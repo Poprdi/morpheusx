@@ -1,5 +1,33 @@
 use super::renderer::{Screen, EFI_DARKGREEN, EFI_LIGHTGREEN, EFI_BLACK};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+// Global rain toggle
+static RAIN_ENABLED: AtomicBool = AtomicBool::new(false);
+static mut GLOBAL_RAIN: Option<MatrixRain> = None;
+
+pub fn toggle_rain(screen: &Screen) {
+    let was_enabled = RAIN_ENABLED.load(Ordering::Relaxed);
+    RAIN_ENABLED.store(!was_enabled, Ordering::Relaxed);
+    
+    unsafe {
+        if !was_enabled {
+            GLOBAL_RAIN = Some(MatrixRain::new(screen.width(), screen.height()));
+        } else {
+            GLOBAL_RAIN = None;
+        }
+    }
+}
+
+pub fn render_rain(screen: &mut Screen) {
+    if RAIN_ENABLED.load(Ordering::Relaxed) {
+        unsafe {
+            if let Some(ref mut rain) = GLOBAL_RAIN {
+                rain.render_frame(screen);
+            }
+        }
+    }
+}
 
 // Simple PRNG for rain animation (LCG algorithm)
 pub struct Rng {

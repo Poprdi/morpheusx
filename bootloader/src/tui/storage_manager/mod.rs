@@ -115,11 +115,19 @@ impl StorageManager {
         self.render(screen);
         
         loop {
-            // Animate rain in background
-            self.rain.render_frame(screen);
+            // Render global rain if active
+            crate::tui::rain::render_rain(screen);
             
             // Check for input (non-blocking)
             if let Some(key) = keyboard.read_key() {
+                // Global rain toggle
+                if key.unicode_char == b'x' as u16 || key.unicode_char == b'X' as u16 {
+                    crate::tui::rain::toggle_rain(screen);
+                    screen.clear();
+                    self.render(screen);
+                    continue;
+                }
+                
                 if self.handle_input(key, screen, keyboard, bs) {
                     return true; // Exit back to main menu
                 }
