@@ -31,35 +31,43 @@ impl InstallerMenu {
         loop {
             self.render(screen, bs);
             
-            let key = keyboard.wait_for_key();
-            
-            match key.scan_code {
-                0x01 => { // Up arrow
-                    if self.selected_esp > 0 {
-                        self.selected_esp -= 1;
+            // Render global rain and check for input
+            loop {
+                crate::tui::rain::render_rain(screen);
+                
+                if let Some(key) = keyboard.read_key() {
+                    // Global rain toggle
+                    if key.unicode_char == b'x' as u16 || key.unicode_char == b'X' as u16 {
+                        crate::tui::rain::toggle_rain(screen);
+                        screen.clear();
+                        self.render(screen, bs);
+                        continue;
                     }
-                }
-                0x02 => { // Down arrow
-                    if self.selected_esp + 1 < self.esp_list.len() {
-                        self.selected_esp += 1;
-                    }
-                }
-                0x17 => { // ESC
-                    return;
-                }
-                _ => {
-                    if key.unicode_char == b'\r' as u16 || key.unicode_char == b'\n' as u16 {
-                        // Enter key - install to selected ESP
-                        if !self.esp_list.is_empty() && self.selected_esp < self.esp_list.len() {
-                            self.install_to_selected(screen, keyboard, bs);
+                    
+                    match key.scan_code {
+                        0x01 => { // Up arrow
+                            if self.selected_esp > 0 {
+                                self.selected_esp -= 1;
+                            }
                         }
-                    } else if key.unicode_char == b'c' as u16 || key.unicode_char == b'C' as u16 {
-                        // Create new ESP - redirect to storage manager
-                        self.show_create_esp_help(screen, keyboard);
-                    } else if key.unicode_char == b'r' as u16 || key.unicode_char == b'R' as u16 {
-                        // Rescan
-                        self.scan_complete = false;
+                        0x02 => { // Down arrow
+                            if self.selected_esp + 1 < self.esp_list.len() {
+                                self.selected_esp += 1;
+                            }
+                        }
+                        0x17 => { // ESC
+                            return;
+                        }
+                        _ => {
+                            if key.unicode_char == b'\r' as u16 || key.unicode_char == b'\n' as u16 {
+                                // Enter key - install to selected ESP
+                                if !self.esp_list.is_empty() && self.selected_esp < self.esp_list.len() {
+                                    self.install_to_selected(screen, keyboard, bs);
+                                }
+                            }
+                        }
                     }
+                    break;
                 }
             }
         }

@@ -1,6 +1,5 @@
 use crate::tui::renderer::{Screen, EFI_GREEN, EFI_LIGHTGREEN, EFI_BLACK, EFI_DARKGREEN};
 use crate::tui::input::{Keyboard, InputKey};
-use crate::tui::rain::MatrixRain;
 use crate::tui::debug::DebugOverlay;
 
 const HEADER_ART: &[&str] = &[
@@ -20,7 +19,6 @@ const DIVIDER: &str = "+========================================================
 pub struct MainMenu {
     selected_index: usize,
     menu_items: [MenuItem; 6],
-    rain: Option<MatrixRain>,
     debug: DebugOverlay,
 }
 
@@ -34,7 +32,6 @@ impl MainMenu {
     pub fn new(_screen: &Screen) -> Self {
         Self {
             selected_index: 0,
-            rain: None,
             debug: DebugOverlay::new(),
             menu_items: [
                 MenuItem {
@@ -208,10 +205,8 @@ impl MainMenu {
         self.debug.render(screen);
         
         loop {
-            // Easter egg: render rain if active
-            if let Some(ref mut rain) = self.rain {
-                rain.render_frame(screen);
-            }
+            // Render global rain if active
+            crate::tui::rain::render_rain(screen);
             
             // Always render debug overlay on top
             self.debug.render(screen);
@@ -227,18 +222,12 @@ impl MainMenu {
                     continue;
                 }
                 
-                // Easter egg: 'x' key toggles rain effect
+                // Global rain toggle
                 if key.unicode_char == b'x' as u16 || key.unicode_char == b'X' as u16 {
-                    // Toggle rain easter egg
-                    if self.rain.is_none() {
-                        self.rain = Some(MatrixRain::new(screen.width(), screen.height()));
-                    } else {
-                        self.rain = None;
-                        // Restore UI
-                        screen.clear();
-                        self.render(screen);
-                        self.debug.render(screen);
-                    }
+                    crate::tui::rain::toggle_rain(screen);
+                    screen.clear();
+                    self.render(screen);
+                    self.debug.render(screen);
                     continue;
                 }
                 
