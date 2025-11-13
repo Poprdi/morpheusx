@@ -1,0 +1,21 @@
+#gitignore file
+
+#vscode
+.vscode/
+.settings/
+*.code-workspace
+*.image
+*.efi
+*.iso
+*.img
+*.EFI
+
+#Builds
+/build/
+/dist/
+/out/
+/bin/
+/target/
+/obj/
+/.next/
+/.next-tmp/

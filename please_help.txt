@@ -1,0 +1,272 @@
+
+
+Implementing self-installation for a UEFI bootloader written in Rust. The bootloader
+needs to copy itself from memory and write to an ESP partition using direct FAT32 
+writes (UEFI Simple File System Protocol doesn't work on runtime-created partitions).
+
+CURRENT ISSUE
+
+The installed binary differs from the original and crashes with page fault when UEFI
+attempts to load it:
+
+  - Page Fault: CR2 = FFFFFFFF9800A058, RIP = 00000000000A4FFF
+  - File writes successfully (52736 bytes)
+  - MD5 hash differs from original binary
+  - UEFI error: "BdsDxe: failed to load... Unsupported"
+
+OBSERVATIONS
+
+1. Original file ImageBase (at offset 0xA8): 0x0000000001400000
+2. Our hardcoded restore value:              0x0000000000400000  ← WRONG!
+3. File size is correct but content is corrupted
+
+CODE SNIPPETS:
+
+1. INSTALLER ENTRY POINT
+
+pub fn install_to_esp(bs: &BootServices, esp: &EspInfo, image_handle: *mut ()) 
+    -> Result<(), InstallError> 
+{
+    unsafe {
+        // Get loaded image protocol
+        let loaded_image = crate::uefi::file_system::get_loaded_image(bs, image_handle)
+            .map_err(|_| InstallError::ProtocolError)?;
+        
+        let image_base = (*loaded_image).image_base as *const u8;
+        let image_size = (*loaded_image).image_size as usize;
+        
+        // Get actual PE file size from headers
+        let file_size = crate::uefi::file_system::get_pe_file_size(image_base)
+            .map_err(|_| InstallError::ProtocolError)?;
+        
+        // Copy memory image and fix relocations to restore original file
+        let mut binary_data = alloc::vec::Vec::new();
+        binary_data.resize(file_size, 0u8);
+        
+        // Copy the PE file from memory
+        core::ptr::copy_nonoverlapping(image_base, binary_data.as_mut_ptr(), file_size);
+        
+        // Fix the ImageBase in PE optional header (UEFI modifies this during load)
+        // Attempting to restore original linker value
+        crate::uefi::file_system::restore_pe_image_base(&mut binary_data)
+            .map_err(|_| InstallError::ProtocolError)?;
+        
+        // Get block IO and write via direct FAT32 write
+        let block_io = crate::uefi::disk::get_disk_protocol(bs, esp.disk_index)
+            .map_err(|_| InstallError::ProtocolError)?;
+        
+        let mut adapter = crate::uefi::gpt_adapter::UefiBlockIoAdapter::new(&mut *block_io)
+            .map_err(|_| InstallError::IoError)?;
+        
+        use morpheus_core::fs::fat32_ops;
+        
+        fat32_ops::write_file(
+            &mut adapter,
+            esp.start_lba,
+            "/EFI/BOOT/BOOTX64.EFI",
+            &binary_data
+        ).map_err(|_| InstallError::IoError)?;
+        
+        Ok(())
+    }
+}
+
+
+2. PE FILE SIZE PARSER
+
+pub unsafe fn get_pe_file_size(image_base: *const u8) -> Result<usize, ()> {
+    // Verify DOS signature
+    let dos_signature = u16::from_le_bytes([*image_base, *image_base.offset(1)]);
+    if dos_signature != 0x5A4D { return Err(()); }
+    
+    // Get PE header offset from e_lfanew
+    let pe_offset = u32::from_le_bytes([
+        *image_base.offset(0x3C), *image_base.offset(0x3D),
+        *image_base.offset(0x3E), *image_base.offset(0x3F),
+    ]) as isize;
+    
+    // Verify PE signature
+    let pe_sig = u32::from_le_bytes([
+        *image_base.offset(pe_offset),     *image_base.offset(pe_offset + 1),
+        *image_base.offset(pe_offset + 2), *image_base.offset(pe_offset + 3),
+    ]);
+    if pe_sig != 0x00004550 { return Err(()); }
+    
+    let coff_header = pe_offset + 4;
+    
+    // NumberOfSections (COFF + 0x02)
+    let num_sections = u16::from_le_bytes([
+        *image_base.offset(coff_header + 0x02),
+        *image_base.offset(coff_header + 0x03),
+    ]) as usize;
+    
+    // SizeOfOptionalHeader (COFF + 0x10)
+    let opt_header_size = u16::from_le_bytes([
+        *image_base.offset(coff_header + 0x10),
+        *image_base.offset(coff_header + 0x11),
+    ]) as isize;
+    
+    // Section table location
+    let section_table = pe_offset + 4 + 20 + opt_header_size;
+    
+    // Find highest section end (PointerToRawData + SizeOfRawData)
+    let mut max_file_offset = 0usize;
+    
+    for i in 0..num_sections {
+        let section_header = section_table + (i as isize * 40);
+        
+        // SizeOfRawData at offset 0x10 in section header
+        let size_of_raw_data = u32::from_le_bytes([
+            *image_base.offset(section_header + 0x10),
+            *image_base.offset(section_header + 0x11),
+            *image_base.offset(section_header + 0x12),
+            *image_base.offset(section_header + 0x13),
+        ]) as usize;
+        
+        // PointerToRawData at offset 0x14
+        let pointer_to_raw_data = u32::from_le_bytes([
+            *image_base.offset(section_header + 0x14),
+            *image_base.offset(section_header + 0x15),
+            *image_base.offset(section_header + 0x16),
+            *image_base.offset(section_header + 0x17),
+        ]) as usize;
+        
+        if size_of_raw_data > 0 && pointer_to_raw_data > 0 {
+            let section_end = pointer_to_raw_data + size_of_raw_data;
+            if section_end > max_file_offset {
+                max_file_offset = section_end;
+            }
+        }
+    }
+    
+    if max_file_offset == 0 { return Err(()); }
+    Ok(max_file_offset)
+}
+
+
+3. IMAGE BASE RESTORATION 
+
+pub fn restore_pe_image_base(pe_data: &mut [u8]) -> Result<(), ()> {
+    if pe_data.len() < 0x40 { return Err(()); }
+    
+    let dos_sig = u16::from_le_bytes([pe_data[0], pe_data[1]]);
+    if dos_sig != 0x5A4D { return Err(()); }
+    
+    let pe_offset = u32::from_le_bytes([
+        pe_data[0x3C], pe_data[0x3D], pe_data[0x3E], pe_data[0x3F],
+    ]) as usize;
+    
+    if pe_offset + 0xB8 > pe_data.len() { return Err(()); }
+    
+    let pe_sig = u32::from_le_bytes([
+        pe_data[pe_offset],     pe_data[pe_offset + 1],
+        pe_data[pe_offset + 2], pe_data[pe_offset + 3],
+    ]);
+    if pe_sig != 0x00004550 { return Err(()); }
+    
+    // ImageBase location in PE32+ optional header
+    // PE signature + COFF header (20 bytes) + offset to ImageBase (0x18)
+    let image_base_offset = pe_offset + 4 + 20 + 0x18;
+    
+    // HARDCODED VALUE - THIS IS THE PROBLEM!
+    // Should this match the linker's original value?
+    let original_image_base = 0x0000000000400000u64;  // ← Hardcoded!
+    
+    pe_data[image_base_offset..image_base_offset + 8]
+        .copy_from_slice(&original_image_base.to_le_bytes());
+    
+    Ok(())
+}
+
+
+ FAT32 WRITE IMPLEMENTATION (SHOULD BE FINE)
+
+fn write_file_in_directory<B: BlockIo>(
+    block_io: &mut B,
+    partition_start: u64,
+    ctx: &Fat32Context,
+    dir_cluster: u32,
+    name: &str,
+    data: &[u8],
+) -> Result<(), Fat32Error> {
+    let cluster_size = (ctx.sectors_per_cluster * 512) as usize;
+    let clusters_needed = ((data.len() + cluster_size - 1) / cluster_size).max(1);
+    
+    // Allocate clusters
+    let mut file_clusters = Vec::new();
+    for _ in 0..clusters_needed {
+        let cluster = ctx.allocate_cluster(block_io, partition_start)?;
+        file_clusters.push(cluster);
+    }
+    
+    // Chain clusters in FAT
+    for i in 0..file_clusters.len() - 1 {
+        ctx.write_fat_entry(block_io, partition_start, 
+                           file_clusters[i], file_clusters[i + 1])?;
+    }
+    
+    // Write data cluster by cluster
+    for (i, &cluster) in file_clusters.iter().enumerate() {
+        let data_offset = i * cluster_size;
+        let data_end = (data_offset + cluster_size).min(data.len());
+        let chunk_size = data_end - data_offset;
+        
+        let mut cluster_data = Vec::new();
+        cluster_data.resize(cluster_size, 0u8);
+        cluster_data[..chunk_size].copy_from_slice(&data[data_offset..data_end]);
+        
+        let sector = ctx.cluster_to_sector(cluster);
+        for sec_offset in 0..ctx.sectors_per_cluster {
+            let start = (sec_offset * 512) as usize;
+            let end = start + 512;
+            block_io.write_blocks(
+                Lba(partition_start + sector as u64 + sec_offset as u64),
+                &cluster_data[start..end]
+            ).map_err(|_| Fat32Error::IoError)?;
+        }
+    }
+    
+    add_dir_entry_to_cluster(block_io, partition_start, ctx, dir_cluster, 
+                             name, file_clusters[0], data.len() as u32, ATTR_ARCHIVE)?;
+    Ok(())
+}
+
+Questions:
+
+1. IMAGEBASE RESTORATION
+   
+ Is hardcoding ImageBase to 0x400000 correct?
+   
+   Current behavior:
+   - Original PE file has ImageBase = 0x0000000001400000 (from linker)
+   - UEFI loads and relocates it to some runtime address
+   - We're restoring it to 0x0000000000400000 (hardcoded)
+   
+   Should we:
+   a) Read the original ImageBase from the on-disk file before copying?
+   b) Keep the linker's value (0x0000000001400000)?
+   c) Use a different approach entirely?
+
+
+2. PE RELOCATION HANDLING
+
+ Are there other PE header fields UEFI modifies besides ImageBase?
+   
+   Concerns:
+   - Base relocation table entries?
+   - Import address table?
+   - Any runtime-patched addresses?
+   
+   Do we need to apply reverse relocations to all code/data sections?
+
+
+
+Context
+
+Target: x86_64 UEFI bootloader (PE32+ executable)
+Language: Rust (no_std environment)
+Use case: Bootloader needs to install itself to ESP at runtime
+Environment: Can't rely on file system access (partition may be newly created)
+
+Linker script uses standard UEFI entry point and image base.
+Binary built with cargo build --target x86_64-unknown-uefi --release

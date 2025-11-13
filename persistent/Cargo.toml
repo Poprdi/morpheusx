@@ -1,0 +1,22 @@
+[package]
+name = "morpheus-persistent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core dependencies (no_std compatible)
+# gpt_disk_io and types for block I/O
+gpt_disk_io = { version = "0.16", default-features = false }
+gpt_disk_types = { version = "0.16", default-features = false }
+
+# Platform-specific relocation engines
+# (conditionally compiled based on target)
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+# x86_64-specific deps if needed
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+# ARM64-specific deps if needed
+
+# Future: armv7 support
+# [target.'cfg(target_arch = "arm")'.dependencies]

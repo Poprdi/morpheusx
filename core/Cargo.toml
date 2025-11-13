@@ -1,0 +1,13 @@
+[package]
+name = "morpheus-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# GPT disk handling (Google's no_std library)
+gpt_disk_types = { version = "0.16", default-features = false }
+gpt_disk_io = { version = "0.16", default-features = false }
+uguid = { version = "2.1", default-features = false }
+
+[features]
+fat32_debug = []

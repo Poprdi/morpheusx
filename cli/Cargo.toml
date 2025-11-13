@@ -1,0 +1,11 @@
+[package]
+name = "morpheus-cli"
+version.workspace = true  
+edition.workspace = true
+
+[[bin]]
+name = "morpheus-cli"
+path = "src/main.rs"
+
+[dependencies]
+# TODO: Add dependencies

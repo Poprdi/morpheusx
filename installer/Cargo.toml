@@ -1,0 +1,11 @@
+[package]
+name = "morpheus-installer"
+version.workspace = true  
+edition.workspace = true
+
+[[bin]]
+name = "morpheus-installer"
+path = "src/main.rs"
+
+[dependencies]
+# TODO: Add dependencies

@@ -1,0 +1,32 @@
+[package]
+name = "morpheus-bootloader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+morpheus-core = { workspace = true }
+morpheus-persistent = { workspace = true }
+# GPT disk handling
+gpt_disk_io = { version = "0.16", default-features = false }
+gpt_disk_types = { version = "0.16", default-features = false }
+# TODO: Enable when other modules are implemented
+# morpheus-redeco = { workspace = true}
+# morpheus-updater = { workspace = true }
+# morpheus-utils = { workspace = true }
+
+[features]
+fat32_debug = ["morpheus-core/fat32_debug"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+
+[target.'cfg(target_arch = "arm")'.dependencies]

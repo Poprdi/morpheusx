@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "bootloader",
+    "core",
+    "persistent",
+    "redeco-integration",
+    "updater",
+    "registry",
+    "network",
+    "installer",
+    "cli",
+    "utils",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Your Name <you@example.com>"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# All workspace crates reference each other here
+morpheus-core = { path = "core" }
+morpheus-persistent = { path = "persistent" }
+morpheus-redeco = { path = "redeco-integration" }
+morpheus-updater = { path = "updater" }
+morpheus-registry = { path = "registry" }
+morpheus-network = { path = "network" }
+morpheus-utils = { path = "utils" }
+
+[profile.release]
+opt-level = "z"      # Optimize for size
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization
+panic = "abort"      # No unwinding
+strip = true         # Strip symbols
+
+[profile.dev]
+panic = "abort"      # No unwinding in dev either
