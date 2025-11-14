@@ -4,6 +4,8 @@
 //! 1. EFI handoff (64-bit, modern kernels)
 //! 2. Protected mode handoff (32-bit, universal compatibility)
 
+pub const EFI_HANDOVER_ENTRY_BIAS: u64 = 0x200;
+
 /// EFI 64-bit handoff protocol
 /// 
 /// For kernels that support it (handover_offset != 0).
@@ -18,17 +20,17 @@
 /// 
 /// Does NOT return.
 #[unsafe(naked)]
-pub unsafe extern "C" fn efi_handoff_64(
+pub unsafe extern "win64" fn efi_handoff_64(
     entry_point: u64,
     image_handle: u64,
     system_table: u64,
     boot_params: u64,
 ) -> ! {
     core::arch::naked_asm!(
-        "mov r11, rcx",   // stash entry pointer
-        "mov rcx, rdx",   // RCX = image handle
-        "mov rdx, r8",    // RDX = system table
-        "mov r8, r9",     // R8  = boot params
+        "mov r11, rcx",   // stash entry pointer (arg1)
+        "mov rcx, rdx",   // RCX = image handle (arg2)
+        "mov rdx, r8",    // RDX = system table (arg3)
+        "mov r8, r9",     // R8  = boot params (arg4)
 
         "cli",
         "cld",
@@ -72,9 +74,8 @@ impl BootPath {
         // Prefer EFI handoff if kernel supports it and we're in long mode
         if in_long_mode {
             if let Some(offset) = handover_offset {
-                return BootPath::EfiHandoff64 {
-                    entry: startup_64 + offset as u64,
-                };
+                let entry = startup_64 + offset as u64 + EFI_HANDOVER_ENTRY_BIAS;
+                return BootPath::EfiHandoff64 { entry };
             }
         }
         

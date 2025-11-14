@@ -2,6 +2,8 @@
 
 use core::ptr;
 
+#[cfg(target_arch = "x86_64")]
+use super::arch::x86_64::handoff::EFI_HANDOVER_ENTRY_BIAS;
 use super::{boot_kernel, kernel_loader::KernelError, KernelImage, LinuxBootParams};
 use super::memory::{
     allocate_boot_params,
@@ -137,8 +139,11 @@ pub unsafe fn boot_linux_kernel(
 
     let efi_supported = kernel.supports_efi_handover_64();
     if efi_supported {
-        let handover = kernel.handover_offset() as u64;
-        let entry = kernel_dest as u64 + handover;
+    let handover = kernel.handover_offset() as u64;
+    #[cfg(target_arch = "x86_64")]
+    let entry = kernel_dest as u64 + handover + EFI_HANDOVER_ENTRY_BIAS;
+    #[cfg(not(target_arch = "x86_64"))]
+    let entry = kernel_dest as u64 + handover;
         screen.put_str_at(5, log_y, &alloc::format!("EFI handover path (+{:#x})", handover), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         screen.put_str_at(5, log_y, &alloc::format!("EFI entry @ {:#x}", entry), EFI_LIGHTGREEN, EFI_BLACK);
