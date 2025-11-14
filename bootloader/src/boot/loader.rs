@@ -137,6 +137,9 @@ pub unsafe fn boot_linux_kernel(
     screen.put_str_at(5, log_y, &alloc::format!("Boot params @ {:#x}", boot_params_phys), EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
 
+    screen.put_str_at(5, log_y, &alloc::format!("Kernel loaded at: {:#x}", kernel_dest as usize), EFI_LIGHTGREEN, EFI_BLACK);
+    log_y += 1;
+
     let efi_supported = kernel.supports_efi_handover_64();
     if efi_supported {
     let handover = kernel.handover_offset() as u64;
@@ -144,15 +147,14 @@ pub unsafe fn boot_linux_kernel(
     let entry = kernel_dest as u64 + handover + EFI_HANDOVER_ENTRY_BIAS;
     #[cfg(not(target_arch = "x86_64"))]
     let entry = kernel_dest as u64 + handover;
-        screen.put_str_at(5, log_y, &alloc::format!("EFI handover path (+{:#x})", handover), EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, &alloc::format!("EFI handover offset: +{:#x}", handover), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("EFI entry @ {:#x}", entry), EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, &alloc::format!("Computed EFI entry: {:#x}", entry), EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        screen.put_str_at(5, log_y, &alloc::format!("  = {:#x} + {:#x} + {:#x}", kernel_dest as u64, handover, EFI_HANDOVER_ENTRY_BIAS), EFI_LIGHTGREEN, EFI_BLACK);
     } else {
         screen.put_str_at(5, log_y, &alloc::format!("32-bit path via {:#x}", kernel.code32_start()), EFI_LIGHTGREEN, EFI_BLACK);
     }
-    log_y += 1;
-
-    screen.put_str_at(5, log_y, &alloc::format!("Kernel loaded at: {:#x}", kernel_dest as usize), EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
 
     screen.put_str_at(5, log_y, "Exiting boot services...", EFI_LIGHTGREEN, EFI_BLACK);
