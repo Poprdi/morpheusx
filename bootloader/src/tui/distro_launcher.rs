@@ -22,19 +22,19 @@ impl DistroLauncher {
         // Later we can scan ESP for vmlinuz files
         let kernels = alloc::vec![
             KernelEntry {
-                name: String::from("Arch Linux"),
-                path: String::from("\\boot\\vmlinuz-linux"),
-                cmdline: String::from("root=/dev/sda2 ro quiet"),
+                name: String::from("Fedora 6.17.4"),
+                path: String::from("\\kernels\\vmlinuz"),
+                cmdline: String::from("root=/dev/sda1 ro quiet"),
             },
             KernelEntry {
-                name: String::from("Ubuntu"),
-                path: String::from("\\boot\\vmlinuz"),
-                cmdline: String::from("root=UUID=xxx ro quiet splash"),
+                name: String::from("Fedora (verbose)"),
+                path: String::from("\\kernels\\vmlinuz"),
+                cmdline: String::from("root=/dev/sda1 ro debug earlyprintk=serial console=ttyS0"),
             },
             KernelEntry {
-                name: String::from("Test Kernel"),
+                name: String::from("Test File"),
                 path: String::from("\\kernels\\test.efi"),
-                cmdline: String::from("root=/dev/sda1 ro debug"),
+                cmdline: String::from("test"),
             },
         ];
 
@@ -186,6 +186,7 @@ impl DistroLauncher {
             let _ = crate::boot::loader::boot_linux_kernel(
                 boot_services,
                 system_table,
+                image_handle,
                 &kernel_data,
                 &kernel.cmdline,
             );

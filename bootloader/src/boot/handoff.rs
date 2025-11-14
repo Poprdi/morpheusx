@@ -2,6 +2,9 @@
 
 use super::{KernelImage, LinuxBootParams};
 
+#[cfg(target_arch = "x86_64")]
+use super::arch::x86_64::handoff::BootPath;
+
 pub enum HandoffError {
     ExitBootServicesFailed,
     InvalidKernel,
@@ -14,48 +17,36 @@ pub unsafe fn boot_kernel(
     boot_params: *mut LinuxBootParams,
     _system_table: *mut (),
 ) -> ! {
-    // According to Linux boot protocol for x86_64:
-    // 
-    // Register state on entry:
-    //   %rsi = address of boot_params (zero page)
-    //   %rsp = stack pointer (must be valid)
-    //   All other registers undefined
-    //
-    // The kernel is entered in 64-bit mode with:
-    //   - Paging enabled (identity mapped)
-    //   - Interrupts disabled
-    //   - Direction flag cleared
-
-    let entry_point = kernel.kernel_base();
-    let boot_params_addr = boot_params as u64;
-
-    // Jump to kernel
-    // According to Linux x86 boot protocol:
-    // - rsi = boot params pointer
-    // - All other GPRs = 0 (except rsp)
-    // - Interrupts disabled (IF=0)
-    // - Direction flag cleared (DF=0)
-    core::arch::asm!(
-        "cli",              // Disable interrupts
-        "cld",              // Clear direction flag
-        "xor rax, rax",     // Zero all registers as per protocol
-        "xor rbx, rbx",
-        "xor rcx, rcx",
-        "xor rdx, rdx",
-        "xor rdi, rdi",
-        "xor rbp, rbp",
-        "xor r8, r8",
-        "xor r9, r9",
-        "xor r10, r10",
-        "xor r11, r11",
-        "xor r12, r12",
-        "xor r13, r13",
-        "xor r14, r14",
-        "xor r15, r15",
-        "mov rsi, {boot_params}",  // Set boot params
-        "jmp {entry}",             // Jump to kernel (no return)
-        boot_params = in(reg) boot_params_addr,
-        entry = in(reg) entry_point,
-        options(noreturn)
-    );
+    // x86_64 architecture: choose optimal boot path
+    #[cfg(target_arch = "x86_64")]
+    {
+        use super::arch::x86_64::transitions::check_efi_handover_support;
+        
+        // Check if kernel supports EFI handover
+        let setup_header = kernel.setup_header_bytes();
+        let handover_offset = check_efi_handover_support(setup_header);
+        
+        // Determine entry points
+        let startup_64 = kernel.kernel_base() as u64;
+        let code32_start = kernel.code32_start();
+        
+        // We're currently in long mode (UEFI bootloader)
+        let in_long_mode = true;
+        
+        // Choose and execute boot path
+        let boot_path = BootPath::choose(
+            handover_offset,
+            startup_64,
+            code32_start,
+            in_long_mode
+        );
+        
+        boot_path.execute(boot_params as u64)
+    }
+    
+    // Other architectures: implement as needed
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        panic!("Unsupported architecture for kernel boot");
+    }
 }

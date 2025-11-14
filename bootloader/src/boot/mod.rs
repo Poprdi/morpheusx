@@ -6,6 +6,10 @@ pub mod handoff;
 pub mod memory;
 pub mod loader;
 
+// Architecture-specific boot code
+#[cfg(target_arch = "x86_64")]
+pub mod arch;
+
 pub use kernel_loader::KernelImage;
 pub use boot_params::LinuxBootParams;
 pub use handoff::boot_kernel;

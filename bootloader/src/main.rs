@@ -83,7 +83,13 @@ struct BootServices {
         memory: u64,
     ) -> usize,
     _free_pages: usize,
-    _get_memory_map: usize,
+    pub get_memory_map: extern "efiapi" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut u8,
+        map_key: *mut usize,
+        descriptor_size: *mut usize,
+        descriptor_version: *mut u32,
+    ) -> usize,
     allocate_pool: extern "efiapi" fn(
         pool_type: usize,
         size: usize,
@@ -114,6 +120,17 @@ struct BootServices {
         search_key: *const (),
         buffer_size: *mut usize,
         buffer: *mut *mut (),
+    ) -> usize,
+    _locate_device_path: usize,
+    _install_configuration_table: usize,
+    // Image Services
+    _load_image: usize,
+    _start_image: usize,
+    _exit: usize,
+    _unload_image: usize,
+    pub exit_boot_services: extern "efiapi" fn(
+        image_handle: *mut (),
+        map_key: usize,
     ) -> usize,
 }
 

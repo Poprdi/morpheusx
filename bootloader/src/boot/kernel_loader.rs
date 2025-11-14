@@ -132,4 +132,22 @@ impl KernelImage {
     pub fn init_size(&self) -> u32 {
         unsafe { (*self.setup_header).init_size }
     }
+    
+    pub fn code32_start(&self) -> u32 {
+        unsafe { (*self.setup_header).code32_start }
+    }
+    
+    pub fn handover_offset(&self) -> u32 {
+        unsafe { (*self.setup_header).handover_offset }
+    }
+    
+    /// Get raw setup header bytes for detailed inspection
+    pub fn setup_header_bytes(&self) -> &[u8] {
+        unsafe {
+            core::slice::from_raw_parts(
+                self.setup_header as *const u8,
+                core::mem::size_of::<SetupHeader>()
+            )
+        }
+    }
 }

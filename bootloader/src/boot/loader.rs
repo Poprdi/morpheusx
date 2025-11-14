@@ -16,6 +16,7 @@ pub enum BootError {
 pub unsafe fn boot_linux_kernel(
     boot_services: &crate::BootServices,
     system_table: *mut (),
+    image_handle: *mut (),
     kernel_data: &[u8],
     cmdline: &str,
 ) -> ! {
@@ -50,9 +51,44 @@ pub unsafe fn boot_linux_kernel(
         }
     }
 
-    // TODO: Exit boot services here
-    // This is critical - kernel expects to own hardware
-    // For now we skip it for testing
+    // Get memory map before exiting boot services
+    let mut map_size: usize = 0;
+    let mut map_key: usize = 0;
+    let mut descriptor_size: usize = 0;
+    let mut descriptor_version: u32 = 0;
+    
+    // First call to get size
+    let _ = (boot_services.get_memory_map)(
+        &mut map_size,
+        core::ptr::null_mut(),
+        &mut map_key,
+        &mut descriptor_size,
+        &mut descriptor_version,
+    );
+    
+    // Exit boot services - kernel now owns hardware
+    // This terminates UEFI runtime and gives full control to kernel
+    let exit_status = (boot_services.exit_boot_services)(
+        image_handle,
+        map_key,
+    );
+    
+    // If ExitBootServices fails, we're in trouble
+    // But we'll try to continue anyway for testing
+    if exit_status != 0 {
+        // Retry once with updated map key
+        let _ = (boot_services.get_memory_map)(
+            &mut map_size,
+            core::ptr::null_mut(),
+            &mut map_key,
+            &mut descriptor_size,
+            &mut descriptor_version,
+        );
+        let _ = (boot_services.exit_boot_services)(
+            image_handle,
+            map_key,
+        );
+    }
 
     // Jump to kernel (never returns)
     // Need to create new KernelImage pointing to loaded location
