@@ -29,7 +29,7 @@ pub unsafe fn boot_kernel(
         };
 
         let startup_64 = kernel_loaded_addr as u64;
-        let protected_mode_entry = kernel_loaded_addr as u32;
+        let protected_mode_entry = kernel.code32_start();
         let in_long_mode = true;
 
         let boot_path = BootPath::choose(
