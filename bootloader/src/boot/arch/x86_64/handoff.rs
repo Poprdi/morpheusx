@@ -110,7 +110,7 @@ impl BootPath {
     pub fn choose(
         handover_offset: Option<u32>,
         startup_64: u64,
-        code32_start: u32,
+        protected_mode_entry: u32,
         in_long_mode: bool,
     ) -> Self {
         // Prefer EFI handoff if kernel supports it and we're in long mode
@@ -123,7 +123,7 @@ impl BootPath {
         }
         
         // Fallback: 32-bit protected mode (universal)
-        BootPath::ProtectedMode32 { entry: code32_start }
+        BootPath::ProtectedMode32 { entry: protected_mode_entry }
     }
     
     /// Execute the handoff (does not return)

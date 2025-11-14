@@ -140,15 +140,15 @@ pub struct SetupHeader {
     root_dev: u16,
     boot_flag: u16,
     jump: u16,
-    header: u32,
-    version: u16,
+    pub header: u32,
+    pub version: u16,
     realmode_swtch: u32,
     start_sys_seg: u16,
     kernel_version: u16,
     type_of_loader: u8,
     loadflags: u8,
     setup_move_size: u16,
-    code32_start: u32,
+    pub code32_start: u32,
     ramdisk_image: u32,
     ramdisk_size: u32,
     bootsect_kludge: u32,
@@ -157,8 +157,8 @@ pub struct SetupHeader {
     ext_loader_type: u8,
     cmd_line_ptr: u32,
     initrd_addr_max: u32,
-    kernel_alignment: u32,
-    relocatable_kernel: u8,
+    pub kernel_alignment: u32,
+    pub relocatable_kernel: u8,
     min_alignment: u8,
     xloadflags: u16,
     cmdline_size: u32,
@@ -167,9 +167,9 @@ pub struct SetupHeader {
     payload_offset: u32,
     payload_length: u32,
     setup_data: u64,
-    pref_address: u64,
-    init_size: u32,
-    handover_offset: u32,
+    pub pref_address: u64,
+    pub init_size: u32,
+    pub handover_offset: u32,
 }
 
 #[repr(C, packed)]
@@ -224,5 +224,19 @@ impl LinuxBootParams {
         self.screen_info.orig_video_cols = 80;
         self.screen_info.orig_video_lines = 25;
         self.screen_info.orig_video_isVGA = 1;
+    }
+    
+    /// Add E820 memory map entry
+    /// CRITICAL: Kernel needs memory map to initialize
+    pub fn add_e820_entry(&mut self, addr: u64, size: u64, entry_type: u32) {
+        let idx = self.e820_entries as usize;
+        if idx < 128 {
+            self.e820_table[idx] = E820Entry {
+                addr,
+                size,
+                entry_type,
+            };
+            self.e820_entries += 1;
+        }
     }
 }

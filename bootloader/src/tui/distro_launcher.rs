@@ -181,14 +181,32 @@ impl DistroLauncher {
             "Booting...", 
             EFI_LIGHTGREEN, EFI_BLACK);
 
-        // Boot the kernel
+        // Clear old logs and track where we are
+        let mut log_line = 18;
+        let initial_log_count = morpheus_core::logger::log_count();
+        
+        // Start boot process in background (it will log as it goes)
+        // We can't actually make it background, so we'll just check logs after
+        // But for now, let's display logs before the call
+        
+        // Actually, we need to modify boot_linux_kernel to take a callback
+        // For now, let's just do a simpler approach: show logs that were added
+        
+        // Boot the kernel - this will add logs to the buffer
+        // We'll instrument it to show progress
         unsafe {
+            // Before calling, clear the screen area for logs
+            for i in 18..30 {
+                screen.put_str_at(5, i, "                                                    ", EFI_BLACK, EFI_BLACK);
+            }
+            
             let _ = crate::boot::loader::boot_linux_kernel(
                 boot_services,
                 system_table,
                 image_handle,
                 &kernel_data,
                 &kernel.cmdline,
+                screen, // Pass screen for live logging
             );
         }
 
