@@ -27,6 +27,12 @@ impl DistroLauncher {
         // Later we can scan ESP for vmlinuz files
         let kernels = alloc::vec![
             KernelEntry {
+                name: String::from("Bootloader Test (with initrd)"),
+                path: String::from("\\kernels\\vmlinuz"),
+                cmdline: String::from("console=ttyS0,115200 debug"),
+                initrd: Some(String::from("\\initrds\\initramfs-test.img")),
+            },
+            KernelEntry {
                 name: String::from("Arch Linux"),
                 path: String::from("\\kernels\\vmlinuz-arch"),
                 cmdline: String::from("root=/dev/ram0 rw console=ttyS0,115200 debug init=/usr/bin/bash"),
