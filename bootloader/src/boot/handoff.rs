@@ -19,16 +19,22 @@ pub unsafe fn boot_kernel(
     image_handle: *mut (),
     kernel_loaded_addr: *mut u8,
 ) -> ! {
-    // x86_64 architecture: choose optimal boot path
+    // x86_64 architecture: GRUB-compatible boot path
     #[cfg(target_arch = "x86_64")]
     {
-        let xloadflags = kernel.xloadflags();
+        // Use handover_offset like GRUB does
+        let handover_offset = if kernel.supports_efi_handover_64() {
+            Some(kernel.handover_offset())
+        } else {
+            None
+        };
+        
         let startup_64 = kernel_loaded_addr as u64;
         let protected_mode_entry = kernel.code32_start();
         let in_long_mode = true;
 
         let boot_path = BootPath::choose(
-            xloadflags,
+            handover_offset,
             startup_64,
             protected_mode_entry,
             in_long_mode,

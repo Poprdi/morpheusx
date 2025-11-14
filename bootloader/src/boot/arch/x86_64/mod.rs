@@ -1,12 +1,11 @@
 //! x86_64 architecture-specific boot code
 //! 
-//! Handles multiple boot paths:
-//! - UEFI 64-bit → Linux kernel (EFI stub or EFI handover)
-//! - BIOS 32-bit → Linux kernel (protected mode handoff)
-//! - Future: 16-bit real mode → Linux kernel (full legacy path)
+//! GRUB-compatible boot paths:
+//! - EFI Handover Protocol (industry standard)
+//! - 32-bit protected mode (legacy fallback)
 
 pub mod transitions;
 pub mod handoff;
 
 pub use transitions::drop_to_protected_mode;
-pub use handoff::efi_stub_64;
+pub use handoff::efi_handover_boot;
