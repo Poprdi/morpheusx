@@ -54,6 +54,7 @@ pub unsafe extern "win64" fn efi_handoff_64(
 /// - Current CPU mode (detected at runtime)
 /// - Kernel capabilities (handover_offset)
 /// - Firmware type (UEFI vs BIOS)
+#[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub enum BootPath {
     /// Modern: UEFI 64-bit → EFI handoff → kernel 64-bit entry
@@ -65,6 +66,7 @@ pub enum BootPath {
 
 impl BootPath {
     /// Determine optimal boot path
+    #[inline(never)]
     pub fn choose(
         handover_offset: Option<u32>,
         startup_64: u64,
@@ -84,15 +86,18 @@ impl BootPath {
     }
     
     /// Execute the handoff (does not return)
+    #[inline(always)]
     pub unsafe fn execute(self, boot_params: u64, image_handle: *mut (), system_table: *mut ()) -> ! {
-        match self {
-            BootPath::EfiHandoff64 { entry } => {
-                efi_handoff_64(entry, image_handle as u64, system_table as u64, boot_params)
-            }
-            BootPath::ProtectedMode32 { entry } => {
-                // Need to drop to 32-bit first if we're in 64-bit
-                super::transitions::drop_to_protected_mode(entry, boot_params as u32)
-            }
+        // Use if-let to avoid potential enum layout issues in match arms
+        if let BootPath::EfiHandoff64 { entry } = self {
+            // Call directly with the extracted u64 value
+            efi_handoff_64(entry, image_handle as u64, system_table as u64, boot_params)
+        } else if let BootPath::ProtectedMode32 { entry } = self {
+            // Need to drop to 32-bit first if we're in 64-bit
+            super::transitions::drop_to_protected_mode(entry, boot_params as u32)
+        } else {
+            // Should never happen
+            core::hint::unreachable_unchecked()
         }
     }
 }
