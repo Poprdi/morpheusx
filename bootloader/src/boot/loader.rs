@@ -2,8 +2,6 @@
 
 use core::ptr;
 
-#[cfg(target_arch = "x86_64")]
-use super::arch::x86_64::handoff::EFI_HANDOVER_ENTRY_BIAS;
 use super::{boot_kernel, kernel_loader::KernelError, KernelImage, LinuxBootParams};
 use super::memory::{
     allocate_boot_params,
@@ -140,20 +138,23 @@ pub unsafe fn boot_linux_kernel(
     screen.put_str_at(5, log_y, &alloc::format!("Kernel loaded at: {:#x}", kernel_dest as usize), EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
 
-    // Display boot path information (based on Limine bootloader's proven approach)
-    let xloadflags = kernel.xloadflags();
-    if (xloadflags & 3) == 3 {
-        // 64-bit kernel with XLF_KERNEL_64 | XLF_CAN_BE_LOADED_ABOVE_4G
-        // Use startup_64 + 0x200 (works for all kernel versions)
-        let entry = kernel_dest as u64 + EFI_HANDOVER_ENTRY_BIAS;
-        screen.put_str_at(5, log_y, &alloc::format!("Boot method: EFI 64-bit handoff"), EFI_LIGHTGREEN, EFI_BLACK);
+    // Display boot path information (GRUB-compatible)
+    let handover_offset = kernel.handover_offset();
+    if handover_offset != 0 {
+        // EFI Handover Protocol (GRUB-style)
+        #[cfg(target_arch = "x86_64")]
+        let entry = kernel_dest as u64 + handover_offset as u64 + 512;
+        #[cfg(not(target_arch = "x86_64"))]
+        let entry = kernel_dest as u64 + handover_offset as u64;
+        
+        screen.put_str_at(5, log_y, &alloc::format!("Boot method: EFI Handover Protocol (GRUB-compatible)"), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("  xloadflags: {:#06x} (64-bit, above 4GB OK)", xloadflags), EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, &alloc::format!("  Handover offset: +{:#x}", handover_offset), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x} = startup_64 + {:#x}", entry, EFI_HANDOVER_ENTRY_BIAS), EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x}", entry), EFI_LIGHTGREEN, EFI_BLACK);
     } else {
-        // Legacy kernel - fall back to 32-bit protected mode
-        screen.put_str_at(5, log_y, &alloc::format!("Boot method: 32-bit protected mode"), EFI_LIGHTGREEN, EFI_BLACK);
+        // No handover support - fall back to 32-bit protected mode
+        screen.put_str_at(5, log_y, &alloc::format!("Boot method: 32-bit protected mode (fallback)"), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x} (code32_start)", kernel.code32_start()), EFI_LIGHTGREEN, EFI_BLACK);
     }
