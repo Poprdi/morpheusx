@@ -27,6 +27,12 @@ impl DistroLauncher {
         // Later we can scan ESP for vmlinuz files
         let kernels = alloc::vec![
             KernelEntry {
+                name: String::from("Arch Linux"),
+                path: String::from("\\kernels\\vmlinuz-arch"),
+                cmdline: String::from("root=/dev/ram0 rw console=ttyS0,115200 debug init=/usr/bin/bash"),
+                initrd: Some(String::from("\\initrds\\initramfs-arch.img")),
+            },
+            KernelEntry {
                 name: String::from("Fedora 6.17.4"),
                 path: String::from("\\kernels\\vmlinuz"),
                 cmdline: String::from("root=/dev/sda1 ro quiet"),
