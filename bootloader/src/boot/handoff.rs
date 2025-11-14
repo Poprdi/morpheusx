@@ -22,18 +22,13 @@ pub unsafe fn boot_kernel(
     // x86_64 architecture: choose optimal boot path
     #[cfg(target_arch = "x86_64")]
     {
-        let handover_offset = if kernel.supports_efi_handover_64() {
-            Some(kernel.handover_offset())
-        } else {
-            None
-        };
-
+        let xloadflags = kernel.xloadflags();
         let startup_64 = kernel_loaded_addr as u64;
         let protected_mode_entry = kernel.code32_start();
         let in_long_mode = true;
 
         let boot_path = BootPath::choose(
-            handover_offset,
+            xloadflags,
             startup_64,
             protected_mode_entry,
             in_long_mode,

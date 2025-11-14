@@ -140,20 +140,22 @@ pub unsafe fn boot_linux_kernel(
     screen.put_str_at(5, log_y, &alloc::format!("Kernel loaded at: {:#x}", kernel_dest as usize), EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
 
-    let efi_supported = kernel.supports_efi_handover_64();
-    if efi_supported {
-    let handover = kernel.handover_offset() as u64;
-    #[cfg(target_arch = "x86_64")]
-    let entry = kernel_dest as u64 + handover + EFI_HANDOVER_ENTRY_BIAS;
-    #[cfg(not(target_arch = "x86_64"))]
-    let entry = kernel_dest as u64 + handover;
-        screen.put_str_at(5, log_y, &alloc::format!("EFI handover offset: +{:#x}", handover), EFI_LIGHTGREEN, EFI_BLACK);
+    // Display boot path information (based on Limine bootloader's proven approach)
+    let xloadflags = kernel.xloadflags();
+    if (xloadflags & 3) == 3 {
+        // 64-bit kernel with XLF_KERNEL_64 | XLF_CAN_BE_LOADED_ABOVE_4G
+        // Use startup_64 + 0x200 (works for all kernel versions)
+        let entry = kernel_dest as u64 + EFI_HANDOVER_ENTRY_BIAS;
+        screen.put_str_at(5, log_y, &alloc::format!("Boot method: EFI 64-bit handoff"), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("Computed EFI entry: {:#x}", entry), EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, &alloc::format!("  xloadflags: {:#06x} (64-bit, above 4GB OK)", xloadflags), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("  = {:#x} + {:#x} + {:#x}", kernel_dest as u64, handover, EFI_HANDOVER_ENTRY_BIAS), EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x} = startup_64 + {:#x}", entry, EFI_HANDOVER_ENTRY_BIAS), EFI_LIGHTGREEN, EFI_BLACK);
     } else {
-        screen.put_str_at(5, log_y, &alloc::format!("32-bit path via {:#x}", kernel.code32_start()), EFI_LIGHTGREEN, EFI_BLACK);
+        // Legacy kernel - fall back to 32-bit protected mode
+        screen.put_str_at(5, log_y, &alloc::format!("Boot method: 32-bit protected mode"), EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x} (code32_start)", kernel.code32_start()), EFI_LIGHTGREEN, EFI_BLACK);
     }
     log_y += 1;
 
@@ -163,8 +165,8 @@ pub unsafe fn boot_linux_kernel(
     exit_boot_services(boot_services, image_handle, &mut memory_map)
         .map_err(BootError::ExitBootServices)?;
 
-    screen.put_str_at(5, log_y, "Jumping to kernel...", EFI_LIGHTGREEN, EFI_BLACK);
-
+    // DO NOT use screen after exiting boot services - UEFI GOP is no longer available
+    
     boot_kernel(&kernel, boot_params_ptr, system_table, image_handle, kernel_dest)
 }
 
