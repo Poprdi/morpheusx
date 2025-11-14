@@ -27,9 +27,15 @@ pub unsafe fn boot_kernel(
         let setup_header = kernel.setup_header_bytes();
         let handover_offset = check_efi_handover_support(setup_header);
         
-        // Entry points use the LOADED kernel address, not original bzImage
-        let startup_64 = kernel_loaded_addr as u64;
+        // For 32-bit mode, we need kernel loaded at code32_start address
+        // For EFI mode, kernel can be anywhere (position independent)
         let code32_start = kernel.code32_start();
+        
+        // Entry points:
+        // - EFI handover: kernel_loaded_addr + handover_offset (position independent)
+        // - 32-bit mode: kernel_loaded_addr (bzImage decompressor stub starts at offset 0)
+        let startup_64 = kernel_loaded_addr as u64;
+        let protected_mode_entry = kernel_loaded_addr as u32;
         
         // We're currently in long mode (UEFI bootloader)
         let in_long_mode = true;
@@ -38,7 +44,7 @@ pub unsafe fn boot_kernel(
         let boot_path = BootPath::choose(
             handover_offset,
             startup_64,
-            code32_start,
+            protected_mode_entry,
             in_long_mode
         );
         
