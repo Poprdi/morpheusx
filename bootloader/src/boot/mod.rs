@@ -5,6 +5,7 @@ pub mod boot_params;
 pub mod handoff;
 pub mod memory;
 pub mod loader;
+pub mod efi_stub;
 
 // Architecture-specific boot code
 #[cfg(target_arch = "x86_64")]

@@ -1,63 +1,40 @@
 //! Kernel handoff implementations
 //! 
 //! Based on GRUB bootloader (the industry standard):
-//! EFI Handover Protocol - used by all modern Linux kernels
+//! EFI Handover Protocol - used by Linux kernels 2.6.30 through 6.0
 //! 
 //! Entry: kernel_addr + handover_offset + 512 (x86_64)
 //! Calling convention: handover_func(image_handle, system_table, boot_params)
+//!
+//! GRUB just casts to function pointer and calls - compiler handles ABI conversion!
 
-/// x86_64 offset added to handover_offset
+/// x86_64 offset added to handover_offset (from Linux kernel docs)
 pub const EFI_HANDOVER_OFFSET_X64: u64 = 512;
 
-/// EFI Handover Protocol entry
+/// EFI Handover Protocol function signature
 /// 
-/// Based on GRUB's implementation. This is THE standard way to boot Linux kernels.
+/// CRITICAL: Uses Microsoft x64 calling convention (Win64 ABI), NOT System V!
+/// Parameters: RCX = image_handle, RDX = system_table, R8 = boot_params
 /// 
-/// Entry point: kernel_addr + handover_offset + 512 (for x86_64)
-/// 
-/// Calling convention (from GRUB):
-/// typedef void (*handover_func)(void *image_handle, 
-///                               grub_efi_system_table_t *systab, 
-///                               void *boot_params);
-/// 
-/// Does NOT return.
-#[unsafe(naked)]
-pub unsafe extern "C" fn efi_handover_boot(
-    entry_point: u64,      // RDI - handover entry address
-    image_handle: u64,     // RSI - EFI image handle
-    system_table: u64,     // RDX - EFI system table
-    boot_params: u64,      // RCX - Linux boot_params
-) -> ! {
-    core::arch::naked_asm!(
-        // GRUB-style EFI handover protocol
-        // We receive: RDI=entry, RSI=handle, RDX=systab, RCX=params
-        // Handover expects: RCX=handle, RDX=systab, R8=params (Win64 ABI!)
-        
-        "mov r11, rdi",      // Save entry point
-        "mov rcx, rsi",      // RCX = image_handle (arg1 Win64)
-        "mov rdx, rdx",      // RDX = system_table (arg2 Win64) - already correct
-        "mov r8, rcx",       // R8 = boot_params (arg3 Win64) - from our RCX
-        
-        "cli",
-        "cld",
-        
-        // Jump to handover entry point
-        "jmp r11",
-    )
-}
+/// GRUB uses efi_call_3 wrapper to handle calling convention
+type HandoverFunc = unsafe extern "efiapi" fn(*mut (), *mut (), *mut ()) -> !;
 
 /// Boot protocol decision logic
 /// 
 /// Based on GRUB bootloader approach:
-/// Use EFI handover protocol when handover_offset != 0
-/// Otherwise fall back to 32-bit protected mode
+/// - EFI handover protocol when handover_offset != 0
+///   → Bootloader does NOT call ExitBootServices (kernel does it)
+/// - 32-bit protected mode fallback otherwise
+///   → Bootloader MUST call ExitBootServices before jumping
 #[derive(Debug, Copy, Clone)]
 pub enum BootPath {
     /// EFI Handover Protocol (GRUB-style, industry standard)
     /// Entry: kernel_addr + handover_offset + 512
+    /// Boot services MUST be active (kernel will exit them)
     EfiHandover64 { entry: u64 },
     
     /// Legacy: 32-bit protected mode fallback
+    /// Boot services MUST be exited before calling
     ProtectedMode32 { entry: u32 },
 }
 
@@ -65,7 +42,7 @@ impl BootPath {
     /// Determine boot path (GRUB-compatible)
     /// 
     /// GRUB uses handover_offset when available, regardless of kernel version.
-    /// This works for kernels 3.x through current 6.x.
+    /// This works for kernels 3.x through 6.0 (handover removed in 6.1).
     pub fn choose(
         handover_offset: Option<u32>,
         startup_64: u64,
@@ -88,16 +65,20 @@ impl BootPath {
     }
     
     /// Execute the handoff (does not return)
+    /// 
+    /// GRUB approach: Cast entry to function pointer and call directly.
+    /// Compiler handles System V → Win64 ABI conversion automatically!
     pub unsafe fn execute(self, boot_params: u64, image_handle: *mut (), system_table: *mut ()) -> ! {
         match self {
             BootPath::EfiHandover64 { entry } => {
-                // GRUB-style EFI handover: pass image_handle, system_table, boot_params
-                efi_handover_boot(
-                    entry,
-                    image_handle as u64,
-                    system_table as u64,
-                    boot_params,
-                )
+                // Debug: write entry address directly to screen
+                // (can't use logger due to 'static lifetime requirements)
+                
+                // GRUB-style: cast to function pointer
+                let handover: HandoverFunc = core::mem::transmute(entry);
+                
+                // Call with image_handle, system_table, boot_params
+                handover(image_handle, system_table, boot_params as *mut ())
             }
             BootPath::ProtectedMode32 { entry } => {
                 // Drop to 32-bit protected mode

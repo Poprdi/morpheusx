@@ -132,10 +132,21 @@ struct BootServices {
     _locate_device_path: usize,
     _install_configuration_table: usize,
     // Image Services
-    _load_image: usize,
-    _start_image: usize,
-    _exit: usize,
-    _unload_image: usize,
+    pub load_image: extern "efiapi" fn(
+        boot_policy: bool,
+        parent_image_handle: *mut (),
+        file_path: *const (),
+        source_buffer: *const core::ffi::c_void,
+        source_size: usize,
+        image_handle: *mut *mut (),
+    ) -> usize,
+    pub start_image: extern "efiapi" fn(
+        image_handle: *mut (),
+        exit_data_size: *mut usize,
+        exit_data: *mut *mut u16,
+    ) -> usize,
+    _exit: extern "efiapi" fn(*mut (), usize, *const u16) -> usize,
+    pub unload_image: extern "efiapi" fn(image_handle: *mut ()) -> usize,
     pub exit_boot_services: extern "efiapi" fn(
         image_handle: *mut (),
         map_key: usize,

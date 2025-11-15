@@ -371,7 +371,7 @@ pub fn restore_pe_image_base(pe_data: &mut [u8]) -> Result<(), ()> {
 pub unsafe fn open_file_read(
     root: *mut FileProtocol,
     path: &[u16],
-) -> Result<*mut FileProtocol, ()> {
+) -> Result<*mut FileProtocol, usize> {
     let mut file: *mut FileProtocol = core::ptr::null_mut();
     
     let status = ((*root).open)(
@@ -383,7 +383,7 @@ pub unsafe fn open_file_read(
     );
     
     if status != 0 {
-        return Err(());
+        return Err(status);
     }
     
     Ok(file)

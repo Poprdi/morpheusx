@@ -2,7 +2,7 @@
 
 use core::ptr;
 
-use super::{boot_kernel, kernel_loader::KernelError, KernelImage, LinuxBootParams};
+use super::{boot_kernel, efi_stub, kernel_loader::KernelError, KernelImage, LinuxBootParams};
 use super::memory::{
     allocate_boot_params,
     allocate_cmdline,
@@ -60,6 +60,20 @@ pub unsafe fn boot_linux_kernel(
     morpheus_core::logger::log("Parsing kernel...");
 
     let kernel = KernelImage::parse(kernel_data).map_err(BootError::KernelParse)?;
+
+    // Attempt EFI stub boot first (modern kernels 6.1+), but only when no initrd yet.
+    if initrd_data.is_none() {
+        match unsafe { efi_stub::boot_via_efi_stub(boot_services, image_handle, kernel_data, cmdline) } {
+            Ok(never) => return Ok(never),
+            Err(_error) => {
+                screen.put_str_at(5, log_y, "EFI stub path unavailable, falling back...", EFI_LIGHTGREEN, EFI_BLACK);
+                log_y += 1;
+                morpheus_core::logger::log("EFI stub path unavailable, falling back to bzImage flow");
+            }
+        }
+    } else {
+        morpheus_core::logger::log("Skipping EFI stub path (initrd support pending)");
+    }
 
     screen.put_str_at(5, log_y, "Allocating kernel memory...", EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
@@ -160,13 +174,25 @@ pub unsafe fn boot_linux_kernel(
     }
     log_y += 1;
 
-    screen.put_str_at(5, log_y, "Exiting boot services...", EFI_LIGHTGREEN, EFI_BLACK);
-    log_y += 1;
-
-    exit_boot_services(boot_services, image_handle, &mut memory_map)
-        .map_err(BootError::ExitBootServices)?;
-
-    // DO NOT use screen after exiting boot services - UEFI GOP is no longer available
+    // CRITICAL: With EFI handover protocol, the KERNEL calls ExitBootServices, not us!
+    // Only exit boot services for legacy 32-bit protected mode boot.
+    let handover_offset = kernel.handover_offset();
+    let uses_efi_handover = handover_offset != 0;
+    
+    if !uses_efi_handover {
+        // Legacy 32-bit protected mode: we must exit boot services
+        screen.put_str_at(5, log_y, "Exiting boot services...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        exit_boot_services(boot_services, image_handle, &mut memory_map)
+            .map_err(BootError::ExitBootServices)?;
+        
+        // DO NOT use screen after exiting boot services - UEFI GOP is no longer available
+    } else {
+        // EFI Handover Protocol: kernel will call ExitBootServices itself
+        screen.put_str_at(5, log_y, "Jumping to kernel (kernel will exit boot services)...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+    }
     
     boot_kernel(&kernel, boot_params_ptr, system_table, image_handle, kernel_dest)
 }
