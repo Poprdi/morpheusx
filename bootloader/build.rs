@@ -5,6 +5,16 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    let target = env::var("TARGET").unwrap();
+    
+    // Only build assembly if we're on a Unix-like system with nasm and ar.
+    // The PE/COFF object format is specific to the x86_64-unknown-uefi target.
+    if target.contains("uefi") {
+        build_trampoline_for_uefi();
+    }
+}
+
+fn build_trampoline_for_uefi() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     
     let obj_file = out_dir.join("trampoline32.obj");

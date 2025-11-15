@@ -296,26 +296,54 @@ impl DistroLauncher {
             
             // Open file for reading
             let file = open_file_read(root, &utf16_path)
-                .map_err(|_| "Failed to open kernel file")?;
+                .map_err(|status| {
+                    if status == 0x80000000000000 | 14 { // EFI_NOT_FOUND
+                        "File not found"
+                    } else {
+                        "Failed to open file"
+                    }
+                })?;
             
-            // Get file size - read a bit to determine size
-            // We'll allocate a large buffer and read
-            let mut file_buffer = alloc::vec![0u8; max_size];
-            let mut read_size = max_size;
+            screen.put_str_at(5, 14, "Reading file...", EFI_DARKGREEN, EFI_BLACK);
             
-            // Read file
-            let status = ((*file).read)(file, &mut read_size, file_buffer.as_mut_ptr());
+            // Read file in a reasonable buffer first to determine size
+            // Most initrd files are under 32MB
+            let initial_buf_size = 32 * 1024 * 1024; // 32MB initial buffer
+            let mut file_buffer = alloc::vec![0u8; initial_buf_size];
+            let mut bytes_read = initial_buf_size;
+            
+            let status = ((*file).read)(file, &mut bytes_read, file_buffer.as_mut_ptr());
+            
+            if status != 0 {
+                close_file(file).ok();
+                close_file(root).ok();
+                return Err("Failed to read file");
+            }
+            
+            // If we read less than buffer size, we got everything
+            if bytes_read < initial_buf_size {
+                file_buffer.truncate(bytes_read);
+                close_file(file).ok();
+                close_file(root).ok();
+                return Ok(file_buffer);
+            }
+            
+            // File is larger, need to read more - expand buffer
+            let remaining = max_size - bytes_read;
+            file_buffer.reserve(remaining);
+            file_buffer.set_len(max_size);
+            
+            let mut additional_read = remaining;
+            let status = ((*file).read)(file, &mut additional_read, file_buffer.as_mut_ptr().add(bytes_read));
             
             close_file(file).ok();
             close_file(root).ok();
             
             if status != 0 {
-                return Err("Failed to read kernel file");
+                return Err("Failed to read remaining file data");
             }
             
-            // Trim buffer to actual size
-            file_buffer.truncate(read_size);
-            
+            file_buffer.truncate(bytes_read + additional_read);
             Ok(file_buffer)
         }
     }

@@ -8,4 +8,4 @@ pub mod transitions;
 pub mod handoff;
 
 pub use transitions::drop_to_protected_mode;
-pub use handoff::efi_handover_boot;
+pub use handoff::BootPath;

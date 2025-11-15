@@ -12,6 +12,11 @@ extern "C" {
 /// This is implemented in external assembly (trampoline32.asm) to properly
 /// handle the mode transition without compiler interference.
 /// 
+/// ONLY used for legacy kernels that don't support EFI handover protocol.
+/// Modern kernels (2.6.30+) use EFI handover and stay in 64-bit mode.
+/// 
+/// When using this path, the bootloader MUST call ExitBootServices first.
+/// 
 /// Arguments:
 /// - entry_point: 32-bit kernel entry address
 /// - boot_params: pointer to Linux boot_params (goes in ESI)
