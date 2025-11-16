@@ -11,7 +11,7 @@ pub const LOGO_LINES_RAW: &[&str] = &[
 pub const LOGO_WIDTH: usize = 72;
 pub const LOGO_HEIGHT: usize = 6;
 
-pub const TAGLINE: &str = "Bootloader v0.1.0";
+pub const TAGLINE: &str = "Bootloader v1.0.1";
 pub const TAGLINE_WIDTH: usize = 32;
 
 // Status messages (raw, without spacing)

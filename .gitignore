@@ -19,3 +19,6 @@
 /obj/
 /.next/
 /.next-tmp/
+/testing/*
+!testing/*.sh
+!testing/README.md

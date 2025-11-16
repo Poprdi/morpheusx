@@ -1,4 +1,4 @@
-use crate::tui::renderer::{Screen, EFI_GREEN, EFI_BLACK};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN};
 
 pub struct Panel {
     pub x: usize,
@@ -24,24 +24,30 @@ impl Panel {
         let mut buf = [0u8; 128];
         let mut idx = 0;
 
-        buf[idx] = b'+'; idx += 1;
-        buf[idx] = b'-'; idx += 1;
-        
+        buf[idx] = b'+';
+        idx += 1;
+        buf[idx] = b'-';
+        idx += 1;
+
         // Title
         for &b in self.title.as_bytes() {
-            if idx >= buf.len() { break; }
+            if idx >= buf.len() {
+                break;
+            }
             buf[idx] = b;
             idx += 1;
         }
-        
-        buf[idx] = b'-'; idx += 1;
-        
+
+        buf[idx] = b'-';
+        idx += 1;
+
         // Fill rest
         while idx < self.width - 1 && idx < buf.len() {
             buf[idx] = b'-';
             idx += 1;
         }
-        buf[idx] = b'+'; idx += 1;
+        buf[idx] = b'+';
+        idx += 1;
 
         let top = core::str::from_utf8(&buf[..idx]).unwrap_or("");
         screen.put_str_at(self.x, self.y, top, EFI_GREEN, EFI_BLACK);
@@ -49,20 +55,36 @@ impl Panel {
         // Side borders
         for i in 1..self.height - 1 {
             screen.put_char_at(self.x, self.y + i, '|', EFI_GREEN, EFI_BLACK);
-            screen.put_char_at(self.x + self.width - 1, self.y + i, '|', EFI_GREEN, EFI_BLACK);
+            screen.put_char_at(
+                self.x + self.width - 1,
+                self.y + i,
+                '|',
+                EFI_GREEN,
+                EFI_BLACK,
+            );
         }
 
         // Bottom border
         idx = 0;
-        buf[idx] = b'+'; idx += 1;
+        buf[idx] = b'+';
+        idx += 1;
         for _ in 1..self.width - 1 {
-            if idx >= buf.len() { break; }
+            if idx >= buf.len() {
+                break;
+            }
             buf[idx] = b'-';
             idx += 1;
         }
-        buf[idx] = b'+'; idx += 1;
+        buf[idx] = b'+';
+        idx += 1;
 
         let bottom = core::str::from_utf8(&buf[..idx]).unwrap_or("");
-        screen.put_str_at(self.x, self.y + self.height - 1, bottom, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(
+            self.x,
+            self.y + self.height - 1,
+            bottom,
+            EFI_GREEN,
+            EFI_BLACK,
+        );
     }
 }

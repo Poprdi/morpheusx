@@ -34,7 +34,7 @@ impl Keyboard {
             };
 
             let status = ((*self.input).read_key_stroke)(self.input, &mut key);
-            
+
             // EFI_SUCCESS = 0
             if status == 0 {
                 Some(key)
@@ -51,20 +51,24 @@ impl Keyboard {
             }
             // Small delay to avoid spinning
             for _ in 0..10000 {
-                unsafe { core::ptr::read_volatile(&0); }
+                unsafe {
+                    core::ptr::read_volatile(&0);
+                }
             }
         }
     }
-    
+
     // Poll for key with a small delay for animation loops (approx 60Hz)
     pub fn poll_key_with_delay(&mut self) -> Option<InputKey> {
         let key = self.read_key();
-        
+
         // Minimal delay for responsive input
         for _ in 0..10000 {
-            unsafe { core::ptr::read_volatile(&0); }
+            unsafe {
+                core::ptr::read_volatile(&0);
+            }
         }
-        
+
         key
     }
 }

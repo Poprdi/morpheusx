@@ -26,16 +26,17 @@ impl ProgressBar {
     pub fn render(&self, screen: &mut Screen) {
         // Draw label
         screen.put_str_at(self.x, self.y, self.label, EFI_GREEN, EFI_BLACK);
-        
+
         // Draw progress bar
         let bar_width = self.width - 2;
         let filled = (bar_width * self.progress) / 100;
-        
+
         let mut buf = [0u8; 128];
         let mut idx = 0;
 
-        buf[idx] = b'['; idx += 1;
-        
+        buf[idx] = b'[';
+        idx += 1;
+
         for i in 0..bar_width {
             if i < filled {
                 buf[idx] = b'=';
@@ -46,8 +47,9 @@ impl ProgressBar {
             }
             idx += 1;
         }
-        
-        buf[idx] = b']'; idx += 1;
+
+        buf[idx] = b']';
+        idx += 1;
 
         let text = core::str::from_utf8(&buf[..idx]).unwrap_or("");
         screen.put_str_at(self.x, self.y + 1, text, EFI_LIGHTGREEN, EFI_BLACK);

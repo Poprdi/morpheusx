@@ -14,6 +14,7 @@ const EFI_ERROR_BIT: usize = 1usize << (usize::BITS - 1);
 const EFI_BUFFER_TOO_SMALL: usize = EFI_ERROR_BIT | 5;
 const EFI_INVALID_PARAMETER: usize = EFI_ERROR_BIT | 2;
 const LOW_MEMORY_MAX: u64 = 0x0000_FFFF_F000;
+pub(crate) const INITRD_MIN_ADDR: u64 = 0x0010_0000;
 
 #[derive(Debug)]
 pub enum MemoryError {
@@ -103,10 +104,7 @@ impl MemoryMap {
         }
     }
 
-    unsafe fn bootstrap(
-        &mut self,
-        boot_services: &crate::BootServices,
-    ) -> Result<(), MemoryError> {
+    unsafe fn bootstrap(&mut self, boot_services: &crate::BootServices) -> Result<(), MemoryError> {
         let mut needed = 0usize;
         let mut map_key = 0usize;
         let mut descriptor_size = 0usize;
@@ -239,24 +237,65 @@ pub unsafe fn allocate_low_buffer(
     max_address: u64,
     size: usize,
 ) -> Result<*mut u8, MemoryError> {
-    allocate_pages_max(boot_services, max_address, pages_from_bytes(size))
+    allocate_buffer_in_range(boot_services, INITRD_MIN_ADDR, max_address, size)
+}
+
+unsafe fn allocate_buffer_in_range(
+    boot_services: &crate::BootServices,
+    min_address: u64,
+    max_address: u64,
+    size: usize,
+) -> Result<*mut u8, MemoryError> {
+    if size == 0 || max_address < min_address {
+        return Err(MemoryError::InvalidAddress);
+    }
+
+    let pages = pages_from_bytes(size);
+    let total_bytes = (pages as u64)
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(MemoryError::AllocationFailed)?;
+
+    let span = max_address.saturating_sub(min_address).saturating_add(1);
+    if span < total_bytes {
+        return Err(MemoryError::AllocationFailed);
+    }
+
+    let max_start = max_address
+        .checked_add(1)
+        .and_then(|limit| limit.checked_sub(total_bytes))
+        .ok_or(MemoryError::AllocationFailed)?;
+
+    let mut candidate = align_down(max_start, PAGE_SIZE as u64);
+    let step = PAGE_SIZE as u64;
+
+    while candidate >= min_address {
+        match allocate_at(boot_services, candidate, pages) {
+            Ok(ptr) => return Ok(ptr),
+            Err(_) => {
+                if candidate < min_address + step {
+                    break;
+                }
+                candidate = candidate.saturating_sub(step);
+            }
+        }
+    }
+
+    Err(MemoryError::AllocationFailed)
 }
 
 // Load kernel image into allocated memory
-pub unsafe fn load_kernel_image(
-    kernel: &KernelImage,
-    dest: *mut u8,
-) -> Result<(), MemoryError> {
-    let kernel_data = core::slice::from_raw_parts(
-        kernel.kernel_base(),
-        kernel.kernel_size(),
-    );
+pub unsafe fn load_kernel_image(kernel: &KernelImage, dest: *mut u8) -> Result<(), MemoryError> {
+    let kernel_data = core::slice::from_raw_parts(kernel.kernel_base(), kernel.kernel_size());
 
     ptr::copy_nonoverlapping(kernel_data.as_ptr(), dest, kernel_data.len());
 
     let init_size = kernel.init_size() as usize;
     if init_size > kernel_data.len() {
-        ptr::write_bytes(dest.add(kernel_data.len()), 0, init_size - kernel_data.len());
+        ptr::write_bytes(
+            dest.add(kernel_data.len()),
+            0,
+            init_size - kernel_data.len(),
+        );
     }
 
     Ok(())
@@ -270,10 +309,7 @@ pub unsafe fn exit_boot_services(
     loop {
         map.ensure_snapshot(boot_services)?;
 
-        let status = (boot_services.exit_boot_services)(
-            image_handle,
-            map.map_key,
-        );
+        let status = (boot_services.exit_boot_services)(image_handle, map.map_key);
 
         if status == EFI_SUCCESS {
             return Ok(());
@@ -293,12 +329,8 @@ unsafe fn allocate_at(
     pages: usize,
 ) -> Result<*mut u8, MemoryError> {
     let mut addr = address;
-    let status = (boot_services.allocate_pages)(
-        EFI_ALLOCATE_ADDRESS,
-        EFI_LOADER_DATA,
-        pages,
-        &mut addr,
-    );
+    let status =
+        (boot_services.allocate_pages)(EFI_ALLOCATE_ADDRESS, EFI_LOADER_DATA, pages, &mut addr);
 
     if status == EFI_SUCCESS {
         Ok(addr as *mut u8)
@@ -313,12 +345,8 @@ unsafe fn allocate_pages_max(
     pages: usize,
 ) -> Result<*mut u8, MemoryError> {
     let mut addr = max_address;
-    let status = (boot_services.allocate_pages)(
-        EFI_ALLOCATE_MAX_ADDRESS,
-        EFI_LOADER_DATA,
-        pages,
-        &mut addr,
-    );
+    let status =
+        (boot_services.allocate_pages)(EFI_ALLOCATE_MAX_ADDRESS, EFI_LOADER_DATA, pages, &mut addr);
 
     if status == EFI_SUCCESS {
         Ok(addr as *mut u8)
@@ -332,12 +360,8 @@ unsafe fn allocate_pages_any(
     pages: usize,
 ) -> Result<*mut u8, MemoryError> {
     let mut addr = 0u64;
-    let status = (boot_services.allocate_pages)(
-        EFI_ALLOCATE_ANY_PAGES,
-        EFI_LOADER_DATA,
-        pages,
-        &mut addr,
-    );
+    let status =
+        (boot_services.allocate_pages)(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, pages, &mut addr);
 
     if status == EFI_SUCCESS {
         Ok(addr as *mut u8)
@@ -355,4 +379,11 @@ fn align_up(value: u64, alignment: u64) -> u64 {
         return value;
     }
     (value + alignment - 1) & !(alignment - 1)
+}
+
+fn align_down(value: u64, alignment: u64) -> u64 {
+    if alignment == 0 {
+        return value;
+    }
+    value & !(alignment - 1)
 }

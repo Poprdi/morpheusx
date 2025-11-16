@@ -34,9 +34,7 @@ impl KernelImage {
             return Err(KernelError::InvalidFormat);
         }
 
-        let setup_header = unsafe {
-            &*(data.as_ptr().add(header_offset) as *const SetupHeader)
-        };
+        let setup_header = unsafe { &*(data.as_ptr().add(header_offset) as *const SetupHeader) };
 
         // Verify magic signature
         if setup_header.header != KERNEL_MAGIC {
@@ -51,7 +49,7 @@ impl KernelImage {
         // Calculate kernel offset
         // Setup sectors + 1 (boot sector) × 512 bytes
         let setup_size = ((setup_header.setup_sects as usize) + 1) * 512;
-        
+
         if data.len() < setup_size {
             return Err(KernelError::InvalidFormat);
         }
@@ -94,11 +92,11 @@ impl KernelImage {
     pub fn init_size(&self) -> u32 {
         unsafe { (*self.setup_header).init_size }
     }
-    
+
     pub fn code32_start(&self) -> u32 {
         unsafe { (*self.setup_header).code32_start }
     }
-    
+
     pub fn handover_offset(&self) -> u32 {
         unsafe { (*self.setup_header).handover_offset }
     }
@@ -122,18 +120,18 @@ impl KernelImage {
     pub fn cmdline_limit(&self) -> u32 {
         unsafe { (*self.setup_header).cmdline_size }
     }
-    
+
     /// Get pointer to setup header for copying to boot params
     pub fn setup_header_ptr(&self) -> *const SetupHeader {
         self.setup_header
     }
-    
+
     /// Get raw setup header bytes for detailed inspection
     pub fn setup_header_bytes(&self) -> &[u8] {
         unsafe {
             core::slice::from_raw_parts(
                 self.setup_header as *const u8,
-                core::mem::size_of::<SetupHeader>()
+                core::mem::size_of::<SetupHeader>(),
             )
         }
     }

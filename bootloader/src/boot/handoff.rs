@@ -19,9 +19,10 @@ pub unsafe fn boot_kernel(
     image_handle: *mut (),
     kernel_loaded_addr: *mut u8,
 ) -> ! {
-    // x86_64 architecture: choose optimal boot path
+    // x86_64 architecture: GRUB-compatible boot path
     #[cfg(target_arch = "x86_64")]
     {
+        // Use handover_offset like GRUB does
         let handover_offset = if kernel.supports_efi_handover_64() {
             Some(kernel.handover_offset())
         } else {
@@ -29,7 +30,7 @@ pub unsafe fn boot_kernel(
         };
 
         let startup_64 = kernel_loaded_addr as u64;
-        let protected_mode_entry = kernel_loaded_addr as u32;
+        let protected_mode_entry = kernel.code32_start();
         let in_long_mode = true;
 
         let boot_path = BootPath::choose(
@@ -38,10 +39,10 @@ pub unsafe fn boot_kernel(
             protected_mode_entry,
             in_long_mode,
         );
-        
+
         boot_path.execute(boot_params as u64, image_handle, system_table)
     }
-    
+
     // Other architectures: implement as needed
     #[cfg(not(target_arch = "x86_64"))]
     {

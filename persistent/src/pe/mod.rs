@@ -1,25 +1,25 @@
 //! PE/COFF file format parsing
-//! 
+//!
 //! Platform-neutral implementation of PE file structure parsing.
 //! Works identically on x86_64, ARM64, and ARM32.
 
-pub mod header;
-pub mod section;
-pub mod reloc;
+pub mod compile_time;
 pub mod embedded_reloc;
 pub mod embedded_reloc_data;
-pub mod compile_time;
+pub mod header;
+pub mod reloc;
+pub mod section;
 
 use core::fmt;
 
 /// Errors during PE parsing
 #[derive(Debug, Clone, Copy)]
 pub enum PeError {
-    InvalidSignature,     // Not a valid PE file
-    InvalidOffset,        // Offset out of bounds
-    UnsupportedFormat,    // PE32 vs PE32+ mismatch
-    MissingSection,       // Required section not found
-    CorruptedData,        // Data integrity check failed
+    InvalidSignature,  // Not a valid PE file
+    InvalidOffset,     // Offset out of bounds
+    UnsupportedFormat, // PE32 vs PE32+ mismatch
+    MissingSection,    // Required section not found
+    CorruptedData,     // Data integrity check failed
 }
 
 impl fmt::Display for PeError {
@@ -37,9 +37,9 @@ impl fmt::Display for PeError {
 /// PE file architecture
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeArch {
-    X64,      // x86_64 (PE32+)
-    ARM64,    // aarch64 (PE32+)
-    ARM,      // armv7 (PE32)
+    X64,   // x86_64 (PE32+)
+    ARM64, // aarch64 (PE32+)
+    ARM,   // armv7 (PE32)
 }
 
 /// Result type for PE operations

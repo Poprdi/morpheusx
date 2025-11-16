@@ -1,5 +1,5 @@
 use super::button::Button;
-use crate::tui::input::{Keyboard, InputKey, SCAN_UP, SCAN_DOWN, KEY_ENTER};
+use crate::tui::input::{InputKey, Keyboard, KEY_ENTER, SCAN_DOWN, SCAN_UP};
 use crate::tui::renderer::Screen;
 
 pub struct Menu {
@@ -10,7 +10,7 @@ pub struct Menu {
 
 impl Menu {
     pub fn new(start_x: usize, start_y: usize) -> Self {
-        let spacing = 2;  // Changed from 4 since buttons are now single line
+        let spacing = 2; // Changed from 4 since buttons are now single line
         Self {
             buttons: [
                 Button::new(start_x, start_y, "Boot Arch"),
@@ -68,10 +68,10 @@ impl Menu {
 
     pub fn run(&mut self, screen: &mut Screen, keyboard: &mut Keyboard) -> usize {
         self.select(0);
-        
+
         loop {
             self.render(screen);
-            
+
             let key = keyboard.wait_for_key();
             if let Some(choice) = self.handle_input(&key) {
                 return choice;

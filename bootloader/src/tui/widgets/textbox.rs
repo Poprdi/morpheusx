@@ -50,21 +50,23 @@ impl TextBox {
         let mut buf = [0u8; 128];
         let mut idx = 0;
 
-        buf[idx] = b'['; idx += 1;
-        
+        buf[idx] = b'[';
+        idx += 1;
+
         // Content
         for i in 0..self.length {
             buf[idx] = self.buffer[i];
             idx += 1;
         }
-        
+
         // Padding
         for _ in self.length..(self.width - 2) {
             buf[idx] = b' ';
             idx += 1;
         }
-        
-        buf[idx] = b']'; idx += 1;
+
+        buf[idx] = b']';
+        idx += 1;
 
         let text = core::str::from_utf8(&buf[..idx]).unwrap_or("");
         screen.put_str_at(self.x, self.y, text, fg, bg);

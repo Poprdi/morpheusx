@@ -1,6 +1,6 @@
-use crate::tui::renderer::{Screen, EFI_GREEN, EFI_LIGHTGREEN, EFI_BLACK, EFI_DARKGREEN};
-use crate::tui::input::{Keyboard, InputKey};
 use crate::tui::debug::DebugOverlay;
+use crate::tui::input::{InputKey, Keyboard};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 
 const HEADER_ART: &[&str] = &[
     "  _____ _____ _____ _____ _   _ _____ _   _ _____ ",
@@ -12,9 +12,12 @@ const HEADER_ART: &[&str] = &[
 
 const SIDE_BORDER_LEFT: &str = "|";
 const SIDE_BORDER_RIGHT: &str = "|";
-const TOP_BORDER: &str = "+===========================================================================+";
-const BOTTOM_BORDER: &str = "+===========================================================================+";
-const DIVIDER: &str = "+===========================================================================+";
+const TOP_BORDER: &str =
+    "+===========================================================================+";
+const BOTTOM_BORDER: &str =
+    "+===========================================================================+";
+const DIVIDER: &str =
+    "+===========================================================================+";
 
 pub struct MainMenu {
     selected_index: usize,
@@ -89,28 +92,28 @@ impl MainMenu {
             0
         };
         let y = 0;
-        
+
         // Draw top border
         screen.put_str_at(x, y, TOP_BORDER, EFI_GREEN, EFI_BLACK);
-        
+
         // Draw header ASCII art centered within border
         for (i, line) in HEADER_ART.iter().enumerate() {
             let art_y = y + 1 + i;
             let padding = (76 - line.len()) / 2;
-            
+
             screen.put_str_at(x, art_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
-            
+
             // Center the art
             let art_x = x + 1 + padding;
             screen.put_str_at(art_x, art_y, line, EFI_LIGHTGREEN, EFI_BLACK);
-            
+
             screen.put_str_at(x + 75, art_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
         }
-        
+
         // Divider after header
         let divider_y = y + 1 + HEADER_ART.len();
         screen.put_str_at(x, divider_y, DIVIDER, EFI_GREEN, EFI_BLACK);
-        
+
         // Instructions
         let instr_y = divider_y + 1;
         screen.put_str_at(x, instr_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
@@ -118,19 +121,19 @@ impl MainMenu {
         let instr_x = x + (76 - instr.len()) / 2;
         screen.put_str_at(instr_x, instr_y, instr, EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 75, instr_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
-        
+
         // Another divider
         let menu_divider_y = instr_y + 1;
         screen.put_str_at(x, menu_divider_y, DIVIDER, EFI_GREEN, EFI_BLACK);
-        
+
         // Menu items - each takes 2 lines
         let menu_start_y = menu_divider_y + 2;
         for (i, item) in self.menu_items.iter().enumerate() {
             let item_y = menu_start_y + i * 2;
-            
+
             // Left border
             screen.put_str_at(x, item_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
-            
+
             if i == self.selected_index {
                 // Selection bracket and icon
                 screen.put_str_at(x + 3, item_y, ">>", EFI_LIGHTGREEN, EFI_BLACK);
@@ -143,23 +146,29 @@ impl MainMenu {
                 screen.put_str_at(x + 6, item_y, item.icon, EFI_DARKGREEN, EFI_BLACK);
                 screen.put_str_at(x + 12, item_y, item.label, EFI_GREEN, EFI_BLACK);
             }
-            
+
             // Right border
             screen.put_str_at(x + 75, item_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
         }
-        
+
         // Bottom divider
         let bottom_div_y = menu_start_y + (self.menu_items.len() * 2) + 1;
         screen.put_str_at(x, bottom_div_y, DIVIDER, EFI_GREEN, EFI_BLACK);
-        
+
         // Status bar
         let status_y = bottom_div_y + 1;
         screen.put_str_at(x, status_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 3, status_y, "Status: READY", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(x + 20, status_y, "|", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x + 22, status_y, "System: Operational", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 22,
+            status_y,
+            "System: Operational",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 75, status_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
-        
+
         // Bottom border
         screen.put_str_at(x, status_y + 1, BOTTOM_BORDER, EFI_GREEN, EFI_BLACK);
     }
@@ -170,13 +179,13 @@ impl MainMenu {
             self.select_prev();
             return MenuAction::Navigate;
         }
-        
+
         // Arrow down
         if key.scan_code == 0x02 {
             self.select_next();
             return MenuAction::Navigate;
         }
-        
+
         // Enter key
         if key.unicode_char == 0x0D {
             return match self.selected_index {
@@ -189,12 +198,12 @@ impl MainMenu {
                 _ => MenuAction::Navigate,
             };
         }
-        
+
         // ESC key
         if key.scan_code == 0x17 {
             return MenuAction::ExitToFirmware;
         }
-        
+
         MenuAction::Navigate
     }
 
@@ -203,14 +212,14 @@ impl MainMenu {
         screen.clear();
         self.render(screen);
         self.debug.render(screen);
-        
+
         loop {
             // Render global rain if active
             crate::tui::rain::render_rain(screen);
-            
+
             // Always render debug overlay on top
             self.debug.render(screen);
-            
+
             // Check for input (non-blocking)
             if let Some(key) = keyboard.read_key() {
                 // Debug overlay toggle
@@ -221,7 +230,7 @@ impl MainMenu {
                     self.debug.render(screen);
                     continue;
                 }
-                
+
                 // Global rain toggle
                 if key.unicode_char == b'x' as u16 || key.unicode_char == b'X' as u16 {
                     crate::tui::rain::toggle_rain(screen);
@@ -230,12 +239,12 @@ impl MainMenu {
                     self.debug.render(screen);
                     continue;
                 }
-                
+
                 let action = self.handle_input(&key);
                 if !matches!(action, MenuAction::Navigate) {
                     return action;
                 }
-                
+
                 // Re-render UI after navigation
                 screen.clear();
                 self.render(screen);

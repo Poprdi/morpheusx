@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-bootloader"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-core"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-network"
-version = "0.1.0"
+version = "1.0.1"
 
 [[package]]
 name = "morpheus-persistent"
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-updater"
-version = "0.1.0"
+version = "1.0.1"
 
 [[package]]
 name = "proc-macro2"
