@@ -24,6 +24,7 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+debug = true
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 

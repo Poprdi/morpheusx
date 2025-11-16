@@ -1,11 +1,11 @@
 //! Visual feedback and logging for persistence operations
-//! 
+//!
 //! Provides structured feedback that can be displayed in TUI or logged.
 //! Reusable across the entire persistence system.
 
 extern crate alloc;
-use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 /// Feedback message with severity level
 #[derive(Debug, Clone)]
@@ -18,23 +18,23 @@ pub struct FeedbackMessage {
 /// Message severity
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedbackLevel {
-    Info,      // Normal operation info
-    Success,   // Operation succeeded
-    Warning,   // Non-critical issue
-    Error,     // Operation failed
-    Debug,     // Detailed debug info
+    Info,    // Normal operation info
+    Success, // Operation succeeded
+    Warning, // Non-critical issue
+    Error,   // Operation failed
+    Debug,   // Detailed debug info
 }
 
 /// Message category for filtering/display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedbackCategory {
-    PeHeader,      // PE header parsing
-    Section,       // Section table parsing
-    Relocation,    // Relocation processing
-    Memory,        // Memory operations
-    Storage,       // Storage backend operations
-    Verification,  // Verification/validation
-    General,       // General messages
+    PeHeader,     // PE header parsing
+    Section,      // Section table parsing
+    Relocation,   // Relocation processing
+    Memory,       // Memory operations
+    Storage,      // Storage backend operations
+    Verification, // Verification/validation
+    General,      // General messages
 }
 
 impl FeedbackMessage {
@@ -45,7 +45,7 @@ impl FeedbackMessage {
             message: message.into(),
         }
     }
-    
+
     pub fn success(category: FeedbackCategory, message: impl Into<String>) -> Self {
         Self {
             level: FeedbackLevel::Success,
@@ -53,7 +53,7 @@ impl FeedbackMessage {
             message: message.into(),
         }
     }
-    
+
     pub fn warning(category: FeedbackCategory, message: impl Into<String>) -> Self {
         Self {
             level: FeedbackLevel::Warning,
@@ -61,7 +61,7 @@ impl FeedbackMessage {
             message: message.into(),
         }
     }
-    
+
     pub fn error(category: FeedbackCategory, message: impl Into<String>) -> Self {
         Self {
             level: FeedbackLevel::Error,
@@ -69,7 +69,7 @@ impl FeedbackMessage {
             message: message.into(),
         }
     }
-    
+
     pub fn debug(category: FeedbackCategory, message: impl Into<String>) -> Self {
         Self {
             level: FeedbackLevel::Debug,
@@ -77,7 +77,7 @@ impl FeedbackMessage {
             message: message.into(),
         }
     }
-    
+
     /// Format for display with prefix
     pub fn format_line(&self) -> String {
         use alloc::format;
@@ -105,7 +105,7 @@ impl FeedbackCollector {
             max_messages,
         }
     }
-    
+
     /// Add a message
     pub fn add(&mut self, msg: FeedbackMessage) {
         if self.messages.len() >= self.max_messages {
@@ -113,55 +113,60 @@ impl FeedbackCollector {
         }
         self.messages.push(msg);
     }
-    
+
     /// Add info message
     pub fn info(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::info(category, message));
     }
-    
+
     /// Add success message
     pub fn success(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::success(category, message));
     }
-    
+
     /// Add warning message
     pub fn warning(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::warning(category, message));
     }
-    
+
     /// Add error message
     pub fn error(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::error(category, message));
     }
-    
+
     /// Add debug message
     pub fn debug(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::debug(category, message));
     }
-    
+
     /// Get all messages
     pub fn messages(&self) -> &[FeedbackMessage] {
         &self.messages
     }
-    
+
     /// Get messages filtered by level
     pub fn messages_by_level(&self, level: FeedbackLevel) -> Vec<&FeedbackMessage> {
         self.messages.iter().filter(|m| m.level == level).collect()
     }
-    
+
     /// Get messages filtered by category
     pub fn messages_by_category(&self, category: FeedbackCategory) -> Vec<&FeedbackMessage> {
-        self.messages.iter().filter(|m| m.category == category).collect()
+        self.messages
+            .iter()
+            .filter(|m| m.category == category)
+            .collect()
     }
-    
+
     /// Clear all messages
     pub fn clear(&mut self) {
         self.messages.clear();
     }
-    
+
     /// Check if any errors
     pub fn has_errors(&self) -> bool {
-        self.messages.iter().any(|m| m.level == FeedbackLevel::Error)
+        self.messages
+            .iter()
+            .any(|m| m.level == FeedbackLevel::Error)
     }
 }
 
@@ -198,19 +203,25 @@ impl PeDumpSummary {
             size_of_image: headers.optional.size_of_image,
         }
     }
-    
+
     /// Format as lines for display
     pub fn format_lines(&self) -> Vec<String> {
         use alloc::format;
         let mut lines = Vec::new();
-        
+
         lines.push(format!("Architecture: {}", self.arch));
-        lines.push(format!("ImageBase (header): 0x{:016X}", self.image_base_header));
+        lines.push(format!(
+            "ImageBase (header): 0x{:016X}",
+            self.image_base_header
+        ));
         lines.push(format!("Loaded at: 0x{:016X}", self.actual_load_address));
-        lines.push(format!("Relocation delta: 0x{:016X}", self.relocation_delta as u64));
+        lines.push(format!(
+            "Relocation delta: 0x{:016X}",
+            self.relocation_delta as u64
+        ));
         lines.push(format!("Sections: {}", self.num_sections));
         lines.push(format!("Image size: {} bytes", self.size_of_image));
-        
+
         if self.has_reloc_section {
             if let (Some(rva), Some(size)) = (self.reloc_section_rva, self.reloc_section_size) {
                 lines.push(format!(".reloc @ RVA 0x{:X} ({} bytes)", rva, size));
@@ -218,7 +229,7 @@ impl PeDumpSummary {
         } else {
             lines.push(".reloc section: NOT FOUND".into());
         }
-        
+
         lines
     }
 }

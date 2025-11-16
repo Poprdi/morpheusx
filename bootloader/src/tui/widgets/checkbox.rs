@@ -34,13 +34,19 @@ impl Checkbox {
         let mut buf = [0u8; 64];
         let mut idx = 0;
 
-        buf[idx] = b'['; idx += 1;
-        buf[idx] = if self.checked { b'X' } else { b' ' }; idx += 1;
-        buf[idx] = b']'; idx += 1;
-        buf[idx] = b' '; idx += 1;
+        buf[idx] = b'[';
+        idx += 1;
+        buf[idx] = if self.checked { b'X' } else { b' ' };
+        idx += 1;
+        buf[idx] = b']';
+        idx += 1;
+        buf[idx] = b' ';
+        idx += 1;
 
         for &b in self.label.as_bytes() {
-            if idx >= buf.len() { break; }
+            if idx >= buf.len() {
+                break;
+            }
             buf[idx] = b;
             idx += 1;
         }
