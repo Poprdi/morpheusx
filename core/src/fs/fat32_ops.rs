@@ -443,6 +443,7 @@ fn write_file_in_directory<B: BlockIo>(
 }
 
 /// Add directory entry to cluster
+#[allow(clippy::too_many_arguments)]
 fn add_dir_entry_to_cluster<B: BlockIo>(
     block_io: &mut B,
     partition_start: u64,

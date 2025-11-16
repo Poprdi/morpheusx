@@ -27,7 +27,7 @@ fn build_trampoline_for_uefi() {
 
     // Use nasm to create COFF object file directly (compatible with PE/UEFI)
     let status = Command::new("nasm")
-        .args(&[
+        .args([
             "-f",
             "win64", // Output COFF format for 64-bit Windows/UEFI
             "-o",
@@ -41,7 +41,7 @@ fn build_trampoline_for_uefi() {
 
     // Create static library with ONLY the COFF object
     let status = Command::new("ar")
-        .args(&[
+        .args([
             "crus",
             lib_file.to_str().unwrap(),
             obj_file.to_str().unwrap(),
