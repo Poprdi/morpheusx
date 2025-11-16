@@ -12,6 +12,7 @@ use super::memory::{
     load_kernel_image,
     MemoryMap,
     MemoryError,
+    INITRD_MIN_ADDR,
 };
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_LIGHTGREEN};
 
@@ -110,12 +111,53 @@ pub unsafe fn boot_linux_kernel(
 
     if let Some(initrd) = initrd_data {
         if !initrd.is_empty() {
+            screen.put_str_at(5, log_y, "Allocating initrd memory...", EFI_LIGHTGREEN, EFI_BLACK);
+            log_y += 1;
+            morpheus_core::logger::log("initrd alloc start");
+            
             let limit = kernel.initrd_addr_max() as u64;
             let max_addr = if limit == 0 { 0xFFFF_FFFF } else { limit };
+            
+            let log_msg = alloc::format!(
+                "Initrd allocation: limit={:#x}, max_addr={:#x}, size={:#x}",
+                limit, max_addr, initrd.len()
+            );
+            morpheus_core::logger::log(log_msg.leak());
+            
             let initrd_ptr = allocate_low_buffer(boot_services, max_addr, initrd.len())
                 .map_err(BootError::InitrdAllocation)?;
+            
+            morpheus_core::logger::log("initrd alloc ok");
+            screen.put_str_at(5, log_y, "Copying initrd to memory...", EFI_LIGHTGREEN, EFI_BLACK);
+            log_y += 1;
+            morpheus_core::logger::log("initrd copy start");
+            
             ptr::copy_nonoverlapping(initrd.as_ptr(), initrd_ptr, initrd.len());
+            
+            morpheus_core::logger::log("initrd copy ok");
+            screen.put_str_at(5, log_y, &alloc::format!("Initrd @ {:#x} ({} bytes)", initrd_ptr as usize, initrd.len()), EFI_LIGHTGREEN, EFI_BLACK);
+            log_y += 1;
+            
+            // Re-enable ramdisk fields
             boot_params.set_ramdisk(initrd_ptr as u64, initrd.len() as u64);
+
+            let ramdisk_start = initrd_ptr as u64;
+            let ramdisk_end = ramdisk_start + initrd.len() as u64;
+            if ramdisk_start < INITRD_MIN_ADDR {
+                morpheus_core::logger::log("Warning: initrd allocated below 1MiB, kernel may fault");
+            }
+            if ramdisk_end > max_addr + 1 {
+                morpheus_core::logger::log("Warning: initrd extends past allowed range");
+            }
+
+            let (ramdisk_image_field, ramdisk_size_field) = boot_params.ramdisk_info();
+            let ramdisk_field_line = alloc::format!(
+                "Boot params ramdisk image={:#x}, size={:#x}",
+                ramdisk_image_field,
+                ramdisk_size_field
+            );
+            screen.put_str_at(5, log_y, &ramdisk_field_line, EFI_LIGHTGREEN, EFI_BLACK);
+            log_y += 1;
         }
     }
 
@@ -152,28 +194,6 @@ pub unsafe fn boot_linux_kernel(
     screen.put_str_at(5, log_y, &alloc::format!("Kernel loaded at: {:#x}", kernel_dest as usize), EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
 
-    // Display boot path information (GRUB-compatible)
-    let handover_offset = kernel.handover_offset();
-    if handover_offset != 0 {
-        // EFI Handover Protocol (GRUB-style)
-        #[cfg(target_arch = "x86_64")]
-        let entry = kernel_dest as u64 + handover_offset as u64 + 512;
-        #[cfg(not(target_arch = "x86_64"))]
-        let entry = kernel_dest as u64 + handover_offset as u64;
-        
-        screen.put_str_at(5, log_y, &alloc::format!("Boot method: EFI Handover Protocol (GRUB-compatible)"), EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("  Handover offset: +{:#x}", handover_offset), EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x}", entry), EFI_LIGHTGREEN, EFI_BLACK);
-    } else {
-        // No handover support - fall back to 32-bit protected mode
-        screen.put_str_at(5, log_y, &alloc::format!("Boot method: 32-bit protected mode (fallback)"), EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        screen.put_str_at(5, log_y, &alloc::format!("  Entry: {:#x} (code32_start)", kernel.code32_start()), EFI_LIGHTGREEN, EFI_BLACK);
-    }
-    log_y += 1;
-
     // CRITICAL: With EFI handover protocol, the KERNEL calls ExitBootServices, not us!
     // Only exit boot services for legacy 32-bit protected mode boot.
     let handover_offset = kernel.handover_offset();
@@ -190,8 +210,17 @@ pub unsafe fn boot_linux_kernel(
         // DO NOT use screen after exiting boot services - UEFI GOP is no longer available
     } else {
         // EFI Handover Protocol: kernel will call ExitBootServices itself
-        screen.put_str_at(5, log_y, "Jumping to kernel (kernel will exit boot services)...", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, "Jumping to kernel (handover protocol)...", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
+        morpheus_core::logger::log("About to call handover");
+        
+        // Log handover parameters for debugging
+        let entry_addr = kernel_dest as u64 + handover_offset as u64 + 512;
+        let log_line = alloc::format!(
+            "Handover: entry={:#x} img_handle={:p} sys_table={:p} boot_params={:p}",
+            entry_addr, image_handle, system_table, boot_params_ptr
+        );
+        morpheus_core::logger::log(log_line.leak());
     }
     
     boot_kernel(&kernel, boot_params_ptr, system_table, image_handle, kernel_dest)

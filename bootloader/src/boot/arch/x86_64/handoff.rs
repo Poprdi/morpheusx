@@ -71,13 +71,10 @@ impl BootPath {
     pub unsafe fn execute(self, boot_params: u64, image_handle: *mut (), system_table: *mut ()) -> ! {
         match self {
             BootPath::EfiHandover64 { entry } => {
-                // Debug: write entry address directly to screen
-                // (can't use logger due to 'static lifetime requirements)
-                
                 // GRUB-style: cast to function pointer
                 let handover: HandoverFunc = core::mem::transmute(entry);
                 
-                // Call with image_handle, system_table, boot_params
+                // Call with image_handle, system_table, boot_params (GRUB order)
                 handover(image_handle, system_table, boot_params as *mut ())
             }
             BootPath::ProtectedMode32 { entry } => {

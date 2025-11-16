@@ -14,6 +14,7 @@ const EFI_ERROR_BIT: usize = 1usize << (usize::BITS - 1);
 const EFI_BUFFER_TOO_SMALL: usize = EFI_ERROR_BIT | 5;
 const EFI_INVALID_PARAMETER: usize = EFI_ERROR_BIT | 2;
 const LOW_MEMORY_MAX: u64 = 0x0000_FFFF_F000;
+pub(crate) const INITRD_MIN_ADDR: u64 = 0x0010_0000;
 
 #[derive(Debug)]
 pub enum MemoryError {
@@ -239,7 +240,52 @@ pub unsafe fn allocate_low_buffer(
     max_address: u64,
     size: usize,
 ) -> Result<*mut u8, MemoryError> {
-    allocate_pages_max(boot_services, max_address, pages_from_bytes(size))
+    allocate_buffer_in_range(boot_services, INITRD_MIN_ADDR, max_address, size)
+}
+
+unsafe fn allocate_buffer_in_range(
+    boot_services: &crate::BootServices,
+    min_address: u64,
+    max_address: u64,
+    size: usize,
+) -> Result<*mut u8, MemoryError> {
+    if size == 0 || max_address < min_address {
+        return Err(MemoryError::InvalidAddress);
+    }
+
+    let pages = pages_from_bytes(size);
+    let total_bytes = (pages as u64)
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(MemoryError::AllocationFailed)?;
+
+    let span = max_address
+        .saturating_sub(min_address)
+        .saturating_add(1);
+    if span < total_bytes {
+        return Err(MemoryError::AllocationFailed);
+    }
+
+    let max_start = max_address
+        .checked_add(1)
+        .and_then(|limit| limit.checked_sub(total_bytes))
+        .ok_or(MemoryError::AllocationFailed)?;
+
+    let mut candidate = align_down(max_start, PAGE_SIZE as u64);
+    let step = PAGE_SIZE as u64;
+
+    while candidate >= min_address {
+        match allocate_at(boot_services, candidate, pages) {
+            Ok(ptr) => return Ok(ptr),
+            Err(_) => {
+                if candidate < min_address + step {
+                    break;
+                }
+                candidate = candidate.saturating_sub(step);
+            }
+        }
+    }
+
+    Err(MemoryError::AllocationFailed)
 }
 
 // Load kernel image into allocated memory
@@ -355,4 +401,11 @@ fn align_up(value: u64, alignment: u64) -> u64 {
         return value;
     }
     (value + alignment - 1) & !(alignment - 1)
+}
+
+fn align_down(value: u64, alignment: u64) -> u64 {
+    if alignment == 0 {
+        return value;
+    }
+    value & !(alignment - 1)
 }
