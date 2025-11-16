@@ -1,0 +1,58 @@
+#!/usr/bin/expect -f
+set timeout 60
+log_user 1
+log_file -a /tmp/full-boot-test.log
+
+spawn qemu-system-x86_64 \
+  -bios /usr/share/ovmf/OVMF.fd \
+  -drive format=raw,file=fat:rw:esp \
+  -m 512M \
+  -display none \
+  -serial mon:stdio \
+  -no-reboot
+
+# Wait for bootloader
+expect {
+    "Press any key" { 
+        send " "
+        exp_continue
+    }
+    "CONTROL CENTER" {
+        puts "\n=== BOOTLOADER MENU LOADED ===" 
+        sleep 2
+        send "\r"
+    }
+    timeout { puts "Timeout waiting for bootloader"; exit 1 }
+}
+
+# Wait for distro menu
+sleep 2
+send "\r"
+
+# Wait for boot
+expect {
+    "Boot method:" {
+        puts "\n=== BOOT METHOD DETECTED ==="
+        exp_continue
+    }
+    "Exiting boot services" {
+        puts "\n=== EXITING BOOT SERVICES ==="
+        exp_continue
+    }
+    "SUCCESS!" {
+        puts "\n=== KERNEL BOOTED SUCCESSFULLY ==="
+        exp_continue
+    }
+    "Linux version" {
+        puts "\n=== LINUX KERNEL STARTED ==="
+        exp_continue
+    }
+    timeout {
+        puts "\n=== Timeout after boot handoff ==="
+    }
+}
+
+sleep 10
+send "\x01"
+send "x"
+expect eof
