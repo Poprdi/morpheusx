@@ -4,6 +4,10 @@
 
 #![no_std]
 #![no_main]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+#![allow(unused_mut)]
 
 extern crate alloc;
 

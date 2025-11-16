@@ -29,6 +29,11 @@
 //! We use trait-based abstraction to keep the core agnostic.
 
 #![no_std]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::new_without_default)]
+#![allow(clippy::doc_lazy_continuation)]
 
 extern crate alloc;
 
