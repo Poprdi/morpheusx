@@ -9,25 +9,26 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+mod boot;
+mod installer;
 mod tui;
 mod uefi;
-mod installer;
-mod boot;
 
-use tui::renderer::Screen;
-use tui::logo::{LOGO_LINES_RAW, LOGO_WIDTH, TAGLINE, TAGLINE_WIDTH};
-use tui::rain::MatrixRain;
 use tui::boot_sequence::BootSequence;
-use tui::input::Keyboard;
-use tui::main_menu::{MainMenu, MenuAction};
-use tui::storage_manager::StorageManager;
-use tui::installer_menu::InstallerMenu;
 use tui::distro_launcher::DistroLauncher;
+use tui::input::Keyboard;
+use tui::installer_menu::InstallerMenu;
+use tui::logo::{LOGO_LINES_RAW, LOGO_WIDTH, TAGLINE, TAGLINE_WIDTH};
+use tui::main_menu::{MainMenu, MenuAction};
+use tui::rain::MatrixRain;
+use tui::renderer::Screen;
+use tui::storage_manager::StorageManager;
 
 #[repr(C)]
 pub struct SimpleTextInputProtocol {
     reset: extern "efiapi" fn(*mut SimpleTextInputProtocol, bool) -> usize,
-    read_key_stroke: extern "efiapi" fn(*mut SimpleTextInputProtocol, *mut tui::input::InputKey) -> usize,
+    read_key_stroke:
+        extern "efiapi" fn(*mut SimpleTextInputProtocol, *mut tui::input::InputKey) -> usize,
 }
 
 #[repr(C)]
@@ -45,7 +46,8 @@ pub struct SimpleTextOutputProtocol {
     reset: extern "efiapi" fn(*mut SimpleTextOutputProtocol, bool) -> usize,
     output_string: extern "efiapi" fn(*mut SimpleTextOutputProtocol, *const u16) -> usize,
     test_string: usize,
-    query_mode: extern "efiapi" fn(*mut SimpleTextOutputProtocol, usize, *mut usize, *mut usize) -> usize,
+    query_mode:
+        extern "efiapi" fn(*mut SimpleTextOutputProtocol, usize, *mut usize, *mut usize) -> usize,
     set_mode: usize,
     set_attribute: extern "efiapi" fn(*mut SimpleTextOutputProtocol, usize) -> usize,
     clear_screen: extern "efiapi" fn(*mut SimpleTextOutputProtocol) -> usize,
@@ -98,11 +100,7 @@ struct BootServices {
         descriptor_size: *mut usize,
         descriptor_version: *mut u32,
     ) -> usize,
-    allocate_pool: extern "efiapi" fn(
-        pool_type: usize,
-        size: usize,
-        buffer: *mut *mut u8,
-    ) -> usize,
+    allocate_pool: extern "efiapi" fn(pool_type: usize, size: usize, buffer: *mut *mut u8) -> usize,
     free_pool: extern "efiapi" fn(buffer: *mut u8) -> usize,
     // Event & Timer Services
     _create_event: usize,
@@ -111,10 +109,25 @@ struct BootServices {
     _signal_event: usize,
     _close_event: usize,
     _check_event: usize,
-    // Protocol Handler Services  
-    _install_protocol_interface: usize,
-    _reinstall_protocol_interface: usize,
-    _uninstall_protocol_interface: usize,
+    // Protocol Handler Services
+    install_protocol_interface: extern "efiapi" fn(
+        handle: *mut *mut (),
+        protocol: *const [u8; 16],
+        interface_type: usize,
+        interface: *mut core::ffi::c_void,
+    ) -> usize,
+    _reinstall_protocol_interface: extern "efiapi" fn(
+        handle: *mut (),
+        protocol: *const [u8; 16],
+        interface_type: usize,
+        old_interface: *mut core::ffi::c_void,
+        new_interface: *mut core::ffi::c_void,
+    ) -> usize,
+    uninstall_protocol_interface: extern "efiapi" fn(
+        handle: *mut (),
+        protocol: *const [u8; 16],
+        interface: *mut core::ffi::c_void,
+    ) -> usize,
     handle_protocol: extern "efiapi" fn(
         handle: *mut (),
         protocol: *const [u8; 16],
@@ -129,8 +142,13 @@ struct BootServices {
         buffer_size: *mut usize,
         buffer: *mut *mut (),
     ) -> usize,
-    _locate_device_path: usize,
-    _install_configuration_table: usize,
+    locate_device_path: extern "efiapi" fn(
+        protocol: *const [u8; 16],
+        device_path: *mut *mut (),
+        handle: *mut *mut (),
+    ) -> usize,
+    install_configuration_table:
+        extern "efiapi" fn(guid: *const [u8; 16], table: *const core::ffi::c_void) -> usize,
     // Image Services
     pub load_image: extern "efiapi" fn(
         boot_policy: bool,
@@ -147,74 +165,83 @@ struct BootServices {
     ) -> usize,
     _exit: extern "efiapi" fn(*mut (), usize, *const u16) -> usize,
     pub unload_image: extern "efiapi" fn(image_handle: *mut ()) -> usize,
-    pub exit_boot_services: extern "efiapi" fn(
-        image_handle: *mut (),
-        map_key: usize,
-    ) -> usize,
+    pub exit_boot_services: extern "efiapi" fn(image_handle: *mut (), map_key: usize) -> usize,
 }
 
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) -> usize {
     unsafe {
         let system_table = &*(system_table as *const SystemTable);
-        
+
         // Set global boot services pointer for allocator
         BOOT_SERVICES_PTR = system_table.boot_services;
-        
+
         let mut screen = Screen::new(system_table.con_out);
         let mut keyboard = Keyboard::new(system_table.con_in);
-        
+
         screen.clear();
-        
+
         // Calculate centered positions
         let screen_width = screen.width();
         let screen_height = screen.height();
-        
+
         // Center logo vertically - put in upper third
         let logo_y = 2;
-        
+
         // Draw logo centered horizontally
         let logo_x = screen.center_x(LOGO_WIDTH);
-        
+
         for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
             let y = logo_y + i;
             if y < screen_height {
-                screen.put_str_at(logo_x, y, line, tui::renderer::EFI_GREEN, tui::renderer::EFI_BLACK);
+                screen.put_str_at(
+                    logo_x,
+                    y,
+                    line,
+                    tui::renderer::EFI_GREEN,
+                    tui::renderer::EFI_BLACK,
+                );
             }
         }
-        
+
         // Draw tagline centered
         let tagline_y = logo_y + LOGO_LINES_RAW.len() + 1;
         let tagline_x = screen.center_x(TAGLINE_WIDTH);
         if tagline_y < screen_height {
-            screen.put_str_at(tagline_x, tagline_y, TAGLINE, tui::renderer::EFI_GREEN, tui::renderer::EFI_BLACK);
+            screen.put_str_at(
+                tagline_x,
+                tagline_y,
+                TAGLINE,
+                tui::renderer::EFI_GREEN,
+                tui::renderer::EFI_BLACK,
+            );
         }
-        
+
         // Boot sequence - log real initialization steps
         let boot_y = tagline_y + 3;
         let boot_x = 5;
         let mut boot_seq = BootSequence::new();
-        
+
         // Initialize matrix rain
         let mut rain = MatrixRain::new(screen_width, screen_height);
-        
+
         // Perform actual initialization and log each step
         morpheus_core::logger::log("Morpheus bootloader initialized");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         morpheus_core::logger::log("UEFI system table acquired");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         morpheus_core::logger::log("Console output protocol ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         morpheus_core::logger::log("Keyboard input protocol ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         // Enumerate storage devices
         let bs = &*system_table.boot_services;
         let mut temp_disk_manager = morpheus_core::disk::manager::DiskManager::new();
@@ -225,7 +252,7 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                     morpheus_core::logger::log("Block I/O protocol initialized");
                     boot_seq.render(&mut screen, boot_x, boot_y);
                     rain.render_frame(&mut screen);
-                    
+
                     morpheus_core::logger::log("Storage devices enumerated");
                     boot_seq.render(&mut screen, boot_x, boot_y);
                     rain.render_frame(&mut screen);
@@ -241,32 +268,32 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                 rain.render_frame(&mut screen);
             }
         }
-        
+
         morpheus_core::logger::log("TUI renderer initialized");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         morpheus_core::logger::log("Matrix rain effect loaded");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         morpheus_core::logger::log("Main menu system ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         boot_seq.mark_complete();
         boot_seq.render(&mut screen, boot_x, boot_y);
         rain.render_frame(&mut screen);
-        
+
         // Wait for keypress
         keyboard.wait_for_key();
-        
+
         // Main application loop
         loop {
             // Launch main menu
             let mut main_menu = MainMenu::new(&screen);
             let action = main_menu.run(&mut screen, &mut keyboard);
-            
+
             // Handle menu action
             match action {
                 MenuAction::DistroLauncher => {
@@ -278,7 +305,13 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                 }
                 MenuAction::DistroDownloader => {
                     screen.clear();
-                    screen.put_str_at(5, 10, "Distro Downloader - Coming soon...", tui::renderer::EFI_LIGHTGREEN, tui::renderer::EFI_BLACK);
+                    screen.put_str_at(
+                        5,
+                        10,
+                        "Distro Downloader - Coming soon...",
+                        tui::renderer::EFI_LIGHTGREEN,
+                        tui::renderer::EFI_BLACK,
+                    );
                     keyboard.wait_for_key();
                 }
                 MenuAction::StorageManager => {
@@ -295,18 +328,30 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                 }
                 MenuAction::AdminFunctions => {
                     screen.clear();
-                    screen.put_str_at(5, 10, "Admin Functions - Coming soon...", tui::renderer::EFI_LIGHTGREEN, tui::renderer::EFI_BLACK);
+                    screen.put_str_at(
+                        5,
+                        10,
+                        "Admin Functions - Coming soon...",
+                        tui::renderer::EFI_LIGHTGREEN,
+                        tui::renderer::EFI_BLACK,
+                    );
                     keyboard.wait_for_key();
                 }
                 MenuAction::ExitToFirmware => {
                     screen.clear();
-                    screen.put_str_at(5, 10, "Exiting to firmware...", tui::renderer::EFI_LIGHTGREEN, tui::renderer::EFI_BLACK);
+                    screen.put_str_at(
+                        5,
+                        10,
+                        "Exiting to firmware...",
+                        tui::renderer::EFI_LIGHTGREEN,
+                        tui::renderer::EFI_BLACK,
+                    );
                     break; // Exit the loop
                 }
                 _ => {}
             }
         }
-        
+
         // Final rain loop
         loop {
             rain.render_frame(&mut screen);
@@ -332,13 +377,13 @@ unsafe impl GlobalAlloc for UefiAllocator {
         if bs.is_null() {
             return core::ptr::null_mut();
         }
-        
+
         let bs = &*bs;
         let mut buffer: *mut u8 = core::ptr::null_mut();
-        
+
         // EfiBootServicesData = 2
         let status = (bs.allocate_pool)(2, layout.size(), &mut buffer);
-        
+
         if status == 0 {
             tui::debug::track_allocation(layout.size());
             buffer
@@ -346,13 +391,13 @@ unsafe impl GlobalAlloc for UefiAllocator {
             core::ptr::null_mut()
         }
     }
-    
+
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let bs = BOOT_SERVICES_PTR;
         if bs.is_null() || ptr.is_null() {
             return;
         }
-        
+
         let bs = &*bs;
         let _ = (bs.free_pool)(ptr);
         tui::debug::track_free(layout.size());

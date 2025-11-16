@@ -23,11 +23,16 @@ impl List {
             width,
             height,
             items: [
-                ListItem { label: "" }, ListItem { label: "" },
-                ListItem { label: "" }, ListItem { label: "" },
-                ListItem { label: "" }, ListItem { label: "" },
-                ListItem { label: "" }, ListItem { label: "" },
-                ListItem { label: "" }, ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
+                ListItem { label: "" },
             ],
             item_count: 0,
             selected_index: 0,
@@ -62,11 +67,11 @@ impl List {
 
     pub fn render(&self, screen: &mut Screen) {
         let visible_end = (self.scroll_offset + self.height).min(self.item_count);
-        
+
         for i in self.scroll_offset..visible_end {
             let y = self.y + (i - self.scroll_offset);
             let is_selected = i == self.selected_index;
-            
+
             let (fg, bg) = if is_selected {
                 (EFI_BLACK, EFI_LIGHTGREEN)
             } else {
@@ -78,15 +83,21 @@ impl List {
             let mut idx = 0;
 
             if is_selected {
-                buf[idx] = b'>'; idx += 1;
-                buf[idx] = b' '; idx += 1;
+                buf[idx] = b'>';
+                idx += 1;
+                buf[idx] = b' ';
+                idx += 1;
             } else {
-                buf[idx] = b' '; idx += 1;
-                buf[idx] = b' '; idx += 1;
+                buf[idx] = b' ';
+                idx += 1;
+                buf[idx] = b' ';
+                idx += 1;
             }
 
             for &b in self.items[i].label.as_bytes() {
-                if idx >= buf.len() { break; }
+                if idx >= buf.len() {
+                    break;
+                }
                 buf[idx] = b;
                 idx += 1;
             }

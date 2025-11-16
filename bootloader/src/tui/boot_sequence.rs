@@ -1,4 +1,4 @@
-use crate::tui::renderer::{Screen, EFI_GREEN, EFI_LIGHTGREEN, EFI_BLACK};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN, EFI_LIGHTGREEN};
 use morpheus_core::logger;
 
 pub struct BootSequence {
@@ -21,7 +21,7 @@ impl BootSequence {
     pub fn render(&mut self, screen: &mut Screen, x: usize, y: usize) {
         let logs = logger::get_logs();
         let log_count = logs.len();
-        
+
         // Only show last 20 logs to fit on screen
         let start_idx = log_count.saturating_sub(20);
 
@@ -38,10 +38,16 @@ impl BootSequence {
         if self.completed {
             let final_y = y + (log_count - start_idx).min(20);
             if final_y < 24 {
-                screen.put_str_at(x, final_y + 1, "> System initialized. Press any key...", EFI_LIGHTGREEN, EFI_BLACK);
+                screen.put_str_at(
+                    x,
+                    final_y + 1,
+                    "> System initialized. Press any key...",
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
             }
         }
-        
+
         self.last_rendered_count = log_count;
     }
 }

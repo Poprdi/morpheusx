@@ -21,7 +21,7 @@ impl PartitionInfo {
     pub fn size_mb(&self) -> u64 {
         ((self.end_lba - self.start_lba + 1) * 512) / (1024 * 1024)
     }
-    
+
     pub fn type_name(&self) -> &'static str {
         match self.partition_type {
             PartitionType::EfiSystem => "EFI System",
@@ -36,8 +36,8 @@ impl PartitionInfo {
 impl PartitionType {
     /// Convert from gpt_disk_types GUID to PartitionType
     pub fn from_gpt_guid(guid: &gpt_disk_types::GptPartitionType) -> Self {
-        use gpt_disk_types::{GptPartitionType as GptType, guid};
-        
+        use gpt_disk_types::{guid, GptPartitionType as GptType};
+
         if guid == &GptType::EFI_SYSTEM {
             PartitionType::EfiSystem
         } else if guid == &GptType::BASIC_DATA {
@@ -46,7 +46,7 @@ impl PartitionType {
             // Check Linux types
             let linux_fs = GptType(guid!("0fc63daf-8483-4772-8e79-3d69d8477de4"));
             let linux_swap = GptType(guid!("0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"));
-            
+
             if guid == &linux_fs {
                 PartitionType::LinuxFilesystem
             } else if guid == &linux_swap {
@@ -56,20 +56,18 @@ impl PartitionType {
             }
         }
     }
-    
+
     /// Convert to gpt_disk_types GUID
     pub fn to_gpt_guid(&self) -> gpt_disk_types::GptPartitionType {
-        use gpt_disk_types::{GptPartitionType as GptType, guid};
-        
+        use gpt_disk_types::{guid, GptPartitionType as GptType};
+
         match self {
             PartitionType::EfiSystem => GptType::EFI_SYSTEM,
             PartitionType::BasicData => GptType::BASIC_DATA,
             PartitionType::LinuxFilesystem => {
                 GptType(guid!("0fc63daf-8483-4772-8e79-3d69d8477de4"))
             }
-            PartitionType::LinuxSwap => {
-                GptType(guid!("0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"))
-            }
+            PartitionType::LinuxSwap => GptType(guid!("0657fd6d-a4ab-43c4-84e5-0933c84b4f4f")),
             PartitionType::Unknown => GptType::UNUSED,
         }
     }
@@ -90,27 +88,27 @@ impl PartitionTable {
             has_gpt: false,
         }
     }
-    
+
     pub fn clear(&mut self) {
         self.partitions = [None; 16];
         self.count = 0;
         self.has_gpt = false;
     }
-    
+
     pub fn add_partition(&mut self, info: PartitionInfo) -> Result<(), ()> {
         if self.count >= 16 {
             return Err(());
         }
-        
+
         self.partitions[self.count] = Some(info);
         self.count += 1;
         Ok(())
     }
-    
+
     pub fn count(&self) -> usize {
         self.count
     }
-    
+
     pub fn get(&self, index: usize) -> Option<&PartitionInfo> {
         if index < self.count {
             self.partitions[index].as_ref()
@@ -118,8 +116,10 @@ impl PartitionTable {
             None
         }
     }
-    
+
     pub fn iter(&self) -> impl Iterator<Item = &PartitionInfo> {
-        self.partitions[..self.count].iter().filter_map(|p| p.as_ref())
+        self.partitions[..self.count]
+            .iter()
+            .filter_map(|p| p.as_ref())
     }
 }

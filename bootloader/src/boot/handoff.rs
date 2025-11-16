@@ -28,7 +28,7 @@ pub unsafe fn boot_kernel(
         } else {
             None
         };
-        
+
         let startup_64 = kernel_loaded_addr as u64;
         let protected_mode_entry = kernel.code32_start();
         let in_long_mode = true;
@@ -39,10 +39,10 @@ pub unsafe fn boot_kernel(
             protected_mode_entry,
             in_long_mode,
         );
-        
+
         boot_path.execute(boot_params as u64, image_handle, system_table)
     }
-    
+
     // Other architectures: implement as needed
     #[cfg(not(target_arch = "x86_64"))]
     {

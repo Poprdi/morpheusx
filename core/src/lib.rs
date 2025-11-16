@@ -1,5 +1,5 @@
 //! Morpheus Core Library
-//! 
+//!
 //! Low-level operations for disk, filesystem, and distro management.
 //! Designed to be no_std compatible.
 

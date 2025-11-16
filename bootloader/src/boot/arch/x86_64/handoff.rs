@@ -1,8 +1,8 @@
 //! Kernel handoff implementations
-//! 
+//!
 //! Based on GRUB bootloader (the industry standard):
 //! EFI Handover Protocol - used by Linux kernels 2.6.30 through 6.0
-//! 
+//!
 //! Entry: kernel_addr + handover_offset + 512 (x86_64)
 //! Calling convention: handover_func(image_handle, system_table, boot_params)
 //!
@@ -12,15 +12,15 @@
 pub const EFI_HANDOVER_OFFSET_X64: u64 = 512;
 
 /// EFI Handover Protocol function signature
-/// 
+///
 /// CRITICAL: Uses Microsoft x64 calling convention (Win64 ABI), NOT System V!
 /// Parameters: RCX = image_handle, RDX = system_table, R8 = boot_params
-/// 
+///
 /// GRUB uses efi_call_3 wrapper to handle calling convention
 type HandoverFunc = unsafe extern "efiapi" fn(*mut (), *mut (), *mut ()) -> !;
 
 /// Boot protocol decision logic
-/// 
+///
 /// Based on GRUB bootloader approach:
 /// - EFI handover protocol when handover_offset != 0
 ///   → Bootloader does NOT call ExitBootServices (kernel does it)
@@ -32,7 +32,7 @@ pub enum BootPath {
     /// Entry: kernel_addr + handover_offset + 512
     /// Boot services MUST be active (kernel will exit them)
     EfiHandover64 { entry: u64 },
-    
+
     /// Legacy: 32-bit protected mode fallback
     /// Boot services MUST be exited before calling
     ProtectedMode32 { entry: u32 },
@@ -40,7 +40,7 @@ pub enum BootPath {
 
 impl BootPath {
     /// Determine boot path (GRUB-compatible)
-    /// 
+    ///
     /// GRUB uses handover_offset when available, regardless of kernel version.
     /// This works for kernels 3.x through 6.0 (handover removed in 6.1).
     pub fn choose(
@@ -59,21 +59,28 @@ impl BootPath {
                 }
             }
         }
-        
+
         // Fallback: 32-bit protected mode
-        BootPath::ProtectedMode32 { entry: protected_mode_entry }
+        BootPath::ProtectedMode32 {
+            entry: protected_mode_entry,
+        }
     }
-    
+
     /// Execute the handoff (does not return)
-    /// 
+    ///
     /// GRUB approach: Cast entry to function pointer and call directly.
     /// Compiler handles System V → Win64 ABI conversion automatically!
-    pub unsafe fn execute(self, boot_params: u64, image_handle: *mut (), system_table: *mut ()) -> ! {
+    pub unsafe fn execute(
+        self,
+        boot_params: u64,
+        image_handle: *mut (),
+        system_table: *mut (),
+    ) -> ! {
         match self {
             BootPath::EfiHandover64 { entry } => {
                 // GRUB-style: cast to function pointer
                 let handover: HandoverFunc = core::mem::transmute(entry);
-                
+
                 // Call with image_handle, system_table, boot_params (GRUB order)
                 handover(image_handle, system_table, boot_params as *mut ())
             }

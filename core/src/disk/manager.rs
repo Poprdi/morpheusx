@@ -25,11 +25,11 @@ impl DiskManager {
             count: 0,
         }
     }
-    
+
     pub fn disk_count(&self) -> usize {
         self.count
     }
-    
+
     pub fn get_disk(&self, index: usize) -> Option<&DiskInfo> {
         if index < self.count {
             self.disks[index].as_ref()
@@ -37,18 +37,18 @@ impl DiskManager {
             None
         }
     }
-    
+
     /// Add a disk to the manager
     pub fn add_disk(&mut self, info: DiskInfo) -> Result<(), ()> {
         if self.count >= 8 {
             return Err(());
         }
-        
+
         self.disks[self.count] = Some(info);
         self.count += 1;
         Ok(())
     }
-    
+
     /// Clear all disks
     pub fn clear(&mut self) {
         self.disks = [None, None, None, None, None, None, None, None];
@@ -73,7 +73,7 @@ impl DiskInfo {
             partitions: PartitionTable::new(),
         }
     }
-    
+
     pub fn size_mb(&self) -> u64 {
         ((self.last_block + 1) * self.block_size as u64) / (1024 * 1024)
     }

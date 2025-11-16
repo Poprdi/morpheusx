@@ -4,11 +4,11 @@ use alloc::vec::Vec;
 
 // EFI text colors
 pub const EFI_BLACK: usize = 0x00;
-pub const EFI_BLUE: usize = 0x01;       // Very dark, good for dim rain
-pub const EFI_DARKGREEN: usize = 0x02;  // Dim green for background rain
+pub const EFI_BLUE: usize = 0x01; // Very dark, good for dim rain
+pub const EFI_DARKGREEN: usize = 0x02; // Dim green for background rain
 pub const EFI_GREEN: usize = 0x02;
-pub const EFI_CYAN: usize = 0x03;       // Alternative dim color
-pub const EFI_RED: usize = 0x04;         // For errors
+pub const EFI_CYAN: usize = 0x03; // Alternative dim color
+pub const EFI_RED: usize = 0x04; // For errors
 pub const EFI_LIGHTGREEN: usize = 0x0A;
 pub const EFI_WHITE: usize = 0x0F;
 
@@ -34,17 +34,17 @@ pub struct Screen {
 impl Screen {
     pub fn new(con_out: *mut SimpleTextOutputProtocol) -> Self {
         let (width, height) = Self::get_screen_size(con_out);
-        
+
         // Create dynamic mask based on actual screen size
         let mut mask = Vec::new();
         for _ in 0..height {
             let row = vec![false; width];
             mask.push(row);
         }
-        
-        Self { 
-            con_out, 
-            width, 
+
+        Self {
+            con_out,
+            width,
             height,
             mask,
         }
@@ -53,29 +53,29 @@ impl Screen {
     fn get_screen_size(con_out: *mut SimpleTextOutputProtocol) -> (usize, usize) {
         unsafe {
             let protocol = &mut *con_out;
-            
+
             if protocol.mode.is_null() {
                 return (80, 25); // fallback
             }
-            
+
             let mode_info = &*protocol.mode;
             let current_mode = mode_info.mode;
-            
+
             if current_mode < 0 {
                 return (80, 25); // fallback
             }
-            
+
             // Query current mode dimensions
             let mut cols: usize = 80;
             let mut rows: usize = 25;
-            
+
             let status = (protocol.query_mode)(
                 protocol,
                 current_mode as usize,
                 &mut cols as *mut usize,
                 &mut rows as *mut usize,
             );
-            
+
             // Status 0 = success
             if status == 0 && cols > 0 && rows > 0 {
                 (cols, rows)
@@ -171,7 +171,7 @@ impl Screen {
         self.set_cursor(x, y);
         self.set_color(fg, bg);
         self.put_str(s);
-        
+
         // Update mask for written content
         if y < self.height {
             for (i, _ch) in s.chars().enumerate() {
@@ -186,14 +186,14 @@ impl Screen {
     // Draw multi-line text block with proper spacing
     pub fn draw_block(&mut self, lines: &[&str]) {
         let mut buffer = [0u16; 512];
-        
+
         for line in lines {
             str_to_ucs2(line, &mut buffer);
             unsafe {
                 let con_out = &mut *self.con_out;
                 (con_out.output_string)(con_out, buffer.as_ptr());
             }
-            
+
             // Add newline
             str_to_ucs2("\r\n", &mut buffer);
             unsafe {
@@ -210,7 +210,14 @@ impl Screen {
     }
 
     // Draw centered text block
-    pub fn draw_centered_block(&mut self, lines: &[&str], width: usize, start_y: usize, fg: usize, bg: usize) {
+    pub fn draw_centered_block(
+        &mut self,
+        lines: &[&str],
+        width: usize,
+        start_y: usize,
+        fg: usize,
+        bg: usize,
+    ) {
         let x_offset = if self.width > width {
             (self.width - width) / 2
         } else {

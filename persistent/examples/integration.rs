@@ -1,5 +1,5 @@
 //! Integration example: How bootloader will use persistent module
-//! 
+//!
 //! This file shows the FUTURE integration once implementation is complete.
 //! DO NOT compile this yet - it's documentation of the API design.
 
@@ -8,11 +8,11 @@
 // This is how the bootloader installer will eventually work:
 
 use morpheus_persistent::capture::MemoryImage;
-use morpheus_persistent::storage::{PersistenceBackend, esp::EspBackend};
 use morpheus_persistent::pe::PeError;
+use morpheus_persistent::storage::{esp::EspBackend, PersistenceBackend};
 
 /// New install_to_esp function (replaces current one in bootloader/src/installer/mod.rs)
-/// 
+///
 /// OLD APPROACH (current):
 /// ```ignore
 /// let image_base = (*loaded_image).image_base as *const u8;
@@ -22,7 +22,7 @@ use morpheus_persistent::pe::PeError;
 /// restore_pe_image_base(&mut binary_data)?;  // Only fixes header!
 /// fat32_ops::write_file(..., &binary_data)?;
 /// ```
-/// 
+///
 /// NEW APPROACH (with proper relocation handling):
 /// ```ignore
 /// let captured = MemoryImage::capture_from_memory(image_base, image_size)?;
@@ -36,45 +36,52 @@ pub unsafe fn install_to_esp_example(
     image_handle: *mut (),
 ) -> Result<(), InstallError> {
     // Phase 1: Capture running image
-    let loaded_image = get_loaded_image(bs, image_handle)
-        .map_err(|_| InstallError::ProtocolError)?;
-    
+    let loaded_image =
+        get_loaded_image(bs, image_handle).map_err(|_| InstallError::ProtocolError)?;
+
     let image_base = (*loaded_image).image_base as *const u8;
     let image_size = (*loaded_image).image_size as usize;
-    
+
     // Phase 2: Extract and unrelocate
     let captured = MemoryImage::capture_from_memory(image_base, image_size)
         .map_err(|_| InstallError::ProtocolError)?;
-    
-    let bootable_image = captured.create_bootable_image()
+
+    let bootable_image = captured
+        .create_bootable_image()
         .map_err(|_| InstallError::ProtocolError)?;
-    
+
     // Phase 3: Get ESP backend
-    let block_io = get_disk_protocol(bs, esp_info.disk_index)
-        .map_err(|_| InstallError::ProtocolError)?;
-    
-    let adapter = UefiBlockIoAdapter::new(&mut *block_io)
-        .map_err(|_| InstallError::IoError)?;
-    
+    let block_io =
+        get_disk_protocol(bs, esp_info.disk_index).map_err(|_| InstallError::ProtocolError)?;
+
+    let adapter = UefiBlockIoAdapter::new(&mut *block_io).map_err(|_| InstallError::IoError)?;
+
     // Phase 4: Store to ESP (Layer 0)
     let mut esp_backend = EspBackend::new(adapter, esp_info.start_lba);
-    esp_backend.store_bootloader(&bootable_image)
+    esp_backend
+        .store_bootloader(&bootable_image)
         .map_err(|_| InstallError::IoError)?;
-    
+
     // Phase 5 (future): Multi-layer persistence
     // let mut tpm_backend = TpmBackend::new();
     // tpm_backend.store_bootloader(&bootable_image)?;  // Hash to PCR
     //
     // let mut cmos_backend = CmosBackend::new();
     // cmos_backend.store_bootloader(&recovery_stub)?;  // Tiny fallback
-    
+
     Ok(())
 }
 
 // Placeholder types (actual definitions are in bootloader crate)
 struct BootServices;
-struct EspInfo { disk_index: usize, start_lba: u64 }
-enum InstallError { ProtocolError, IoError }
+struct EspInfo {
+    disk_index: usize,
+    start_lba: u64,
+}
+enum InstallError {
+    ProtocolError,
+    IoError,
+}
 struct UefiBlockIoAdapter;
 
 unsafe fn get_loaded_image(_: &BootServices, _: *mut ()) -> Result<*mut LoadedImageProtocol, ()> {
@@ -83,7 +90,10 @@ unsafe fn get_loaded_image(_: &BootServices, _: *mut ()) -> Result<*mut LoadedIm
 unsafe fn get_disk_protocol(_: &BootServices, _: usize) -> Result<*mut (), ()> {
     unimplemented!()
 }
-struct LoadedImageProtocol { image_base: *mut (), image_size: u64 }
+struct LoadedImageProtocol {
+    image_base: *mut (),
+    image_size: u64,
+}
 
 // Platform-specific bootloader paths
 #[cfg(target_arch = "x86_64")]
@@ -104,12 +114,12 @@ impl PersistenceOrchestrator {
     pub fn new() -> Self {
         Self { layers: Vec::new() }
     }
-    
+
     /// Add a persistence layer
     pub fn add_layer(&mut self, backend: Box<dyn PersistenceBackend>) {
         self.layers.push(backend);
     }
-    
+
     /// Store bootloader to all configured layers
     pub fn store_all(&mut self, bootloader: &[u8]) -> Result<(), PeError> {
         for layer in &mut self.layers {
@@ -117,7 +127,7 @@ impl PersistenceOrchestrator {
         }
         Ok(())
     }
-    
+
     /// Verify all layers match
     pub fn verify_all(&mut self, expected: &[u8]) -> Result<bool, PeError> {
         for layer in &mut self.layers {

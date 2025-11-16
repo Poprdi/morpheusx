@@ -1,4 +1,4 @@
-use super::renderer::{Screen, EFI_DARKGREEN, EFI_LIGHTGREEN, EFI_BLACK};
+use super::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_LIGHTGREEN};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,7 +9,7 @@ static mut GLOBAL_RAIN: Option<MatrixRain> = None;
 pub fn toggle_rain(screen: &Screen) {
     let was_enabled = RAIN_ENABLED.load(Ordering::Relaxed);
     RAIN_ENABLED.store(!was_enabled, Ordering::Relaxed);
-    
+
     unsafe {
         if !was_enabled {
             GLOBAL_RAIN = Some(MatrixRain::new(screen.width(), screen.height()));
@@ -45,7 +45,9 @@ impl Rng {
     }
 
     pub fn range(&mut self, max: u32) -> u32 {
-        if max == 0 { return 0; }
+        if max == 0 {
+            return 0;
+        }
         self.next() % max
     }
 }
@@ -55,7 +57,7 @@ pub struct RainColumn {
     pub y: isize,
     pub length: usize,
     pub speed: usize,
-    pub tick_delay: u32,  // Frames to wait before next update
+    pub tick_delay: u32,   // Frames to wait before next update
     pub tick_counter: u32, // Current frame counter
 }
 
@@ -74,12 +76,12 @@ impl RainColumn {
     pub fn update(&mut self, max_y: usize, rng: &mut Rng) {
         // Increment tick counter
         self.tick_counter += 1;
-        
+
         // Only update position when tick counter reaches delay
         if self.tick_counter >= self.tick_delay {
             self.tick_counter = 0; // Reset counter
             self.y += self.speed as isize;
-            
+
             // Reset column when it goes off screen
             if self.y > max_y as isize + self.length as isize {
                 self.y = -(rng.range(10) as isize);
@@ -103,15 +105,15 @@ impl MatrixRain {
         let mut rng = Rng::new(0x1337BEEF);
         // One column per character position for dense rain
         let num_cols = screen_width;
-        
+
         let mut columns = Vec::new();
-        
+
         // Create a column for every x position with heavily staggered start positions
         for x in 0..num_cols {
             // Spread initial positions across a large range to create continuous flow
             let max_offset = screen_height * 2;
             let y_offset = (x * max_offset / num_cols) as isize;
-            
+
             columns.push(RainColumn {
                 x,
                 y: -(rng.range(20) as isize) - y_offset,
@@ -122,9 +124,9 @@ impl MatrixRain {
             });
         }
 
-        Self { 
-            columns, 
-            rng, 
+        Self {
+            columns,
+            rng,
             screen_height,
             screen_width,
             frame_count: 0,
@@ -141,10 +143,10 @@ impl MatrixRain {
             core::hint::black_box(counter);
         }
     }
-    
+
     pub fn render_frame(&mut self, screen: &mut Screen) {
         self.frame_count = self.frame_count.wrapping_add(1);
-        
+
         // Update all column positions
         for col in &mut self.columns {
             col.update(self.screen_height, &mut self.rng);
@@ -154,27 +156,36 @@ impl MatrixRain {
         for col in &self.columns {
             for i in 0..col.length {
                 let y = col.y - i as isize;
-                
+
                 if y >= 0 && y < self.screen_height as isize && col.x < self.screen_width {
                     let y_pos = y as usize;
                     let x_pos = col.x;
-                    
+
                     // Easter egg mode: render rain OVER everything, eating the UI
-                    let (ch, color) = if i == 0 { 
+                    let (ch, color) = if i == 0 {
                         // Head: bright green binary
-                        (if self.rng.range(2) == 0 { '1' } else { '0' }, EFI_LIGHTGREEN)
+                        (
+                            if self.rng.range(2) == 0 { '1' } else { '0' },
+                            EFI_LIGHTGREEN,
+                        )
                     } else if i < 3 {
-                        // Middle: normal green binary  
-                        (if self.rng.range(2) == 0 { '1' } else { '0' }, EFI_DARKGREEN)
+                        // Middle: normal green binary
+                        (
+                            if self.rng.range(2) == 0 { '1' } else { '0' },
+                            EFI_DARKGREEN,
+                        )
                     } else {
                         // Tail: dim green dots for cosmic trail effect
-                        (if self.rng.range(3) == 0 { '.' } else { ' ' }, EFI_DARKGREEN)
+                        (
+                            if self.rng.range(3) == 0 { '.' } else { ' ' },
+                            EFI_DARKGREEN,
+                        )
                     };
                     screen.put_char_at(x_pos, y_pos, ch, color, EFI_BLACK);
                 }
             }
         }
-        
+
         // Built-in delay for smooth animation
         self.delay();
     }

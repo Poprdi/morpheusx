@@ -2,41 +2,41 @@
 
 #[repr(C, packed)]
 pub struct LinuxBootParams {
-    screen_info: ScreenInfo,         // 0x000
-    apm_bios_info: ApmBiosInfo,      // 0x040
-    _pad2: [u8; 4],                  // 0x054
-    tboot_addr: u64,                 // 0x058
-    ist_info: IstInfo,               // 0x060
-    acpi_rsdp_addr: u64,             // 0x070
-    _pad3: [u8; 8],                  // 0x078
-    hd0_info: [u8; 16],              // 0x080 (obsolete)
-    hd1_info: [u8; 16],              // 0x090 (obsolete)
-    sys_desc_table: SysDescTable,    // 0x0a0 (obsolete)
-    olpc_ofw_header: OlpcOfwHeader,  // 0x0b0
-    ext_ramdisk_image: u32,          // 0x0c0
-    ext_ramdisk_size: u32,           // 0x0c4
-    ext_cmd_line_ptr: u32,           // 0x0c8
-    _pad4: [u8; 112],                // 0x0cc
-    cc_blob_address: u32,            // 0x13c
-    edid_info: EdidInfo,             // 0x140
-    efi_info: EfiInfo,               // 0x1c0
-    alt_mem_k: u32,                  // 0x1e0
-    scratch: u32,                    // 0x1e4
-    e820_entries: u8,                // 0x1e8
-    eddbuf_entries: u8,              // 0x1e9
-    edd_mbr_sig_buf_entries: u8,     // 0x1ea
-    kbd_status: u8,                  // 0x1eb
-    secure_boot: u8,                 // 0x1ec
-    _pad5: [u8; 2],                  // 0x1ed
-    sentinel: u8,                    // 0x1ef
-    _pad6: [u8; 1],                  // 0x1f0
-    hdr: SetupHeader,                // 0x1f1
+    screen_info: ScreenInfo,        // 0x000
+    apm_bios_info: ApmBiosInfo,     // 0x040
+    _pad2: [u8; 4],                 // 0x054
+    tboot_addr: u64,                // 0x058
+    ist_info: IstInfo,              // 0x060
+    acpi_rsdp_addr: u64,            // 0x070
+    _pad3: [u8; 8],                 // 0x078
+    hd0_info: [u8; 16],             // 0x080 (obsolete)
+    hd1_info: [u8; 16],             // 0x090 (obsolete)
+    sys_desc_table: SysDescTable,   // 0x0a0 (obsolete)
+    olpc_ofw_header: OlpcOfwHeader, // 0x0b0
+    ext_ramdisk_image: u32,         // 0x0c0
+    ext_ramdisk_size: u32,          // 0x0c4
+    ext_cmd_line_ptr: u32,          // 0x0c8
+    _pad4: [u8; 112],               // 0x0cc
+    cc_blob_address: u32,           // 0x13c
+    edid_info: EdidInfo,            // 0x140
+    efi_info: EfiInfo,              // 0x1c0
+    alt_mem_k: u32,                 // 0x1e0
+    scratch: u32,                   // 0x1e4
+    e820_entries: u8,               // 0x1e8
+    eddbuf_entries: u8,             // 0x1e9
+    edd_mbr_sig_buf_entries: u8,    // 0x1ea
+    kbd_status: u8,                 // 0x1eb
+    secure_boot: u8,                // 0x1ec
+    _pad5: [u8; 2],                 // 0x1ed
+    sentinel: u8,                   // 0x1ef
+    _pad6: [u8; 1],                 // 0x1f0
+    hdr: SetupHeader,               // 0x1f1
     _pad7: [u8; 0x290 - 0x1f1 - core::mem::size_of::<SetupHeader>()],
-    edd_mbr_sig_buffer: [u32; 16],   // 0x290
-    e820_table: [E820Entry; 128],    // 0x2d0
-    _pad8: [u8; 48],                 // 0xcd0
-    eddbuf: [EddInfo; 6],            // 0xd00
-    _pad9: [u8; 276],                // 0xeec
+    edd_mbr_sig_buffer: [u32; 16], // 0x290
+    e820_table: [E820Entry; 128],  // 0x2d0
+    _pad8: [u8; 48],               // 0xcd0
+    eddbuf: [EddInfo; 6],          // 0xd00
+    _pad9: [u8; 276],              // 0xeec
 }
 
 #[repr(C, packed)]
@@ -221,21 +221,17 @@ impl LinuxBootParams {
     pub fn set_loader_type(&mut self, loader_type: u8) {
         self.hdr.type_of_loader = loader_type;
     }
-    
+
     pub fn header(&self) -> &SetupHeader {
         &self.hdr
     }
-    
+
     /// Copy setup header from kernel image to boot params
     /// CRITICAL: The kernel expects its own setup header back
     pub unsafe fn copy_setup_header(&mut self, kernel_setup_header: *const SetupHeader) {
-        core::ptr::copy_nonoverlapping(
-            kernel_setup_header,
-            &mut self.hdr as *mut SetupHeader,
-            1
-        );
+        core::ptr::copy_nonoverlapping(kernel_setup_header, &mut self.hdr as *mut SetupHeader, 1);
     }
-    
+
     /// Set basic video mode (text mode fallback)
     pub fn set_video_mode(&mut self) {
         self.screen_info.orig_video_mode = 0x03; // 80x25 text mode
@@ -243,7 +239,7 @@ impl LinuxBootParams {
         self.screen_info.orig_video_lines = 25;
         self.screen_info.orig_video_isVGA = 1;
     }
-    
+
     /// Add E820 memory map entry
     /// CRITICAL: Kernel needs memory map to initialize
     pub fn add_e820_entry(&mut self, addr: u64, size: u64, entry_type: u32) {
