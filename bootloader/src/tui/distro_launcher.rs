@@ -36,9 +36,7 @@ impl DistroLauncher {
             KernelEntry {
                 name: String::from("Arch Linux"),
                 path: String::from("\\kernels\\vmlinuz-arch"),
-                cmdline: String::from(
-                    "root=/dev/ram0 rw console=ttyS0,115200 debug init=/usr/bin/bash"
-                ),
+                cmdline: String::from("root=/dev/ram0 rw console=ttyS0,115200 console=tty0 debug"),
                 initrd: Some(String::from("\\initrds\\initramfs-arch.img")),
             },
             KernelEntry {
