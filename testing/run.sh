@@ -11,28 +11,29 @@ if [ ! -f esp/EFI/BOOT/BOOTX64.EFI ]; then
     exit 1
 fi
 
-# Create ESP disk image if needed or if esp directory is newer
-if [ ! -f esp.img ] || [ esp -nt esp.img ]; then
-    echo "Creating ESP disk image from esp/ directory..."
-    # Calculate size needed (add 50MB overhead for FAT32 structures)
-    ESP_SIZE=$(du -sb esp | awk '{print int(($1 / 1024 / 1024) + 50)}')
-    echo "ESP directory size: ${ESP_SIZE}MB (with overhead)"
-    
-    # Create disk image
-    dd if=/dev/zero of=esp.img bs=1M count=$ESP_SIZE status=none
-    
-    # Format as FAT32
-    mkfs.vfat -F 32 -n "ESP" esp.img >/dev/null
-    
-    # Mount and copy contents
-    mkdir -p /tmp/esp-mount
-    sudo mount -o loop esp.img /tmp/esp-mount
-    sudo rsync -a esp/ /tmp/esp-mount/
-    sudo umount /tmp/esp-mount
-    rmdir /tmp/esp-mount
-    
-    echo "✓ ESP image created: esp.img (${ESP_SIZE}MB)"
-fi
+# Always rebuild ESP disk image to ensure latest bootloader is used
+echo "Creating ESP disk image from esp/ directory..."
+# Calculate size needed (add 50MB overhead for FAT32 structures)
+ESP_SIZE=$(du -sb esp | awk '{print int(($1 / 1024 / 1024) + 50)}')
+echo "ESP directory size: ${ESP_SIZE}MB (with overhead)"
+
+# Remove old image if exists
+rm -f esp.img
+
+# Create disk image
+dd if=/dev/zero of=esp.img bs=1M count=$ESP_SIZE status=none
+
+# Format as FAT32
+mkfs.vfat -F 32 -n "ESP" esp.img >/dev/null
+
+# Mount and copy contents
+mkdir -p /tmp/esp-mount
+sudo mount -o loop esp.img /tmp/esp-mount
+sudo rsync -a esp/ /tmp/esp-mount/ || true  # Ignore permission errors from FAT32
+sudo umount /tmp/esp-mount
+rmdir /tmp/esp-mount
+
+echo "✓ ESP image created: esp.img (${ESP_SIZE}MB)"
 
 echo "Starting QEMU with OVMF..."
 echo "Press Ctrl+A then X to exit QEMU"
@@ -70,6 +71,7 @@ case $REPLY in
         echo "If Morpheus boots, installation succeeded!"
         echo ""
         qemu-system-x86_64 \
+            -s \
             -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
             -drive format=raw,file=test-disk-10g.img \
             -net none \
@@ -80,6 +82,7 @@ case $REPLY in
         echo "Booting from ESP directory only..."
         echo ""
         qemu-system-x86_64 \
+            -s \
             -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
             -net none \
@@ -90,6 +93,7 @@ case $REPLY in
         echo "Booting with ESP + both test disks..."
         echo ""
         qemu-system-x86_64 \
+            -s \
             -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
             -drive format=raw,file=test-disk.img \

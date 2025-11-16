@@ -90,7 +90,7 @@ struct BootServices {
         pages: usize,
         memory: *mut u64,
     ) -> usize,
-    _free_pages: usize,
+    pub free_pages: extern "efiapi" fn(memory: u64, pages: usize) -> usize,
     pub get_memory_map: extern "efiapi" fn(
         memory_map_size: *mut usize,
         memory_map: *mut u8,

@@ -212,8 +212,18 @@ impl LinuxBootParams {
         self.ext_ramdisk_size = (initrd_size >> 32) as u32;
     }
 
+    pub fn ramdisk_info(&self) -> (u64, u64) {
+        let addr = (self.ext_ramdisk_image as u64) << 32 | self.hdr.ramdisk_image as u64;
+        let size = (self.ext_ramdisk_size as u64) << 32 | self.hdr.ramdisk_size as u64;
+        (addr, size)
+    }
+
     pub fn set_loader_type(&mut self, loader_type: u8) {
         self.hdr.type_of_loader = loader_type;
+    }
+    
+    pub fn header(&self) -> &SetupHeader {
+        &self.hdr
     }
     
     /// Copy setup header from kernel image to boot params
