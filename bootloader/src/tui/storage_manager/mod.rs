@@ -9,6 +9,7 @@ mod format;
 mod gpt_ops_ui;
 mod partition_ops;
 mod render;
+mod utils;
 
 pub struct StorageManager {
     disk_manager: DiskManager,
@@ -277,7 +278,7 @@ impl StorageManager {
                     );
 
                     let mut err_buf = [0u8; 20];
-                    let err_len = Self::format_number(err_code as u64, &mut err_buf);
+                    let err_len = utils::format_number(err_code as u64, &mut err_buf);
                     let err_str = core::str::from_utf8(&err_buf[..err_len]).unwrap_or("?");
 
                     screen.put_str_at(5, 7, "Error code: ", EFI_GREEN, EFI_BLACK);

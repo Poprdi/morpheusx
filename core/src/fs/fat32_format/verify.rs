@@ -1,15 +1,7 @@
 // FAT32 filesystem formatter
 
+use super::Fat32Error;
 use gpt_disk_io::BlockIo;
-
-#[derive(Debug)]
-pub enum Fat32Error {
-    IoError,
-    PartitionTooSmall,
-    PartitionTooLarge,
-    InvalidBlockSize,
-    NotImplemented,
-}
 
 /// FAT32 Boot Sector (first 512 bytes of partition)
 #[repr(C, packed)]
@@ -142,107 +134,6 @@ fn calculate_fat_size(total_sectors: u32, reserved_sectors: u16, sectors_per_clu
 }
 
 /// Format partition as FAT32
-pub fn format_fat32<B: BlockIo>(
-    block_io: &mut B,
-    partition_lba_start: u64,
-    partition_sectors: u64,
-) -> Result<(), Fat32Error> {
-    // Validate partition size (min 65MB, max 2TB)
-    if partition_sectors < 133120 {
-        // ~65MB
-        return Err(Fat32Error::PartitionTooSmall);
-    }
-
-    if partition_sectors > 0xFFFFFFFF {
-        return Err(Fat32Error::PartitionTooLarge);
-    }
-
-    let total_sectors = partition_sectors as u32;
-    let reserved_sectors = 32u16;
-    let sectors_per_cluster = 8u8; // 4KB clusters for most sizes
-
-    // Calculate FAT size
-    let fat_size = calculate_fat_size(total_sectors, reserved_sectors, sectors_per_cluster);
-
-    // Calculate cluster count for FSInfo
-    let fat_sectors = fat_size * 2; // Two FAT copies
-    let data_sectors = total_sectors - reserved_sectors as u32 - fat_sectors;
-    let cluster_count = data_sectors / sectors_per_cluster as u32;
-
-    // Create boot sector
-    let boot_sector = Fat32BootSector::new(total_sectors, fat_size, partition_lba_start as u32);
-    let boot_bytes = boot_sector.to_bytes();
-
-    // Write boot sector to LBA 0 of partition
-    let lba = gpt_disk_types::Lba::from(gpt_disk_types::LbaLe::from_u64(partition_lba_start));
-    block_io
-        .write_blocks(lba, &boot_bytes)
-        .map_err(|_| Fat32Error::IoError)?;
-
-    // Create and write FSInfo sector
-    let fsinfo = FsInfoSector::new(cluster_count - 1); // -1 for root cluster
-    let fsinfo_bytes = fsinfo.to_bytes();
-    let fsinfo_lba =
-        gpt_disk_types::Lba::from(gpt_disk_types::LbaLe::from_u64(partition_lba_start + 1));
-    block_io
-        .write_blocks(fsinfo_lba, &fsinfo_bytes)
-        .map_err(|_| Fat32Error::IoError)?;
-
-    // Write backup boot sector (sector 6)
-    let backup_lba =
-        gpt_disk_types::Lba::from(gpt_disk_types::LbaLe::from_u64(partition_lba_start + 6));
-    block_io
-        .write_blocks(backup_lba, &boot_bytes)
-        .map_err(|_| Fat32Error::IoError)?;
-
-    // Initialize FAT tables (write first sector of each FAT)
-    let mut fat_sector = [0u8; 512];
-    // First two entries are reserved: 0xFFFFFFF8 (media type) and 0xFFFFFFFF (EOC)
-    // Entry 2 is root directory: 0xFFFFFFFF (EOC - single cluster root)
-    fat_sector[0] = 0xF8;
-    fat_sector[1] = 0xFF;
-    fat_sector[2] = 0xFF;
-    fat_sector[3] = 0xFF;
-    fat_sector[4] = 0xFF;
-    fat_sector[5] = 0xFF;
-    fat_sector[6] = 0xFF;
-    fat_sector[7] = 0xFF;
-    fat_sector[8] = 0xFF;
-    fat_sector[9] = 0xFF;
-    fat_sector[10] = 0xFF;
-    fat_sector[11] = 0xFF;
-
-    // Write first FAT
-    let fat1_lba = gpt_disk_types::Lba::from(gpt_disk_types::LbaLe::from_u64(
-        partition_lba_start + reserved_sectors as u64,
-    ));
-    block_io
-        .write_blocks(fat1_lba, &fat_sector)
-        .map_err(|_| Fat32Error::IoError)?;
-
-    // Write second FAT
-    let fat2_lba = gpt_disk_types::Lba::from(gpt_disk_types::LbaLe::from_u64(
-        partition_lba_start + reserved_sectors as u64 + fat_size as u64,
-    ));
-    block_io
-        .write_blocks(fat2_lba, &fat_sector)
-        .map_err(|_| Fat32Error::IoError)?;
-
-    // Initialize root directory (cluster 2) - all zeros for empty dir
-    let root_lba_val = partition_lba_start + reserved_sectors as u64 + (fat_size * 2) as u64;
-    let empty_sector = [0u8; 512];
-    for i in 0..sectors_per_cluster {
-        let lba =
-            gpt_disk_types::Lba::from(gpt_disk_types::LbaLe::from_u64(root_lba_val + i as u64));
-        block_io
-            .write_blocks(lba, &empty_sector)
-            .map_err(|_| Fat32Error::IoError)?;
-    }
-
-    Ok(())
-}
-
-/// Verify FAT32 filesystem integrity after formatting
 pub fn verify_fat32<B: BlockIo>(
     block_io: &mut B,
     partition_lba_start: u64,

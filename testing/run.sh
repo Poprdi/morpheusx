@@ -72,7 +72,7 @@ case $REPLY in
         echo ""
         qemu-system-x86_64 \
             -s \
-            -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
+            -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=test-disk-10g.img \
             -net none \
             -m 4096M \
@@ -83,7 +83,7 @@ case $REPLY in
         echo ""
         qemu-system-x86_64 \
             -s \
-            -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
+            -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
             -net none \
             -m 4096M \
@@ -94,7 +94,7 @@ case $REPLY in
         echo ""
         qemu-system-x86_64 \
             -s \
-            -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
+            -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
             -drive format=raw,file=test-disk.img \
             -drive format=raw,file=test-disk-10g.img \
