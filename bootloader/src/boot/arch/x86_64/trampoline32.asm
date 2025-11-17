@@ -1,5 +1,7 @@
 ; 32-bit protected mode trampoline
 ; Handles 64-bit to 32-bit CPU mode transition
+; Honestly seems pretty straight fowrad but not that easy to get right without segfaulting hard lol
+
 
 BITS 64
 

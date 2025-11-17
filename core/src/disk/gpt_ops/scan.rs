@@ -46,7 +46,7 @@ pub fn scan_partitions<B: BlockIo>(
         }
     };
 
-    // Use iterator to read partitions
+    // Use iterator to read partitions (im loosing it mentally here)
     let mut entry_buf = [0u8; 4096];
     let entry_buffer = &mut entry_buf[..block_size_bytes];
 
