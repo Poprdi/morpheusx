@@ -9,15 +9,15 @@ use alloc::vec::Vec;
 const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 
 pub struct DistroLauncher {
-    kernels: Vec<KernelEntry>,
-    selected_index: usize,
+    pub(super) kernels: Vec<KernelEntry>,
+    pub(super) selected_index: usize,
 }
 
-struct KernelEntry {
-    name: String,
-    path: String,
-    cmdline: String,
-    initrd: Option<String>,
+pub(super) struct KernelEntry {
+    pub(super) name: String,
+    pub(super) path: String,
+    pub(super) cmdline: String,
+    pub(super) initrd: Option<String>,
 }
 
 

@@ -3,7 +3,7 @@
 use core::{marker::PhantomData, ptr};
 
 use crate::boot::{KernelImage, LinuxBootParams};
-use super::allocation::{align_up, pages_from_bytes};
+use super::allocation::{align_up, pages_from_bytes, allocate_pages_max, allocate_pages_any};
 
 const PAGE_SIZE: usize = 4096;
 const EFI_ALLOCATE_ANY_PAGES: usize = 0;

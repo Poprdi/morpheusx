@@ -196,7 +196,7 @@ pub(super) unsafe fn allocate_pages_max(
     }
 }
 
-unsafe fn allocate_pages_any(
+pub(super) unsafe fn allocate_pages_any(
     boot_services: &crate::BootServices,
     pages: usize,
 ) -> Result<*mut u8, MemoryError> {

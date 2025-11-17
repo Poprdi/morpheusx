@@ -1,3 +1,6 @@
+use super::{FileProtocol, LoadedImageProtocol, LOADED_IMAGE_PROTOCOL_GUID, EFI_FILE_MODE_READ};
+use crate::BootServices;
+
 pub fn ascii_to_utf16(ascii: &str, buf: &mut [u16]) -> usize {
     let mut i = 0;
     for (idx, byte) in ascii.bytes().enumerate() {

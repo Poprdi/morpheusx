@@ -1,5 +1,6 @@
 // Distro launcher - select and boot a kernel
 
+use super::ui::{DistroLauncher, KernelEntry};
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
@@ -8,21 +9,8 @@ use alloc::vec::Vec;
 
 const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 
-pub struct DistroLauncher {
-    kernels: Vec<KernelEntry>,
-    selected_index: usize,
-}
-
-struct KernelEntry {
-    name: String,
-    path: String,
-    cmdline: String,
-    initrd: Option<String>,
-}
-
-
 impl DistroLauncher {
-    fn boot_kernel(
+    pub(super) fn boot_kernel(
         &self,
         screen: &mut Screen,
         keyboard: &mut Keyboard,

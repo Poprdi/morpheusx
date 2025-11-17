@@ -1,8 +1,8 @@
-use super::StorageManager;
+use super::super::StorageManager;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 
 impl StorageManager {
-    pub(super) fn render_disk_list(&self, screen: &mut Screen) {
+    pub(in super::super) fn render_disk_list(&self, screen: &mut Screen) {
         let title = "=== STORAGE DEVICES ===";
         let x = screen.center_x(title.len());
         screen.put_str_at(x, 2, title, EFI_LIGHTGREEN, EFI_BLACK);
