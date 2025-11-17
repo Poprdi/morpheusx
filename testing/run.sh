@@ -26,10 +26,10 @@ dd if=/dev/zero of=esp.img bs=1M count=$ESP_SIZE status=none
 # Format as FAT32
 mkfs.vfat -F 32 -n "ESP" esp.img >/dev/null
 
-# Mount and copy contents
+# Mount and copy contents (EXCLUDE rootfs - it's packed into initramfs)
 mkdir -p /tmp/esp-mount
 sudo mount -o loop esp.img /tmp/esp-mount
-sudo rsync -a esp/ /tmp/esp-mount/ || true  # Ignore permission errors from FAT32
+sudo rsync -a --exclude='rootfs' esp/ /tmp/esp-mount/ || true  # Ignore symlink errors from FAT32
 sudo umount /tmp/esp-mount
 rmdir /tmp/esp-mount
 
@@ -75,7 +75,7 @@ case $REPLY in
             -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
             -drive format=raw,file=test-disk-10g.img \
             -net none \
-            -m 256M \
+            -m 4096M \
             -serial stdio
         ;;
     3)
@@ -86,7 +86,7 @@ case $REPLY in
             -bios /usr/share/edk2/ovmf/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
             -net none \
-            -m 256M \
+            -m 4096M \
             -serial stdio
         ;;
     *)
@@ -99,7 +99,7 @@ case $REPLY in
             -drive format=raw,file=test-disk.img \
             -drive format=raw,file=test-disk-10g.img \
             -net none \
-            -m 256M \
+            -m 4096M \
             -serial stdio
         ;;
 esac

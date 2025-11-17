@@ -42,11 +42,28 @@ echo "Extracting relocation metadata..."
 echo "Building bootloader (pass 2 with correct reloc data)..."
 cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
 
+# Rebuild initrd if rootfs exists
+if [ -d "testing/esp/rootfs" ]; then
+    echo ""
+    echo "Rebuilding initramfs from rootfs..."
+    cd testing
+    ./rebuild-initrd.sh
+    cd ..
+else
+    echo ""
+    echo "Note: No rootfs found, skipping initrd rebuild"
+    echo "Run './testing/install-arch.sh' or './testing/create-minimal-arch.sh' first"
+fi
+
 # Copy to test ESP
+echo ""
 echo "Deploying to test ESP..."
 cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi testing/esp/EFI/BOOT/BOOTX64.EFI
 
 echo ""
 echo "✓ Built successfully: testing/esp/EFI/BOOT/BOOTX64.EFI"
 echo "✓ Relocation data is hardcoded in the binary"
+if [ -f "testing/esp/initrds/initramfs-arch.img" ]; then
+    echo "✓ Initramfs rebuilt: testing/esp/initrds/initramfs-arch.img"
+fi
 echo "Run './testing/run.sh' to test in QEMU"
