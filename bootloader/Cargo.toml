@@ -12,7 +12,6 @@ morpheus-persistent = { workspace = true }
 gpt_disk_io = { version = "0.16", default-features = false }
 gpt_disk_types = { version = "0.16", default-features = false }
 # TODO: Enable when other modules are implemented
-# morpheus-redeco = { workspace = true}
 # morpheus-updater = { workspace = true }
 # morpheus-utils = { workspace = true }
 
