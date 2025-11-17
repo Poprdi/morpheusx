@@ -1,7 +1,0 @@
-[package]
-name = "morpheus-redeco_integration"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-# TODO: Add dependencies as needed
