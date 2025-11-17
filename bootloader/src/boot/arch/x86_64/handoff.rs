@@ -28,7 +28,7 @@ type HandoverFunc = unsafe extern "efiapi" fn(*mut (), *mut (), *mut ()) -> !;
 ///   → Bootloader MUST call ExitBootServices before jumping
 #[derive(Debug, Copy, Clone)]
 pub enum BootPath {
-    /// EFI Handover Protocol (GRUB-style, industry standard)
+    /// EFI Handover Protocol 
     /// Entry: kernel_addr + handover_offset + 512
     /// Boot services MUST be active (kernel will exit them)
     EfiHandover64 { entry: u64 },
@@ -39,7 +39,7 @@ pub enum BootPath {
 }
 
 impl BootPath {
-    /// Determine boot path (GRUB-compatible)
+    /// Determine boot path to use
     ///
     /// GRUB uses handover_offset when available, regardless of kernel version.
     /// This works for kernels 3.x through 6.0 (handover removed in 6.1).

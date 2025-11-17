@@ -7,7 +7,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
-const MAX_INITRD_BYTES: usize = 32 * 1024 * 1024; // 32 MiB - reasonable for initramfs
 
 pub struct DistroLauncher {
     kernels: Vec<KernelEntry>,
@@ -195,23 +194,22 @@ impl DistroLauncher {
     ) {
         screen.clear();
         screen.put_str_at(5, 10, "Loading kernel...", EFI_LIGHTGREEN, EFI_BLACK);
-        screen.put_str_at(5, 12, "Reading kernel image...", EFI_DARKGREEN, EFI_BLACK);
 
         morpheus_core::logger::log("kernel read start");
-        let kernel_data = match Self::read_file_to_vec(
+        let (kernel_ptr, kernel_size) = match Self::read_file_to_uefi_pages(
             boot_services,
             image_handle,
             &kernel.path,
             screen,
             MAX_KERNEL_BYTES,
+            12, // start line for kernel status msgs
         ) {
-            Ok(data) => {
-                screen.put_str_at(5, 13, "Kernel loaded successfully", EFI_GREEN, EFI_BLACK);
+            Ok((ptr, size)) => {
                 morpheus_core::logger::log("kernel read ok");
-                data
+                (ptr, size)
             }
             Err(e) => {
-                screen.put_str_at(5, 15, "ERROR: Failed to read kernel", EFI_RED, EFI_BLACK);
+                screen.put_str_at(5, 18, "ERROR: Failed to read kernel", EFI_RED, EFI_BLACK);
                 morpheus_core::logger::log("kernel read failed");
                 Self::dump_logs_to_screen(screen);
                 keyboard.wait_for_key();
@@ -219,32 +217,28 @@ impl DistroLauncher {
             }
         };
 
-        let initrd_data = match &kernel.initrd {
+        // Load initrd using same GRUB-style approach
+        morpheus_core::logger::log("BEFORE initrd match");
+        let (initrd_ptr, initrd_size) = match &kernel.initrd {
             Some(path) => {
-                screen.put_str_at(5, 16, "Initrd: loading...", EFI_DARKGREEN, EFI_BLACK);
-                morpheus_core::logger::log("initrd read start");
-                match Self::read_file_to_vec(
+                morpheus_core::logger::log("initrd path found");
+                
+                match Self::read_file_to_uefi_pages(
                     boot_services,
                     image_handle,
                     path,
                     screen,
-                    MAX_INITRD_BYTES,
+                    512 * 1024 * 1024, // 512MB max for initrd
+                    19, // start line for initrd status msgs (after kernel section)
                 ) {
-                    Ok(data) => {
-                        screen.put_str_at(
-                            5,
-                            17,
-                            "Initrd loaded successfully",
-                            EFI_GREEN,
-                            EFI_BLACK,
-                        );
+                    Ok((ptr, size)) => {
                         morpheus_core::logger::log("initrd read ok");
-                        Some(data)
+                        (Some(ptr), size)
                     }
                     Err(e) => {
                         screen.put_str_at(
                             5,
-                            18,
+                            25,
                             "ERROR: Failed to read initrd",
                             EFI_RED,
                             EFI_BLACK,
@@ -257,26 +251,17 @@ impl DistroLauncher {
                 }
             }
             None => {
-                screen.put_str_at(5, 16, "Initrd: none", EFI_DARKGREEN, EFI_BLACK);
+                screen.put_str_at(5, 19, "Initrd: none", EFI_DARKGREEN, EFI_BLACK);
                 morpheus_core::logger::log("initrd missing");
-                None
+                (None, 0)
             }
         };
 
         screen.put_str_at(5, 18, "Booting...", EFI_LIGHTGREEN, EFI_BLACK);
 
-        // Clear old logs before jumping to the kernel
-        // Start boot process in background (it will log as it goes)
-        // We can't actually make it background, so we'll just check logs after
-        // But for now, let's display logs before the call
-
-        // Actually, we need to modify boot_linux_kernel to take a callback
-        // For now, let's just do a simpler approach: show logs that were added
-
-        // Boot the kernel - this will add logs to the buffer
-        // We'll instrument it to show progress
+        // Boot the kernel - convert raw pointers to slices (GRUB style)
         let boot_result = unsafe {
-            // Before calling, clear the screen area for logs
+            // Clear screen area for logs
             for i in 18..30 {
                 screen.put_str_at(
                     5,
@@ -287,12 +272,16 @@ impl DistroLauncher {
                 );
             }
 
+            // Convert pointers to slices for boot call
+            let kernel_slice = core::slice::from_raw_parts(kernel_ptr, kernel_size);
+            let initrd_slice = initrd_ptr.map(|ptr| core::slice::from_raw_parts(ptr, initrd_size));
+
             crate::boot::loader::boot_linux_kernel(
                 boot_services,
                 system_table,
                 image_handle,
-                &kernel_data,
-                initrd_data.as_deref(),
+                kernel_slice,
+                initrd_slice,
                 &kernel.cmdline,
                 screen,
             )
@@ -305,30 +294,43 @@ impl DistroLauncher {
         }
     }
 
-    fn read_file_to_vec(
+    // GRUB-style file reader: allocate max pages, read what we can, return actual size
+    // Returns (pointer, actual_size) - caller must NOT free, kernel will handle it
+    fn read_file_to_uefi_pages(
         boot_services: &crate::BootServices,
         image_handle: *mut (),
         path: &str,
         screen: &mut Screen,
         max_size: usize,
-    ) -> Result<Vec<u8>, &'static str> {
+        start_line: usize, // where to render status messages
+    ) -> Result<(*mut u8, usize), &'static str> {
         use crate::uefi::file_system::*;
 
         unsafe {
             let loaded_image = get_loaded_image(boot_services, image_handle)
-                .map_err(|_| "Failed to get loaded image")?;
+                .map_err(|_| {
+                    morpheus_core::logger::log("FAIL: get_loaded_image");
+                    "Failed to get loaded image"
+                })?;
 
             let device_handle = (*loaded_image).device_handle;
             let fs_protocol = get_file_system_protocol(boot_services, device_handle)
-                .map_err(|_| "Failed to get file system protocol")?;
-            let root = open_root_volume(fs_protocol).map_err(|_| "Failed to open root volume")?;
+                .map_err(|_| {
+                    morpheus_core::logger::log("FAIL: get_file_system_protocol");
+                    "Failed to get file system protocol"
+                })?;
+            let root = open_root_volume(fs_protocol).map_err(|_| {
+                morpheus_core::logger::log("FAIL: open_root_volume");
+                "Failed to open root volume"
+            })?;
 
-            screen.put_str_at(5, 13, "Opening file...", EFI_DARKGREEN, EFI_BLACK);
+            screen.put_str_at(5, start_line, "Opening file...", EFI_DARKGREEN, EFI_BLACK);
 
             let mut utf16_path = [0u16; 256];
             ascii_to_utf16(path, &mut utf16_path);
 
             let file = open_file_read(root, &utf16_path).map_err(|status| {
+                morpheus_core::logger::log("FAIL: open_file_read");
                 if status == 0x80000000000000 | 14 {
                     "File not found"
                 } else {
@@ -338,61 +340,77 @@ impl DistroLauncher {
 
             screen.put_str_at(
                 5,
-                14,
-                "Reading file with UEFI pages...",
+                start_line + 1,
+                "Allocating pages...",
                 EFI_DARKGREEN,
                 EFI_BLACK,
             );
-            morpheus_core::logger::log("uefi page alloc");
 
-            // GRUB approach: allocate UEFI pages directly
+            // Try allocating smaller chunks if big allocation fails
+            // Start with max_size, then try 256MB, 128MB, 64MB chunks
             const PAGE_SIZE: usize = 4096;
-            let pages_needed = (max_size + PAGE_SIZE - 1) / PAGE_SIZE;
+            let chunk_sizes = [
+                max_size,
+                256 * 1024 * 1024, // 256MB
+                128 * 1024 * 1024, // 128MB
+                64 * 1024 * 1024,  // 64MB
+            ];
 
-            let mut buffer_addr = 0xFFFFFFFFu64;
-            let alloc_type = 1; // EFI_ALLOCATE_MAX_ADDRESS
+            let mut buffer_addr = 0u64;
+            let mut chunk_size = 0usize;
+            let alloc_type = 0; // EFI_ALLOCATE_ANY_PAGES - less fragmentation
             let mem_type = 2; // EFI_LOADER_DATA
 
-            let status = (boot_services.allocate_pages)(
-                alloc_type,
-                mem_type,
-                pages_needed,
-                &mut buffer_addr,
-            );
+            // Try progressively smaller allocations
+            for &size in &chunk_sizes {
+                let pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+                let mut addr = 0u64; // ANY_PAGES doesn't need initial address
+                
+                let status = (boot_services.allocate_pages)(
+                    alloc_type,
+                    mem_type,
+                    pages_needed,
+                    &mut addr,
+                );
 
-            if status != 0 {
-                morpheus_core::logger::log("uefi alloc failed");
-                close_file(file).ok();
-                close_file(root).ok();
-                return Err("Failed to allocate UEFI pages for file");
+                if status == 0 {
+                    buffer_addr = addr;
+                    chunk_size = size;
+                    break;
+                }
             }
 
-            morpheus_core::logger::log("uefi pages allocated");
-            let buffer_ptr = buffer_addr as *mut u8;
-            let mut bytes_to_read = max_size;
+            if buffer_addr == 0 {
+                morpheus_core::logger::log("FAIL: all allocate_pages attempts");
+                close_file(file).ok();
+                close_file(root).ok();
+                return Err("Failed to allocate UEFI pages");
+            }
 
+            let buffer_ptr = buffer_addr as *mut u8;
+            let mut bytes_to_read = chunk_size;
+
+            screen.put_str_at(5, start_line + 2, "Reading file...", EFI_DARKGREEN, EFI_BLACK);
+            
+            // Read up to chunk_size - UEFI will update bytes_to_read with actual amount
             let status = ((*file).read)(file, &mut bytes_to_read, buffer_ptr);
 
             if status != 0 {
-                morpheus_core::logger::log("uefi read failed");
-                (boot_services.free_pages)(buffer_addr, pages_needed);
+                morpheus_core::logger::log("FAIL: file.read");
+                let pages = (chunk_size + PAGE_SIZE - 1) / PAGE_SIZE;
+                (boot_services.free_pages)(buffer_addr, pages);
                 close_file(file).ok();
                 close_file(root).ok();
                 return Err("Failed to read file");
             }
 
-            morpheus_core::logger::log("uefi read complete");
-
             close_file(file).ok();
             close_file(root).ok();
 
-            morpheus_core::logger::log("creating vec from raw parts");
-            // DON'T copy to Vec - wrap UEFI buffer in Vec without copying
-            // Vec::from_raw_parts takes ownership without allocating/copying
-            let result = Vec::from_raw_parts(buffer_ptr, bytes_to_read, max_size);
+            screen.put_str_at(5, start_line + 3, "Success!", EFI_GREEN, EFI_BLACK);
 
-            morpheus_core::logger::log("file read success");
-            Ok(result)
+            // Return pointer + actual bytes read (GRUB style)
+            Ok((buffer_ptr, bytes_to_read))
         }
     }
 
