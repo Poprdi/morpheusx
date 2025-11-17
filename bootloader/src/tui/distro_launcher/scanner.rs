@@ -52,6 +52,13 @@ impl EntryScanner {
             "console=ttyS0,115200 console=tty0".to_string(),
         ));
 
+        entries.push(BootEntry::new(
+            "Tails OS".to_string(),
+            "\\kernels\\vmlinuz-tails".to_string(),
+            Some("\\initrds\\initrd-tails.img".to_string()),
+            "boot=live live-media-path=/live nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string(),
+        ));
+
         entries
     }
 
