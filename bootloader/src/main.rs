@@ -303,9 +303,8 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                 MenuAction::DistroLauncher => {
                     let bs = &*system_table.boot_services;
                     let st_ptr = system_table as *const SystemTable as *mut ();
-                    let mut launcher = DistroLauncher::new();
+                    let mut launcher = DistroLauncher::new(bs, image_handle);
                     launcher.run(&mut screen, &mut keyboard, bs, st_ptr, image_handle);
-                    // Returns when user presses ESC, loop continues to main menu
                 }
                 MenuAction::DistroDownloader => {
                     screen.clear();

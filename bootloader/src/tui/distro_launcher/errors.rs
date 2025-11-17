@@ -1,13 +1,10 @@
-// Distro launcher - select and boot a kernel
-
-use super::ui::{DistroLauncher, KernelEntry};
+use super::ui::DistroLauncher;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
 use alloc::string::String;
-use alloc::vec::Vec;
 
-const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024;
 
 impl DistroLauncher {
     pub(super) fn await_failure(

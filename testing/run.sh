@@ -59,14 +59,30 @@ fi
 # Prompt for boot mode
 echo ""
 echo "Select boot mode:"
-echo "  [1] Normal - ESP + both test disks (default)"
-echo "  [2] Persistence test - ONLY 10GB disk (tests if bootloader installed)"
-echo "  [3] ESP only - For development/testing"
+echo "  [1] ESP image only (legacy)"
+echo "  [2] 50GB Test Disk (proper boot entries)"
+echo "  [3] Persistence test - ONLY 10GB disk"
 read -p "Choice [1/2/3]: " -n 1 -r
 echo ""
 
 case $REPLY in
     2)
+        if [ ! -f test-disk-50g.img ]; then
+            echo "50GB test disk not found. Creating it now..."
+            ./create-test-disk.sh
+        fi
+        
+        echo "Booting from 50GB test disk..."
+        echo ""
+        qemu-system-x86_64 \
+            -s \
+            -bios /usr/share/OVMF/OVMF_CODE.fd \
+            -drive format=raw,file=test-disk-50g.img \
+            -net none \
+            -m 4096M \
+            -serial stdio
+        ;;
+    3)
         echo "Booting ONLY test-disk-10g.img (persistence test)..."
         echo "If Morpheus boots, installation succeeded!"
         echo ""
@@ -78,26 +94,13 @@ case $REPLY in
             -m 4096M \
             -serial stdio
         ;;
-    3)
-        echo "Booting from ESP directory only..."
-        echo ""
-        qemu-system-x86_64 \
-            -s \
-            -bios /usr/share/OVMF/OVMF_CODE.fd \
-            -drive format=raw,file=esp.img \
-            -net none \
-            -m 4096M \
-            -serial stdio
-        ;;
     *)
-        echo "Booting with ESP + both test disks..."
+        echo "Booting from ESP image (legacy mode)..."
         echo ""
         qemu-system-x86_64 \
             -s \
             -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
-            -drive format=raw,file=test-disk.img \
-            -drive format=raw,file=test-disk-10g.img \
             -net none \
             -m 4096M \
             -serial stdio
