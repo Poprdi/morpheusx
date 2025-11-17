@@ -25,6 +25,3 @@ pub struct EspInfo {
 }
 
 /// Find EFI System Partition on any disk
-
-mod operations;
-pub use operations::*;
