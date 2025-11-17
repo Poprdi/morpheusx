@@ -1,23 +1,22 @@
-// Distro launcher - select and boot a kernel
-
-use super::ui::{DistroLauncher, KernelEntry};
+use super::ui::DistroLauncher;
+use super::entry::BootEntry;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024;
 
 impl DistroLauncher {
-    pub(super) fn boot_kernel(
+    pub(super) fn boot_entry(
         &self,
         screen: &mut Screen,
         keyboard: &mut Keyboard,
         boot_services: &crate::BootServices,
         system_table: *mut (),
         image_handle: *mut (),
-        kernel: &KernelEntry,
+        entry: &BootEntry,
     ) {
         screen.clear();
         screen.put_str_at(5, 10, "Loading kernel...", EFI_LIGHTGREEN, EFI_BLACK);
@@ -26,10 +25,10 @@ impl DistroLauncher {
         let (kernel_ptr, kernel_size) = match Self::read_file_to_uefi_pages(
             boot_services,
             image_handle,
-            &kernel.path,
+            &entry.kernel_path,
             screen,
             MAX_KERNEL_BYTES,
-            12, // start line for kernel status msgs
+            12,
         ) {
             Ok((ptr, size)) => {
                 morpheus_core::logger::log("kernel read ok");
@@ -46,7 +45,7 @@ impl DistroLauncher {
 
         // Load initrd using same GRUB-style approach
         morpheus_core::logger::log("BEFORE initrd match");
-        let (initrd_ptr, initrd_size) = match &kernel.initrd {
+        let (initrd_ptr, initrd_size) = match &entry.initrd_path {
             Some(path) => {
                 morpheus_core::logger::log("initrd path found");
                 
@@ -55,8 +54,8 @@ impl DistroLauncher {
                     image_handle,
                     path,
                     screen,
-                    512 * 1024 * 1024, // 512MB max for initrd
-                    19, // start line for initrd status msgs (after kernel section)
+                    512 * 1024 * 1024,
+                    19,
                 ) {
                     Ok((ptr, size)) => {
                         morpheus_core::logger::log("initrd read ok");
@@ -109,7 +108,7 @@ impl DistroLauncher {
                 image_handle,
                 kernel_slice,
                 initrd_slice,
-                &kernel.cmdline,
+                &entry.cmdline,
                 screen,
             )
         };
