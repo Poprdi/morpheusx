@@ -7,6 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024;
+const PAGE_SIZE: usize = 4096;
 
 impl DistroLauncher {
     pub(super) fn boot_entry(
@@ -69,7 +70,7 @@ impl DistroLauncher {
                             EFI_RED,
                             EFI_BLACK,
                         );
-                        morpheus_core::logger::log("initrd read failed");
+                        morpheus_core::logger::log("failed to read initrd");
                         Self::dump_logs_to_screen(screen);
                         keyboard.wait_for_key();
                         return;
@@ -77,13 +78,13 @@ impl DistroLauncher {
                 }
             }
             None => {
-                screen.put_str_at(5, 19, "Initrd: none", EFI_DARKGREEN, EFI_BLACK);
-                morpheus_core::logger::log("initrd missing");
+                screen.put_str_at(5, 19, "No initrd found", EFI_DARKGREEN, EFI_BLACK);
+                morpheus_core::logger::log("initrd not found");
                 (None, 0)
             }
         };
 
-        screen.put_str_at(5, 18, "Booting...", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, 18, "Booting......", EFI_LIGHTGREEN, EFI_BLACK);
 
         // Boot the kernel - convert raw pointers to slices (GRUB style)
         let boot_result = unsafe {
@@ -169,9 +170,9 @@ impl DistroLauncher {
                 EFI_BLACK,
             );
 
-            // Try allocating smaller chunks if big allocation fails
+            // Here we try to allocate UEFI pages for the file read buffer.
             // Start with max_size, then try 256MB, 128MB, 64MB chunks
-            const PAGE_SIZE: usize = 4096;
+            // until one works. If none work, return error. This is not "beatifull" but it works so get of my ass.            const PAGE_SIZE: usize = 4096;
             let chunk_sizes = [
                 max_size,
                 256 * 1024 * 1024, // 256MB
@@ -232,7 +233,7 @@ impl DistroLauncher {
 
             screen.put_str_at(5, start_line + 3, "Success!", EFI_GREEN, EFI_BLACK);
 
-            // Return pointer + actual bytes read (GRUB style)
+            // Return pointer + actual bytes read
             Ok((buffer_ptr, bytes_to_read))
         }
     }
