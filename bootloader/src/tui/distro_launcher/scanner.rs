@@ -56,7 +56,7 @@ impl EntryScanner {
             "Tails OS".to_string(),
             "\\kernels\\vmlinuz-tails".to_string(),
             Some("\\initrds\\initrd-tails.img".to_string()),
-            "boot=live live-media-path=/live nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string(),
+            "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string(),
         ));
 
         entries
@@ -194,22 +194,22 @@ impl EntryScanner {
     fn generate_cmdline(distro: &str) -> String {
         match distro {
             name if name.contains("tails") => {
-                "boot=live live-media-path=/live nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string()
+                "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string()
             }
             name if name.contains("ubuntu") => {
-                "boot=casper quiet splash console=ttyS0,115200 console=tty0".to_string()
+                "boot=casper quiet splash console=ttyS0,115200 console=tty*".to_string()
             }
             name if name.contains("debian") => {
-                "boot=live quiet console=ttyS0,115200 console=tty0".to_string()
+                "boot=live quiet console=ttyS0,115200 console=tty*".to_string()
             }
             name if name.contains("arch") => {
-                "root=/dev/ram0 rw console=ttyS0,115200 console=tty0 debug".to_string()
+                "root=/dev/ram0 rw console=ttyS0,115200 console=tty* debug".to_string()
             }
             name if name.contains("fedora") => {
-                "rd.live.image quiet console=ttyS0,115200 console=tty0".to_string()
+                "rd.live.image quiet console=ttyS0,115200 console=tty*".to_string()
             }
             name if name.contains("kali") => {
-                "boot=live quiet console=ttyS0,115200 console=tty0".to_string()
+                "boot=live quiet console=ttyS0,115200 console=tty*".to_string()
             }
             _ => {
                 "console=ttyS0,115200 console=tty0".to_string()
