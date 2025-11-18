@@ -56,7 +56,7 @@ impl EntryScanner {
             "Tails OS".to_string(),
             "\\kernels\\vmlinuz-tails".to_string(),
             Some("\\initrds\\initrd-tails.img".to_string()),
-            "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string(),
+            "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC console=ttyS0,115200 console=tty1".to_string(),
         ));
 
         entries
@@ -194,7 +194,7 @@ impl EntryScanner {
     fn generate_cmdline(distro: &str) -> String {
         match distro {
             name if name.contains("tails") => {
-                "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC splash=0 console=ttyS0,115200 console=tty0".to_string()
+                "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC console=ttyS0,115200 console=tty1".to_string()
             }
             name if name.contains("ubuntu") => {
                 "boot=casper quiet splash console=ttyS0,115200 console=tty*".to_string()

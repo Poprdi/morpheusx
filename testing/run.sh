@@ -79,8 +79,11 @@ case $REPLY in
             -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=test-disk-50g.img \
             -net none \
-            -m 4096M \
-            -serial stdio
+            -smp 8 \
+            -m 12G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial mon:stdio
         ;;
     3)
         echo "Booting ONLY test-disk-10g.img (persistence test)..."
@@ -91,8 +94,11 @@ case $REPLY in
             -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=test-disk-10g.img \
             -net none \
-            -m 4096M \
-            -serial stdio
+            -smp 8 \
+            -m 12G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial mon:stdio
         ;;
     *)
         echo "Booting from ESP image (legacy mode)..."
@@ -102,7 +108,10 @@ case $REPLY in
             -bios /usr/share/OVMF/OVMF_CODE.fd \
             -drive format=raw,file=esp.img \
             -net none \
-            -m 4096M \
-            -serial stdio
+            -smp 8 \
+            -m 12G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial mon:stdio
         ;;
 esac
