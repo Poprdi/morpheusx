@@ -1,6 +1,6 @@
 # MorpheusX
 
-A UEFI bootloader written in pure Rust enabling ephemeral operating systems with persistent userland state. Distro-hop daily while maintaining your development environment, configurations, and data across reboots.
+A UEFI "bootloader" (more like a minimal bare metall os or runtime) written in pure Rust enabling ephemeral operating systems with persistent userland state. Distro-hop daily while maintaining your development environment, configurations, and data across reboots.
 
 ## Overview
 
