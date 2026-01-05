@@ -4,7 +4,7 @@ Thanks for your interest in improving MorpheusX! This project is experimental an
 
 ## Quick start
 - Fork the repo and create a feature branch.
-- Install toolchain: `rustup target add x86_64-unknown-uefi`.
+- Run the setup script: `./setup-dev.sh` (handles dependencies, toolchain, and test images).
 - Build: `cargo build --release --target x86_64-unknown-uefi`.
 - Run in QEMU/OVMF: `cd testing && ./run.sh`.
 
