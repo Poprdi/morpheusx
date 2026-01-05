@@ -275,9 +275,9 @@ do_create_disk() {
     
     log_info "Creating GPT partition table..."
     parted -s "$disk_img" mklabel gpt
-    parted -s "$disk_img" mkpart primary fat32 1MiB 513MiB
+    parted -s "$disk_img" mkpart primary fat32 1MiB 4GiB
     parted -s "$disk_img" set 1 esp on
-    parted -s "$disk_img" mkpart primary ext4 513MiB 100%
+    parted -s "$disk_img" mkpart primary ext4 4GiB 100%
     
     log_info "Setting up partitions..."
     local loop_dev
@@ -292,9 +292,14 @@ do_create_disk() {
     mnt=$(mktemp -d)
     sudo mount "${loop_dev}p1" "$mnt"
     
-    sudo mkdir -p "$mnt"/{EFI/BOOT,kernels,initrds,loader/entries}
+    sudo mkdir -p "$mnt"/{EFI/BOOT,kernels,initrds,live,loader/entries}
     
     [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
+    
+    if [[ -f "${ESP_DIR}/initrds/filesystem.squashfs" ]]; then
+        log_info "Copying Tails squashfs (~2GB, this takes a moment)..."
+        sudo cp "${ESP_DIR}/initrds/filesystem.squashfs" "$mnt/live/"
+    fi
     
     for kernel in "${ESP_DIR}"/kernels/vmlinuz-*; do
         [[ -f "$kernel" ]] || continue
