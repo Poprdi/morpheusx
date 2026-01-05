@@ -103,11 +103,29 @@ impl BothEndian16 {
 }
 
 /// Parse Primary Volume Descriptor from sector data
-pub fn parse(_data: &[u8]) -> Result<PrimaryVolumeDescriptor> {
-    // TODO: Implementation
-    // 1. Validate header
-    // 2. Parse fields
-    // 3. Extract root directory record
+pub fn parse(data: &[u8]) -> Result<&PrimaryVolumeDescriptor> {
+    use crate::error::Iso9660Error;
     
-    unimplemented!()
+    // Validate minimum length
+    if data.len() < core::mem::size_of::<PrimaryVolumeDescriptor>() {
+        return Err(Iso9660Error::InvalidSignature);
+    }
+    
+    // Cast to struct (safe because we checked size)
+    let pvd = unsafe { &*(data.as_ptr() as *const PrimaryVolumeDescriptor) };
+    
+    // Validate header
+    if pvd.type_code != 1 {
+        return Err(Iso9660Error::InvalidSignature);
+    }
+    
+    if &pvd.identifier != b"CD001" {
+        return Err(Iso9660Error::InvalidSignature);
+    }
+    
+    if pvd.version != 1 {
+        return Err(Iso9660Error::UnsupportedVersion);
+    }
+    
+    Ok(pvd)
 }
