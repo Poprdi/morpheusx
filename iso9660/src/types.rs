@@ -1,5 +1,7 @@
 //! Common types and constants for ISO9660
 
+// Vec is imported but not used in current stubs
+#[allow(unused_imports)]
 use alloc::vec::Vec;
 
 /// ISO9660 sector size (always 2048 bytes)
@@ -61,8 +63,11 @@ pub struct VolumeInfo {
 /// File entry metadata
 #[derive(Debug, Clone)]
 pub struct FileEntry {
-    /// File identifier (name)
-    pub name: Vec<u8>,
+    /// File identifier (name as UTF-8)
+    pub name: alloc::string::String,
+    
+    /// File size in bytes
+    pub size: u64,
     
     /// Extent location (LBA)
     pub extent_lba: u32,
