@@ -44,6 +44,6 @@ This is experimental, not production-hardened, and portions of the network and p
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up the toolchain, run builds/tests, and send focused PRs.
 
 ## License
-Workspace metadata declares `MIT OR Apache-2.0`. License files have not yet been added; choose the license you prefer before using this in downstream projects.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
 
 ## Deticated to all the SysAdmins who showed me the way <3
