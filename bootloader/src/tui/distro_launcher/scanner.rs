@@ -248,7 +248,7 @@ impl EntryScanner {
 
     unsafe fn parse_conf_file(&self, root: *mut FileProtocol, path: &str) -> Result<BootEntry, ()> {
         let path_utf16 = Self::str_to_utf16(path);
-        let file = open_file_read(root, &path_utf16)?;
+        let file = open_file_read(root, &path_utf16).map_err(|_| ())?;
         
         let mut buffer = [0u8; MAX_FILE_SIZE];
         let mut size = MAX_FILE_SIZE;
@@ -272,14 +272,16 @@ impl EntryScanner {
                 continue;
             }
 
-            if let Some(value) = line.strip_prefix("title") {
-                title = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("linux") {
-                linux = value.trim().replace('/', "\\").to_string();
-            } else if let Some(value) = line.strip_prefix("initrd") {
-                initrd = Some(value.trim().replace('/', "\\").to_string());
-            } else if let Some(value) = line.strip_prefix("options") {
-                options = value.trim().to_string();
+            let mut parts = line.splitn(2, |c: char| c.is_whitespace());
+            let key = parts.next().unwrap_or("");
+            let value = parts.next().unwrap_or("").trim();
+
+            match key {
+                "title" => title = value.to_string(),
+                "linux" => linux = value.replace('/', "\\").to_string(),
+                "initrd" => initrd = Some(value.replace('/', "\\").to_string()),
+                "options" => options = value.to_string(),
+                _ => {}
             }
         }
 
