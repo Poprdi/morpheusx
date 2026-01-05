@@ -1,0 +1,93 @@
+//! Directory Record structure
+//!
+//! Directory records describe files and subdirectories.
+
+use crate::error::{Iso9660Error, Result};
+use crate::types::FileFlags;
+
+/// Directory Record (variable length)
+#[repr(C, packed)]
+pub struct DirectoryRecord {
+    /// Length of directory record (BP 1)
+    pub length: u8,
+    
+    /// Extended attribute record length (BP 2)
+    pub extended_attr_length: u8,
+    
+    /// Extent location (both-endian 32-bit) (BP 3-10)
+    pub extent_lba: [u8; 8],
+    
+    /// Data length (both-endian 32-bit) (BP 11-18)
+    pub data_length: [u8; 8],
+    
+    /// Recording date and time (7 bytes) (BP 19-25)
+    pub recording_datetime: [u8; 7],
+    
+    /// File flags (BP 26)
+    pub file_flags: u8,
+    
+    /// File unit size (interleaved files) (BP 27)
+    pub file_unit_size: u8,
+    
+    /// Interleave gap size (BP 28)
+    pub interleave_gap: u8,
+    
+    /// Volume sequence number (both-endian 16-bit) (BP 29-32)
+    pub volume_sequence: [u8; 4],
+    
+    /// File identifier length (BP 33)
+    pub file_id_len: u8,
+    
+    // Followed by:
+    // - File identifier (file_id_len bytes)
+    // - Padding field (1 byte if file_id_len is even)
+    // - System use area (variable)
+}
+
+impl DirectoryRecord {
+    /// Minimum record length
+    pub const MIN_LENGTH: u8 = 34;
+    
+    /// Parse directory record from bytes
+    pub fn parse(_data: &[u8]) -> Result<&Self> {
+        // TODO: Validate and parse
+        Err(Iso9660Error::InvalidDirectoryRecord)
+    }
+    
+    /// Get extent LBA (little-endian part of both-endian field)
+    pub fn get_extent_lba(&self) -> u32 {
+        u32::from_le_bytes([
+            self.extent_lba[0],
+            self.extent_lba[1],
+            self.extent_lba[2],
+            self.extent_lba[3],
+        ])
+    }
+    
+    /// Get data length (little-endian part)
+    pub fn get_data_length(&self) -> u32 {
+        u32::from_le_bytes([
+            self.data_length[0],
+            self.data_length[1],
+            self.data_length[2],
+            self.data_length[3],
+        ])
+    }
+    
+    /// Parse file flags
+    pub fn get_flags(&self) -> FileFlags {
+        FileFlags {
+            hidden: self.file_flags & 0x01 != 0,
+            directory: self.file_flags & 0x02 != 0,
+            associated: self.file_flags & 0x04 != 0,
+            extended_format: self.file_flags & 0x08 != 0,
+            extended_permissions: self.file_flags & 0x10 != 0,
+            not_final: self.file_flags & 0x80 != 0,
+        }
+    }
+    
+    /// Is this a directory?
+    pub fn is_directory(&self) -> bool {
+        self.file_flags & 0x02 != 0
+    }
+}

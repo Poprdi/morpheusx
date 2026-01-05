@@ -1,0 +1,27 @@
+[package]
+name = "iso9660"
+version = "0.1.0"
+edition = "2021"
+authors = []
+license = "MIT OR Apache-2.0"
+description = "no_std ISO9660 filesystem implementation with El Torito boot support"
+keywords = ["iso9660", "filesystem", "no_std", "cdrom", "bootable"]
+categories = ["no-std", "filesystem", "parsing"]
+
+[dependencies]
+# Core dependencies (no_std compatible)
+gpt_disk_io = { version = "0.16", default-features = false }
+gpt_disk_types = { version = "0.16", default-features = false }
+
+[features]
+default = []
+# Enable Rock Ridge POSIX extensions
+rock-ridge = []
+# Enable Joliet long filename support
+joliet = []
+# Enable detailed debug logging
+debug = []
+
+[lib]
+name = "iso9660"
+path = "src/lib.rs"
