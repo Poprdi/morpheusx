@@ -8,7 +8,7 @@ pub mod supplementary;
 pub mod boot_record;
 
 use crate::error::{Iso9660Error, Result};
-use crate::types::{VolumeInfo, VOLUME_DESCRIPTOR_START, SECTOR_SIZE};
+use crate::types::VolumeInfo;
 use gpt_disk_io::BlockIo;
 
 /// Mount an ISO9660 volume from a block device

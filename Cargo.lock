@@ -66,6 +66,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "iso9660"
+version = "0.1.0"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+]
+
+[[package]]
 name = "morpheus-bootloader"
 version = "1.0.1"
 dependencies = [

@@ -7,6 +7,7 @@ use crate::types::FileEntry;
 use gpt_disk_io::BlockIo;
 
 /// Directory iterator
+#[allow(dead_code)]  // Stub implementation, fields will be used
 pub struct DirectoryIterator<'a, B: BlockIo> {
     block_io: &'a mut B,
     extent_lba: u32,

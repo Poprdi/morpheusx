@@ -47,6 +47,9 @@ pub enum Iso9660Error {
     /// Invalid boot catalog
     InvalidBootCatalog,
     
+    /// No boot catalog found
+    NoBootCatalog,
+    
     /// Invalid boot entry
     InvalidBootEntry,
     
@@ -61,6 +64,9 @@ pub enum Iso9660Error {
     
     /// Joliet extension error
     JolietError,
+    
+    /// Read failed
+    ReadFailed,
     
     /// Internal error (should not occur)
     InternalError,
@@ -82,11 +88,13 @@ impl fmt::Display for Iso9660Error {
             Self::InvalidString => write!(f, "Invalid string encoding"),
             Self::NoBootRecord => write!(f, "Boot record volume descriptor not found"),
             Self::InvalidBootCatalog => write!(f, "Invalid El Torito boot catalog"),
+            Self::NoBootCatalog => write!(f, "No boot catalog found"),
             Self::InvalidBootEntry => write!(f, "Invalid boot entry"),
             Self::ChecksumFailed => write!(f, "Validation entry checksum failed"),
             Self::UnsupportedPlatform => write!(f, "Unsupported boot platform"),
             Self::RockRidgeError => write!(f, "Rock Ridge extension error"),
             Self::JolietError => write!(f, "Joliet extension error"),
+            Self::ReadFailed => write!(f, "Read operation failed"),
             Self::InternalError => write!(f, "Internal error"),
         }
     }

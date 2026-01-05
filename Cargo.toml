@@ -6,6 +6,7 @@ members = [
     "persistent",
     "updater",
     "network",
+    "iso9660",
 ]
 
 [workspace.package]
@@ -22,6 +23,7 @@ morpheus-core = { path = "core" }
 morpheus-persistent = { path = "persistent" }
 morpheus-updater = { path = "updater" }
 morpheus-network = { path = "network" }
+iso9660 = { path = "iso9660" }
 
 [profile.release]
 opt-level = "z"      # Optimize for size
