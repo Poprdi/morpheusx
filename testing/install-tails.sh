@@ -16,7 +16,7 @@ echo "=========================================="
 echo "  Tails OS Live System Installer"
 echo "=========================================="
 echo ""
-echo "This will download and extract Tails OS 7.2 live system:"
+echo "This will download and extract Tails OS ${TAILS_VERSION:-7.3.1} live system:"
 echo "  ✓ Full Debian-based userland"
 echo "  ✓ Complete networking stack (Tor ready)"
 echo "  ✓ Desktop environment (GNOME)"
@@ -41,38 +41,56 @@ mkdir -p "$INITRD_DIR"
 mkdir -p "$WORK_DIR"
 
 # Download Tails ISO
-# Using version 7.2 (Nov 2025) - current stable release
-TAILS_VERSION="7.2"
+# Using version 7.3.1 (Dec 2025) - current stable release
+TAILS_VERSION="7.3.1"
 TAILS_ISO="tails-amd64-${TAILS_VERSION}.iso"
 # Tails official download structure: https://download.tails.net/tails/stable/
 TAILS_URL="https://download.tails.net/tails/stable/tails-amd64-${TAILS_VERSION}/tails-amd64-${TAILS_VERSION}.iso"
-TAILS_URL_FALLBACK="https://mirrors.wikimedia.org/tails/stable/tails-amd64-${TAILS_VERSION}/tails-amd64-${TAILS_VERSION}.iso"
+TAILS_URL_FALLBACK="https://mirrors.edge.kernel.org/tails/stable/tails-amd64-${TAILS_VERSION}/tails-amd64-${TAILS_VERSION}.iso"
 
 echo ""
 echo "Downloading Tails ${TAILS_VERSION}..."
 echo "This may take a while (1.3GB)..."
 echo "URL: $TAILS_URL"
-if [ ! -f "$WORK_DIR/$TAILS_ISO" ]; then
-    # Try with curl first (better redirect handling)
+
+MIN_ISO_SIZE=$((500 * 1024 * 1024))
+
+download_iso() {
+    rm -f "$WORK_DIR/$TAILS_ISO"
     if command -v curl &> /dev/null; then
-        if ! curl -L --progress-bar -C - -o "$WORK_DIR/$TAILS_ISO" "$TAILS_URL"; then
+        if ! curl -L --fail --progress-bar -o "$WORK_DIR/$TAILS_ISO" "$TAILS_URL"; then
             echo "Primary mirror failed, trying fallback..."
             echo "Fallback URL: $TAILS_URL_FALLBACK"
-            curl -L --progress-bar -C - -o "$WORK_DIR/$TAILS_ISO" "$TAILS_URL_FALLBACK"
+            curl -L --fail --progress-bar -o "$WORK_DIR/$TAILS_ISO" "$TAILS_URL_FALLBACK"
         fi
-    # Fallback to wget with proper redirect handling
     elif command -v wget &> /dev/null; then
-        if ! wget --progress=bar:force --max-redirect=5 -c -O "$WORK_DIR/$TAILS_ISO" "$TAILS_URL"; then
+        if ! wget --progress=bar:force --max-redirect=5 -O "$WORK_DIR/$TAILS_ISO" "$TAILS_URL"; then
             echo "Primary mirror failed, trying fallback..."
-            echo "Fallback URL: $TAILS_URL_FALLBACK"
-            wget --progress=bar:force --max-redirect=5 -c -O "$WORK_DIR/$TAILS_ISO" "$TAILS_URL_FALLBACK"
+            wget --progress=bar:force --max-redirect=5 -O "$WORK_DIR/$TAILS_ISO" "$TAILS_URL_FALLBACK"
         fi
     else
-        echo "Error: Neither curl nor wget found. Please install one of them."
+        echo "Error: Neither curl nor wget found."
         exit 1
     fi
+}
+
+if [ -f "$WORK_DIR/$TAILS_ISO" ]; then
+    ISO_SIZE=$(stat -c%s "$WORK_DIR/$TAILS_ISO" 2>/dev/null || echo 0)
+    if [ "$ISO_SIZE" -lt "$MIN_ISO_SIZE" ]; then
+        echo "Cached ISO is corrupted (too small: ${ISO_SIZE} bytes). Re-downloading..."
+        download_iso
+    else
+        echo "ISO already downloaded ($(numfmt --to=iec $ISO_SIZE)), using cached version"
+    fi
 else
-    echo "ISO already downloaded, using cached version"
+    download_iso
+fi
+
+ISO_SIZE=$(stat -c%s "$WORK_DIR/$TAILS_ISO" 2>/dev/null || echo 0)
+if [ "$ISO_SIZE" -lt "$MIN_ISO_SIZE" ]; then
+    echo "Error: Downloaded ISO is too small (${ISO_SIZE} bytes). Download failed."
+    rm -f "$WORK_DIR/$TAILS_ISO"
+    exit 1
 fi
 
 # Mount ISO and extract kernel/initrd

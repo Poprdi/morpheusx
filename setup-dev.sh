@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
-IFS=$'\n\t'
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="${SCRIPT_DIR}"
 readonly TESTING_DIR="${PROJECT_ROOT}/testing"
 readonly ESP_DIR="${TESTING_DIR}/esp"
-readonly VERSION="1.1.0"
+readonly VERSION="2.0.0"
 
 readonly C_RED='\033[0;31m'
 readonly C_GREEN='\033[0;32m'
 readonly C_YELLOW='\033[1;33m'
 readonly C_BLUE='\033[0;34m'
 readonly C_CYAN='\033[0;36m'
-readonly C_MAGENTA='\033[0;35m'
 readonly C_BOLD='\033[1m'
 readonly C_DIM='\033[2m'
 readonly C_RESET='\033[0m'
@@ -24,9 +22,9 @@ readonly SYM_CROSS="✗"
 readonly SYM_ARROW="➜"
 readonly SYM_BULLET="•"
 
+INTERACTIVE=false
 FORCE_MODE=false
-AUTO_MODE=false
-VERBOSE=false
+SKIP_QEMU=false
 
 log_info()    { printf "${C_BLUE}${SYM_ARROW} %s${C_RESET}\n" "$1"; }
 log_success() { printf "${C_GREEN}${SYM_CHECK} %s${C_RESET}\n" "$1"; }
@@ -37,12 +35,12 @@ die()         { log_error "$1"; exit 1; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
 
-confirm() {
-    [[ "${AUTO_MODE}" == "true" ]] && return 0
-    printf "${C_YELLOW}%s [y/N] ${C_RESET}" "$1"
+ask() {
+    [[ "${INTERACTIVE}" != "true" ]] && return 0
+    printf "${C_YELLOW}%s [Y/n] ${C_RESET}" "$1"
     read -r -n 1 response
     printf "\n"
-    [[ "$response" =~ ^[yY]$ ]]
+    [[ ! "$response" =~ ^[nN]$ ]]
 }
 
 print_banner() {
@@ -56,7 +54,7 @@ print_banner() {
                  /_/                                   
 BANNER
     printf "${C_RESET}"
-    printf "${C_DIM}Development Environment Manager v${VERSION}${C_RESET}\n\n"
+    printf "${C_DIM}Development Environment Bootstrap v${VERSION}${C_RESET}\n\n"
 }
 
 detect_distro() {
@@ -64,18 +62,11 @@ detect_distro() {
     echo "unknown"
 }
 
-check_rust()      { has_cmd rustc && rustup target list 2>/dev/null | grep -q "x86_64-unknown-uefi (installed)"; }
-check_ovmf()      { get_ovmf_path &>/dev/null; }
-check_tails()     { [[ -f "${ESP_DIR}/kernels/vmlinuz-tails" ]]; }
-check_arch()      { [[ -f "${ESP_DIR}/kernels/vmlinuz-arch" ]]; }
-check_disk_50g()  { [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; }
-check_disk_10g()  { [[ -f "${TESTING_DIR}/test-disk-10g.img" ]]; }
-check_esp_img()   { [[ -f "${TESTING_DIR}/esp.img" ]]; }
-check_bootloader(){ [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]]; }
-check_qemu()      { has_cmd qemu-system-x86_64; }
-
 get_ovmf_path() {
     local -a paths=(
+        "/usr/share/OVMF/x64/OVMF.4m.fd"
+        "/usr/share/OVMF/x64/OVMF_CODE.4m.fd"
+        "/usr/share/edk2/x64/OVMF_CODE.4m.fd"
         "/usr/share/OVMF/OVMF_CODE.fd"
         "/usr/share/edk2/ovmf/OVMF_CODE.fd"
         "/usr/share/edk2-ovmf/OVMF_CODE.fd"
@@ -86,17 +77,28 @@ get_ovmf_path() {
     return 1
 }
 
-status_line() {
-    local name=$1 check=$2 extra=${3:-}
-    if eval "$check"; then
-        printf "  ${C_GREEN}${SYM_CHECK}${C_RESET} %-28s %s\n" "$name" "${C_DIM}${extra}${C_RESET}"
-    else
-        printf "  ${C_RED}${SYM_CROSS}${C_RESET} %-28s %s\n" "$name" "${C_DIM}${extra}${C_RESET}"
-    fi
+check_rust()       { has_cmd rustc && rustup target list 2>/dev/null | grep -q "x86_64-unknown-uefi (installed)"; }
+check_ovmf()       { get_ovmf_path &>/dev/null; }
+check_bootloader() { [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]]; }
+check_qemu()       { has_cmd qemu-system-x86_64; }
+check_disk_tools() { has_cmd qemu-img && has_cmd parted && has_cmd mkfs.vfat && has_cmd mkfs.ext4; }
+check_tails()      { [[ -f "${ESP_DIR}/kernels/vmlinuz-tails" ]]; }
+check_arch()       { [[ -f "${ESP_DIR}/kernels/vmlinuz-arch" ]]; }
+check_any_distro() { check_tails || check_arch || compgen -G "${ESP_DIR}/kernels/vmlinuz-*" > /dev/null 2>&1; }
+check_disk_50g()   { [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; }
+
+ensure_dirs() {
+    mkdir -p "${ESP_DIR}"/{EFI/BOOT,kernels,initrds,loader/entries}
+    mkdir -p "${TESTING_DIR}"
 }
 
-get_disk_size() {
-    [[ -f "$1" ]] && du -h "$1" 2>/dev/null | cut -f1 || echo "N/A"
+print_check() {
+    local ok=$1 name=$2 extra=${3:-}
+    if [[ "$ok" == "1" ]]; then
+        printf "  ${C_GREEN}${SYM_CHECK}${C_RESET} %-28s ${C_DIM}%s${C_RESET}\n" "$name" "$extra"
+    else
+        printf "  ${C_RED}${SYM_CROSS}${C_RESET} %-28s ${C_DIM}%s${C_RESET}\n" "$name" "$extra"
+    fi
 }
 
 cmd_status() {
@@ -104,216 +106,171 @@ cmd_status() {
     printf "${C_BOLD}Environment Status:${C_RESET}\n\n"
     
     printf "${C_DIM}── Toolchain ──${C_RESET}\n"
-    status_line "Rust Compiler" "has_cmd rustc" "$(rustc --version 2>/dev/null | cut -d' ' -f2 || echo '')"
-    status_line "UEFI Target" "check_rust"
-    status_line "NASM Assembler" "has_cmd nasm"
-    status_line "QEMU" "check_qemu" "$(qemu-system-x86_64 --version 2>/dev/null | head -1 | cut -d' ' -f4 || echo '')"
-    status_line "OVMF Firmware" "check_ovmf" "$(get_ovmf_path 2>/dev/null || echo '')"
+    print_check "$(has_cmd rustc && echo 1 || echo 0)" "Rust Compiler" "$(rustc --version 2>/dev/null | cut -d' ' -f2 || echo 'missing')"
+    print_check "$(check_rust && echo 1 || echo 0)" "UEFI Target"
+    print_check "$(has_cmd nasm && echo 1 || echo 0)" "NASM Assembler"
+    print_check "$(check_qemu && echo 1 || echo 0)" "QEMU" "$(qemu-system-x86_64 --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+' || echo 'missing')"
+    print_check "$(check_ovmf && echo 1 || echo 0)" "OVMF Firmware" "$(get_ovmf_path 2>/dev/null || echo 'missing')"
+    print_check "$(check_disk_tools && echo 1 || echo 0)" "Disk Tools" "parted, mkfs.vfat, mkfs.ext4"
     
-    printf "\n${C_DIM}── Build Artifacts ──${C_RESET}\n"
-    status_line "Bootloader (BOOTX64.EFI)" "check_bootloader"
-    
-    printf "\n${C_DIM}── Virtual Disks ──${C_RESET}\n"
-    status_line "ESP Image" "check_esp_img" "$(get_disk_size "${TESTING_DIR}/esp.img")"
-    status_line "Test Disk 50GB" "check_disk_50g" "$(get_disk_size "${TESTING_DIR}/test-disk-50g.img")"
-    status_line "Test Disk 10GB" "check_disk_10g" "$(get_disk_size "${TESTING_DIR}/test-disk-10g.img")"
+    printf "\n${C_DIM}── Build ──${C_RESET}\n"
+    print_check "$(check_bootloader && echo 1 || echo 0)" "Bootloader (BOOTX64.EFI)"
     
     printf "\n${C_DIM}── Distributions ──${C_RESET}\n"
-    status_line "Tails OS" "check_tails"
-    status_line "Arch Linux" "check_arch"
+    print_check "$(check_tails && echo 1 || echo 0)" "Tails OS"
+    print_check "$(check_arch && echo 1 || echo 0)" "Arch Linux"
     
-    for kernel in "${ESP_DIR}"/kernels/vmlinuz-* 2>/dev/null; do
-        [[ -f "$kernel" ]] || continue
-        local name=$(basename "$kernel" | sed 's/vmlinuz-//')
-        [[ "$name" == "tails" || "$name" == "arch" ]] && continue
-        status_line "${name^}" "[[ -f \"$kernel\" ]]"
-    done
-    
+    printf "\n${C_DIM}── Disk Images ──${C_RESET}\n"
+    print_check "$(check_disk_50g && echo 1 || echo 0)" "Test Disk 50GB"
     printf "\n"
 }
 
-cmd_setup() {
-    print_banner
-    log_step "Installing System Dependencies"
+do_install_packages() {
+    log_step "Installing System Packages"
     
-    local distro=$(detect_distro)
+    local distro
+    distro=$(detect_distro)
     local -a pkgs=()
     local install_cmd=""
     
     case "${distro}" in
         arch|manjaro|endeavouros)
-            pkgs=(nasm qemu-full ovmf rust parted dosfstools)
+            pkgs=(base-devel nasm qemu-full ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools cdrtools)
             install_cmd="sudo pacman -S --needed --noconfirm"
             ;;
         debian|ubuntu|pop|linuxmint|kali)
-            pkgs=(nasm qemu-system-x86 ovmf curl rsync parted dosfstools qemu-utils)
+            pkgs=(build-essential nasm qemu-system-x86 ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage qemu-utils)
             install_cmd="sudo apt-get install -y -qq"
+            log_info "Updating package lists..."
             sudo apt-get update -qq
             ;;
         fedora)
-            pkgs=(nasm qemu-system-x86 edk2-ovmf curl rsync parted dosfstools qemu-img)
+            pkgs=(gcc make nasm qemu-system-x86 edk2-ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage qemu-img)
             install_cmd="sudo dnf install -y -q"
             ;;
         rhel|centos|almalinux|rocky)
-            pkgs=(nasm qemu-kvm edk2-ovmf curl rsync parted dosfstools)
+            pkgs=(gcc make nasm qemu-kvm edk2-ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage)
             install_cmd="sudo yum install -y -q"
             ;;
         opensuse*|suse)
-            pkgs=(nasm qemu-x86 qemu-ovmf-x86_64 curl rsync parted dosfstools)
+            pkgs=(gcc make nasm qemu-x86 qemu-ovmf-x86_64 parted dosfstools e2fsprogs util-linux rsync curl wget squashfs genisoimage)
             install_cmd="sudo zypper install -y"
             ;;
         alpine)
-            pkgs=(nasm qemu-system-x86_64 ovmf curl rsync parted dosfstools bash)
+            pkgs=(build-base nasm qemu-system-x86_64 ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools cdrkit bash)
             install_cmd="sudo apk add"
             ;;
         *)
-            die "Unsupported distribution: ${distro}"
+            log_warn "Unknown distro: ${distro}"
+            log_info "Please install: nasm qemu ovmf parted dosfstools e2fsprogs rsync curl wget"
+            return 0
             ;;
     esac
     
     log_info "Detected: ${distro}"
-    ${install_cmd} "${pkgs[@]}" || true
-    log_success "System packages installed"
+    log_info "Installing packages..."
     
+    if ! ${install_cmd} "${pkgs[@]}"; then
+        log_warn "Some packages failed - retrying individually..."
+        for pkg in "${pkgs[@]}"; do
+            ${install_cmd} "$pkg" 2>/dev/null || log_warn "Failed: $pkg"
+        done
+    fi
+    
+    log_success "System packages ready"
+}
+
+do_install_rust() {
     log_step "Rust Toolchain"
+    
     if ! has_cmd rustc; then
         log_info "Installing Rust..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-        source "$HOME/.cargo/env"
+        source "$HOME/.cargo/env" 2>/dev/null || export PATH="$HOME/.cargo/bin:$PATH"
     fi
     
-    if ! rustup target list | grep -q "x86_64-unknown-uefi (installed)"; then
+    if ! rustup target list 2>/dev/null | grep -q "x86_64-unknown-uefi (installed)"; then
+        log_info "Adding UEFI target..."
         rustup target add x86_64-unknown-uefi
     fi
-    log_success "Rust ready"
     
-    log_step "OVMF Configuration"
-    local ovmf_path
-    ovmf_path=$(get_ovmf_path) || die "OVMF not found"
-    
-    if [[ -f "${TESTING_DIR}/run.sh" ]] && ! grep -Fq "${ovmf_path}" "${TESTING_DIR}/run.sh"; then
-        sed -i "s|/usr/share/OVMF/OVMF_CODE.fd|${ovmf_path}|g; \
-                s|/usr/share/edk2/ovmf/OVMF_CODE.fd|${ovmf_path}|g" "${TESTING_DIR}/run.sh"
-    fi
-    log_success "OVMF: ${ovmf_path}"
-    
-    log_step "Workspace"
-    mkdir -p "${ESP_DIR}"/{EFI/BOOT,kernels,initrds,loader/entries}
-    log_success "Directory structure ready"
-    
-    printf "\n${C_GREEN}${C_BOLD}Setup complete!${C_RESET}\n"
+    log_success "Rust: $(rustc --version | cut -d' ' -f2)"
 }
 
-cmd_build() {
-    print_banner
-    log_step "Building MorpheusX"
+do_configure_ovmf() {
+    log_step "OVMF Configuration"
+    
+    local ovmf_path
+    ovmf_path=$(get_ovmf_path) || die "OVMF not found after package install"
+    
+    if [[ -f "${TESTING_DIR}/run.sh" ]]; then
+        sed -i "s|/usr/share/OVMF/OVMF_CODE.fd|${ovmf_path}|g" "${TESTING_DIR}/run.sh" 2>/dev/null || true
+        sed -i "s|/usr/share/edk2/ovmf/OVMF_CODE.fd|${ovmf_path}|g" "${TESTING_DIR}/run.sh" 2>/dev/null || true
+    fi
+    
+    log_success "OVMF: ${ovmf_path}"
+}
+
+do_build() {
+    log_step "Building MorpheusX Bootloader"
+    
+    ensure_dirs
+    
+    if check_bootloader && [[ "${FORCE_MODE}" != "true" ]]; then
+        log_success "Bootloader already built"
+        return 0
+    fi
     
     pushd "${TESTING_DIR}" >/dev/null
     ./build.sh
     popd >/dev/null
     
-    check_bootloader && log_success "Build complete: esp/EFI/BOOT/BOOTX64.EFI"
+    check_bootloader || die "Build failed"
+    log_success "Bootloader ready"
 }
 
-cmd_disk() {
-    local target="${1:-}"
+do_install_tails() {
+    log_step "Installing Tails OS"
     
-    print_banner
+    if check_tails && [[ "${FORCE_MODE}" != "true" ]]; then
+        log_success "Tails already installed"
+        return 0
+    fi
     
-    case "${target}" in
-        esp)
-            cmd_disk_esp
-            ;;
-        50g|50G|large)
-            cmd_disk_50g
-            ;;
-        10g|10G|small)
-            cmd_disk_10g
-            ;;
-        all)
-            cmd_disk_esp
-            cmd_disk_50g
-            cmd_disk_10g
-            ;;
-        info)
-            cmd_disk_info
-            ;;
-        *)
-            printf "Usage: %s disk <target>\n\n" "$(basename "$0")"
-            printf "Targets:\n"
-            printf "  ${C_CYAN}esp${C_RESET}     Create/update ESP image from esp/ directory\n"
-            printf "  ${C_CYAN}50g${C_RESET}     Create 50GB test disk with GPT + ESP + root partitions\n"
-            printf "  ${C_CYAN}10g${C_RESET}     Create 10GB persistence test disk (empty, for installer testing)\n"
-            printf "  ${C_CYAN}all${C_RESET}     Create all disk images\n"
-            printf "  ${C_CYAN}info${C_RESET}    Show disk image details\n"
-            return 1
-            ;;
-    esac
+    pushd "${TESTING_DIR}" >/dev/null
+    yes y | ./install-tails.sh || ./install-tails.sh
+    popd >/dev/null
+    
+    log_success "Tails installed"
 }
 
-cmd_disk_info() {
-    log_step "Disk Image Details"
+do_install_arch() {
+    log_step "Installing Arch Linux"
     
-    printf "\n${C_DIM}── Images ──${C_RESET}\n"
+    if check_arch && [[ "${FORCE_MODE}" != "true" ]]; then
+        log_success "Arch already installed"
+        return 0
+    fi
     
-    for img in "${TESTING_DIR}"/*.img; do
-        [[ -f "$img" ]] || continue
-        local name=$(basename "$img")
-        local size=$(du -h "$img" | cut -f1)
-        local vsize=$(qemu-img info "$img" 2>/dev/null | grep "virtual size" | cut -d: -f2 | xargs || echo "N/A")
-        printf "  ${C_CYAN}%s${C_RESET}\n" "$name"
-        printf "    Actual: %s  Virtual: %s\n" "$size" "$vsize"
-        
-        if parted -s "$img" print 2>/dev/null | grep -q "Partition Table"; then
-            printf "    Partitions:\n"
-            parted -s "$img" print 2>/dev/null | grep -E "^\s*[0-9]" | while read -r line; do
-                printf "      %s\n" "$line"
-            done
-        fi
-        printf "\n"
-    done
+    pushd "${TESTING_DIR}" >/dev/null
+    ./install-arch.sh
+    popd >/dev/null
+    
+    log_success "Arch installed"
 }
 
-cmd_disk_esp() {
-    log_step "Creating ESP Image"
+do_create_disk() {
+    log_step "Creating Test Disk"
     
-    local esp_img="${TESTING_DIR}/esp.img"
-    
-    local esp_size=$(du -sb "${ESP_DIR}" 2>/dev/null | awk '{print int(($1 / 1024 / 1024) + 64)}')
-    [[ $esp_size -lt 64 ]] && esp_size=64
-    
-    log_info "ESP directory size: ~${esp_size}MB"
-    
-    rm -f "$esp_img"
-    dd if=/dev/zero of="$esp_img" bs=1M count=$esp_size status=none
-    mkfs.vfat -F 32 -n "ESP" "$esp_img" >/dev/null
-    
-    local mount_point=$(mktemp -d)
-    sudo mount -o loop "$esp_img" "$mount_point"
-    
-    trap "sudo umount '$mount_point' 2>/dev/null; rmdir '$mount_point'" EXIT
-    
-    sudo rsync -a --exclude='rootfs' "${ESP_DIR}/" "$mount_point/" 2>/dev/null || true
-    
-    sudo umount "$mount_point"
-    rmdir "$mount_point"
-    trap - EXIT
-    
-    log_success "ESP image created: $(du -h "$esp_img" | cut -f1)"
-}
-
-cmd_disk_50g() {
-    log_step "Creating 50GB Test Disk"
+    if check_disk_50g && [[ "${FORCE_MODE}" != "true" ]]; then
+        log_success "Test disk already exists"
+        return 0
+    fi
     
     local disk_img="${TESTING_DIR}/test-disk-50g.img"
     
-    if [[ -f "$disk_img" && "${FORCE_MODE}" == "false" ]]; then
-        confirm "Disk exists. Recreate?" || { log_info "Skipped"; return 0; }
-    fi
-    
+    log_info "Creating 50GB sparse disk image..."
     rm -f "$disk_img"
-    
-    log_info "Creating sparse image..."
     qemu-img create -f raw "$disk_img" 50G >/dev/null
     
     log_info "Creating GPT partition table..."
@@ -322,169 +279,261 @@ cmd_disk_50g() {
     parted -s "$disk_img" set 1 esp on
     parted -s "$disk_img" mkpart primary ext4 513MiB 100%
     
-    log_info "Setting up loop device..."
-    local loop_dev=$(sudo losetup -fP --show "$disk_img")
+    log_info "Setting up partitions..."
+    local loop_dev
+    loop_dev=$(sudo losetup -fP --show "$disk_img")
     
-    trap "sudo umount /tmp/morpheus-esp 2>/dev/null || true; sudo losetup -d '$loop_dev' 2>/dev/null || true" EXIT
+    trap "sudo losetup -d '$loop_dev' 2>/dev/null || true" EXIT
     
-    log_info "Formatting partitions..."
     sudo mkfs.vfat -F 32 -n "ESP" "${loop_dev}p1" >/dev/null
-    sudo mkfs.ext4 -q -L "MORPHEUS_ROOT" "${loop_dev}p2" >/dev/null
+    sudo mkfs.ext4 -q -L "MORPHEUS_DATA" "${loop_dev}p2" >/dev/null
     
-    mkdir -p /tmp/morpheus-esp
-    sudo mount "${loop_dev}p1" /tmp/morpheus-esp
+    local mnt
+    mnt=$(mktemp -d)
+    sudo mount "${loop_dev}p1" "$mnt"
     
-    sudo mkdir -p /tmp/morpheus-esp/{EFI/BOOT,kernels,initrds,loader/entries}
+    sudo mkdir -p "$mnt"/{EFI/BOOT,kernels,initrds,loader/entries}
     
-    [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" /tmp/morpheus-esp/EFI/BOOT/
-    [[ -d "${ESP_DIR}/kernels" ]] && sudo cp -r "${ESP_DIR}/kernels/"* /tmp/morpheus-esp/kernels/ 2>/dev/null || true
-    [[ -d "${ESP_DIR}/initrds" ]] && sudo cp -r "${ESP_DIR}/initrds/"* /tmp/morpheus-esp/initrds/ 2>/dev/null || true
+    [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
     
-    for kernel in /tmp/morpheus-esp/kernels/vmlinuz-*; do
+    for kernel in "${ESP_DIR}"/kernels/vmlinuz-*; do
         [[ -f "$kernel" ]] || continue
-        local kname=$(basename "$kernel")
-        local distro=$(echo "$kname" | sed 's/vmlinuz-//')
-        local title="${distro^}"
-        local cmdline="console=ttyS0,115200 console=tty0"
+        local kname distro
+        kname=$(basename "$kernel")
+        distro=${kname#vmlinuz-}
         
+        sudo cp "$kernel" "$mnt/kernels/"
+        [[ -f "${ESP_DIR}/initrds/initrd-${distro}.img" ]] && sudo cp "${ESP_DIR}/initrds/initrd-${distro}.img" "$mnt/initrds/"
+        
+        local title="$distro" cmdline="console=ttyS0,115200 console=tty0"
         case "$distro" in
-            tails)  cmdline="boot=live live-media-path=/live nopersistence noprompt timezone=Etc/UTC splash=0 $cmdline"; title="Tails OS" ;;
-            arch)   cmdline="root=/dev/ram0 rw debug $cmdline"; title="Arch Linux" ;;
-            ubuntu) cmdline="boot=casper quiet splash $cmdline"; title="Ubuntu" ;;
-            debian) cmdline="boot=live quiet $cmdline"; title="Debian" ;;
-            fedora) cmdline="rd.live.image quiet $cmdline"; title="Fedora" ;;
-            kali)   cmdline="boot=live quiet $cmdline"; title="Kali Linux" ;;
+            tails)  title="Tails OS"; cmdline="boot=live live-media-path=/live nopersistence noprompt splash=0 $cmdline" ;;
+            arch)   title="Arch Linux"; cmdline="root=/dev/ram0 rw debug $cmdline" ;;
+            ubuntu) title="Ubuntu"; cmdline="boot=casper quiet splash $cmdline" ;;
+            debian) title="Debian"; cmdline="boot=live quiet $cmdline" ;;
+            fedora) title="Fedora"; cmdline="rd.live.image quiet $cmdline" ;;
         esac
         
-        local initrd=""
-        [[ -f "/tmp/morpheus-esp/initrds/initrd-${distro}.img" ]] && initrd="initrd  \\\\initrds\\\\initrd-${distro}.img"
+        local initrd_line=""
+        [[ -f "$mnt/initrds/initrd-${distro}.img" ]] && initrd_line="initrd  /initrds/initrd-${distro}.img"
         
-        sudo tee "/tmp/morpheus-esp/loader/entries/${distro}.conf" > /dev/null <<EOF
+        sudo tee "$mnt/loader/entries/${distro}.conf" > /dev/null << EOF
 title   $title
-linux   \\kernels\\$kname
-$initrd
+linux   /kernels/$kname
+$initrd_line
 options $cmdline
 EOF
-        log_info "Boot entry: $title"
+        log_info "Added boot entry: $title"
     done
     
-    sudo sync
-    sudo umount /tmp/morpheus-esp
+    sudo umount "$mnt"
+    rmdir "$mnt"
     sudo losetup -d "$loop_dev"
     trap - EXIT
     
-    log_success "50GB disk created: $(du -h "$disk_img" | cut -f1) (sparse)"
+    log_success "Test disk ready: $(du -h "$disk_img" | cut -f1) (sparse)"
 }
 
-cmd_disk_10g() {
-    log_step "Creating 10GB Persistence Disk"
-    
-    local disk_img="${TESTING_DIR}/test-disk-10g.img"
-    
-    if [[ -f "$disk_img" && "${FORCE_MODE}" == "false" ]]; then
-        confirm "Disk exists. Recreate?" || { log_info "Skipped"; return 0; }
-    fi
-    
-    rm -f "$disk_img"
-    qemu-img create -f raw "$disk_img" 10G >/dev/null
-    
-    log_success "10GB disk created (empty, for installer testing)"
-}
-
-cmd_run() {
-    local mode="${1:-}"
-    
-    print_banner
-    check_bootloader || die "Bootloader not built. Run: ./setup-dev.sh build"
+do_launch_qemu() {
+    log_step "Launching QEMU"
     
     local ovmf_path
     ovmf_path=$(get_ovmf_path) || die "OVMF not found"
     
-    case "${mode}" in
-        esp|1)
-            check_esp_img || cmd_disk_esp
-            log_info "Booting from ESP image..."
-            qemu-system-x86_64 \
-                -bios "$ovmf_path" \
-                -drive format=raw,file="${TESTING_DIR}/esp.img" \
-                -net none -smp 4 -m 4G \
-                -vga virtio -display gtk,gl=on \
-                -serial mon:stdio
+    local disk="${TESTING_DIR}/test-disk-50g.img"
+    [[ -f "$disk" ]] || disk="${ESP_DIR}"
+    
+    log_info "Starting MorpheusX..."
+    log_info "Press Ctrl+A X to exit QEMU"
+    printf "\n"
+    
+    if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
+        qemu-system-x86_64 \
+            -bios "$ovmf_path" \
+            -drive format=raw,file="${TESTING_DIR}/test-disk-50g.img" \
+            -net none \
+            -smp 4 \
+            -m 4G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial mon:stdio
+    else
+        qemu-system-x86_64 \
+            -bios "$ovmf_path" \
+            -drive format=raw,file=fat:rw:"${ESP_DIR}" \
+            -net none \
+            -smp 4 \
+            -m 4G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial mon:stdio
+    fi
+}
+
+run_full_auto() {
+    print_banner
+    
+    log_info "Full automatic setup - sit back and relax"
+    printf "\n"
+    
+    if ! check_disk_tools || ! check_qemu; then
+        do_install_packages
+    else
+        log_success "System packages OK"
+    fi
+    
+    if ! check_rust; then
+        do_install_rust
+    else
+        log_success "Rust toolchain OK"
+    fi
+    
+    if ! check_ovmf; then
+        die "OVMF not found after setup"
+    fi
+    do_configure_ovmf
+    
+    do_build
+    
+    if ! check_any_distro; then
+        log_step "Installing Distributions"
+        log_info "Installing Tails OS (this downloads ~1.3GB)..."
+        do_install_tails
+    else
+        log_success "Distributions ready"
+    fi
+    
+    do_create_disk
+    
+    printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
+    
+    if [[ "${SKIP_QEMU}" != "true" ]]; then
+        do_launch_qemu
+    fi
+}
+
+run_interactive() {
+    print_banner
+    
+    log_info "Interactive setup - I'll ask you at each step"
+    printf "\n"
+    
+    if ! check_disk_tools || ! check_qemu; then
+        if ask "Install system packages (qemu, parted, etc)?"; then
+            do_install_packages
+        fi
+    else
+        log_success "System packages OK"
+    fi
+    
+    if ! check_rust; then
+        if ask "Install Rust toolchain?"; then
+            do_install_rust
+        fi
+    else
+        log_success "Rust toolchain OK"
+    fi
+    
+    if check_ovmf; then
+        do_configure_ovmf
+    else
+        log_warn "OVMF not found - QEMU boot will fail"
+    fi
+    
+    if ask "Build MorpheusX bootloader?"; then
+        FORCE_MODE=true
+        do_build
+    fi
+    
+    printf "\n${C_BOLD}Which distributions to install?${C_RESET}\n"
+    printf "  ${C_CYAN}[1]${C_RESET} Tails OS only (~1.3GB)\n"
+    printf "  ${C_CYAN}[2]${C_RESET} Arch Linux only (~2GB)\n"
+    printf "  ${C_CYAN}[3]${C_RESET} Both Tails and Arch\n"
+    printf "  ${C_CYAN}[4]${C_RESET} Skip - I'll add distros later\n"
+    printf "Choice [1]: "
+    read -r distro_choice
+    [[ -z "$distro_choice" ]] && distro_choice=1
+    
+    case "$distro_choice" in
+        1) do_install_tails ;;
+        2) do_install_arch ;;
+        3) do_install_tails; do_install_arch ;;
+        4) log_info "Skipping distributions" ;;
+    esac
+    
+    if ask "Create 50GB test disk with bootloader and distros?"; then
+        FORCE_MODE=true
+        do_create_disk
+    fi
+    
+    printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
+    
+    if ask "Launch QEMU now?"; then
+        do_launch_qemu
+    fi
+}
+
+cmd_setup() {
+    print_banner
+    do_install_packages
+    do_install_rust
+    do_configure_ovmf
+    ensure_dirs
+    printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Environment ready!${C_RESET}\n"
+}
+
+cmd_build() {
+    print_banner
+    check_rust || die "Rust not installed. Run: $0 setup"
+    ensure_dirs
+    FORCE_MODE=true
+    do_build
+}
+
+cmd_disk() {
+    local target="${1:-50g}"
+    print_banner
+    check_disk_tools || die "Disk tools missing. Run: $0 setup"
+    
+    case "$target" in
+        50g|50G|all) FORCE_MODE=true; do_create_disk ;;
+        info)
+            printf "${C_BOLD}Disk Images:${C_RESET}\n\n"
+            for img in "${TESTING_DIR}"/*.img; do
+                [[ -f "$img" ]] || continue
+                printf "  ${C_CYAN}%s${C_RESET}\n" "$(basename "$img")"
+                printf "    Size: %s\n" "$(du -h "$img" | cut -f1)"
+                printf "    Actual: %s\n" "$(stat --printf='%s' "$img" | numfmt --to=iec)"
+            done
             ;;
-        50g|large|2)
-            check_disk_50g || die "50GB disk not found. Run: ./setup-dev.sh disk 50g"
-            log_info "Booting from 50GB test disk..."
-            qemu-system-x86_64 \
-                -s -bios "$ovmf_path" \
-                -drive format=raw,file="${TESTING_DIR}/test-disk-50g.img" \
-                -net none -smp 8 -m 12G \
-                -vga virtio -display gtk,gl=on \
-                -serial mon:stdio
-            ;;
-        10g|persist|3)
-            check_disk_10g || die "10GB disk not found. Run: ./setup-dev.sh disk 10g"
-            log_info "Booting from 10GB persistence disk..."
-            qemu-system-x86_64 \
-                -s -bios "$ovmf_path" \
-                -drive format=raw,file="${TESTING_DIR}/test-disk-10g.img" \
-                -net none -smp 8 -m 12G \
-                -vga virtio -display gtk,gl=on \
-                -serial mon:stdio
-            ;;
-        "")
-            printf "Select boot mode:\n"
-            printf "  ${C_CYAN}[1]${C_RESET} ESP image (quick test)\n"
-            printf "  ${C_CYAN}[2]${C_RESET} 50GB disk (full test with partitions)\n"
-            printf "  ${C_CYAN}[3]${C_RESET} 10GB disk (persistence/installer test)\n"
-            printf "\n"
-            read -r -n 1 -p "Choice: " choice
-            printf "\n"
-            cmd_run "$choice"
-            ;;
-        *)
-            printf "Usage: %s run [mode]\n\n" "$(basename "$0")"
-            printf "Modes:\n"
-            printf "  ${C_CYAN}esp${C_RESET}      Boot from ESP image\n"
-            printf "  ${C_CYAN}50g${C_RESET}      Boot from 50GB test disk\n"
-            printf "  ${C_CYAN}10g${C_RESET}      Boot from 10GB persistence disk\n"
-            return 1
-            ;;
+        *) log_error "Unknown target: $target"; return 1 ;;
     esac
 }
 
 cmd_install() {
     local target="${1:-}"
-    
     print_banner
     
-    case "${target}" in
-        tails)
-            log_step "Installing Tails OS"
-            pushd "${TESTING_DIR}" >/dev/null
-            [[ "${AUTO_MODE}" == "true" ]] && yes y | ./install-tails.sh || ./install-tails.sh
-            popd >/dev/null
-            ;;
-        arch)
-            log_step "Installing Arch Linux"
-            pushd "${TESTING_DIR}" >/dev/null
-            [[ "${FORCE_MODE}" == "true" ]] && ./install-arch.sh --force || ./install-arch.sh
-            popd >/dev/null
-            ;;
-        distro)
-            log_step "Live Distribution Installer"
-            pushd "${TESTING_DIR}" >/dev/null
-            ./install-live-distro.sh
-            popd >/dev/null
-            ;;
-        *)
+    case "$target" in
+        tails)  FORCE_MODE=true; do_install_tails ;;
+        arch)   FORCE_MODE=true; do_install_arch ;;
+        both|all) FORCE_MODE=true; do_install_tails; do_install_arch ;;
+        "")
             printf "Usage: %s install <target>\n\n" "$(basename "$0")"
             printf "Targets:\n"
-            printf "  ${C_CYAN}tails${C_RESET}   Install Tails OS (1.3GB)\n"
-            printf "  ${C_CYAN}arch${C_RESET}    Install Arch Linux (~2GB)\n"
-            printf "  ${C_CYAN}distro${C_RESET}  Interactive distro selector (Ubuntu, Debian, Fedora, Kali)\n"
+            printf "  ${C_CYAN}tails${C_RESET}   Install Tails OS\n"
+            printf "  ${C_CYAN}arch${C_RESET}    Install Arch Linux\n"
+            printf "  ${C_CYAN}both${C_RESET}    Install both\n"
             return 1
             ;;
+        *) die "Unknown target: $target" ;;
     esac
+}
+
+cmd_run() {
+    print_banner
+    check_bootloader || die "Bootloader not built. Run: $0 build"
+    do_launch_qemu
 }
 
 cmd_clean() {
@@ -492,12 +541,11 @@ cmd_clean() {
     log_step "Cleaning"
     
     printf "What to clean?\n"
-    printf "  ${C_CYAN}[1]${C_RESET} Build artifacts only (target/, BOOTX64.EFI)\n"
-    printf "  ${C_CYAN}[2]${C_RESET} Disk images (esp.img, test-disk-*.img)\n"
-    printf "  ${C_CYAN}[3]${C_RESET} Distributions (kernels, initrds)\n"
+    printf "  ${C_CYAN}[1]${C_RESET} Build artifacts only\n"
+    printf "  ${C_CYAN}[2]${C_RESET} Disk images only\n"
+    printf "  ${C_CYAN}[3]${C_RESET} Distributions only\n"
     printf "  ${C_CYAN}[4]${C_RESET} Everything\n"
-    printf "  ${C_CYAN}[0]${C_RESET} Cancel\n"
-    printf "\n"
+    printf "  ${C_CYAN}[0]${C_RESET} Cancel\n\n"
     
     read -r -n 1 -p "Choice: " choice
     printf "\n\n"
@@ -506,116 +554,63 @@ cmd_clean() {
         1)
             rm -rf "${PROJECT_ROOT}/target"
             rm -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI"
-            log_success "Build artifacts removed"
+            log_success "Build artifacts cleaned"
             ;;
         2)
             rm -f "${TESTING_DIR}"/*.img
-            log_success "Disk images removed"
+            log_success "Disk images cleaned"
             ;;
         3)
-            rm -rf "${ESP_DIR}/kernels/"*
-            rm -rf "${ESP_DIR}/initrds/"*
-            log_success "Distributions removed"
+            rm -f "${ESP_DIR}/kernels"/*
+            rm -f "${ESP_DIR}/initrds"/*
+            rm -rf "${ESP_DIR}/rootfs"
+            log_success "Distributions cleaned"
             ;;
         4)
-            confirm "Remove EVERYTHING?" || return 0
             rm -rf "${PROJECT_ROOT}/target"
             rm -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI"
             rm -f "${TESTING_DIR}"/*.img
-            rm -rf "${ESP_DIR}/kernels/"*
-            rm -rf "${ESP_DIR}/initrds/"*
-            log_success "All artifacts removed"
+            rm -f "${ESP_DIR}/kernels"/*
+            rm -f "${ESP_DIR}/initrds"/*
+            rm -rf "${ESP_DIR}/rootfs"
+            log_success "Everything cleaned"
             ;;
         0|*) log_info "Cancelled" ;;
     esac
 }
 
-cmd_interactive() {
-    while true; do
-        clear
-        print_banner
-        
-        printf "${C_BOLD}Main Menu${C_RESET}\n\n"
-        
-        local st
-        check_rust && check_qemu && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[1]${C_RESET} Setup Environment        %b\n" "$st"
-        
-        check_bootloader && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[2]${C_RESET} Build Bootloader         %b\n" "$st"
-        
-        printf "\n${C_DIM}  ── Distributions ──${C_RESET}\n"
-        check_tails && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[3]${C_RESET} Install Tails            %b\n" "$st"
-        check_arch && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[4]${C_RESET} Install Arch             %b\n" "$st"
-        printf "  ${C_CYAN}[5]${C_RESET} Install Other Distro\n"
-        
-        printf "\n${C_DIM}  ── Disk Images ──${C_RESET}\n"
-        check_esp_img && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[6]${C_RESET} Create ESP Image         %b\n" "$st"
-        check_disk_50g && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[7]${C_RESET} Create 50GB Test Disk    %b\n" "$st"
-        check_disk_10g && st="${C_GREEN}${SYM_CHECK}${C_RESET}" || st="${C_RED}${SYM_CROSS}${C_RESET}"
-        printf "  ${C_CYAN}[8]${C_RESET} Create 10GB Test Disk    %b\n" "$st"
-        
-        printf "\n${C_DIM}  ── Actions ──${C_RESET}\n"
-        printf "  ${C_CYAN}[r]${C_RESET} Run QEMU\n"
-        printf "  ${C_CYAN}[s]${C_RESET} Show Status\n"
-        printf "  ${C_CYAN}[c]${C_RESET} Clean\n"
-        printf "  ${C_CYAN}[q]${C_RESET} Quit\n"
-        printf "\n"
-        
-        read -r -n 1 -p "Select: " choice
-        printf "\n\n"
-        
-        case "$choice" in
-            1) cmd_setup; read -r -p "Press Enter..." ;;
-            2) cmd_build; read -r -p "Press Enter..." ;;
-            3) cmd_install tails; read -r -p "Press Enter..." ;;
-            4) cmd_install arch; read -r -p "Press Enter..." ;;
-            5) cmd_install distro; read -r -p "Press Enter..." ;;
-            6) cmd_disk esp; read -r -p "Press Enter..." ;;
-            7) cmd_disk 50g; read -r -p "Press Enter..." ;;
-            8) cmd_disk 10g; read -r -p "Press Enter..." ;;
-            r|R) cmd_run ;;
-            s|S) cmd_status; read -r -p "Press Enter..." ;;
-            c|C) cmd_clean; read -r -p "Press Enter..." ;;
-            q|Q|0) printf "Bye!\n"; exit 0 ;;
-            *) ;;
-        esac
-    done
-}
-
 usage() {
     print_banner
-    cat << EOF
-${C_BOLD}Usage:${C_RESET} $(basename "$0") [options] <command> [args]
-
-${C_BOLD}Commands:${C_RESET}
-  ${C_CYAN}setup${C_RESET}              Install dependencies and configure environment
-  ${C_CYAN}build${C_RESET}              Build the bootloader
-  ${C_CYAN}run${C_RESET} [mode]         Launch QEMU (esp|50g|10g)
-  ${C_CYAN}disk${C_RESET} <target>      Manage disk images (esp|50g|10g|all|info)
-  ${C_CYAN}install${C_RESET} <target>   Install distributions (tails|arch|distro)
-  ${C_CYAN}status${C_RESET}             Show environment status
-  ${C_CYAN}clean${C_RESET}              Remove build artifacts
-  ${C_CYAN}interactive${C_RESET}        Launch interactive menu (default)
-
-${C_BOLD}Options:${C_RESET}
-  -f, --force          Force re-creation/rebuild
-  -y, --yes, --auto    Non-interactive mode
-  -h, --help           Show this help
-
-${C_BOLD}Examples:${C_RESET}
-  $(basename "$0")                    # Interactive menu
-  $(basename "$0") setup              # Setup environment
-  $(basename "$0") disk all           # Create all disk images
-  $(basename "$0") install tails      # Install Tails OS
-  $(basename "$0") run 50g            # Boot from 50GB disk
-  $(basename "$0") -f disk 50g        # Force recreate 50GB disk
-
-EOF
+    printf "${C_BOLD}Usage:${C_RESET} %s [options] [command]\n\n" "$(basename "$0")"
+    
+    printf "${C_BOLD}Default Behavior:${C_RESET}\n"
+    printf "  Running without arguments does EVERYTHING automatically:\n"
+    printf "  installs deps, builds, downloads distros, creates disk, launches QEMU\n\n"
+    
+    printf "${C_BOLD}Options:${C_RESET}\n"
+    printf "  ${C_CYAN}-i, --interactive${C_RESET}  Ask at each step what to do\n"
+    printf "  ${C_CYAN}-f, --force${C_RESET}        Force rebuild/recreate\n"
+    printf "  ${C_CYAN}-n, --no-qemu${C_RESET}      Setup everything but don't launch QEMU\n"
+    printf "  ${C_CYAN}-h, --help${C_RESET}         Show this help\n"
+    
+    printf "\n${C_BOLD}Commands:${C_RESET} (for power users)\n"
+    printf "  ${C_CYAN}setup${C_RESET}              Install dependencies only\n"
+    printf "  ${C_CYAN}build${C_RESET}              Build bootloader only\n"
+    printf "  ${C_CYAN}install${C_RESET} <target>   Install distro (tails|arch|both)\n"
+    printf "  ${C_CYAN}disk${C_RESET} [target]      Create disk image (50g|info)\n"
+    printf "  ${C_CYAN}run${C_RESET}                Launch QEMU\n"
+    printf "  ${C_CYAN}status${C_RESET}             Show environment status\n"
+    printf "  ${C_CYAN}clean${C_RESET}              Remove artifacts\n"
+    
+    printf "\n${C_BOLD}Examples:${C_RESET}\n"
+    printf "  ${C_DIM}# Complete auto-setup + launch${C_RESET}\n"
+    printf "  %s\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Interactive guided setup${C_RESET}\n"
+    printf "  %s --interactive\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Setup without launching QEMU${C_RESET}\n"
+    printf "  %s --no-qemu\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Just rebuild${C_RESET}\n"
+    printf "  %s build\n\n" "$(basename "$0")"
 }
 
 main() {
@@ -624,27 +619,31 @@ main() {
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -f|--force)  FORCE_MODE=true; shift ;;
-            -y|--yes|--auto) AUTO_MODE=true; shift ;;
-            -v|--verbose) VERBOSE=true; shift ;;
-            -h|--help)   usage; exit 0 ;;
-            -*)          die "Unknown option: $1" ;;
-            *)           [[ -z "$cmd" ]] && cmd="$1" || args+=("$1"); shift ;;
+            -i|--interactive) INTERACTIVE=true; shift ;;
+            -f|--force)       FORCE_MODE=true; shift ;;
+            -n|--no-qemu)     SKIP_QEMU=true; shift ;;
+            -h|--help)        usage; exit 0 ;;
+            -*)               die "Unknown option: $1" ;;
+            *)                [[ -z "$cmd" ]] && cmd="$1" || args+=("$1"); shift ;;
         esac
     done
     
-    [[ -z "$cmd" ]] && cmd="interactive"
-    
-    case "$cmd" in
-        setup|init)       cmd_setup ;;
-        build|compile)    cmd_build ;;
-        run|start|qemu)   cmd_run "${args[@]:-}" ;;
-        disk|image)       cmd_disk "${args[@]:-}" ;;
-        install|add)      cmd_install "${args[@]:-}" ;;
-        status|info)      cmd_status ;;
-        clean|purge)      cmd_clean ;;
-        interactive|menu|i) cmd_interactive ;;
-        *)                die "Unknown command: $cmd. Try --help" ;;
+    case "${cmd:-}" in
+        "")
+            if [[ "${INTERACTIVE}" == "true" ]]; then
+                run_interactive
+            else
+                run_full_auto
+            fi
+            ;;
+        setup|init)      cmd_setup ;;
+        build|compile)   cmd_build ;;
+        install|add)     cmd_install "${args[@]:-}" ;;
+        disk|image)      cmd_disk "${args[@]:-}" ;;
+        run|start|qemu)  cmd_run ;;
+        status|info)     cmd_status ;;
+        clean|purge)     cmd_clean ;;
+        *)               die "Unknown command: $cmd" ;;
     esac
 }
 
