@@ -12,7 +12,8 @@ members = [
 version = "1.0.1"
 edition = "2021"
 rust-version = "1.75"
-authors = ["Your Name <you@example.com>"]
+# Update with your name before publishing
+authors = []
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]

@@ -19,5 +19,10 @@
 /obj/
 /.next/
 /.next-tmp/
-/testing/esp
-#logs
+
+# Testing artifacts
+/testing/esp/
+/testing/*.img
+NvVars
+
+# Logs

@@ -1,61 +1,49 @@
 # MorpheusX
 
-A UEFI "bootloader" (more like a minimal bare metall os or runtime) written in pure Rust enabling ephemeral operating systems with persistent userland state. Distro-hop daily while maintaining your development environment, configurations, and data across reboots.
+MorpheusX is a UEFI boot/runtime that loads Linux kernels directly from firmware space, treats distributions as disposable layers, and keeps userland state persistent. It is written in Rust with a no_std core and minimal dependencies.
 
-## Overview
+## What it does
+- Boots Linux kernels from the EFI system partition with custom GPT and FAT32 handling
+- Provides a boot-time TUI for selecting images and guiding installs
+- Includes a network stack (UEFI HTTP) for downloading ISOs and updates (work in progress)
+- Lays groundwork for persistence: capturing the loaded image, reversing relocations, and writing a bootable copy back to disk
+- Contains an updater, registry/config layer, and supporting CLI utilities for development workflows
 
-MorpheusX implements a bare-metal bootloader that decouples the OS layer from user data. Boot into Arch today, Fedora tomorrow, NixOS next week - your userland persists regardless of the underlying distribution. The bootloader handles kernel loading, filesystem operations, and state management entirely in UEFI space without external dependencies.
+## Repository layout
+- bootloader/ – UEFI entry point, EFI stub, kernel loader, TUI, installer
+- core/ – GPT management, disk and partition helpers, logging
+- network/ – HTTP client stack on UEFI protocols (in progress)
+- persistent/ – PE/COFF parsing and relocation reversal for self-persistence
+- updater/ – self-update primitives
+- cli/, installer/, registry/, utils/, xtask/, tools/ – supporting crates, helper tooling, and dev utilities
 
-## Vision
-
-Traditional systems tie user data to the OS installation. MorpheusX inverts this model by treating operating systems as ephemeral, interchangeable layers while preserving userland state across different distributions. This enables:
-
-- Daily distribution switching without data migration
-- Isolated testing environments with persistent development tools
-- Rapid OS recovery by simply booting a different image
-- Exploration of multiple distributions simultaneously
-
-The architecture demonstrates low-level systems programming techniques including direct UEFI protocol manipulation, custom filesystem drivers, GPT partition management, and cross-architecture bootloader design.
-
-## Architecture
-
-```
-morpheusx/
-├── bootloader/     UEFI application entry point, EFI stub, kernel loading
-├── core/           GPT operations, disk management, logging infrastructure  
-├── network/        HTTP client for ISO downloads (UEFI protocol-based)
-├── persistent/     State capture and restoration across boots
-├── registry/       Configuration management
-└── updater/        Self-update mechanisms
-```
-
-## Technical Details
-
-- **Target**: x86_64-unknown-uefi (ARM64 support planned)
-- **Language**: Rust (no_std, bare metal)
-- **Dependencies**: Zero runtime dependencies, minimal build-time deps
-- **Protocols**: Direct UEFI protocol bindings (no wrapper libraries)
-- **Build**: LTO enabled, size-optimized for EFI system partition constraints
-
-The bootloader implements custom parsers for GPT, FAT32, and PE/COFF formats. Network stack uses raw UEFI HTTP protocols. All disk I/O happens through EFI_BLOCK_IO_PROTOCOL without OS driver dependencies.
-
-## Build
+## Building
+Prerequisites: Rust 1.75+ with `rustup`, target `x86_64-unknown-uefi`, and a nightly or stable toolchain that supports `no_std` UEFI builds.
 
 ```bash
+rustup target add x86_64-unknown-uefi
 cargo build --release --target x86_64-unknown-uefi
 ```
 
-Output: `target/x86_64-unknown-uefi/release/morpheus-bootloader.efi`
+The bootable binary is produced at `target/x86_64-unknown-uefi/release/morpheus-bootloader.efi`.
 
-## Testing
+## Running in QEMU
+Use the provided scripts (requires QEMU and OVMF):
 
-QEMU with OVMF firmware:
 ```bash
-cd testing && ./run.sh
+cd testing
+./run.sh
 ```
 
-## Status
+See additional helper scripts in `testing/` for preparing initrds and disk images.
 
-Early development. Core bootloader and disk management functional. Network and persistence layers in progress.
+## Project status
+This is experimental, not production-hardened, and portions of the network and persistence layers are still under construction. Expect sharp edges and incomplete flows.
 
-*Dedicated to all the sysadmins who showed me the way <3.*
+## Contributing
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up the toolchain, run builds/tests, and send focused PRs.
+
+## License
+Workspace metadata declares `MIT OR Apache-2.0`. License files have not yet been added; choose the license you prefer before using this in downstream projects.
+
+## Deticated to all the SysAdmins who showed me the way <3
