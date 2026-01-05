@@ -9,6 +9,7 @@ use crate::utils::string;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 use alloc::string::String;
+use alloc::boxed::Box;
 
 /// Directory iterator
 pub struct DirectoryIterator<'a, B: BlockIo> {
@@ -16,7 +17,7 @@ pub struct DirectoryIterator<'a, B: BlockIo> {
     extent_lba: u32,
     extent_len: u32,
     offset: usize,
-    current_sector: [u8; SECTOR_SIZE],
+    current_sector: Box<[u8; SECTOR_SIZE]>,
     current_sector_lba: Option<u64>,
 }
 
@@ -28,7 +29,7 @@ impl<'a, B: BlockIo> DirectoryIterator<'a, B> {
             extent_lba,
             extent_len,
             offset: 0,
-            current_sector: [0u8; SECTOR_SIZE],
+            current_sector: Box::new([0u8; SECTOR_SIZE]),
             current_sector_lba: None,
         }
     }
@@ -51,7 +52,7 @@ impl<'a, B: BlockIo> Iterator for DirectoryIterator<'a, B> {
             
             // Read sector if needed
             if self.current_sector_lba != Some(lba) {
-                if self.block_io.read_blocks(Lba(lba), &mut self.current_sector).is_err() {
+                if self.block_io.read_blocks(Lba(lba), self.current_sector.as_mut()).is_err() {
                     return Some(Err(Iso9660Error::IoError));
                 }
                 self.current_sector_lba = Some(lba);

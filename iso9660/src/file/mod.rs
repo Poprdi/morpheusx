@@ -34,9 +34,11 @@ pub fn read_file<B: BlockIo>(
     let sector_count = file_size.div_ceil(SECTOR_SIZE);
     let start_lba = file.extent_lba as u64;
     
+    // Allocate sector buffer once outside the loop
+    let mut sector = [0u8; SECTOR_SIZE];
+    
     // Read sectors
     for i in 0..sector_count {
-        let mut sector = [0u8; SECTOR_SIZE];
         block_io.read_blocks(Lba(start_lba + i as u64), &mut sector)
             .map_err(|_| Iso9660Error::IoError)?;
         
