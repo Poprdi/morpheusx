@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use alloc::string::{String, ToString};
 
 const BOOT_ENTRIES_PATH: &str = "\\loader\\entries";
-const MAX_PATH_LEN: usize = 256;
 const MAX_FILE_SIZE: usize = 4096;
 
 pub struct EntryScanner {
@@ -24,42 +23,41 @@ impl EntryScanner {
     pub fn scan_boot_entries(&self) -> Vec<BootEntry> {
         let mut entries = Vec::new();
 
-        entries.push(BootEntry::new(
-            "Arch Linux".to_string(),
-            "\\kernels\\vmlinuz-arch".to_string(),
-            Some("\\initrds\\initramfs-arch.img".to_string()),
-            "root=/dev/ram0 rw console=ttyS0,115200 console=tty0 debug".to_string(),
-        ));
+        unsafe {
+            if let Ok(root) = self.get_esp_root() {
+                if let Ok(conf_entries) = self.scan_loader_entries(root) {
+                    for entry in conf_entries {
+                        if self.kernel_exists(root, &entry.kernel_path) {
+                            entries.push(entry);
+                        }
+                    }
+                }
 
-        entries.push(BootEntry::new(
-            "Ubuntu 20.04".to_string(),
-            "\\kernels\\vmlinuz-ubuntu2004".to_string(),
-            None,
-            "boot=casper quiet splash console=ttyS0,115200 console=tty0".to_string(),
-        ));
+                if entries.is_empty() {
+                    if let Ok(kernel_entries) = self.scan_kernels(root) {
+                        entries.extend(kernel_entries);
+                    }
+                }
 
-        entries.push(BootEntry::new(
-            "Fedora 36".to_string(),
-            "\\kernels\\vmlinuz-fedora36".to_string(),
-            None,
-            "rd.live.image quiet console=ttyS0,115200 console=tty0".to_string(),
-        ));
+                ((*root).close)(root);
+            }
+        }
 
-        entries.push(BootEntry::new(
-            "Generic Kernel".to_string(),
-            "\\kernels\\vmlinuz".to_string(),
-            None,
-            "console=ttyS0,115200 console=tty0".to_string(),
-        ));
-
-        entries.push(BootEntry::new(
-            "Tails OS".to_string(),
-            "\\kernels\\vmlinuz-tails".to_string(),
-            Some("\\initrds\\initrd-tails.img".to_string()),
-            "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC console=ttyS0,115200 console=tty1".to_string(),
-        ));
+        if entries.is_empty() {
+            entries.push(self.create_fallback_entry());
+        }
 
         entries
+    }
+
+    unsafe fn kernel_exists(&self, root: *mut FileProtocol, path: &str) -> bool {
+        let path_utf16 = Self::str_to_utf16(path);
+        if let Ok(file) = open_file_read(root, &path_utf16) {
+            ((*file).close)(file);
+            true
+        } else {
+            false
+        }
     }
 
     unsafe fn get_esp_root(&self) -> Result<*mut FileProtocol, ()> {
@@ -194,7 +192,7 @@ impl EntryScanner {
     fn generate_cmdline(distro: &str) -> String {
         match distro {
             name if name.contains("tails") => {
-                "boot=live live-media-path=/initrds nopersistence noprompt timezone=Etc/UTC console=ttyS0,115200 console=tty1".to_string()
+                "boot=live live-media-path=/live nopersistence noprompt timezone=Etc/UTC console=ttyS0,115200 console=tty1".to_string()
             }
             name if name.contains("ubuntu") => {
                 "boot=casper quiet splash console=ttyS0,115200 console=tty*".to_string()
@@ -222,10 +220,74 @@ impl EntryScanner {
         let entries_path = Self::str_to_utf16(BOOT_ENTRIES_PATH);
         
         if let Ok(entries_dir) = open_file_read(root, &entries_path) {
+            let mut buffer = [0u8; 512];
+            
+            loop {
+                let mut buffer_size = buffer.len();
+                let status = ((*entries_dir).read)(entries_dir, &mut buffer_size, buffer.as_mut_ptr());
+                
+                if status != 0 || buffer_size == 0 {
+                    break;
+                }
+
+                if let Some(filename) = Self::extract_filename(&buffer[..buffer_size]) {
+                    if filename.ends_with(".conf") {
+                        let conf_path = alloc::format!("{}\\{}", BOOT_ENTRIES_PATH, filename);
+                        if let Ok(entry) = self.parse_conf_file(root, &conf_path) {
+                            entries.push(entry);
+                        }
+                    }
+                }
+            }
+            
             ((*entries_dir).close)(entries_dir);
         }
 
         Ok(entries)
+    }
+
+    unsafe fn parse_conf_file(&self, root: *mut FileProtocol, path: &str) -> Result<BootEntry, ()> {
+        let path_utf16 = Self::str_to_utf16(path);
+        let file = open_file_read(root, &path_utf16)?;
+        
+        let mut buffer = [0u8; MAX_FILE_SIZE];
+        let mut size = MAX_FILE_SIZE;
+        let status = ((*file).read)(file, &mut size, buffer.as_mut_ptr());
+        ((*file).close)(file);
+        
+        if status != 0 {
+            return Err(());
+        }
+
+        let content = core::str::from_utf8(&buffer[..size]).map_err(|_| ())?;
+        
+        let mut title = String::new();
+        let mut linux = String::new();
+        let mut initrd = None;
+        let mut options = String::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Some(value) = line.strip_prefix("title") {
+                title = value.trim().to_string();
+            } else if let Some(value) = line.strip_prefix("linux") {
+                linux = value.trim().replace('/', "\\").to_string();
+            } else if let Some(value) = line.strip_prefix("initrd") {
+                initrd = Some(value.trim().replace('/', "\\").to_string());
+            } else if let Some(value) = line.strip_prefix("options") {
+                options = value.trim().to_string();
+            }
+        }
+
+        if title.is_empty() || linux.is_empty() {
+            return Err(());
+        }
+
+        Ok(BootEntry::new(title, linux, initrd, options))
     }
 
     fn create_fallback_entry(&self) -> BootEntry {
