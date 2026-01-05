@@ -1,16 +1,26 @@
-//! Persistence storage backends
+//! Persistence storage backends (Future API)
 //!
-//! Multiple layers of persistence for bootloader and data.
+//! This module defines a trait-based abstraction for multiple persistence layers.
+//!
+//! # Current Status
+//!
+//! This API is **not yet implemented**. The current working implementation uses
+//! `morpheus_core::fs::fat32_ops::write_file()` directly in the bootloader installer.
+//!
+//! This module exists as a future abstraction for multi-layer persistence:
+//! - Layer 0: ESP/FAT32 (primary bootable storage) 
+//! - Layer 1: TPM (cryptographic attestation)
+//! - Layer 2: CMOS/NVRAM (emergency recovery stub)
+//! - Layer 3: HVRAM (hypervisor-hidden persistence)
 
-pub mod esp; // ESP/FAT32 storage (primary)
-             // Future layers:
-             // pub mod tpm;   // TPM PCR measurements
-             // pub mod cmos;  // CMOS/NVRAM micro-persistence
-             // pub mod hvram; // Hypervisor RAM persistence
+pub mod esp;
 
 use crate::pe::PeError;
 
 /// Trait for persistence backends
+///
+/// Different backends store the bootloader image in different ways.
+/// The trait provides a unified interface for multi-layer persistence.
 pub trait PersistenceBackend {
     /// Store bootloader image
     fn store_bootloader(&mut self, data: &[u8]) -> Result<(), PeError>;
@@ -24,14 +34,3 @@ pub trait PersistenceBackend {
     /// Backend name for logging
     fn name(&self) -> &str;
 }
-
-// Layer 0: ESP Persistence (what works now)
-// Layer 1: TPM attestation (cryptographic proof of boot state)
-// Layer 2: CMOS/NVRAM (tiny stub for emergency recovery)
-// Layer 3: HVRAM (if running virtualized, hide in hypervisor)
-//
-// Each layer serves different purposes:
-// - ESP: Primary bootable storage
-// - TPM: Tamper detection
-// - CMOS: Recovery if ESP corrupted
-// - HVRAM: Stealth/anti-forensics

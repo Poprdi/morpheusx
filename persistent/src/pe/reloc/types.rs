@@ -3,7 +3,7 @@
 //! Platform-neutral format, but application is platform-specific.
 //! The .reloc section contains blocks of relocations.
 
-use super::super::{PeError, PeResult};
+use super::super::PeResult;
 
 /// Base relocation block header
 #[repr(C, packed)]

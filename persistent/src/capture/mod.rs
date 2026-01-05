@@ -1,10 +1,30 @@
-//! Memory image capture
+//! Memory image capture (Future API)
 //!
-//! Extract the running bootloader from memory and prepare it for persistence.
+//! This module defines a higher-level API for capturing and unrelocating PE images.
+//!
+//! # Current Status
+//!
+//! This API is **not yet implemented**. The current working implementation uses:
+//! - `PeHeaders::unrelocate_image()` in `pe/header/pe_headers.rs`
+//! - `unrelocate_image()` in `pe/reloc/unrelocate.rs`
+//! - Direct integration in `bootloader/src/installer/operations.rs`
+//!
+//! This module exists as a future abstraction layer that would provide a cleaner API.
+//!
+//! # Future Usage
+//!
+//! ```ignore
+//! let captured = MemoryImage::capture_from_memory(image_base, image_size)?;
+//! let bootable = captured.create_bootable_image()?;
+//! esp_backend.store_bootloader(&bootable)?;
+//! ```
 
 use crate::pe::PeError;
 
 /// Captured memory image of running bootloader
+///
+/// This struct holds a captured PE image along with metadata needed
+/// to reverse relocations and create a bootable disk image.
 pub struct MemoryImage {
     /// Raw image data (as loaded by UEFI)
     pub data: alloc::vec::Vec<u8>,
@@ -28,45 +48,26 @@ impl MemoryImage {
     ///
     /// # Returns
     /// Captured image with relocation information
-    pub fn capture_from_memory(image_base: *const u8, image_size: usize) -> Result<Self, PeError> {
-        // TODO: Implement memory capture
-        //
-        // 1. Allocate Vec and copy image data
-        // 2. Parse PE headers to find original ImageBase
-        // 3. Calculate relocation delta
-        // 4. Return MemoryImage struct
-
-        todo!("Implement memory image capture")
+    ///
+    /// # Note
+    /// Not yet implemented. See `bootloader/src/installer/operations.rs` for
+    /// the current working implementation.
+    pub fn capture_from_memory(_image_base: *const u8, _image_size: usize) -> Result<Self, PeError> {
+        // Future implementation would:
+        // 1. Copy image data to Vec
+        // 2. Parse PE headers
+        // 3. Reconstruct original ImageBase
+        // 4. Calculate relocation delta
+        unimplemented!("Use PeHeaders::unrelocate_image() directly for now")
     }
 
     /// Create bootable disk image by reversing relocations
     ///
-    /// Uses platform-specific relocation engine to unapply all fixups.
-    /// Result is a byte-for-byte copy of what should be written to disk.
+    /// # Note
+    /// Not yet implemented. See `PeHeaders::unrelocate_image()` and
+    /// `PeHeaders::rva_to_file_layout()` for the current working implementation.
     pub fn create_bootable_image(&self) -> Result<alloc::vec::Vec<u8>, PeError> {
-        // TODO: Implement bootable image creation
-        //
-        // 1. Clone self.data (don't modify original)
-        // 2. Restore original ImageBase in PE header
-        // 3. Find .reloc section
-        // 4. Get platform-specific relocation engine
-        // 5. Iterate all relocations, unapply each one
-        // 6. Return unrelocated image
-
-        todo!("Implement bootable image creation")
+        // Future implementation would use the RelocationEngine trait
+        unimplemented!("Use PeHeaders::unrelocate_image() and rva_to_file_layout() directly for now")
     }
 }
-
-// Integration with existing code:
-//
-// Current installer does:
-//   let image_base = (*loaded_image).image_base as *const u8;
-//   let image_size = (*loaded_image).image_size as usize;
-//   // ... copy and fix ImageBase field ...
-//
-// New approach:
-//   let captured = MemoryImage::capture_from_memory(image_base, image_size)?;
-//   let bootable = captured.create_bootable_image()?;
-//   // ... write bootable to ESP ...
-//
-// This properly handles relocations instead of just fixing the header.

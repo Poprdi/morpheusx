@@ -8,7 +8,6 @@ use super::super::section::SectionTable;
 use super::super::{PeArch, PeError, PeResult};
 
 extern crate alloc;
-use alloc::vec::Vec;
 
 /// Complete PE headers structure
 pub struct PeHeaders {

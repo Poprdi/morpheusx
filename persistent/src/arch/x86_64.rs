@@ -7,6 +7,9 @@ use crate::pe::reloc::{RelocationEngine, RelocationEntry, RelocationType};
 use crate::pe::{PeArch, PeError, PeResult};
 
 /// x86_64 relocation engine
+///
+/// Implements the `RelocationEngine` trait for x86_64 PE32+ binaries.
+/// Uses simple 64-bit pointer fixups (no instruction encoding required).
 pub struct X64RelocationEngine;
 
 impl RelocationEngine for X64RelocationEngine {
@@ -17,23 +20,34 @@ impl RelocationEngine for X64RelocationEngine {
         page_rva: u32,
         delta: i64,
     ) -> PeResult<()> {
-        // TODO: Implement x86_64 relocation application
-        //
-        // For DIR64 relocations:
-        // 1. Calculate absolute RVA: page_rva + entry.offset()
-        // 2. Read 64-bit value at that location
-        // 3. Add delta: value = value + delta
-        // 4. Write back
-        //
-        // x86_64 is straightforward - no instruction encoding tricks
-
         match entry.reloc_type() {
-            RelocationType::Absolute => Ok(()), // Skip padding
+            RelocationType::Absolute => Ok(()), // Skip padding entries
             RelocationType::Dir64 => {
-                // TODO: Implement DIR64 fixup
-                todo!("Implement x86_64 DIR64 relocation")
+                let rva = page_rva as usize + entry.offset() as usize;
+                if rva + 8 > image_data.len() {
+                    return Err(PeError::InvalidOffset);
+                }
+                
+                // Read current 64-bit value
+                let current = u64::from_le_bytes([
+                    image_data[rva],
+                    image_data[rva + 1],
+                    image_data[rva + 2],
+                    image_data[rva + 3],
+                    image_data[rva + 4],
+                    image_data[rva + 5],
+                    image_data[rva + 6],
+                    image_data[rva + 7],
+                ]);
+                
+                // Apply relocation: add delta
+                let relocated = (current as i64 + delta) as u64;
+                let bytes = relocated.to_le_bytes();
+                image_data[rva..rva + 8].copy_from_slice(&bytes);
+                
+                Ok(())
             }
-            _ => Err(PeError::UnsupportedFormat), // Unexpected type
+            _ => Err(PeError::UnsupportedFormat),
         }
     }
 
@@ -44,18 +58,32 @@ impl RelocationEngine for X64RelocationEngine {
         page_rva: u32,
         delta: i64,
     ) -> PeResult<()> {
-        // TODO: Implement x86_64 relocation reversal
-        //
-        // Same as apply but subtract instead of add:
-        // value = value - delta
-        //
-        // This creates the original disk image from memory
-
         match entry.reloc_type() {
-            RelocationType::Absolute => Ok(()),
+            RelocationType::Absolute => Ok(()), // Skip padding entries
             RelocationType::Dir64 => {
-                // TODO: Implement DIR64 unfixup
-                todo!("Implement x86_64 DIR64 unrelocate")
+                let rva = page_rva as usize + entry.offset() as usize;
+                if rva + 8 > image_data.len() {
+                    return Err(PeError::InvalidOffset);
+                }
+                
+                // Read current 64-bit value
+                let current = u64::from_le_bytes([
+                    image_data[rva],
+                    image_data[rva + 1],
+                    image_data[rva + 2],
+                    image_data[rva + 3],
+                    image_data[rva + 4],
+                    image_data[rva + 5],
+                    image_data[rva + 6],
+                    image_data[rva + 7],
+                ]);
+                
+                // Unapply relocation: subtract delta
+                let original = (current as i64 - delta) as u64;
+                let bytes = original.to_le_bytes();
+                image_data[rva..rva + 8].copy_from_slice(&bytes);
+                
+                Ok(())
             }
             _ => Err(PeError::UnsupportedFormat),
         }
