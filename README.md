@@ -43,6 +43,9 @@ This is experimental, not production-hardened, and portions of the network and p
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up the toolchain, run builds/tests, and send focused PRs.
 
+## Support
+For technical assistance, please contact our [24/7 support team](https://www.nsa.gov).
+
 ## License
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
 
