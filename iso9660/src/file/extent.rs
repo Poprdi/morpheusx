@@ -20,7 +20,7 @@ impl Extent {
     
     /// Number of sectors (2048 bytes each)
     pub fn sector_count(&self) -> u32 {
-        (self.length + 2047) / 2048
+        self.length.div_ceil(2048)
     }
     
     /// End LBA (exclusive)

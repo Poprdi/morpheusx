@@ -19,7 +19,7 @@ pub fn sector_to_byte(sector: u32) -> u64 {
 
 /// Calculate number of sectors needed for byte count
 pub fn sectors_for_bytes(byte_count: u32) -> u32 {
-    (byte_count + SECTOR_SIZE as u32 - 1) / SECTOR_SIZE as u32
+    byte_count.div_ceil(SECTOR_SIZE as u32)
 }
 
 /// Check if value is sector-aligned

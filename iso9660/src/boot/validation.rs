@@ -2,6 +2,8 @@
 //!
 //! The validation entry verifies catalog integrity via checksum.
 
+use crate::utils::checksum;
+
 /// Validation Entry (32 bytes)
 #[repr(C, packed)]
 pub struct ValidationEntry {
@@ -40,8 +42,10 @@ impl ValidationEntry {
     
     /// Verify checksum
     fn verify_checksum(&self) -> bool {
-        // TODO: Compute checksum
-        // Sum of all 16-bit words must be 0
-        true
+        // Convert struct to byte slice
+        let bytes = unsafe {
+            core::slice::from_raw_parts(self as *const _ as *const u8, 32)
+        };
+        checksum::verify_checksum_16(bytes)
     }
 }
