@@ -121,11 +121,16 @@ impl EntryScanner {
     }
 
     fn parse_file_info(&self, data: &[u8]) -> Option<BootEntry> {
-        if data.len() < 8 {
+        // EFI_FILE_INFO: Attribute is at offset 72 (8 bytes)
+        if data.len() < 82 {
             return None;
         }
 
-        let attr = data[4];
+        // Check if it's a directory (attribute bit 4)
+        let attr = u64::from_le_bytes([
+            data[72], data[73], data[74], data[75],
+            data[76], data[77], data[78], data[79],
+        ]);
         if attr & 0x10 != 0 {
             return None;
         }
@@ -151,8 +156,22 @@ impl EntryScanner {
     }
 
     fn extract_filename(data: &[u8]) -> Option<String> {
+        // EFI_FILE_INFO structure:
+        // offset 0:  Size (8 bytes)
+        // offset 8:  FileSize (8 bytes)
+        // offset 16: PhysicalSize (8 bytes)
+        // offset 24: CreateTime (16 bytes)
+        // offset 40: LastAccessTime (16 bytes)
+        // offset 56: ModificationTime (16 bytes)
+        // offset 72: Attribute (8 bytes)
+        // offset 80: FileName[] (CHAR16, null-terminated)
+        
+        if data.len() < 82 {
+            return None;
+        }
+
         let mut name = String::new();
-        let mut i = 8;
+        let mut i = 80;
         
         while i + 1 < data.len() {
             let ch = u16::from_le_bytes([data[i], data[i + 1]]);
@@ -165,7 +184,7 @@ impl EntryScanner {
             i += 2;
         }
 
-        if name.is_empty() {
+        if name.is_empty() || name == "." || name == ".." {
             None
         } else {
             Some(name)
