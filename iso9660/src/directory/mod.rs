@@ -6,8 +6,10 @@ pub mod path_table;
 pub mod flags;
 
 use crate::error::{Iso9660Error, Result};
-use crate::types::{VolumeInfo, FileEntry};
+use crate::types::{VolumeInfo, FileEntry, MAX_DIRECTORY_DEPTH};
 use gpt_disk_io::BlockIo;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// Find a file or directory by path
 ///
@@ -19,15 +21,81 @@ use gpt_disk_io::BlockIo;
 /// # Returns
 /// File entry if found
 pub fn find_file<B: BlockIo>(
-    _block_io: &mut B,
-    _volume: &VolumeInfo,
-    _path: &str,
+    block_io: &mut B,
+    volume: &VolumeInfo,
+    path: &str,
 ) -> Result<FileEntry> {
-    // TODO: Implementation
-    // 1. Split path into components
-    // 2. Start at root directory
-    // 3. Navigate through each component
-    // 4. Return final entry
+    // Split path by '/' and filter empty components
+    let components: Vec<&str> = path
+        .split('/')
+        .filter(|c| !c.is_empty())
+        .collect();
     
-    Err(Iso9660Error::NotFound)
+    // Check depth
+    if components.len() > MAX_DIRECTORY_DEPTH {
+        return Err(Iso9660Error::PathTooLong);
+    }
+    
+    // Start at root directory
+    let mut current_lba = volume.root_extent_lba;
+    let mut current_len = volume.root_extent_len;
+    
+    // Navigate through each component
+    for (depth, component) in components.iter().enumerate() {
+        let is_last = depth == components.len() - 1;
+        
+        // Create iterator for current directory
+        let iter = iterator::DirectoryIterator::new(block_io, current_lba, current_len);
+        
+        // Search for matching entry (case-insensitive)
+        let mut found = None;
+        for result in iter {
+            let entry = result?;
+            
+            // Case-insensitive comparison
+            if entry.name.eq_ignore_ascii_case(component) {
+                found = Some(entry);
+                break;
+            }
+        }
+        
+        match found {
+            Some(entry) => {
+                if is_last {
+                    // Found the target file/directory
+                    return Ok(entry);
+                } else {
+                    // Need to navigate into this directory
+                    if !entry.flags.directory {
+                        return Err(Iso9660Error::NotFound);
+                    }
+                    current_lba = entry.extent_lba;
+                    current_len = entry.data_length;
+                }
+            }
+            None => return Err(Iso9660Error::NotFound),
+        }
+    }
+    
+    // If path is empty or just "/", return root as a directory entry
+    if components.is_empty() {
+        Ok(FileEntry {
+            name: String::from("/"),
+            size: volume.root_extent_len as u64,
+            extent_lba: volume.root_extent_lba,
+            data_length: volume.root_extent_len,
+            flags: crate::types::FileFlags {
+                hidden: false,
+                directory: true,
+                associated: false,
+                extended_format: false,
+                extended_permissions: false,
+                not_final: false,
+            },
+            file_unit_size: 0,
+            interleave_gap: 0,
+        })
+    } else {
+        Err(Iso9660Error::NotFound)
+    }
 }

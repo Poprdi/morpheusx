@@ -49,9 +49,26 @@ impl DirectoryRecord {
     pub const MIN_LENGTH: u8 = 34;
     
     /// Parse directory record from bytes
-    pub fn parse(_data: &[u8]) -> Result<&Self> {
-        // TODO: Validate and parse
-        Err(Iso9660Error::InvalidDirectoryRecord)
+    pub fn parse(data: &[u8]) -> Result<&Self> {
+        // Validate minimum length
+        if data.len() < Self::MIN_LENGTH as usize {
+            return Err(Iso9660Error::InvalidDirectoryRecord);
+        }
+        
+        // Cast to struct
+        let record = unsafe { &*(data.as_ptr() as *const DirectoryRecord) };
+        
+        // Validate record length
+        if record.length == 0 || record.length as usize > data.len() {
+            return Err(Iso9660Error::InvalidDirectoryRecord);
+        }
+        
+        // Validate file identifier length
+        if record.file_id_len as usize + Self::MIN_LENGTH as usize > record.length as usize {
+            return Err(Iso9660Error::InvalidDirectoryRecord);
+        }
+        
+        Ok(record)
     }
     
     /// Get extent LBA (little-endian part of both-endian field)
@@ -89,5 +106,18 @@ impl DirectoryRecord {
     /// Is this a directory?
     pub fn is_directory(&self) -> bool {
         self.file_flags & 0x02 != 0
+    }
+    
+    /// Get file identifier bytes
+    pub fn file_identifier(&self) -> &[u8] {
+        // File identifier starts at offset 33 (after fixed header)
+        let start = 33;
+        let len = self.file_id_len as usize;
+        
+        // Safety: we validated file_id_len in parse()
+        unsafe {
+            let base_ptr = self as *const _ as *const u8;
+            core::slice::from_raw_parts(base_ptr.add(start), len)
+        }
     }
 }
