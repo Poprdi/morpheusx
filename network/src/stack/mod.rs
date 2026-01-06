@@ -1,0 +1,119 @@
+//! smoltcp integration layer.
+//!
+//! This adapts MorpheusX `NetworkDevice` drivers to smoltcp's `Device` trait.
+
+use crate::device::NetworkDevice;
+use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::time::Instant;
+use core::marker::PhantomData;
+
+const MTU: usize = 1536;
+
+/// Thin adapter that exposes a `NetworkDevice` to smoltcp.
+pub struct DeviceAdapter<D: NetworkDevice> {
+    pub inner: D,
+}
+
+impl<D: NetworkDevice> DeviceAdapter<D> {
+    pub fn new(inner: D) -> Self {
+        Self { inner }
+    }
+}
+
+impl<D: NetworkDevice> Device for DeviceAdapter<D> {
+    type RxToken<'a> = AdapterRxToken<'a, D> where D: 'a;
+    type TxToken<'a> = AdapterTxToken<'a, D> where D: 'a;
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut caps = DeviceCapabilities::default();
+        caps.max_transmission_unit = MTU;
+        caps.medium = Medium::Ethernet;
+        caps
+    }
+
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        if self.inner.can_receive() {
+            let device_ptr: *mut D = &mut self.inner;
+            Some((
+                AdapterRxToken {
+                    device: device_ptr,
+                    buffer: [0u8; MTU],
+                    _p: PhantomData,
+                },
+                AdapterTxToken {
+                    device: device_ptr,
+                    _p: PhantomData,
+                },
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        if self.inner.can_transmit() {
+            let device_ptr: *mut D = &mut self.inner;
+            Some(AdapterTxToken {
+                device: device_ptr,
+                _p: PhantomData,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+pub struct AdapterRxToken<'a, D: NetworkDevice> {
+    device: *mut D,
+    buffer: [u8; MTU],
+    _p: PhantomData<&'a mut D>,
+}
+
+impl<'a, D: NetworkDevice> RxToken for AdapterRxToken<'a, D> {
+    fn consume<R, F>(mut self, f: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        let len = match unsafe { (*self.device).receive(&mut self.buffer) } {
+            Ok(Some(size)) => size,
+            Ok(None) => 0,
+            Err(_) => 0,
+        };
+        f(&mut self.buffer[..len])
+    }
+}
+
+pub struct AdapterTxToken<'a, D: NetworkDevice> {
+    device: *mut D,
+    _p: PhantomData<&'a mut D>,
+}
+
+impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
+    fn consume<R, F>(self, len: usize, f: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        let mut buffer = [0u8; MTU];
+        let result = f(&mut buffer[..len]);
+        // Best-effort transmit; ignore errors for now.
+        let _ = unsafe { (*self.device).transmit(&buffer[..len]) };
+        result
+    }
+}
+
+/// Minimal holder for future smoltcp interface wiring.
+pub struct NetworkStack<D: NetworkDevice> {
+    pub device: DeviceAdapter<D>,
+}
+
+impl<D: NetworkDevice> NetworkStack<D> {
+    pub fn new(device: D) -> Self {
+        Self {
+            device: DeviceAdapter::new(device),
+        }
+    }
+
+    pub fn capabilities(&self) -> DeviceCapabilities {
+        self.device.capabilities()
+    }
+}
