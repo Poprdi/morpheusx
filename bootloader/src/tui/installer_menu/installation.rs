@@ -269,7 +269,7 @@ fn perform_installation(
                     progress_bar.render(screen);
                     last_percent = percent;
                     
-                    // Log at every 1% for smooth updates
+                    // Log at every 1% for smooth updates  === PERSISTENCE INSTALLER ===
                     morpheus_core::logger::log(
                         alloc::format!("Writing: {}% ({} KB / {} KB)", 
                             percent,
@@ -298,7 +298,6 @@ fn perform_installation(
             
             let status_y = logs_y + max_logs + 1;
             screen.put_str_at(start_x, status_y, "[OK] Bootloader written successfully!", EFI_LIGHTGREEN, EFI_BLACK);
-            screen.put_str_at(start_x, status_y + 1, "[OK] Morpheus is now persistent", EFI_LIGHTGREEN, EFI_BLACK);
             *y = status_y + 2;
         }
         Err(e) => {

@@ -245,7 +245,7 @@ impl LinuxBootParams {
 
     /// Add E820 memory map entry
     /// CRITICAL: Kernel needs memory map to initialize
-    pub fn add_e820_entry(&mut self, addr: u64, size: u64, entry_type: u32) {
+    pub fn add_e820_entry(&mut self, addr: u64, size: u64, entry_type: u32) -> bool {
         let idx = self.e820_entries as usize;
         if idx < 128 {
             self.e820_table[idx] = E820Entry {
@@ -254,6 +254,11 @@ impl LinuxBootParams {
                 entry_type,
             };
             self.e820_entries += 1;
+            true
+        } else {
+            // E820 table full - this is a serious issue!
+            morpheus_core::logger::log("ERROR: E820 table overflow - memory region dropped!");
+            false
         }
     }
 
