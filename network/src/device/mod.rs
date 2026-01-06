@@ -1,9 +1,23 @@
 //! Network device abstraction for smoltcp integration.
 //!
 //! This keeps the core stack generic over concrete NIC drivers (PCIe/USB/SPI).
+//!
+//! # Available Drivers
+//!
+//! - [`virtio`] - VirtIO-net for virtual machines (QEMU, KVM, VirtualBox)
+//! - [`realtek`] - Realtek NICs (placeholder)
+//! - [`intel`] - Intel NICs (placeholder)
+//! - [`broadcom`] - Broadcom NICs (placeholder)
+//!
+//! # HAL Layer
+//!
+//! The [`hal`] module provides hardware abstraction for DMA and memory mapping:
+//! - [`hal::UefiHal`] - Use UEFI Boot Services (before ExitBootServices)
+//! - [`hal::BareHal`] - Use pre-allocated memory pool (after ExitBootServices)
 
 use crate::error::{NetworkError, Result};
 
+pub mod hal;
 pub mod virtio;
 pub mod realtek;
 pub mod intel;

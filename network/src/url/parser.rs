@@ -138,8 +138,7 @@ impl Url {
                 return Ok((host, None));
             }
 
-            if rest.starts_with(':') {
-                let port_str = &rest[1..];
+            if let Some(port_str) = rest.strip_prefix(':') {
                 let port = port_str.parse::<u16>().map_err(|_| NetworkError::InvalidUrl)?;
                 return Ok((host, Some(port)));
             }
@@ -194,9 +193,30 @@ impl Url {
     }
 }
 
+impl core::fmt::Display for Url {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}://{}", self.scheme.as_str(), self.host)?;
+        
+        if let Some(port) = self.port {
+            if port != self.scheme.default_port() {
+                write!(f, ":{}", port)?;
+            }
+        }
+        
+        write!(f, "{}", self.path)?;
+        
+        if let Some(ref query) = self.query {
+            write!(f, "?{}", query)?;
+        }
+        
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     // ==================== Scheme Tests ====================
 

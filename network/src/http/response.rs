@@ -362,7 +362,8 @@ mod tests {
         assert_eq!(response.status_code, 200);
         assert_eq!(response.content_length(), Some(1000));
         assert!(response.body.is_empty()); // Body not parsed
-        assert_eq!(body_offset, 45); // Where body starts
+        // 17 (status line) + 22 (header) + 2 (blank line) = 41 bytes
+        assert_eq!(body_offset, 41); // Where body starts
     }
 
     // ==================== Error Cases ====================
