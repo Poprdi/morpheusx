@@ -4,4 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-# TODO: Add dependencies as needed
+smoltcp = { version = "0.11", default-features = false, features = [
+    "alloc",
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-tcp",
+    "socket-udp",
+    "socket-icmp",
+    "socket-dhcpv4",
+    "socket-dns",
+] }

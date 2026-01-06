@@ -16,10 +16,14 @@ pub mod url;
 pub mod transfer;
 pub mod client;
 pub mod utils;
+pub mod device;
+pub mod stack;
 
 pub use error::{NetworkError, Result};
 pub use types::{HttpMethod, ProgressCallback};
 pub use client::HttpClient;
+pub use device::NetworkDevice;
+pub use stack::{DeviceAdapter, NetworkStack};
 
 #[cfg(target_os = "uefi")]
 pub use client::uefi::UefiHttpClient;
