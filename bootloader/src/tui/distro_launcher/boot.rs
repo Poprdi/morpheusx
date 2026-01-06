@@ -145,13 +145,22 @@ impl DistroLauncher {
         entry: &BootEntry,
     ) {
         use super::iso_boot::extract_iso_boot_files;
+        use crate::tui::boot_sequence::BootSequence;
 
-        screen.put_str_at(5, 10, "Mounting ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.clear();
+        screen.put_str_at(5, 2, "Booting from ISO", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, 3, "================", EFI_GREEN, EFI_BLACK);
+        
+        let mut boot_seq = BootSequence::new();
+
+        morpheus_core::logger::log("ISO Boot: Starting...");
+        boot_seq.render(screen, 5, 5);
 
         let esp_root = match unsafe { Self::get_esp_root(boot_services, image_handle) } {
             Ok(root) => root,
             Err(_) => {
-                screen.put_str_at(5, 12, "ERROR: Failed to access ESP", EFI_RED, EFI_BLACK);
+                morpheus_core::logger::log("ISO Boot: FAILED to access ESP");
+                boot_seq.render(screen, 5, 5);
                 keyboard.wait_for_key();
                 return;
             }
@@ -162,13 +171,17 @@ impl DistroLauncher {
             .strip_prefix("iso:")
             .unwrap_or(&entry.cmdline);
 
-        screen.put_str_at(5, 12, "Extracting kernel from ISO...", EFI_LIGHTGREEN, EFI_BLACK);
-
+        // The extract function logs its own progress
         let (kernel_data, initrd_data, cmdline) = match extract_iso_boot_files(iso_path, esp_root) {
-            Ok(files) => files,
+            Ok(files) => {
+                boot_seq.render(screen, 5, 5);
+                files
+            }
             Err(e) => {
-                let msg = alloc::format!("ERROR: Failed to extract ISO: {:?}", e);
-                screen.put_str_at(5, 14, &msg, EFI_RED, EFI_BLACK);
+                morpheus_core::logger::log(
+                    alloc::format!("ISO Boot: FAILED - {:?}", e).leak()
+                );
+                boot_seq.render(screen, 5, 5);
                 unsafe {
                     ((*esp_root).close)(esp_root);
                 }
@@ -181,7 +194,8 @@ impl DistroLauncher {
             ((*esp_root).close)(esp_root);
         }
 
-        screen.put_str_at(5, 14, "Booting from ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+        morpheus_core::logger::log("ISO Boot: Launching kernel...");
+        boot_seq.render(screen, 5, 5);
 
         let boot_result = unsafe {
             let kernel_slice = core::slice::from_raw_parts(kernel_data.as_ptr(), kernel_data.len());
