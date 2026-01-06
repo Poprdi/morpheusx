@@ -63,6 +63,40 @@ iso9660/
 Total: 27 files (~4500 lines estimated when complete)
 ```
 
+## Public API Surface
+
+All of the following items are re-exported at the crate root and available to external dependencies via `iso9660::ItemName`.
+
+### Functions (5)
+
+```rust
+pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u32) -> Result<VolumeInfo>
+pub fn find_file<B: BlockIo>(block_io: &mut B, volume: &VolumeInfo, path: &str) -> Result<FileEntry>
+pub fn read_file<B: BlockIo>(block_io: &mut B, file: &FileEntry, buffer: &mut [u8]) -> Result<usize>
+pub fn read_file_vec<B: BlockIo>(block_io: &mut B, file: &FileEntry) -> Result<Vec<u8>>
+pub fn find_boot_image<B: BlockIo>(block_io: &mut B, volume: &VolumeInfo) -> Result<BootImage>
+```
+
+### Advanced Types (8)
+
+```rust
+pub struct FileReader<B: BlockIo> { ... }   // Buffered streaming I/O
+pub struct DirectoryIterator<B: BlockIo> { ... }   // Sequential directory listing
+pub struct VolumeInfo { ... }               // Volume metadata
+pub struct FileEntry { ... }                // File metadata
+pub struct FileFlags { ... }                // File attribute bitflags
+pub struct BootImage { ... }                // Boot catalog entry
+pub enum BootMediaType { ... }              // Boot media type
+pub enum BootPlatform { ... }               // Boot platform ID
+```
+
+### Error & Result
+
+```rust
+pub enum Iso9660Error { ... }   // 20+ error variants
+pub type Result<T> = std::result::Result<T, Iso9660Error>
+```
+
 ## Layered Architecture
 
 ```

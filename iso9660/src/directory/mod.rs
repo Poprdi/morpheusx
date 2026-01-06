@@ -13,13 +13,25 @@ use alloc::vec::Vec;
 
 /// Find a file or directory by path
 ///
+/// Navigates the directory tree from root to locate a file/directory.
+/// Paths are case-insensitive and support both `/` and `\` separators.
+///
 /// # Arguments
 /// * `block_io` - Block device
 /// * `volume` - Mounted volume info
-/// * `path` - Path to find (e.g. "/boot/vmlinuz")
+/// * `path` - Path to find (e.g., "/boot/vmlinuz", "/LIVE/INITRD.IMG")
 ///
 /// # Returns
-/// File entry if found
+/// File entry if found, with metadata and extent location
+///
+/// # Example
+/// ```ignore
+/// use iso9660::{mount, find_file};
+/// 
+/// let volume = mount(&mut block_io, 0)?;
+/// let file = find_file(&mut block_io, &volume, "/boot/vmlinuz")?;
+/// println!("File size: {} bytes", file.size);
+/// ```
 pub fn find_file<B: BlockIo>(
     block_io: &mut B,
     volume: &VolumeInfo,
