@@ -7,7 +7,7 @@ const HEADER_ART: &[&str] = &[
     " |     |     | __  |  _  |   | |   __| | | |   __|",
     " | | | |  |  |    -|   __|     |   __| |_| |__   |",
     " |_|_|_|_____|__|__|__|  |__|__|_____|\\___|_____|",
-    "      C O N T R O L   C E N T E R   v 0 . 1       ",
+    "      C O N T R O L   C E N T E R   v 1 . 2       ",
 ];
 
 const SIDE_BORDER_LEFT: &str = "|";

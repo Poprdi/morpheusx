@@ -13,8 +13,7 @@ members = [
 version = "1.0.1"
 edition = "2021"
 rust-version = "1.75"
-# Update with your name before publishing
-authors = []
+authors = ["PopRdi"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
@@ -23,7 +22,8 @@ morpheus-core = { path = "core" }
 morpheus-persistent = { path = "persistent" }
 morpheus-updater = { path = "updater" }
 morpheus-network = { path = "network" }
-iso9660 = { path = "iso9660" }
+# Keep dependency name `iso9660` for code imports, while the package is published as `iso9660-rs`
+iso9660 = { path = "iso9660", package = "iso9660-rs" }
 
 [profile.release]
 opt-level = "z"      # Optimize for size

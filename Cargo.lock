@@ -66,7 +66,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "iso9660"
+name = "iso9660-rs"
 version = "0.1.0"
 dependencies = [
  "gpt_disk_io",
@@ -79,7 +79,7 @@ version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
- "iso9660",
+ "iso9660-rs",
  "morpheus-core",
  "morpheus-persistent",
 ]

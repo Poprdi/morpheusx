@@ -297,7 +297,7 @@ fn perform_installation(
             render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
             
             let status_y = logs_y + max_logs + 1;
-            screen.put_str_at(start_x, status_y, "[OK] Bootloader written successfully!", EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(start_x, status_y, "[OK] MorpheusX written successfully!", EFI_LIGHTGREEN, EFI_BLACK);
             *y = status_y + 2;
         }
         Err(e) => {

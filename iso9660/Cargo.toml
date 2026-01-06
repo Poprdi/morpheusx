@@ -1,12 +1,16 @@
 [package]
-name = "iso9660"
-version = "0.1.0"
+name = "iso9660-rs"
+version = "1.0.1"
 edition = "2021"
-authors = []
+authors = ["MorpheusX Contributors"]
 license = "MIT OR Apache-2.0"
-description = "no_std ISO9660 filesystem implementation with El Torito boot support"
-keywords = ["iso9660", "filesystem", "no_std", "cdrom", "bootable"]
-categories = ["no-std", "filesystem", "parsing"]
+description = "A no_std ISO9660 filesystem implementation with El Torito boot support"
+keywords = ["iso9660", "filesystem", "no_std", "cdrom", "eltorito"]
+categories = ["no-std", "filesystem", "parsing", "embedded"]
+repository = "https://github.com/Poprdi/morpheusx/tree/master/iso9660"
+documentation = "https://docs.rs/iso9660-rs"
+readme = "README.md"
+rust-version = "1.70"
 
 [dependencies]
 # Core dependencies (no_std compatible)
@@ -22,10 +26,10 @@ gpt_disk_types = { version = "0.16" }
 default = []
 # Enable Rock Ridge POSIX extensions
 rock-ridge = []
-# Enable Joliet long filename support
+# Enable Joliet long filename support  
 joliet = []
-# Enable detailed debug logging
-debug = []
+# Enable all extensions
+all-extensions = ["rock-ridge", "joliet"]
 
 [lib]
 name = "iso9660"
