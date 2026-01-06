@@ -15,14 +15,24 @@ use gpt_disk_types::Lba;
 
 /// Mount an ISO9660 volume from a block device
 ///
-/// Reads volume descriptors starting at sector 16 and builds VolumeInfo.
+/// Reads volume descriptors starting at sector 16 and builds `VolumeInfo`.
+/// This is the entry point for all ISO9660 operations.
 ///
 /// # Arguments
 /// * `block_io` - Block device containing the ISO
-/// * `start_sector` - Starting sector of the ISO (0 if raw ISO)
+/// * `start_sector` - Starting sector of the ISO (0 if raw ISO file)
 ///
 /// # Returns
-/// Parsed volume information
+/// Parsed volume information for further navigation
+///
+/// # Example
+/// ```ignore
+/// use iso9660::mount;
+/// 
+/// let volume = mount(&mut block_io, 0)?;
+/// println!("Volume: {:?}", String::from_utf8_lossy(&volume.volume_id));
+/// println!("Root extent: LBA {}", volume.root_extent_lba);
+/// ```
 pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeInfo> {
     let mut buffer = [0u8; SECTOR_SIZE];
     let mut boot_catalog_lba: Option<u32> = None;

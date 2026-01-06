@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "iso9660-rs"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",

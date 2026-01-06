@@ -16,12 +16,27 @@ use entry::BootEntry;
 
 /// Find boot image from El Torito boot catalog
 ///
+/// Extracts the bootable image entry from an ISO's El Torito catalog.
+/// Useful for booting live ISOs (Tails, Ubuntu, etc.) or custom kernels.
+///
 /// # Arguments
 /// * `block_io` - Block device
 /// * `volume` - Mounted volume
 ///
 /// # Returns
-/// Boot image entry if found
+/// Boot image entry with LBA, size, platform, and media type
+///
+/// # Example
+/// ```ignore
+/// use iso9660::{mount, find_boot_image};
+/// 
+/// let volume = mount(&mut block_io, 0)?;
+/// let boot = find_boot_image(&mut block_io, &volume)?;
+/// println!("Boot image at sector {}, {} bytes", 
+///     boot.load_rba, 
+///     boot.sector_count * 512
+/// );
+/// ```
 pub fn find_boot_image<B: BlockIo>(
     block_io: &mut B,
     volume: &VolumeInfo,

@@ -59,10 +59,12 @@ pub mod extensions;
 pub mod utils;
 
 pub use error::{Iso9660Error, Result};
-pub use types::{VolumeInfo, FileEntry, BootImage};
+pub use types::{VolumeInfo, FileEntry, FileFlags, BootImage, BootMediaType, BootPlatform};
 
 // High-level API exports
 pub use volume::mount;
 pub use directory::find_file;
-pub use file::read_file;
+pub use directory::iterator::DirectoryIterator;
+pub use file::{read_file, read_file_vec};
+pub use file::reader::FileReader;
 pub use boot::find_boot_image;

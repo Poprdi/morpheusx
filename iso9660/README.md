@@ -57,12 +57,54 @@ println!("Boot image at sector {}, {} bytes", boot.load_rba, boot.sector_count *
 
 ## API Overview
 
-| Function | Description |
-|----------|-------------|
-| `mount()` | Parse volume descriptors and return `VolumeInfo` |
-| `find_file()` | Navigate directory tree to find file by path |
-| `read_file()` | Read file contents into buffer |
-| `find_boot_image()` | Extract El Torito boot entry |
+### High-Level Functions
+
+| Function | Purpose |
+|----------|---------|
+| `mount(block_io, start_sector)` → `VolumeInfo` | Parse volume descriptors and mount ISO |
+| `find_file(block_io, volume, path)` → `FileEntry` | Navigate directory tree to locate file by path |
+| `read_file(block_io, file, buffer)` → `usize` | Read file contents into provided buffer |
+| `read_file_vec(block_io, file)` → `Vec<u8>` | Read entire file into heap-allocated vector |
+| `find_boot_image(block_io, volume)` → `BootImage` | Extract El Torito bootable image entry |
+
+### Advanced APIs
+
+| Type | Purpose |
+|------|---------|
+| `FileReader<B>` | Buffered file reader with `seek()`, `read()`, `position()`, `is_eof()` |
+| `DirectoryIterator<B>` | Manual directory traversal for sequential listing |
+| `VolumeInfo` | Volume descriptor details (publisher, volume name, creation date) |
+| `FileEntry` | File metadata (name, size, location, flags, datetime) |
+| `FileFlags` | File attribute flags (is_directory, is_file, is_hidden, etc.) |
+| `BootImage` | Boot catalog entry (load_rba, sector_count, platform, media_type) |
+| `BootMediaType` | Boot media type enum (NoEmulation, Floppy, HardDisk, CDROM) |
+| `BootPlatform` | Boot platform ID enum (x86, EFI, PowerPC, Mac) |
+| `Iso9660Error` | Comprehensive error types with error context |
+| `Result<T>` | Standard result type alias |
+
+### Typical Usage Pattern
+
+```rust
+use iso9660::{mount, find_file, read_file, FileReader};
+
+// 1. Mount ISO
+let volume = mount(&mut block_io, 0)?;
+
+// 2. Find file by path
+let file = find_file(&mut block_io, &volume, "/boot/vmlinuz")?;
+
+// 3. Option A: Read entire file into vector
+let data = iso9660::read_file_vec(&mut block_io, &file)?;
+
+// Option B: Stream read with buffer
+let mut buf = [0u8; 4096];
+let bytes_read = read_file(&mut block_io, &file, &mut buf)?;
+
+// Option C: Use FileReader for advanced control
+let mut reader = FileReader::new(&file);
+reader.seek(512)?;  // Skip first sector
+let pos = reader.position();
+```
 
 ## Architecture
 
@@ -78,16 +120,19 @@ iso9660/
 
 ## El Torito Boot Support
 
-This crate can extract bootable images from live ISO files - useful for UEFI bootloaders:
+Extract bootable images from live ISO files - essential for UEFI bootloaders booting Tails, Ubuntu, etc.:
 
 ```rust
-// Find boot image from Tails, Ubuntu, etc.
+use iso9660::find_boot_image;
+
+// Find boot image
 let boot = find_boot_image(&mut block_io, &volume)?;
 
-// boot.load_rba = sector containing boot image
-// boot.sector_count = size in 512-byte virtual sectors
-// boot.platform = x86, EFI, PowerPC, Mac
-// boot.media_type = NoEmulation, Floppy, HardDisk
+// Access boot image metadata
+println!("Boot platform: {:?}", boot.platform);      // x86, EFI, PowerPC, Mac
+println!("Media type: {:?}", boot.media_type);        // NoEmulation, Floppy, HardDisk, CDROM
+println!("Boot location: sector {}", boot.load_rba);  // Sector number
+println!("Boot size: {} bytes", boot.sector_count * 512);  // Size in 512-byte sectors
 ```
 
 ## Spec Compliance
