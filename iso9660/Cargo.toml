@@ -1,6 +1,6 @@
 [package]
 name = "iso9660-rs"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 authors = ["MorpheusX Contributors"]
 license = "MIT OR Apache-2.0"
