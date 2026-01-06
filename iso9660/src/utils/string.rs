@@ -36,6 +36,12 @@ pub fn is_valid_level1_filename(name: &str) -> bool {
 }
 
 /// Strip version suffix from filename (e.g., "FILE.TXT;1" -> "FILE.TXT")
+/// Also removes trailing dot if present (e.g., "FILE.;1" -> "FILE")
 pub fn strip_version(name: &str) -> &str {
-    name.split(';').next().unwrap_or(name)
+    let base = name.split(';').next().unwrap_or(name);
+    if let Some(stripped) = base.strip_suffix('.') {
+        stripped
+    } else {
+        base
+    }
 }
