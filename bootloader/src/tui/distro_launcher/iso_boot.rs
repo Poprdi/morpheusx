@@ -203,8 +203,44 @@ pub fn extract_iso_boot_files(
     iso_path: &str,
     esp_root: *mut FileProtocol,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, String), IsoBootError> {
+    extract_iso_with_progress(iso_path, esp_root, None)
+}
+
+/// Progress callback type: (bytes_read, total_bytes, message)
+pub type ProgressCallback<'a> = &'a mut dyn FnMut(usize, usize, &str);
+
+/// Mount an ISO file with progress reporting
+pub fn extract_iso_with_progress(
+    iso_path: &str,
+    esp_root: *mut FileProtocol,
+    progress: Option<ProgressCallback>,
+) -> Result<(Vec<u8>, Option<Vec<u8>>, String), IsoBootError> {
+    // Chunk size for reading: 4MB chunks for good progress granularity
+    const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+    
+    let mut progress = progress;
+    
+    // Track last logged percentage to avoid flooding logs
+    let mut last_logged_percent = 0usize;
+    
+    let mut report = |read: usize, total: usize, msg: &str| {
+        // Always call progress callback for smooth UI updates
+        if let Some(ref mut cb) = progress {
+            cb(read, total, msg);
+        }
+        
+        // Only log at 10% intervals to avoid overflowing the 64-entry log buffer
+        let current_percent = if total > 0 { (read * 100) / total } else { 0 };
+        if current_percent / 10 != last_logged_percent / 10 || read == 0 || read == total {
+            morpheus_core::logger::log(
+                alloc::format!("ISO: {} ({} MB / {} MB)", msg, read / 1024 / 1024, total / 1024 / 1024).leak()
+            );
+            last_logged_percent = current_percent;
+        }
+    };
+    
     unsafe {
-        morpheus_core::logger::log(alloc::format!("ISO: Opening {}", iso_path).leak());
+        report(0, 0, "Opening file...");
         
         // 1. Open ISO file
         let iso_path_utf16: Vec<u16> = iso_path
@@ -216,48 +252,72 @@ pub fn extract_iso_boot_files(
                 morpheus_core::logger::log("ISO: FAILED to open file");
                 IsoBootError::IsoNotFound
             })?;
-        morpheus_core::logger::log("ISO: File opened");
 
         // 2. Determine size and guard against oversized images
         let file_size = get_file_size(iso_file)?;
-        morpheus_core::logger::log(
-            alloc::format!("ISO: Size {} MB", file_size / 1024 / 1024).leak(),
-        );
+        report(0, file_size, "File opened");
+        
         if file_size > MAX_ISO_SIZE {
             ((*iso_file).close)(iso_file);
             return Err(IsoBootError::IsoTooLarge);
         }
 
-        // 3. Read ISO into memory (BlockIo requires contiguous backing)
-        morpheus_core::logger::log("ISO: Allocating memory buffer...");
+        // 3. Allocate buffer
+        report(0, file_size, "Allocating memory...");
         let mut iso_data = alloc::vec![0u8; file_size];
-        morpheus_core::logger::log("ISO: Reading file into memory...");
-        let mut read_size = file_size;
-        let status = ((*iso_file).read)(iso_file, &mut read_size, iso_data.as_mut_ptr());
-        ((*iso_file).close)(iso_file);
-
-        if status != 0 || read_size != file_size {
-            morpheus_core::logger::log(
-                alloc::format!("ISO: FAILED read (status={}, got {} of {})", status, read_size, file_size).leak()
+        
+        // 4. Read ISO in chunks with progress
+        let mut bytes_read = 0usize;
+        while bytes_read < file_size {
+            let remaining = file_size - bytes_read;
+            let chunk_size = remaining.min(CHUNK_SIZE);
+            let mut read_size = chunk_size;
+            
+            let status = ((*iso_file).read)(
+                iso_file,
+                &mut read_size,
+                iso_data[bytes_read..].as_mut_ptr(),
             );
-            return Err(IsoBootError::ReadFailed);
+            
+            if status != 0 {
+                ((*iso_file).close)(iso_file);
+                morpheus_core::logger::log(
+                    alloc::format!("ISO: Read failed at {} bytes, status=0x{:x}", bytes_read, status).leak()
+                );
+                return Err(IsoBootError::ReadFailed);
+            }
+            
+            if read_size == 0 {
+                // EOF before expected - file truncated?
+                ((*iso_file).close)(iso_file);
+                morpheus_core::logger::log("ISO: Unexpected EOF");
+                return Err(IsoBootError::ReadFailed);
+            }
+            
+            bytes_read += read_size;
+            
+            let percent = (bytes_read * 100) / file_size;
+            let msg = alloc::format!("Reading ISO... {}%", percent);
+            report(bytes_read, file_size, msg.leak());
         }
-        morpheus_core::logger::log("ISO: File loaded into memory");
+        
+        ((*iso_file).close)(iso_file);
+        report(file_size, file_size, "ISO loaded into memory");
 
-        // 4. Wrap buffer in a BlockIo implementation
+        // 5. Wrap buffer in a BlockIo implementation
         let mut mem_device = MemoryBlockDevice::new(iso_data);
 
-        // 5. Mount ISO9660 volume
-        morpheus_core::logger::log("ISO: Mounting ISO9660 filesystem...");
+        // 6. Mount ISO9660 volume
+        report(file_size, file_size, "Mounting filesystem...");
         let volume = mount(&mut mem_device, 0).map_err(|e| {
             morpheus_core::logger::log(
                 alloc::format!("ISO: FAILED mount: {:?}", e).leak(),
             );
             IsoBootError::MountFailed
         })?;
-        morpheus_core::logger::log("ISO: Filesystem mounted");
+        report(file_size, file_size, "Filesystem mounted");
 
-        // 6. Locate kernel using common distro paths
+        // 7. Locate kernel using common distro paths
         let kernel_paths = [
             "/casper/vmlinuz",           // Ubuntu/Kubuntu/Xubuntu
             "/casper/vmlinuz.efi",       // Ubuntu EFI
@@ -268,7 +328,7 @@ pub fn extract_iso_boot_files(
             "/EFI/boot/vmlinuz",         // EFI fallback
         ];
 
-        morpheus_core::logger::log("ISO: Searching for kernel...");
+        report(file_size, file_size, "Searching for kernel...");
         let mut kernel_entry = None;
         let mut kernel_path_found = "";
         for path in &kernel_paths {
@@ -287,8 +347,8 @@ pub fn extract_iso_boot_files(
             alloc::format!("ISO: Found kernel {} ({} bytes)", kernel_path_found, kernel.size).leak(),
         );
 
-        // 7. Read kernel bytes
-        morpheus_core::logger::log("ISO: Reading kernel...");
+        // 8. Read kernel bytes
+        report(file_size, file_size, "Reading kernel...");
         let mut kernel_data = alloc::vec![0u8; kernel.size as usize];
         read_file(&mut mem_device, &kernel, &mut kernel_data)
             .map_err(|e| {
@@ -297,9 +357,9 @@ pub fn extract_iso_boot_files(
                 );
                 IsoBootError::ReadFailed
             })?;
-        morpheus_core::logger::log("ISO: Kernel loaded");
+        report(file_size, file_size, "Kernel loaded");
 
-        // 8. Locate initrd based on kernel placement
+        // 9. Locate initrd based on kernel placement
         let initrd_paths = match kernel_path_found {
             p if p.contains("casper") => vec![
                 "/casper/initrd",
@@ -321,19 +381,26 @@ pub fn extract_iso_boot_files(
             ],
         };
 
+        report(file_size, file_size, "Searching for initrd...");
         let mut initrd_data = None;
         for path in &initrd_paths {
             if let Ok(entry) = find_file(&mut mem_device, &volume, path) {
+                report(file_size, file_size, alloc::format!("Reading initrd {}...", path).leak());
                 let mut data = alloc::vec![0u8; entry.size as usize];
                 if read_file(&mut mem_device, &entry, &mut data).is_ok() {
+                    morpheus_core::logger::log(
+                        alloc::format!("ISO: Found initrd {} ({} bytes)", path, entry.size).leak()
+                    );
                     initrd_data = Some(data);
                     break;
                 }
             }
         }
 
-        // 9. Build cmdline tailored to distro layout
+        // 10. Build cmdline tailored to distro layout
         let cmdline = generate_iso_cmdline(iso_path, kernel_path_found);
+        
+        report(file_size, file_size, "Ready to boot!");
 
         Ok((kernel_data, initrd_data, cmdline))
     }
