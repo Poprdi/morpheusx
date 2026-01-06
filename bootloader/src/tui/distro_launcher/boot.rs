@@ -3,6 +3,7 @@ use super::entry::BootEntry;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
+use crate::uefi::file_system::FileProtocol;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -20,6 +21,19 @@ impl DistroLauncher {
         entry: &BootEntry,
     ) {
         screen.clear();
+
+        if entry.cmdline.starts_with("iso:") {
+            self.boot_from_iso(
+                screen,
+                keyboard,
+                boot_services,
+                system_table,
+                image_handle,
+                entry,
+            );
+            return;
+        }
+
         screen.put_str_at(5, 10, "Loading kernel...", EFI_LIGHTGREEN, EFI_BLACK);
 
         morpheus_core::logger::log("kernel read start");
@@ -119,6 +133,91 @@ impl DistroLauncher {
             let msg = alloc::format!("ERROR: {}", detail);
             Self::await_failure(screen, keyboard, 18, &msg, "kernel boot failed");
         }
+    }
+
+    fn boot_from_iso(
+        &self,
+        screen: &mut Screen,
+        keyboard: &mut Keyboard,
+        boot_services: &crate::BootServices,
+        system_table: *mut (),
+        image_handle: *mut (),
+        entry: &BootEntry,
+    ) {
+        use super::iso_boot::extract_iso_boot_files;
+
+        screen.put_str_at(5, 10, "Mounting ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+
+        let esp_root = match unsafe { Self::get_esp_root(boot_services, image_handle) } {
+            Ok(root) => root,
+            Err(_) => {
+                screen.put_str_at(5, 12, "ERROR: Failed to access ESP", EFI_RED, EFI_BLACK);
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        let iso_path = entry
+            .cmdline
+            .strip_prefix("iso:")
+            .unwrap_or(&entry.cmdline);
+
+        screen.put_str_at(5, 12, "Extracting kernel from ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+
+        let (kernel_data, initrd_data, cmdline) = match extract_iso_boot_files(iso_path, esp_root) {
+            Ok(files) => files,
+            Err(e) => {
+                let msg = alloc::format!("ERROR: Failed to extract ISO: {:?}", e);
+                screen.put_str_at(5, 14, &msg, EFI_RED, EFI_BLACK);
+                unsafe {
+                    ((*esp_root).close)(esp_root);
+                }
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        unsafe {
+            ((*esp_root).close)(esp_root);
+        }
+
+        screen.put_str_at(5, 14, "Booting from ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+
+        let boot_result = unsafe {
+            let kernel_slice = core::slice::from_raw_parts(kernel_data.as_ptr(), kernel_data.len());
+            let initrd_slice = initrd_data
+                .as_ref()
+                .map(|d| core::slice::from_raw_parts(d.as_ptr(), d.len()));
+
+            crate::boot::loader::boot_linux_kernel(
+                boot_services,
+                system_table,
+                image_handle,
+                kernel_slice,
+                initrd_slice,
+                &cmdline,
+                screen,
+            )
+        };
+
+        if let Err(error) = boot_result {
+            let detail = Self::describe_boot_error(&error);
+            let msg = alloc::format!("ERROR: {}", detail);
+            Self::await_failure(screen, keyboard, 18, &msg, "iso boot failed");
+        }
+    }
+
+    unsafe fn get_esp_root(
+        boot_services: &crate::BootServices,
+        image_handle: *mut (),
+    ) -> Result<*mut FileProtocol, ()> {
+        use crate::uefi::file_system::{get_file_system_protocol, get_loaded_image, open_root_volume};
+
+        let loaded_image = get_loaded_image(boot_services, image_handle)?;
+        let device_handle = (*loaded_image).device_handle;
+
+        let fs_protocol = get_file_system_protocol(boot_services, device_handle)?;
+        open_root_volume(fs_protocol)
     }
     fn read_file_to_uefi_pages(
         boot_services: &crate::BootServices,
