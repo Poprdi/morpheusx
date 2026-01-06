@@ -11,6 +11,7 @@ ESP_DIR="$BASE_DIR/esp"
 KERNELS_DIR="$ESP_DIR/kernels"
 INITRD_DIR="$ESP_DIR/initrds"
 WORK_DIR="/tmp/morpheus-tails-setup"
+ISO_TARGET_DIR="$ESP_DIR/isos"
 
 echo "=========================================="
 echo "  Tails OS Live System Installer"
@@ -38,6 +39,7 @@ echo ""
 echo "Setting up workspace..."
 mkdir -p "$KERNELS_DIR"
 mkdir -p "$INITRD_DIR"
+mkdir -p "$ISO_TARGET_DIR"
 mkdir -p "$WORK_DIR"
 
 # Download Tails ISO
@@ -74,15 +76,30 @@ download_iso() {
     fi
 }
 
+# Check if we already have the ISO
+SKIP_DOWNLOAD=false
 if [ -f "$WORK_DIR/$TAILS_ISO" ]; then
     ISO_SIZE=$(stat -c%s "$WORK_DIR/$TAILS_ISO" 2>/dev/null || echo 0)
-    if [ "$ISO_SIZE" -lt "$MIN_ISO_SIZE" ]; then
-        echo "Cached ISO is corrupted (too small: ${ISO_SIZE} bytes). Re-downloading..."
-        download_iso
+    if [ "$ISO_SIZE" -ge "$MIN_ISO_SIZE" ]; then
+        echo "ISO already cached ($(numfmt --to=iec $ISO_SIZE))"
+        # Check if running interactively (user can respond to prompts)
+        if [ -t 0 ]; then
+            read -p "Re-download? [y/N]: " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                SKIP_DOWNLOAD=true
+                echo "Using cached ISO"
+            fi
+        else
+            SKIP_DOWNLOAD=true
+            echo "Using cached ISO (non-interactive mode)"
+        fi
     else
-        echo "ISO already downloaded ($(numfmt --to=iec $ISO_SIZE)), using cached version"
+        echo "Cached ISO is corrupted (too small: ${ISO_SIZE} bytes). Re-downloading..."
     fi
-else
+fi
+
+if [ "$SKIP_DOWNLOAD" = false ]; then
     download_iso
 fi
 
@@ -92,6 +109,12 @@ if [ "$ISO_SIZE" -lt "$MIN_ISO_SIZE" ]; then
     rm -f "$WORK_DIR/$TAILS_ISO"
     exit 1
 fi
+
+# Copy ISO to ESP isos/ for bootloader ISO boot
+echo ""
+echo "Copying ISO to ESP isos/ directory for bootloader discovery..."
+cp "$WORK_DIR/$TAILS_ISO" "$ISO_TARGET_DIR/"
+echo "  Added: $ISO_TARGET_DIR/$TAILS_ISO"
 
 # Mount ISO and extract kernel/initrd
 echo ""
@@ -148,6 +171,7 @@ echo "Installed files:"
 echo "  • Kernel: $KERNELS_DIR/vmlinuz-tails"
 echo "  • Initrd: $INITRD_DIR/initrd-tails.img"
 echo "  • RootFS: $INITRD_DIR/filesystem.squashfs"
+echo "  • ISO:    $ISO_TARGET_DIR/$TAILS_ISO"
 echo ""
 echo "Kernel boot parameters needed:"
 echo "  boot=live"

@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+iso9660 = { workspace = true }
 morpheus-core = { workspace = true }
 morpheus-persistent = { workspace = true }
 # GPT disk handling

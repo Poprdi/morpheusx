@@ -79,6 +79,7 @@ version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
+ "iso9660",
  "morpheus-core",
  "morpheus-persistent",
 ]
