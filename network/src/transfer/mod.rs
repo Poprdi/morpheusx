@@ -1,13 +1,12 @@
-//! Data transfer handling
+//! Data transfer handling.
 //!
-//! TODO: Implement transfer mechanisms
-//! - Chunked transfer encoding
-//! - Content-Length based transfer
-//! - Streaming downloads
-//! - Progress tracking
-//! - Buffer management
+//! Provides transfer mechanisms for HTTP:
+//! - Chunked transfer encoding decoder
+//! - Streaming downloads with progress
+//! - Progress tracking utilities
 
 pub mod chunked;
 pub mod streaming;
 
-// TODO: Implement transfer handlers
+pub use chunked::{ChunkedDecoder, DecoderState};
+pub use streaming::{StreamReader, StreamWriter, StreamConfig, StreamState, ProgressTracker};
