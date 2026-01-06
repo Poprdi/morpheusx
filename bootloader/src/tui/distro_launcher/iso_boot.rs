@@ -3,14 +3,18 @@
 //! Scans for ISO files on ESP and creates boot entries from them
 
 use super::entry::BootEntry;
-use crate::uefi::file_system::{FileProtocol, open_file_read};
-use crate::uefi::gpt_adapter::UefiBlockIoAdapter;
+use crate::uefi::file_system::{FileProtocol, open_file_read, FILE_INFO_GUID};
 use crate::BootServices;
+use alloc::format;
+use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
-use alloc::format;
+use gpt_disk_io::BlockIo;
+use gpt_disk_types::{BlockSize, Lba};
+use iso9660::{find_file, mount, read_file};
+use core::fmt;
 
-const ISO_DIR_PATH: &str = "\\isos";
+const ISO_DIR_PATH: &str = "\\.iso";
 const MAX_ISO_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB max
 
 pub struct IsoScanner {
@@ -117,16 +121,15 @@ impl IsoScanner {
             return None;
         }
 
-        // TODO: Mount ISO and extract boot info using iso9660 crate
-        // For now, create boot entry with ISO path as "kernel"
-        let iso_path = format!("\\isos\\{}", filename);
         let distro_name = Self::extract_distro_from_filename(&filename);
-        
+        let iso_path = format!("\\.iso\\{}", filename);
+
+        // Create a lazy ISO entry. Actual extraction is deferred to boot time.
         Some(BootEntry::new(
             format!("{} (ISO)", distro_name),
-            iso_path.clone(), // ISO path as kernel for now
+            iso_path.clone(),
             None,
-            format!("iso={} boot=live", iso_path),
+            format!("iso:{}", iso_path),
         ))
     }
 
@@ -191,20 +194,22 @@ pub fn extract_iso_boot_files(
     esp_root: *mut FileProtocol,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, String), IsoBootError> {
     unsafe {
-        // Open ISO file
-        let iso_path_utf16: Vec<u16> = iso_path.encode_utf16().chain(core::iter::once(0)).collect();
+        // 1. Open ISO file
+        let iso_path_utf16: Vec<u16> = iso_path
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
         let iso_file = open_file_read(esp_root, &iso_path_utf16)
             .map_err(|_| IsoBootError::IsoNotFound)?;
 
-        // Get file size
+        // 2. Determine size and guard against oversized images
         let file_size = get_file_size(iso_file)?;
-        
         if file_size > MAX_ISO_SIZE {
             ((*iso_file).close)(iso_file);
             return Err(IsoBootError::IsoTooLarge);
         }
 
-        // Read ISO into memory (required for iso9660 parsing)
+        // 3. Read ISO into memory (BlockIo requires contiguous backing)
         let mut iso_data = alloc::vec![0u8; file_size];
         let mut read_size = file_size;
         let status = ((*iso_file).read)(iso_file, &mut read_size, iso_data.as_mut_ptr());
@@ -214,62 +219,112 @@ pub fn extract_iso_boot_files(
             return Err(IsoBootError::ReadFailed);
         }
 
-        // Create in-memory block device
+        // 4. Wrap buffer in a BlockIo implementation
         let mut mem_device = MemoryBlockDevice::new(iso_data);
 
-        // Mount ISO using iso9660
-        let volume = iso9660::mount(&mut mem_device, 0)
-            .map_err(|_| IsoBootError::MountFailed)?;
+        // 5. Mount ISO9660 volume
+        let volume = mount(&mut mem_device, 0).map_err(|_| IsoBootError::MountFailed)?;
 
-        // Try to find kernel - common paths for live distros
+        // 6. Locate kernel using common distro paths
         let kernel_paths = [
-            "/casper/vmlinuz",           // Ubuntu
+            "/casper/vmlinuz",           // Ubuntu/Kubuntu/Xubuntu
+            "/casper/vmlinuz.efi",       // Ubuntu EFI
             "/live/vmlinuz",             // Debian/Tails
-            "/arch/boot/x86_64/vmlinuz", // Arch
-            "/isolinux/vmlinuz",         // Generic
+            "/arch/boot/x86_64/vmlinuz", // Arch Linux
+            "/isolinux/vmlinuz",         // Generic syslinux
             "/boot/vmlinuz",             // Fallback
+            "/EFI/boot/vmlinuz",         // EFI fallback
         ];
 
         let mut kernel_entry = None;
+        let mut kernel_path_found = "";
         for path in &kernel_paths {
-            if let Ok(entry) = iso9660::find_file(&mut mem_device, &volume, path) {
+            if let Ok(entry) = find_file(&mut mem_device, &volume, path) {
                 kernel_entry = Some(entry);
+                kernel_path_found = path;
                 break;
             }
         }
 
         let kernel = kernel_entry.ok_or(IsoBootError::KernelNotFound)?;
 
-        // Read kernel data
+        // 7. Read kernel bytes
         let mut kernel_data = alloc::vec![0u8; kernel.size as usize];
-        iso9660::read_file(&mut mem_device, &kernel, &mut kernel_data)
+        read_file(&mut mem_device, &kernel, &mut kernel_data)
             .map_err(|_| IsoBootError::ReadFailed)?;
 
-        // Try to find initrd
-        let initrd_paths = [
-            "/casper/initrd",
-            "/casper/initrd.lz",
-            "/live/initrd.img",
-            "/arch/boot/x86_64/archiso.img",
-            "/isolinux/initrd.img",
-            "/boot/initrd.img",
-        ];
+        // 8. Locate initrd based on kernel placement
+        let initrd_paths = match kernel_path_found {
+            p if p.contains("casper") => vec![
+                "/casper/initrd",
+                "/casper/initrd.lz",
+                "/casper/initrd.img",
+            ],
+            p if p.contains("live") => vec![
+                "/live/initrd.img",
+                "/live/initrd",
+            ],
+            p if p.contains("arch") => vec![
+                "/arch/boot/x86_64/archiso.img",
+                "/arch/boot/intel_ucode.img",
+            ],
+            _ => vec![
+                "/isolinux/initrd.img",
+                "/boot/initrd.img",
+                "/initrd.img",
+            ],
+        };
 
         let mut initrd_data = None;
         for path in &initrd_paths {
-            if let Ok(entry) = iso9660::find_file(&mut mem_device, &volume, path) {
+            if let Ok(entry) = find_file(&mut mem_device, &volume, path) {
                 let mut data = alloc::vec![0u8; entry.size as usize];
-                if iso9660::read_file(&mut mem_device, &entry, &mut data).is_ok() {
+                if read_file(&mut mem_device, &entry, &mut data).is_ok() {
                     initrd_data = Some(data);
                     break;
                 }
             }
         }
 
-        // Generate boot parameters
-        let boot_params = format!("boot=live iso-scan/filename={}", iso_path);
+        // 9. Build cmdline tailored to distro layout
+        let cmdline = generate_iso_cmdline(iso_path, kernel_path_found);
 
-        Ok((kernel_data, initrd_data, boot_params))
+        Ok((kernel_data, initrd_data, cmdline))
+    }
+}
+
+fn generate_iso_cmdline(iso_path: &str, kernel_path: &str) -> String {
+    let linux_path = iso_path.replace('\\', "/");
+
+    match kernel_path {
+        p if p.contains("casper") => {
+            // Ubuntu/derivatives
+            alloc::format!(
+                "boot=casper iso-scan/filename={} quiet splash console=ttyS0,115200 console=tty1",
+                linux_path
+            )
+        }
+        p if p.contains("live") => {
+            // Debian/Tails live-boot
+            alloc::format!(
+                "boot=live findiso={} live-media-path=/live nopersistence console=ttyS0,115200 console=tty1",
+                linux_path
+            )
+        }
+        p if p.contains("arch") => {
+            // Arch ISO
+            alloc::format!(
+                "archisobasedir=arch img_dev=/dev/disk/by-label/ESP img_loop={} console=ttyS0,115200",
+                linux_path
+            )
+        }
+        _ => {
+            // Fallback
+            alloc::format!(
+                "root=/dev/ram0 rw iso-scan/filename={} console=ttyS0,115200",
+                linux_path
+            )
+        }
     }
 }
 
@@ -277,21 +332,28 @@ unsafe fn get_file_size(file: *mut FileProtocol) -> Result<usize, IsoBootError> 
     let mut info_buffer = [0u8; 512];
     let mut buffer_size = info_buffer.len();
     
-    // EFI_FILE_INFO GUID
-    let info_guid = uguid::guid!("09576e92-6d3f-11d2-8e39-00a0c969723b");
+    // Cast get_info from usize to proper function pointer
+    type GetInfoFn = extern "efiapi" fn(
+        this: *mut FileProtocol,
+        info_type: *const [u8; 16],
+        buffer_size: *mut usize,
+        buffer: *mut u8,
+    ) -> usize;
     
-    let status = ((*file).get_info)(
+    let get_info_fn: GetInfoFn = core::mem::transmute((*file).get_info);
+    
+    let status = get_info_fn(
         file,
-        &info_guid,
+        &FILE_INFO_GUID,
         &mut buffer_size,
-        info_buffer.as_mut_ptr() as *mut (),
+        info_buffer.as_mut_ptr(),
     );
 
     if status != 0 {
         return Err(IsoBootError::ReadFailed);
     }
 
-    // File size is at offset 8 (8 bytes)
+    // File size is at offset 8 (8 bytes) in EFI_FILE_INFO
     if buffer_size >= 16 {
         let size = u64::from_le_bytes([
             info_buffer[8], info_buffer[9], info_buffer[10], info_buffer[11],
@@ -314,22 +376,43 @@ impl MemoryBlockDevice {
     }
 }
 
-impl gpt_disk_io::BlockIo for MemoryBlockDevice {
-    fn read_blocks(&mut self, lba: gpt_disk_types::Lba, buffer: &mut [u8]) -> Result<(), ()> {
-        let offset = lba.0 as usize * 2048;
-        if offset + buffer.len() > self.data.len() {
-            return Err(());
+/// Error type for MemoryBlockDevice I/O operations
+#[derive(Debug, Clone, Copy)]
+struct MemoryBlockIoError;
+
+impl fmt::Display for MemoryBlockIoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "memory block device I/O error")
+    }
+}
+
+impl BlockIo for MemoryBlockDevice {
+    type Error = MemoryBlockIoError;
+
+    fn block_size(&self) -> BlockSize {
+        // ISO9660 sector size is 2048 bytes
+        BlockSize::BS_2048
+    }
+
+    fn num_blocks(&mut self) -> Result<u64, Self::Error> {
+        Ok((self.data.len() / 2048) as u64)
+    }
+
+    fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<(), Self::Error> {
+        let offset = start_lba.0 as usize * 2048;
+        if offset + dst.len() > self.data.len() {
+            return Err(MemoryBlockIoError);
         }
-        buffer.copy_from_slice(&self.data[offset..offset + buffer.len()]);
+        dst.copy_from_slice(&self.data[offset..offset + dst.len()]);
         Ok(())
     }
 
-    fn write_blocks(&mut self, _lba: gpt_disk_types::Lba, _buffer: &[u8]) -> Result<(), ()> {
-        Err(()) // Read-only
+    fn write_blocks(&mut self, _start_lba: Lba, _src: &[u8]) -> Result<(), Self::Error> {
+        Err(MemoryBlockIoError) // Read-only
     }
 
-    fn block_size(&self) -> u64 {
-        2048
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(()) // No-op for in-memory device
     }
 }
 
