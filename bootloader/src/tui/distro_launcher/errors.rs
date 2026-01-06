@@ -26,20 +26,19 @@ impl DistroLauncher {
         keyboard.wait_for_key();
     }
     pub(super) fn dump_logs_to_screen(screen: &mut Screen) {
-        let logs = morpheus_core::logger::get_logs();
         let start_y = 20;
 
         screen.put_str_at(5, start_y, "=== DEBUG LOGS ===", EFI_LIGHTGREEN, EFI_BLACK);
 
-        for (i, log_entry) in logs.iter().enumerate() {
+        // Show the last N logs that fit on screen
+        let max_logs_to_show = (screen.height() - start_y - 2).min(30);
+        
+        for (i, log_msg) in morpheus_core::logger::get_last_n_logs(max_logs_to_show).enumerate() {
             let y = start_y + 1 + i;
             if y >= screen.height() - 1 {
                 break;
             }
-
-            if let Some(msg) = log_entry {
-                screen.put_str_at(7, y, msg, EFI_GREEN, EFI_BLACK);
-            }
+            screen.put_str_at(7, y, log_msg, EFI_GREEN, EFI_BLACK);
         }
     }
     pub(super) fn describe_boot_error(error: &BootError) -> alloc::string::String {

@@ -56,7 +56,7 @@ impl DistroLauncher {
         self.render(screen);
 
         loop {
-            if let Some(key) = keyboard.read_key() {
+            if let Some(key) = keyboard.poll_key_with_delay() {
                 // ESC - return to main menu
                 if key.scan_code == 0x17 {
                     return;

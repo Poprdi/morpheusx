@@ -174,7 +174,7 @@ impl DistroLauncher {
             .unwrap_or(&entry.cmdline);
 
         // Use progress callback to continuously update screen
-        let mut last_log_count = morpheus_core::logger::log_count();
+        let mut last_log_count = morpheus_core::logger::total_log_count();
         let mut last_percent = 0usize;
         let mut progress_callback = |bytes: usize, total: usize, _msg: &str| {
             if total > 0 {
@@ -186,7 +186,7 @@ impl DistroLauncher {
                 }
             }
             
-            let current_log_count = morpheus_core::logger::log_count();
+            let current_log_count = morpheus_core::logger::total_log_count();
             if current_log_count != last_log_count {
                 boot_seq.render(screen, 5, 8);
                 last_log_count = current_log_count;

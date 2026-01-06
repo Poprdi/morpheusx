@@ -19,25 +19,32 @@ impl BootSequence {
     }
 
     pub fn render(&mut self, screen: &mut Screen, x: usize, y: usize) {
-        let logs = logger::get_logs();
-        let log_count = logs.len();
-
+        let total_count = logger::total_log_count();
+        
         // Only show last 20 logs to fit on screen
-        let start_idx = log_count.saturating_sub(20);
-
-        for (i, log_opt) in logs[start_idx..log_count].iter().enumerate() {
-            if let Some(log) = log_opt {
-                let line_y = y + i;
-                if line_y < 25 {
-                    screen.put_str_at(x, line_y, "[  OK  ] ", EFI_GREEN, EFI_BLACK);
-                    screen.put_str_at(x + 9, line_y, log, EFI_LIGHTGREEN, EFI_BLACK);
-                }
+        let logs_to_show = 20;
+        
+        // Clear the log area first to prevent text overlap
+        for i in 0..logs_to_show {
+            let line_y = y + i;
+            if line_y < screen.height() {
+                screen.put_str_at(x, line_y, "                                                                                ", EFI_BLACK, EFI_BLACK);
+            }
+        }
+        
+        // Now render the actual logs
+        for (i, log) in logger::get_last_n_logs(logs_to_show).enumerate() {
+            let line_y = y + i;
+            if line_y < screen.height() {
+                screen.put_str_at(x, line_y, "[  OK  ] ", EFI_GREEN, EFI_BLACK);
+                screen.put_str_at(x + 9, line_y, log, EFI_LIGHTGREEN, EFI_BLACK);
             }
         }
 
         if self.completed {
-            let final_y = y + (log_count - start_idx).min(20);
-            if final_y < 24 {
+            let displayed_logs = logs_to_show.min(logger::log_count());
+            let final_y = y + displayed_logs;
+            if final_y < screen.height() - 1 {
                 screen.put_str_at(
                     x,
                     final_y + 1,
@@ -48,6 +55,6 @@ impl BootSequence {
             }
         }
 
-        self.last_rendered_count = log_count;
+        self.last_rendered_count = total_count;
     }
 }

@@ -62,8 +62,8 @@ impl Keyboard {
     pub fn poll_key_with_delay(&mut self) -> Option<InputKey> {
         let key = self.read_key();
 
-        // Minimal delay for responsive input
-        for _ in 0..10000 {
+        // Delay for ~16ms (60 FPS) - increased from 10k to 100k iterations
+        for _ in 0..100000 {
             unsafe {
                 core::ptr::read_volatile(&0);
             }

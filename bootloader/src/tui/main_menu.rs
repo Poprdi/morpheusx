@@ -220,8 +220,8 @@ impl MainMenu {
             // Always render debug overlay on top
             self.debug.render(screen);
 
-            // Check for input (non-blocking)
-            if let Some(key) = keyboard.read_key() {
+            // Check for input with frame limiting (~60 FPS)
+            if let Some(key) = keyboard.poll_key_with_delay() {
                 // Debug overlay toggle
                 if key.unicode_char == b'd' as u16 || key.unicode_char == b'D' as u16 {
                     self.debug.toggle();

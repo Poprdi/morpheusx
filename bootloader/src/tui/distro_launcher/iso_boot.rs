@@ -229,13 +229,15 @@ pub fn extract_iso_with_progress(
             cb(read, total, msg);
         }
         
-        // Only log at 10% intervals to avoid overflowing the 64-entry log buffer
-        let current_percent = if total > 0 { (read * 100) / total } else { 0 };
-        if current_percent / 10 != last_logged_percent / 10 || read == 0 || read == total {
+        // Log at 0.1% intervals (every 1/1000) for smooth scroll
+        let current_percent_x10 = if total > 0 { (read * 1000) / total } else { 0 };
+        let last_percent_x10 = last_logged_percent;
+        
+        if current_percent_x10 != last_percent_x10 || read == 0 || read == total {
             morpheus_core::logger::log(
                 alloc::format!("ISO: {} ({} MB / {} MB)", msg, read / 1024 / 1024, total / 1024 / 1024).leak()
             );
-            last_logged_percent = current_percent;
+            last_logged_percent = current_percent_x10;
         }
     };
     
