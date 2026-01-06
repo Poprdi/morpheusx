@@ -232,19 +232,15 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
         // Perform actual initialization and log each step
         morpheus_core::logger::log("Morpheus bootloader initialized");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         morpheus_core::logger::log("UEFI system table acquired");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         morpheus_core::logger::log("Console output protocol ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         morpheus_core::logger::log("Keyboard input protocol ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         // Enumerate storage devices
         let bs = &*system_table.boot_services;
@@ -255,38 +251,33 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                 if disk_count > 0 {
                     morpheus_core::logger::log("Block I/O protocol initialized");
                     boot_seq.render(&mut screen, boot_x, boot_y);
-                    rain.render_frame(&mut screen);
 
                     morpheus_core::logger::log("Storage devices enumerated");
                     boot_seq.render(&mut screen, boot_x, boot_y);
-                    rain.render_frame(&mut screen);
                 } else {
                     morpheus_core::logger::log("No storage devices detected");
                     boot_seq.render(&mut screen, boot_x, boot_y);
-                    rain.render_frame(&mut screen);
                 }
             }
             Err(_) => {
                 morpheus_core::logger::log("Warning: Storage enumeration failed");
                 boot_seq.render(&mut screen, boot_x, boot_y);
-                rain.render_frame(&mut screen);
             }
         }
 
         morpheus_core::logger::log("TUI renderer initialized");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         morpheus_core::logger::log("Matrix rain effect loaded");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         morpheus_core::logger::log("Main menu system ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
-        rain.render_frame(&mut screen);
 
         boot_seq.mark_complete();
         boot_seq.render(&mut screen, boot_x, boot_y);
+        
+        // Render rain one final time for visual effect before waiting
         rain.render_frame(&mut screen);
 
         // Wait for keypress

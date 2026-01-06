@@ -245,8 +245,7 @@ impl MainMenu {
                     return action;
                 }
 
-                // Re-render UI after navigation
-                screen.clear();
+                // Re-render UI after navigation (without clearing)
                 self.render(screen);
                 self.debug.render(screen);
             }

@@ -65,14 +65,12 @@ impl DistroLauncher {
                 // Up arrow
                 if key.scan_code == 0x01 {
                     self.select_prev();
-                    screen.clear();
                     self.render(screen);
                 }
 
                 // Down arrow
                 if key.scan_code == 0x02 {
                     self.select_next();
-                    screen.clear();
                     self.render(screen);
                 }
 
