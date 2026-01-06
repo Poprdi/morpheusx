@@ -320,14 +320,30 @@ pub fn extract_iso_with_progress(
         report(file_size, file_size, "Filesystem mounted");
 
         // 7. Locate kernel using common distro paths
+        // Extended list covering more distributions
         let kernel_paths = [
-            "/casper/vmlinuz",           // Ubuntu/Kubuntu/Xubuntu
-            "/casper/vmlinuz.efi",       // Ubuntu EFI
-            "/live/vmlinuz",             // Debian/Tails
-            "/arch/boot/x86_64/vmlinuz", // Arch Linux
-            "/isolinux/vmlinuz",         // Generic syslinux
-            "/boot/vmlinuz",             // Fallback
-            "/EFI/boot/vmlinuz",         // EFI fallback
+            // Ubuntu/Kubuntu/Xubuntu/Linux Mint
+            "/casper/vmlinuz",
+            "/casper/vmlinuz.efi",
+            // Debian/Tails/Kali
+            "/live/vmlinuz",
+            "/live/vmlinuz-amd64",
+            // Arch Linux
+            "/arch/boot/x86_64/vmlinuz",
+            "/arch/boot/x86_64/vmlinuz-linux",
+            // Fedora/RHEL/CentOS
+            "/images/pxeboot/vmlinuz",
+            "/isolinux/vmlinuz",
+            // openSUSE
+            "/boot/x86_64/loader/linux",
+            // Alpine
+            "/boot/vmlinuz-lts",
+            "/boot/vmlinuz-virt",
+            // Generic paths
+            "/boot/vmlinuz",
+            "/vmlinuz",
+            "/EFI/boot/vmlinuz",
+            "/EFI/BOOT/vmlinuz.efi",
         ];
 
         report(file_size, file_size, "Searching for kernel...");
@@ -362,24 +378,44 @@ pub fn extract_iso_with_progress(
         report(file_size, file_size, "Kernel loaded");
 
         // 9. Locate initrd based on kernel placement
+        // Extended initrd paths for more distributions
         let initrd_paths = match kernel_path_found {
             p if p.contains("casper") => vec![
                 "/casper/initrd",
                 "/casper/initrd.lz",
                 "/casper/initrd.img",
+                "/casper/initrd.gz",
             ],
             p if p.contains("live") => vec![
                 "/live/initrd.img",
                 "/live/initrd",
+                "/live/initrd.img-amd64",
             ],
             p if p.contains("arch") => vec![
                 "/arch/boot/x86_64/archiso.img",
+                "/arch/boot/x86_64/initramfs-linux.img",
                 "/arch/boot/intel_ucode.img",
+            ],
+            p if p.contains("images/pxeboot") => vec![
+                // Fedora/RHEL/CentOS
+                "/images/pxeboot/initrd.img",
+                "/isolinux/initrd.img",
+            ],
+            p if p.contains("boot/x86_64/loader") => vec![
+                // openSUSE
+                "/boot/x86_64/loader/initrd",
+            ],
+            p if p.contains("boot/vmlinuz-") => vec![
+                // Alpine
+                "/boot/initramfs-lts",
+                "/boot/initramfs-virt",
             ],
             _ => vec![
                 "/isolinux/initrd.img",
                 "/boot/initrd.img",
+                "/boot/initrd",
                 "/initrd.img",
+                "/initrd",
             ],
         };
 

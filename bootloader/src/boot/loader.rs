@@ -186,13 +186,17 @@ pub unsafe fn boot_linux_kernel(
 
             let ramdisk_start = initrd_ptr as u64;
             let ramdisk_end = ramdisk_start + initrd.len() as u64;
+            
+            // Validate initrd address - these are critical errors, not warnings
             if ramdisk_start < INITRD_MIN_ADDR {
                 morpheus_core::logger::log(
-                    "Warning: initrd allocated below 1MiB, kernel may fault",
+                    "ERROR: initrd allocated below 1MiB - kernel will fault!",
                 );
+                return Err(BootError::InitrdAllocation(MemoryError::AllocationFailed));
             }
             if ramdisk_end > max_addr + 1 {
-                morpheus_core::logger::log("Warning: initrd extends past allowed range");
+                morpheus_core::logger::log("ERROR: initrd extends past max allowed address!");
+                return Err(BootError::InitrdAllocation(MemoryError::AllocationFailed));
             }
 
             let (ramdisk_image_field, ramdisk_size_field) = boot_params.ramdisk_info();
@@ -316,6 +320,15 @@ fn truncate_cmdline<'a>(cmdline: &'a str, max_bytes: usize) -> &'a str {
     if cmdline.len() <= max_bytes {
         return cmdline;
     }
+
+    // Log warning about truncation - this could break boot!
+    morpheus_core::logger::log("WARNING: Command line too long, truncating!");
+    let truncated_msg = alloc::format!(
+        "cmdline {} bytes > {} max, critical params may be lost!",
+        cmdline.len(),
+        max_bytes
+    );
+    morpheus_core::logger::log(truncated_msg.leak());
 
     let mut end = max_bytes;
     while end > 0 && !cmdline.is_char_boundary(end) {

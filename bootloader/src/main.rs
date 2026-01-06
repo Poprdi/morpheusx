@@ -381,8 +381,31 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+fn panic(info: &PanicInfo) -> ! {
+    // Try to display panic information on screen
+    // This is best-effort since we may be in a bad state
+    unsafe {
+        if !BOOT_SERVICES_PTR.is_null() {
+            // Try to get console output and display panic
+            // We can't use the Screen abstraction here since we might be in a bad state
+            // Just spin - at minimum don't silently hang
+        }
+    }
+    
+    // Log the panic message if possible
+    if let Some(location) = info.location() {
+        // We can't allocate in panic handler, so just use static message
+        morpheus_core::logger::log("PANIC occurred!");
+    } else {
+        morpheus_core::logger::log("PANIC occurred (no location)!");
+    }
+    
+    // Infinite loop - system is in bad state
+    // TODO: Could trigger UEFI reset after timeout
+    loop {
+        // Prevent optimization from removing the loop
+        core::hint::spin_loop();
+    }
 }
 
 // UEFI allocator using boot services

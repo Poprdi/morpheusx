@@ -327,11 +327,7 @@ impl EntryScanner {
     }
 
     fn str_to_utf16(s: &str) -> Vec<u16> {
-        let mut buf = Vec::with_capacity(s.len() + 1);
-        for byte in s.bytes() {
-            buf.push(byte as u16);
-        }
-        buf.push(0);
-        buf
+        // Proper UTF-16 encoding, not just ASCII bytes
+        s.encode_utf16().chain(core::iter::once(0)).collect()
     }
 }
