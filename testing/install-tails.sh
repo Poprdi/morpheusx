@@ -11,7 +11,7 @@ ESP_DIR="$BASE_DIR/esp"
 KERNELS_DIR="$ESP_DIR/kernels"
 INITRD_DIR="$ESP_DIR/initrds"
 WORK_DIR="/tmp/morpheus-tails-setup"
-ISO_TARGET_DIR="$ESP_DIR/isos"
+ISO_TARGET_DIR="$ESP_DIR/.iso"
 
 echo "=========================================="
 echo "  Tails OS Live System Installer"
@@ -78,10 +78,34 @@ download_iso() {
 
 # Check if we already have the ISO
 SKIP_DOWNLOAD=false
-if [ -f "$WORK_DIR/$TAILS_ISO" ]; then
+
+# Check final destination first (ESP .iso/ directory)
+if [ -f "$ISO_TARGET_DIR/$TAILS_ISO" ]; then
+    ISO_SIZE=$(stat -c%s "$ISO_TARGET_DIR/$TAILS_ISO" 2>/dev/null || echo 0)
+    if [ "$ISO_SIZE" -ge "$MIN_ISO_SIZE" ]; then
+        echo "ISO already in ESP .iso/ directory ($(numfmt --to=iec $ISO_SIZE))"
+        # Check if running interactively (user can respond to prompts)
+        if [ -t 0 ]; then
+            read -p "Re-download? [y/N]: " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                SKIP_DOWNLOAD=true
+                echo "Using existing ISO from ESP"
+                # Copy to work dir for mounting
+                cp "$ISO_TARGET_DIR/$TAILS_ISO" "$WORK_DIR/$TAILS_ISO"
+            fi
+        else
+            SKIP_DOWNLOAD=true
+            echo "Using existing ISO from ESP (non-interactive mode)"
+            # Copy to work dir for mounting
+            cp "$ISO_TARGET_DIR/$TAILS_ISO" "$WORK_DIR/$TAILS_ISO"
+        fi
+    fi
+# Check cache directory second
+elif [ -f "$WORK_DIR/$TAILS_ISO" ]; then
     ISO_SIZE=$(stat -c%s "$WORK_DIR/$TAILS_ISO" 2>/dev/null || echo 0)
     if [ "$ISO_SIZE" -ge "$MIN_ISO_SIZE" ]; then
-        echo "ISO already cached ($(numfmt --to=iec $ISO_SIZE))"
+        echo "ISO already cached in temp ($(numfmt --to=iec $ISO_SIZE))"
         # Check if running interactively (user can respond to prompts)
         if [ -t 0 ]; then
             read -p "Re-download? [y/N]: " -n 1 -r
@@ -110,9 +134,9 @@ if [ "$ISO_SIZE" -lt "$MIN_ISO_SIZE" ]; then
     exit 1
 fi
 
-# Copy ISO to ESP isos/ for bootloader ISO boot
+# Copy ISO to ESP .iso/ for bootloader ISO boot
 echo ""
-echo "Copying ISO to ESP isos/ directory for bootloader discovery..."
+echo "Copying ISO to ESP .iso/ directory for bootloader discovery..."
 cp "$WORK_DIR/$TAILS_ISO" "$ISO_TARGET_DIR/"
 echo "  Added: $ISO_TARGET_DIR/$TAILS_ISO"
 

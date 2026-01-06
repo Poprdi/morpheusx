@@ -13,6 +13,11 @@ categories = ["no-std", "filesystem", "parsing"]
 gpt_disk_io = { version = "0.16", default-features = false }
 gpt_disk_types = { version = "0.16", default-features = false }
 
+[dev-dependencies]
+# For std-based testing only
+gpt_disk_io = { version = "0.16" }
+gpt_disk_types = { version = "0.16" }
+
 [features]
 default = []
 # Enable Rock Ridge POSIX extensions

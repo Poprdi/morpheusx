@@ -32,20 +32,30 @@ impl IsoScanner {
 
     /// Scan for ISO files and create boot entries
     pub fn scan_iso_files(&self) -> Vec<BootEntry> {
+        morpheus_core::logger::log("IsoScanner::scan_iso_files() - starting");
         let mut entries = Vec::new();
 
         unsafe {
             if let Ok(root) = self.get_esp_root() {
+                morpheus_core::logger::log("IsoScanner: got ESP root");
                 let iso_dir_path = Self::str_to_utf16(ISO_DIR_PATH);
                 
                 if let Ok(iso_dir) = open_file_read(root, &iso_dir_path) {
+                    morpheus_core::logger::log("IsoScanner: opened .iso directory");
                     if let Ok(iso_entries) = self.enumerate_isos(iso_dir) {
+                        morpheus_core::logger::log(
+                            alloc::format!("IsoScanner: found {} ISOs", iso_entries.len()).leak(),
+                        );
                         entries.extend(iso_entries);
                     }
                     ((*iso_dir).close)(iso_dir);
+                } else {
+                    morpheus_core::logger::log("IsoScanner: failed to open .iso directory");
                 }
 
                 ((*root).close)(root);
+            } else {
+                morpheus_core::logger::log("IsoScanner: failed to get ESP root");
             }
         }
 
@@ -194,36 +204,59 @@ pub fn extract_iso_boot_files(
     esp_root: *mut FileProtocol,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, String), IsoBootError> {
     unsafe {
+        morpheus_core::logger::log("extract_iso: starting");
+        
         // 1. Open ISO file
         let iso_path_utf16: Vec<u16> = iso_path
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();
         let iso_file = open_file_read(esp_root, &iso_path_utf16)
-            .map_err(|_| IsoBootError::IsoNotFound)?;
+            .map_err(|_| {
+                morpheus_core::logger::log("extract_iso: FAIL open_file_read");
+                IsoBootError::IsoNotFound
+            })?;
+        morpheus_core::logger::log("extract_iso: file opened");
 
         // 2. Determine size and guard against oversized images
         let file_size = get_file_size(iso_file)?;
+        morpheus_core::logger::log(
+            alloc::format!("extract_iso: file_size = {} bytes", file_size).leak(),
+        );
         if file_size > MAX_ISO_SIZE {
             ((*iso_file).close)(iso_file);
             return Err(IsoBootError::IsoTooLarge);
         }
 
         // 3. Read ISO into memory (BlockIo requires contiguous backing)
+        morpheus_core::logger::log("extract_iso: allocating buffer");
         let mut iso_data = alloc::vec![0u8; file_size];
+        morpheus_core::logger::log("extract_iso: reading file");
         let mut read_size = file_size;
         let status = ((*iso_file).read)(iso_file, &mut read_size, iso_data.as_mut_ptr());
         ((*iso_file).close)(iso_file);
 
+        morpheus_core::logger::log(
+            alloc::format!("extract_iso: read status={}, read_size={}", status, read_size).leak(),
+        );
         if status != 0 || read_size != file_size {
+            morpheus_core::logger::log("extract_iso: FAIL file read mismatch");
             return Err(IsoBootError::ReadFailed);
         }
 
         // 4. Wrap buffer in a BlockIo implementation
+        morpheus_core::logger::log("extract_iso: creating MemoryBlockDevice");
         let mut mem_device = MemoryBlockDevice::new(iso_data);
 
         // 5. Mount ISO9660 volume
-        let volume = mount(&mut mem_device, 0).map_err(|_| IsoBootError::MountFailed)?;
+        morpheus_core::logger::log("extract_iso: mounting ISO9660");
+        let volume = mount(&mut mem_device, 0).map_err(|e| {
+            morpheus_core::logger::log(
+                alloc::format!("extract_iso: FAIL mount: {:?}", e).leak(),
+            );
+            IsoBootError::MountFailed
+        })?;
+        morpheus_core::logger::log("extract_iso: ISO mounted successfully");
 
         // 6. Locate kernel using common distro paths
         let kernel_paths = [
@@ -391,7 +424,8 @@ impl BlockIo for MemoryBlockDevice {
 
     fn block_size(&self) -> BlockSize {
         // ISO9660 sector size is 2048 bytes
-        BlockSize::BS_2048
+        // SAFETY: 2048 is a valid block size (>= 512)
+        BlockSize::new(2048).expect("2048 is a valid block size")
     }
 
     fn num_blocks(&mut self) -> Result<u64, Self::Error> {

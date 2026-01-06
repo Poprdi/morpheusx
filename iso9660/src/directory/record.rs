@@ -45,8 +45,8 @@ pub struct DirectoryRecord {
 }
 
 impl DirectoryRecord {
-    /// Minimum record length
-    pub const MIN_LENGTH: u8 = 34;
+    /// Minimum record length (33 bytes header)
+    pub const MIN_LENGTH: u8 = 33;
     
     /// Parse directory record from bytes
     pub fn parse(data: &[u8]) -> Result<&Self> {
