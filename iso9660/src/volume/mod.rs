@@ -54,7 +54,13 @@ pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeIn
                     &*(buffer.as_ptr() as *const boot_record::BootRecordVolumeDescriptor) 
                 };
                 if boot_record.validate() {
-                    boot_catalog_lba = Some(boot_record.catalog_lba());
+                    let catalog_lba = boot_record.catalog_lba();
+                    boot_catalog_lba = Some(catalog_lba);
+                    
+                    // If we already have volume info, update it
+                    if let Some(ref mut vi) = volume_info {
+                        vi.boot_catalog_lba = Some(catalog_lba);
+                    }
                 }
             }
             1 => {
@@ -71,7 +77,7 @@ pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeIn
                     root_extent_len: root_record.get_data_length(),
                     logical_block_size: pvd.logical_block_size.get(),
                     volume_space_size: pvd.volume_space_size.get(),
-                    boot_catalog_lba,
+                    boot_catalog_lba, // Use currently found catalog LBA
                     has_joliet: false, // Will be set if we find supplementary VD
                     has_rock_ridge: false, // TODO: Detect from root directory system use
                 });

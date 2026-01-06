@@ -24,14 +24,14 @@ pub fn read_file<B: BlockIo>(
     buffer: &mut [u8],
 ) -> Result<usize> {
     let file_size = file.size as usize;
+    let bytes_to_read = core::cmp::min(buffer.len(), file_size);
     
-    // Check buffer size
-    if buffer.len() < file_size {
-        return Err(Iso9660Error::ReadFailed);
+    if bytes_to_read == 0 {
+        return Ok(0);
     }
     
-    // Calculate number of sectors to read
-    let sector_count = file_size.div_ceil(SECTOR_SIZE);
+    // Calculate number of sectors needed for the requested bytes
+    let sector_count = bytes_to_read.div_ceil(SECTOR_SIZE);
     let start_lba = file.extent_lba as u64;
     
     // Allocate sector buffer once outside the loop
@@ -43,11 +43,15 @@ pub fn read_file<B: BlockIo>(
             .map_err(|_| Iso9660Error::IoError)?;
         
         let offset = i * SECTOR_SIZE;
-        let len = core::cmp::min(SECTOR_SIZE, file_size - offset);
+        // Copy what we need from this sector
+        // The remaining bytes in the buffer might be less than a sector
+        let remaining = bytes_to_read - offset;
+        let len = core::cmp::min(SECTOR_SIZE, remaining);
+        
         buffer[offset..offset + len].copy_from_slice(&sector[..len]);
     }
     
-    Ok(file_size)
+    Ok(bytes_to_read)
 }
 
 /// Read file into new Vec

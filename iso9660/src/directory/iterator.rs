@@ -78,22 +78,27 @@ impl<'a, B: BlockIo> Iterator for DirectoryIterator<'a, B> {
             // Advance offset by record length
             self.offset += record.length as usize;
             
-            // Skip "." and ".." entries
-            let file_id = record.file_identifier();
-            if file_id.len() == 1 && (file_id[0] == 0x00 || file_id[0] == 0x01) {
-                continue;
-            }
-            
             // Convert file identifier to string
-            let name = match string::dchars_to_str(file_id) {
-                Ok(s) => {
-                    // Strip version suffix (e.g., ";1")
-                    let stripped = string::strip_version(s);
-                    String::from(stripped)
-                }
-                Err(_) => {
-                    // If not valid UTF-8, use lossy conversion
-                    String::from_utf8_lossy(file_id).into_owned()
+            let file_id = record.file_identifier();
+            
+            // Handle special directory entries
+            let name = if file_id.len() == 1 && file_id[0] == 0 {
+                String::from(".")
+            } else if file_id.len() == 1 && file_id[0] == 1 {
+                String::from("..")
+            } else {
+                match string::dchars_to_str(file_id) {
+                    Ok(s) => {
+                        // Strip version suffix (e.g., ";1")
+                        let stripped = string::strip_version(s);
+                        String::from(stripped)
+                    }
+                    Err(_) => {
+                        // If not valid UTF-8, use lossy conversion
+                        let s = String::from_utf8_lossy(file_id);
+                        let stripped = string::strip_version(&s);
+                        String::from(stripped)
+                    }
                 }
             };
             
