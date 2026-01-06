@@ -26,3 +26,9 @@
 NvVars
 *.txt
 *.dat
+
+# Secrets (API tokens, credentials)
+crates.io
+.cargo/credentials*
+.env
+.env.local
