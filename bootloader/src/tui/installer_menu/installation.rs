@@ -228,36 +228,131 @@ fn perform_installation(
     start_x: usize,
     y: &mut usize,
 ) {
-    *y += 1;
-    screen.put_str_at(start_x, *y, "--- Installation ---", EFI_CYAN, EFI_BLACK);
-    *y += 1;
-
-    feedback.info(FeedbackCategory::Storage, "Writing to ESP partition...");
-    feedback.debug(
-        FeedbackCategory::Storage,
-        format!(
-            "Target: Disk {} Part {} ({}MB)",
-            esp.disk_index, esp.partition_index, esp.size_mb
-        ),
+    use crate::tui::boot_sequence::BootSequence;
+    use crate::tui::widgets::progressbar::ProgressBar;
+    
+    // Clear screen for installation phase - fresh start
+    screen.clear();
+    
+    // Draw installation header
+    screen.put_str_at(start_x, 1, "=== PERSISTENCE INSTALLER ===", EFI_LIGHTGREEN, EFI_BLACK);
+    screen.put_str_at(start_x, 3, "--- Writing to ESP ---", EFI_CYAN, EFI_BLACK);
+    screen.put_str_at(
+        start_x, 
+        4, 
+        &format!("Target: Disk {} Part {} ({}MB)", esp.disk_index, esp.partition_index, esp.size_mb),
+        EFI_DARKGREEN, 
+        EFI_BLACK
     );
-    render_feedback(screen, feedback, start_x, y);
+    
+    // Progress bar at fixed position
+    let progress_y = 6;
+    let logs_y = 9;
+    let max_logs = (screen.height() - logs_y - 3).min(15); // Leave room for status message
+    
+    let mut progress_bar = ProgressBar::new(start_x, progress_y, 60, "Installing:");
+    progress_bar.render(screen);
+    
+    // Log installation start - this will be the first log in our display
+    morpheus_core::logger::log("Installation: Starting write to ESP...");
+    
+    // Track the starting log count so we only show installation logs
+    let install_start_log_count = morpheus_core::logger::total_log_count();
+    let mut last_percent = 0usize;
+    
+    let result = {
+        let mut progress_callback = |bytes: usize, total: usize, msg: &str| {
+            if total > 0 {
+                let percent = (bytes * 100) / total;
+                if percent != last_percent {
+                    progress_bar.set_progress(percent);
+                    progress_bar.render(screen);
+                    last_percent = percent;
+                    
+                    // Log at every 1% for smooth updates
+                    morpheus_core::logger::log(
+                        alloc::format!("Writing: {}% ({} KB / {} KB)", 
+                            percent,
+                            bytes / 1024, 
+                            total / 1024
+                        ).leak()
+                    );
+                    
+                    // Render only installation logs (skip boot logs)
+                    render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
+                }
+            }
+        };
+        
+        installer::install_to_esp_with_progress(bs, esp, image_handle, Some(&mut progress_callback))
+    };
 
-    match installer::install_to_esp(bs, esp, image_handle) {
+    // Final render
+    progress_bar.set_progress(100);
+    progress_bar.render(screen);
+
+    match result {
         Ok(()) => {
-            feedback.success(
-                FeedbackCategory::Storage,
-                "Bootloader written successfully!",
-            );
-            feedback.success(FeedbackCategory::General, "Morpheus is now persistent");
-            render_feedback(screen, feedback, start_x, y);
+            morpheus_core::logger::log("Installation: Complete!");
+            render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
+            
+            let status_y = logs_y + max_logs + 1;
+            screen.put_str_at(start_x, status_y, "[OK] Bootloader written successfully!", EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(start_x, status_y + 1, "[OK] Morpheus is now persistent", EFI_LIGHTGREEN, EFI_BLACK);
+            *y = status_y + 2;
         }
         Err(e) => {
-            feedback.error(
-                FeedbackCategory::Storage,
-                format!("Installation failed: {:?}", e),
-            );
-            render_feedback(screen, feedback, start_x, y);
+            morpheus_core::logger::log(alloc::format!("Installation: FAILED - {:?}", e).leak());
+            render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
+            
+            let status_y = logs_y + max_logs + 1;
+            screen.put_str_at(start_x, status_y, &format!("[ERR] Installation failed: {:?}", e), EFI_WHITE, EFI_BLACK);
+            *y = status_y + 1;
         }
+    }
+}
+
+/// Render only logs from installation (skip boot logs)
+fn render_install_logs(screen: &mut Screen, x: usize, y: usize, max_lines: usize, start_count: usize) {
+    let total_count = morpheus_core::logger::total_log_count();
+    let install_log_count = total_count.saturating_sub(start_count);
+    
+    // Get last N installation logs
+    let logs_to_show = install_log_count.min(max_lines);
+    let skip_count = install_log_count.saturating_sub(logs_to_show);
+    
+    // Clear the log area first
+    for i in 0..max_lines {
+        let line_y = y + i;
+        if line_y < screen.height() {
+            screen.put_str_at(x, line_y, "                                                                                ", EFI_BLACK, EFI_BLACK);
+        }
+    }
+    
+    // Render installation logs only
+    let mut line_idx = 0;
+    for (i, log) in morpheus_core::logger::get_logs_iter().enumerate() {
+        // Skip boot logs (before installation started)
+        if i < start_count {
+            continue;
+        }
+        
+        // Skip older installation logs if we have more than max_lines
+        let install_idx = i - start_count;
+        if install_idx < skip_count {
+            continue;
+        }
+        
+        if line_idx >= max_lines {
+            break;
+        }
+        
+        let line_y = y + line_idx;
+        if line_y < screen.height() {
+            screen.put_str_at(x, line_y, "[  OK  ] ", EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(x + 9, line_y, log, EFI_LIGHTGREEN, EFI_BLACK);
+        }
+        line_idx += 1;
     }
 }
 

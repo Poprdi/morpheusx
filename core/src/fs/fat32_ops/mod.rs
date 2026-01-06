@@ -12,12 +12,26 @@ use gpt_disk_io::BlockIo;
 extern crate alloc;
 use alloc::vec::Vec;
 
+/// Progress callback type: (bytes_written, total_bytes, message)
+pub type ProgressCallback<'a> = Option<&'a mut dyn FnMut(usize, usize, &str)>;
+
 /// Write file to FAT32 partition
 pub fn write_file<B: BlockIo>(
     block_io: &mut B,
     partition_lba_start: u64,
     path: &str,
     data: &[u8],
+) -> Result<(), Fat32Error> {
+    write_file_with_progress(block_io, partition_lba_start, path, data, &mut None)
+}
+
+/// Write file to FAT32 partition with progress reporting
+pub fn write_file_with_progress<B: BlockIo>(
+    block_io: &mut B,
+    partition_lba_start: u64,
+    path: &str,
+    data: &[u8],
+    progress: &mut ProgressCallback,
 ) -> Result<(), Fat32Error> {
     let ctx = Fat32Context::from_boot_sector(block_io, partition_lba_start)?;
 
@@ -41,13 +55,14 @@ pub fn write_file<B: BlockIo>(
             )?;
         } else {
             // This is the file name - create/write it
-            file_ops::write_file_in_directory(
+            file_ops::write_file_in_directory_with_progress(
                 block_io,
                 partition_lba_start,
                 &ctx,
                 current_cluster,
                 part,
                 data,
+                progress,
             )?;
         }
     }

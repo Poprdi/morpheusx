@@ -126,6 +126,19 @@ pub fn install_to_esp(
     esp: &EspInfo,
     image_handle: *mut (),
 ) -> Result<(), InstallError> {
+    install_to_esp_with_progress(bs, esp, image_handle, None)
+}
+
+/// Progress callback type: (bytes_written, total_bytes, message)
+pub type ProgressCallback<'a> = Option<&'a mut dyn FnMut(usize, usize, &str)>;
+
+/// Install bootloader to ESP with progress reporting
+pub fn install_to_esp_with_progress(
+    bs: &BootServices,
+    esp: &EspInfo,
+    image_handle: *mut (),
+    mut progress: ProgressCallback,
+) -> Result<(), InstallError> {
     unsafe {
         // Get loaded image protocol
         let loaded_image = crate::uefi::file_system::get_loaded_image(bs, image_handle)
@@ -227,16 +240,17 @@ pub fn install_to_esp(
         // Bypasses UEFI FS protocol (works on runtime-created partitions)
         use morpheus_core::fs::fat32_ops;
 
-        // DEBUG: Write buffer to /EFI/DEBUG.BIN before FAT32 write
-        fat32_ops::write_file(&mut adapter, esp.start_lba, "/EFI/DEBUG.BIN", &binary_data)
-            .map_err(|_| InstallError::IoError)?;
+        if let Some(ref mut cb) = progress {
+            cb(0, binary_data.len(), "Writing BOOTX64.EFI...");
+        }
 
         // Write to fallback boot path - UEFI auto-detects and boots this
-        fat32_ops::write_file(
+        fat32_ops::write_file_with_progress(
             &mut adapter,
             esp.start_lba,
             "/EFI/BOOT/BOOTX64.EFI",
             &binary_data,
+            &mut progress,
         )
         .map_err(|_| InstallError::IoError)?;
 

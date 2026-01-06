@@ -71,10 +71,35 @@ struct SystemTable {
     con_out: *mut SimpleTextOutputProtocol,
     _stderr_handle: *const (),
     _stderr: *const (),
-    runtime_services: *const (),
+    runtime_services: *const RuntimeServices,
     boot_services: *const BootServices,
     number_of_table_entries: usize,
     configuration_table: *const ConfigurationTable,
+}
+
+#[repr(C)]
+struct RuntimeServices {
+    _header: [u8; 24],
+    // Time Services
+    _get_time: usize,
+    _set_time: usize,
+    _get_wakeup_time: usize,
+    _set_wakeup_time: usize,
+    // Virtual Memory Services
+    _set_virtual_address_map: usize,
+    _convert_pointer: usize,
+    // Variable Services
+    _get_variable: usize,
+    _get_next_variable_name: usize,
+    _set_variable: usize,
+    // Miscellaneous Services
+    _get_next_high_monotonic_count: usize,
+    pub reset_system: extern "efiapi" fn(
+        reset_type: u32,  // 0=Cold, 1=Warm, 2=Shutdown, 3=PlatformSpecific
+        reset_status: usize,
+        data_size: usize,
+        reset_data: *const (),
+    ) -> !,
 }
 
 #[repr(C)]
@@ -340,15 +365,17 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                         tui::renderer::EFI_LIGHTGREEN,
                         tui::renderer::EFI_BLACK,
                     );
-                    break; // Exit the loop
+                    
+                    // Actually exit to firmware using UEFI ResetSystem
+                    unsafe {
+                        let runtime_services = &*system_table.runtime_services;
+                        // ResetType: 0 = EfiResetCold, 1 = EfiResetWarm, 2 = EfiResetShutdown
+                        // Use EfiResetWarm (1) to return to firmware setup
+                        (runtime_services.reset_system)(1, 0, 0, core::ptr::null());
+                    }
                 }
                 _ => {}
             }
-        }
-
-        // Final rain loop
-        loop {
-            rain.render_frame(&mut screen);
         }
     }
 }
