@@ -21,6 +21,25 @@ pub fn write_file_in_directory<B: BlockIo>(
     name: &str,
     data: &[u8],
 ) -> Result<(), Fat32Error> {
+    write_file_in_directory_with_progress(block_io, partition_start, ctx, dir_cluster, name, data, &mut None)
+}
+
+pub fn write_file_in_directory_with_progress<B: BlockIo>(
+    block_io: &mut B,
+    partition_start: u64,
+    ctx: &Fat32Context,
+    dir_cluster: u32,
+    name: &str,
+    data: &[u8],
+    progress: &mut Option<&mut dyn FnMut(usize, usize, &str)>,
+) -> Result<(), Fat32Error> {
+    let total_size = data.len();
+    
+    // Report start
+    if let Some(ref mut cb) = progress {
+        cb(0, total_size, "Allocating clusters...");
+    }
+    
     // Allocate clusters for file data
     let cluster_size = (ctx.sectors_per_cluster * SECTOR_SIZE as u32) as usize;
     let clusters_needed = ((data.len() + cluster_size - 1) / cluster_size).max(1);
@@ -42,7 +61,8 @@ pub fn write_file_in_directory<B: BlockIo>(
     }
     // Last cluster is already marked with EOC by allocate_cluster
 
-    // Write file data to clusters
+    // Write file data to clusters with progress reporting
+    let mut bytes_written = 0;
     for (i, &cluster) in file_clusters.iter().enumerate() {
         let data_offset = i * cluster_size;
         let data_end = (data_offset + cluster_size).min(data.len());
@@ -61,6 +81,14 @@ pub fn write_file_in_directory<B: BlockIo>(
                     &cluster_data[start..end],
                 )
                 .map_err(|_| Fat32Error::IoError)?;
+            
+            bytes_written += SECTOR_SIZE.min(total_size - bytes_written);
+            
+            // Report progress after each sector
+            if let Some(ref mut cb) = progress {
+                let percent = (bytes_written * 100) / total_size;
+                cb(bytes_written, total_size, alloc::format!("Writing... {}%", percent).leak());
+            }
         }
     }
 
@@ -75,6 +103,11 @@ pub fn write_file_in_directory<B: BlockIo>(
         data.len() as u32,
         ATTR_ARCHIVE,
     )?;
+    
+    // Report completion
+    if let Some(ref mut cb) = progress {
+        cb(total_size, total_size, "Write complete");
+    }
 
     Ok(())
 }
