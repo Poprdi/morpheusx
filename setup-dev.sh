@@ -88,7 +88,7 @@ check_any_distro() { check_tails || check_arch || compgen -G "${ESP_DIR}/kernels
 check_disk_50g()   { [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; }
 
 ensure_dirs() {
-    mkdir -p "${ESP_DIR}"/{EFI/BOOT,kernels,initrds,loader/entries,isos}
+    mkdir -p "${ESP_DIR}"/{EFI/BOOT,kernels,initrds,loader/entries,.iso}
     mkdir -p "${TESTING_DIR}"
 }
 
@@ -292,7 +292,7 @@ do_create_disk() {
     mnt=$(mktemp -d)
     sudo mount "${loop_dev}p1" "$mnt"
     
-    sudo mkdir -p "$mnt"/{EFI/BOOT,kernels,initrds,live,loader/entries,isos}
+    sudo mkdir -p "$mnt"/{EFI/BOOT,kernels,initrds,live,loader/entries,.iso}
     
     [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
     
@@ -301,11 +301,11 @@ do_create_disk() {
         sudo cp "${ESP_DIR}/initrds/filesystem.squashfs" "$mnt/live/"
     fi
 
-    if compgen -G "${ESP_DIR}/isos/*.iso" > /dev/null 2>&1; then
-        log_info "Copying ISO images into ESP isos/ (for bootloader ISO scan)..."
-        sudo cp "${ESP_DIR}/isos/"*.iso "$mnt/isos/"
+    if compgen -G "${ESP_DIR}/.iso/*.iso" > /dev/null 2>&1; then
+        log_info "Copying ISO images into ESP .iso/ (for bootloader ISO scan)..."
+        sudo cp "${ESP_DIR}/.iso/"*.iso "$mnt/.iso/"
     else
-        log_warn "No ISO images found in ${ESP_DIR}/isos to copy"
+        log_warn "No ISO images found in ${ESP_DIR}/.iso to copy"
     fi
     
     for kernel in "${ESP_DIR}"/kernels/vmlinuz-*; do

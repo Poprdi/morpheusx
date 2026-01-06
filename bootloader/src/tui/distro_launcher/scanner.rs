@@ -1,4 +1,5 @@
 use super::entry::BootEntry;
+use super::iso_boot::IsoScanner;
 use crate::uefi::file_system::{FileProtocol, open_file_read, get_loaded_image};
 use crate::BootServices;
 use alloc::vec::Vec;
@@ -42,6 +43,11 @@ impl EntryScanner {
                 ((*root).close)(root);
             }
         }
+
+        // Scan for ISO files in .iso directory
+        let iso_scanner = IsoScanner::new(self.boot_services, self.image_handle);
+        let iso_entries = iso_scanner.scan_iso_files();
+        entries.extend(iso_entries);
 
         if entries.is_empty() {
             entries.push(self.create_fallback_entry());

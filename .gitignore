@@ -24,5 +24,5 @@
 /testing/esp/
 /testing/*.img
 NvVars
-
-# Logs
+*.txt
+*.dat
