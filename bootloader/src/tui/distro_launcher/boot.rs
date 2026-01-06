@@ -144,23 +144,25 @@ impl DistroLauncher {
         image_handle: *mut (),
         entry: &BootEntry,
     ) {
-        use super::iso_boot::extract_iso_boot_files;
         use crate::tui::boot_sequence::BootSequence;
+        use crate::tui::widgets::progressbar::ProgressBar;
 
         screen.clear();
         screen.put_str_at(5, 2, "Booting from ISO", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(5, 3, "================", EFI_GREEN, EFI_BLACK);
         
         let mut boot_seq = BootSequence::new();
+        let mut progress_bar = ProgressBar::new(5, 5, 60, "Loading ISO:");
 
         morpheus_core::logger::log("ISO Boot: Starting...");
-        boot_seq.render(screen, 5, 5);
+        boot_seq.render(screen, 5, 8);
+        progress_bar.render(screen);
 
         let esp_root = match unsafe { Self::get_esp_root(boot_services, image_handle) } {
             Ok(root) => root,
             Err(_) => {
                 morpheus_core::logger::log("ISO Boot: FAILED to access ESP");
-                boot_seq.render(screen, 5, 5);
+                boot_seq.render(screen, 5, 8);
                 keyboard.wait_for_key();
                 return;
             }
@@ -171,17 +173,43 @@ impl DistroLauncher {
             .strip_prefix("iso:")
             .unwrap_or(&entry.cmdline);
 
+        // Use progress callback to continuously update screen
+        let mut last_log_count = morpheus_core::logger::log_count();
+        let mut last_percent = 0usize;
+        let mut progress_callback = |bytes: usize, total: usize, _msg: &str| {
+            if total > 0 {
+                let percent = (bytes * 100) / total;
+                if percent != last_percent {
+                    progress_bar.set_progress(percent);
+                    progress_bar.render(screen);
+                    last_percent = percent;
+                }
+            }
+            
+            let current_log_count = morpheus_core::logger::log_count();
+            if current_log_count != last_log_count {
+                boot_seq.render(screen, 5, 8);
+                last_log_count = current_log_count;
+            }
+        };
+
         // The extract function logs its own progress
-        let (kernel_data, initrd_data, cmdline) = match extract_iso_boot_files(iso_path, esp_root) {
+        let (kernel_data, initrd_data, cmdline) = match super::iso_boot::extract_iso_with_progress(
+            iso_path,
+            esp_root,
+            Some(&mut progress_callback),
+        ) {
             Ok(files) => {
-                boot_seq.render(screen, 5, 5);
+                progress_bar.set_progress(100);
+                progress_bar.render(screen);
+                boot_seq.render(screen, 5, 8);
                 files
             }
             Err(e) => {
                 morpheus_core::logger::log(
                     alloc::format!("ISO Boot: FAILED - {:?}", e).leak()
                 );
-                boot_seq.render(screen, 5, 5);
+                boot_seq.render(screen, 5, 8);
                 unsafe {
                     ((*esp_root).close)(esp_root);
                 }
@@ -195,7 +223,7 @@ impl DistroLauncher {
         }
 
         morpheus_core::logger::log("ISO Boot: Launching kernel...");
-        boot_seq.render(screen, 5, 5);
+        boot_seq.render(screen, 5, 8);
 
         let boot_result = unsafe {
             let kernel_slice = core::slice::from_raw_parts(kernel_data.as_ptr(), kernel_data.len());
