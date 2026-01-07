@@ -32,10 +32,10 @@ use virtio_drivers::{BufferDirection, Hal, PhysAddr, PAGE_SIZE};
 use super::common;
 
 /// UEFI memory type for Boot Services Data.
-const EFI_BOOT_SERVICES_DATA: u32 = 4;
+const EFI_BOOT_SERVICES_DATA: usize = 4;
 
 /// UEFI memory allocation type: allocate any available pages.
-const ALLOCATE_ANY_PAGES: u32 = 0;
+const ALLOCATE_ANY_PAGES: usize = 0;
 
 /// UEFI status codes.
 #[repr(usize)]
@@ -47,38 +47,30 @@ pub enum EfiStatus {
 
 /// UEFI Boot Services table (partial definition for memory allocation).
 ///
+/// Layout matches the bootloader's BootServices struct for compatibility.
 /// We only define the fields we need for memory allocation.
 #[repr(C)]
 pub struct EfiBootServices {
-    pub hdr: EfiTableHeader,
+    /// Header (24 bytes: signature, revision, header_size, crc32, reserved)
+    pub _header: [u8; 24],
 
     // Task Priority Services (2 entries)
     _raise_tpl: usize,
     _restore_tpl: usize,
 
-    // Memory Services (5 entries)
-    pub allocate_pages: unsafe extern "efiapi" fn(
-        alloc_type: u32,
-        memory_type: u32,
+    // Memory Services
+    pub allocate_pages: extern "efiapi" fn(
+        alloc_type: usize,
+        memory_type: usize,
         pages: usize,
-        memory: *mut PhysAddr,
+        memory: *mut u64,
     ) -> usize,
-    pub free_pages: unsafe extern "efiapi" fn(memory: PhysAddr, pages: usize) -> usize,
+    pub free_pages: extern "efiapi" fn(memory: u64, pages: usize) -> usize,
     _get_memory_map: usize,
     _allocate_pool: usize,
     _free_pool: usize,
 
     // ... other services omitted
-}
-
-/// EFI Table Header (common to all UEFI tables).
-#[repr(C)]
-pub struct EfiTableHeader {
-    pub signature: u64,
-    pub revision: u32,
-    pub header_size: u32,
-    pub crc32: u32,
-    pub reserved: u32,
 }
 
 /// Global pointer to UEFI Boot Services.
@@ -138,7 +130,7 @@ impl UefiHal {
         pages: usize,
     ) -> Result<(PhysAddr, NonNull<u8>, usize), usize> {
         let bs = Self::boot_services();
-        let mut paddr: PhysAddr = 0;
+        let mut paddr: u64 = 0;
 
         let status = (bs.allocate_pages)(ALLOCATE_ANY_PAGES, EFI_BOOT_SERVICES_DATA, pages, &mut paddr);
 
@@ -150,11 +142,9 @@ impl UefiHal {
         let size = common::pages_to_bytes(pages);
 
         // Zero the memory
-        unsafe {
-            core::ptr::write_bytes(vaddr.as_ptr(), 0, size);
-        }
+        core::ptr::write_bytes(vaddr.as_ptr(), 0, size);
 
-        Ok((paddr, vaddr, size))
+        Ok((paddr as PhysAddr, vaddr, size))
     }
 }
 
@@ -169,12 +159,10 @@ unsafe impl Hal for UefiHal {
         }
 
         let bs = Self::boot_services();
-        let mut paddr: PhysAddr = 0;
+        let mut paddr: u64 = 0;
 
-        // SAFETY: Boot services pointer is valid (checked in boot_services())
-        let status = unsafe {
-            (bs.allocate_pages)(ALLOCATE_ANY_PAGES, EFI_BOOT_SERVICES_DATA, pages, &mut paddr)
-        };
+        // Call UEFI AllocatePages
+        let status = (bs.allocate_pages)(ALLOCATE_ANY_PAGES, EFI_BOOT_SERVICES_DATA, pages, &mut paddr);
 
         if status != EfiStatus::Success as usize {
             panic!("UefiHal: AllocatePages failed with status {:#x}", status);
@@ -190,14 +178,14 @@ unsafe impl Hal for UefiHal {
             core::ptr::write_bytes(vaddr.as_ptr(), 0, size);
         }
 
-        (paddr, vaddr)
+        (paddr as PhysAddr, vaddr)
     }
 
     unsafe fn dma_dealloc(paddr: PhysAddr, _vaddr: NonNull<u8>, pages: usize) -> i32 {
         let bs = Self::boot_services();
 
         // SAFETY: Caller guarantees paddr was from dma_alloc
-        let status = unsafe { (bs.free_pages)(paddr, pages) };
+        let status = (bs.free_pages)(paddr as u64, pages);
 
         if status != EfiStatus::Success as usize {
             return status as i32;
