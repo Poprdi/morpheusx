@@ -235,8 +235,6 @@ pub enum UiMode {
     Manage,
     /// Confirm delete ISO
     ConfirmDelete,
-    /// Confirm boot ISO
-    ConfirmBoot,
 }
 
 impl UiMode {
@@ -249,13 +247,12 @@ impl UiMode {
             Self::Result => "Result",
             Self::Manage => "Manage",
             Self::ConfirmDelete => "Confirm Delete",
-            Self::ConfirmBoot => "Confirm Boot",
         }
     }
     
     /// Check if in management submenu
     pub const fn is_manage_related(&self) -> bool {
-        matches!(self, Self::Manage | Self::ConfirmDelete | Self::ConfirmBoot)
+        matches!(self, Self::Manage | Self::ConfirmDelete)
     }
 }
 
@@ -439,13 +436,6 @@ impl UiState {
     pub fn show_confirm_delete(&mut self) {
         if self.iso_count > 0 {
             self.mode = UiMode::ConfirmDelete;
-        }
-    }
-
-    /// Show confirm boot dialog
-    pub fn show_confirm_boot(&mut self) {
-        if self.iso_count > 0 {
-            self.mode = UiMode::ConfirmBoot;
         }
     }
 

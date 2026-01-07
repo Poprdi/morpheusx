@@ -1,6 +1,8 @@
 //! Distro Downloader UI
 //!
-//! Main TUI for browsing and downloading Linux distributions.
+//! Main TUI for browsing, downloading, and managing Linux distributions.
+//! Integrates ISO storage management for chunked downloads.
+//!
 //! Follows the same rendering pattern as main_menu and distro_launcher:
 //! - Clear screen once at start
 //! - Render initial state
@@ -11,8 +13,12 @@ use alloc::vec::Vec;
 use super::catalog::{DistroEntry, CATEGORIES, get_by_category};
 use super::state::{DownloadState, DownloadStatus, UiState, UiMode};
 use crate::tui::input::{InputKey, Keyboard};
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED,
+    EFI_YELLOW, EFI_WHITE, EFI_DARKGRAY,
+};
 use crate::BootServices;
+use morpheus_core::iso::{IsoStorageManager, MAX_ISOS};
 
 // Layout constants
 const HEADER_Y: usize = 0;
@@ -21,6 +27,15 @@ const LIST_Y: usize = 5;
 const DETAILS_Y: usize = 14;
 const FOOTER_Y: usize = 19;
 const VISIBLE_ITEMS: usize = 8;
+
+/// Action returned from UI
+#[derive(Debug, Clone, Copy)]
+pub enum ManageAction {
+    /// Continue UI loop
+    Continue,
+    /// Exit UI
+    Exit,
+}
 
 /// Main distro downloader UI controller
 pub struct DistroDownloader {
@@ -36,23 +51,85 @@ pub struct DistroDownloader {
     image_handle: *mut (),
     /// Track if we need full redraw (mode change, category change)
     needs_full_redraw: bool,
+    /// ISO storage manager (for downloaded ISOs)
+    iso_storage: IsoStorageManager,
+    /// Cached ISO names for display
+    iso_names: [[u8; 64]; MAX_ISOS],
+    /// Cached ISO name lengths
+    iso_name_lens: [usize; MAX_ISOS],
+    /// Cached ISO sizes (MB)
+    iso_sizes_mb: [u64; MAX_ISOS],
+    /// Cached ISO completion status
+    iso_complete: [bool; MAX_ISOS],
 }
 
 impl DistroDownloader {
     /// Create a new distro downloader
-    pub fn new(boot_services: *const BootServices, image_handle: *mut ()) -> Self {
+    ///
+    /// # Arguments
+    /// * `boot_services` - UEFI boot services
+    /// * `image_handle` - Current image handle
+    /// * `esp_start_lba` - Start LBA of ESP partition (for ISO storage)
+    /// * `disk_size_lba` - Total disk size in LBAs
+    pub fn new(
+        boot_services: *const BootServices,
+        image_handle: *mut (),
+        esp_start_lba: u64,
+        disk_size_lba: u64,
+    ) -> Self {
         let ui_state = UiState::new();
         let current_category = ui_state.current_category();
         let current_distros: Vec<_> = get_by_category(current_category).collect();
+        let iso_storage = IsoStorageManager::new(esp_start_lba, disk_size_lba);
 
-        Self {
+        let mut this = Self {
             ui_state,
             download_state: DownloadState::new(),
             current_distros,
             boot_services,
             image_handle,
             needs_full_redraw: true,
+            iso_storage,
+            iso_names: [[0u8; 64]; MAX_ISOS],
+            iso_name_lens: [0; MAX_ISOS],
+            iso_sizes_mb: [0; MAX_ISOS],
+            iso_complete: [false; MAX_ISOS],
+        };
+        this.refresh_iso_cache();
+        this
+    }
+
+    /// Refresh ISO cache from storage manager
+    fn refresh_iso_cache(&mut self) {
+        self.ui_state.update_iso_count(self.iso_storage.count());
+
+        for (i, (_, entry)) in self.iso_storage.iter().enumerate() {
+            if i >= MAX_ISOS {
+                break;
+            }
+            let manifest = &entry.manifest;
+
+            // Copy name
+            let name_len = manifest.name_len.min(64);
+            self.iso_names[i][..name_len].copy_from_slice(&manifest.name[..name_len]);
+            self.iso_name_lens[i] = name_len;
+
+            // Size in MB
+            self.iso_sizes_mb[i] = manifest.total_size / (1024 * 1024);
+
+            // Completion status
+            self.iso_complete[i] = manifest.is_complete();
         }
+    }
+
+    /// Get ISO storage manager reference
+    pub fn storage(&self) -> &IsoStorageManager {
+        &self.iso_storage
+    }
+
+    /// Get mutable ISO storage manager reference
+    pub fn storage_mut(&mut self) -> &mut IsoStorageManager {
+        &mut self.iso_storage
     }
 
     /// Refresh the distro list for current category
@@ -67,17 +144,19 @@ impl DistroDownloader {
         self.current_distros.get(self.ui_state.selected_distro).copied()
     }
 
-    /// Handle input and return whether to continue the loop
-    fn handle_input(&mut self, key: &InputKey, screen: &mut Screen) -> bool {
+    /// Handle input and return action
+    fn handle_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
         match self.ui_state.mode {
             UiMode::Browse => self.handle_browse_input(key, screen),
             UiMode::Confirm => self.handle_confirm_input(key, screen),
             UiMode::Downloading => self.handle_download_input(key, screen),
             UiMode::Result => self.handle_result_input(key, screen),
+            UiMode::Manage => self.handle_manage_input(key, screen),
+            UiMode::ConfirmDelete => self.handle_confirm_delete_input(key, screen),
         }
     }
 
-    fn handle_browse_input(&mut self, key: &InputKey, screen: &mut Screen) -> bool {
+    fn handle_browse_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
         match key.scan_code {
             // Up arrow
             0x01 => {
@@ -104,7 +183,7 @@ impl DistroDownloader {
             }
             // ESC - exit
             0x17 => {
-                return false;
+                return ManageAction::Exit;
             }
             _ => {
                 // Enter key - show confirm dialog
@@ -113,18 +192,25 @@ impl DistroDownloader {
                     self.needs_full_redraw = true;
                     self.render_full(screen);
                 }
+                // 'm' or 'M' - switch to manage view
+                else if key.unicode_char == b'm' as u16 || key.unicode_char == b'M' as u16 {
+                    self.refresh_iso_cache();
+                    self.ui_state.show_manage();
+                    self.needs_full_redraw = true;
+                    self.render_full(screen);
+                }
             }
         }
-        true
+        ManageAction::Continue
     }
 
-    fn handle_confirm_input(&mut self, key: &InputKey, screen: &mut Screen) -> bool {
+    fn handle_confirm_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
         // ESC - cancel
         if key.scan_code == 0x17 {
             self.ui_state.return_to_browse();
             self.needs_full_redraw = true;
             self.render_full(screen);
-            return true;
+            return ManageAction::Continue;
         }
 
         // Y/y - confirm download
@@ -132,7 +218,7 @@ impl DistroDownloader {
             if let Some(distro) = self.selected_distro() {
                 self.start_download(distro, screen);
             }
-            return true;
+            return ManageAction::Continue;
         }
 
         // N/n - cancel
@@ -142,10 +228,10 @@ impl DistroDownloader {
             self.render_full(screen);
         }
 
-        true
+        ManageAction::Continue
     }
 
-    fn handle_download_input(&mut self, key: &InputKey, screen: &mut Screen) -> bool {
+    fn handle_download_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
         // ESC cancels download
         if key.scan_code == 0x17 {
             self.download_state.fail("Cancelled by user");
@@ -153,18 +239,83 @@ impl DistroDownloader {
             self.needs_full_redraw = true;
             self.render_full(screen);
         }
-        true
+        ManageAction::Continue
     }
 
-    fn handle_result_input(&mut self, key: &InputKey, screen: &mut Screen) -> bool {
+    fn handle_result_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
         // Any key returns to browse
         if key.scan_code != 0 || key.unicode_char != 0 {
             self.ui_state.return_to_browse();
             self.download_state.reset();
+            self.refresh_iso_cache(); // Refresh after download
             self.needs_full_redraw = true;
             self.render_full(screen);
         }
-        true
+        ManageAction::Continue
+    }
+
+    fn handle_manage_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
+        match key.scan_code {
+            // Up arrow
+            0x01 => {
+                self.ui_state.prev_iso();
+                self.render_full(screen);
+            }
+            // Down arrow
+            0x02 => {
+                self.ui_state.next_iso();
+                self.render_full(screen);
+            }
+            // ESC - back to browse
+            0x17 => {
+                self.ui_state.return_from_manage();
+                self.needs_full_redraw = true;
+                self.render_full(screen);
+            }
+            _ => {
+                // 'd' or 'D' - delete
+                if (key.unicode_char == b'd' as u16 || key.unicode_char == b'D' as u16)
+                    && self.ui_state.iso_count > 0
+                {
+                    self.ui_state.show_confirm_delete();
+                    self.needs_full_redraw = true;
+                    self.render_full(screen);
+                }
+                // 'r' or 'R' - refresh
+                else if key.unicode_char == b'r' as u16 || key.unicode_char == b'R' as u16 {
+                    self.refresh_iso_cache();
+                    self.needs_full_redraw = true;
+                    self.render_full(screen);
+                }
+            }
+        }
+        ManageAction::Continue
+    }
+
+    fn handle_confirm_delete_input(&mut self, key: &InputKey, screen: &mut Screen) -> ManageAction {
+        // Y/y - confirm delete
+        if key.unicode_char == b'y' as u16 || key.unicode_char == b'Y' as u16 {
+            let idx = self.ui_state.selected_iso;
+            if self.iso_storage.remove_entry(idx).is_ok() {
+                self.refresh_iso_cache();
+            }
+            self.ui_state.cancel_confirm();
+            self.needs_full_redraw = true;
+            self.render_full(screen);
+            return ManageAction::Continue;
+        }
+
+        // N/n/ESC - cancel
+        if key.unicode_char == b'n' as u16
+            || key.unicode_char == b'N' as u16
+            || key.scan_code == 0x17
+        {
+            self.ui_state.cancel_confirm();
+            self.needs_full_redraw = true;
+            self.render_full(screen);
+        }
+
+        ManageAction::Continue
     }
 
     /// Start downloading a distribution
@@ -225,6 +376,16 @@ impl DistroDownloader {
             UiMode::Result => {
                 self.render_header(screen);
                 self.render_result(screen);
+            }
+            UiMode::Manage => {
+                self.render_manage_header(screen);
+                self.render_iso_list(screen);
+                self.render_manage_footer(screen);
+            }
+            UiMode::ConfirmDelete => {
+                self.render_manage_header(screen);
+                self.render_iso_list(screen);
+                self.render_manage_confirm_dialog(screen, "Delete this ISO?");
             }
         }
     }
@@ -394,10 +555,10 @@ impl DistroDownloader {
         screen.put_str_at(x + 78, y, "+", EFI_GREEN, EFI_BLACK);
 
         screen.put_str_at(x, y + 1, "|", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x + 2, y + 1, "[UP/DOWN] Select", EFI_DARKGREEN, EFI_BLACK);
-        screen.put_str_at(x + 22, y + 1, "[LEFT/RIGHT] Category", EFI_DARKGREEN, EFI_BLACK);
-        screen.put_str_at(x + 48, y + 1, "[ENTER] Download", EFI_DARKGREEN, EFI_BLACK);
-        screen.put_str_at(x + 68, y + 1, "[ESC] Back", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 2, y + 1, "[Arrows] Nav", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 17, y + 1, "[ENTER] Download", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 37, y + 1, "[M] Manage ISOs", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 56, y + 1, "[ESC] Back", EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 78, y + 1, "|", EFI_GREEN, EFI_BLACK);
 
         screen.put_str_at(x, y + 2, "+", EFI_GREEN, EFI_BLACK);
@@ -516,11 +677,141 @@ impl DistroDownloader {
                 }
 
                 // Handle mode-specific input
-                if !self.handle_input(&key, screen) {
-                    return;
+                match self.handle_input(&key, screen) {
+                    ManageAction::Continue => {}
+                    ManageAction::Exit => return,
                 }
             }
         }
+    }
+
+    // =========================================================================
+    // ISO Manager Rendering
+    // =========================================================================
+
+    fn render_manage_header(&self, screen: &mut Screen) {
+        let title = "=== ISO MANAGER ===";
+        let x = screen.center_x(title.len());
+        screen.put_str_at(x, HEADER_Y, title, EFI_LIGHTGREEN, EFI_BLACK);
+
+        let subtitle = "Manage downloaded ISO images  |  Press [ESC] to return";
+        let x = screen.center_x(subtitle.len());
+        screen.put_str_at(x, HEADER_Y + 1, subtitle, EFI_DARKGREEN, EFI_BLACK);
+    }
+
+    fn render_iso_list(&self, screen: &mut Screen) {
+        let x = 2;
+        let y = 4;
+
+        if self.ui_state.iso_count == 0 {
+            screen.put_str_at(x, y, "No ISOs stored.", EFI_DARKGRAY, EFI_BLACK);
+            screen.put_str_at(x, y + 1, "Download distros from the Browse view to see them here.", EFI_DARKGRAY, EFI_BLACK);
+            return;
+        }
+
+        // Column headers
+        screen.put_str_at(x + 2, y, "NAME                                    ", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 44, y, "SIZE (MB)", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 58, y, "STATUS", EFI_DARKGREEN, EFI_BLACK);
+
+        // Separator
+        screen.put_str_at(x, y + 1, "------------------------------------------------------------------------", EFI_DARKGREEN, EFI_BLACK);
+
+        // List ISOs
+        for i in 0..self.ui_state.iso_count {
+            let row_y = y + 2 + i;
+
+            // Selection indicator
+            if i == self.ui_state.selected_iso {
+                screen.put_str_at(x, row_y, ">>", EFI_LIGHTGREEN, EFI_BLACK);
+            } else {
+                screen.put_str_at(x, row_y, "  ", EFI_BLACK, EFI_BLACK);
+            }
+
+            // Name (max 40 chars)
+            let name = core::str::from_utf8(&self.iso_names[i][..self.iso_name_lens[i].min(40)])
+                .unwrap_or("???");
+            
+            let (fg, bg) = if i == self.ui_state.selected_iso {
+                (EFI_BLACK, EFI_GREEN)
+            } else {
+                (EFI_LIGHTGREEN, EFI_BLACK)
+            };
+            
+            let name_padded = Self::pad_or_truncate(name, 40);
+            screen.put_str_at(x + 2, row_y, &name_padded, fg, bg);
+
+            // Size
+            let size_str = Self::format_size_mb(self.iso_sizes_mb[i]);
+            screen.put_str_at(x + 44, row_y, &size_str, EFI_GREEN, EFI_BLACK);
+
+            // Status
+            if self.iso_complete[i] {
+                screen.put_str_at(x + 58, row_y, "Ready   ", EFI_GREEN, EFI_BLACK);
+            } else {
+                screen.put_str_at(x + 58, row_y, "Partial ", EFI_YELLOW, EFI_BLACK);
+            }
+        }
+    }
+
+    fn render_manage_footer(&self, screen: &mut Screen) {
+        let x = 2;
+        let y = FOOTER_Y;
+
+        screen.put_str_at(x, y, "+-[ Controls ]", EFI_GREEN, EFI_BLACK);
+        for i in 15..70 {
+            screen.put_str_at(x + i, y, "-", EFI_GREEN, EFI_BLACK);
+        }
+        screen.put_str_at(x + 70, y, "+", EFI_GREEN, EFI_BLACK);
+
+        screen.put_str_at(x, y + 1, "|", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + 2, y + 1, "[UP/DOWN] Select", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 22, y + 1, "[D] Delete", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 38, y + 1, "[R] Refresh", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 54, y + 1, "[ESC] Back", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 70, y + 1, "|", EFI_GREEN, EFI_BLACK);
+
+        screen.put_str_at(x, y + 2, "+", EFI_GREEN, EFI_BLACK);
+        for i in 1..70 {
+            screen.put_str_at(x + i, y + 2, "-", EFI_GREEN, EFI_BLACK);
+        }
+        screen.put_str_at(x + 70, y + 2, "+", EFI_GREEN, EFI_BLACK);
+    }
+
+    fn render_manage_confirm_dialog(&self, screen: &mut Screen, message: &str) {
+        let x = 15;
+        let y = 10;
+
+        // Get selected ISO name
+        let name = if self.ui_state.selected_iso < self.ui_state.iso_count {
+            core::str::from_utf8(
+                &self.iso_names[self.ui_state.selected_iso]
+                    [..self.iso_name_lens[self.ui_state.selected_iso].min(40)],
+            )
+            .unwrap_or("???")
+        } else {
+            "???"
+        };
+
+        screen.put_str_at(x, y,     "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 1, "|                    CONFIRM                       |", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 2, "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 3, "|                                                  |", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 4, "|                                                  |", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 5, "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 6, "|               [Y]es       [N]o                   |", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, y + 7, "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
+
+        screen.put_str_at(x + 3, y + 3, message, EFI_WHITE, EFI_BLACK);
+        screen.put_str_at(x + 3, y + 4, name, EFI_LIGHTGREEN, EFI_BLACK);
+    }
+
+    fn format_size_mb(mb: u64) -> alloc::string::String {
+        use alloc::string::String;
+        use core::fmt::Write;
+        let mut s = String::with_capacity(12);
+        let _ = write!(s, "{:>8}", mb);
+        s
     }
 }
 
