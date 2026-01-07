@@ -27,6 +27,7 @@ pub struct DownloaderRenderer;
 impl DownloaderRenderer {
     /// Render the header with title
     pub fn render_header(screen: &mut Screen) {
+        morpheus_core::logger::log("Renderer: render_header()");
         let width = screen.width();
         let header_width = HEADER_ART[0].len();
         let x = if width > header_width { (width - header_width) / 2 } else { 0 };
@@ -62,6 +63,7 @@ impl DownloaderRenderer {
         selected_category: usize,
         y: usize,
     ) {
+        morpheus_core::logger::log("Renderer: render_categories()");
         let x = 2;
         let mut current_x = x;
 
@@ -95,6 +97,7 @@ impl DownloaderRenderer {
         y_start: usize,
         max_items: usize,
     ) {
+        morpheus_core::logger::log("Renderer: render_distro_list()");
         let x = 2;
 
         // Column headers
@@ -173,6 +176,7 @@ impl DownloaderRenderer {
         distro: &DistroEntry,
         y: usize,
     ) {
+        morpheus_core::logger::log("Renderer: render_details()");
         let x = 2;
 
         // Box top
@@ -227,6 +231,7 @@ impl DownloaderRenderer {
         status: &str,
         y: usize,
     ) {
+        morpheus_core::logger::log("Renderer: render_progress()");
         let x = 2;
 
         // Clear area
@@ -282,6 +287,7 @@ impl DownloaderRenderer {
 
     /// Render error message
     pub fn render_error(screen: &mut Screen, message: &str, y: usize) {
+        morpheus_core::logger::log("Renderer: render_error()");
         let x = 2;
         screen.put_str_at(x, y, "ERROR: ", EFI_RED, EFI_BLACK);
         screen.put_str_at(x + 7, y, message, EFI_RED, EFI_BLACK);
@@ -289,6 +295,7 @@ impl DownloaderRenderer {
 
     /// Render footer with keybindings
     pub fn render_footer(screen: &mut Screen, y: usize) {
+        morpheus_core::logger::log("Renderer: render_footer()");
         let x = 2;
         screen.put_str_at(x, y, "┌─ Controls ", EFI_GREEN, EFI_BLACK);
         for i in 13..78 {
@@ -314,6 +321,7 @@ impl DownloaderRenderer {
 
     /// Render success message
     pub fn render_success(screen: &mut Screen, message: &str, y: usize) {
+        morpheus_core::logger::log("Renderer: render_success()");
         let x = 2;
         screen.put_str_at(x, y, "SUCCESS: ", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(x + 9, y, message, EFI_LIGHTGREEN, EFI_BLACK);
