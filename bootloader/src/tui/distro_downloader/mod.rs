@@ -1,7 +1,8 @@
 //! Distro Downloader Module
 //!
-//! Provides a TUI for browsing and downloading Linux distribution ISOs.
-//! Downloads are saved to the ESP partition in `/isos/` directory.
+//! Provides a TUI for browsing, downloading, and managing Linux distribution ISOs.
+//! Downloads are stored using chunked FAT32 storage (bypassing 4GB limit).
+//! Integrates ISO management for viewing, deleting, and booting downloaded ISOs.
 //!
 //! # Architecture
 //!
@@ -10,13 +11,13 @@
 //! │                    DistroDownloader                         │
 //! ├─────────────────────────────────────────────────────────────┤
 //! │  ┌─────────────┐  ┌──────────────┐  ┌───────────────────┐  │
-//! │  │   Catalog   │  │    State     │  │     Renderer      │  │
-//! │  │  (static)   │  │ (UI + DL)    │  │   (TUI output)    │  │
+//! │  │   Catalog   │  │    State     │  │   IsoStorage      │  │
+//! │  │  (static)   │  │ (UI + DL)    │  │   (chunked)       │  │
 //! │  └─────────────┘  └──────────────┘  └───────────────────┘  │
 //! │         │                │                    │            │
 //! │         ▼                ▼                    ▼            │
 //! │  ┌─────────────────────────────────────────────────────┐   │
-//! │  │              UI Event Loop (run)                    │   │
+//! │  │     UI Event Loop (Browse / Manage / Download)      │   │
 //! │  └─────────────────────────────────────────────────────┘   │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
@@ -28,4 +29,4 @@ pub mod ui;
 
 pub use catalog::{DistroCategory, DistroEntry, CATEGORIES, DISTRO_CATALOG, get_by_category};
 pub use state::{DownloadState, DownloadStatus, UiMode, UiState};
-pub use ui::DistroDownloader;
+pub use ui::{DistroDownloader, ManageAction};

@@ -4,6 +4,8 @@ use crate::uefi::file_system::{FileProtocol, open_file_read, get_loaded_image};
 use crate::BootServices;
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
+use alloc::format;
+use morpheus_core::iso::IsoStorageManager;
 
 const BOOT_ENTRIES_PATH: &str = "\\loader\\entries";
 const MAX_FILE_SIZE: usize = 4096;
@@ -44,16 +46,92 @@ impl EntryScanner {
             }
         }
 
-        // Scan for ISO files in .iso directory
+        // Scan for ISO files in .iso directory (legacy single-file ISOs)
         let iso_scanner = IsoScanner::new(self.boot_services, self.image_handle);
         let iso_entries = iso_scanner.scan_iso_files();
         entries.extend(iso_entries);
+
+        // Scan for chunked ISOs from storage manager
+        let chunked_entries = self.scan_chunked_isos();
+        entries.extend(chunked_entries);
 
         if entries.is_empty() {
             entries.push(self.create_fallback_entry());
         }
 
         entries
+    }
+
+    /// Scan for ISOs stored in chunked format via IsoStorageManager
+    fn scan_chunked_isos(&self) -> Vec<BootEntry> {
+        let mut entries = Vec::new();
+
+        // Get disk info for storage manager
+        let (esp_lba, disk_lba) = unsafe {
+            let bs = &*self.boot_services;
+            let mut dm = morpheus_core::disk::manager::DiskManager::new();
+            if crate::uefi::disk::enumerate_disks(bs, &mut dm).is_ok() && dm.disk_count() > 0 {
+                if let Some(disk) = dm.get_disk(0) {
+                    (2048_u64, disk.last_block + 1)
+                } else {
+                    return entries;
+                }
+            } else {
+                return entries;
+            }
+        };
+
+        let storage = IsoStorageManager::new(esp_lba, disk_lba);
+
+        for (idx, entry) in storage.iter().enumerate() {
+            let manifest = &entry.1.manifest;
+
+            // Only show complete ISOs
+            if !manifest.is_complete() {
+                continue;
+            }
+
+            let name = manifest.name_str();
+            let distro_name = Self::extract_distro_from_name(name);
+
+            // Create entry with special chunked: prefix to indicate chunked ISO
+            entries.push(BootEntry::new(
+                format!("{} (Chunked ISO)", distro_name),
+                format!("chunked:{}", idx), // Special path indicating chunked ISO index
+                None,
+                format!("chunked_iso:{}", idx),
+            ));
+        }
+
+        morpheus_core::logger::log(
+            format!("Found {} chunked ISOs", entries.len()).leak(),
+        );
+
+        entries
+    }
+
+    fn extract_distro_from_name(name: &str) -> String {
+        let name_lower = name.to_lowercase();
+
+        if name_lower.contains("tails") {
+            "Tails".to_string()
+        } else if name_lower.contains("ubuntu") {
+            "Ubuntu".to_string()
+        } else if name_lower.contains("debian") {
+            "Debian".to_string()
+        } else if name_lower.contains("arch") {
+            "Arch".to_string()
+        } else if name_lower.contains("fedora") {
+            "Fedora".to_string()
+        } else if name_lower.contains("kali") {
+            "Kali".to_string()
+        } else {
+            // Remove .iso extension if present
+            name.strip_suffix(".iso")
+                .or_else(|| name.strip_suffix(".ISO"))
+                .unwrap_or(name)
+                .to_string()
+        }
     }
 
     unsafe fn kernel_exists(&self, root: *mut FileProtocol, path: &str) -> bool {
