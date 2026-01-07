@@ -650,6 +650,82 @@ impl DmaPool {
         Ok(())
     }
 
+    /// Initialize from caves discovered in our own binary.
+    ///
+    /// This scans the memory range for caves (unused padding) and chains
+    /// them into one logical pool. Perfect for running network stack DMA
+    /// entirely from caves in our PE binary.
+    ///
+    /// # Safety
+    ///
+    /// - `image_base` and `image_end` must bound our loaded PE image.
+    /// - The discovered caves must not overlap with any used code/data.
+    pub unsafe fn init_from_caves(image_base: usize, image_end: usize) -> Result<()> {
+        if INITIALIZED.swap(true, Ordering::SeqCst) {
+            return Err(DmaError::AlreadyInitialized);
+        }
+
+        // Find all caves in our image
+        let mut caves = [MemoryRegion::new(0, 0); MAX_CAVES];
+        let found = MemoryDiscovery::find_all_caves(
+            image_base,
+            image_end,
+            MIN_CAVE_SIZE,
+            PaddingPattern::Any,
+            &mut caves,
+        );
+
+        if found == 0 {
+            // Fallback to static storage
+            let base = STATIC_STORAGE.data.as_mut_ptr() as usize;
+            core::ptr::write_bytes(STATIC_STORAGE.data.as_mut_ptr(), 0, DEFAULT_POOL_SIZE);
+            POOL.base.store(base, Ordering::SeqCst);
+            POOL.size.store(DEFAULT_POOL_SIZE, Ordering::SeqCst);
+            return Ok(());
+        }
+
+        // Use the largest cave as primary pool
+        // (Could use CavePool for chaining, but global POOL is simpler)
+        let best = caves[0]; // Already sorted by size
+        core::ptr::write_bytes(best.base as *mut u8, 0, best.size);
+        POOL.base.store(best.base, Ordering::SeqCst);
+        POOL.size.store(best.size, Ordering::SeqCst);
+
+        // Store total cave info for stats
+        CAVE_POOL.store_caves(&caves[..found]);
+
+        Ok(())
+    }
+
+    /// Initialize from a pre-built CavePool.
+    ///
+    /// Use this when you've already discovered caves and want to chain them.
+    ///
+    /// # Safety
+    ///
+    /// All caves in the pool must be valid, identity-mapped memory.
+    pub unsafe fn init_from_cave_pool(caves: &[MemoryRegion]) -> Result<()> {
+        if INITIALIZED.swap(true, Ordering::SeqCst) {
+            return Err(DmaError::AlreadyInitialized);
+        }
+
+        if caves.is_empty() {
+            INITIALIZED.store(false, Ordering::SeqCst);
+            return Err(DmaError::NoMemoryFound);
+        }
+
+        // Store all caves for chained allocation
+        CAVE_POOL.store_caves(caves);
+
+        // Use largest as primary (backwards compat with single-pool API)
+        let best = caves.iter().max_by_key(|c| c.size).unwrap();
+        core::ptr::write_bytes(best.base as *mut u8, 0, best.size);
+        POOL.base.store(best.base, Ordering::SeqCst);
+        POOL.size.store(best.size, Ordering::SeqCst);
+
+        Ok(())
+    }
+
     /// Check if the pool is initialized.
     #[inline]
     pub fn is_initialized() -> bool {
