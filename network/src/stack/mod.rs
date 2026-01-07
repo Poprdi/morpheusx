@@ -184,6 +184,163 @@ static TX_PACKET_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::Atom
 static DHCP_DISCOVER_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static RX_PACKET_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+// Debug marker for tracing initialization steps
+static DEBUG_INIT_STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+// ============================================================================
+// Debug Log Ring Buffer
+// ============================================================================
+
+/// Maximum length of a single debug message
+const DEBUG_MSG_LEN: usize = 64;
+/// Number of messages in the ring buffer
+const DEBUG_RING_SIZE: usize = 16;
+
+/// A single debug log entry
+#[derive(Clone, Copy)]
+pub struct DebugLogEntry {
+    /// Message content (null-terminated or full)
+    pub msg: [u8; DEBUG_MSG_LEN],
+    /// Actual length of message
+    pub len: usize,
+    /// Stage number when this was logged
+    pub stage: u32,
+}
+
+impl Default for DebugLogEntry {
+    fn default() -> Self {
+        Self {
+            msg: [0u8; DEBUG_MSG_LEN],
+            len: 0,
+            stage: 0,
+        }
+    }
+}
+
+/// Ring buffer for debug logs
+struct DebugRing {
+    entries: [DebugLogEntry; DEBUG_RING_SIZE],
+    write_idx: usize,
+    read_idx: usize,
+    count: usize,
+}
+
+impl DebugRing {
+    const fn new() -> Self {
+        Self {
+            entries: [DebugLogEntry {
+                msg: [0u8; DEBUG_MSG_LEN],
+                len: 0,
+                stage: 0,
+            }; DEBUG_RING_SIZE],
+            write_idx: 0,
+            read_idx: 0,
+            count: 0,
+        }
+    }
+}
+
+static mut DEBUG_RING: DebugRing = DebugRing::new();
+static DEBUG_RING_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Push a debug message to the ring buffer
+pub fn debug_log(stage: u32, msg: &str) {
+    // Simple spinlock
+    while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    
+    unsafe {
+        let entry = &mut DEBUG_RING.entries[DEBUG_RING.write_idx];
+        let bytes = msg.as_bytes();
+        let copy_len = bytes.len().min(DEBUG_MSG_LEN);
+        entry.msg[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        entry.len = copy_len;
+        entry.stage = stage;
+        
+        DEBUG_RING.write_idx = (DEBUG_RING.write_idx + 1) % DEBUG_RING_SIZE;
+        if DEBUG_RING.count < DEBUG_RING_SIZE {
+            DEBUG_RING.count += 1;
+        } else {
+            // Overwrite oldest - advance read pointer
+            DEBUG_RING.read_idx = (DEBUG_RING.read_idx + 1) % DEBUG_RING_SIZE;
+        }
+    }
+    
+    DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
+
+/// Pop the next debug message from the ring buffer (FIFO order)
+/// Returns None if buffer is empty
+pub fn debug_log_pop() -> Option<DebugLogEntry> {
+    // Simple spinlock
+    while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    
+    let result = unsafe {
+        if DEBUG_RING.count == 0 {
+            None
+        } else {
+            let entry = DEBUG_RING.entries[DEBUG_RING.read_idx];
+            DEBUG_RING.read_idx = (DEBUG_RING.read_idx + 1) % DEBUG_RING_SIZE;
+            DEBUG_RING.count -= 1;
+            Some(entry)
+        }
+    };
+    
+    DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
+    result
+}
+
+/// Check if there are pending debug messages
+pub fn debug_log_available() -> bool {
+    unsafe { DEBUG_RING.count > 0 }
+}
+
+/// Clear all debug messages
+pub fn debug_log_clear() {
+    while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    
+    unsafe {
+        DEBUG_RING.write_idx = 0;
+        DEBUG_RING.read_idx = 0;
+        DEBUG_RING.count = 0;
+    }
+    
+    DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
+}
+
+/// Set debug init stage and log it
+pub fn set_debug_stage(stage: u32) {
+    DEBUG_INIT_STAGE.store(stage, core::sync::atomic::Ordering::Relaxed);
+    
+    // Also log to ring buffer with description
+    let desc = match stage {
+        10 => "entered NetInterface::new",
+        11 => "got MAC address",
+        12 => "created DeviceAdapter",
+        13 => "created smoltcp Config",
+        14 => "about to create Interface",
+        15 => "Interface created",
+        16 => "SocketSet created",
+        17 => "about to create DNS socket",
+        18 => "DNS socket added",
+        19 => "creating DHCP socket",
+        20 => "DHCP socket added",
+        25 => "returning from new()",
+        _ => "unknown",
+    };
+    debug_log(stage, desc);
+}
+
+/// Get current debug init stage.
+pub fn debug_stage() -> u32 {
+    DEBUG_INIT_STAGE.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// Get the number of TX errors that have occurred.
 pub fn tx_error_count() -> u32 {
     TX_ERROR_COUNT.load(core::sync::atomic::Ordering::Relaxed)

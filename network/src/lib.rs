@@ -87,6 +87,8 @@ pub use client::HttpClient;
 pub use client::NativeHttpClient;
 pub use device::NetworkDevice;
 pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState, ecam_bases};
+pub use stack::{set_debug_stage, debug_stage};  // Debug stage tracking
+pub use stack::{debug_log, debug_log_pop, debug_log_available, debug_log_clear, DebugLogEntry};  // Ring buffer logging
 pub use device::hal::StaticHal;
 
 // Re-export standalone assembly functions

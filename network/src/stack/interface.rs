@@ -64,6 +64,7 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
 use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
+use smoltcp::socket::dns::{Socket as DnsSocket, GetQueryResultError};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr};
 
@@ -151,6 +152,8 @@ pub struct NetInterface<D: NetworkDevice> {
     sockets: SocketSet<'static>,
     /// DHCP socket handle (if using DHCP).
     dhcp_handle: Option<SocketHandle>,
+    /// DNS socket handle.
+    dns_handle: SocketHandle,
     /// Current state.
     state: NetState,
     /// Configured gateway.
@@ -169,25 +172,48 @@ impl<D: NetworkDevice> NetInterface<D> {
     /// * `device` - The network device to use
     /// * `config` - IP configuration (DHCP or static)
     pub fn new(device: D, config: NetConfig) -> Self {
+        super::set_debug_stage(10); // Stage 10: entered NetInterface::new
+        
         let mac = device.mac_address();
         let ethernet_addr = EthernetAddress(mac);
+        super::set_debug_stage(11); // Stage 11: got MAC
 
         let mut device_adapter = DeviceAdapter::new(device);
+        super::set_debug_stage(12); // Stage 12: created DeviceAdapter
 
         // Create smoltcp config
         let smoltcp_config = Config::new(ethernet_addr.into());
+        super::set_debug_stage(13); // Stage 13: created Config
 
         // Create interface
+        super::set_debug_stage(14); // Stage 14: about to create Interface
         let mut iface = Interface::new(smoltcp_config, &mut device_adapter, Instant::from_millis(0));
+        super::set_debug_stage(15); // Stage 15: Interface created
 
         // Create socket storage
         let mut sockets = SocketSet::new(vec![]);
+        super::set_debug_stage(16); // Stage 16: SocketSet created
+
+        // Default DNS servers (Cloudflare and Google)
+        let default_dns_servers: &[IpAddress] = &[
+            IpAddress::v4(1, 1, 1, 1),   // Cloudflare
+            IpAddress::v4(8, 8, 8, 8),   // Google
+        ];
+        
+        // Create DNS socket with default servers
+        super::set_debug_stage(17); // Stage 17: about to create DNS socket
+        let dns_queries: [Option<smoltcp::socket::dns::DnsQuery>; 1] = [None];
+        let dns_socket = DnsSocket::new(default_dns_servers, dns_queries);
+        let dns_handle = sockets.add(dns_socket);
+        super::set_debug_stage(18); // Stage 18: DNS socket added
 
         let (state, dhcp_handle, gateway, dns) = match config {
             NetConfig::Dhcp => {
+                super::set_debug_stage(19); // Stage 19: creating DHCP socket
                 // Add DHCP socket
                 let dhcp_socket = DhcpSocket::new();
                 let handle = sockets.add(dhcp_socket);
+                super::set_debug_stage(20); // Stage 20: DHCP socket added
                 (NetState::DhcpDiscovering, Some(handle), None, None)
             }
             NetConfig::Static {
@@ -215,11 +241,13 @@ impl<D: NetworkDevice> NetInterface<D> {
             }
         };
 
+        super::set_debug_stage(25); // Stage 25: about to return Self
         Self {
             device: device_adapter,
             iface,
             sockets,
             dhcp_handle,
+            dns_handle,
             state,
             gateway,
             dns,
@@ -264,6 +292,33 @@ impl<D: NetworkDevice> NetInterface<D> {
         })
     }
 
+    /// Start a DNS query for a hostname. Returns a query handle.
+    pub fn start_dns_query(&mut self, hostname: &str) -> Result<smoltcp::socket::dns::QueryHandle> {
+        super::debug_log(80, \"start_dns_query\");\n        let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+        dns_socket
+            .start_query(self.iface.context(), hostname, smoltcp::wire::DnsQueryType::A)
+            .map_err(|_| {\n                super::debug_log(81, \"DNS query start err\");\n                NetworkError::DnsResolutionFailed\n            })
+    }
+    
+    /// Check DNS query result. Returns Ok(Some(ip)) if resolved, Ok(None) if pending, Err if failed.
+    pub fn get_dns_result(&mut self, handle: smoltcp::socket::dns::QueryHandle) -> Result<Option<Ipv4Addr>> {
+        let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+        match dns_socket.get_query_result(handle) {
+            Ok(addrs) => {
+                super::debug_log(82, \"DNS got result\");\n                // Find first IPv4 address
+                for addr in addrs {
+                    if let IpAddress::Ipv4(v4) = addr {
+                        let bytes = v4.as_bytes();
+                        return Ok(Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])));
+                    }
+                }
+                super::debug_log(83, \"DNS no IPv4 addr\");\n                Err(NetworkError::DnsResolutionFailed)
+            }
+            Err(GetQueryResultError::Pending) => Ok(None),
+            Err(GetQueryResultError::Failed) => {\n                super::debug_log(84, \"DNS query failed\");\n                Err(NetworkError::DnsResolutionFailed)\n            }
+        }
+    }
+
     /// Get the MAC address.
     pub fn mac_address(&self) -> [u8; 6] {
         self.device.inner.mac_address()
@@ -284,24 +339,56 @@ impl<D: NetworkDevice> NetInterface<D> {
             let event = self.sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
             match event {
                 Some(DhcpEvent::Configured(config)) => {
+                    super::debug_log(30, "DHCP configured!");
+                    
+                    // Copy config data we need before releasing the borrow
+                    let address = config.address;
+                    let router = config.router;
+                    let dns_servers: Vec<Ipv4Address> = config.dns_servers.iter().copied().collect();
+                    drop(config); // Explicitly release the borrow
+                    
                     // Apply DHCP configuration
                     self.iface.update_ip_addrs(|addrs| {
                         addrs.clear();
-                        addrs.push(IpCidr::Ipv4(config.address)).ok();
+                        addrs.push(IpCidr::Ipv4(address)).ok();
                     });
 
-                    if let Some(router) = config.router {
+                    if let Some(router) = router {
                         self.iface.routes_mut().add_default_ipv4_route(router).ok();
                         self.gateway = Some(router);
                     }
 
-                    if let Some(dns_servers) = config.dns_servers.first() {
-                        self.dns = Some(*dns_servers);
+                    // Update DNS servers: DHCP-provided first, then real-world fallbacks
+                    // This ensures QEMU/virtual DNS works while keeping real DNS for hardware
+                    let mut dns_addrs: Vec<IpAddress> = dns_servers
+                        .iter()
+                        .map(|a| IpAddress::Ipv4(*a))
+                        .collect();
+                    
+                    // Add real-world DNS servers as fallbacks (for real hardware)
+                    // Only add if not already present from DHCP
+                    let cloudflare = IpAddress::v4(1, 1, 1, 1);
+                    let google = IpAddress::v4(8, 8, 8, 8);
+                    if !dns_addrs.contains(&cloudflare) {
+                        dns_addrs.push(cloudflare);
+                    }
+                    if !dns_addrs.contains(&google) {
+                        dns_addrs.push(google);
+                    }
+                    
+                    // Update DNS socket with combined servers
+                    let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+                    dns_socket.update_servers(&dns_addrs);
+                    
+                    if !dns_servers.is_empty() {
+                        self.dns = Some(dns_servers[0]);
                     }
 
                     self.state = NetState::Ready;
+                    super::debug_log(31, "DHCP state -> Ready");
                 }
                 Some(DhcpEvent::Deconfigured) => {
+                    super::debug_log(32, "DHCP deconfigured");
                     self.iface.update_ip_addrs(|addrs| addrs.clear());
                     self.iface.routes_mut().remove_default_ipv4_route();
                     self.gateway = None;
@@ -317,6 +404,7 @@ impl<D: NetworkDevice> NetInterface<D> {
 
     /// Create a TCP socket and return its handle.
     pub fn tcp_socket(&mut self) -> Result<SocketHandle> {
+        super::debug_log(90, \"tcp_socket create\");
         let rx_buffer = TcpSocketBuffer::new(vec![0u8; TCP_RX_BUFFER_SIZE]);
         let tx_buffer = TcpSocketBuffer::new(vec![0u8; TCP_TX_BUFFER_SIZE]);
         let socket = TcpSocket::new(rx_buffer, tx_buffer);
@@ -331,6 +419,7 @@ impl<D: NetworkDevice> NetInterface<D> {
         remote_ip: Ipv4Addr,
         remote_port: u16,
     ) -> Result<()> {
+        super::debug_log(91, \"tcp_connect start\");
         let remote_addr = Ipv4Address::from_bytes(&remote_ip.octets());
         let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote_addr), remote_port);
 
@@ -341,8 +430,12 @@ impl<D: NetworkDevice> NetInterface<D> {
 
         socket
             .connect(self.iface.context(), endpoint, local_port)
-            .map_err(|_| NetworkError::ConnectionFailed)?;
+            .map_err(|_| {
+                super::debug_log(92, \"tcp_connect FAILED\");
+                NetworkError::ConnectionFailed
+            })?;
 
+        super::debug_log(93, \"tcp_connect initiated\");
         Ok(())
     }
 
