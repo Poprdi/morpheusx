@@ -32,6 +32,7 @@
 //! ```
 
 mod interface;
+pub mod setup;
 
 use crate::device::NetworkDevice;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -39,6 +40,10 @@ use smoltcp::time::Instant;
 use core::marker::PhantomData;
 
 pub use interface::{NetInterface, NetConfig, NetState, MAX_TCP_SOCKETS};
+#[cfg(feature = "uefi")]
+pub use setup::{NetworkStack as UefiNetworkStack, init_virtio_network, init_qemu_network};
+#[cfg(feature = "uefi")]
+pub use crate::device::pci::ecam_bases;
 
 const MTU: usize = 1536;
 
