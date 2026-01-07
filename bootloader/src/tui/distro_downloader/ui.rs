@@ -356,11 +356,11 @@ impl DistroDownloader {
         };
 
         // Create UEFI block I/O adapter
-        let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+        let uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
 
         // Step 2: Find free space on disk
         let block_size = uefi_block_io.block_size_bytes() as usize;
-        let free_regions = match find_free_space(&mut uefi_block_io, block_size) {
+        let free_regions = match find_free_space(uefi_block_io, block_size) {
             Ok(r) => r,
             Err(e) => {
                 self.show_download_error(screen, &format!("Failed to scan disk: {:?}", e));
@@ -430,11 +430,12 @@ impl DistroDownloader {
         for i in 0..chunks_needed {
             let chunk_size = remaining.min(CHUNK_SIZE);
             chunks.chunks[i] = ChunkInfo {
+                partition_uuid: [0u8; 16],  // Will be set when partition is created
                 start_lba: chunk_partitions[i].0,
                 end_lba: chunk_partitions[i].1,
-                size: chunk_size,
-                written: 0,
-                verified: false,
+                data_size: chunk_size,
+                index: i as u8,
+                written: false,
             };
             remaining -= chunk_size;
         }
@@ -488,12 +489,27 @@ impl DistroDownloader {
                     }
                 };
 
-                // Register ISO in storage manager
+                // Update manifest with final chunks before registering
+                manifest.chunks = final_chunks.clone();
+                manifest.mark_complete();
+
+                // Persist manifest to ESP filesystem FIRST (so it survives reboots)
+                unsafe {
+                    let bs = &*self.boot_services;
+                    if let Err(e) = super::manifest_io::persist_manifest(bs, self.image_handle, &manifest) {
+                        self.show_download_error(screen, &format!("Failed to persist manifest: {:?}", e));
+                        return;
+                    }
+                    morpheus_core::logger::log("Manifest persisted to ESP");
+                }
+
+                // Register ISO in storage manager (in-memory cache)
                 match self.iso_storage.finalize_download(manifest, final_chunks) {
                     Ok(idx) => {
                         morpheus_core::logger::log(format!("ISO registered at index {}", idx).leak());
                         self.refresh_iso_cache();
-                        self.ui_state.show_result(&format!("Download complete: {}", distro.name));
+                        let msg: &'static str = format!("Download complete: {}", distro.name).leak();
+                        self.ui_state.show_result(msg);
                         self.download_state.complete();
                     }
                     Err(e) => {
@@ -532,7 +548,7 @@ impl DistroDownloader {
                 break;
             }
 
-            let region_size = region.size_lba;
+            let region_size = region.size_lba();
             let mut region_offset = 0u64;
 
             while chunks_allocated < chunks_needed && region_offset + sectors_per_chunk <= region_size {
@@ -565,6 +581,9 @@ impl DistroDownloader {
         screen: &mut Screen,
     ) -> Result<usize, &'static str> {
         use morpheus_network::client::uefi::{UefiHttpClient, Downloader, DownloadConfig};
+        use morpheus_network::error::NetworkError;
+        use gpt_disk_io::BlockIo;
+        use core::cell::Cell;
 
         // Initialize HTTP client
         let mut http_client = match UefiHttpClient::new() {
@@ -574,16 +593,33 @@ impl DistroDownloader {
 
         // Initialize with boot services
         let bs = unsafe { &*self.boot_services };
-        if let Err(_) = http_client.initialize(bs) {
-            return Err("Failed to initialize HTTP client");
+        
+        // Cast bootloader's BootServices to network crate's BootServices
+        // They have compatible layouts for the fields we use
+        let network_bs = bs as *const BootServices as *const morpheus_network::protocol::uefi::bindings::BootServices;
+        let network_bs_ref = unsafe { &*network_bs };
+        
+        if let Err(e) = unsafe { http_client.initialize(network_bs_ref) } {
+            morpheus_core::logger::log("HTTP client init failed - check if UEFI HTTP protocol available");
+            return match e {
+                NetworkError::ProtocolNotAvailable => 
+                    Err("HTTP protocol not available (enable network in QEMU/check firmware)"),
+                NetworkError::InitializationFailed => 
+                    Err("HTTP initialization failed (network driver issue)"),
+                _ => Err("Failed to initialize HTTP client"),
+            };
         }
+
+        morpheus_core::logger::log("HTTP client initialized successfully");
 
         // Create downloader with ISO config
         let config = DownloadConfig::for_iso();
         let mut downloader = Downloader::with_config(&mut http_client, config);
 
-        // Track bytes for progress
-        let mut total_written = 0usize;
+        // Track bytes for progress using Cell for interior mutability
+        // This allows the progress closure to update without &mut self
+        let progress_bytes = Cell::new(0usize);
+        let progress_total = Cell::new(None::<usize>);
 
         // Download with writer callback
         let result = downloader.download_to_writer(
@@ -598,16 +634,18 @@ impl DistroDownloader {
                     let lba = part_start + sector_offset;
                     uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
                         .map_err(|_| IsoError::IoError)
-                }).map_err(|_| morpheus_network::error::NetworkError::IoError)?;
+                }).map_err(|_| morpheus_network::error::NetworkError::FileError)?;
 
-                total_written += chunk_data.len();
+                // Update local progress tracker
+                progress_bytes.set(progress_bytes.get() + chunk_data.len());
                 Ok(())
             },
-            Some(|downloaded, total| {
-                // Update progress state
-                self.download_state.update_progress(downloaded, total);
-            }),
+            None::<fn(usize, Option<usize>)>,  // Progress callback disabled for now
         );
+
+        // After download, update actual state
+        let final_bytes = progress_bytes.get();
+        self.download_state.update_progress(final_bytes);
 
         match result {
             Ok(bytes) => Ok(bytes),
@@ -618,8 +656,10 @@ impl DistroDownloader {
     /// Show download error and return to result mode
     fn show_download_error(&mut self, screen: &mut Screen, msg: &str) {
         morpheus_core::logger::log(format!("Download error: {}", msg).leak());
-        self.ui_state.show_result(msg);
-        self.download_state.fail(msg);
+        // Leak the message to get 'static lifetime - acceptable for rare error paths
+        let static_msg: &'static str = alloc::string::String::from(msg).leak();
+        self.ui_state.show_result(static_msg);
+        self.download_state.fail(static_msg);
         self.needs_full_redraw = true;
         self.render_full(screen);
     }

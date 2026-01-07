@@ -86,22 +86,25 @@ pub unsafe fn boot_from_iso<B: BlockIo>(
 
     // Determine kernel and initrd paths
     let (kernel_path, initrd_path) = if boot_image.is_ok() {
-        // Standard live ISO layout
-        // Try common paths
+        // Standard live ISO layout - try common paths
+        // Order matters: more specific first
         let kernel_paths = [
+            "/live/vmlinuz",             // Tails, Debian Live
             "/casper/vmlinuz",           // Ubuntu
-            "/live/vmlinuz",             // Debian/Tails
-            "/isolinux/vmlinuz",         // Generic
+            "/isolinux/vmlinuz",         // Generic syslinux
             "/boot/vmlinuz",             // Alpine
+            "/images/pxeboot/vmlinuz",   // Fedora
             "/boot/x86_64/loader/linux", // openSUSE
         ];
         
         let initrd_paths = [
-            "/casper/initrd",
-            "/live/initrd.img",
-            "/isolinux/initrd.img",
-            "/boot/initramfs",
-            "/boot/x86_64/loader/initrd",
+            "/live/initrd.img",          // Tails, Debian Live  
+            "/casper/initrd",            // Ubuntu (no extension)
+            "/casper/initrd.lz",         // Ubuntu compressed
+            "/isolinux/initrd.img",      // Generic syslinux
+            "/boot/initramfs",           // Alpine
+            "/images/pxeboot/initrd.img", // Fedora
+            "/boot/x86_64/loader/initrd", // openSUSE
         ];
 
         let mut found_kernel = None;

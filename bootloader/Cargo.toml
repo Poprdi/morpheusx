@@ -9,6 +9,7 @@ license.workspace = true
 iso9660 = { workspace = true }
 morpheus-core = { workspace = true }
 morpheus-persistent = { workspace = true }
+morpheus-network = { workspace = true }
 gpt_disk_io = { version = "0.16", default-features = false }
 gpt_disk_types = { version = "0.16", default-features = false }
 # TODO: Enable when other modules are implemented

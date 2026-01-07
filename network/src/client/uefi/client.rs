@@ -139,14 +139,48 @@ impl UefiHttpClient {
         })
     }
 
-    /// Initialize the client with UEFI protocols.
+    /// Initialize the client directly from UEFI BootServices pointer.
+    ///
+    /// This is the simplest initialization path for bootloader integration.
+    /// Locates HTTP protocols via BootServices and configures the client.
+    ///
+    /// # Arguments
+    ///
+    /// * `boot_services` - Pointer to UEFI Boot Services table
+    ///
+    /// # Safety
+    ///
+    /// - `boot_services` must be a valid pointer to UEFI Boot Services.
+    /// - Must be called before `ExitBootServices()`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let bs = unsafe { &*system_table.boot_services };
+    /// let mut client = UefiHttpClient::new()?;
+    /// unsafe { client.initialize(bs)?; }
+    /// ```
+    #[cfg(target_os = "uefi")]
+    pub unsafe fn initialize(
+        &mut self,
+        boot_services: &crate::protocol::uefi::bindings::BootServices,
+    ) -> Result<()> {
+        self.protocol_manager.initialize_from_boot_services(boot_services as *const _)?;
+        self.initialized = true;
+        Ok(())
+    }
+
+    /// Initialize the client with UEFI protocols via closures.
+    ///
+    /// This is the original initialization path using callback closures.
+    /// For most cases, prefer `initialize()` with direct BootServices pointer.
     ///
     /// # Safety
     ///
     /// This method interacts with UEFI boot services.
     /// Must be called before making requests.
     #[cfg(target_os = "uefi")]
-    pub unsafe fn initialize<F, G>(
+    pub unsafe fn initialize_with_closures<F, G>(
         &mut self,
         locate_protocol: F,
         open_protocol: G,
