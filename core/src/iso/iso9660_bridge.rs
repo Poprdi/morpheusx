@@ -183,6 +183,17 @@ impl<'a, B: BlockIo> ChunkedIso<'a, B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::fmt;
+
+    // Mock error type that implements Display
+    #[derive(Debug)]
+    struct MockError;
+
+    impl fmt::Display for MockError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "MockError")
+        }
+    }
 
     // Mock BlockIo for testing
     struct MockBlockIo {
@@ -190,7 +201,7 @@ mod tests {
     }
 
     impl BlockIo for MockBlockIo {
-        type Error = ();
+        type Error = MockError;
 
         fn block_size(&self) -> gpt_disk_types::BlockSize {
             gpt_disk_types::BlockSize::new(512).unwrap()

@@ -223,7 +223,7 @@ impl Default for DownloadState {
 /// UI mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
-    /// Browsing distro list
+    /// Browsing distro list for download
     Browse,
     /// Showing confirmation dialog
     Confirm,
@@ -231,6 +231,12 @@ pub enum UiMode {
     Downloading,
     /// Showing result (success/error)
     Result,
+    /// Managing downloaded ISOs
+    Manage,
+    /// Confirm delete ISO
+    ConfirmDelete,
+    /// Confirm boot ISO
+    ConfirmBoot,
 }
 
 impl UiMode {
@@ -241,7 +247,15 @@ impl UiMode {
             Self::Confirm => "Confirm",
             Self::Downloading => "Downloading",
             Self::Result => "Result",
+            Self::Manage => "Manage",
+            Self::ConfirmDelete => "Confirm Delete",
+            Self::ConfirmBoot => "Confirm Boot",
         }
+    }
+    
+    /// Check if in management submenu
+    pub const fn is_manage_related(&self) -> bool {
+        matches!(self, Self::Manage | Self::ConfirmDelete | Self::ConfirmBoot)
     }
 }
 
@@ -258,6 +272,10 @@ pub struct UiState {
     pub mode: UiMode,
     /// Status message to display
     pub status_message: Option<&'static str>,
+    /// Selected ISO index in manage view
+    pub selected_iso: usize,
+    /// Total ISO count (cached from storage)
+    pub iso_count: usize,
 }
 
 impl UiState {
@@ -273,6 +291,8 @@ impl UiState {
             scroll_offset: 0,
             mode: UiMode::Browse,
             status_message: None,
+            selected_iso: 0,
+            iso_count: 0,
         }
     }
 
@@ -376,6 +396,67 @@ impl UiState {
     /// Check if downloading
     pub fn is_downloading(&self) -> bool {
         matches!(self.mode, UiMode::Downloading)
+    }
+
+    // --- ISO Management ---
+
+    /// Switch to ISO management view
+    pub fn show_manage(&mut self) {
+        morpheus_core::logger::log("UiState::show_manage()");
+        self.mode = UiMode::Manage;
+        self.selected_iso = 0;
+    }
+
+    /// Return to browse from manage
+    pub fn return_from_manage(&mut self) {
+        morpheus_core::logger::log("UiState::return_from_manage()");
+        self.mode = UiMode::Browse;
+    }
+
+    /// Update ISO count (call after storage changes)
+    pub fn update_iso_count(&mut self, count: usize) {
+        self.iso_count = count;
+        if self.selected_iso >= count && count > 0 {
+            self.selected_iso = count - 1;
+        }
+    }
+
+    /// Move to next ISO in manage list
+    pub fn next_iso(&mut self) {
+        if self.iso_count > 0 && self.selected_iso + 1 < self.iso_count {
+            self.selected_iso += 1;
+        }
+    }
+
+    /// Move to previous ISO in manage list
+    pub fn prev_iso(&mut self) {
+        if self.selected_iso > 0 {
+            self.selected_iso -= 1;
+        }
+    }
+
+    /// Show confirm delete dialog
+    pub fn show_confirm_delete(&mut self) {
+        if self.iso_count > 0 {
+            self.mode = UiMode::ConfirmDelete;
+        }
+    }
+
+    /// Show confirm boot dialog
+    pub fn show_confirm_boot(&mut self) {
+        if self.iso_count > 0 {
+            self.mode = UiMode::ConfirmBoot;
+        }
+    }
+
+    /// Cancel confirmation and return to manage
+    pub fn cancel_confirm(&mut self) {
+        self.mode = UiMode::Manage;
+    }
+
+    /// Check if in manage mode
+    pub fn is_managing(&self) -> bool {
+        self.mode.is_manage_related()
     }
 }
 
