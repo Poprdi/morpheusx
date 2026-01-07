@@ -32,3 +32,4 @@ crates.io
 .cargo/credentials*
 .env
 .env.local
+/cavealloc

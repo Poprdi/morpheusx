@@ -25,24 +25,22 @@
 //!                              │
 //!                              ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                    HAL Implementation                       │
-//! │  (UefiHal or BareHal - DMA memory, address translation)     │
+//! │                    StaticHal (dma-pool)                     │
+//! │  (Firmware-agnostic DMA memory, address translation)        │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
-//!
-//! # Features
-//!
-//! - `uefi`: Use UEFI Boot Services for memory allocation
-//! - `bare`: Use pre-allocated static memory pool
 //!
 //! # Usage
 //!
 //! ```ignore
 //! use morpheus_network::device::virtio::VirtioNetDevice;
-//! use morpheus_network::device::hal::BareHal;
+//! use morpheus_network::device::hal::StaticHal;
+//!
+//! // Initialize HAL (once at boot)
+//! StaticHal::init();
 //!
 //! // Create from PCI transport
-//! let device = VirtioNetDevice::<BareHal>::from_pci(pci_root, device_fn)?;
+//! let device = VirtioNetDevice::<StaticHal, _>::new(transport)?;
 //!
 //! // Use with smoltcp via DeviceAdapter
 //! let adapter = DeviceAdapter::new(device);

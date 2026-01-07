@@ -7,16 +7,20 @@
 //!
 //! - [`DeviceAdapter`] - Adapts `NetworkDevice` to smoltcp's `Device` trait
 //! - [`NetInterface`] - Full IP stack with TCP sockets and DHCP
-//! - [`NetworkStack`] - Legacy minimal holder (use NetInterface instead)
+//! - [`NetworkStack`] - High-level convenience wrapper for HTTP client
 //!
 //! # Usage
 //!
 //! ```ignore
 //! use morpheus_network::stack::{NetInterface, NetConfig};
 //! use morpheus_network::device::virtio::VirtioNetDevice;
+//! use morpheus_network::device::hal::StaticHal;
+//!
+//! // Initialize HAL
+//! StaticHal::init();
 //!
 //! // Create device
-//! let device = VirtioNetDevice::new(transport)?;
+//! let device = VirtioNetDevice::<StaticHal, _>::new(transport)?;
 //!
 //! // Create interface with DHCP
 //! let mut iface = NetInterface::new(device, NetConfig::dhcp());
@@ -40,9 +44,7 @@ use smoltcp::time::Instant;
 use core::marker::PhantomData;
 
 pub use interface::{NetInterface, NetConfig, NetState, MAX_TCP_SOCKETS};
-#[cfg(feature = "uefi")]
-pub use setup::{NetworkStack as UefiNetworkStack, init_virtio_network, init_qemu_network};
-#[cfg(feature = "uefi")]
+pub use setup::{NetworkStack, init_virtio_network, init_qemu_network, EcamConfigAccess};
 pub use crate::device::pci::ecam_bases;
 
 const MTU: usize = 1536;
