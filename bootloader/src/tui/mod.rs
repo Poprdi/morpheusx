@@ -4,6 +4,7 @@ pub mod distro_downloader;
 pub mod distro_launcher;
 pub mod input;
 pub mod installer_menu;
+pub mod iso_manager;
 pub mod logo;
 pub mod main_menu;
 pub mod rain;

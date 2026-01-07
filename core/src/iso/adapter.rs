@@ -264,6 +264,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iso::chunk::MAX_CHUNKS;
 
     fn make_test_context() -> IsoReadContext {
         let mut ctx = IsoReadContext {

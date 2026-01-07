@@ -9,7 +9,16 @@ pub const EFI_DARKGREEN: usize = 0x02; // Dim green for background rain
 pub const EFI_GREEN: usize = 0x02;
 pub const EFI_CYAN: usize = 0x03; // Alternative dim color
 pub const EFI_RED: usize = 0x04; // For errors
+pub const EFI_MAGENTA: usize = 0x05;
+pub const EFI_BROWN: usize = 0x06;
+pub const EFI_LIGHTGRAY: usize = 0x07;
+pub const EFI_DARKGRAY: usize = 0x08;
+pub const EFI_LIGHTBLUE: usize = 0x09;
 pub const EFI_LIGHTGREEN: usize = 0x0A;
+pub const EFI_LIGHTCYAN: usize = 0x0B;
+pub const EFI_LIGHTRED: usize = 0x0C;
+pub const EFI_LIGHTMAGENTA: usize = 0x0D;
+pub const EFI_YELLOW: usize = 0x0E;
 pub const EFI_WHITE: usize = 0x0F;
 
 fn str_to_ucs2(s: &str, buf: &mut [u16]) {
@@ -230,5 +239,25 @@ impl Screen {
                 self.put_str_at(x_offset, y, line, fg, bg);
             }
         }
+    }
+
+    // Alias methods for compatibility with different naming conventions
+
+    /// Alias for set_color
+    #[inline]
+    pub fn set_colors(&mut self, fg: usize, bg: usize) {
+        self.set_color(fg, bg);
+    }
+
+    /// Alias for put_str
+    #[inline]
+    pub fn print(&mut self, s: &str) {
+        self.put_str(s);
+    }
+
+    /// Alias for put_char
+    #[inline]
+    pub fn print_char(&mut self, ch: char) {
+        self.put_char(ch);
     }
 }
