@@ -946,7 +946,7 @@ impl DistroDownloader {
         log_y += 1;
         
         // Reset TX error counter before starting
-        morpheus_network::stack::reset_tx_error_count();
+        morpheus_network::stack::reset_counters();
         
         screen.put_str_at(7, log_y, "Creating NativeHttpClient...", EFI_YELLOW, EFI_BLACK);
         let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
@@ -971,10 +971,14 @@ impl DistroDownloader {
         screen.put_str_at(7, log_y, &format!("Poll returned in {}ms     ", poll_elapsed), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
-        // Check if TX had any errors
+        // Check counters
+        let tx_pkts = morpheus_network::stack::tx_packet_count();
+        let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
+        let rx_pkts = morpheus_network::stack::rx_packet_count();
         let tx_errors = morpheus_network::stack::tx_error_count();
-        screen.put_str_at(7, log_y, &format!("TX errors: {}             ", tx_errors), 
-            if tx_errors > 0 { EFI_RED } else { EFI_LIGHTGREEN }, EFI_BLACK);
+        screen.put_str_at(7, log_y, &format!(
+            "TX:{} DHCP:{} RX:{} ERR:{}", tx_pkts, dhcp_pkts, rx_pkts, tx_errors
+        ), if tx_errors > 0 || rx_pkts == 0 { EFI_YELLOW } else { EFI_LIGHTGREEN }, EFI_BLACK);
         log_y += 1;
         
         // Now do the DHCP loop
@@ -988,20 +992,27 @@ impl DistroDownloader {
             
             let now = get_time_ms();
             if now - last_update > 1000 {
-                // Update every second with TX error count
+                // Update every second with packet counters
                 let elapsed = (now - start_time) / 1000;
+                let tx_pkts = morpheus_network::stack::tx_packet_count();
+                let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
+                let rx_pkts = morpheus_network::stack::rx_packet_count();
                 let tx_errs = morpheus_network::stack::tx_error_count();
                 screen.put_str_at(7, log_y, &format!(
-                    "DHCP: {}s, {} polls, {} TX errs", elapsed, poll_count, tx_errs
-                ), if tx_errs > 0 { EFI_RED } else { EFI_YELLOW }, EFI_BLACK);
+                    "{}s TX:{} DHCP:{} RX:{} ERR:{}", elapsed, tx_pkts, dhcp_pkts, rx_pkts, tx_errs
+                ), if rx_pkts > 0 { EFI_LIGHTGREEN } else { EFI_YELLOW }, EFI_BLACK);
                 last_update = now;
             }
             
             if now - start_time > 30_000 {
                 log_y += 1;
-                let final_tx_errs = morpheus_network::stack::tx_error_count();
+                let tx_pkts = morpheus_network::stack::tx_packet_count();
+                let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
+                let rx_pkts = morpheus_network::stack::rx_packet_count();
+                let tx_errs = morpheus_network::stack::tx_error_count();
                 screen.put_str_at(5, log_y, &format!(
-                    "DHCP timeout - {} TX errors", final_tx_errs
+                    "DHCP timeout - TX:{} DHCP:{} RX:{} ERR:{}",
+                    tx_pkts, dhcp_pkts, rx_pkts, tx_errs
                 ), EFI_RED, EFI_BLACK);
                 log_y += 1;
                 
@@ -1014,10 +1025,21 @@ impl DistroDownloader {
         }
         log_y += 1;
         
+        // Show IP configuration after DHCP
         if let Some(ip) = client.ip_address() {
             screen.put_str_at(5, log_y, &format!("IP: {}", ip), EFI_LIGHTGREEN, EFI_BLACK);
             log_y += 1;
+        } else {
+            screen.put_str_at(5, log_y, "WARNING: No IP assigned!", EFI_RED, EFI_BLACK);
+            log_y += 1;
         }
+        
+        // Show final packet counts
+        let final_tx = morpheus_network::stack::tx_packet_count();
+        let final_rx = morpheus_network::stack::rx_packet_count();
+        screen.put_str_at(7, log_y, &format!("Final: TX:{} RX:{}", final_tx, final_rx), EFI_DARKGRAY, EFI_BLACK);
+        log_y += 1;
+        
         screen.put_str_at(5, log_y, "Network ready!", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
 

@@ -74,6 +74,9 @@ impl<D: NetworkDevice> Device for DeviceAdapter<D> {
         let mut temp_buf = [0u8; MTU];
         match self.inner.receive(&mut temp_buf) {
             Ok(Some(len)) if len > 0 => {
+                // Track received packets
+                RX_PACKET_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                
                 // We have a packet! Create tokens with the data
                 let device_ptr: *mut D = &mut self.inner;
                 let mut token = AdapterRxToken {
@@ -139,6 +142,24 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
         let mut buffer = [0u8; MTU];
         let result = f(&mut buffer[..len]);
         
+        // Track packets sent
+        TX_PACKET_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        
+        // Check if this is a DHCP packet (UDP port 67/68)
+        if len >= 42 {
+            // Check if Ethernet + IP + UDP to port 67 (DHCP server)
+            let ethertype = u16::from_be_bytes([buffer[12], buffer[13]]);
+            if ethertype == 0x0800 {  // IPv4
+                let protocol = buffer[23];  // IP protocol field
+                if protocol == 17 {  // UDP
+                    let dst_port = u16::from_be_bytes([buffer[36], buffer[37]]);
+                    if dst_port == 67 {
+                        DHCP_DISCOVER_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        
         // Attempt transmit and capture error for debugging
         // We still have to return `result` regardless of TX success
         // because that's what smoltcp expects
@@ -146,7 +167,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
             Ok(()) => {
                 // TX succeeded
             }
-            Err(e) => {
+            Err(_e) => {
                 // TX failed - log to static flag for debugging
                 // In a real implementation, we'd have a proper error channel
                 TX_ERROR_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
@@ -159,6 +180,9 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
 
 // Global counter for TX errors (debugging)
 static TX_ERROR_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static TX_PACKET_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static DHCP_DISCOVER_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static RX_PACKET_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Get the number of TX errors that have occurred.
 pub fn tx_error_count() -> u32 {
@@ -168,4 +192,27 @@ pub fn tx_error_count() -> u32 {
 /// Reset the TX error counter.
 pub fn reset_tx_error_count() {
     TX_ERROR_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Get the number of packets transmitted.
+pub fn tx_packet_count() -> u32 {
+    TX_PACKET_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Get the number of DHCP discover packets sent.
+pub fn dhcp_discover_count() -> u32 {
+    DHCP_DISCOVER_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Get the number of packets received.
+pub fn rx_packet_count() -> u32 {
+    RX_PACKET_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset all counters.
+pub fn reset_counters() {
+    TX_ERROR_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+    TX_PACKET_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+    DHCP_DISCOVER_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+    RX_PACKET_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
 }
