@@ -36,12 +36,12 @@ use virtio_drivers::transport::pci::bus::{ConfigurationAccess, DeviceFunction, P
 /// Network stack ready to use for HTTP requests.
 ///
 /// Contains all the components needed for native bare-metal networking.
-pub struct NetworkStack {
+pub struct VirtioNetworkStack {
     /// The HTTP client (owns interface which owns device)
     client: NativeHttpClient<VirtioNetDevice<StaticHal, PciTransport>>,
 }
 
-impl NetworkStack {
+impl VirtioNetworkStack {
     /// Get a mutable reference to the HTTP client.
     pub fn client(&mut self) -> &mut NativeHttpClient<VirtioNetDevice<StaticHal, PciTransport>> {
         &mut self.client
@@ -120,11 +120,11 @@ impl ConfigurationAccess for EcamConfigAccess {
 ///
 /// # Returns
 ///
-/// A fully initialized `NetworkStack` ready for HTTP requests.
+/// A fully initialized `VirtioNetworkStack` ready for HTTP requests.
 pub unsafe fn init_virtio_network(
     ecam_base: usize,
     get_time_ms: fn() -> u64,
-) -> Result<NetworkStack> {
+) -> Result<VirtioNetworkStack> {
     // Step 1: Scan PCI for VirtIO network device using our scanner
     let ecam = EcamAccess::new(ecam_base as *mut u8);
     let scanner = PciScanner::new(ecam);
@@ -158,7 +158,7 @@ pub unsafe fn init_virtio_network(
     // Step 4: Create HTTP client with DHCP
     let client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
 
-    Ok(NetworkStack { client })
+    Ok(VirtioNetworkStack { client })
 }
 
 /// Quick initialization for QEMU Q35 machine type.
@@ -168,7 +168,7 @@ pub unsafe fn init_virtio_network(
 /// # Safety
 ///
 /// Same requirements as `init_virtio_network`.
-pub unsafe fn init_qemu_network(get_time_ms: fn() -> u64) -> Result<NetworkStack> {
+pub unsafe fn init_qemu_network(get_time_ms: fn() -> u64) -> Result<VirtioNetworkStack> {
     init_virtio_network(crate::device::pci::ecam_bases::QEMU_Q35, get_time_ms)
 }
 
