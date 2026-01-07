@@ -202,7 +202,29 @@ impl ConfigAccess for EcamAccess {
 unsafe impl Send for EcamAccess {}
 unsafe impl Sync for EcamAccess {}
 
+// =============================================================================
+// External assembly functions for PCI I/O (compiled from pci_io.S)
+// Using standalone assembly avoids compiler optimization issues with inline asm
+// =============================================================================
+#[cfg(target_arch = "x86_64")]
+extern "C" {
+    /// Read 32-bit value from PCI configuration space.
+    /// Args: bus, device, function, offset (must be 4-byte aligned)
+    fn pci_config_read32(bus: u64, device: u64, function: u64, offset: u64) -> u32;
+
+    /// Write 32-bit value to PCI configuration space.
+    /// Args: bus, device, function, offset, value
+    fn pci_config_write32(bus: u64, device: u64, function: u64, offset: u64, value: u32);
+
+    /// Test if PCI I/O ports are accessible.
+    /// Returns the value read back from 0xCF8 (should have bit 31 set).
+    fn pci_io_test() -> u32;
+}
+
 /// Legacy I/O port PCI configuration access (0xCF8/0xCFC).
+/// 
+/// Uses standalone assembly (pci_io.S) for reliable I/O port access
+/// without compiler optimization interference.
 #[cfg(target_arch = "x86_64")]
 pub struct LegacyIoAccess;
 
@@ -213,13 +235,11 @@ impl LegacyIoAccess {
         Self
     }
 
-    /// Build the CONFIG_ADDRESS value.
-    fn config_address(device: DeviceFunction, offset: u8) -> u32 {
-        0x8000_0000
-            | ((device.bus as u32) << 16)
-            | ((device.device as u32) << 11)
-            | ((device.function as u32) << 8)
-            | ((offset as u32) & 0xFC)
+    /// Test if PCI I/O ports are working.
+    /// Returns true if the enable bit (bit 31) is readable after write.
+    pub fn test_io_ports() -> bool {
+        let result = unsafe { pci_io_test() };
+        (result & 0x8000_0000) != 0
     }
 }
 
@@ -233,55 +253,26 @@ impl Default for LegacyIoAccess {
 #[cfg(target_arch = "x86_64")]
 impl ConfigAccess for LegacyIoAccess {
     unsafe fn read32(&self, device: DeviceFunction, offset: u8) -> u32 {
-        use core::arch::asm;
-
-        let address = Self::config_address(device, offset);
-
-        // SAFETY: Port I/O is safe in UEFI/bare metal context
-        unsafe {
-            // Write to CONFIG_ADDRESS (0xCF8)
-            asm!(
-                "out dx, eax",
-                in("dx") 0xCF8u16,
-                in("eax") address,
-                options(nomem, nostack)
-            );
-
-            // Read from CONFIG_DATA (0xCFC)
-            let value: u32;
-            asm!(
-                "in eax, dx",
-                in("dx") 0xCFCu16,
-                out("eax") value,
-                options(nomem, nostack)
-            );
-            value
-        }
+        // Use standalone assembly for reliable I/O port access
+        // The external function handles all the port I/O atomically
+        // without any compiler interference
+        pci_config_read32(
+            device.bus as u64,
+            device.device as u64,
+            device.function as u64,
+            offset as u64,
+        )
     }
 
     unsafe fn write32(&self, device: DeviceFunction, offset: u8, value: u32) {
-        use core::arch::asm;
-
-        let address = Self::config_address(device, offset);
-
-        // SAFETY: Port I/O is safe in UEFI/bare metal context
-        unsafe {
-            // Write to CONFIG_ADDRESS (0xCF8)
-            asm!(
-                "out dx, eax",
-                in("dx") 0xCF8u16,
-                in("eax") address,
-                options(nomem, nostack)
-            );
-
-            // Write to CONFIG_DATA (0xCFC)
-            asm!(
-                "out dx, eax",
-                in("dx") 0xCFCu16,
-                in("eax") value,
-                options(nomem, nostack)
-            );
-        }
+        // Use standalone assembly for reliable I/O port access
+        pci_config_write32(
+            device.bus as u64,
+            device.device as u64,
+            device.function as u64,
+            offset as u64,
+            value,
+        )
     }
 }
 
@@ -405,6 +396,105 @@ pub mod ecam_bases {
 
     /// Intel platform (typical).
     pub const INTEL_TYPICAL: usize = 0xE000_0000;
+}
+
+/// Diagnostic utilities for PCI debugging.
+#[cfg(target_arch = "x86_64")]
+pub mod diagnostics {
+    use super::*;
+
+    /// Test I/O port access using standalone assembly.
+    /// Returns (cf8_readback, host_bridge_id).
+    pub fn raw_io_test() -> (u32, u32) {
+        // Use our external assembly test function
+        let cf8_readback = unsafe { pci_io_test() };
+        
+        // Also read host bridge
+        let legacy = LegacyIoAccess::new();
+        let host_id = unsafe { legacy.read32(DeviceFunction::new(0, 0, 0), 0x00) };
+        
+        (cf8_readback, host_id)
+    }
+
+    /// Read the host bridge (bus 0, dev 0, func 0) vendor/device ID.
+    /// This should ALWAYS return a valid device (the host bridge) if PCI works.
+    /// Returns (vendor_id, device_id).
+    pub fn read_host_bridge() -> (u16, u16) {
+        let legacy = LegacyIoAccess::new();
+        let df = DeviceFunction::new(0, 0, 0);
+        let id = unsafe { legacy.read32(df, 0x00) };
+        let vendor = (id & 0xFFFF) as u16;
+        let device = ((id >> 16) & 0xFFFF) as u16;
+        (vendor, device)
+    }
+
+    /// Scan specific device locations where QEMU typically places VirtIO.
+    /// Returns raw vendor/device values (0xFFFF = no device).
+    pub fn probe_common_virtio_locations() -> Vec<(DeviceFunction, u16, u16)> {
+        let legacy = LegacyIoAccess::new();
+        let mut results = Vec::new();
+
+        // QEMU typically places VirtIO devices at these locations
+        let locations = [
+            DeviceFunction::new(0, 1, 0),
+            DeviceFunction::new(0, 2, 0),
+            DeviceFunction::new(0, 3, 0),
+            DeviceFunction::new(0, 4, 0),
+            DeviceFunction::new(0, 5, 0),
+            DeviceFunction::new(0, 6, 0),
+            DeviceFunction::new(0, 31, 0), // ISA bridge on i440FX
+        ];
+
+        for loc in locations {
+            let id = unsafe { legacy.read32(loc, 0x00) };
+            let vendor = (id & 0xFFFF) as u16;
+            let device = ((id >> 16) & 0xFFFF) as u16;
+            results.push((loc, vendor, device));
+        }
+
+        results
+    }
+
+    /// Full diagnostic: returns structured info about PCI state.
+    pub struct PciDiagnostic {
+        /// Whether 0xCF8 read-back matches what we wrote
+        pub io_port_works: bool,
+        /// Raw value read back from 0xCF8
+        pub cf8_readback: u32,
+        /// Host bridge vendor ID (should be 0x8086 for Intel/QEMU)
+        pub host_bridge_vendor: u16,
+        /// Host bridge device ID
+        pub host_bridge_device: u16,
+        /// All devices found on bus 0
+        pub bus0_device_count: usize,
+        /// Devices at common VirtIO locations
+        pub virtio_locations: Vec<(DeviceFunction, u16, u16)>,
+    }
+
+    /// Run full PCI diagnostics.
+    pub fn run_diagnostics() -> PciDiagnostic {
+        let (cf8_readback, _data) = raw_io_test();
+
+        // Check if readback has enable bit set (bit 31)
+        let io_port_works = (cf8_readback & 0x8000_0000) != 0;
+
+        let (host_vendor, host_device) = read_host_bridge();
+
+        let legacy = LegacyIoAccess::new();
+        let scanner = PciScanner::new(legacy);
+        let bus0_devices = scanner.scan_bus(0);
+
+        let virtio_locs = probe_common_virtio_locations();
+
+        PciDiagnostic {
+            io_port_works,
+            cf8_readback,
+            host_bridge_vendor: host_vendor,
+            host_bridge_device: host_device,
+            bus0_device_count: bus0_devices.len(),
+            virtio_locations: virtio_locs,
+        }
+    }
 }
 
 #[cfg(test)]

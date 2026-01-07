@@ -195,6 +195,7 @@ dependencies = [
  "morpheus-core",
  "morpheus-network",
  "morpheus-persistent",
+ "virtio-drivers",
 ]
 
 [[package]]

@@ -583,7 +583,9 @@ impl DistroDownloader {
         }
     }
 
-    /// Download URL and write to chunks via ChunkWriter
+    /// Download URL and write to chunks via ChunkWriter using NATIVE network stack.
+    /// This uses our bare-metal TCP/IP stack with VirtIO, running DMA from code caves
+    /// in our PE binary - completely firmware-agnostic.
     fn download_with_chunk_writer(
         &mut self,
         url: &str,
@@ -591,77 +593,331 @@ impl DistroDownloader {
         block_io_protocol: *mut BlockIoProtocol,
         screen: &mut Screen,
     ) -> Result<usize, &'static str> {
-        use morpheus_network::client::uefi::{UefiHttpClient, Downloader, DownloadConfig};
-        use morpheus_network::error::NetworkError;
+        use dma_pool::DmaPool;
+        use morpheus_network::device::hal::StaticHal;
+        use morpheus_network::device::pci::{EcamAccess, PciScanner, ecam_bases};
+        use morpheus_network::device::virtio::VirtioNetDevice;
+        use morpheus_network::device::NetworkDevice;
+        use morpheus_network::client::NativeHttpClient;
+        use morpheus_network::stack::NetConfig;
+        use virtio_drivers::transport::pci::PciTransport;
+        use virtio_drivers::transport::pci::bus::{ConfigurationAccess, DeviceFunction, PciRoot};
         use gpt_disk_io::BlockIo;
         use core::cell::Cell;
+        use crate::uefi::file_system::get_loaded_image;
 
-        // Initialize HTTP client
-        let mut http_client = match UefiHttpClient::new() {
-            Ok(c) => c,
-            Err(_) => return Err("Failed to create HTTP client"),
-        };
+        screen.clear();
+        screen.put_str_at(5, 2, "=== Native Network Download ===", EFI_LIGHTGREEN, EFI_BLACK);
+        
+        let mut log_y = 4;
 
-        // Initialize with boot services
-        let bs = unsafe { &*self.boot_services };
-        
-        // Cast bootloader's BootServices to network crate's BootServices
-        // They have compatible layouts for the fields we use
-        let network_bs = bs as *const BootServices as *const morpheus_network::protocol::uefi::bindings::BootServices;
-        let network_bs_ref = unsafe { &*network_bs };
-        
-        if let Err(e) = unsafe { http_client.initialize(network_bs_ref) } {
-            morpheus_core::logger::log("HTTP client init failed - check if UEFI HTTP protocol available");
-            return match e {
-                NetworkError::ProtocolNotAvailable => 
-                    Err("HTTP protocol not available (enable network in QEMU/check firmware)"),
-                NetworkError::InitializationFailed => 
-                    Err("HTTP initialization failed (network driver issue)"),
-                _ => Err("Failed to initialize HTTP client"),
-            };
+        // Time function for network stack
+        fn get_time_ms() -> u64 {
+            static mut COUNTER: u64 = 0;
+            unsafe {
+                COUNTER += 100;
+                COUNTER
+            }
         }
 
-        morpheus_core::logger::log("HTTP client initialized successfully");
+        // Step 1: Initialize DMA pool from code caves in our PE binary
+        screen.put_str_at(5, log_y, "Initializing DMA pool...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        let (image_base, image_size) = unsafe {
+            let bs = &*self.boot_services;
+            match get_loaded_image(bs, self.image_handle) {
+                Ok(loaded_image) => {
+                    let base = (*loaded_image).image_base as usize;
+                    let size = (*loaded_image).image_size as usize;
+                    screen.put_str_at(7, log_y, &format!("PE: base={:#x} size={}KB", base, size/1024), EFI_YELLOW, EFI_BLACK);
+                    log_y += 1;
+                    (base, size)
+                }
+                Err(_) => {
+                    screen.put_str_at(7, log_y, "Failed to get PE image, using static pool", EFI_YELLOW, EFI_BLACK);
+                    log_y += 1;
+                    (0, 0)
+                }
+            }
+        };
 
-        // Create downloader with ISO config
-        let config = DownloadConfig::for_iso();
-        let mut downloader = Downloader::with_config(&mut http_client, config);
+        // Try cave-based init, fall back to static if no caves found
+        if image_base != 0 && image_size > 0 {
+            let image_end = image_base + image_size;
+            unsafe {
+                match DmaPool::init_from_caves(image_base, image_end) {
+                    Ok(_) => {
+                        screen.put_str_at(7, log_y, &format!("DMA caves: {} bytes", DmaPool::free_space()), EFI_YELLOW, EFI_BLACK);
+                        log_y += 1;
+                    }
+                    Err(_) => {
+                        screen.put_str_at(7, log_y, "No caves found, using static pool", EFI_YELLOW, EFI_BLACK);
+                        log_y += 1;
+                        DmaPool::init_static();
+                    }
+                }
+            }
+        } else {
+            DmaPool::init_static();
+        }
 
-        // Track bytes for progress using Cell for interior mutability
-        // This allows the progress closure to update without &mut self
+        // Step 2: Initialize HAL
+        screen.put_str_at(5, log_y, "Initializing HAL...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        StaticHal::init();
+
+        // Step 3: Run PCI diagnostics first to understand the environment
+        screen.put_str_at(5, log_y, "Running PCI diagnostics...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+
+        use morpheus_network::device::pci::{LegacyIoAccess, diagnostics};
+        
+        // Run comprehensive diagnostics
+        let diag = diagnostics::run_diagnostics();
+        
+        // Display diagnostic results
+        let io_status = if diag.io_port_works { "OK" } else { "FAIL" };
+        screen.put_str_at(7, log_y, &format!(
+            "I/O ports: {} (0xCF8={:#010x})", io_status, diag.cf8_readback
+        ), if diag.io_port_works { EFI_YELLOW } else { EFI_RED }, EFI_BLACK);
+        log_y += 1;
+        
+        screen.put_str_at(7, log_y, &format!(
+            "Host bridge: {:04x}:{:04x}", diag.host_bridge_vendor, diag.host_bridge_device
+        ), EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+
+        // Show what's at common VirtIO locations
+        screen.put_str_at(5, log_y, "Probing common device slots...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        for (loc, vendor, device) in diag.virtio_locations.iter().take(6) {
+            let status = if *vendor == 0xFFFF { 
+                "empty" 
+            } else if *vendor == 0x1AF4 { 
+                "VirtIO!" 
+            } else { 
+                "device" 
+            };
+            screen.put_str_at(7, log_y, &format!(
+                "  {:02x}:{:02x}.{}: {:04x}:{:04x} ({})",
+                loc.bus, loc.device, loc.function, vendor, device, status
+            ), if *vendor == 0x1AF4 { EFI_LIGHTGREEN } else { EFI_DARKGRAY }, EFI_BLACK);
+            log_y += 1;
+        }
+
+        // Step 4: Full PCI scan
+        screen.put_str_at(5, log_y, "Scanning PCI bus 0...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        let legacy_io = LegacyIoAccess::new();
+        let scanner = PciScanner::new(legacy_io);
+        
+        // Enumerate all devices on bus 0
+        let all_devices = scanner.scan_bus(0);
+        screen.put_str_at(7, log_y, &format!("Found: {} devices", all_devices.len()), EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+        
+        // Show devices found
+        for dev in all_devices.iter().take(5) {
+            let mark = if dev.vendor_id == 0x1AF4 { "*" } else { " " };
+            screen.put_str_at(7, log_y, &format!(
+                "{}{:02x}:{:02x}.{} {:04x}:{:04x} {:02x}:{:02x}",
+                mark, dev.location.bus, dev.location.device, dev.location.function,
+                dev.vendor_id, dev.device_id, dev.class, dev.subclass
+            ), EFI_DARKGRAY, EFI_BLACK);
+            log_y += 1;
+        }
+        
+        let virtio_devices = scanner.find_virtio_net();
+        
+        if virtio_devices.is_empty() {
+            // Try ECAM fallback
+            screen.put_str_at(5, log_y, "Trying ECAM @ 0xB0000000...", EFI_YELLOW, EFI_BLACK);
+            log_y += 1;
+            
+            let ecam_base = ecam_bases::QEMU_Q35;
+            let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
+            let ecam_scanner = PciScanner::new(ecam);
+            let ecam_devices = ecam_scanner.scan_bus(0);
+            
+            screen.put_str_at(7, log_y, &format!("ECAM: {} devices", ecam_devices.len()), EFI_YELLOW, EFI_BLACK);
+            log_y += 1;
+            
+            for dev in ecam_devices.iter().take(5) {
+                let mark = if dev.vendor_id == 0x1AF4 { "*" } else { " " };
+                screen.put_str_at(7, log_y, &format!(
+                    "{}{:02x}:{:02x}.{} {:04x}:{:04x}",
+                    mark, dev.location.bus, dev.location.device, dev.location.function,
+                    dev.vendor_id, dev.device_id
+                ), EFI_DARKGRAY, EFI_BLACK);
+                log_y += 1;
+            }
+            
+            screen.put_str_at(5, log_y + 1, "ERROR: No VirtIO network device found!", EFI_RED, EFI_BLACK);
+            screen.put_str_at(5, log_y + 2, "Press any key to continue...", EFI_YELLOW, EFI_BLACK);
+            // Wait for keypress so user can see diagnostics
+            unsafe {
+                let st = &*self.system_table;
+                if let Some(stdin) = st.con_in.as_ref() {
+                    let _ = stdin.read_key_stroke();
+                }
+            }
+            return Err("No VirtIO network device found on PCI bus");
+        }
+
+        let device_info = virtio_devices[0];
+        screen.put_str_at(5, log_y, &format!(
+            "Found VirtIO @ {:02x}:{:02x}.{}",
+            device_info.location.bus, device_info.location.device, device_info.location.function
+        ), EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+
+        // Step 4: Create PCI transport
+        screen.put_str_at(5, log_y, "Creating PCI transport...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        let device_fn = DeviceFunction {
+            bus: device_info.location.bus,
+            device: device_info.location.device,
+            function: device_info.location.function,
+        };
+
+        // Legacy I/O configuration access for virtio-drivers
+        struct LegacyConfigAccess;
+        impl LegacyConfigAccess {
+            fn config_address(df: DeviceFunction, reg: u8) -> u32 {
+                0x8000_0000
+                    | ((df.bus as u32) << 16)
+                    | ((df.device as u32) << 11)
+                    | ((df.function as u32) << 8)
+                    | ((reg as u32) & 0xFC)
+            }
+        }
+        impl ConfigurationAccess for LegacyConfigAccess {
+            fn read_word(&self, df: DeviceFunction, reg: u8) -> u32 {
+                use core::arch::asm;
+                let address = Self::config_address(df, reg);
+                unsafe {
+                    asm!("out dx, eax", in("dx") 0xCF8u16, in("eax") address, options(nomem, nostack));
+                    let value: u32;
+                    asm!("in eax, dx", in("dx") 0xCFCu16, out("eax") value, options(nomem, nostack));
+                    value
+                }
+            }
+            fn write_word(&mut self, df: DeviceFunction, reg: u8, data: u32) {
+                use core::arch::asm;
+                let address = Self::config_address(df, reg);
+                unsafe {
+                    asm!("out dx, eax", in("dx") 0xCF8u16, in("eax") address, options(nomem, nostack));
+                    asm!("out dx, eax", in("dx") 0xCFCu16, in("eax") data, options(nomem, nostack));
+                }
+            }
+            unsafe fn unsafe_clone(&self) -> Self { Self }
+        }
+
+        let cam = LegacyConfigAccess;
+        let mut pci_root = PciRoot::new(cam);
+        
+        let transport = match PciTransport::new::<StaticHal, LegacyConfigAccess>(&mut pci_root, device_fn) {
+            Ok(t) => t,
+            Err(e) => {
+                screen.put_str_at(5, log_y, &format!("PCI transport failed: {:?}", e), EFI_RED, EFI_BLACK);
+                return Err("Failed to create PCI transport");
+            }
+        };
+
+        // Step 5: Create VirtIO network device
+        screen.put_str_at(5, log_y, "Creating VirtIO device...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        let virtio_device = match VirtioNetDevice::<StaticHal, PciTransport>::new(transport) {
+            Ok(d) => d,
+            Err(e) => {
+                screen.put_str_at(5, log_y, &format!("VirtIO failed: {:?}", e), EFI_RED, EFI_BLACK);
+                return Err("Failed to create VirtIO network device");
+            }
+        };
+        
+        let mac = virtio_device.mac_address();
+        screen.put_str_at(7, log_y, &format!(
+            "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+        ), EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+
+        // Step 6: DHCP
+        screen.put_str_at(5, log_y, "Starting DHCP...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
+        
+        screen.put_str_at(7, log_y, "Waiting for DHCP (30s)...", EFI_YELLOW, EFI_BLACK);
+        if let Err(e) = client.wait_for_network(30_000) {
+            log_y += 1;
+            screen.put_str_at(5, log_y, &format!("DHCP failed: {:?}", e), EFI_RED, EFI_BLACK);
+            return Err("DHCP configuration timeout");
+        }
+        log_y += 1;
+        screen.put_str_at(5, log_y, "Network configured!", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+
+        // Step 7: Download
+        screen.put_str_at(5, log_y, "Starting download...", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        let progress_y = log_y;
         let progress_bytes = Cell::new(0usize);
-        let progress_total = Cell::new(None::<usize>);
 
-        // Download with writer callback
-        let result = downloader.download_to_writer(
-            url,
-            |chunk_data, _offset| {
-                // Write chunk to disk via ChunkWriter
-                // SAFETY: block_io_protocol is valid for the duration of download
-                let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
-                
-                chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
-                    // Write to disk at partition_start + sector_offset
-                    let lba = part_start + sector_offset;
-                    uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
-                        .map_err(|_| IsoError::IoError)
-                }).map_err(|_| morpheus_network::error::NetworkError::FileError)?;
+        let result = client.get_streaming(url, |chunk_data| {
+            let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+            
+            chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
+                let lba = part_start + sector_offset;
+                uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
+                    .map_err(|_| IsoError::IoError)
+            }).map_err(|_| morpheus_network::error::NetworkError::FileError)?;
 
-                // Update local progress tracker
-                progress_bytes.set(progress_bytes.get() + chunk_data.len());
-                Ok(())
-            },
-            None::<fn(usize, Option<usize>)>,  // Progress callback disabled for now
-        );
+            let new_total = progress_bytes.get() + chunk_data.len();
+            progress_bytes.set(new_total);
+            
+            // Update screen every 1MB
+            if new_total % (1024 * 1024) < chunk_data.len() {
+                screen.put_str_at(7, progress_y, &format!(
+                    "Downloaded: {} MB       ",
+                    new_total / (1024 * 1024)
+                ), EFI_YELLOW, EFI_BLACK);
+            }
+            Ok(())
+        });
 
-        // After download, update actual state
         let final_bytes = progress_bytes.get();
         self.download_state.update_progress(final_bytes);
 
         match result {
-            Ok(bytes) => Ok(bytes),
-            Err(_) => Err("Download failed"),
+            Ok(bytes) => {
+                screen.put_str_at(5, progress_y + 1, &format!("Complete: {} bytes", bytes), EFI_LIGHTGREEN, EFI_BLACK);
+                Ok(bytes)
+            }
+            Err(e) => {
+                screen.put_str_at(5, progress_y + 1, &format!("Failed: {:?}", e), EFI_RED, EFI_BLACK);
+                Err("Download failed")
+            }
         }
+    }
+
+    /// Legacy UEFI HTTP download - REMOVED
+    /// Use download_with_chunk_writer which now uses native stack
+    #[allow(dead_code)]
+    fn download_native(
+        &mut self,
+        _url: &str,
+        _chunk_writer: &mut ChunkWriter,
+        _block_io_protocol: *mut BlockIoProtocol,
+        _screen: &mut Screen,
+    ) -> Result<usize, &'static str> {
+        Err("Use download_with_chunk_writer - it now uses native network stack")
     }
 
     /// Show download error and return to result mode
@@ -673,162 +929,6 @@ impl DistroDownloader {
         self.download_state.fail(static_msg);
         self.needs_full_redraw = true;
         self.render_full(screen);
-    }
-
-    /// Download using native VirtIO network stack (for QEMU or real hardware).
-    ///
-    /// This bypasses UEFI HTTP protocol and uses our bare-metal TCP/IP stack
-    /// with the VirtIO network device directly.
-    #[allow(dead_code)]
-    fn download_native(
-        &mut self,
-        url: &str,
-        chunk_writer: &mut ChunkWriter,
-        block_io_protocol: *mut BlockIoProtocol,
-        _screen: &mut Screen,
-    ) -> Result<usize, &'static str> {
-        use morpheus_network::device::hal::uefi::EfiBootServices;
-        use morpheus_network::device::hal::UefiHal;
-        use morpheus_network::device::pci::{EcamAccess, PciScanner, ecam_bases};
-        use gpt_disk_io::BlockIo;
-        use core::cell::Cell;
-
-        morpheus_core::logger::log("=== Starting native network download ===");
-
-        // Get time function for the network stack
-        fn get_time_ms() -> u64 {
-            static mut COUNTER: u64 = 0;
-            unsafe {
-                COUNTER += 100; // Simulate ~100ms per call
-                COUNTER
-            }
-        }
-
-        // Step 1: Initialize UEFI HAL
-        let bs = unsafe { &*self.boot_services };
-        let efi_bs = bs as *const BootServices as *mut EfiBootServices;
-        
-        morpheus_core::logger::log("Initializing UEFI HAL...");
-        unsafe { UefiHal::init(efi_bs) };
-        morpheus_core::logger::log("UEFI HAL initialized");
-
-        // Step 2: Scan PCI for VirtIO network device
-        morpheus_core::logger::log("Scanning PCI bus for VirtIO network device...");
-        let ecam_base = ecam_bases::QEMU_Q35;
-        morpheus_core::logger::log(format!("Using ECAM base: {:#x}", ecam_base).leak());
-        
-        let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
-        let scanner = PciScanner::new(ecam);
-        
-        let virtio_devices = scanner.find_virtio_net();
-        morpheus_core::logger::log(format!("Found {} VirtIO network device(s)", virtio_devices.len()).leak());
-        
-        if virtio_devices.is_empty() {
-            morpheus_core::logger::log("ERROR: No VirtIO network device found!");
-            
-            // Try scanning all network devices for debugging
-            let all_net = scanner.find_network();
-            morpheus_core::logger::log(format!("Total network devices found: {}", all_net.len()).leak());
-            for dev in all_net.iter() {
-                morpheus_core::logger::log(format!(
-                    "  Device: bus={} dev={} func={} vendor={:#x} device={:#x}",
-                    dev.location.bus, dev.location.device, dev.location.function,
-                    dev.vendor_id, dev.device_id
-                ).leak());
-            }
-            
-            return Err("No VirtIO network device found on PCI bus");
-        }
-
-        let device_info = virtio_devices[0];
-        morpheus_core::logger::log(format!(
-            "Using VirtIO device at bus={} dev={} func={}",
-            device_info.location.bus, device_info.location.device, device_info.location.function
-        ).leak());
-
-        // Step 3: Create PCI transport and VirtIO device
-        morpheus_core::logger::log("Creating PCI transport...");
-        
-        use morpheus_network::device::virtio::VirtioNetDevice;
-        use morpheus_network::stack::setup::EcamConfigAccess;
-        use virtio_drivers::transport::pci::PciTransport;
-        use virtio_drivers::transport::pci::bus::{DeviceFunction, PciRoot};
-        
-        let device_fn = DeviceFunction {
-            bus: device_info.location.bus,
-            device: device_info.location.device,
-            function: device_info.location.function,
-        };
-
-        let cam = unsafe { EcamConfigAccess::new(ecam_base) };
-        let mut pci_root = PciRoot::new(cam);
-        
-        let transport = match PciTransport::new::<UefiHal, EcamConfigAccess>(&mut pci_root, device_fn) {
-            Ok(t) => t,
-            Err(e) => {
-                morpheus_core::logger::log(format!("PCI transport failed: {:?}", e).leak());
-                return Err("Failed to create PCI transport");
-            }
-        };
-        morpheus_core::logger::log("PCI transport created");
-
-        // Step 4: Create VirtIO network device
-        morpheus_core::logger::log("Creating VirtIO network device...");
-        let virtio_device = match VirtioNetDevice::<UefiHal, PciTransport>::new(transport) {
-            Ok(d) => d,
-            Err(e) => {
-                morpheus_core::logger::log(format!("VirtIO device creation failed: {:?}", e).leak());
-                return Err("Failed to create VirtIO network device");
-            }
-        };
-        morpheus_core::logger::log("VirtIO network device created");
-
-        // Step 5: Create HTTP client with DHCP
-        use morpheus_network::client::native::NativeHttpClient;
-        use morpheus_network::stack::NetConfig;
-        
-        morpheus_core::logger::log("Creating HTTP client with DHCP...");
-        let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
-        
-        // Wait for DHCP
-        morpheus_core::logger::log("Waiting for DHCP...");
-        if let Err(e) = client.wait_for_network(30_000) {
-            morpheus_core::logger::log(format!("DHCP timeout: {:?}", e).leak());
-            return Err("DHCP configuration timeout");
-        }
-        morpheus_core::logger::log("DHCP configured, starting download...");
-
-        // Track progress
-        let progress_bytes = Cell::new(0usize);
-
-        // Download with streaming callback
-        let result = client.get_streaming(url, |chunk_data| {
-            // Write chunk to disk via ChunkWriter
-            let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
-            
-            chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
-                let lba = part_start + sector_offset;
-                uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
-                    .map_err(|_| IsoError::IoError)
-            }).map_err(|_| morpheus_network::error::NetworkError::FileError)?;
-
-            progress_bytes.set(progress_bytes.get() + chunk_data.len());
-            Ok(())
-        });
-
-        let final_bytes = progress_bytes.get();
-        self.download_state.update_progress(final_bytes);
-
-        match result {
-            Ok(bytes) => {
-                morpheus_core::logger::log(format!("Download complete: {} bytes", bytes).leak());
-                Ok(bytes)
-            }
-            Err(e) => {
-                morpheus_core::logger::log(format!("Download failed: {:?}", e).leak());
-                Err("Native download failed")
-            }
-        }
     }
 
     /// Get BlockIoProtocol pointer for first physical disk

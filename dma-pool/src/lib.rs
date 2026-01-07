@@ -124,7 +124,7 @@ impl MemoryRegion {
 
 /// Memory discovery strategies.
 ///
-/// Inspired by cavealloc's cave discovery - finds unused padding in executables.
+/// Inspired by cave discovery - finds unused padding in executables.
 pub struct MemoryDiscovery;
 
 /// Padding byte patterns recognized as "cave" candidates.
@@ -435,7 +435,7 @@ pub type Result<T> = core::result::Result<T, DmaError>;
 
 /// A pool composed of multiple memory caves chained together.
 ///
-/// Inspired by cavealloc's chained deployment - when no single cave is large
+/// Inspired by chained deployment - when no single cave is large
 /// enough, we chain multiple smaller caves into one logical pool.
 ///
 /// This is ideal for running network stack DMA entirely from caves in our
