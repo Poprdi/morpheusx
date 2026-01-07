@@ -379,7 +379,8 @@ do_launch_qemu() {
         qemu-system-x86_64 \
             -bios "$ovmf_path" \
             -drive format=raw,file="${TESTING_DIR}/test-disk-50g.img" \
-            -net none \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 4 \
             -m 4G \
             -vga virtio \
@@ -389,7 +390,8 @@ do_launch_qemu() {
         qemu-system-x86_64 \
             -bios "$ovmf_path" \
             -drive format=raw,file=fat:rw:"${ESP_DIR}" \
-            -net none \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 4 \
             -m 4G \
             -vga virtio \

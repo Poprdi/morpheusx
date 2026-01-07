@@ -235,7 +235,11 @@ extern "C" {
 
     /// Test if PCI I/O ports are accessible.
     /// Returns the value read back from 0xCF8 (should have bit 31 set).
-    fn pci_io_test() -> u32;
+    pub fn pci_io_test() -> u32;
+    
+    /// Read CPU timestamp counter.
+    /// Returns 64-bit TSC value.
+    pub fn read_tsc() -> u64;
 }
 
 /// Legacy I/O port PCI configuration access (0xCF8/0xCFC).
@@ -445,31 +449,33 @@ pub mod diagnostics {
         (vendor, device)
     }
 
-    /// Scan specific device locations where QEMU typically places VirtIO.
+    /// Scan ALL device slots on bus 0 to find VirtIO devices.
     /// Returns raw vendor/device values (0xFFFF = no device).
-    pub fn probe_common_virtio_locations() -> Vec<(DeviceFunction, u16, u16)> {
+    pub fn probe_all_bus0_slots() -> Vec<(DeviceFunction, u16, u16)> {
         let legacy = LegacyIoAccess::new();
         let mut results = Vec::new();
 
-        // QEMU typically places VirtIO devices at these locations
-        let locations = [
-            DeviceFunction::new(0, 1, 0),
-            DeviceFunction::new(0, 2, 0),
-            DeviceFunction::new(0, 3, 0),
-            DeviceFunction::new(0, 4, 0),
-            DeviceFunction::new(0, 5, 0),
-            DeviceFunction::new(0, 6, 0),
-            DeviceFunction::new(0, 31, 0), // ISA bridge on i440FX
-        ];
-
-        for loc in locations {
+        // Scan ALL 32 device slots on bus 0
+        for slot in 0..32u8 {
+            let loc = DeviceFunction::new(0, slot, 0);
             let id = unsafe { legacy.read32(loc, 0x00) };
             let vendor = (id & 0xFFFF) as u16;
             let device = ((id >> 16) & 0xFFFF) as u16;
-            results.push((loc, vendor, device));
+            
+            // Only add if device present (not 0xFFFF)
+            if vendor != 0xFFFF {
+                results.push((loc, vendor, device));
+            }
         }
 
         results
+    }
+    
+    /// Scan specific device locations where QEMU typically places VirtIO.
+    /// Returns raw vendor/device values (0xFFFF = no device).
+    pub fn probe_common_virtio_locations() -> Vec<(DeviceFunction, u16, u16)> {
+        // Just use the full scan now
+        probe_all_bus0_slots()
     }
 
     /// Full diagnostic: returns structured info about PCI state.

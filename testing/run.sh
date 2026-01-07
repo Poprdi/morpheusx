@@ -78,7 +78,7 @@ case $REPLY in
             -s \
             -bios /usr/share/OVMF/x64/OVMF_CODE.4m.fd \
             -drive format=raw,file=test-disk-50g.img \
-            -device virtio-net-pci,netdev=net0 \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
             -m 12G \
@@ -94,7 +94,7 @@ case $REPLY in
             -s \
             -bios /usr/share/OVMF/x64/OVMF_CODE.4m.fd \
             -drive format=raw,file=test-disk-10g.img \
-            -device virtio-net-pci,netdev=net0 \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
             -m 12G \
@@ -109,7 +109,7 @@ case $REPLY in
             -s \
             -bios /usr/share/OVMF/x64/OVMF_CODE.4m.fd \
             -drive format=raw,file=esp.img \
-            -device virtio-net-pci,netdev=net0 \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
             -m 12G \

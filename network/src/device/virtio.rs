@@ -252,12 +252,44 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
         // Header is already zeroed (no offload features)
         tx_buf[VIRTIO_NET_HDR_SIZE..].copy_from_slice(packet);
 
-        // Send and wait for completion (blocking for simplicity)
-        self.inner.send(&tx_buf).map_err(|e| {
-            NetworkError::DeviceError(alloc::format!("TX failed: {:?}", e))
-        })?;
-
-        Ok(())
+        // Try non-blocking send with timeout
+        // The virtio-drivers send() spins forever waiting for completion
+        // We'll use transmit_begin + poll pattern instead
+        
+        // First check if device can accept TX
+        if !self.inner.can_send() {
+            return Err(NetworkError::DeviceError(alloc::format!("TX queue full")));
+        }
+        
+        // Submit buffer to TX queue (returns token)
+        let token = unsafe {
+            self.inner.transmit_begin(&tx_buf).map_err(|e| {
+                NetworkError::DeviceError(alloc::format!("TX begin failed: {:?}", e))
+            })?
+        };
+        
+        // Poll for completion with timeout (10ms ~= 20M cycles at 2GHz)
+        let timeout_cycles = 20_000_000u64;
+        let start = unsafe { crate::device::pci::read_tsc() };
+        
+        loop {
+            // Check if TX completed
+            if let Some(completed_token) = self.inner.poll_transmit() {
+                if completed_token == token {
+                    // Complete the send
+                    unsafe {
+                        let _ = self.inner.transmit_complete(token, &tx_buf);
+                    }
+                    return Ok(());
+                }
+            }
+            
+            // Check timeout
+            let now = unsafe { crate::device::pci::read_tsc() };
+            if now.wrapping_sub(start) > timeout_cycles {
+                return Err(NetworkError::Timeout);
+            }
+        }
     }
 
     fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>> {
