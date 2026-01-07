@@ -12,6 +12,7 @@ pub enum NetworkError {
     InitializationFailed,
     DnsResolutionFailed,
     ConnectionFailed,
+    NotConnected,
     Timeout,
     HttpError(u16),
     InvalidUrl,
@@ -24,6 +25,16 @@ pub enum NetworkError {
     DeviceError(alloc::string::String),
     /// Buffer too small for operation.
     BufferTooSmall,
+    /// Response exceeded size limit.
+    ResponseTooLarge,
+    /// Too many redirects.
+    TooManyRedirects,
+    /// Send operation failed.
+    SendFailed,
+    /// Receive operation failed.
+    ReceiveFailed,
+    /// Unexpected end of stream.
+    UnexpectedEof,
     Unknown,
 }
 
@@ -34,6 +45,7 @@ impl fmt::Display for NetworkError {
             Self::InitializationFailed => write!(f, "Network initialization failed"),
             Self::DnsResolutionFailed => write!(f, "DNS resolution failed"),
             Self::ConnectionFailed => write!(f, "Connection failed"),
+            Self::NotConnected => write!(f, "Not connected"),
             Self::Timeout => write!(f, "Request timed out"),
             Self::HttpError(code) => write!(f, "HTTP error: {}", code),
             Self::InvalidUrl => write!(f, "Invalid URL"),
@@ -44,6 +56,11 @@ impl fmt::Display for NetworkError {
             Self::TlsError => write!(f, "TLS/HTTPS error"),
             Self::DeviceError(msg) => write!(f, "Device error: {}", msg),
             Self::BufferTooSmall => write!(f, "Buffer too small"),
+            Self::ResponseTooLarge => write!(f, "Response too large"),
+            Self::TooManyRedirects => write!(f, "Too many redirects"),
+            Self::SendFailed => write!(f, "Send failed"),
+            Self::ReceiveFailed => write!(f, "Receive failed"),
+            Self::UnexpectedEof => write!(f, "Unexpected end of stream"),
             Self::Unknown => write!(f, "Unknown error"),
         }
     }
