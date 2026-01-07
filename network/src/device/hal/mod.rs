@@ -1,51 +1,43 @@
 //! Hardware Abstraction Layer for VirtIO drivers.
 //!
 //! This module provides the `Hal` trait implementation required by the
-//! `virtio-drivers` crate. We support two environments:
+//! `virtio-drivers` crate. We use a single, firmware-agnostic implementation.
 //!
-//! - **UEFI mode** (`uefi` feature): Uses UEFI Boot Services for memory
-//!   allocation. Must be used before calling `ExitBootServices()`.
+//! # Design Philosophy
 //!
-//! - **Bare metal mode** (`bare` feature): Uses a pre-allocated static memory
-//!   pool. Works after `ExitBootServices()` or in non-UEFI environments.
+//! The HAL is completely firmware-agnostic - no UEFI, no OS dependencies.
+//! It uses a static memory pool compiled into the binary for DMA operations.
+//! This eliminates all firmware quirks and compatibility issues.
 //!
 //! # Architecture
 //!
 //! The HAL provides:
-//! - DMA memory allocation (physically contiguous, cache-coherent)
-//! - Physical-to-virtual address translation (identity mapping in UEFI/bare)
-//! - Memory sharing for IOMMU (pass-through in simple cases)
+//! - DMA memory allocation (physically contiguous from static pool)
+//! - Physical-to-virtual address translation (identity mapping)
+//! - Memory sharing for IOMMU (pass-through, no IOMMU support needed)
 //!
 //! # Usage
 //!
 //! ```ignore
-//! // In UEFI environment (before ExitBootServices)
-//! #[cfg(feature = "uefi")]
-//! use crate::device::hal::UefiHal;
+//! use morpheus_network::device::hal::StaticHal;
 //!
-//! // In bare metal environment (after ExitBootServices)
-//! #[cfg(feature = "bare")]
-//! use crate::device::hal::BareHal;
+//! // Initialize the HAL (call once at startup)
+//! StaticHal::init();
+//!
+//! // Now VirtIO drivers can be used
+//! let net = VirtIONetRaw::<StaticHal, _>::new(transport)?;
 //! ```
 
 extern crate alloc;
 
-#[cfg(feature = "uefi")]
-pub mod uefi;
+pub mod static_hal;
 
-#[cfg(feature = "bare")]
-pub mod bare;
-
-#[cfg(feature = "uefi")]
-pub use uefi::UefiHal;
-
-#[cfg(feature = "bare")]
-pub use bare::BareHal;
+pub use static_hal::StaticHal;
 
 use core::ptr::NonNull;
 use virtio_drivers::{BufferDirection, Hal, PhysAddr, PAGE_SIZE};
 
-/// Common HAL utilities shared between implementations.
+/// Common HAL utilities.
 pub mod common {
     use super::*;
 

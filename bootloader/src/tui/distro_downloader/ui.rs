@@ -687,46 +687,115 @@ impl DistroDownloader {
         block_io_protocol: *mut BlockIoProtocol,
         _screen: &mut Screen,
     ) -> Result<usize, &'static str> {
-        use morpheus_network::init_qemu_network;
         use morpheus_network::device::hal::uefi::EfiBootServices;
+        use morpheus_network::device::hal::UefiHal;
+        use morpheus_network::device::pci::{EcamAccess, PciScanner, ecam_bases};
         use gpt_disk_io::BlockIo;
         use core::cell::Cell;
 
+        morpheus_core::logger::log("=== Starting native network download ===");
+
         // Get time function for the network stack
-        // Uses UEFI GetTime for milliseconds approximation
         fn get_time_ms() -> u64 {
-            // In real implementation, read UEFI time or TSC
-            // For now, use a simple counter
             static mut COUNTER: u64 = 0;
             unsafe {
-                COUNTER += 1;
+                COUNTER += 100; // Simulate ~100ms per call
                 COUNTER
             }
         }
 
-        // Initialize native network stack
+        // Step 1: Initialize UEFI HAL
         let bs = unsafe { &*self.boot_services };
         let efi_bs = bs as *const BootServices as *mut EfiBootServices;
         
-        let mut network_stack = unsafe {
-            match init_qemu_network(efi_bs, get_time_ms) {
-                Ok(stack) => stack,
-                Err(e) => {
-                    morpheus_core::logger::log(format!("Native network init failed: {:?}", e).leak());
-                    return Err("Failed to initialize native network stack");
-                }
+        morpheus_core::logger::log("Initializing UEFI HAL...");
+        unsafe { UefiHal::init(efi_bs) };
+        morpheus_core::logger::log("UEFI HAL initialized");
+
+        // Step 2: Scan PCI for VirtIO network device
+        morpheus_core::logger::log("Scanning PCI bus for VirtIO network device...");
+        let ecam_base = ecam_bases::QEMU_Q35;
+        morpheus_core::logger::log(format!("Using ECAM base: {:#x}", ecam_base).leak());
+        
+        let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
+        let scanner = PciScanner::new(ecam);
+        
+        let virtio_devices = scanner.find_virtio_net();
+        morpheus_core::logger::log(format!("Found {} VirtIO network device(s)", virtio_devices.len()).leak());
+        
+        if virtio_devices.is_empty() {
+            morpheus_core::logger::log("ERROR: No VirtIO network device found!");
+            
+            // Try scanning all network devices for debugging
+            let all_net = scanner.find_network();
+            morpheus_core::logger::log(format!("Total network devices found: {}", all_net.len()).leak());
+            for dev in all_net.iter() {
+                morpheus_core::logger::log(format!(
+                    "  Device: bus={} dev={} func={} vendor={:#x} device={:#x}",
+                    dev.location.bus, dev.location.device, dev.location.function,
+                    dev.vendor_id, dev.device_id
+                ).leak());
             }
+            
+            return Err("No VirtIO network device found on PCI bus");
+        }
+
+        let device_info = virtio_devices[0];
+        morpheus_core::logger::log(format!(
+            "Using VirtIO device at bus={} dev={} func={}",
+            device_info.location.bus, device_info.location.device, device_info.location.function
+        ).leak());
+
+        // Step 3: Create PCI transport and VirtIO device
+        morpheus_core::logger::log("Creating PCI transport...");
+        
+        use morpheus_network::device::virtio::VirtioNetDevice;
+        use morpheus_network::stack::setup::EcamConfigAccess;
+        use virtio_drivers::transport::pci::PciTransport;
+        use virtio_drivers::transport::pci::bus::{DeviceFunction, PciRoot};
+        
+        let device_fn = DeviceFunction {
+            bus: device_info.location.bus,
+            device: device_info.location.device,
+            function: device_info.location.function,
         };
 
-        morpheus_core::logger::log("Native network stack initialized (VirtIO)");
+        let cam = unsafe { EcamConfigAccess::new(ecam_base) };
+        let mut pci_root = PciRoot::new(cam);
+        
+        let transport = match PciTransport::new::<UefiHal, EcamConfigAccess>(&mut pci_root, device_fn) {
+            Ok(t) => t,
+            Err(e) => {
+                morpheus_core::logger::log(format!("PCI transport failed: {:?}", e).leak());
+                return Err("Failed to create PCI transport");
+            }
+        };
+        morpheus_core::logger::log("PCI transport created");
 
+        // Step 4: Create VirtIO network device
+        morpheus_core::logger::log("Creating VirtIO network device...");
+        let virtio_device = match VirtioNetDevice::<UefiHal, PciTransport>::new(transport) {
+            Ok(d) => d,
+            Err(e) => {
+                morpheus_core::logger::log(format!("VirtIO device creation failed: {:?}", e).leak());
+                return Err("Failed to create VirtIO network device");
+            }
+        };
+        morpheus_core::logger::log("VirtIO network device created");
+
+        // Step 5: Create HTTP client with DHCP
+        use morpheus_network::client::native::NativeHttpClient;
+        use morpheus_network::stack::NetConfig;
+        
+        morpheus_core::logger::log("Creating HTTP client with DHCP...");
+        let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
+        
         // Wait for DHCP
-        let client = network_stack.client();
+        morpheus_core::logger::log("Waiting for DHCP...");
         if let Err(e) = client.wait_for_network(30_000) {
             morpheus_core::logger::log(format!("DHCP timeout: {:?}", e).leak());
             return Err("DHCP configuration timeout");
         }
-
         morpheus_core::logger::log("DHCP configured, starting download...");
 
         // Track progress
