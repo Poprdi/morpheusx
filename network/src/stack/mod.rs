@@ -7,7 +7,6 @@
 //!
 //! - [`DeviceAdapter`] - Adapts `NetworkDevice` to smoltcp's `Device` trait
 //! - [`NetInterface`] - Full IP stack with TCP sockets and DHCP
-//! - [`NetworkStack`] - High-level convenience wrapper for HTTP client
 //!
 //! # Usage
 //!
@@ -15,6 +14,10 @@
 //! use morpheus_network::stack::{NetInterface, NetConfig};
 //! use morpheus_network::device::virtio::VirtioNetDevice;
 //! use morpheus_network::device::hal::StaticHal;
+//! use dma_pool::DmaPool;
+//!
+//! // Initialize DMA pool from caves in our PE image
+//! unsafe { DmaPool::init_from_caves(image_base, image_end) };
 //!
 //! // Initialize HAL
 //! StaticHal::init();
@@ -29,14 +32,9 @@
 //! while !iface.has_ip() {
 //!     iface.poll(get_time_ms());
 //! }
-//!
-//! // Create TCP socket and connect
-//! let socket = iface.tcp_socket()?;
-//! iface.tcp_connect(socket, remote_ip, 80)?;
 //! ```
 
 mod interface;
-pub mod setup;
 
 use crate::device::NetworkDevice;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -44,7 +42,6 @@ use smoltcp::time::Instant;
 use core::marker::PhantomData;
 
 pub use interface::{NetInterface, NetConfig, NetState, MAX_TCP_SOCKETS};
-pub use setup::{VirtioNetworkStack, init_virtio_network, init_qemu_network, EcamConfigAccess};
 pub use crate::device::pci::ecam_bases;
 
 const MTU: usize = 1536;
@@ -135,25 +132,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
     {
         let mut buffer = [0u8; MTU];
         let result = f(&mut buffer[..len]);
-        // Best-effort transmit; ignore errors for now.
         let _ = unsafe { (*self.device).transmit(&buffer[..len]) };
         result
-    }
-}
-
-/// Minimal holder for future smoltcp interface wiring.
-pub struct NetworkStack<D: NetworkDevice> {
-    pub device: DeviceAdapter<D>,
-}
-
-impl<D: NetworkDevice> NetworkStack<D> {
-    pub fn new(device: D) -> Self {
-        Self {
-            device: DeviceAdapter::new(device),
-        }
-    }
-
-    pub fn capabilities(&self) -> DeviceCapabilities {
-        self.device.capabilities()
     }
 }

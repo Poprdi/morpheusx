@@ -1,35 +1,26 @@
-//! HTTP client interface and implementations.
+//! HTTP client implementation.
 //!
-//! This module provides two HTTP client implementations:
-//!
-//! - [`uefi::UefiHttpClient`] - Uses UEFI HTTP Boot protocol (requires firmware support)
-//! - [`native::NativeHttpClient`] - Bare metal TCP/IP over any `NetworkDevice`
-//!
-//! # Choosing a Client
-//!
-//! Use **`NativeHttpClient`** (preferred):
-//! - Works with any network hardware via drivers
-//! - No UEFI firmware dependencies
-//! - Full control over network stack
-//! - Works in QEMU with virtio-net
-//!
-//! Use **`UefiHttpClient`** when:
-//! - UEFI firmware has HTTP Boot support
-//! - You need HTTPS (TLS in firmware)
-//! - Simpler setup (firmware handles everything)
+//! Pure bare-metal HTTP client over TCP/IP. Uses smoltcp for the network
+//! stack and dma-pool for DMA memory from code caves in our PE binary.
 //!
 //! # Example
 //!
 //! ```ignore
-//! use morpheus_network::client::native::NativeHttpClient;
+//! use dma_pool::DmaPool;
+//! use morpheus_network::client::NativeHttpClient;
 //! use morpheus_network::device::virtio::VirtioNetDevice;
+//! use morpheus_network::device::hal::StaticHal;
 //! use morpheus_network::stack::NetConfig;
 //!
+//! // Init DMA from caves
+//! unsafe { DmaPool::init_from_caves(image_base, image_end) };
+//! StaticHal::init();
+//!
 //! // Create VirtIO network device
-//! let device = VirtioNetDevice::new(transport)?;
+//! let device = VirtioNetDevice::<StaticHal, _>::new(transport)?;
 //!
 //! // Create native HTTP client
-//! let mut client = NativeHttpClient::new(device, NetConfig::dhcp(), get_time_ms);
+//! let mut client = NativeHttpClient::new(device, NetConfig::Dhcp, get_time_ms);
 //!
 //! // Wait for DHCP
 //! client.wait_for_network(30_000)?;
@@ -43,8 +34,6 @@ use crate::http::{Request, Response};
 use crate::types::ProgressCallback;
 
 /// HTTP client trait.
-///
-/// Implemented by both UEFI and native clients for interchangeable use.
 pub trait HttpClient {
     /// Execute an HTTP request.
     fn request(&mut self, request: &Request) -> Result<Response>;
@@ -60,13 +49,5 @@ pub trait HttpClient {
     fn is_ready(&self) -> bool;
 }
 
-// Native bare-metal client (always available)
 pub mod native;
 pub use native::NativeHttpClient;
-
-// UEFI protocol-based client (UEFI only)
-#[cfg(target_os = "uefi")]
-pub mod uefi;
-
-#[cfg(target_os = "uefi")]
-pub use uefi::UefiHttpClient;
