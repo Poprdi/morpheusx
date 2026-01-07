@@ -14,10 +14,15 @@
 //! The [`hal`] module provides hardware abstraction for DMA and memory mapping:
 //! - [`hal::UefiHal`] - Use UEFI Boot Services (before ExitBootServices)
 //! - [`hal::BareHal`] - Use pre-allocated memory pool (after ExitBootServices)
+//!
+//! # PCI Discovery
+//!
+//! The [`pci`] module provides PCI bus scanning for device discovery.
 
 use crate::error::{NetworkError, Result};
 
 pub mod hal;
+pub mod pci;
 pub mod virtio;
 pub mod realtek;
 pub mod intel;
