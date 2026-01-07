@@ -756,14 +756,15 @@ impl DistroDownloader {
             }
             
             screen.put_str_at(5, log_y + 1, "ERROR: No VirtIO network device found!", EFI_RED, EFI_BLACK);
-            screen.put_str_at(5, log_y + 2, "Press any key to continue...", EFI_YELLOW, EFI_BLACK);
-            // Wait for keypress so user can see diagnostics
-            unsafe {
-                let st = &*self.system_table;
-                if let Some(stdin) = st.con_in.as_ref() {
-                    let _ = stdin.read_key_stroke();
-                }
+            screen.put_str_at(5, log_y + 2, "Check QEMU -device virtio-net-pci", EFI_YELLOW, EFI_BLACK);
+            screen.put_str_at(5, log_y + 4, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
+            
+            // Simple busy-wait loop for ~3 seconds so user can see diagnostics
+            // This avoids needing keyboard access which requires system_table
+            for _ in 0..300_000_000u64 {
+                core::hint::spin_loop();
             }
+            
             return Err("No VirtIO network device found on PCI bus");
         }
 

@@ -211,10 +211,26 @@ do_configure_ovmf() {
     log_success "OVMF: ${ovmf_path}"
 }
 
+do_clean() {
+    log_step "Cleaning Build Artifacts"
+    
+    log_info "Removing target directory..."
+    rm -rf "${PROJECT_ROOT}/target"
+    
+    log_info "Removing any stale ESP bootloader..."
+    rm -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI"
+    
+    log_success "Build artifacts cleaned"
+}
+
 do_build() {
-    log_step "Building MorpheusX Bootloader"
+    log_step "Building MorpheusX Bootloader (Clean Build)"
     
     ensure_dirs
+    
+    # Always clean before building to avoid stale artifacts
+    log_info "Performing clean build (removing all cached artifacts)..."
+    rm -rf "${PROJECT_ROOT}/target"
     
     if check_bootloader && [[ "${FORCE_MODE}" != "true" ]]; then
         log_success "Bootloader already built"
