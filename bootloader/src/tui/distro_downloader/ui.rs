@@ -850,19 +850,19 @@ impl DistroDownloader {
             unsafe fn unsafe_clone(&self) -> Self { Self }
         }
 
-        let cam = LegacyConfigAccess;
-        let mut pci_root = PciRoot::new(cam);
-        
-        // Read BARs before creating transport for debug
-        let bar0 = cam.read_word(device_fn, 0x10);
-        let bar1 = cam.read_word(device_fn, 0x14);
-        let bar2 = cam.read_word(device_fn, 0x18);
-        let bar4 = cam.read_word(device_fn, 0x20);
+        // Read BARs for debug using direct PCI access
+        let bar0 = LegacyConfigAccess.read_word(device_fn, 0x10);
+        let bar1 = LegacyConfigAccess.read_word(device_fn, 0x14);
+        let bar2 = LegacyConfigAccess.read_word(device_fn, 0x18);
+        let bar4 = LegacyConfigAccess.read_word(device_fn, 0x20);
         screen.put_str_at(7, log_y, &format!(
             "BARs: 0={:#x} 1={:#x} 2={:#x} 4={:#x}",
             bar0, bar1, bar2, bar4
         ), EFI_DARKGRAY, EFI_BLACK);
         log_y += 1;
+
+        let cam = LegacyConfigAccess;
+        let mut pci_root = PciRoot::new(cam);
         
         let transport = match PciTransport::new::<StaticHal, LegacyConfigAccess>(&mut pci_root, device_fn) {
             Ok(t) => t,
@@ -885,7 +885,7 @@ impl DistroDownloader {
         screen.put_str_at(5, log_y, "Creating VirtIO device...", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
-        let virtio_device = match VirtioNetDevice::<StaticHal, PciTransport>::new(transport) {
+        let mut virtio_device = match VirtioNetDevice::<StaticHal, PciTransport>::new(transport) {
             Ok(d) => d,
             Err(e) => {
                 screen.put_str_at(5, log_y, &format!("VirtIO failed: {:?}", e), EFI_RED, EFI_BLACK);
@@ -904,15 +904,77 @@ impl DistroDownloader {
         screen.put_str_at(5, log_y, "Starting DHCP...", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
+        // Test TX directly before creating smoltcp stack
+        screen.put_str_at(7, log_y, "Testing raw TX...           ", EFI_YELLOW, EFI_BLACK);
+        
+        // Create a dummy Ethernet frame (just to test TX path)
+        // Broadcast ARP-like frame - minimum 60 bytes for Ethernet
+        let test_frame: [u8; 60] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff,  // Dest MAC (broadcast)
+            0x52, 0x54, 0x00, 0x12, 0x34, 0x56,  // Src MAC  
+            0x08, 0x06,                          // EtherType (ARP)
+            // ARP header (28 bytes)
+            0x00, 0x01,  // Hardware type (Ethernet)
+            0x08, 0x00,  // Protocol type (IPv4)
+            0x06,        // Hardware size
+            0x04,        // Protocol size
+            0x00, 0x01,  // Opcode (request)
+            0x52, 0x54, 0x00, 0x12, 0x34, 0x56,  // Sender MAC
+            0x0a, 0x00, 0x02, 0x0f,              // Sender IP (10.0.2.15)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Target MAC (unknown)
+            0x0a, 0x00, 0x02, 0x02,              // Target IP (10.0.2.2 - gateway)
+            // Padding to reach 60 bytes
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        
+        // NetworkDevice trait already imported at line 600
+        match virtio_device.transmit(&test_frame) {
+            Ok(()) => {
+                screen.put_str_at(7, log_y, "Test TX OK!                 ", EFI_LIGHTGREEN, EFI_BLACK);
+            }
+            Err(e) => {
+                screen.put_str_at(7, log_y, &format!("Test TX FAILED: {:?}", e), EFI_RED, EFI_BLACK);
+                log_y += 1;
+                
+                // Wait and return early
+                screen.put_str_at(7, log_y, "TX broken - cannot continue", EFI_RED, EFI_BLACK);
+                let spin_start = get_time_ms();
+                while get_time_ms() - spin_start < 10000 {}
+                return Err("VirtIO TX failed");
+            }
+        }
+        log_y += 1;
+        
+        // Reset TX error counter before starting
+        morpheus_network::stack::reset_tx_error_count();
+        
+        screen.put_str_at(7, log_y, "Creating NativeHttpClient...", EFI_YELLOW, EFI_BLACK);
         let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
+        screen.put_str_at(7, log_y, "NativeHttpClient created OK  ", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
         
-        // Debug: Check if we can even transmit
-        screen.put_str_at(7, log_y, "Checking TX capability...", EFI_YELLOW, EFI_BLACK);
+        // Try to understand where we hang
+        screen.put_str_at(7, log_y, "Calling poll()...           ", EFI_YELLOW, EFI_BLACK);
         
-        // Poll once and see what happens
-        screen.put_str_at(7, log_y, "First poll() call...    ", EFI_YELLOW, EFI_BLACK);
+        // Use a manual timeout loop instead of relying on internal timeout
+        let poll_start = get_time_ms();
+        let poll_timeout_ms = 5000; // 5 second timeout
+        
+        // Spawn poll in a way we can track
+        // Actually, poll() blocks internally, so we can't easily timeout it externally
+        // The hang is INSIDE smoltcp or our device driver
+        
+        // Let's just call poll and see what happens
         client.poll();
-        screen.put_str_at(7, log_y, "Poll returned!          ", EFI_LIGHTGREEN, EFI_BLACK);
+        
+        let poll_elapsed = get_time_ms() - poll_start;
+        screen.put_str_at(7, log_y, &format!("Poll returned in {}ms     ", poll_elapsed), EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        // Check if TX had any errors
+        let tx_errors = morpheus_network::stack::tx_error_count();
+        screen.put_str_at(7, log_y, &format!("TX errors: {}             ", tx_errors), 
+            if tx_errors > 0 { EFI_RED } else { EFI_LIGHTGREEN }, EFI_BLACK);
         log_y += 1;
         
         // Now do the DHCP loop
@@ -926,17 +988,21 @@ impl DistroDownloader {
             
             let now = get_time_ms();
             if now - last_update > 1000 {
-                // Update every second
+                // Update every second with TX error count
                 let elapsed = (now - start_time) / 1000;
+                let tx_errs = morpheus_network::stack::tx_error_count();
                 screen.put_str_at(7, log_y, &format!(
-                    "DHCP: {}s, {} polls        ", elapsed, poll_count
-                ), EFI_YELLOW, EFI_BLACK);
+                    "DHCP: {}s, {} polls, {} TX errs", elapsed, poll_count, tx_errs
+                ), if tx_errs > 0 { EFI_RED } else { EFI_YELLOW }, EFI_BLACK);
                 last_update = now;
             }
             
             if now - start_time > 30_000 {
                 log_y += 1;
-                screen.put_str_at(5, log_y, "DHCP timeout - no response", EFI_RED, EFI_BLACK);
+                let final_tx_errs = morpheus_network::stack::tx_error_count();
+                screen.put_str_at(5, log_y, &format!(
+                    "DHCP timeout - {} TX errors", final_tx_errs
+                ), EFI_RED, EFI_BLACK);
                 log_y += 1;
                 
                 // Spin for 5 seconds so user can see the output
