@@ -2,10 +2,11 @@ use super::ui::DistroLauncher;
 use super::entry::BootEntry;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW};
 use crate::uefi::file_system::FileProtocol;
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::format;
 
 const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024;
 const PAGE_SIZE: usize = 4096;
@@ -24,6 +25,18 @@ impl DistroLauncher {
 
         if entry.cmdline.starts_with("iso:") {
             self.boot_from_iso(
+                screen,
+                keyboard,
+                boot_services,
+                system_table,
+                image_handle,
+                entry,
+            );
+            return;
+        }
+
+        if entry.cmdline.starts_with("chunked_iso:") {
+            self.boot_from_chunked_iso(
                 screen,
                 keyboard,
                 boot_services,
@@ -247,6 +260,265 @@ impl DistroLauncher {
             let msg = alloc::format!("ERROR: {}", detail);
             Self::await_failure(screen, keyboard, 18, &msg, "iso boot failed");
         }
+    }
+
+    /// Boot from a chunked ISO stored via IsoStorageManager
+    fn boot_from_chunked_iso(
+        &self,
+        screen: &mut Screen,
+        keyboard: &mut Keyboard,
+        boot_services: &crate::BootServices,
+        system_table: *mut (),
+        image_handle: *mut (),
+        entry: &BootEntry,
+    ) {
+        use crate::tui::boot_sequence::BootSequence;
+        use crate::tui::widgets::progressbar::ProgressBar;
+        use crate::uefi::block_io_adapter::UefiBlockIo;
+        use morpheus_core::iso::{IsoBlockIoAdapter, IsoStorageManager};
+
+        screen.clear();
+        screen.put_str_at(5, 2, "Booting from Chunked ISO", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, 3, "========================", EFI_GREEN, EFI_BLACK);
+
+        let mut boot_seq = BootSequence::new();
+        let mut progress_bar = ProgressBar::new(5, 5, 60, "Loading ISO:");
+        boot_seq.render(screen, 5, 8);
+        progress_bar.render(screen);
+
+        morpheus_core::logger::log("Chunked ISO Boot: Starting...");
+
+        // Parse index from cmdline: "chunked_iso:N"
+        let idx_str = entry.cmdline.strip_prefix("chunked_iso:").unwrap_or("0");
+        let iso_idx: usize = idx_str.parse().unwrap_or(0);
+
+        morpheus_core::logger::log(format!("Chunked ISO: index={}", iso_idx).leak());
+
+        // Get disk info
+        let (esp_lba, disk_lba) = {
+            let mut dm = morpheus_core::disk::manager::DiskManager::new();
+            if crate::uefi::disk::enumerate_disks(boot_services, &mut dm).is_ok() && dm.disk_count() > 0 {
+                if let Some(disk) = dm.get_disk(0) {
+                    (2048_u64, disk.last_block + 1)
+                } else {
+                    screen.put_str_at(5, 18, "ERROR: No disk found", EFI_RED, EFI_BLACK);
+                    keyboard.wait_for_key();
+                    return;
+                }
+            } else {
+                screen.put_str_at(5, 18, "ERROR: Disk enumeration failed", EFI_RED, EFI_BLACK);
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        // Get ISO read context
+        let storage = IsoStorageManager::new(esp_lba, disk_lba);
+        let read_ctx = match storage.get_read_context(iso_idx) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                screen.put_str_at(5, 18, "ERROR: ISO not found in storage", EFI_RED, EFI_BLACK);
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        morpheus_core::logger::log(
+            format!("Chunked ISO: {} chunks, {} bytes", read_ctx.num_chunks, read_ctx.total_size).leak()
+        );
+
+        // Get block I/O protocol for first physical disk
+        let block_io_protocol = match Self::get_first_disk_block_io(boot_services) {
+            Some(p) => p,
+            None => {
+                screen.put_str_at(5, 18, "ERROR: No block I/O device", EFI_RED, EFI_BLACK);
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        // Create UEFI block I/O adapter
+        // SAFETY: Protocol pointer is valid from get_first_disk_block_io
+        let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+
+        // Create ISO adapter that bridges chunked storage to iso9660
+        let mut iso_adapter = IsoBlockIoAdapter::new(read_ctx, &mut uefi_block_io);
+
+        // Mount ISO filesystem
+        progress_bar.set_progress(10);
+        progress_bar.render(screen);
+        morpheus_core::logger::log("Chunked ISO: Mounting filesystem...");
+
+        let volume = match iso9660::mount(&mut iso_adapter, 0) {
+            Ok(v) => v,
+            Err(e) => {
+                screen.put_str_at(5, 18, "ERROR: Failed to mount ISO", EFI_RED, EFI_BLACK);
+                screen.put_str_at(5, 19, &format!("{:?}", e), EFI_YELLOW, EFI_BLACK);
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        progress_bar.set_progress(20);
+        progress_bar.render(screen);
+        morpheus_core::logger::log("Chunked ISO: Looking for kernel...");
+
+        // Find kernel
+        let kernel_paths = [
+            "/live/vmlinuz",
+            "/casper/vmlinuz",
+            "/boot/vmlinuz",
+            "/isolinux/vmlinuz",
+        ];
+
+        let mut kernel_data = None;
+        for kpath in &kernel_paths {
+            if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, kpath) {
+                morpheus_core::logger::log(format!("Found kernel at {}", kpath).leak());
+                if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
+                    kernel_data = Some(data);
+                    break;
+                }
+            }
+        }
+
+        let kernel_data = match kernel_data {
+            Some(d) => d,
+            None => {
+                screen.put_str_at(5, 18, "ERROR: No kernel found in ISO", EFI_RED, EFI_BLACK);
+                keyboard.wait_for_key();
+                return;
+            }
+        };
+
+        progress_bar.set_progress(50);
+        progress_bar.render(screen);
+        morpheus_core::logger::log("Chunked ISO: Looking for initrd...");
+
+        // Find initrd
+        let initrd_paths = [
+            "/live/initrd.img",
+            "/casper/initrd",
+            "/boot/initrd.img",
+            "/isolinux/initrd.img",
+        ];
+
+        let mut initrd_data = None;
+        for ipath in &initrd_paths {
+            if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, ipath) {
+                morpheus_core::logger::log(format!("Found initrd at {}", ipath).leak());
+                if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
+                    initrd_data = Some(data);
+                    break;
+                }
+            }
+        }
+
+        progress_bar.set_progress(80);
+        progress_bar.render(screen);
+        morpheus_core::logger::log("Chunked ISO: Preparing boot...");
+        boot_seq.render(screen, 5, 8);
+
+        // Default cmdline for live boot
+        let cmdline = "boot=live quiet splash";
+
+        progress_bar.set_progress(100);
+        progress_bar.render(screen);
+
+        screen.put_str_at(5, 16, "Starting kernel...", EFI_LIGHTGREEN, EFI_BLACK);
+
+        // SAFETY: Calling kernel boot with properly loaded kernel/initrd data
+        let boot_result = unsafe {
+            crate::boot::loader::boot_linux_kernel(
+                boot_services,
+                system_table,
+                image_handle,
+                &kernel_data,
+                initrd_data.as_deref(),
+                cmdline,
+                screen,
+            )
+        };
+
+        if let Err(error) = boot_result {
+            let detail = Self::describe_boot_error(&error);
+            let msg = format!("ERROR: {}", detail);
+            Self::await_failure(screen, keyboard, 18, &msg, "chunked iso boot failed");
+        }
+    }
+
+    /// Get BlockIoProtocol pointer for first physical disk
+    fn get_first_disk_block_io(boot_services: &crate::BootServices) -> Option<*mut crate::uefi::block_io::BlockIoProtocol> {
+        use crate::uefi::block_io::{BlockIoProtocol, EFI_BLOCK_IO_PROTOCOL_GUID};
+
+        // Get buffer size needed for all Block I/O handles
+        let mut buffer_size: usize = 0;
+        let _ = (boot_services.locate_handle)(
+            2, // ByProtocol
+            &EFI_BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut buffer_size,
+            core::ptr::null_mut(),
+        );
+
+        if buffer_size == 0 {
+            return None;
+        }
+
+        // Allocate buffer for handles
+        let mut handle_buffer: *mut u8 = core::ptr::null_mut();
+        let alloc_status = (boot_services.allocate_pool)(2, buffer_size, &mut handle_buffer);
+
+        if alloc_status != 0 || handle_buffer.is_null() {
+            return None;
+        }
+
+        // Get all Block I/O handles
+        let status = (boot_services.locate_handle)(
+            2,
+            &EFI_BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut buffer_size,
+            handle_buffer as *mut *mut (),
+        );
+
+        if status != 0 {
+            (boot_services.free_pool)(handle_buffer);
+            return None;
+        }
+
+        // Iterate through handles and find physical disks
+        let handles = handle_buffer as *const *mut ();
+        let handle_count = buffer_size / core::mem::size_of::<*mut ()>();
+
+        // Find first physical disk (not a partition)
+        let mut result = None;
+        unsafe {
+            for i in 0..handle_count {
+                let handle = *handles.add(i);
+                let mut block_io_ptr: *mut () = core::ptr::null_mut();
+
+                let proto_status = (boot_services.handle_protocol)(
+                    handle,
+                    &EFI_BLOCK_IO_PROTOCOL_GUID,
+                    &mut block_io_ptr,
+                );
+
+                if proto_status == 0 && !block_io_ptr.is_null() {
+                    let block_io = &*(block_io_ptr as *const BlockIoProtocol);
+                    let media = &*block_io.media;
+
+                    // Only use physical disks, not partitions
+                    if !media.logical_partition && media.media_present {
+                        result = Some(block_io_ptr as *mut BlockIoProtocol);
+                        break;
+                    }
+                }
+            }
+        }
+
+        (boot_services.free_pool)(handle_buffer);
+        result
     }
 
     unsafe fn get_esp_root(
