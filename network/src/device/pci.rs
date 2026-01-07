@@ -100,10 +100,27 @@ impl PciDeviceInfo {
     }
 
     /// Check if this is a VirtIO network device.
+    /// Supports both transitional (0x1000) and modern (0x1041) device IDs,
+    /// as well as class-based detection (class 0x02 = network).
     pub fn is_virtio_net(&self) -> bool {
-        self.is_virtio()
-            && (self.device_id == VIRTIO_NET_DEVICE_ID
-                || self.device_id == VIRTIO_DEVICE_ID_BASE + 1)
+        if !self.is_virtio() {
+            return false;
+        }
+        
+        // Modern VirtIO network device
+        if self.device_id == VIRTIO_NET_DEVICE_ID {
+            return true;
+        }
+        
+        // Transitional VirtIO network (device ID 0x1000, type = device_id - 0x1000 = 0 = reserved,
+        // but QEMU uses 0x1000 for net). Also check 0x1001 just in case.
+        if self.device_id == VIRTIO_DEVICE_ID_BASE || self.device_id == VIRTIO_DEVICE_ID_BASE + 1 {
+            // For transitional devices, also verify it's a network class
+            return self.class == 0x02;
+        }
+        
+        // Fallback: any VirtIO device with network class
+        self.class == 0x02
     }
 
     /// Check if this is a network device (class 0x02).

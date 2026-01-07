@@ -1,11 +1,15 @@
 #!/bin/bash
 # Build script for Morpheus bootloader
+# Always performs a clean build to avoid stale/cached artifacts
 
 set -e
 
 cd "$(dirname "$0")/.."
 
-echo "Building Morpheus bootloader for x86_64 UEFI..."
+echo "========================================"
+echo "  MorpheusX Clean Build"
+echo "========================================"
+echo ""
 
 # Prompt to clean QEMU disk images
 if [ -f testing/test-disk.img ] || [ -f testing/test-disk-10g.img ]; then
@@ -26,26 +30,42 @@ fi
 # Install rust target if not present
 rustup target add x86_64-unknown-uefi 2>/dev/null || true
 
-# Clean build cache to ensure fresh build
-echo "Cleaning build cache..."
-cargo clean
+# =============================================================================
+# FULL CLEAN BUILD - Remove ALL cached artifacts
+# =============================================================================
+echo ""
+echo "Step 1: Cleaning ALL build artifacts..."
+echo "  - Removing target directory entirely"
+rm -rf target/
 
-# Build (first pass to get binary for reloc extraction)
-echo "Building bootloader (pass 1)..."
+# Also clean any stale fingerprints that might survive cargo clean
+echo "  - Build cache cleared"
+echo ""
+
+# =============================================================================
+# PASS 1: Build bootloader to get binary for reloc extraction
+# =============================================================================
+echo "Step 2: Building bootloader (pass 1)..."
 cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
 
 # Extract relocation data from the built binary
-echo "Extracting relocation metadata..."
+echo ""
+echo "Step 3: Extracting relocation metadata..."
 ./tools/extract-reloc-data.sh
 
-# Rebuild with correct embedded relocation data
-echo "Building bootloader (pass 2 with correct reloc data)..."
+# =============================================================================
+# PASS 2: Rebuild with correct embedded relocation data
+# =============================================================================
+echo ""
+echo "Step 4: Building bootloader (pass 2 with reloc data)..."
+# Clean just the bootloader to force rebuild with new reloc data
+cargo clean -p morpheus-bootloader
 cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
 
 # Rebuild initrd if rootfs exists
 if [ -d "testing/esp/rootfs" ]; then
     echo ""
-    echo "Rebuilding initramfs from rootfs..."
+    echo "Step 5: Rebuilding initramfs from rootfs..."
     cd testing
     ./rebuild-initrd.sh
     cd ..
@@ -57,13 +77,17 @@ fi
 
 # Copy to test ESP
 echo ""
-echo "Deploying to test ESP..."
+echo "Step 6: Deploying to test ESP..."
 cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi testing/esp/EFI/BOOT/BOOTX64.EFI
 
 echo ""
-echo "✓ Built successfully: testing/esp/EFI/BOOT/BOOTX64.EFI"
-echo "✓ Relocation data is hardcoded in the binary"
+echo "========================================"
+echo "  Build Complete!"
+echo "========================================"
+echo "✓ Built: testing/esp/EFI/BOOT/BOOTX64.EFI"
+echo "✓ Relocation data embedded in binary"
 if [ -f "testing/esp/initrds/initramfs-arch.img" ]; then
-    echo "✓ Initramfs rebuilt: testing/esp/initrds/initramfs-arch.img"
+    echo "✓ Initramfs: testing/esp/initrds/initramfs-arch.img"
 fi
+echo ""
 echo "Run './testing/run.sh' to test in QEMU"
