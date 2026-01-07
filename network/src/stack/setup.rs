@@ -1,32 +1,31 @@
 //! Network stack setup helpers.
 //!
-//! High-level convenience functions for initializing the native network stack
-//! in UEFI or bare metal environments.
+//! High-level convenience functions for initializing the native network stack.
+//! This module is completely firmware-agnostic - no UEFI dependencies.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use morpheus_network::stack::setup::init_virtio_network;
+//! use morpheus_network::stack::setup::{NetworkStack, init_virtio_network};
+//! use morpheus_network::device::hal::StaticHal;
 //!
-//! // In bootloader (before ExitBootServices)
-//! let client = init_virtio_network(boot_services_ptr, ecam_base, get_time_ms)?;
+//! // Initialize HAL (once at boot)
+//! StaticHal::init();
+//!
+//! // Initialize network stack
+//! let mut stack = init_virtio_network(ecam_base, get_time_ms)?;
 //!
 //! // Now download files
-//! let response = client.get("http://example.com/file.iso")?;
+//! let response = stack.client().get("http://example.com/file.iso")?;
 //! ```
 
 extern crate alloc;
 
 use alloc::format;
 
-#[cfg(feature = "uefi")]
-use crate::device::hal::uefi::EfiBootServices;
-#[cfg(feature = "uefi")]
-use crate::device::hal::UefiHal;
-
-use crate::device::pci::{EcamAccess, PciScanner, ConfigAccess};
+use crate::device::hal::StaticHal;
+use crate::device::pci::{EcamAccess, PciScanner};
 use crate::device::virtio::VirtioNetDevice;
-use crate::device::NetworkDevice;
 use crate::client::native::NativeHttpClient;
 use crate::stack::interface::NetConfig;
 use crate::error::{NetworkError, Result};
@@ -37,16 +36,14 @@ use virtio_drivers::transport::pci::bus::{ConfigurationAccess, DeviceFunction, P
 /// Network stack ready to use for HTTP requests.
 ///
 /// Contains all the components needed for native bare-metal networking.
-#[cfg(feature = "uefi")]
 pub struct NetworkStack {
     /// The HTTP client (owns interface which owns device)
-    client: NativeHttpClient<VirtioNetDevice<UefiHal, PciTransport>>,
+    client: NativeHttpClient<VirtioNetDevice<StaticHal, PciTransport>>,
 }
 
-#[cfg(feature = "uefi")]
 impl NetworkStack {
     /// Get a mutable reference to the HTTP client.
-    pub fn client(&mut self) -> &mut NativeHttpClient<VirtioNetDevice<UefiHal, PciTransport>> {
+    pub fn client(&mut self) -> &mut NativeHttpClient<VirtioNetDevice<StaticHal, PciTransport>> {
         &mut self.client
     }
 }
@@ -54,12 +51,10 @@ impl NetworkStack {
 /// ECAM Configuration Access implementation.
 ///
 /// Provides access to PCIe configuration space via memory-mapped ECAM.
-#[cfg(feature = "uefi")]
 pub struct EcamConfigAccess {
     base: usize,
 }
 
-#[cfg(feature = "uefi")]
 impl EcamConfigAccess {
     /// Create a new ECAM configuration access.
     ///
@@ -79,7 +74,6 @@ impl EcamConfigAccess {
     }
 }
 
-#[cfg(feature = "uefi")]
 impl ConfigurationAccess for EcamConfigAccess {
     fn read_word(&self, device_function: DeviceFunction, register_offset: u8) -> u32 {
         let ptr = self.offset(device_function, register_offset) as *const u32;
@@ -98,39 +92,40 @@ impl ConfigurationAccess for EcamConfigAccess {
     }
 }
 
-/// Initialize the full VirtIO network stack in UEFI environment.
+/// Initialize the full VirtIO network stack.
+///
+/// This is firmware-agnostic - works in UEFI, bare metal, or any other environment.
 ///
 /// This performs the full setup:
-/// 1. Initialize UefiHal with boot services
-/// 2. Scan PCI for VirtIO network device
-/// 3. Create PciTransport and VirtioNetDevice
-/// 4. Create NativeHttpClient with DHCP
+/// 1. Scan PCI for VirtIO network device
+/// 2. Create PciTransport and VirtioNetDevice
+/// 3. Create NativeHttpClient with DHCP
+///
+/// # Prerequisites
+///
+/// You must initialize the HAL before calling this function:
+/// ```ignore
+/// StaticHal::init();  // or init_discover(), or init_external()
+/// ```
 ///
 /// # Safety
 ///
-/// - `boot_services` must be a valid pointer to UEFI Boot Services.
-/// - Must be called before `ExitBootServices()`.
-/// - The ECAM base address must match your platform.
+/// - The ECAM base address must point to valid PCIe configuration space.
+/// - The HAL must be initialized before calling this function.
 ///
 /// # Arguments
 ///
-/// * `boot_services` - Pointer to UEFI Boot Services
 /// * `ecam_base` - PCIe ECAM base address (use `ecam_bases::QEMU_Q35` for QEMU)
 /// * `get_time_ms` - Function that returns current time in milliseconds
 ///
 /// # Returns
 ///
 /// A fully initialized `NetworkStack` ready for HTTP requests.
-#[cfg(feature = "uefi")]
 pub unsafe fn init_virtio_network(
-    boot_services: *mut EfiBootServices,
     ecam_base: usize,
     get_time_ms: fn() -> u64,
 ) -> Result<NetworkStack> {
-    // Step 1: Initialize UEFI HAL
-    UefiHal::init(boot_services);
-
-    // Step 2: Scan PCI for VirtIO network device using our scanner
+    // Step 1: Scan PCI for VirtIO network device using our scanner
     let ecam = EcamAccess::new(ecam_base as *mut u8);
     let scanner = PciScanner::new(ecam);
     
@@ -143,7 +138,7 @@ pub unsafe fn init_virtio_network(
 
     let device_info = virtio_devices[0];
     
-    // Step 3: Create PCI transport using virtio-drivers types
+    // Step 2: Create PCI transport using virtio-drivers types
     let device_fn = DeviceFunction {
         bus: device_info.location.bus,
         device: device_info.location.device,
@@ -154,13 +149,13 @@ pub unsafe fn init_virtio_network(
     let cam = EcamConfigAccess::new(ecam_base);
     let mut pci_root = PciRoot::new(cam);
     
-    let transport = PciTransport::new::<UefiHal, EcamConfigAccess>(&mut pci_root, device_fn)
+    let transport = PciTransport::new::<StaticHal, EcamConfigAccess>(&mut pci_root, device_fn)
         .map_err(|e| NetworkError::DeviceError(format!("PCI transport failed: {:?}", e)))?;
 
-    // Step 4: Create VirtIO network device
-    let virtio_device = VirtioNetDevice::<UefiHal, PciTransport>::new(transport)?;
+    // Step 3: Create VirtIO network device
+    let virtio_device = VirtioNetDevice::<StaticHal, PciTransport>::new(transport)?;
 
-    // Step 5: Create HTTP client with DHCP
+    // Step 4: Create HTTP client with DHCP
     let client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
 
     Ok(NetworkStack { client })
@@ -173,10 +168,7 @@ pub unsafe fn init_virtio_network(
 /// # Safety
 ///
 /// Same requirements as `init_virtio_network`.
-#[cfg(feature = "uefi")]
-pub unsafe fn init_qemu_network(
-    boot_services: *mut EfiBootServices,
-    get_time_ms: fn() -> u64,
-) -> Result<NetworkStack> {
-    init_virtio_network(boot_services, crate::device::pci::ecam_bases::QEMU_Q35, get_time_ms)
+pub unsafe fn init_qemu_network(get_time_ms: fn() -> u64) -> Result<NetworkStack> {
+    init_virtio_network(crate::device::pci::ecam_bases::QEMU_Q35, get_time_ms)
 }
+

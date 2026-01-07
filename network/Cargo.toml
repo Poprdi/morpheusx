@@ -5,10 +5,10 @@ edition.workspace = true
 
 [features]
 default = []
-uefi = []      # Enable UEFI HAL for virtio (before ExitBootServices)
-bare = []      # Enable bare metal HAL (after ExitBootServices or no UEFI)
 
 [dependencies]
+dma-pool = { workspace = true }
+
 smoltcp = { version = "0.11", default-features = false, features = [
     "alloc",
     "medium-ethernet",

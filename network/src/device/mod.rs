@@ -11,9 +11,15 @@
 //!
 //! # HAL Layer
 //!
-//! The [`hal`] module provides hardware abstraction for DMA and memory mapping:
-//! - [`hal::UefiHal`] - Use UEFI Boot Services (before ExitBootServices)
-//! - [`hal::BareHal`] - Use pre-allocated memory pool (after ExitBootServices)
+//! The [`hal`] module provides hardware abstraction for DMA and memory mapping.
+//! Uses the `dma-pool` crate for firmware-agnostic memory allocation.
+//!
+//! - [`hal::StaticHal`] - Unified HAL for all device drivers
+//!
+//! Initialize with one of:
+//! - `StaticHal::init()` - Uses compiled-in static pool
+//! - `StaticHal::init_discover(start, end)` - Runtime memory discovery
+//! - `StaticHal::init_external(base, size)` - Caller-provided region
 //!
 //! # PCI Discovery
 //!

@@ -1,13 +1,13 @@
 //! MorpheusX Network Stack
 //!
-//! Bare-metal HTTP client for UEFI bootloader environment.
+//! Firmware-agnostic bare-metal HTTP client for bootloader environments.
 //!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                    HTTP Clients                             │
-//! │  NativeHttpClient (bare metal) | UefiHttpClient (firmware) │
+//! │                    HTTP Client                              │
+//! │            NativeHttpClient (bare metal TCP/IP)             │
 //! └─────────────────────────────────────────────────────────────┘
 //!                              │
 //!                              ▼
@@ -33,10 +33,14 @@
 //! ```ignore
 //! use morpheus_network::client::NativeHttpClient;
 //! use morpheus_network::device::virtio::VirtioNetDevice;
+//! use morpheus_network::device::hal::StaticHal;
 //! use morpheus_network::stack::NetConfig;
 //!
+//! // Initialize HAL (once at boot)
+//! StaticHal::init();
+//!
 //! // Create network device (VirtIO for QEMU)
-//! let device = VirtioNetDevice::new(transport)?;
+//! let device = VirtioNetDevice::<StaticHal, _>::new(transport)?;
 //!
 //! // Create HTTP client with DHCP
 //! let mut client = NativeHttpClient::new(device, NetConfig::dhcp(), get_time_ms);
@@ -75,9 +79,4 @@ pub use client::NativeHttpClient;
 pub use device::NetworkDevice;
 pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState};
 
-#[cfg(feature = "uefi")]
-pub use stack::{UefiNetworkStack, init_virtio_network, init_qemu_network, ecam_bases};
-
-#[cfg(target_os = "uefi")]
-pub use client::uefi::UefiHttpClient;
 
