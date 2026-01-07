@@ -1046,21 +1046,32 @@ impl DistroDownloader {
         screen.put_str_at(5, log_y, "Network ready!", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
 
-        // Step 7: Download
-        // Show URL being downloaded (truncated if too long)
-        let url_display = if url.len() > 60 { &url[..60] } else { url };
-        screen.put_str_at(5, log_y, &format!("URL: {}", url_display), EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
+        // Clear screen for download UI - cleaner look
+        // Small delay to let user see network ready message
+        let pause_start = get_time_ms();
+        while get_time_ms() - pause_start < 500 {}
         
-        // Show expected size
+        screen.clear();
+        
+        // === DOWNLOAD SCREEN LAYOUT ===
+        // Row 2: Title
+        screen.put_str_at(5, 2, "=== Downloading ISO ===", EFI_LIGHTGREEN, EFI_BLACK);
+        
+        // Row 4: URL (truncated)
+        let url_display = if url.len() > 65 { &url[..65] } else { url };
+        screen.put_str_at(5, 4, &format!("URL: {}", url_display), EFI_DARKGRAY, EFI_BLACK);
+        
+        // Row 5: Expected size
         let size_mb = expected_size / (1024 * 1024);
-        screen.put_str_at(5, log_y, &format!("Size: {} MB", size_mb), EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
+        screen.put_str_at(5, 5, &format!("Size: {} MB", size_mb), EFI_DARKGRAY, EFI_BLACK);
         
-        screen.put_str_at(5, log_y, "Downloading...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
+        // Row 8-9: Progress bar area (will be updated)
+        let progress_y = 8;
         
-        let progress_y = log_y;
+        // Row 12: Status line
+        let status_y = 12;
+        screen.put_str_at(5, status_y, "Status: Downloading...", EFI_YELLOW, EFI_BLACK);
+        
         let progress_bytes = Cell::new(0usize);
         let last_update = Cell::new(0u64);
         let start_time = get_time_ms();
@@ -1077,9 +1088,9 @@ impl DistroDownloader {
             let new_total = progress_bytes.get() + chunk_data.len();
             progress_bytes.set(new_total);
             
-            // Update progress bar every 100ms or 256KB
+            // Update progress bar every 200ms
             let now = get_time_ms();
-            if now - last_update.get() > 100 || new_total % (256 * 1024) < chunk_data.len() {
+            if now - last_update.get() > 200 {
                 last_update.set(now);
                 
                 // Calculate percentage
@@ -1089,38 +1100,42 @@ impl DistroDownloader {
                     0
                 };
                 
-                // Calculate speed (bytes per second)
+                // Calculate speed (KB/s)
                 let elapsed_ms = now.saturating_sub(start_time).max(1);
-                let speed_bps = (new_total as u64 * 1000) / elapsed_ms;
-                let speed_kbps = speed_bps / 1024;
+                let speed_kbps = (new_total as u64 * 1000) / elapsed_ms / 1024;
                 
-                // Draw progress bar [=====>                    ] 45%
-                let bar_width = 40;
+                // Draw progress bar: [==================>           ] 45%
+                let bar_width = 50;
                 let filled = (bar_width * percent) / 100;
-                let mut bar = [b' '; 42];
+                let mut bar = [b' '; 52];
                 bar[0] = b'[';
                 for i in 0..bar_width {
                     if i < filled {
-                        bar[i + 1] = b'=';
+                        bar[i + 1] = b'#';
                     } else if i == filled && percent < 100 {
                         bar[i + 1] = b'>';
+                    } else {
+                        bar[i + 1] = b'-';
                     }
                 }
-                bar[41] = b']';
-                let bar_str = core::str::from_utf8(&bar).unwrap_or("[???]");
+                bar[51] = b']';
+                let bar_str = core::str::from_utf8(&bar).unwrap_or("[error]");
                 
-                // Progress line: [========>                   ] 25% 1234 KB/s
-                screen.put_str_at(5, progress_y, &format!(
-                    "{} {}% {} KB/s    ",
-                    bar_str, percent, speed_kbps
-                ), EFI_LIGHTGREEN, EFI_BLACK);
+                // Row 8: Progress bar
+                screen.put_str_at(5, progress_y, bar_str, EFI_LIGHTGREEN, EFI_BLACK);
                 
-                // Downloaded / Total line
-                let downloaded_mb = new_total / (1024 * 1024);
+                // Row 9: Percentage and speed
                 screen.put_str_at(5, progress_y + 1, &format!(
-                    "Downloaded: {} / {} MB         ",
-                    downloaded_mb, size_mb
+                    "  {}%  |  {} KB/s                    ",
+                    percent, speed_kbps
                 ), EFI_YELLOW, EFI_BLACK);
+                
+                // Row 10: Downloaded / Total
+                let downloaded_mb = new_total / (1024 * 1024);
+                screen.put_str_at(5, progress_y + 2, &format!(
+                    "  {} / {} MB                        ",
+                    downloaded_mb, size_mb
+                ), EFI_DARKGRAY, EFI_BLACK);
             }
             Ok(())
         });
@@ -1130,41 +1145,38 @@ impl DistroDownloader {
 
         match result {
             Ok(bytes) => {
-                // Final progress bar at 100%
-                let bar_str = "[========================================]";
-                screen.put_str_at(5, progress_y, &format!(
-                    "{} 100% Complete!    ",
-                    bar_str
-                ), EFI_LIGHTGREEN, EFI_BLACK);
+                // Show completion
+                let bar_complete = "[##################################################]";
+                screen.put_str_at(5, progress_y, bar_complete, EFI_LIGHTGREEN, EFI_BLACK);
+                screen.put_str_at(5, progress_y + 1, "  100%  |  COMPLETE!                    ", EFI_LIGHTGREEN, EFI_BLACK);
                 
                 let downloaded_mb = bytes / (1024 * 1024);
-                screen.put_str_at(5, progress_y + 1, &format!(
-                    "Downloaded: {} MB - SUCCESS!         ",
+                screen.put_str_at(5, progress_y + 2, &format!(
+                    "  {} MB downloaded                  ",
                     downloaded_mb
                 ), EFI_LIGHTGREEN, EFI_BLACK);
+                
+                screen.put_str_at(5, status_y, "Status: Download complete!          ", EFI_LIGHTGREEN, EFI_BLACK);
                 
                 Ok(bytes)
             }
             Err(e) => {
-                log_y = progress_y + 1;
-                screen.put_str_at(5, log_y, &format!("HTTP Failed: {:?}", e), EFI_RED, EFI_BLACK);
-                log_y += 1;
+                screen.put_str_at(5, status_y, &format!("Status: FAILED - {:?}              ", e), EFI_RED, EFI_BLACK);
                 
-                // Show final stats
+                // Show stats on error
                 let final_tx = morpheus_network::stack::tx_packet_count();
                 let final_rx = morpheus_network::stack::rx_packet_count();
                 let final_err = morpheus_network::stack::tx_error_count();
-                screen.put_str_at(5, log_y, &format!(
-                    "Stats: TX:{} RX:{} ERR:{} Downloaded:{}B",
+                screen.put_str_at(5, status_y + 2, &format!(
+                    "Debug: TX:{} RX:{} ERR:{} Bytes:{}",
                     final_tx, final_rx, final_err, final_bytes
                 ), EFI_YELLOW, EFI_BLACK);
-                log_y += 1;
                 
-                screen.put_str_at(5, log_y + 1, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
+                screen.put_str_at(5, status_y + 4, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
                 
                 // Wait so user can see the error
                 let spin_start = get_time_ms();
-                while get_time_ms() - spin_start < 10000 {}  // 10 second pause
+                while get_time_ms() - spin_start < 10000 {}
                 
                 Err("Download failed")
             }
