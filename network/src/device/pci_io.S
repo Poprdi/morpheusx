@@ -191,3 +191,18 @@ io_inl:
     mov dx, cx
     in eax, dx
     ret
+
+; =============================================================================
+; read_tsc - Read CPU timestamp counter
+;
+; Arguments: None
+;
+; Returns:
+;   RAX: 64-bit TSC value (EDX:EAX combined)
+; =============================================================================
+global read_tsc
+read_tsc:
+    rdtsc                       ; Result in EDX:EAX
+    shl rdx, 32                 ; Shift high 32 bits
+    or rax, rdx                 ; Combine into RAX
+    ret

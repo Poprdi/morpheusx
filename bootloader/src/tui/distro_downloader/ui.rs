@@ -611,13 +611,13 @@ impl DistroDownloader {
         
         let mut log_y = 4;
 
-        // Time function for network stack
+        // Time function for network stack using standalone assembly RDTSC
+        // We estimate ~2GHz CPU, so divide by 2_000_000 to get ms
         fn get_time_ms() -> u64 {
-            static mut COUNTER: u64 = 0;
-            unsafe {
-                COUNTER += 100;
-                COUNTER
-            }
+            // Use standalone assembly from morpheus_network
+            let tsc = unsafe { morpheus_network::read_tsc() };
+            // Assume ~2GHz CPU, adjust if needed
+            tsc / 2_000_000
         }
 
         // Step 1: Initialize DMA pool from code caves in our PE binary
@@ -689,21 +689,30 @@ impl DistroDownloader {
         log_y += 1;
 
         // Show what's at common VirtIO locations
-        screen.put_str_at(5, log_y, "Probing common device slots...", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, log_y, "All devices on bus 0:", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
-        for (loc, vendor, device) in diag.virtio_locations.iter().take(6) {
-            let status = if *vendor == 0xFFFF { 
-                "empty" 
-            } else if *vendor == 0x1AF4 { 
-                "VirtIO!" 
+        // Show ALL detected devices with their status
+        for (loc, vendor, device) in diag.virtio_locations.iter() {
+            let status = if *vendor == 0x1AF4 { 
+                if *device == 0x1000 || *device == 0x1001 { "VirtIO-NET" }
+                else if *device == 0x1041 { "VirtIO-NET(M)" }
+                else if *device == 0x1050 { "VirtIO-GPU" }
+                else { "VirtIO" }
             } else { 
                 "device" 
+            };
+            let color = if *vendor == 0x1AF4 && (*device == 0x1000 || *device == 0x1001 || *device == 0x1041) {
+                EFI_LIGHTGREEN
+            } else if *vendor == 0x1AF4 {
+                EFI_YELLOW
+            } else {
+                EFI_DARKGRAY
             };
             screen.put_str_at(7, log_y, &format!(
                 "  {:02x}:{:02x}.{}: {:04x}:{:04x} ({})",
                 loc.bus, loc.device, loc.function, vendor, device, status
-            ), if *vendor == 0x1AF4 { EFI_LIGHTGREEN } else { EFI_DARKGRAY }, EFI_BLACK);
+            ), color, EFI_BLACK);
             log_y += 1;
         }
 
@@ -786,34 +795,28 @@ impl DistroDownloader {
         };
 
         // Legacy I/O configuration access for virtio-drivers
+        // Uses standalone assembly from morpheus_network (no inline asm)
         struct LegacyConfigAccess;
-        impl LegacyConfigAccess {
-            fn config_address(df: DeviceFunction, reg: u8) -> u32 {
-                0x8000_0000
-                    | ((df.bus as u32) << 16)
-                    | ((df.device as u32) << 11)
-                    | ((df.function as u32) << 8)
-                    | ((reg as u32) & 0xFC)
-            }
-        }
         impl ConfigurationAccess for LegacyConfigAccess {
             fn read_word(&self, df: DeviceFunction, reg: u8) -> u32 {
-                use core::arch::asm;
-                let address = Self::config_address(df, reg);
-                unsafe {
-                    asm!("out dx, eax", in("dx") 0xCF8u16, in("eax") address, options(nomem, nostack));
-                    let value: u32;
-                    asm!("in eax, dx", in("dx") 0xCFCu16, out("eax") value, options(nomem, nostack));
-                    value
-                }
+                // Use standalone assembly for PCI config read
+                use morpheus_network::device::pci::LegacyIoAccess;
+                use morpheus_network::device::pci::ConfigAccess;
+                let access = LegacyIoAccess::new();
+                let loc = morpheus_network::device::pci::DeviceFunction::new(
+                    df.bus, df.device, df.function
+                );
+                unsafe { access.read32(loc, reg) }
             }
             fn write_word(&mut self, df: DeviceFunction, reg: u8, data: u32) {
-                use core::arch::asm;
-                let address = Self::config_address(df, reg);
-                unsafe {
-                    asm!("out dx, eax", in("dx") 0xCF8u16, in("eax") address, options(nomem, nostack));
-                    asm!("out dx, eax", in("dx") 0xCFCu16, in("eax") data, options(nomem, nostack));
-                }
+                // Use standalone assembly for PCI config write
+                use morpheus_network::device::pci::LegacyIoAccess;
+                use morpheus_network::device::pci::ConfigAccess;
+                let access = LegacyIoAccess::new();
+                let loc = morpheus_network::device::pci::DeviceFunction::new(
+                    df.bus, df.device, df.function
+                );
+                unsafe { access.write32(loc, reg, data) }
             }
             unsafe fn unsafe_clone(&self) -> Self { Self }
         }
@@ -848,20 +851,59 @@ impl DistroDownloader {
         ), EFI_YELLOW, EFI_BLACK);
         log_y += 1;
 
-        // Step 6: DHCP
+        // Step 6: DHCP configuration
         screen.put_str_at(5, log_y, "Starting DHCP...", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
         let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
         
-        screen.put_str_at(7, log_y, "Waiting for DHCP (30s)...", EFI_YELLOW, EFI_BLACK);
-        if let Err(e) = client.wait_for_network(30_000) {
-            log_y += 1;
-            screen.put_str_at(5, log_y, &format!("DHCP failed: {:?}", e), EFI_RED, EFI_BLACK);
-            return Err("DHCP configuration timeout");
+        // Debug: Check if we can even transmit
+        screen.put_str_at(7, log_y, "Checking TX capability...", EFI_YELLOW, EFI_BLACK);
+        
+        // Poll once and see what happens
+        screen.put_str_at(7, log_y, "First poll() call...    ", EFI_YELLOW, EFI_BLACK);
+        client.poll();
+        screen.put_str_at(7, log_y, "Poll returned!          ", EFI_LIGHTGREEN, EFI_BLACK);
+        log_y += 1;
+        
+        // Now do the DHCP loop
+        let start_time = get_time_ms();
+        let mut poll_count = 0u32;
+        let mut last_update = start_time;
+        
+        while !client.is_network_ready() {
+            client.poll();
+            poll_count += 1;
+            
+            let now = get_time_ms();
+            if now - last_update > 1000 {
+                // Update every second
+                let elapsed = (now - start_time) / 1000;
+                screen.put_str_at(7, log_y, &format!(
+                    "DHCP: {}s, {} polls        ", elapsed, poll_count
+                ), EFI_YELLOW, EFI_BLACK);
+                last_update = now;
+            }
+            
+            if now - start_time > 30_000 {
+                log_y += 1;
+                screen.put_str_at(5, log_y, "DHCP timeout - no response", EFI_RED, EFI_BLACK);
+                log_y += 1;
+                
+                // Spin for 5 seconds so user can see the output
+                let spin_start = get_time_ms();
+                while get_time_ms() - spin_start < 5000 {}
+                
+                return Err("DHCP configuration timeout");
+            }
         }
         log_y += 1;
-        screen.put_str_at(5, log_y, "Network configured!", EFI_LIGHTGREEN, EFI_BLACK);
+        
+        if let Some(ip) = client.ip_address() {
+            screen.put_str_at(5, log_y, &format!("IP: {}", ip), EFI_LIGHTGREEN, EFI_BLACK);
+            log_y += 1;
+        }
+        screen.put_str_at(5, log_y, "Network ready!", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
 
         // Step 7: Download
