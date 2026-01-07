@@ -210,19 +210,58 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
     /// Resolve hostname to IP address.
     ///
-    /// Supports:
-    /// 1. Numeric IP addresses (e.g., "192.168.1.1")
-    /// 2. Hardcoded DNS for common distro download hosts
-    /// 3. TODO: Full DNS resolution via UDP
-    pub fn resolve_host(&self, host: &str) -> Result<Ipv4Addr> {
+    /// Uses actual DNS resolution via UDP to Cloudflare (1.1.1.1) or Google (8.8.8.8).
+    /// Falls back to hardcoded entries for reliability.
+    pub fn resolve_host(&mut self, host: &str) -> Result<Ipv4Addr> {
+        crate::stack::debug_log(40, "resolve_host start");
+        
         // Try parsing as IP address first
         if let Ok(ip) = host.parse::<Ipv4Addr>() {
+            crate::stack::debug_log(41, "host is IP addr");
             return Ok(ip);
         }
 
-        // Hardcoded DNS for common distro download hosts
-        // These are stable IPs for CDN/mirror services
-        // Updated: January 2026
+        crate::stack::debug_log(42, "starting DNS query");
+        
+        // Try actual DNS resolution (5 second timeout)
+        let start = self.now();
+        let timeout_ms = 5000;
+        
+        // Start DNS query
+        match self.iface.start_dns_query(host) {
+            Ok(query_handle) => {
+                crate::stack::debug_log(43, "DNS query started");
+                // Poll until we get a result
+                loop {
+                    let now = self.now();
+                    self.iface.poll(now);
+                    
+                    match self.iface.get_dns_result(query_handle) {
+                        Ok(Some(ip)) => {
+                            crate::stack::debug_log(44, "DNS resolved OK");
+                            return Ok(ip);
+                        }
+                        Ok(None) => {
+                            // Still pending
+                            if now - start > timeout_ms {
+                                crate::stack::debug_log(45, "DNS timeout");
+                                break; // Timeout - fall through to hardcoded
+                            }
+                        }
+                        Err(_) => {
+                            crate::stack::debug_log(46, "DNS query failed");
+                            break; // Failed - fall through to hardcoded
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                crate::stack::debug_log(47, "DNS start failed");
+                // Couldn't start query - fall through to hardcoded
+            }
+        }
+
+        // Fallback: Hardcoded DNS for common hosts (in case DNS is blocked)
         let known_hosts: &[(&str, &str)] = &[
             // Test endpoints (HTTP)
             ("speedtest.tele2.net", "90.130.70.73"),
@@ -232,43 +271,25 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             // Ubuntu/Canonical
             ("releases.ubuntu.com", "91.189.91.38"),
             ("cdimage.ubuntu.com", "91.189.88.142"),
-            ("archive.ubuntu.com", "91.189.91.39"),
-            // Kernel.org mirrors
-            ("mirrors.edge.kernel.org", "147.75.197.195"),
-            ("cdn.kernel.org", "139.178.84.217"),
-            // Tails official (HTTPS only)
-            ("download.tails.net", "204.13.164.63"),
-            // Fedora
-            ("download.fedoraproject.org", "152.19.134.142"),
-            // Debian  
-            ("cdimage.debian.org", "194.71.11.165"),
-            ("ftp.debian.org", "199.232.66.132"),
-            // Arch Linux
-            ("mirror.rackspace.com", "162.209.85.197"),
-            ("mirrors.kernel.org", "147.75.197.195"),
-            // Kali
-            ("cdimage.kali.org", "192.99.200.113"),
-            // Whonix
-            ("download.whonix.org", "116.202.120.184"),
-            // Generic/test
-            ("httpbin.org", "54.144.42.194"),
         ];
 
         for (hostname, ip_str) in known_hosts {
-            if host == *hostname || host.ends_with(&format!(".{}", hostname)) {
+            if host == *hostname {
                 if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
+                    crate::stack::debug_log(48, "using hardcoded DNS");
                     return Ok(ip);
                 }
             }
         }
 
-        // TODO: Implement DNS resolution via UDP
-        // For now, return error for unknown hostnames
+        crate::stack::debug_log(49, "DNS resolution FAILED");
         Err(NetworkError::DnsResolutionFailed)
     }
 
     /// Connect to a remote host.
     fn connect(&mut self, ip: Ipv4Addr, port: u16) -> Result<()> {
+        crate::stack::debug_log(50, "TCP connect start");
+        
         // Close any existing connection
         if let Some(handle) = self.socket.take() {
             self.iface.tcp_close(handle);
@@ -278,9 +299,11 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         // Create new socket
         let handle = self.iface.tcp_socket()?;
         self.socket = Some(handle);
+        crate::stack::debug_log(51, "TCP socket created");
 
         // Initiate connection
         self.iface.tcp_connect(handle, ip, port)?;
+        crate::stack::debug_log(52, "TCP connecting...");
 
         // Wait for connection
         let start = self.now();
@@ -289,14 +312,18 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
             let state = self.iface.tcp_state(handle);
             if state == TcpState::Closed || state == TcpState::TimeWait {
+                crate::stack::debug_log(53, "TCP conn FAILED");
                 return Err(NetworkError::ConnectionFailed);
             }
 
             if self.now() - start > self.config.connect_timeout_ms {
+                crate::stack::debug_log(54, "TCP conn TIMEOUT");
+                crate::stack::debug_log(54, "TCP conn TIMEOUT");
                 return Err(NetworkError::Timeout);
             }
         }
 
+        crate::stack::debug_log(55, "TCP connected OK");
         Ok(())
     }
 
@@ -431,23 +458,32 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
+        crate::stack::debug_log(60, "get_streaming start");
+        
         let parsed_url = Url::parse(url)?;
         
         // Check for HTTPS - we don't support TLS yet!
         if parsed_url.is_https() {
+            crate::stack::debug_log(61, "HTTPS not supported!");
             return Err(NetworkError::TlsNotSupported);
         }
         
         let request = Request::get(parsed_url.clone());
+        crate::stack::debug_log(62, "resolving host...");
 
         // Resolve and connect
         let ip = self.resolve_host(&request.url.host)?;
+        crate::stack::debug_log(63, "host resolved");
+        
         let port = request.url.port.unwrap_or_else(|| parsed_url.scheme.default_port());
         self.connect(ip, port)?;
+        crate::stack::debug_log(64, "connected to server");
 
         // Send request
+        crate::stack::debug_log(65, "sending HTTP request");
         let wire = request.to_wire_format();
         self.send_all(&wire)?;
+        crate::stack::debug_log(66, "request sent");
 
         // Read response headers first
         let mut header_buf = Vec::new();
@@ -455,9 +491,11 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         let mut headers_complete = false;
         let mut body_start = 0;
 
+        crate::stack::debug_log(67, "reading headers...");
         while !headers_complete {
             let n = self.recv(&mut buffer)?;
             if n == 0 {
+                crate::stack::debug_log(68, "unexpected EOF");
                 return Err(NetworkError::UnexpectedEof);
             }
             header_buf.extend_from_slice(&buffer[..n]);
@@ -468,6 +506,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 body_start = pos + 4; // Skip \r\n\r\n
             }
         }
+        crate::stack::debug_log(69, "headers received");
 
         // Parse headers to get Content-Length
         let headers_str = core::str::from_utf8(&header_buf[..body_start - 4])
@@ -483,6 +522,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
 
         // Stream remaining body
+        crate::stack::debug_log(70, "streaming body...");
         loop {
             // Check if we have all data
             if let Some(expected) = content_length {
@@ -497,10 +537,14 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                     callback(&buffer[..n])?;
                     total_received += n;
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    crate::stack::debug_log(71, "recv error");
+                    return Err(e);
+                }
             }
         }
 
+        crate::stack::debug_log(72, "download complete");
         Ok(total_received)
     }
 

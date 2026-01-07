@@ -456,8 +456,7 @@ impl DistroDownloader {
         };
 
         // Step 6: Initialize HTTP client and start download
-        self.download_state.start_download(Some(total_size as usize));
-        self.render_progress_only(screen);
+        // Note: Progress UI will be shown by download_with_chunk_writer after network init
 
         // Get fresh block_io for write operations
         let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
@@ -468,26 +467,15 @@ impl DistroDownloader {
             }
         };
 
-        // Try native VirtIO download first (works without UEFI HTTP protocol)
-        // Falls back to UEFI HTTP if native fails
-        morpheus_core::logger::log("Attempting native network download (VirtIO)...");
-        let download_result = self.download_native(
+        // Use native VirtIO download (works without UEFI HTTP protocol)
+        morpheus_core::logger::log("Starting native network download (VirtIO)...");
+        let download_result = self.download_with_chunk_writer(
             distro.url,
             distro.size_bytes,
             &mut chunk_writer,
             block_io_protocol,
             screen,
-        ).or_else(|native_err| {
-            // Native failed, try UEFI HTTP as fallback
-            morpheus_core::logger::log(format!("Native download failed: {}, trying UEFI HTTP...", native_err).leak());
-            self.download_with_chunk_writer(
-                distro.url,
-                distro.size_bytes,
-                &mut chunk_writer,
-                block_io_protocol,
-                screen,
-            )
-        });
+        );
 
         match download_result {
             Ok(bytes_written) => {
@@ -951,9 +939,42 @@ impl DistroDownloader {
         // Reset TX error counter before starting
         morpheus_network::stack::reset_counters();
         
+        // Clear debug log ring buffer and reset stage
+        morpheus_network::debug_log_clear();
+        morpheus_network::stack::set_debug_stage(0);
+        
         screen.put_str_at(7, log_y, "Creating NativeHttpClient...", EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+        
+        // Reserve lines for debug log display (ring buffer will be shown here)
+        let debug_log_start_y = log_y;
+        let debug_log_lines = 6; // Show up to 6 log lines
+        for i in 0..debug_log_lines {
+            screen.put_str_at(9, debug_log_start_y + i, "                                                        ", EFI_DARKGRAY, EFI_BLACK);
+        }
+        log_y += debug_log_lines;
+        
+        // Create the client - debug logs will accumulate in ring buffer
         let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
-        screen.put_str_at(7, log_y, "NativeHttpClient created OK  ", EFI_LIGHTGREEN, EFI_BLACK);
+        
+        // Drain debug ring buffer and display on screen
+        let mut log_line = 0;
+        while let Some(entry) = morpheus_network::debug_log_pop() {
+            if log_line < debug_log_lines {
+                // Convert message bytes to string
+                let msg = core::str::from_utf8(&entry.msg[..entry.len]).unwrap_or("???");
+                screen.put_str_at(9, debug_log_start_y + log_line, &format!(
+                    "[{:2}] {}                                    ", entry.stage, msg
+                ), EFI_LIGHTGREEN, EFI_BLACK);
+                log_line += 1;
+            }
+        }
+        
+        // Show final stage
+        let final_stage = morpheus_network::stack::debug_stage();
+        screen.put_str_at(7, log_y, &format!(
+            "Init complete (stage {})                         ", final_stage
+        ), EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
         // Try to understand where we hang
@@ -989,9 +1010,23 @@ impl DistroDownloader {
         let mut poll_count = 0u32;
         let mut last_update = start_time;
         
+        // Reserve a line for debug log output during DHCP
+        let dhcp_debug_y = log_y;
+        log_y += 1;
+        let dhcp_status_y = log_y;
+        log_y += 1;
+        
         while !client.is_network_ready() {
             client.poll();
             poll_count += 1;
+            
+            // Drain any debug logs and show latest
+            while let Some(entry) = morpheus_network::debug_log_pop() {
+                let msg = core::str::from_utf8(&entry.msg[..entry.len]).unwrap_or("???");
+                screen.put_str_at(9, dhcp_debug_y, &format!(
+                    "[{:2}] {}                                      ", entry.stage, msg
+                ), EFI_YELLOW, EFI_BLACK);
+            }
             
             let now = get_time_ms();
             if now - last_update > 1000 {
@@ -1001,14 +1036,13 @@ impl DistroDownloader {
                 let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
                 let rx_pkts = morpheus_network::stack::rx_packet_count();
                 let tx_errs = morpheus_network::stack::tx_error_count();
-                screen.put_str_at(7, log_y, &format!(
-                    "{}s TX:{} DHCP:{} RX:{} ERR:{}", elapsed, tx_pkts, dhcp_pkts, rx_pkts, tx_errs
+                screen.put_str_at(7, dhcp_status_y, &format!(
+                    "{}s TX:{} DHCP:{} RX:{} ERR:{}        ", elapsed, tx_pkts, dhcp_pkts, rx_pkts, tx_errs
                 ), if rx_pkts > 0 { EFI_LIGHTGREEN } else { EFI_YELLOW }, EFI_BLACK);
                 last_update = now;
             }
             
             if now - start_time > 30_000 {
-                log_y += 1;
                 let tx_pkts = morpheus_network::stack::tx_packet_count();
                 let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
                 let rx_pkts = morpheus_network::stack::rx_packet_count();
@@ -1070,13 +1104,29 @@ impl DistroDownloader {
         
         // Row 12: Status line
         let status_y = 12;
-        screen.put_str_at(5, status_y, "Status: Downloading...", EFI_YELLOW, EFI_BLACK);
+        screen.put_str_at(5, status_y, "Status: Connecting...", EFI_YELLOW, EFI_BLACK);
+
+        // Show what we're connecting to
+        let host = url.split('/').nth(2).unwrap_or("unknown");
+        screen.put_str_at(5, status_y + 1, &format!("Host: {}", host), EFI_DARKGRAY, EFI_BLACK);
         
         let progress_bytes = Cell::new(0usize);
         let last_update = Cell::new(0u64);
+        let chunks_received = Cell::new(0u32);
         let start_time = get_time_ms();
 
+        // Update status when streaming starts
+        let status_updated = Cell::new(false);
+        
         let result = client.get_streaming(url, |chunk_data| {
+            // Mark that we got data
+            if !status_updated.get() {
+                status_updated.set(true);
+                screen.put_str_at(5, status_y, "Status: Downloading...              ", EFI_YELLOW, EFI_BLACK);
+            }
+            
+            chunks_received.set(chunks_received.get() + 1);
+            
             let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
             
             chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
@@ -1161,40 +1211,36 @@ impl DistroDownloader {
                 Ok(bytes)
             }
             Err(e) => {
-                screen.put_str_at(5, status_y, &format!("Status: FAILED - {:?}              ", e), EFI_RED, EFI_BLACK);
+                screen.put_str_at(5, status_y, &format!("FAILED: {:?}                        ", e), EFI_RED, EFI_BLACK);
                 
-                // Show stats on error
+                // Show detailed stats on error
                 let final_tx = morpheus_network::stack::tx_packet_count();
                 let final_rx = morpheus_network::stack::rx_packet_count();
                 let final_err = morpheus_network::stack::tx_error_count();
+                let chunks = chunks_received.get();
+                
                 screen.put_str_at(5, status_y + 2, &format!(
-                    "Debug: TX:{} RX:{} ERR:{} Bytes:{}",
-                    final_tx, final_rx, final_err, final_bytes
+                    "TX:{} RX:{} ERR:{} Chunks:{} Bytes:{}",
+                    final_tx, final_rx, final_err, chunks, final_bytes
                 ), EFI_YELLOW, EFI_BLACK);
                 
-                screen.put_str_at(5, status_y + 4, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
+                // Show if we even connected
+                let connected_msg = if status_updated.get() {
+                    "Connected OK, failed during download"
+                } else {
+                    "Failed before receiving any data (connection issue?)"
+                };
+                screen.put_str_at(5, status_y + 3, connected_msg, EFI_YELLOW, EFI_BLACK);
+                
+                screen.put_str_at(5, status_y + 5, "Waiting 15s so you can read this...", EFI_DARKGRAY, EFI_BLACK);
                 
                 // Wait so user can see the error
                 let spin_start = get_time_ms();
-                while get_time_ms() - spin_start < 10000 {}
+                while get_time_ms() - spin_start < 15000 {}
                 
                 Err("Download failed")
             }
         }
-    }
-
-    /// Legacy UEFI HTTP download - REMOVED
-    /// Use download_with_chunk_writer which now uses native stack
-    #[allow(dead_code)]
-    fn download_native(
-        &mut self,
-        _url: &str,
-        _expected_size: u64,
-        _chunk_writer: &mut ChunkWriter,
-        _block_io_protocol: *mut BlockIoProtocol,
-        _screen: &mut Screen,
-    ) -> Result<usize, &'static str> {
-        Err("Use download_with_chunk_writer - it now uses native network stack")
     }
 
     /// Show download error and return to result mode
