@@ -131,12 +131,13 @@ impl StaticHal {
 // SAFETY: We implement the Hal trait correctly using dma-pool
 unsafe impl Hal for StaticHal {
     fn dma_alloc(pages: usize, _direction: BufferDirection) -> (PhysAddr, NonNull<u8>) {
-        DmaPool::alloc_pages(pages)
-            .expect("StaticHal: DMA allocation failed")
+        let (paddr, vaddr) = DmaPool::alloc_pages(pages)
+            .expect("StaticHal: DMA allocation failed");
+        (paddr as PhysAddr, vaddr)
     }
 
     unsafe fn dma_dealloc(paddr: PhysAddr, _vaddr: NonNull<u8>, pages: usize) -> i32 {
-        DmaPool::dealloc_pages(paddr, pages);
+        DmaPool::dealloc_pages(paddr as usize, pages);
         0
     }
 

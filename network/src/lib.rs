@@ -1,6 +1,7 @@
 //! MorpheusX Network Stack
 //!
 //! Firmware-agnostic bare-metal HTTP client for bootloader environments.
+//! Uses code caves in our PE binary for DMA memory - no firmware calls needed.
 //!
 //! # Architecture
 //!
@@ -26,24 +27,34 @@
 //!         ▼                    ▼                    ▼
 //!    VirtIO-net           Intel i210           Realtek RTL
 //!    (QEMU/KVM)           (future)             (future)
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │              StaticHal (dma-pool crate)                     │
+//! │  DMA memory from code caves in PE section padding           │
+//! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! # Quick Start
 //!
 //! ```ignore
-//! use morpheus_network::client::NativeHttpClient;
+//! use dma_pool::{DmaPool, MemoryDiscovery, PaddingPattern};
 //! use morpheus_network::device::virtio::VirtioNetDevice;
 //! use morpheus_network::device::hal::StaticHal;
+//! use morpheus_network::client::NativeHttpClient;
 //! use morpheus_network::stack::NetConfig;
 //!
-//! // Initialize HAL (once at boot)
+//! // Initialize DMA pool from caves in our PE image
+//! unsafe { DmaPool::init_from_caves(image_base, image_end) };
+//!
+//! // Initialize HAL
 //! StaticHal::init();
 //!
 //! // Create network device (VirtIO for QEMU)
 //! let device = VirtioNetDevice::<StaticHal, _>::new(transport)?;
 //!
 //! // Create HTTP client with DHCP
-//! let mut client = NativeHttpClient::new(device, NetConfig::dhcp(), get_time_ms);
+//! let mut client = NativeHttpClient::new(device, NetConfig::Dhcp, get_time_ms);
 //!
 //! // Wait for network
 //! client.wait_for_network(30_000)?;
@@ -63,12 +74,10 @@ extern crate alloc;
 
 pub mod error;
 pub mod types;
-pub mod protocol;
 pub mod http;
 pub mod url;
 pub mod transfer;
 pub mod client;
-pub mod utils;
 pub mod device;
 pub mod stack;
 
@@ -77,6 +86,7 @@ pub use types::{HttpMethod, ProgressCallback};
 pub use client::HttpClient;
 pub use client::NativeHttpClient;
 pub use device::NetworkDevice;
-pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState};
+pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState, ecam_bases};
+pub use device::hal::StaticHal;
 
 
