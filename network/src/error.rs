@@ -1,10 +1,12 @@
 //! Network error types
 
+extern crate alloc;
+
 use core::fmt;
 
 pub type Result<T> = core::result::Result<T, NetworkError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkError {
     ProtocolNotAvailable,
     InitializationFailed,
@@ -18,6 +20,10 @@ pub enum NetworkError {
     OutOfMemory,
     Cancelled,
     TlsError,
+    /// Device-level error with description.
+    DeviceError(alloc::string::String),
+    /// Buffer too small for operation.
+    BufferTooSmall,
     Unknown,
 }
 
@@ -36,6 +42,8 @@ impl fmt::Display for NetworkError {
             Self::OutOfMemory => write!(f, "Out of memory"),
             Self::Cancelled => write!(f, "Operation cancelled"),
             Self::TlsError => write!(f, "TLS/HTTPS error"),
+            Self::DeviceError(msg) => write!(f, "Device error: {}", msg),
+            Self::BufferTooSmall => write!(f, "Buffer too small"),
             Self::Unknown => write!(f, "Unknown error"),
         }
     }

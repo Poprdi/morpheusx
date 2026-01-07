@@ -186,13 +186,28 @@ impl<H: Hal, T: Transport> VirtioNetDevice<H, T> {
     }
 
     /// Poll for completed RX buffers.
-    fn poll_rx(&mut self) -> Option<(usize, usize)> {
-        // Check each buffer for completion
-        for (idx, buf) in self.rx_buffers.iter_mut().enumerate() {
-            if let Some(token) = buf.token {
-                if let Some(len) = unsafe { self.inner.receive_complete(token) } {
-                    buf.token = None;
-                    return Some((idx, len));
+    ///
+    /// Returns (buffer_index, header_len, packet_len) if a packet is ready.
+    fn poll_rx(&mut self) -> Option<(usize, usize, usize)> {
+        // Use poll_receive to check for completion
+        if let Some(token) = self.inner.poll_receive() {
+            // Find the buffer with this token
+            for (idx, buf) in self.rx_buffers.iter_mut().enumerate() {
+                if buf.token == Some(token) {
+                    // Complete the receive
+                    match unsafe {
+                        self.inner
+                            .receive_complete(token, buf.data.as_mut_slice())
+                    } {
+                        Ok((hdr_len, pkt_len)) => {
+                            buf.token = None;
+                            return Some((idx, hdr_len, pkt_len));
+                        }
+                        Err(_) => {
+                            buf.token = None;
+                            return None;
+                        }
+                    }
                 }
             }
         }
@@ -200,8 +215,12 @@ impl<H: Hal, T: Transport> VirtioNetDevice<H, T> {
     }
 
     /// Acknowledge interrupt (call after handling packets).
+    ///
+    /// Returns true if there was a queue notification.
     pub fn ack_interrupt(&mut self) -> bool {
-        self.inner.ack_interrupt()
+        use virtio_drivers::transport::InterruptStatus;
+        let status = self.inner.ack_interrupt();
+        status.contains(InterruptStatus::QUEUE_INTERRUPT)
     }
 }
 
@@ -245,12 +264,11 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
 
     fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>> {
         // Poll for completed RX
-        if let Some((idx, len)) = self.poll_rx() {
+        if let Some((idx, hdr_len, pkt_len)) = self.poll_rx() {
             // Received a packet
             let rx_buf = &self.rx_buffers[idx];
-            let packet_len = len.saturating_sub(VIRTIO_NET_HDR_SIZE);
 
-            if buffer.len() < packet_len {
+            if buffer.len() < pkt_len {
                 // Buffer too small, but we still consumed the packet
                 // Refill and return error
                 let _ = self.refill_rx_queue();
@@ -258,14 +276,12 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
             }
 
             // Copy packet data (skip header)
-            buffer[..packet_len].copy_from_slice(
-                &rx_buf.data[VIRTIO_NET_HDR_SIZE..VIRTIO_NET_HDR_SIZE + packet_len],
-            );
+            buffer[..pkt_len].copy_from_slice(&rx_buf.data[hdr_len..hdr_len + pkt_len]);
 
             // Refill the RX queue
             let _ = self.refill_rx_queue();
 
-            return Ok(Some(packet_len));
+            return Ok(Some(pkt_len));
         }
 
         // No packet available
