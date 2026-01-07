@@ -89,4 +89,8 @@ pub use device::NetworkDevice;
 pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState, ecam_bases};
 pub use device::hal::StaticHal;
 
+// Re-export standalone assembly functions
+#[cfg(target_arch = "x86_64")]
+pub use device::pci::{read_tsc, pci_io_test};
+
 
