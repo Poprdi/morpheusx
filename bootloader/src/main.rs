@@ -323,15 +323,9 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                     launcher.run(&mut screen, &mut keyboard, bs, st_ptr, image_handle);
                 }
                 MenuAction::DistroDownloader => {
-                    screen.clear();
-                    screen.put_str_at(
-                        5,
-                        10,
-                        "Distro Downloader - Coming soon...",
-                        tui::renderer::EFI_LIGHTGREEN,
-                        tui::renderer::EFI_BLACK,
-                    );
-                    keyboard.wait_for_key();
+                    let bs = &*system_table.boot_services;
+                    let mut downloader = tui::distro_downloader::DistroDownloader::new(bs, image_handle);
+                    downloader.run(&mut screen, &mut keyboard);
                 }
                 MenuAction::StorageManager => {
                     let bs = &*system_table.boot_services;
