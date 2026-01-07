@@ -69,21 +69,29 @@ impl<D: NetworkDevice> Device for DeviceAdapter<D> {
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if self.inner.can_receive() {
-            let device_ptr: *mut D = &mut self.inner;
-            Some((
-                AdapterRxToken {
+        // Try to actually receive a packet first
+        // Only return tokens if we have data ready
+        let mut temp_buf = [0u8; MTU];
+        match self.inner.receive(&mut temp_buf) {
+            Ok(Some(len)) if len > 0 => {
+                // We have a packet! Create tokens with the data
+                let device_ptr: *mut D = &mut self.inner;
+                let mut token = AdapterRxToken {
                     device: device_ptr,
                     buffer: [0u8; MTU],
+                    len,
                     _p: PhantomData,
-                },
-                AdapterTxToken {
-                    device: device_ptr,
-                    _p: PhantomData,
-                },
-            ))
-        } else {
-            None
+                };
+                token.buffer[..len].copy_from_slice(&temp_buf[..len]);
+                Some((
+                    token,
+                    AdapterTxToken {
+                        device: device_ptr,
+                        _p: PhantomData,
+                    },
+                ))
+            }
+            _ => None, // No packet available
         }
     }
 
@@ -103,20 +111,18 @@ impl<D: NetworkDevice> Device for DeviceAdapter<D> {
 pub struct AdapterRxToken<'a, D: NetworkDevice> {
     device: *mut D,
     buffer: [u8; MTU],
+    len: usize,
     _p: PhantomData<&'a mut D>,
 }
 
 impl<'a, D: NetworkDevice> RxToken for AdapterRxToken<'a, D> {
-    fn consume<R, F>(mut self, f: F) -> R
+    fn consume<R, F>(self, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let len = match unsafe { (*self.device).receive(&mut self.buffer) } {
-            Ok(Some(size)) => size,
-            Ok(None) => 0,
-            Err(_) => 0,
-        };
-        f(&mut self.buffer[..len])
+        // We already have the data in buffer from when receive() was called
+        let mut buf = self.buffer;
+        f(&mut buf[..self.len])
     }
 }
 

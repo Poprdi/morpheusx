@@ -232,13 +232,15 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
     }
 
     fn can_receive(&self) -> bool {
-        // Check if any RX buffer has completed
-        for buf in &self.rx_buffers {
-            if buf.token.is_some() {
-                // Can't check completion without mutable access, assume yes
-                return true;
-            }
-        }
+        // We can't actually check if an RX buffer has completed without
+        // calling poll_receive() which requires &mut self.
+        // 
+        // IMPORTANT: Return false here to avoid smoltcp spinning.
+        // smoltcp will still call receive() periodically, and if a packet
+        // has arrived, poll_rx() will find it.
+        //
+        // This is a conservative approach - we might miss immediate
+        // notification of packet arrival, but it won't cause hangs.
         false
     }
 
