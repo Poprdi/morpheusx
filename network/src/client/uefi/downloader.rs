@@ -215,6 +215,75 @@ impl<'a> Downloader<'a> {
         self.execute_with_retry(&request)
     }
 
+    /// Download to a writer callback (for streaming to disk).
+    ///
+    /// This method downloads in chunks and calls the writer for each chunk,
+    /// allowing memory-efficient downloads of large files.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL to download from
+    /// * `writer` - Callback that receives data chunks: (chunk_data, offset) -> Result<()>
+    /// * `progress` - Optional progress callback: (bytes_downloaded, total_size)
+    ///
+    /// # Returns
+    ///
+    /// Total bytes downloaded on success.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// downloader.download_to_writer(
+    ///     "http://example.com/large.iso",
+    ///     |chunk, offset| {
+    ///         // Write chunk to disk at offset
+    ///         disk_writer.write(offset, chunk)?;
+    ///         Ok(())
+    ///     },
+    ///     Some(|downloaded, total| {
+    ///         println!("Progress: {} / {:?}", downloaded, total);
+    ///     }),
+    /// )?;
+    /// ```
+    pub fn download_to_writer<W>(
+        &mut self,
+        url: &str,
+        mut writer: W,
+        progress: Option<ProgressCallback>,
+    ) -> Result<usize>
+    where
+        W: FnMut(&[u8], usize) -> Result<()>,
+    {
+        let parsed_url = Url::parse(url)?;
+        
+        // Get file size first
+        let total_size = self.get_file_size(url)?;
+        
+        // Execute the download
+        let request = Request::get(parsed_url);
+        let response = self.execute_with_retry(&request)?;
+        
+        if !response.is_success() {
+            return Err(NetworkError::HttpError(response.status_code));
+        }
+        
+        // Write chunks
+        let chunk_size = self.config.chunk_size;
+        let mut offset = 0usize;
+        
+        for chunk in response.body.chunks(chunk_size) {
+            writer(chunk, offset)?;
+            offset += chunk.len();
+            
+            // Report progress
+            if let Some(ref cb) = progress {
+                cb(offset, total_size);
+            }
+        }
+        
+        Ok(offset)
+    }
+
     /// Internal: Download from parsed URL.
     fn download_url(
         &mut self,

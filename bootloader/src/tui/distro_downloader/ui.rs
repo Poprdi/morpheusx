@@ -9,6 +9,8 @@
 //! - Only re-render after handling input (no clear in render loop)
 
 use alloc::vec::Vec;
+use alloc::format;
+use alloc::string::ToString;
 
 use super::catalog::{DistroEntry, CATEGORIES, get_by_category};
 use super::state::{DownloadState, DownloadStatus, UiState, UiMode};
@@ -18,7 +20,11 @@ use crate::tui::renderer::{
     EFI_YELLOW, EFI_WHITE, EFI_DARKGRAY,
 };
 use crate::BootServices;
-use morpheus_core::iso::{IsoStorageManager, MAX_ISOS};
+use crate::uefi::block_io::{BlockIoProtocol, EFI_BLOCK_IO_PROTOCOL_GUID};
+use crate::uefi::block_io_adapter::UefiBlockIo;
+use morpheus_core::disk::gpt_ops::{find_free_space, create_partition, FreeRegion, GptError};
+use morpheus_core::disk::partition::PartitionType;
+use morpheus_core::iso::{IsoStorageManager, IsoManifest, ChunkWriter, ChunkInfo, ChunkSet, MAX_ISOS, MAX_CHUNKS, IsoError};
 
 // Layout constants
 const HEADER_Y: usize = 0;
@@ -325,29 +331,368 @@ impl DistroDownloader {
         self.needs_full_redraw = true;
         self.render_full(screen);
 
-        // TODO: Actual HTTP download integration
-        // For now, simulate the download process
-        self.simulate_download(distro, screen);
+        // Execute the full download flow
+        self.execute_download(distro, screen);
     }
 
-    /// Simulate download for testing (will be replaced with real HTTP)
-    fn simulate_download(&mut self, distro: &'static DistroEntry, screen: &mut Screen) {
-        self.download_state.start_download(Some(distro.size_bytes as usize));
+    /// Execute the full ISO download flow
+    ///
+    /// 1. Check disk space and find free regions
+    /// 2. Create chunk partitions
+    /// 3. Initialize HTTP client
+    /// 4. Download with streaming to chunk writer
+    /// 5. Finalize and register ISO
+    fn execute_download(&mut self, distro: &'static DistroEntry, screen: &mut Screen) {
+        let total_size = distro.size_bytes;
+        morpheus_core::logger::log(format!("Starting download: {} ({} bytes)", distro.name, total_size).leak());
+
+        // Step 1: Get block I/O protocol for disk operations
+        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
+            Some(p) => p,
+            None => {
+                self.show_download_error(screen, "No disk device found");
+                return;
+            }
+        };
+
+        // Create UEFI block I/O adapter
+        let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+
+        // Step 2: Find free space on disk
+        let block_size = uefi_block_io.block_size_bytes() as usize;
+        let free_regions = match find_free_space(&mut uefi_block_io, block_size) {
+            Ok(r) => r,
+            Err(e) => {
+                self.show_download_error(screen, &format!("Failed to scan disk: {:?}", e));
+                return;
+            }
+        };
+
+        // Calculate chunks needed (4GB per chunk)
+        const CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB
+        let chunks_needed = ((total_size + CHUNK_SIZE - 1) / CHUNK_SIZE) as usize;
+        
+        if chunks_needed > MAX_CHUNKS {
+            self.show_download_error(screen, "ISO too large (max 32GB)");
+            return;
+        }
+
+        morpheus_core::logger::log(format!("Need {} chunks for {} bytes", chunks_needed, total_size).leak());
+
+        // Step 3: Allocate partitions from free space
+        let chunk_partitions = match self.allocate_chunk_partitions(
+            &free_regions,
+            chunks_needed,
+            total_size,
+            block_size,
+        ) {
+            Some(p) => p,
+            None => {
+                self.show_download_error(screen, "Insufficient disk space");
+                return;
+            }
+        };
+
+        // Step 4: Create GPT partitions for each chunk
+        // Re-acquire block_io since we need mutable access
+        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
+            Some(p) => p,
+            None => {
+                self.show_download_error(screen, "Lost disk device");
+                return;
+            }
+        };
+
+        for (i, (start_lba, end_lba)) in chunk_partitions.iter().enumerate().take(chunks_needed) {
+            morpheus_core::logger::log(format!("Creating partition {}: LBA {} - {}", i, start_lba, end_lba).leak());
+            
+            let uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+            if let Err(e) = create_partition(
+                uefi_block_io,
+                PartitionType::BasicData, // FAT32 data partition
+                *start_lba,
+                *end_lba,
+            ) {
+                self.show_download_error(screen, &format!("Failed to create partition {}: {:?}", i, e));
+                return;
+            }
+        }
+
+        // Step 5: Prepare manifest and chunk writer
+        let mut manifest = IsoManifest::new(distro.filename, total_size);
+        
+        // Build chunk set with partition info
+        let mut chunks = ChunkSet::new();
+        chunks.total_size = total_size;
+        chunks.count = chunks_needed;
+        
+        let mut remaining = total_size;
+        for i in 0..chunks_needed {
+            let chunk_size = remaining.min(CHUNK_SIZE);
+            chunks.chunks[i] = ChunkInfo {
+                start_lba: chunk_partitions[i].0,
+                end_lba: chunk_partitions[i].1,
+                size: chunk_size,
+                written: 0,
+                verified: false,
+            };
+            remaining -= chunk_size;
+        }
+        manifest.chunks = chunks;
+
+        // Create chunk writer
+        let partitions: Vec<_> = chunk_partitions.iter()
+            .take(chunks_needed)
+            .copied()
+            .collect();
+        
+        let mut chunk_writer = match ChunkWriter::new(total_size, CHUNK_SIZE, &partitions) {
+            Ok(w) => w,
+            Err(e) => {
+                self.show_download_error(screen, &format!("Failed to create writer: {:?}", e));
+                return;
+            }
+        };
+
+        // Step 6: Initialize HTTP client and start download
+        self.download_state.start_download(Some(total_size as usize));
         self.render_progress_only(screen);
 
-        // For actual implementation, this would:
-        // 1. Initialize HTTP client via morpheus-network
-        // 2. Send HEAD request to get Content-Length
-        // 3. Create file on ESP: /isos/{filename}
-        // 4. Send GET request with progress callback
-        // 5. Write chunks to file, update progress
-        // 6. Verify checksum if available
+        // Get fresh block_io for write operations
+        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
+            Some(p) => p,
+            None => {
+                self.show_download_error(screen, "Lost disk device");
+                return;
+            }
+        };
 
-        // For now, mark as complete and show result
-        self.ui_state.show_result("Download simulation complete");
-        self.download_state.complete();
+        // Download with streaming write
+        let download_result = self.download_with_chunk_writer(
+            distro.url,
+            &mut chunk_writer,
+            block_io_protocol,
+            screen,
+        );
+
+        match download_result {
+            Ok(bytes_written) => {
+                morpheus_core::logger::log(format!("Download complete: {} bytes", bytes_written).leak());
+                
+                // Finalize chunk writer and get final chunk set
+                let final_chunks = match chunk_writer.finalize() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.show_download_error(screen, &format!("Finalize failed: {:?}", e));
+                        return;
+                    }
+                };
+
+                // Register ISO in storage manager
+                match self.iso_storage.finalize_download(manifest, final_chunks) {
+                    Ok(idx) => {
+                        morpheus_core::logger::log(format!("ISO registered at index {}", idx).leak());
+                        self.refresh_iso_cache();
+                        self.ui_state.show_result(&format!("Download complete: {}", distro.name));
+                        self.download_state.complete();
+                    }
+                    Err(e) => {
+                        self.show_download_error(screen, &format!("Failed to register ISO: {:?}", e));
+                        return;
+                    }
+                }
+            }
+            Err(msg) => {
+                self.show_download_error(screen, msg);
+                return;
+            }
+        }
+
         self.needs_full_redraw = true;
         self.render_full(screen);
+    }
+
+    /// Allocate chunk partitions from free space regions
+    fn allocate_chunk_partitions(
+        &self,
+        free_regions: &[Option<FreeRegion>; 16],
+        chunks_needed: usize,
+        total_size: u64,
+        block_size: usize,
+    ) -> Option<[(u64, u64); MAX_CHUNKS]> {
+        const CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB
+        let sectors_per_chunk = CHUNK_SIZE / block_size as u64;
+
+        let mut partitions = [(0u64, 0u64); MAX_CHUNKS];
+        let mut chunks_allocated = 0;
+        let mut remaining_bytes = total_size;
+
+        for region in free_regions.iter().flatten() {
+            if chunks_allocated >= chunks_needed {
+                break;
+            }
+
+            let region_size = region.size_lba;
+            let mut region_offset = 0u64;
+
+            while chunks_allocated < chunks_needed && region_offset + sectors_per_chunk <= region_size {
+                let chunk_bytes = remaining_bytes.min(CHUNK_SIZE);
+                let sectors_needed = (chunk_bytes + block_size as u64 - 1) / block_size as u64;
+
+                let start_lba = region.start_lba + region_offset;
+                let end_lba = start_lba + sectors_needed - 1;
+
+                partitions[chunks_allocated] = (start_lba, end_lba);
+                chunks_allocated += 1;
+                remaining_bytes = remaining_bytes.saturating_sub(CHUNK_SIZE);
+                region_offset += sectors_per_chunk;
+            }
+        }
+
+        if chunks_allocated >= chunks_needed {
+            Some(partitions)
+        } else {
+            None
+        }
+    }
+
+    /// Download URL and write to chunks via ChunkWriter
+    fn download_with_chunk_writer(
+        &mut self,
+        url: &str,
+        chunk_writer: &mut ChunkWriter,
+        block_io_protocol: *mut BlockIoProtocol,
+        screen: &mut Screen,
+    ) -> Result<usize, &'static str> {
+        use morpheus_network::client::uefi::{UefiHttpClient, Downloader, DownloadConfig};
+
+        // Initialize HTTP client
+        let mut http_client = match UefiHttpClient::new() {
+            Ok(c) => c,
+            Err(_) => return Err("Failed to create HTTP client"),
+        };
+
+        // Initialize with boot services
+        let bs = unsafe { &*self.boot_services };
+        if let Err(_) = http_client.initialize(bs) {
+            return Err("Failed to initialize HTTP client");
+        }
+
+        // Create downloader with ISO config
+        let config = DownloadConfig::for_iso();
+        let mut downloader = Downloader::with_config(&mut http_client, config);
+
+        // Track bytes for progress
+        let mut total_written = 0usize;
+
+        // Download with writer callback
+        let result = downloader.download_to_writer(
+            url,
+            |chunk_data, _offset| {
+                // Write chunk to disk via ChunkWriter
+                // SAFETY: block_io_protocol is valid for the duration of download
+                let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+                
+                chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
+                    // Write to disk at partition_start + sector_offset
+                    let lba = part_start + sector_offset;
+                    uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
+                        .map_err(|_| IsoError::IoError)
+                }).map_err(|_| morpheus_network::error::NetworkError::IoError)?;
+
+                total_written += chunk_data.len();
+                Ok(())
+            },
+            Some(|downloaded, total| {
+                // Update progress state
+                self.download_state.update_progress(downloaded, total);
+            }),
+        );
+
+        match result {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => Err("Download failed"),
+        }
+    }
+
+    /// Show download error and return to result mode
+    fn show_download_error(&mut self, screen: &mut Screen, msg: &str) {
+        morpheus_core::logger::log(format!("Download error: {}", msg).leak());
+        self.ui_state.show_result(msg);
+        self.download_state.fail(msg);
+        self.needs_full_redraw = true;
+        self.render_full(screen);
+    }
+
+    /// Get BlockIoProtocol pointer for first physical disk
+    fn get_first_disk_block_io(boot_services: &BootServices) -> Option<*mut BlockIoProtocol> {
+        // Get buffer size needed for all Block I/O handles
+        let mut buffer_size: usize = 0;
+        let _ = (boot_services.locate_handle)(
+            2, // ByProtocol
+            &EFI_BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut buffer_size,
+            core::ptr::null_mut(),
+        );
+
+        if buffer_size == 0 {
+            return None;
+        }
+
+        // Allocate buffer for handles
+        let mut handle_buffer: *mut u8 = core::ptr::null_mut();
+        let alloc_status = (boot_services.allocate_pool)(2, buffer_size, &mut handle_buffer);
+
+        if alloc_status != 0 || handle_buffer.is_null() {
+            return None;
+        }
+
+        // Get all Block I/O handles
+        let status = (boot_services.locate_handle)(
+            2,
+            &EFI_BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut buffer_size,
+            handle_buffer as *mut *mut (),
+        );
+
+        if status != 0 {
+            (boot_services.free_pool)(handle_buffer);
+            return None;
+        }
+
+        // Iterate through handles and find physical disk
+        let handles = handle_buffer as *const *mut ();
+        let handle_count = buffer_size / core::mem::size_of::<*mut ()>();
+
+        let mut result = None;
+        unsafe {
+            for i in 0..handle_count {
+                let handle = *handles.add(i);
+                let mut block_io_ptr: *mut () = core::ptr::null_mut();
+
+                let proto_status = (boot_services.handle_protocol)(
+                    handle,
+                    &EFI_BLOCK_IO_PROTOCOL_GUID,
+                    &mut block_io_ptr,
+                );
+
+                if proto_status == 0 && !block_io_ptr.is_null() {
+                    let block_io = &*(block_io_ptr as *const BlockIoProtocol);
+                    let media = &*block_io.media;
+
+                    // Only use physical disks, not partitions
+                    if !media.logical_partition && media.media_present {
+                        result = Some(block_io_ptr as *mut BlockIoProtocol);
+                        break;
+                    }
+                }
+            }
+        }
+
+        (boot_services.free_pool)(handle_buffer);
+        result
     }
 
     /// Full render - clears screen if needed and draws everything
