@@ -13,6 +13,7 @@ morpheus-network = { workspace = true }
 dma-pool = { workspace = true }
 gpt_disk_io = { version = "0.16", default-features = false }
 gpt_disk_types = { version = "0.16", default-features = false }
+virtio-drivers = { version = "0.12", default-features = false }
 # TODO: Enable when other modules are implemented
 # morpheus-updater = { workspace = true }
 # morpheus-utils = { workspace = true }
