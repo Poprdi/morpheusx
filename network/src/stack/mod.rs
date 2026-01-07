@@ -1,11 +1,44 @@
 //! smoltcp integration layer.
 //!
-//! This adapts MorpheusX `NetworkDevice` drivers to smoltcp's `Device` trait.
+//! This module provides the bridge between MorpheusX network device drivers
+//! and the smoltcp TCP/IP stack.
+//!
+//! # Components
+//!
+//! - [`DeviceAdapter`] - Adapts `NetworkDevice` to smoltcp's `Device` trait
+//! - [`NetInterface`] - Full IP stack with TCP sockets and DHCP
+//! - [`NetworkStack`] - Legacy minimal holder (use NetInterface instead)
+//!
+//! # Usage
+//!
+//! ```ignore
+//! use morpheus_network::stack::{NetInterface, NetConfig};
+//! use morpheus_network::device::virtio::VirtioNetDevice;
+//!
+//! // Create device
+//! let device = VirtioNetDevice::new(transport)?;
+//!
+//! // Create interface with DHCP
+//! let mut iface = NetInterface::new(device, NetConfig::dhcp());
+//!
+//! // Poll until IP configured
+//! while !iface.has_ip() {
+//!     iface.poll(get_time_ms());
+//! }
+//!
+//! // Create TCP socket and connect
+//! let socket = iface.tcp_socket()?;
+//! iface.tcp_connect(socket, remote_ip, 80)?;
+//! ```
+
+mod interface;
 
 use crate::device::NetworkDevice;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use core::marker::PhantomData;
+
+pub use interface::{NetInterface, NetConfig, NetState, MAX_TCP_SOCKETS};
 
 const MTU: usize = 1536;
 
