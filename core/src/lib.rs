@@ -14,10 +14,5 @@
 
 pub mod disk;
 pub mod fs;
+pub mod iso;
 pub mod logger;
-
-// TODO: Uncomment as modules are implemented
-// pub mod arch;
-// pub mod mount;
-// pub mod distro;
-// pub mod error;
