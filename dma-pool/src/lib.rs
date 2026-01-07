@@ -326,6 +326,83 @@ impl MemoryDiscovery {
         }
         Self::find_caves(section_end, aligned_end, min_size, PaddingPattern::Any)
     }
+
+    /// Scan a PE image for caves in all section padding.
+    ///
+    /// This is the recommended way to discover DMA memory in a bootloader:
+    /// scan your own PE image for unused padding between sections.
+    ///
+    /// # Arguments
+    ///
+    /// * `image_base` - Base address of loaded PE image
+    /// * `sections` - Iterator of (virtual_address, virtual_size, raw_size) tuples
+    /// * `section_alignment` - PE section alignment (from OptionalHeader)
+    /// * `caves` - Output buffer for discovered caves
+    ///
+    /// # Safety
+    ///
+    /// - `image_base` must be the actual load address
+    /// - Section info must accurately describe the loaded image
+    ///
+    /// # Returns
+    ///
+    /// Number of caves found
+    pub unsafe fn scan_pe_sections<I>(
+        image_base: usize,
+        sections: I,
+        section_alignment: usize,
+        caves: &mut [MemoryRegion],
+    ) -> usize
+    where
+        I: Iterator<Item = (u32, u32, u32)>, // (vaddr, vsize, raw_size)
+    {
+        let mut found = 0;
+        let max_caves = caves.len();
+
+        for (vaddr, vsize, _raw_size) in sections {
+            if found >= max_caves {
+                break;
+            }
+
+            let section_start = image_base + vaddr as usize;
+            let section_data_end = section_start + vsize as usize;
+            let section_aligned_end = align_up(section_data_end, section_alignment);
+
+            // Look for padding at end of section
+            if section_aligned_end > section_data_end {
+                let padding_size = section_aligned_end - section_data_end;
+                if padding_size >= MIN_CAVE_SIZE {
+                    // Scan the padding for actual caves
+                    let mut section_caves = [MemoryRegion::new(0, 0); 4];
+                    let section_found = Self::find_all_caves(
+                        section_data_end,
+                        section_aligned_end,
+                        MIN_CAVE_SIZE,
+                        PaddingPattern::Any,
+                        &mut section_caves,
+                    );
+
+                    for cave in &section_caves[..section_found] {
+                        if found < max_caves {
+                            caves[found] = *cave;
+                            found += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by size descending
+        for i in 0..found.saturating_sub(1) {
+            for j in 0..found - 1 - i {
+                if caves[j].size < caves[j + 1].size {
+                    caves.swap(j, j + 1);
+                }
+            }
+        }
+
+        found
+    }
 }
 
 // ============================================================================
@@ -540,6 +617,112 @@ static POOL: PoolState = PoolState {
     allocations: core::cell::UnsafeCell::new([Allocation::empty(); MAX_ALLOCATIONS]),
     alloc_count: AtomicUsize::new(0),
 };
+
+/// Global cave pool for chained allocations.
+struct GlobalCavePool {
+    caves: core::cell::UnsafeCell<[MemoryRegion; MAX_CAVES]>,
+    offsets: core::cell::UnsafeCell<[usize; MAX_CAVES]>,
+    count: AtomicUsize,
+    total: AtomicUsize,
+}
+
+impl GlobalCavePool {
+    const fn new() -> Self {
+        Self {
+            caves: core::cell::UnsafeCell::new([MemoryRegion::new(0, 0); MAX_CAVES]),
+            offsets: core::cell::UnsafeCell::new([0; MAX_CAVES]),
+            count: AtomicUsize::new(0),
+            total: AtomicUsize::new(0),
+        }
+    }
+
+    fn store_caves(&self, caves: &[MemoryRegion]) {
+        lock();
+        unsafe {
+            let storage = &mut *self.caves.get();
+            let offsets = &mut *self.offsets.get();
+            let mut total = 0usize;
+            for (i, cave) in caves.iter().take(MAX_CAVES).enumerate() {
+                storage[i] = *cave;
+                offsets[i] = 0;
+                total += cave.size;
+            }
+            self.count.store(caves.len().min(MAX_CAVES), Ordering::SeqCst);
+            self.total.store(total, Ordering::SeqCst);
+        }
+        unlock();
+    }
+
+    fn alloc_chained(&self, pages: usize) -> Result<(usize, NonNull<u8>)> {
+        if pages == 0 {
+            return Err(DmaError::ZeroPages);
+        }
+
+        let size = pages_to_bytes(pages);
+
+        lock();
+
+        let result = unsafe {
+            let caves = &*self.caves.get();
+            let offsets = &mut *self.offsets.get();
+            let count = self.count.load(Ordering::Relaxed);
+
+            let mut found = None;
+            for i in 0..count {
+                let cave = &caves[i];
+                let offset = offsets[i];
+                let aligned_offset = align_up(offset, PAGE_SIZE);
+                let new_offset = aligned_offset + size;
+
+                if new_offset <= cave.size {
+                    offsets[i] = new_offset;
+
+                    let paddr = cave.base + aligned_offset;
+                    let vaddr_ptr = paddr as *mut u8;
+                    core::ptr::write_bytes(vaddr_ptr, 0, size);
+
+                    found = Some((paddr, vaddr_ptr));
+                    break;
+                }
+            }
+            found
+        };
+
+        unlock();
+
+        match result {
+            Some((paddr, vaddr_ptr)) => {
+                let vaddr = NonNull::new(vaddr_ptr).ok_or(DmaError::OutOfMemory)?;
+                Ok((paddr, vaddr))
+            }
+            None => Err(DmaError::OutOfMemory),
+        }
+    }
+
+    fn cave_count(&self) -> usize {
+        self.count.load(Ordering::Relaxed)
+    }
+
+    fn total_size(&self) -> usize {
+        self.total.load(Ordering::Relaxed)
+    }
+
+    fn free_space(&self) -> usize {
+        lock();
+        let used = unsafe {
+            let offsets = &*self.offsets.get();
+            let count = self.count.load(Ordering::Relaxed);
+            offsets[..count].iter().sum()
+        };
+        unlock();
+        self.total.load(Ordering::Relaxed).saturating_sub(used)
+    }
+}
+
+unsafe impl Sync for GlobalCavePool {}
+unsafe impl Send for GlobalCavePool {}
+
+static CAVE_POOL: GlobalCavePool = GlobalCavePool::new();
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 static LOCK: AtomicBool = AtomicBool::new(false);
@@ -830,6 +1013,39 @@ impl DmaPool {
     /// Get pool base address.
     pub fn base_address() -> usize {
         POOL.base.load(Ordering::Relaxed)
+    }
+
+    /// Allocate from chained caves.
+    ///
+    /// This tries each cave in order until allocation succeeds.
+    /// Use this when you've initialized with `init_from_caves` or `init_from_cave_pool`.
+    pub fn alloc_pages_chained(pages: usize) -> Result<(usize, NonNull<u8>)> {
+        if !Self::is_initialized() {
+            return Err(DmaError::NotInitialized);
+        }
+
+        // Try primary pool first
+        if let Ok(result) = Self::alloc_pages(pages) {
+            return Ok(result);
+        }
+
+        // Fall back to chained caves
+        CAVE_POOL.alloc_chained(pages)
+    }
+
+    /// Get total cave space (across all chained caves).
+    pub fn total_cave_space() -> usize {
+        CAVE_POOL.total_size()
+    }
+
+    /// Get number of caves in the chained pool.
+    pub fn cave_count() -> usize {
+        CAVE_POOL.cave_count()
+    }
+
+    /// Get free space in chained caves.
+    pub fn cave_free_space() -> usize {
+        CAVE_POOL.free_space()
     }
 
     /// Reset the allocator.

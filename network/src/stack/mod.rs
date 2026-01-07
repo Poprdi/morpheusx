@@ -44,7 +44,7 @@ use smoltcp::time::Instant;
 use core::marker::PhantomData;
 
 pub use interface::{NetInterface, NetConfig, NetState, MAX_TCP_SOCKETS};
-pub use setup::{NetworkStack, init_virtio_network, init_qemu_network, EcamConfigAccess};
+pub use setup::{VirtioNetworkStack, init_virtio_network, init_qemu_network, EcamConfigAccess};
 pub use crate::device::pci::ecam_bases;
 
 const MTU: usize = 1536;
