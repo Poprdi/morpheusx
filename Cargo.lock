@@ -188,6 +188,7 @@ dependencies = [
  "gpt_disk_types",
  "iso9660-rs",
  "morpheus-core",
+ "morpheus-network",
  "morpheus-persistent",
 ]
 

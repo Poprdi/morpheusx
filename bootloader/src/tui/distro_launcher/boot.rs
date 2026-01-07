@@ -312,12 +312,25 @@ impl DistroLauncher {
             }
         };
 
-        // Get ISO read context
-        let storage = IsoStorageManager::new(esp_lba, disk_lba);
+        // Get ISO read context - load manifests from ESP first
+        let mut storage = IsoStorageManager::new(esp_lba, disk_lba);
+        
+        // Load persisted manifests from ESP filesystem
+        if let Err(_) = unsafe {
+            crate::tui::distro_downloader::manifest_io::load_manifests_from_esp(
+                boot_services,
+                image_handle,
+                &mut storage,
+            )
+        } {
+            morpheus_core::logger::log("Warning: Could not load manifests from ESP");
+        }
+        
         let read_ctx = match storage.get_read_context(iso_idx) {
             Ok(ctx) => ctx,
             Err(_) => {
                 screen.put_str_at(5, 18, "ERROR: ISO not found in storage", EFI_RED, EFI_BLACK);
+                screen.put_str_at(5, 19, &format!("Index {} not in {} ISOs", iso_idx, storage.count()), EFI_YELLOW, EFI_BLACK);
                 keyboard.wait_for_key();
                 return;
             }
@@ -363,12 +376,18 @@ impl DistroLauncher {
         progress_bar.render(screen);
         morpheus_core::logger::log("Chunked ISO: Looking for kernel...");
 
-        // Find kernel
+        // Find kernel - check common paths for various distros
+        // Tails: /live/vmlinuz
+        // Ubuntu: /casper/vmlinuz  
+        // Debian: /live/vmlinuz-*
+        // Fedora: /images/pxeboot/vmlinuz or /isolinux/vmlinuz
         let kernel_paths = [
-            "/live/vmlinuz",
-            "/casper/vmlinuz",
-            "/boot/vmlinuz",
-            "/isolinux/vmlinuz",
+            "/live/vmlinuz",           // Tails, Debian Live
+            "/casper/vmlinuz",         // Ubuntu
+            "/boot/vmlinuz",           // Alpine, some others
+            "/isolinux/vmlinuz",       // Generic syslinux
+            "/images/pxeboot/vmlinuz", // Fedora
+            "/boot/x86_64/loader/linux", // openSUSE
         ];
 
         let mut kernel_data = None;
@@ -395,12 +414,18 @@ impl DistroLauncher {
         progress_bar.render(screen);
         morpheus_core::logger::log("Chunked ISO: Looking for initrd...");
 
-        // Find initrd
+        // Find initrd - check common paths for various distros
+        // Tails: /live/initrd.img
+        // Ubuntu: /casper/initrd (no extension)
+        // Debian: /live/initrd.img-*
         let initrd_paths = [
-            "/live/initrd.img",
-            "/casper/initrd",
-            "/boot/initrd.img",
-            "/isolinux/initrd.img",
+            "/live/initrd.img",        // Tails, Debian Live
+            "/casper/initrd",          // Ubuntu (no extension)
+            "/casper/initrd.lz",       // Ubuntu compressed
+            "/boot/initrd.img",        // Alpine
+            "/isolinux/initrd.img",    // Generic syslinux
+            "/images/pxeboot/initrd.img", // Fedora
+            "/boot/x86_64/loader/initrd", // openSUSE
         ];
 
         let mut initrd_data = None;
@@ -419,8 +444,23 @@ impl DistroLauncher {
         morpheus_core::logger::log("Chunked ISO: Preparing boot...");
         boot_seq.render(screen, 5, 8);
 
-        // Default cmdline for live boot
-        let cmdline = "boot=live quiet splash";
+        // Determine cmdline based on ISO name/type
+        // Tails needs specific parameters for live boot
+        let iso_name = storage.get(iso_idx)
+            .map(|e| e.manifest.name_str())
+            .unwrap_or("");
+        
+        let cmdline = if iso_name.to_lowercase().contains("tails") {
+            // Tails-specific: needs boot=live and findiso for squashfs
+            "boot=live nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails quiet"
+        } else if iso_name.to_lowercase().contains("ubuntu") {
+            "boot=casper quiet splash"
+        } else if iso_name.to_lowercase().contains("fedora") {
+            "rd.live.image quiet"
+        } else {
+            // Generic live boot cmdline
+            "boot=live quiet splash"
+        };
 
         progress_bar.set_progress(100);
         progress_bar.render(screen);

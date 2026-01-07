@@ -39,6 +39,7 @@ use super::bindings::{
     Guid, Handle, Status, HttpProtocol, ServiceBindingProtocol,
     HttpConfigData, HttpVersion, HttpAccessPoint, HttpIpv4AccessPoint,
     HttpConfigBuilder, status, HTTP_SERVICE_BINDING_GUID, HTTP_PROTOCOL_GUID,
+    BootServices, OPEN_PROTOCOL_GET_PROTOCOL,
 };
 use core::ptr;
 
@@ -135,6 +136,82 @@ impl ProtocolManager {
     #[cfg(test)]
     pub fn initialize_mock(&mut self) -> Result<()> {
         self.state = ManagerState::Configured;
+        Ok(())
+    }
+
+    /// Initialize the protocol manager directly from UEFI BootServices pointer.
+    ///
+    /// This is a simpler initialization path that takes a raw BootServices pointer
+    /// instead of closures. This is the preferred method for bootloader integration.
+    ///
+    /// # Safety
+    ///
+    /// - `boot_services` must be a valid pointer to UEFI Boot Services table.
+    /// - Must be called before `ExitBootServices()`.
+    #[cfg(target_os = "uefi")]
+    pub unsafe fn initialize_from_boot_services(
+        &mut self,
+        boot_services: *const BootServices,
+    ) -> Result<()> {
+        if boot_services.is_null() {
+            return Err(NetworkError::InitializationFailed);
+        }
+        
+        let bs = &*boot_services;
+        
+        // Step 1: Locate HTTP Service Binding Protocol
+        let mut service_binding_ptr: *mut core::ffi::c_void = ptr::null_mut();
+        let status = (bs.locate_protocol)(
+            &HTTP_SERVICE_BINDING_GUID,
+            ptr::null(),
+            &mut service_binding_ptr,
+        );
+        
+        if !status::is_success(status) || service_binding_ptr.is_null() {
+            self.state = ManagerState::Error;
+            return Err(NetworkError::ProtocolNotAvailable);
+        }
+        
+        let service_binding = service_binding_ptr as *mut ServiceBindingProtocol;
+        self.service_binding = Some(service_binding);
+        self.state = ManagerState::ServiceBound;
+
+        // Step 2: Create child HTTP protocol instance
+        let mut child_handle: Handle = ptr::null_mut();
+        let status = ((*service_binding).create_child)(
+            service_binding,
+            &mut child_handle,
+        );
+        
+        if !status::is_success(status) || child_handle.is_null() {
+            self.state = ManagerState::Error;
+            return Err(NetworkError::InitializationFailed);
+        }
+        
+        self.child_handle = Some(child_handle);
+        self.state = ManagerState::ChildCreated;
+
+        // Step 3: Open HTTP Protocol on child handle
+        let mut http_ptr: *mut core::ffi::c_void = ptr::null_mut();
+        let status = (bs.open_protocol)(
+            child_handle,
+            &HTTP_PROTOCOL_GUID,
+            &mut http_ptr,
+            ptr::null_mut(), // agent_handle (none)
+            ptr::null_mut(), // controller_handle (none)
+            OPEN_PROTOCOL_GET_PROTOCOL,
+        );
+        
+        if !status::is_success(status) || http_ptr.is_null() {
+            self.state = ManagerState::Error;
+            return Err(NetworkError::ProtocolNotAvailable);
+        }
+        
+        self.http_protocol = Some(http_ptr as *mut HttpProtocol);
+
+        // Step 4: Configure HTTP
+        self.configure_http()?;
+
         Ok(())
     }
 

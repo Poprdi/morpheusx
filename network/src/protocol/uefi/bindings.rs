@@ -104,6 +104,110 @@ pub const HTTP_SERVICE_BINDING_GUID: Guid = Guid::from_values(
     [0xa7, 0x2a, 0xe0, 0xc4, 0xe7, 0x5d, 0xae, 0x1c],
 );
 
+// ==================== Boot Services ====================
+
+/// UEFI Boot Services table (partial definition for HTTP protocol access).
+///
+/// This matches the bootloader's BootServices struct layout.
+/// We only define the fields needed for HTTP protocol initialization.
+#[repr(C)]
+pub struct BootServices {
+    _header: [u8; 24],
+    // Task Priority Services
+    _raise_tpl: usize,
+    _restore_tpl: usize,
+    // Memory Services  
+    pub allocate_pages: extern "efiapi" fn(
+        allocate_type: usize,
+        memory_type: usize,
+        pages: usize,
+        memory: *mut u64,
+    ) -> Status,
+    pub free_pages: extern "efiapi" fn(memory: u64, pages: usize) -> Status,
+    pub get_memory_map: extern "efiapi" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut u8,
+        map_key: *mut usize,
+        descriptor_size: *mut usize,
+        descriptor_version: *mut u32,
+    ) -> Status,
+    pub allocate_pool: extern "efiapi" fn(pool_type: usize, size: usize, buffer: *mut *mut u8) -> Status,
+    pub free_pool: extern "efiapi" fn(buffer: *mut u8) -> Status,
+    // Event & Timer Services
+    _create_event: usize,
+    _set_timer: usize,
+    _wait_for_event: usize,
+    _signal_event: usize,
+    _close_event: usize,
+    _check_event: usize,
+    // Protocol Handler Services
+    _install_protocol_interface: usize,
+    _reinstall_protocol_interface: usize,
+    _uninstall_protocol_interface: usize,
+    pub handle_protocol: extern "efiapi" fn(
+        handle: Handle,
+        protocol: *const Guid,
+        interface: *mut *mut c_void,
+    ) -> Status,
+    _reserved: usize,
+    _register_protocol_notify: usize,
+    pub locate_handle: extern "efiapi" fn(
+        search_type: usize,
+        protocol: *const Guid,
+        search_key: *const c_void,
+        buffer_size: *mut usize,
+        buffer: *mut Handle,
+    ) -> Status,
+    _locate_device_path: usize,
+    _install_configuration_table: usize,
+    // Image Services (skipped)
+    _load_image: usize,
+    _start_image: usize,
+    _exit: usize,
+    _unload_image: usize,
+    _exit_boot_services: usize,
+    // Miscellaneous Services (skipped)
+    _get_next_monotonic_count: usize,
+    _stall: usize,
+    _set_watchdog_timer: usize,
+    // Driver Support Services (skipped)
+    _connect_controller: usize,
+    _disconnect_controller: usize,
+    // Open and Close Protocol Services
+    pub open_protocol: extern "efiapi" fn(
+        handle: Handle,
+        protocol: *const Guid,
+        interface: *mut *mut c_void,
+        agent_handle: Handle,
+        controller_handle: Handle,
+        attributes: u32,
+    ) -> Status,
+    _close_protocol: usize,
+    _open_protocol_information: usize,
+    // Library Services
+    _protocols_per_handle: usize,
+    pub locate_handle_buffer: extern "efiapi" fn(
+        search_type: usize,
+        protocol: *const Guid,
+        search_key: *const c_void,
+        no_handles: *mut usize,
+        buffer: *mut *mut Handle,
+    ) -> Status,
+    pub locate_protocol: extern "efiapi" fn(
+        protocol: *const Guid,
+        registration: *const c_void,
+        interface: *mut *mut c_void,
+    ) -> Status,
+}
+
+/// Search type for LocateHandle: ByProtocol.
+pub const LOCATE_HANDLE_BY_PROTOCOL: usize = 2;
+
+/// Open protocol attribute: BY_HANDLE_PROTOCOL.
+pub const OPEN_PROTOCOL_BY_HANDLE_PROTOCOL: u32 = 0x00000001;
+/// Open protocol attribute: GET_PROTOCOL.
+pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x00000002;
+
 // ==================== HTTP Types ====================
 
 /// HTTP version (major.minor).

@@ -81,7 +81,20 @@ impl EntryScanner {
             }
         };
 
-        let storage = IsoStorageManager::new(esp_lba, disk_lba);
+        // Create storage manager and load persisted manifests from ESP
+        let mut storage = IsoStorageManager::new(esp_lba, disk_lba);
+        
+        unsafe {
+            let bs = &*self.boot_services;
+            // Load manifests from /morpheus/isos/*.manifest on ESP
+            if let Err(_) = crate::tui::distro_downloader::manifest_io::load_manifests_from_esp(
+                bs,
+                self.image_handle,
+                &mut storage,
+            ) {
+                morpheus_core::logger::log("Failed to load manifests from ESP");
+            }
+        }
 
         for (idx, entry) in storage.iter().enumerate() {
             let manifest = &entry.1.manifest;
