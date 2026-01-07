@@ -75,6 +75,9 @@ pub use client::NativeHttpClient;
 pub use device::NetworkDevice;
 pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState};
 
+#[cfg(feature = "uefi")]
+pub use stack::{UefiNetworkStack, init_virtio_network, init_qemu_network, ecam_bases};
+
 #[cfg(target_os = "uefi")]
 pub use client::uefi::UefiHttpClient;
 

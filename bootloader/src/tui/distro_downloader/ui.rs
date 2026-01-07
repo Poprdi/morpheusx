@@ -468,13 +468,24 @@ impl DistroDownloader {
             }
         };
 
-        // Download with streaming write
-        let download_result = self.download_with_chunk_writer(
+        // Try native VirtIO download first (works without UEFI HTTP protocol)
+        // Falls back to UEFI HTTP if native fails
+        morpheus_core::logger::log("Attempting native network download (VirtIO)...");
+        let download_result = self.download_native(
             distro.url,
             &mut chunk_writer,
             block_io_protocol,
             screen,
-        );
+        ).or_else(|native_err| {
+            // Native failed, try UEFI HTTP as fallback
+            morpheus_core::logger::log(format!("Native download failed: {}, trying UEFI HTTP...", native_err).leak());
+            self.download_with_chunk_writer(
+                distro.url,
+                &mut chunk_writer,
+                block_io_protocol,
+                screen,
+            )
+        });
 
         match download_result {
             Ok(bytes_written) => {
@@ -662,6 +673,93 @@ impl DistroDownloader {
         self.download_state.fail(static_msg);
         self.needs_full_redraw = true;
         self.render_full(screen);
+    }
+
+    /// Download using native VirtIO network stack (for QEMU or real hardware).
+    ///
+    /// This bypasses UEFI HTTP protocol and uses our bare-metal TCP/IP stack
+    /// with the VirtIO network device directly.
+    #[allow(dead_code)]
+    fn download_native(
+        &mut self,
+        url: &str,
+        chunk_writer: &mut ChunkWriter,
+        block_io_protocol: *mut BlockIoProtocol,
+        _screen: &mut Screen,
+    ) -> Result<usize, &'static str> {
+        use morpheus_network::init_qemu_network;
+        use morpheus_network::device::hal::uefi::EfiBootServices;
+        use gpt_disk_io::BlockIo;
+        use core::cell::Cell;
+
+        // Get time function for the network stack
+        // Uses UEFI GetTime for milliseconds approximation
+        fn get_time_ms() -> u64 {
+            // In real implementation, read UEFI time or TSC
+            // For now, use a simple counter
+            static mut COUNTER: u64 = 0;
+            unsafe {
+                COUNTER += 1;
+                COUNTER
+            }
+        }
+
+        // Initialize native network stack
+        let bs = unsafe { &*self.boot_services };
+        let efi_bs = bs as *const BootServices as *mut EfiBootServices;
+        
+        let mut network_stack = unsafe {
+            match init_qemu_network(efi_bs, get_time_ms) {
+                Ok(stack) => stack,
+                Err(e) => {
+                    morpheus_core::logger::log(format!("Native network init failed: {:?}", e).leak());
+                    return Err("Failed to initialize native network stack");
+                }
+            }
+        };
+
+        morpheus_core::logger::log("Native network stack initialized (VirtIO)");
+
+        // Wait for DHCP
+        let client = network_stack.client();
+        if let Err(e) = client.wait_for_network(30_000) {
+            morpheus_core::logger::log(format!("DHCP timeout: {:?}", e).leak());
+            return Err("DHCP configuration timeout");
+        }
+
+        morpheus_core::logger::log("DHCP configured, starting download...");
+
+        // Track progress
+        let progress_bytes = Cell::new(0usize);
+
+        // Download with streaming callback
+        let result = client.get_streaming(url, |chunk_data| {
+            // Write chunk to disk via ChunkWriter
+            let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
+            
+            chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
+                let lba = part_start + sector_offset;
+                uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
+                    .map_err(|_| IsoError::IoError)
+            }).map_err(|_| morpheus_network::error::NetworkError::FileError)?;
+
+            progress_bytes.set(progress_bytes.get() + chunk_data.len());
+            Ok(())
+        });
+
+        let final_bytes = progress_bytes.get();
+        self.download_state.update_progress(final_bytes);
+
+        match result {
+            Ok(bytes) => {
+                morpheus_core::logger::log(format!("Download complete: {} bytes", bytes).leak());
+                Ok(bytes)
+            }
+            Err(e) => {
+                morpheus_core::logger::log(format!("Download failed: {:?}", e).leak());
+                Err("Native download failed")
+            }
+        }
     }
 
     /// Get BlockIoProtocol pointer for first physical disk
