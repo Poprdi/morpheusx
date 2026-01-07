@@ -49,7 +49,7 @@ impl UefiBlockIo {
 
     /// Get block size as u32
     pub fn block_size_bytes(&self) -> u32 {
-        self.block_size.to_u32().unwrap_or(512)
+        self.block_size.to_u32()
     }
 
     /// Get total number of blocks
@@ -70,7 +70,7 @@ impl BlockIo for UefiBlockIo {
     }
 
     fn read_blocks(&mut self, start_lba: Lba, buffer: &mut [u8]) -> Result<(), Self::Error> {
-        let block_size = self.block_size.to_u64().unwrap_or(512);
+        let block_size = self.block_size.to_u64();
         let num_blocks = buffer.len() as u64 / block_size;
 
         // SAFETY: Protocol pointer is valid (guaranteed by constructor)
@@ -83,7 +83,7 @@ impl BlockIo for UefiBlockIo {
     }
 
     fn write_blocks(&mut self, start_lba: Lba, buffer: &[u8]) -> Result<(), Self::Error> {
-        let block_size = self.block_size.to_u64().unwrap_or(512);
+        let block_size = self.block_size.to_u64();
         let num_blocks = buffer.len() as u64 / block_size;
 
         // SAFETY: Protocol pointer is valid (guaranteed by constructor)

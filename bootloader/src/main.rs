@@ -324,7 +324,28 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                 }
                 MenuAction::DistroDownloader => {
                     let bs = &*system_table.boot_services;
-                    let mut downloader = tui::distro_downloader::DistroDownloader::new(bs, image_handle);
+                    // Get disk info for ISO storage
+                    // ESP typically starts after GPT headers, disk size from first disk
+                    let (esp_lba, disk_lba) = {
+                        let mut dm = morpheus_core::disk::manager::DiskManager::new();
+                        if crate::uefi::disk::enumerate_disks(bs, &mut dm).is_ok() && dm.disk_count() > 0 {
+                            if let Some(disk) = dm.get_disk(0) {
+                                // ESP usually at LBA 2048, use full disk size (last_block + 1)
+                                (2048, disk.last_block + 1)
+                            } else {
+                                (2048, 100_000_000) // ~50GB default
+                            }
+                        } else {
+                            (2048, 100_000_000)
+                        }
+                    };
+                    let mut downloader = tui::distro_downloader::DistroDownloader::new(
+                        bs,
+                        image_handle,
+                        esp_lba,
+                        disk_lba,
+                    );
+                    // Downloader manages ISOs (download/delete), boot happens via DistroLauncher
                     downloader.run(&mut screen, &mut keyboard);
                 }
                 MenuAction::StorageManager => {
