@@ -165,18 +165,39 @@ impl DistroEntry {
 
 /// Static catalog of available distributions
 pub static DISTRO_CATALOG: &[DistroEntry] = &[
+    // ============ TEST ENTRIES (HTTP - for development) ============
+    DistroEntry::new(
+        "Test ISO (Small)",
+        "Small test file for network testing",
+        "1.0",
+        "http://speedtest.tele2.net/1MB.zip",  // HTTP test endpoint
+        1_000_000,
+        "test-1mb.iso",
+        DistroCategory::Minimal,
+    ),
+    
+    DistroEntry::new(
+        "Test ISO (10MB)",
+        "Medium test file for network testing",
+        "1.0",
+        "http://speedtest.tele2.net/10MB.zip",
+        10_000_000,
+        "test-10mb.iso",
+        DistroCategory::Minimal,
+    ),
+
     // ============ Privacy ============
     DistroEntry::new(
         "Tails",
         "Amnesic Incognito Live System - Privacy focused",
         "6.10",
-        "https://download.tails.net/tails/stable/tails-amd64-6.10/tails-amd64-6.10.iso",
+        "http://mirror.fcix.net/tails/stable/tails-amd64-6.10/tails-amd64-6.10.iso",
         1_400_000_000,
         "tails-6.10.iso",
         DistroCategory::Privacy,
     )
     .with_mirrors(&[
-        "https://mirrors.edge.kernel.org/tails/stable/tails-amd64-6.10/tails-amd64-6.10.iso",
+        "http://ftp.acc.umu.se/mirror/tails.boum.org/tails/stable/tails-amd64-6.10/tails-amd64-6.10.iso",
     ]),
 
     DistroEntry::new(

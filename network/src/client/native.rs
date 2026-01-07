@@ -210,16 +210,60 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
     /// Resolve hostname to IP address.
     ///
-    /// For now, only supports numeric IPs or hardcoded DNS.
-    /// Full DNS requires UDP socket support.
+    /// Supports:
+    /// 1. Numeric IP addresses (e.g., "192.168.1.1")
+    /// 2. Hardcoded DNS for common distro download hosts
+    /// 3. TODO: Full DNS resolution via UDP
     pub fn resolve_host(&self, host: &str) -> Result<Ipv4Addr> {
         // Try parsing as IP address first
         if let Ok(ip) = host.parse::<Ipv4Addr>() {
             return Ok(ip);
         }
 
+        // Hardcoded DNS for common distro download hosts
+        // These are stable IPs for CDN/mirror services
+        // Updated: January 2026
+        let known_hosts: &[(&str, &str)] = &[
+            // Test endpoints (HTTP)
+            ("speedtest.tele2.net", "90.130.70.73"),
+            // Tails HTTP mirrors
+            ("mirror.fcix.net", "204.152.191.37"),
+            ("ftp.acc.umu.se", "130.239.18.159"),
+            // Ubuntu/Canonical
+            ("releases.ubuntu.com", "91.189.91.38"),
+            ("cdimage.ubuntu.com", "91.189.88.142"),
+            ("archive.ubuntu.com", "91.189.91.39"),
+            // Kernel.org mirrors
+            ("mirrors.edge.kernel.org", "147.75.197.195"),
+            ("cdn.kernel.org", "139.178.84.217"),
+            // Tails official (HTTPS only)
+            ("download.tails.net", "204.13.164.63"),
+            // Fedora
+            ("download.fedoraproject.org", "152.19.134.142"),
+            // Debian  
+            ("cdimage.debian.org", "194.71.11.165"),
+            ("ftp.debian.org", "199.232.66.132"),
+            // Arch Linux
+            ("mirror.rackspace.com", "162.209.85.197"),
+            ("mirrors.kernel.org", "147.75.197.195"),
+            // Kali
+            ("cdimage.kali.org", "192.99.200.113"),
+            // Whonix
+            ("download.whonix.org", "116.202.120.184"),
+            // Generic/test
+            ("httpbin.org", "54.144.42.194"),
+        ];
+
+        for (hostname, ip_str) in known_hosts {
+            if host == *hostname || host.ends_with(&format!(".{}", hostname)) {
+                if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
+                    return Ok(ip);
+                }
+            }
+        }
+
         // TODO: Implement DNS resolution via UDP
-        // For now, return error for hostnames
+        // For now, return error for unknown hostnames
         Err(NetworkError::DnsResolutionFailed)
     }
 
@@ -388,11 +432,17 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         F: FnMut(&[u8]) -> Result<()>,
     {
         let parsed_url = Url::parse(url)?;
-        let request = Request::get(parsed_url);
+        
+        // Check for HTTPS - we don't support TLS yet!
+        if parsed_url.is_https() {
+            return Err(NetworkError::TlsNotSupported);
+        }
+        
+        let request = Request::get(parsed_url.clone());
 
         // Resolve and connect
         let ip = self.resolve_host(&request.url.host)?;
-        let port = request.url.port.unwrap_or(80);
+        let port = request.url.port.unwrap_or_else(|| parsed_url.scheme.default_port());
         self.connect(ip, port)?;
 
         // Send request
