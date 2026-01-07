@@ -21,6 +21,8 @@ pub enum NetworkError {
     OutOfMemory,
     Cancelled,
     TlsError,
+    /// TLS/HTTPS is not supported - use HTTP URLs
+    TlsNotSupported,
     /// Device-level error with description.
     DeviceError(alloc::string::String),
     /// Buffer too small for operation.
@@ -54,6 +56,7 @@ impl fmt::Display for NetworkError {
             Self::OutOfMemory => write!(f, "Out of memory"),
             Self::Cancelled => write!(f, "Operation cancelled"),
             Self::TlsError => write!(f, "TLS/HTTPS error"),
+            Self::TlsNotSupported => write!(f, "HTTPS not supported - use HTTP URL"),
             Self::DeviceError(msg) => write!(f, "Device error: {}", msg),
             Self::BufferTooSmall => write!(f, "Buffer too small"),
             Self::ResponseTooLarge => write!(f, "Response too large"),

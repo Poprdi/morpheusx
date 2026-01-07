@@ -473,6 +473,7 @@ impl DistroDownloader {
         morpheus_core::logger::log("Attempting native network download (VirtIO)...");
         let download_result = self.download_native(
             distro.url,
+            distro.size_bytes,
             &mut chunk_writer,
             block_io_protocol,
             screen,
@@ -481,6 +482,7 @@ impl DistroDownloader {
             morpheus_core::logger::log(format!("Native download failed: {}, trying UEFI HTTP...", native_err).leak());
             self.download_with_chunk_writer(
                 distro.url,
+                distro.size_bytes,
                 &mut chunk_writer,
                 block_io_protocol,
                 screen,
@@ -589,6 +591,7 @@ impl DistroDownloader {
     fn download_with_chunk_writer(
         &mut self,
         url: &str,
+        expected_size: u64,
         chunk_writer: &mut ChunkWriter,
         block_io_protocol: *mut BlockIoProtocol,
         screen: &mut Screen,
@@ -1044,11 +1047,23 @@ impl DistroDownloader {
         log_y += 1;
 
         // Step 7: Download
-        screen.put_str_at(5, log_y, "Starting download...", EFI_LIGHTGREEN, EFI_BLACK);
+        // Show URL being downloaded (truncated if too long)
+        let url_display = if url.len() > 60 { &url[..60] } else { url };
+        screen.put_str_at(5, log_y, &format!("URL: {}", url_display), EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+        
+        // Show expected size
+        let size_mb = expected_size / (1024 * 1024);
+        screen.put_str_at(5, log_y, &format!("Size: {} MB", size_mb), EFI_DARKGRAY, EFI_BLACK);
+        log_y += 1;
+        
+        screen.put_str_at(5, log_y, "Downloading...", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
         let progress_y = log_y;
         let progress_bytes = Cell::new(0usize);
+        let last_update = Cell::new(0u64);
+        let start_time = get_time_ms();
 
         let result = client.get_streaming(url, |chunk_data| {
             let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
@@ -1062,11 +1077,49 @@ impl DistroDownloader {
             let new_total = progress_bytes.get() + chunk_data.len();
             progress_bytes.set(new_total);
             
-            // Update screen every 1MB
-            if new_total % (1024 * 1024) < chunk_data.len() {
-                screen.put_str_at(7, progress_y, &format!(
-                    "Downloaded: {} MB       ",
-                    new_total / (1024 * 1024)
+            // Update progress bar every 100ms or 256KB
+            let now = get_time_ms();
+            if now - last_update.get() > 100 || new_total % (256 * 1024) < chunk_data.len() {
+                last_update.set(now);
+                
+                // Calculate percentage
+                let percent = if expected_size > 0 {
+                    ((new_total as u64 * 100) / expected_size).min(100) as usize
+                } else {
+                    0
+                };
+                
+                // Calculate speed (bytes per second)
+                let elapsed_ms = now.saturating_sub(start_time).max(1);
+                let speed_bps = (new_total as u64 * 1000) / elapsed_ms;
+                let speed_kbps = speed_bps / 1024;
+                
+                // Draw progress bar [=====>                    ] 45%
+                let bar_width = 40;
+                let filled = (bar_width * percent) / 100;
+                let mut bar = [b' '; 42];
+                bar[0] = b'[';
+                for i in 0..bar_width {
+                    if i < filled {
+                        bar[i + 1] = b'=';
+                    } else if i == filled && percent < 100 {
+                        bar[i + 1] = b'>';
+                    }
+                }
+                bar[41] = b']';
+                let bar_str = core::str::from_utf8(&bar).unwrap_or("[???]");
+                
+                // Progress line: [========>                   ] 25% 1234 KB/s
+                screen.put_str_at(5, progress_y, &format!(
+                    "{} {}% {} KB/s    ",
+                    bar_str, percent, speed_kbps
+                ), EFI_LIGHTGREEN, EFI_BLACK);
+                
+                // Downloaded / Total line
+                let downloaded_mb = new_total / (1024 * 1024);
+                screen.put_str_at(5, progress_y + 1, &format!(
+                    "Downloaded: {} / {} MB         ",
+                    downloaded_mb, size_mb
                 ), EFI_YELLOW, EFI_BLACK);
             }
             Ok(())
@@ -1077,11 +1130,42 @@ impl DistroDownloader {
 
         match result {
             Ok(bytes) => {
-                screen.put_str_at(5, progress_y + 1, &format!("Complete: {} bytes", bytes), EFI_LIGHTGREEN, EFI_BLACK);
+                // Final progress bar at 100%
+                let bar_str = "[========================================]";
+                screen.put_str_at(5, progress_y, &format!(
+                    "{} 100% Complete!    ",
+                    bar_str
+                ), EFI_LIGHTGREEN, EFI_BLACK);
+                
+                let downloaded_mb = bytes / (1024 * 1024);
+                screen.put_str_at(5, progress_y + 1, &format!(
+                    "Downloaded: {} MB - SUCCESS!         ",
+                    downloaded_mb
+                ), EFI_LIGHTGREEN, EFI_BLACK);
+                
                 Ok(bytes)
             }
             Err(e) => {
-                screen.put_str_at(5, progress_y + 1, &format!("Failed: {:?}", e), EFI_RED, EFI_BLACK);
+                log_y = progress_y + 1;
+                screen.put_str_at(5, log_y, &format!("HTTP Failed: {:?}", e), EFI_RED, EFI_BLACK);
+                log_y += 1;
+                
+                // Show final stats
+                let final_tx = morpheus_network::stack::tx_packet_count();
+                let final_rx = morpheus_network::stack::rx_packet_count();
+                let final_err = morpheus_network::stack::tx_error_count();
+                screen.put_str_at(5, log_y, &format!(
+                    "Stats: TX:{} RX:{} ERR:{} Downloaded:{}B",
+                    final_tx, final_rx, final_err, final_bytes
+                ), EFI_YELLOW, EFI_BLACK);
+                log_y += 1;
+                
+                screen.put_str_at(5, log_y + 1, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
+                
+                // Wait so user can see the error
+                let spin_start = get_time_ms();
+                while get_time_ms() - spin_start < 10000 {}  // 10 second pause
+                
                 Err("Download failed")
             }
         }
@@ -1093,6 +1177,7 @@ impl DistroDownloader {
     fn download_native(
         &mut self,
         _url: &str,
+        _expected_size: u64,
         _chunk_writer: &mut ChunkWriter,
         _block_io_protocol: *mut BlockIoProtocol,
         _screen: &mut Screen,
