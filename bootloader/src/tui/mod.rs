@@ -1,5 +1,6 @@
 pub mod boot_sequence;
 pub mod debug;
+pub mod distro_downloader;
 pub mod distro_launcher;
 pub mod input;
 pub mod installer_menu;

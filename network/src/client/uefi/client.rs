@@ -32,7 +32,7 @@
 
 use alloc::vec::Vec;
 use alloc::vec;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::ptr;
 
 use crate::client::HttpClient;
