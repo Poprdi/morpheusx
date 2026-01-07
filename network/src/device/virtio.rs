@@ -252,6 +252,14 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
         // Header is already zeroed (no offload features)
         tx_buf[VIRTIO_NET_HDR_SIZE..].copy_from_slice(packet);
 
+        // DEBUG: Log buffer address to verify DMA range
+        let buf_ptr = tx_buf.as_ptr() as usize;
+        #[cfg(feature = "debug_tx")]
+        {
+            extern crate alloc;
+            // Log to serial if available
+        }
+
         // Try non-blocking send with timeout
         // The virtio-drivers send() spins forever waiting for completion
         // We'll use transmit_begin + poll pattern instead
@@ -268,11 +276,15 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
             })?
         };
         
-        // Poll for completion with timeout (10ms ~= 20M cycles at 2GHz)
-        let timeout_cycles = 20_000_000u64;
+        // Poll for completion with timeout
+        // Increase timeout to 100ms for slow emulation
+        let timeout_cycles = 200_000_000u64;
         let start = unsafe { crate::device::pci::read_tsc() };
+        let mut poll_count = 0u32;
         
         loop {
+            poll_count += 1;
+            
             // Check if TX completed
             if let Some(completed_token) = self.inner.poll_transmit() {
                 if completed_token == token {
@@ -287,7 +299,16 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
             // Check timeout
             let now = unsafe { crate::device::pci::read_tsc() };
             if now.wrapping_sub(start) > timeout_cycles {
-                return Err(NetworkError::Timeout);
+                // Return with debug info
+                return Err(NetworkError::DeviceError(alloc::format!(
+                    "TX timeout after {} polls, buf@{:#x}, token={}",
+                    poll_count, buf_ptr, token
+                )));
+            }
+            
+            // Small delay between polls to not hammer the device
+            for _ in 0..1000 {
+                core::hint::spin_loop();
             }
         }
     }

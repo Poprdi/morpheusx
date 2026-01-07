@@ -624,43 +624,72 @@ impl DistroDownloader {
         screen.put_str_at(5, log_y, "Initializing DMA pool...", EFI_LIGHTGREEN, EFI_BLACK);
         log_y += 1;
         
+        // Get PE load info using embedded relocation data
+        use morpheus_persistent::pe::embedded_reloc_data::ORIGINAL_IMAGE_BASE;
+        
         let (image_base, image_size) = unsafe {
             let bs = &*self.boot_services;
             match get_loaded_image(bs, self.image_handle) {
                 Ok(loaded_image) => {
                     let base = (*loaded_image).image_base as usize;
                     let size = (*loaded_image).image_size as usize;
-                    screen.put_str_at(7, log_y, &format!("PE: base={:#x} size={}KB", base, size/1024), EFI_YELLOW, EFI_BLACK);
-                    log_y += 1;
                     (base, size)
                 }
-                Err(_) => {
-                    screen.put_str_at(7, log_y, "Failed to get PE image, using static pool", EFI_YELLOW, EFI_BLACK);
-                    log_y += 1;
-                    (0, 0)
-                }
+                Err(_) => (0, 0)
             }
         };
 
-        // Try cave-based init, fall back to static if no caves found
-        if image_base != 0 && image_size > 0 {
-            let image_end = image_base + image_size;
-            unsafe {
-                match DmaPool::init_from_caves(image_base, image_end) {
-                    Ok(_) => {
-                        screen.put_str_at(7, log_y, &format!("DMA caves: {} bytes", DmaPool::free_space()), EFI_YELLOW, EFI_BLACK);
-                        log_y += 1;
-                    }
-                    Err(_) => {
-                        screen.put_str_at(7, log_y, "No caves found, using static pool", EFI_YELLOW, EFI_BLACK);
-                        log_y += 1;
-                        DmaPool::init_static();
-                    }
-                }
-            }
+        // Calculate relocation delta using compile-time embedded data
+        let reloc_delta = if image_base != 0 {
+            image_base as i64 - ORIGINAL_IMAGE_BASE as i64
         } else {
-            DmaPool::init_static();
-        }
+            0
+        };
+        
+        // Show detailed PE/DMA info for debugging
+        screen.put_str_at(7, log_y, &format!(
+            "Linker ImageBase: {:#x}", ORIGINAL_IMAGE_BASE
+        ), EFI_DARKGRAY, EFI_BLACK);
+        log_y += 1;
+        
+        screen.put_str_at(7, log_y, &format!(
+            "Actual load addr: {:#x} (delta: {:+#x})",
+            image_base, reloc_delta
+        ), EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+
+        // Check if PE is loaded below 4GB (required for VirtIO transitional 32-bit DMA)
+        let pe_under_4gb = image_base < 0x1_0000_0000;
+        screen.put_str_at(7, log_y, &format!(
+            "PE location: {}",
+            if pe_under_4gb { "<4GB (DMA OK)" } else { ">4GB (DMA RISK!)" }
+        ), if pe_under_4gb { EFI_LIGHTGREEN } else { EFI_RED }, EFI_BLACK);
+        log_y += 1;
+
+        // Initialize static pool - it's in our .bss, so same location as PE
+        DmaPool::init_static();
+        
+        // Show where static pool is located
+        let pool_base = DmaPool::base_address();
+        let pool_size = DmaPool::total_size();
+        let pool_under_4gb = pool_base < 0x1_0000_0000;
+        let pool_end = pool_base + pool_size;
+        
+        screen.put_str_at(7, log_y, &format!(
+            "DMA pool: {:#x}-{:#x} ({} KB)",
+            pool_base, pool_end, pool_size / 1024
+        ), EFI_YELLOW, EFI_BLACK);
+        log_y += 1;
+        
+        screen.put_str_at(7, log_y, &format!(
+            "DMA range: {}",
+            if pool_under_4gb && pool_end < 0x1_0000_0000 { 
+                "<4GB OK" 
+            } else { 
+                ">4GB - VirtIO may fail!" 
+            }
+        ), if pool_under_4gb && pool_end < 0x1_0000_0000 { EFI_LIGHTGREEN } else { EFI_RED }, EFI_BLACK);
+        log_y += 1;
 
         // Step 2: Initialize HAL
         screen.put_str_at(5, log_y, "Initializing HAL...", EFI_LIGHTGREEN, EFI_BLACK);
@@ -824,6 +853,17 @@ impl DistroDownloader {
         let cam = LegacyConfigAccess;
         let mut pci_root = PciRoot::new(cam);
         
+        // Read BARs before creating transport for debug
+        let bar0 = cam.read_word(device_fn, 0x10);
+        let bar1 = cam.read_word(device_fn, 0x14);
+        let bar2 = cam.read_word(device_fn, 0x18);
+        let bar4 = cam.read_word(device_fn, 0x20);
+        screen.put_str_at(7, log_y, &format!(
+            "BARs: 0={:#x} 1={:#x} 2={:#x} 4={:#x}",
+            bar0, bar1, bar2, bar4
+        ), EFI_DARKGRAY, EFI_BLACK);
+        log_y += 1;
+        
         let transport = match PciTransport::new::<StaticHal, LegacyConfigAccess>(&mut pci_root, device_fn) {
             Ok(t) => t,
             Err(e) => {
@@ -831,6 +871,15 @@ impl DistroDownloader {
                 return Err("Failed to create PCI transport");
             }
         };
+        
+        // Show DMA pool info after transport is created
+        let dma_base = DmaPool::base_address();
+        let dma_free = DmaPool::free_space();
+        screen.put_str_at(7, log_y, &format!(
+            "DMA: base={:#x} free={}KB",
+            dma_base, dma_free / 1024
+        ), EFI_DARKGRAY, EFI_BLACK);
+        log_y += 1;
 
         // Step 5: Create VirtIO network device
         screen.put_str_at(5, log_y, "Creating VirtIO device...", EFI_LIGHTGREEN, EFI_BLACK);

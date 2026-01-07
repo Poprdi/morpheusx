@@ -132,7 +132,34 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
     {
         let mut buffer = [0u8; MTU];
         let result = f(&mut buffer[..len]);
-        let _ = unsafe { (*self.device).transmit(&buffer[..len]) };
+        
+        // Attempt transmit and capture error for debugging
+        // We still have to return `result` regardless of TX success
+        // because that's what smoltcp expects
+        match unsafe { (*self.device).transmit(&buffer[..len]) } {
+            Ok(()) => {
+                // TX succeeded
+            }
+            Err(e) => {
+                // TX failed - log to static flag for debugging
+                // In a real implementation, we'd have a proper error channel
+                TX_ERROR_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        
         result
     }
+}
+
+// Global counter for TX errors (debugging)
+static TX_ERROR_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Get the number of TX errors that have occurred.
+pub fn tx_error_count() -> u32 {
+    TX_ERROR_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset the TX error counter.
+pub fn reset_tx_error_count() {
+    TX_ERROR_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
 }
