@@ -402,16 +402,16 @@ impl DeviceFactory {
                 Self::create_virtio(&detected.pci_info, config)
             }
             DriverType::IntelIgb | DriverType::IntelE1000 => {
-                Err(NetworkError::Other("Intel NIC driver not yet implemented"))
+                Err(NetworkError::DeviceError(alloc::string::String::from("Intel NIC driver not yet implemented")))
             }
             DriverType::RealtekRtl8168 | DriverType::RealtekRtl8139 => {
-                Err(NetworkError::Other("Realtek NIC driver not yet implemented"))
+                Err(NetworkError::DeviceError(alloc::string::String::from("Realtek NIC driver not yet implemented")))
             }
             DriverType::BroadcomBcm57xx => {
-                Err(NetworkError::Other("Broadcom NIC driver not yet implemented"))
+                Err(NetworkError::DeviceError(alloc::string::String::from("Broadcom NIC driver not yet implemented")))
             }
             DriverType::Unknown => {
-                Err(NetworkError::Other("Unknown network device type"))
+                Err(NetworkError::DeviceError(alloc::string::String::from("Unknown network device type")))
             }
         }
     }
@@ -421,7 +421,7 @@ impl DeviceFactory {
         let devices = Self::scan(config)?;
         
         if devices.is_empty() {
-            return Err(NetworkError::Other("No network devices found"));
+            return Err(NetworkError::DeviceError(alloc::string::String::from("No network devices found")));
         }
 
         // Filter by preference
@@ -446,10 +446,10 @@ impl DeviceFactory {
             }
         };
 
-        let device = device.ok_or(NetworkError::Other("No matching network device found"))?;
+        let device = device.ok_or(NetworkError::DeviceError(alloc::string::String::from("No matching network device found")))?;
         
         if !device.driver_type.is_implemented() {
-            return Err(NetworkError::Other("Found device but driver not implemented"));
+            return Err(NetworkError::DeviceError(alloc::string::String::from("Found device but driver not implemented")));
         }
 
         Self::create_from_detected(device, config)
@@ -473,11 +473,11 @@ impl DeviceFactory {
 
             // Create PCI transport
             let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
-                .map_err(|e| NetworkError::Other("Failed to create PCI transport"))?;
+                .map_err(|e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
 
             // Create VirtIO device
             let device = VirtioNetDevice::new(transport)
-                .map_err(|_| NetworkError::Other("Failed to create VirtIO device"))?;
+                .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
 
             Ok(UnifiedNetDevice::VirtIO(device))
         } else {
@@ -487,10 +487,10 @@ impl DeviceFactory {
             let mut pci_root = PciRoot::new(bridge);
 
             let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
-                .map_err(|e| NetworkError::Other("Failed to create PCI transport"))?;
+                .map_err(|e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
 
             let device = VirtioNetDevice::new(transport)
-                .map_err(|_| NetworkError::Other("Failed to create VirtIO device"))?;
+                .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
 
             Ok(UnifiedNetDevice::VirtIO(device))
         }
@@ -505,17 +505,17 @@ impl DeviceFactory {
         };
 
         let ecam_base = config.ecam_base
-            .ok_or(NetworkError::Other("ECAM base required on non-x86"))?;
+            .ok_or(NetworkError::DeviceError(alloc::string::String::from("ECAM base required on non-x86")))?;
         
         let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
         let bridge = VirtioConfigBridge::new(ecam);
         let mut pci_root = PciRoot::new(bridge);
 
         let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
-            .map_err(|e| NetworkError::Other("Failed to create PCI transport"))?;
+            .map_err(|e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
 
         let device = VirtioNetDevice::new(transport)
-            .map_err(|_| NetworkError::Other("Failed to create VirtIO device"))?;
+            .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
 
         Ok(UnifiedNetDevice::VirtIO(device))
     }

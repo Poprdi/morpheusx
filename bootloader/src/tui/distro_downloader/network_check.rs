@@ -3,12 +3,12 @@
 //! Verifies network was properly initialized during bootstrap phase.
 //! Does NOT perform initialization - only validates existing setup.
 
-use crate::screen::Screen;
-use crate::uefi::EFI_LIGHTGREEN;
-use crate::uefi::EFI_YELLOW;
-use crate::uefi::EFI_RED;
-use crate::uefi::EFI_DARKGRAY;
-use crate::uefi::EFI_BLACK;
+extern crate alloc;
+
+use alloc::format;
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW, EFI_RED, EFI_DARKGRAY,
+};
 use dma_pool::DmaPool;
 
 /// Check network connectivity

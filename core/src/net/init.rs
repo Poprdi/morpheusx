@@ -50,6 +50,7 @@ use super::ring_buffer::{error_log, debug_log, drain_network_logs, InitStage};
 use morpheus_network::{
     DeviceFactory, DeviceConfig, UnifiedNetDevice,
     NativeHttpClient, NetConfig, StaticHal,
+    NetworkDevice,  // Trait for mac_address()
 };
 
 /// Network initialization result containing the client and status.
