@@ -92,7 +92,7 @@ pub use stack::{debug_log, debug_log_pop, debug_log_available, debug_log_clear, 
 pub use device::hal::StaticHal;
 
 // Re-export device factory types
-pub use device::factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType};
+pub use device::factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType, PciAccessMethod};
 
 // Re-export standalone assembly functions
 #[cfg(target_arch = "x86_64")]

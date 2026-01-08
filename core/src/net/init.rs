@@ -89,47 +89,94 @@ impl NetworkInit {
         config: &InitConfig,
         get_time_ms: fn() -> u64,
     ) -> NetInitResult<NetworkInitResult> {
+        // No-op poll function for basic init
+        Self::initialize_with_poll(config, get_time_ms, || {})
+    }
+
+    /// Initialize with display polling.
+    ///
+    /// Same as `initialize`, but calls `poll_display` periodically so the
+    /// caller can update the UI with new log entries.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Initialization configuration
+    /// * `get_time_ms` - Function to get current time in milliseconds
+    /// * `poll_display` - Called periodically to let caller update display
+    pub fn initialize_with_poll<F>(
+        config: &InitConfig,
+        get_time_ms: fn() -> u64,
+        mut poll_display: F,
+    ) -> NetInitResult<NetworkInitResult>
+    where
+        F: FnMut(),
+    {
         let start_time = get_time_ms();
         
         debug_log(InitStage::General, "Starting network initialization");
+        poll_display();
 
         // Step 1: Initialize DMA pool
         debug_log(InitStage::DmaPool, "Initializing DMA memory pool");
+        poll_display();
         Self::init_dma_pool(config)?;
         debug_log(InitStage::DmaPool, "DMA pool initialized");
+        poll_display();
 
         // Step 2: Initialize HAL
-        debug_log(InitStage::Hal, "Initializing hardware abstraction layer");
+        debug_log(InitStage::Hal, "Initializing HAL");
+        poll_display();
         Self::init_hal()?;
         debug_log(InitStage::Hal, "HAL initialized");
+        poll_display();
 
         // Step 3: Scan PCI and create device
-        debug_log(InitStage::PciScan, "Scanning PCI bus for network devices");
+        debug_log(InitStage::PciScan, "Scanning PCI bus");
+        poll_display();
         let device = Self::create_device(config)?;
         debug_log(InitStage::VirtioDevice, "Network device created");
+        poll_display();
 
         // Step 4: Get MAC address before we move the device
         let mac_address = device.mac_address();
         debug_log(InitStage::VirtioDevice, "MAC address retrieved");
+        poll_display();
 
         // Step 5: Create HTTP client with DHCP
         debug_log(InitStage::NetworkClient, "Creating HTTP client");
+        poll_display();
         let mut client = NativeHttpClient::new(device, NetConfig::Dhcp, get_time_ms);
-        debug_log(InitStage::NetworkClient, "HTTP client created, starting DHCP");
+        debug_log(InitStage::NetworkClient, "Starting DHCP");
+        poll_display();
 
-        // Step 6: Wait for DHCP
-        debug_log(InitStage::Dhcp, "Waiting for DHCP lease");
-        client.wait_for_network(config.dhcp_timeout_ms)
-            .map_err(|e| {
-                error_log(InitStage::Dhcp, "DHCP failed or timed out");
-                drain_network_logs(); // Capture any network crate debug info
-                NetInitError::DhcpTimeout
-            })?;
+        // Step 6: Wait for DHCP with polling
+        debug_log(InitStage::Dhcp, "Waiting for DHCP lease...");
+        poll_display();
+        
+        // Poll-based DHCP wait so we can update display
+        let dhcp_start = get_time_ms();
+        loop {
+            client.poll();
+            poll_display();
+            
+            if client.ip_address().is_some() {
+                break; // Got IP!
+            }
+            
+            if get_time_ms() - dhcp_start > config.dhcp_timeout_ms {
+                error_log(InitStage::Dhcp, "DHCP timeout");
+                drain_network_logs();
+                return Err(NetInitError::DhcpTimeout);
+            }
+        }
 
         // Extract IP information
         let ip = client.ip_address()
             .map(|ip| ip.octets())
             .unwrap_or([0, 0, 0, 0]);
+
+        debug_log(InitStage::Dhcp, "DHCP complete");
+        poll_display();
 
         let init_time_ms = get_time_ms() - start_time;
 
@@ -144,6 +191,7 @@ impl NetworkInit {
         };
 
         debug_log(InitStage::General, "Network initialization complete");
+        poll_display();
 
         Ok(NetworkInitResult { client, status })
     }
@@ -185,9 +233,33 @@ impl NetworkInit {
 
     /// Create network device using the factory.
     fn create_device(config: &InitConfig) -> NetInitResult<UnifiedNetDevice> {
-        // Build DeviceConfig from our InitConfig
+        // Step 1: Probe for working PCI access method
+        debug_log(InitStage::PciScan, "Probing PCI access methods...");
+        
+        let access_method = DeviceFactory::probe_pci_access();
+        match access_method {
+            Some(morpheus_network::PciAccessMethod::LegacyIo) => {
+                debug_log(InitStage::PciScan, "Using Legacy I/O port access");
+            }
+            Some(morpheus_network::PciAccessMethod::Ecam(base)) => {
+                // Log ECAM base address
+                if base == 0xB000_0000 {
+                    debug_log(InitStage::PciScan, "Using ECAM access (Q35)");
+                } else if base == 0xE000_0000 {
+                    debug_log(InitStage::PciScan, "Using ECAM access (i440FX)");
+                } else {
+                    debug_log(InitStage::PciScan, "Using ECAM access");
+                }
+            }
+            None => {
+                error_log(InitStage::PciScan, "No working PCI access method found");
+                return Err(NetInitError::PciScanFailed);
+            }
+        }
+
+        // Build DeviceConfig - let factory use auto-probe
         let device_config = DeviceConfig {
-            ecam_base: config.ecam_base,
+            ecam_base: config.ecam_base, // None = auto-probe
             preferred_driver: morpheus_network::device::factory::PreferredDriver::Any,
             scan_bus: 0,
         };
@@ -201,14 +273,9 @@ impl NetworkInit {
                 }
 
                 // Log what we found
-                for (i, dev) in devices.iter().enumerate() {
-                    let mut msg = [0u8; 64];
+                for dev in devices.iter() {
                     let name = dev.driver_type.name();
-                    let len = name.len().min(50);
-                    msg[..len].copy_from_slice(&name.as_bytes()[..len]);
-                    if let Ok(s) = core::str::from_utf8(&msg[..len]) {
-                        debug_log(InitStage::PciScan, s);
-                    }
+                    debug_log(InitStage::PciScan, name);
                 }
             }
             Err(_) => {
@@ -219,7 +286,7 @@ impl NetworkInit {
 
         // Create device
         DeviceFactory::create_auto(&device_config)
-            .map_err(|e| {
+            .map_err(|_e| {
                 error_log(InitStage::VirtioDevice, "Device creation failed");
                 drain_network_logs();
                 NetInitError::VirtioInit

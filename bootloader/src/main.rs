@@ -18,7 +18,7 @@ mod installer;
 mod tui;
 mod uefi;
 
-use tui::boot_sequence::BootSequence;
+use tui::boot_sequence::{BootSequence, NetworkBootResult};
 use tui::distro_launcher::DistroLauncher;
 use tui::input::Keyboard;
 use tui::installer_menu::InstallerMenu;
@@ -298,6 +298,19 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
 
         morpheus_core::logger::log("Main menu system ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
+
+        // Initialize network stack
+        // Time function using TSC (timestamp counter)
+        fn get_time_ms() -> u64 {
+            // SAFETY: Reading TSC is always safe on x86_64
+            let tsc = unsafe { morpheus_network::read_tsc() };
+            // Approximate conversion - 2GHz assumed (TODO: calibrate properly)
+            tsc / 2_000_000
+        }
+
+        let _network_result = boot_seq.init_network(&mut screen, boot_x, boot_y, get_time_ms);
+        // Network result stored for later use by distro downloader
+        // TODO: Store in global or pass to menu system
 
         boot_seq.mark_complete();
         boot_seq.render(&mut screen, boot_x, boot_y);
