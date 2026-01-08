@@ -58,11 +58,11 @@ mod status;
 mod ring_buffer;
 
 pub use error::{NetInitError, NetInitResult};
-pub use config::InitConfig;
-pub use init::NetworkInit;
+pub use config::{InitConfig, ECAM_BASE_QEMU_Q35, ECAM_BASE_QEMU_I440FX};
+pub use init::{NetworkInit, NetworkInitResult};
 pub use status::NetworkStatus;
 pub use ring_buffer::{
-    ErrorLogEntry, error_log, error_log_pop, error_log_available, 
-    error_log_clear, error_log_count, drain_network_logs,
+    ErrorLogEntry, InitStage, error_log, debug_log, error_log_pop, 
+    error_log_available, error_log_clear, error_log_count, drain_network_logs,
 };
 
