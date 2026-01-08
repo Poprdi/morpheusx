@@ -27,6 +27,7 @@ pub mod state;
 pub mod renderer;
 pub mod ui;
 pub mod manifest_io;
+pub mod network_check; // Network connectivity verification
 
 pub use catalog::{DistroCategory, DistroEntry, CATEGORIES, DISTRO_CATALOG, get_by_category};
 pub use manifest_io::{persist_manifest, load_manifests_from_esp, delete_manifest, ManifestIoError};

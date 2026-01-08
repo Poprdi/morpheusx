@@ -294,10 +294,14 @@ impl<D: NetworkDevice> NetInterface<D> {
 
     /// Start a DNS query for a hostname. Returns a query handle.
     pub fn start_dns_query(&mut self, hostname: &str) -> Result<smoltcp::socket::dns::QueryHandle> {
-        super::debug_log(80, \"start_dns_query\");\n        let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+        super::debug_log(80, "start_dns_query");
+        let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
         dns_socket
             .start_query(self.iface.context(), hostname, smoltcp::wire::DnsQueryType::A)
-            .map_err(|_| {\n                super::debug_log(81, \"DNS query start err\");\n                NetworkError::DnsResolutionFailed\n            })
+            .map_err(|_| {
+                super::debug_log(81, "DNS query start err");
+                NetworkError::DnsResolutionFailed
+            })
     }
     
     /// Check DNS query result. Returns Ok(Some(ip)) if resolved, Ok(None) if pending, Err if failed.
@@ -305,17 +309,22 @@ impl<D: NetworkDevice> NetInterface<D> {
         let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
         match dns_socket.get_query_result(handle) {
             Ok(addrs) => {
-                super::debug_log(82, \"DNS got result\");\n                // Find first IPv4 address
+                super::debug_log(82, "DNS got result");
+                // Find first IPv4 address
                 for addr in addrs {
                     if let IpAddress::Ipv4(v4) = addr {
                         let bytes = v4.as_bytes();
                         return Ok(Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])));
                     }
                 }
-                super::debug_log(83, \"DNS no IPv4 addr\");\n                Err(NetworkError::DnsResolutionFailed)
+                super::debug_log(83, "DNS no IPv4 addr");
+                Err(NetworkError::DnsResolutionFailed)
             }
             Err(GetQueryResultError::Pending) => Ok(None),
-            Err(GetQueryResultError::Failed) => {\n                super::debug_log(84, \"DNS query failed\");\n                Err(NetworkError::DnsResolutionFailed)\n            }
+            Err(GetQueryResultError::Failed) => {
+                super::debug_log(84, "DNS query failed");
+                Err(NetworkError::DnsResolutionFailed)
+            }
         }
     }
 
@@ -404,7 +413,7 @@ impl<D: NetworkDevice> NetInterface<D> {
 
     /// Create a TCP socket and return its handle.
     pub fn tcp_socket(&mut self) -> Result<SocketHandle> {
-        super::debug_log(90, \"tcp_socket create\");
+        super::debug_log(90, "tcp_socket create");
         let rx_buffer = TcpSocketBuffer::new(vec![0u8; TCP_RX_BUFFER_SIZE]);
         let tx_buffer = TcpSocketBuffer::new(vec![0u8; TCP_TX_BUFFER_SIZE]);
         let socket = TcpSocket::new(rx_buffer, tx_buffer);
@@ -419,7 +428,7 @@ impl<D: NetworkDevice> NetInterface<D> {
         remote_ip: Ipv4Addr,
         remote_port: u16,
     ) -> Result<()> {
-        super::debug_log(91, \"tcp_connect start\");
+        super::debug_log(91, "tcp_connect start");
         let remote_addr = Ipv4Address::from_bytes(&remote_ip.octets());
         let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote_addr), remote_port);
 
@@ -431,11 +440,11 @@ impl<D: NetworkDevice> NetInterface<D> {
         socket
             .connect(self.iface.context(), endpoint, local_port)
             .map_err(|_| {
-                super::debug_log(92, \"tcp_connect FAILED\");
+                super::debug_log(92, "tcp_connect FAILED");
                 NetworkError::ConnectionFailed
             })?;
 
-        super::debug_log(93, \"tcp_connect initiated\");
+        super::debug_log(93, "tcp_connect initiated");
         Ok(())
     }
 

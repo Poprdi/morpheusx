@@ -91,6 +91,9 @@ pub use stack::{set_debug_stage, debug_stage};  // Debug stage tracking
 pub use stack::{debug_log, debug_log_pop, debug_log_available, debug_log_clear, DebugLogEntry};  // Ring buffer logging
 pub use device::hal::StaticHal;
 
+// Re-export device factory types
+pub use device::factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType};
+
 // Re-export standalone assembly functions
 #[cfg(target_arch = "x86_64")]
 pub use device::pci::{read_tsc, pci_io_test};

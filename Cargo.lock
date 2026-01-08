@@ -202,8 +202,10 @@ dependencies = [
 name = "morpheus-core"
 version = "1.0.1"
 dependencies = [
+ "dma-pool",
  "gpt_disk_io",
  "gpt_disk_types",
+ "morpheus-network",
  "uguid",
 ]
 
@@ -223,6 +225,10 @@ dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
 ]
+
+[[package]]
+name = "morpheus-ping"
+version = "0.1.0"
 
 [[package]]
 name = "morpheus-updater"
