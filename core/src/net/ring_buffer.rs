@@ -251,13 +251,14 @@ pub fn drain_network_logs() {
     // Import from network crate's ring buffer
     use morpheus_network::stack::{debug_log_pop, debug_log_available};
     
-    while debug_log_available() > 0 {
+    while debug_log_available() {
         if let Some(net_entry) = debug_log_pop() {
             // Convert network entry to our format
-            let stage = InitStage::from_network_stage(net_entry.stage);
+            // Network crate uses u32 for stage, we use u8
+            let stage = InitStage::from_network_stage(net_entry.stage as u8);
             
             // Get message from network entry
-            let len = net_entry.len as usize;
+            let len = net_entry.len;
             let msg_bytes = &net_entry.msg[..len.min(64)]; // Network uses 64-byte messages
             if let Ok(msg) = core::str::from_utf8(msg_bytes) {
                 // Forward as debug log (network crate entries aren't necessarily errors)
