@@ -2,6 +2,12 @@
 //!
 //! Configuration options for the network initialization sequence.
 
+/// ECAM base address for QEMU Q35 machine type.
+pub const ECAM_BASE_QEMU_Q35: usize = 0xB000_0000;
+
+/// ECAM base address for QEMU i440FX machine type.
+pub const ECAM_BASE_QEMU_I440FX: usize = 0xE000_0000;
+
 /// Network initialization configuration.
 #[derive(Debug, Clone)]
 pub struct InitConfig {
@@ -13,6 +19,9 @@ pub struct InitConfig {
     pub image_base: Option<usize>,
     /// Image end address for DMA cave discovery.
     pub image_end: Option<usize>,
+    /// ECAM base address for PCIe config access.
+    /// If None, uses legacy I/O ports on x86.
+    pub ecam_base: Option<usize>,
     /// Retry count for transient failures.
     pub retry_count: u8,
     /// Delay between retries in milliseconds.
@@ -26,6 +35,7 @@ impl Default for InitConfig {
             use_static_dma: true,     // Use static as fallback
             image_base: None,
             image_end: None,
+            ecam_base: Some(ECAM_BASE_QEMU_Q35), // Default to Q35
             retry_count: 3,
             retry_delay_ms: 1_000,
         }
@@ -49,9 +59,25 @@ impl InitConfig {
             use_static_dma: true,
             image_base: None,
             image_end: None,
+            ecam_base: Some(ECAM_BASE_QEMU_Q35),
             retry_count: 2,
             retry_delay_ms: 500,
         }
+    }
+
+    /// Create config using legacy I/O port PCI access (x86 only).
+    #[cfg(target_arch = "x86_64")]
+    pub fn legacy_io() -> Self {
+        Self {
+            ecam_base: None,
+            ..Default::default()
+        }
+    }
+
+    /// Set ECAM base address.
+    pub fn ecam(mut self, base: usize) -> Self {
+        self.ecam_base = Some(base);
+        self
     }
 
     /// Set DHCP timeout.
