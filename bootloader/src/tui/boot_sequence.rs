@@ -121,7 +121,7 @@ impl BootSequence {
         
         // Track how many dropdown lines we've shown (shared with closure)
         let dropdown_lines_cell = core::cell::Cell::new(0usize);
-        const MAX_DROPDOWN_LINES: usize = 12;
+        const MAX_DROPDOWN_LINES: usize = 24; // Increased from 12 to show more network init stages
 
         // Use default config (auto-probe PCI access)
         let config = InitConfig::default();

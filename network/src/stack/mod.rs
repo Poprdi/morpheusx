@@ -286,17 +286,17 @@ impl DebugRing {
 static mut DEBUG_RING: DebugRing = DebugRing::new();
 static DEBUG_RING_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Push a debug message to the ring buffer
+/// Push a debug message to the ring buffer (AND write to serial)
 pub fn debug_log(stage: u32, msg: &str) {
-    // Simple spinlock with backoff
-    let mut retries = 0;
-    while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
-        retries += 1;
-        if retries > 10 {
-            crate::device::pci::tsc_delay_us(1); // 1us after several spins
-        } else {
-            core::hint::spin_loop();
-        }
+    // ALWAYS write to serial first - this is visible even if we hang
+    #[cfg(target_arch = "x86_64")]
+    crate::serial_stage(stage, msg);
+    
+    // Bounded try-lock: in single-threaded context, lock should never be held
+    // If it is, we have a bug - don't spin forever, just skip the log
+    if DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        // Lock held - impossible in single-threaded, skip to avoid hang
+        return;
     }
     
     unsafe {
@@ -322,15 +322,10 @@ pub fn debug_log(stage: u32, msg: &str) {
 /// Pop the next debug message from the ring buffer (FIFO order)
 /// Returns None if buffer is empty
 pub fn debug_log_pop() -> Option<DebugLogEntry> {
-    // Simple spinlock with backoff
-    let mut retries = 0;
-    while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
-        retries += 1;
-        if retries > 10 {
-            crate::device::pci::tsc_delay_us(1); // 1us after several spins
-        } else {
-            core::hint::spin_loop();
-        }
+    // Bounded try-lock: in single-threaded context, lock should never be held
+    if DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        // Lock held - impossible in single-threaded, return None
+        return None;
     }
     
     let result = unsafe {
@@ -355,14 +350,10 @@ pub fn debug_log_available() -> bool {
 
 /// Clear all debug messages
 pub fn debug_log_clear() {
-    let mut retries = 0;
-    while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
-        retries += 1;
-        if retries > 10 {
-            crate::device::pci::tsc_delay_us(1); // 1us after several spins
-        } else {
-            core::hint::spin_loop();
-        }
+    // Bounded try-lock: in single-threaded context, lock should never be held
+    if DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
+        // Lock held - impossible in single-threaded, skip
+        return;
     }
     
     unsafe {

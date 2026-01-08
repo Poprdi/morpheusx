@@ -173,26 +173,34 @@ impl<D: NetworkDevice> NetInterface<D> {
     /// * `config` - IP configuration (DHCP or static)
     pub fn new(device: D, config: NetConfig) -> Self {
         super::set_debug_stage(10); // Stage 10: entered NetInterface::new
+        super::debug_log(10, "NetInterface::new() entered");
         
         let mac = device.mac_address();
         let ethernet_addr = EthernetAddress(mac);
         super::set_debug_stage(11); // Stage 11: got MAC
+        super::debug_log(11, "Got MAC address");
 
         let mut device_adapter = DeviceAdapter::new(device);
         super::set_debug_stage(12); // Stage 12: created DeviceAdapter
+        super::debug_log(12, "Created DeviceAdapter");
 
         // Create smoltcp config
         let smoltcp_config = Config::new(ethernet_addr.into());
         super::set_debug_stage(13); // Stage 13: created Config
+        super::debug_log(13, "Created smoltcp Config");
 
         // Create interface
         super::set_debug_stage(14); // Stage 14: about to create Interface
+        super::debug_log(14, "Creating smoltcp Interface...");
         let mut iface = Interface::new(smoltcp_config, &mut device_adapter, Instant::from_millis(0));
         super::set_debug_stage(15); // Stage 15: Interface created
+        super::debug_log(15, "smoltcp Interface created");
 
         // Create socket storage
+        super::debug_log(15, "Creating SocketSet...");
         let mut sockets = SocketSet::new(vec![]);
         super::set_debug_stage(16); // Stage 16: SocketSet created
+        super::debug_log(16, "SocketSet created");
 
         // Default DNS servers (Cloudflare and Google)
         let default_dns_servers: &[IpAddress] = &[
@@ -202,18 +210,22 @@ impl<D: NetworkDevice> NetInterface<D> {
         
         // Create DNS socket with default servers
         super::set_debug_stage(17); // Stage 17: about to create DNS socket
+        super::debug_log(17, "Creating DNS socket...");
         let dns_queries: [Option<smoltcp::socket::dns::DnsQuery>; 1] = [None];
         let dns_socket = DnsSocket::new(default_dns_servers, dns_queries);
         let dns_handle = sockets.add(dns_socket);
         super::set_debug_stage(18); // Stage 18: DNS socket added
+        super::debug_log(18, "DNS socket added");
 
         let (state, dhcp_handle, gateway, dns) = match config {
             NetConfig::Dhcp => {
                 super::set_debug_stage(19); // Stage 19: creating DHCP socket
+                super::debug_log(19, "Creating DHCP socket...");
                 // Add DHCP socket
                 let dhcp_socket = DhcpSocket::new();
                 let handle = sockets.add(dhcp_socket);
                 super::set_debug_stage(20); // Stage 20: DHCP socket added
+                super::debug_log(20, "DHCP socket added");
                 (NetState::DhcpDiscovering, Some(handle), None, None)
             }
             NetConfig::Static {
@@ -242,6 +254,7 @@ impl<D: NetworkDevice> NetInterface<D> {
         };
 
         super::set_debug_stage(25); // Stage 25: about to return Self
+        super::debug_log(25, "NetInterface::new() complete");
         Self {
             device: device_adapter,
             iface,
