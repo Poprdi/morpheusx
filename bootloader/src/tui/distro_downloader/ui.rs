@@ -331,11 +331,12 @@ impl DistroDownloader {
         self.needs_full_redraw = true;
         self.render_full(screen);
 
-        // Execute the full download flow
-        self.execute_download(distro, screen);
+        // Note: execute_download requires a client - this is called without one
+        // The caller should use execute_download_with_client instead
+        self.show_download_error(screen, "HTTP client required - use execute_download_with_client");
     }
 
-    /// Execute the full ISO download flow
+    /// Execute the full ISO download flow with an HTTP client
     ///
     /// 1. Check network connectivity (assumes bootstrap already initialized network)
     /// 2. Check disk space and find free regions
@@ -343,12 +344,16 @@ impl DistroDownloader {
     /// 4. Download with streaming to chunk writer
     /// 5. Finalize and register ISO
     ///
-    /// # TODO
-    /// - HTTP client will be provided by network bootstrap phase
-    /// - Network should be initialized during bootloader bootstrap phase
-    /// - HTTP client will be accessed via a public static/global in network_check.rs
-    /// - For now, this will show an error when attempting download
-    fn execute_download(&mut self, distro: &'static DistroEntry, screen: &mut Screen) {
+    /// # Arguments
+    /// * `distro` - The distro to download
+    /// * `client` - HTTP client from core network init
+    /// * `screen` - Display screen
+    pub fn execute_download_with_client<D: morpheus_network::NetworkDevice>(
+        &mut self,
+        distro: &'static DistroEntry,
+        client: &mut morpheus_network::client::NativeHttpClient<D>,
+        screen: &mut Screen,
+    ) {
         // Time function for delays
         fn get_time_ms() -> u64 {
             let tsc = unsafe { morpheus_network::read_tsc() };
@@ -366,15 +371,6 @@ impl DistroDownloader {
             return;
         }
 
-        // TODO: Get HTTP client from global state or pass as parameter
-        // For now, show error that HTTP client integration is pending
-        self.show_download_error(screen, "HTTP client not yet integrated - awaiting bootstrap implementation");
-        return;
-
-        // === UNREACHABLE CODE BELOW ===
-        // Will be enabled once HTTP client is passed in from bootstrap
-        #[allow(unreachable_code)]
-        {
         const CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB max chunk size
 
         // STEP 2: Now that network is ready, check disk space
@@ -527,7 +523,7 @@ impl DistroDownloader {
         let download_result = self.download_with_chunk_writer(
             distro.url,
             distro.size_bytes,
-            &mut client,
+            client,
             &mut chunk_writer,
             block_io_protocol,
             screen,
@@ -583,7 +579,6 @@ impl DistroDownloader {
 
         self.needs_full_redraw = true;
         self.render_full(screen);
-        } // End unreachable code block
     }
 
     /// Allocate chunk partitions from free space regions
@@ -632,11 +627,11 @@ impl DistroDownloader {
 
     /// Download URL and write to chunks via ChunkWriter.
     /// Assumes network client is already initialized with DHCP complete and IP assigned.
-    fn download_with_chunk_writer(
+    fn download_with_chunk_writer<D: morpheus_network::NetworkDevice>(
         &mut self,
         url: &str,
         expected_size: u64,
-        client: &mut morpheus_network::client::NativeHttpClient<morpheus_network::device::virtio::VirtioNetDevice<morpheus_network::device::hal::StaticHal, virtio_drivers::transport::pci::PciTransport>>,
+        client: &mut morpheus_network::client::NativeHttpClient<D>,
         chunk_writer: &mut ChunkWriter,
         block_io_protocol: *mut BlockIoProtocol,
         screen: &mut Screen,
