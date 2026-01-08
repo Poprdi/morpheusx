@@ -166,7 +166,27 @@ impl NetworkInit {
         // Step 5: Create HTTP client with DHCP
         debug_log(InitStage::NetworkClient, "Creating HTTP client");
         poll_display();
+        
+        // Clear network crate's debug stage to 0 before init
+        // This helps track progress if NetInterface::new() hangs
+        morpheus_network::debug_log_clear();
+        
+        // This call may hang during NetInterface::new() - the network stack
+        // logs debug stages (10-25) to its own ring buffer as it progresses
+        // If it hangs, check morpheus_network::debug_stage() for last stage
         let mut client = NativeHttpClient::new(device, NetConfig::Dhcp, get_time_ms);
+        
+        // Drain network stack's debug logs and copy to our ring buffer
+        // This lets us see which stage it reached if it hung
+        while let Some(entry) = morpheus_network::debug_log_pop() {
+            let msg = core::str::from_utf8(&entry.msg[..entry.len])
+                .unwrap_or("Invalid UTF-8 in network log");
+            debug_log(InitStage::NetworkClient, msg);
+            poll_display();
+        }
+        
+        debug_log(InitStage::NetworkClient, "HTTP client created");
+        poll_display();
         debug_log(InitStage::NetworkClient, "Starting DHCP");
         poll_display();
 

@@ -98,4 +98,83 @@ pub use device::factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, Detecte
 #[cfg(target_arch = "x86_64")]
 pub use device::pci::{read_tsc, pci_io_test, tsc_delay_us};
 
+// ===================== Serial Debug Output =====================
+// Write directly to COM1 (0x3f8) for QEMU -serial stdio debugging
+// This works even when the main display is blocked
+
+/// Write a single byte to COM1 serial port (non-blocking with bounded wait)
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub fn serial_byte(b: u8) {
+    unsafe {
+        // Bounded wait for TX buffer empty - max ~100 iterations
+        // If serial port doesn't exist, we just skip the write
+        let mut retries = 0u32;
+        loop {
+            let status: u8;
+            core::arch::asm!(
+                "in al, dx",
+                in("dx") 0x3fdu16,  // COM1 + 5 = line status register
+                out("al") status,
+                options(nostack, preserves_flags)
+            );
+            if status & 0x20 != 0 {
+                // TX buffer empty, safe to write
+                core::arch::asm!(
+                    "out dx, al",
+                    in("dx") 0x3f8u16,  // COM1 data register
+                    in("al") b,
+                    options(nostack, preserves_flags)
+                );
+                return;
+            }
+            retries += 1;
+            if retries > 100 {
+                // Serial port not responding - abandon write
+                return;
+            }
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Write a string to COM1 serial port
+#[cfg(target_arch = "x86_64")]
+pub fn serial_str(s: &str) {
+    for b in s.bytes() {
+        serial_byte(b);
+    }
+}
+
+/// Write a u32 as decimal to serial
+#[cfg(target_arch = "x86_64")]
+pub fn serial_u32(n: u32) {
+    if n == 0 {
+        serial_byte(b'0');
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut i = 0;
+    let mut val = n;
+    while val > 0 {
+        buf[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        serial_byte(buf[i]);
+    }
+}
+
+/// Log debug stage to serial - format: "[NET:XX] message\n"
+#[cfg(target_arch = "x86_64")]
+pub fn serial_stage(stage: u32, msg: &str) {
+    serial_str("[NET:");
+    serial_u32(stage);
+    serial_str("] ");
+    serial_str(msg);
+    serial_byte(b'\n');
+}
+
 
