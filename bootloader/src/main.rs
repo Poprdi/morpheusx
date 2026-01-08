@@ -255,7 +255,7 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
         let mut rain = MatrixRain::new(screen_width, screen_height);
 
         // Perform actual initialization and log each step
-        morpheus_core::logger::log("Morpheus bootloader initialized");
+        morpheus_core::logger::log("MorpheusX initialized");
         boot_seq.render(&mut screen, boot_x, boot_y);
 
         morpheus_core::logger::log("UEFI system table acquired");

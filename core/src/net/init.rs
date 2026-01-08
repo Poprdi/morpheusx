@@ -47,11 +47,32 @@ use super::error::{NetInitError, NetInitResult};
 use super::status::NetworkStatus;
 use super::ring_buffer::{error_log, debug_log, drain_network_logs, InitStage};
 
+/// Helper to format TX/RX stats into a buffer.
+fn write_to_buf(buf: &mut [u8], tx: u32, rx: u32) -> Result<usize, ()> {
+    use core::fmt::Write;
+    struct BufWriter<'a> { buf: &'a mut [u8], pos: usize }
+    impl<'a> Write for BufWriter<'a> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let remaining = self.buf.len().saturating_sub(self.pos);
+            let to_write = bytes.len().min(remaining);
+            self.buf[self.pos..self.pos + to_write].copy_from_slice(&bytes[..to_write]);
+            self.pos += to_write;
+            if to_write < bytes.len() { Err(core::fmt::Error) } else { Ok(()) }
+        }
+    }
+    let mut writer = BufWriter { buf, pos: 0 };
+    write!(&mut writer, "TX: {} RX: {}", tx, rx).map_err(|_| ())?;
+    Ok(writer.pos)
+}
+
 use morpheus_network::{
     DeviceFactory, DeviceConfig, UnifiedNetDevice,
     NativeHttpClient, NetConfig, StaticHal,
     NetworkDevice,  // Trait for mac_address()
+    tsc_delay_us,   // TSC-based delay
 };
+use morpheus_network::stack::{tx_packet_count, rx_packet_count};
 
 /// Network initialization result containing the client and status.
 /// 
@@ -155,18 +176,39 @@ impl NetworkInit {
         
         // Poll-based DHCP wait so we can update display
         let dhcp_start = get_time_ms();
+        let mut last_progress_log = dhcp_start;
         loop {
             client.poll();
             poll_display();
+            
+            // Small delay to avoid spinning CPU at 100%
+            tsc_delay_us(1000); // 1ms between polls
             
             if client.ip_address().is_some() {
                 break; // Got IP!
             }
             
-            if get_time_ms() - dhcp_start > config.dhcp_timeout_ms {
+            let elapsed = get_time_ms() - dhcp_start;
+            if elapsed > config.dhcp_timeout_ms {
                 error_log(InitStage::Dhcp, "DHCP timeout");
                 drain_network_logs();
                 return Err(NetInitError::DhcpTimeout);
+            }
+            
+            // Log progress every 2 seconds with packet stats
+            if get_time_ms() - last_progress_log > 2000 {
+                // Format stats: "TX: 5 RX: 3"
+                let tx = tx_packet_count();
+                let rx = rx_packet_count();
+                let mut msg_buf = [0u8; 64];
+                let msg = if let Ok(len) = write_to_buf(&mut msg_buf, tx, rx) {
+                    core::str::from_utf8(&msg_buf[..len]).unwrap_or("TX/RX stats error")
+                } else {
+                    "Stats unavailable"
+                };
+                debug_log(InitStage::Dhcp, msg);
+                last_progress_log = get_time_ms();
+                poll_display();
             }
         }
 
@@ -233,16 +275,25 @@ impl NetworkInit {
 
     /// Create network device using the factory.
     fn create_device(config: &InitConfig) -> NetInitResult<UnifiedNetDevice> {
-        // Step 1: Probe for working PCI access method
+        // Build DeviceConfig - let factory use auto-probe
+        let device_config = DeviceConfig {
+            ecam_base: config.ecam_base, // None = auto-probe
+            preferred_driver: morpheus_network::device::factory::PreferredDriver::Any,
+            scan_bus: 0,
+        };
+
         debug_log(InitStage::PciScan, "Probing PCI access methods...");
-        
-        let access_method = DeviceFactory::probe_pci_access();
-        match access_method {
-            Some(morpheus_network::PciAccessMethod::LegacyIo) => {
+        let (devices, method) = DeviceFactory::scan(&device_config)
+            .map_err(|_| {
+                error_log(InitStage::PciScan, "PCI scan failed");
+                NetInitError::PciScanFailed
+            })?;
+
+        match method {
+            morpheus_network::PciAccessMethod::LegacyIo => {
                 debug_log(InitStage::PciScan, "Using Legacy I/O port access");
             }
-            Some(morpheus_network::PciAccessMethod::Ecam(base)) => {
-                // Log ECAM base address
+            morpheus_network::PciAccessMethod::Ecam(base) => {
                 if base == 0xB000_0000 {
                     debug_log(InitStage::PciScan, "Using ECAM access (Q35)");
                 } else if base == 0xE000_0000 {
@@ -251,41 +302,50 @@ impl NetworkInit {
                     debug_log(InitStage::PciScan, "Using ECAM access");
                 }
             }
-            None => {
-                error_log(InitStage::PciScan, "No working PCI access method found");
-                return Err(NetInitError::PciScanFailed);
-            }
         }
 
-        // Build DeviceConfig - let factory use auto-probe
-        let device_config = DeviceConfig {
-            ecam_base: config.ecam_base, // None = auto-probe
-            preferred_driver: morpheus_network::device::factory::PreferredDriver::Any,
-            scan_bus: 0,
+        if devices.is_empty() {
+            error_log(InitStage::PciScan, "No network devices found on PCI bus");
+            return Err(NetInitError::NoNetworkDevice);
+        }
+
+        for dev in devices.iter() {
+            let name = dev.driver_type.name();
+            debug_log(InitStage::PciScan, name);
+        }
+
+        // Choose device based on preference
+        let device = match device_config.preferred_driver {
+            morpheus_network::device::factory::PreferredDriver::Any => {
+                devices.iter()
+                    .find(|d| d.driver_type.is_implemented())
+                    .or_else(|| devices.first())
+            }
+            morpheus_network::device::factory::PreferredDriver::VirtIO => {
+                devices.iter().find(|d| d.driver_type == morpheus_network::device::factory::DriverType::VirtIO)
+            }
+            morpheus_network::device::factory::PreferredDriver::Intel => {
+                devices.iter().find(|d| matches!(d.driver_type, morpheus_network::device::factory::DriverType::IntelIgb | morpheus_network::device::factory::DriverType::IntelE1000))
+            }
+            morpheus_network::device::factory::PreferredDriver::Realtek => {
+                devices.iter().find(|d| matches!(d.driver_type, morpheus_network::device::factory::DriverType::RealtekRtl8168 | morpheus_network::device::factory::DriverType::RealtekRtl8139))
+            }
+            morpheus_network::device::factory::PreferredDriver::Broadcom => {
+                devices.iter().find(|d| d.driver_type == morpheus_network::device::factory::DriverType::BroadcomBcm57xx)
+            }
         };
 
-        // Scan for devices first to log what we find
-        match DeviceFactory::scan(&device_config) {
-            Ok(devices) => {
-                if devices.is_empty() {
-                    error_log(InitStage::PciScan, "No network devices found on PCI bus");
-                    return Err(NetInitError::NoNetworkDevice);
-                }
+        let device = device.ok_or_else(|| {
+            error_log(InitStage::PciScan, "No matching network device found");
+            NetInitError::NoNetworkDevice
+        })?;
 
-                // Log what we found
-                for dev in devices.iter() {
-                    let name = dev.driver_type.name();
-                    debug_log(InitStage::PciScan, name);
-                }
-            }
-            Err(_) => {
-                error_log(InitStage::PciScan, "PCI scan failed");
-                return Err(NetInitError::PciScanFailed);
-            }
+        if !device.driver_type.is_implemented() {
+            error_log(InitStage::PciScan, "Found device but driver not implemented");
+            return Err(NetInitError::NoNetworkDevice);
         }
 
-        // Create device
-        DeviceFactory::create_auto(&device_config)
+        DeviceFactory::create_from_detected_with_method(device, method)
             .map_err(|_e| {
                 error_log(InitStage::VirtioDevice, "Device creation failed");
                 drain_network_logs();

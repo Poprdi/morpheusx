@@ -353,56 +353,53 @@ impl fmt::Debug for UnifiedNetDevice {
 pub struct DeviceFactory;
 
 impl DeviceFactory {
-    /// Probe for available PCI access methods.
-    /// 
-    /// Checks each method by reading the host bridge (bus 0, dev 0, func 0).
-    /// A valid host bridge should always exist and return a non-0xFFFF vendor ID.
-    /// 
-    /// Returns the first working method found, or None if all fail.
+    /// Probe all available PCI access methods (ordered by preference).
+    ///
+    /// Returns a list of working methods; ECAM candidates are preferred first,
+    /// legacy I/O is appended if it works. The first entry is the most preferred.
     #[cfg(target_arch = "x86_64")]
-    pub fn probe_pci_access() -> Option<PciAccessMethod> {
-        // Check 1: Try legacy I/O port access first (most compatible on x86)
+    pub fn probe_pci_access_all() -> alloc::vec::Vec<PciAccessMethod> {
+        let mut methods = alloc::vec::Vec::new();
+
+        // Prefer ECAM candidates first (Q35, i440FX, typical Intel, alt)
+        const ECAM_CANDIDATES: &[usize] = &[
+            ecam_bases::QEMU_Q35,
+            ecam_bases::QEMU_I440FX,
+            ecam_bases::INTEL_TYPICAL,
+            0xF000_0000,
+        ];
+
+        for &base in ECAM_CANDIDATES {
+            let ecam = unsafe { EcamAccess::new(base as *mut u8) };
+            let df = DeviceFunction::new(0, 0, 0);
+            let id = unsafe { ecam.read32(df, 0x00) };
+            let vendor = (id & 0xFFFF) as u16;
+            if vendor != 0xFFFF && vendor != 0x0000 {
+                methods.push(PciAccessMethod::Ecam(base));
+            }
+        }
+
+        // Legacy I/O last
         {
             let legacy = LegacyIoAccess::new();
             let df = DeviceFunction::new(0, 0, 0);
             let id = unsafe { legacy.read32(df, 0x00) };
             let vendor = (id & 0xFFFF) as u16;
-            
-            // Valid vendor ID means this method works
             if vendor != 0xFFFF && vendor != 0x0000 {
-                return Some(PciAccessMethod::LegacyIo);
+                methods.push(PciAccessMethod::LegacyIo);
             }
         }
 
-        // Check 2: Try common ECAM base addresses
-        const ECAM_CANDIDATES: &[usize] = &[
-            ecam_bases::QEMU_Q35,      // 0xB000_0000 - QEMU Q35
-            ecam_bases::QEMU_I440FX,   // 0xE000_0000 - QEMU i440FX
-            ecam_bases::INTEL_TYPICAL, // 0xE000_0000 - Intel platforms
-            0xF000_0000,               // Alternative ECAM location
-        ];
-
-        for &base in ECAM_CANDIDATES {
-            let ecam = unsafe { EcamAccess::new(base as *mut u8) };
-            let df = DeviceFunction::new(0, 0, 0);
-            let id = unsafe { ecam.read32(df, 0x00) };
-            let vendor = (id & 0xFFFF) as u16;
-
-            if vendor != 0xFFFF && vendor != 0x0000 {
-                return Some(PciAccessMethod::Ecam(base));
-            }
-        }
-
-        None
+        methods
     }
 
-    /// Probe for available PCI access methods (non-x86).
+    /// Probe all available PCI access methods (non-x86).
     #[cfg(not(target_arch = "x86_64"))]
-    pub fn probe_pci_access() -> Option<PciAccessMethod> {
-        // On non-x86, we only have ECAM
+    pub fn probe_pci_access_all() -> alloc::vec::Vec<PciAccessMethod> {
+        let mut methods = alloc::vec::Vec::new();
         const ECAM_CANDIDATES: &[usize] = &[
-            0x4000_0000, // ARM typical
-            0x8000_0000, // Alternative
+            0x4000_0000,
+            0x8000_0000,
         ];
 
         for &base in ECAM_CANDIDATES {
@@ -410,33 +407,54 @@ impl DeviceFactory {
             let df = DeviceFunction::new(0, 0, 0);
             let id = unsafe { ecam.read32(df, 0x00) };
             let vendor = (id & 0xFFFF) as u16;
-
             if vendor != 0xFFFF && vendor != 0x0000 {
-                return Some(PciAccessMethod::Ecam(base));
+                methods.push(PciAccessMethod::Ecam(base));
             }
         }
 
-        None
+        methods
     }
 
     /// Scan for network devices on the PCI bus.
-    /// 
-    /// If `config.ecam_base` is None, automatically probes for the correct
-    /// PCI access method first.
-    pub fn scan(config: &DeviceConfig) -> Result<Vec<DetectedDevice>> {
-        // Determine which access method to use
-        let access_method = if let Some(ecam_base) = config.ecam_base {
-            // Explicit ECAM base provided
-            PciAccessMethod::Ecam(ecam_base)
-        } else {
-            // Auto-probe for working method
-            Self::probe_pci_access()
-                .ok_or_else(|| NetworkError::DeviceError(
-                    alloc::string::String::from("No working PCI access method found")
-                ))?
-        };
+    ///
+    /// If `config.ecam_base` is provided, tries it first, then probes remaining
+    /// methods (ECAM first, legacy last) so a bad hint does not block fallback.
+    pub fn scan(config: &DeviceConfig) -> Result<(Vec<DetectedDevice>, PciAccessMethod)> {
+        let mut methods: alloc::vec::Vec<PciAccessMethod> = alloc::vec::Vec::new();
 
-        Self::scan_with_method(access_method, config.scan_bus)
+        if let Some(ecam_base) = config.ecam_base {
+            methods.push(PciAccessMethod::Ecam(ecam_base));
+        }
+
+        let mut probed = Self::probe_pci_access_all();
+
+        // If the hinted ECAM base was already added, avoid duplicating it
+        if let Some(ecam_base) = config.ecam_base {
+            probed.retain(|m| match m {
+                PciAccessMethod::Ecam(base) => *base != ecam_base,
+                _ => true,
+            });
+        }
+
+        methods.extend(probed);
+
+        if methods.is_empty() {
+            return Err(NetworkError::DeviceError(alloc::string::String::from(
+                "No working PCI access method found",
+            )));
+        }
+
+        // Try each method until devices are found
+        for method in methods.into_iter() {
+            let devices = Self::scan_with_method(method, config.scan_bus)?;
+            if !devices.is_empty() {
+                return Ok((devices, method));
+            }
+        }
+
+        Err(NetworkError::DeviceError(alloc::string::String::from(
+            "No network devices found",
+        )))
     }
 
     /// Scan using a specific PCI access method.
@@ -489,23 +507,13 @@ impl DeviceFactory {
         Ok(devices)
     }
 
-    /// Create a network device from detected device info.
+    /// Create a network device from detected device info using a chosen method.
     /// 
     /// Returns the unified device wrapper that implements NetworkDevice.
-    pub fn create_from_detected(
+    pub fn create_from_detected_with_method(
         detected: &DetectedDevice,
-        config: &DeviceConfig,
+        access_method: PciAccessMethod,
     ) -> Result<UnifiedNetDevice> {
-        // Determine access method (probe if not specified)
-        let access_method = if let Some(ecam_base) = config.ecam_base {
-            PciAccessMethod::Ecam(ecam_base)
-        } else {
-            Self::probe_pci_access()
-                .ok_or_else(|| NetworkError::DeviceError(
-                    alloc::string::String::from("No working PCI access method")
-                ))?
-        };
-
         match detected.driver_type {
             DriverType::VirtIO => {
                 Self::create_virtio(&detected.pci_info, access_method)
@@ -526,17 +534,13 @@ impl DeviceFactory {
     }
 
     /// Auto-detect and create the best available network device.
+    /// Uses the first method that finds devices (ECAM preferred, legacy last).
     pub fn create_auto(config: &DeviceConfig) -> Result<UnifiedNetDevice> {
-        let devices = Self::scan(config)?;
-        
-        if devices.is_empty() {
-            return Err(NetworkError::DeviceError(alloc::string::String::from("No network devices found")));
-        }
+        let (devices, method) = Self::scan(config)?;
 
         // Filter by preference
         let device = match config.preferred_driver {
             PreferredDriver::Any => {
-                // Prefer implemented drivers
                 devices.iter()
                     .find(|d| d.driver_type.is_implemented())
                     .or_else(|| devices.first())
@@ -556,12 +560,12 @@ impl DeviceFactory {
         };
 
         let device = device.ok_or(NetworkError::DeviceError(alloc::string::String::from("No matching network device found")))?;
-        
+
         if !device.driver_type.is_implemented() {
             return Err(NetworkError::DeviceError(alloc::string::String::from("Found device but driver not implemented")));
         }
 
-        Self::create_from_detected(device, config)
+        Self::create_from_detected_with_method(device, method)
     }
 
     /// Create a VirtIO network device.

@@ -113,10 +113,11 @@ impl BootSequence {
         logger::log("Initializing network stack...");
         self.render(screen, x, y);
 
-        // Position for network log dropdown (below boot sequence logs)
-        let boot_log_count = logger::log_count().min(20);
-        let dropdown_y = y + boot_log_count;
-        let dropdown_x = x + 4; // Indent slightly
+        // Position for network log dropdown (same top as boot logs, right side)
+        let dropdown_y = y; // align to first boot log line
+        // Keep panel inside screen bounds; reserve ~70 cols for text
+        let avail = screen.width().saturating_sub(70);
+        let dropdown_x = (screen.width() / 2).min(avail);
         
         // Track how many dropdown lines we've shown (shared with closure)
         let dropdown_lines_cell = core::cell::Cell::new(0usize);
@@ -173,7 +174,7 @@ impl BootSequence {
 
         match result {
             Ok(net_result) => {
-                // Success! Clear the dropdown area
+                // Success! Clear the dropdown area on the right side
                 let lines_shown = dropdown_lines_cell.get();
                 for i in 0..lines_shown {
                     let line_y = dropdown_y + i;
@@ -204,11 +205,11 @@ impl BootSequence {
                 // Log the failure - but DON'T re-render, it would overwrite the dropdown
                 logger::log("Network initialization FAILED");
                 
-                // Just add the FAILED line manually below dropdown
+                // Just add the FAILED line manually below dropdown on the right
                 let lines_shown = dropdown_lines_cell.get();
                 let fail_y = dropdown_y + lines_shown + 1;
                 if fail_y < screen.height() - 1 {
-                    screen.put_str_at(x, fail_y, "[FAILED] Network initialization FAILED", EFI_RED, EFI_BLACK);
+                    screen.put_str_at(dropdown_x, fail_y, "[FAILED] Network initialization FAILED", EFI_RED, EFI_BLACK);
                 }
 
                 NetworkBootResult::Failed

@@ -242,6 +242,24 @@ extern "C" {
     pub fn read_tsc() -> u64;
 }
 
+/// Delay for approximately the given number of microseconds using TSC.
+/// Assumes ~2.5 GHz CPU (adjust TSC_MHZ for your platform).
+#[cfg(target_arch = "x86_64")]
+pub fn tsc_delay_us(us: u32) {
+    const TSC_MHZ: u64 = 2500; // Assume ~2.5 GHz CPU
+    let cycles = (us as u64) * TSC_MHZ;
+    let start = unsafe { read_tsc() };
+    while unsafe { read_tsc() }.wrapping_sub(start) < cycles {
+        core::hint::spin_loop();
+    }
+}
+
+/// Delay (non-x86 stub - no-op for now)
+#[cfg(not(target_arch = "x86_64"))]
+pub fn tsc_delay_us(_us: u32) {
+    // No-op on non-x86 platforms
+}
+
 /// Legacy I/O port PCI configuration access (0xCF8/0xCFC).
 /// 
 /// Uses standalone assembly (pci_io.S) for reliable I/O port access

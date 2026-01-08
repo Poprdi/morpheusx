@@ -96,6 +96,6 @@ pub use device::factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, Detecte
 
 // Re-export standalone assembly functions
 #[cfg(target_arch = "x86_64")]
-pub use device::pci::{read_tsc, pci_io_test};
+pub use device::pci::{read_tsc, pci_io_test, tsc_delay_us};
 
 
