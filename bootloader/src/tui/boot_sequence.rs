@@ -1,9 +1,10 @@
 use alloc::boxed::Box;
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW};
+use core::cell::RefCell;
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW, EFI_CYAN, EFI_DARKGRAY};
 use morpheus_core::logger;
 use morpheus_core::net::{
     NetworkInit, NetworkInitResult, InitConfig, NetworkStatus,
-    error_log_pop, error_log_clear, ErrorLogEntry,
+    error_log_pop, error_log_clear, error_log_available, ErrorLogEntry,
 };
 
 /// Result of network initialization for bootstrap phase
@@ -87,8 +88,9 @@ impl BootSequence {
 
     /// Initialize network stack and display result.
     ///
-    /// On success: logs "Network initialized" with IP address.
-    /// On failure: dumps all error logs from the ring buffer.
+    /// Displays logs live as they come in from the network init.
+    /// On success: clears dropdown and shows single success line with IP/MAC.
+    /// On failure: keeps showing the error logs.
     ///
     /// # Arguments
     /// * `screen` - Screen for rendering status
@@ -111,31 +113,103 @@ impl BootSequence {
         logger::log("Initializing network stack...");
         self.render(screen, x, y);
 
-        // Use QEMU Q35 config by default
-        let config = InitConfig::for_qemu();
+        // Position for network log dropdown (below boot sequence logs)
+        let boot_log_count = logger::log_count().min(20);
+        let dropdown_y = y + boot_log_count;
+        let dropdown_x = x + 4; // Indent slightly
+        
+        // Track how many dropdown lines we've shown (shared with closure)
+        let dropdown_lines_cell = core::cell::Cell::new(0usize);
+        const MAX_DROPDOWN_LINES: usize = 12;
 
-        match NetworkInit::initialize(&config, get_time_ms) {
-            Ok(result) => {
-                // Success! Log the IP address
-                let ip = result.status.ip_address;
-                let mac = result.status.mac_address;
-                let time_ms = result.status.init_time_ms;
+        // Use default config (auto-probe PCI access)
+        let config = InitConfig::default();
 
-                // Format success message with IP
-                let mut msg_buf = [0u8; 64];
-                let msg = format_net_success(&mut msg_buf, &ip, time_ms);
+        // Helper to display a log entry
+        let display_entry = |scr: &mut Screen, entry: &ErrorLogEntry, lines: &core::cell::Cell<usize>| {
+            let current_lines = lines.get();
+            if current_lines >= MAX_DROPDOWN_LINES {
+                return;
+            }
+
+            let line_y = dropdown_y + current_lines;
+            
+            if line_y < scr.height() - 2 {
+                // Format: "[STAGE] message"
+                let mut format_buf = [0u8; 100];
+                let len = entry.format(&mut format_buf);
+                let formatted = core::str::from_utf8(&format_buf[..len]).unwrap_or("?");
+
+                // Color: cyan for debug, red for error
+                let color = if entry.is_error { 
+                    EFI_RED 
+                } else { 
+                    EFI_CYAN 
+                };
+
+                // Clear line and display
+                scr.put_str_at(dropdown_x, line_y, "                                                                        ", EFI_BLACK, EFI_BLACK);
+                scr.put_str_at(dropdown_x, line_y, formatted, color, EFI_BLACK);
+                
+                lines.set(current_lines + 1);
+            }
+        };
+
+        // Create a poll closure that updates the dropdown display
+        let result = {
+            // We need raw pointers because closure can't capture mutable refs
+            let screen_ptr = screen as *mut Screen;
+            let lines_ref = &dropdown_lines_cell;
+            
+            NetworkInit::initialize_with_poll(&config, get_time_ms, || {
+                // Poll the error/debug ring buffer and display new entries
+                while let Some(entry) = error_log_pop() {
+                    // SAFETY: We know screen is valid during init
+                    let scr = unsafe { &mut *screen_ptr };
+                    display_entry(scr, &entry, lines_ref);
+                }
+            })
+        };
+
+        match result {
+            Ok(net_result) => {
+                // Success! Clear the dropdown area
+                let lines_shown = dropdown_lines_cell.get();
+                for i in 0..lines_shown {
+                    let line_y = dropdown_y + i;
+                    if line_y < screen.height() {
+                        screen.put_str_at(dropdown_x, line_y, "                                                                        ", EFI_BLACK, EFI_BLACK);
+                    }
+                }
+
+                // Format success message with IP, MAC, and time
+                let ip = net_result.status.ip_address;
+                let mac = net_result.status.mac_address;
+                let time_ms = net_result.status.init_time_ms;
+
+                // Display single success line
+                let mut msg_buf = [0u8; 80];
+                let msg = format_net_full_success(&mut msg_buf, &ip, &mac, time_ms);
                 logger::log(msg);
                 self.render(screen, x, y);
 
-                NetworkBootResult::Success(result)
+                NetworkBootResult::Success(net_result)
             }
-            Err(e) => {
-                // Failure - log the error type
-                logger::log("Network initialization FAILED");
-                self.render(screen, x, y);
+            Err(_e) => {
+                // Drain any remaining log entries that weren't shown during poll
+                while let Some(entry) = error_log_pop() {
+                    display_entry(screen, &entry, &dropdown_lines_cell);
+                }
 
-                // Display all error logs from ring buffer
-                self.display_network_errors(screen, x, y);
+                // Log the failure - but DON'T re-render, it would overwrite the dropdown
+                logger::log("Network initialization FAILED");
+                
+                // Just add the FAILED line manually below dropdown
+                let lines_shown = dropdown_lines_cell.get();
+                let fail_y = dropdown_y + lines_shown + 1;
+                if fail_y < screen.height() - 1 {
+                    screen.put_str_at(x, fail_y, "[FAILED] Network initialization FAILED", EFI_RED, EFI_BLACK);
+                }
 
                 NetworkBootResult::Failed
             }
@@ -217,5 +291,41 @@ fn format_net_success(buf: &mut [u8; 64], ip: &[u8; 4], time_ms: u64) -> &'stati
     // This is fine because we only call this once during boot
     let len = writer.pos;
     let static_buf: &'static mut [u8; 64] = Box::leak(Box::new(*buf));
+    core::str::from_utf8(&static_buf[..len]).unwrap_or("Network ready")
+}
+
+/// Format full network success message with IP, MAC, and time.
+/// 
+/// Message format: "Network: IP x.x.x.x | MAC xx:xx:xx:xx:xx:xx (XXXms)"
+fn format_net_full_success(buf: &mut [u8; 80], ip: &[u8; 4], mac: &[u8; 6], time_ms: u64) -> &'static str {
+    use core::fmt::Write;
+    
+    struct BufWriter<'a> {
+        buf: &'a mut [u8],
+        pos: usize,
+    }
+    
+    impl<'a> Write for BufWriter<'a> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let remaining = self.buf.len() - self.pos;
+            let to_copy = bytes.len().min(remaining);
+            self.buf[self.pos..self.pos + to_copy].copy_from_slice(&bytes[..to_copy]);
+            self.pos += to_copy;
+            Ok(())
+        }
+    }
+    
+    let mut writer = BufWriter { buf: buf, pos: 0 };
+    let _ = write!(
+        writer,
+        "Net: {}.{}.{}.{} | {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ({}ms)",
+        ip[0], ip[1], ip[2], ip[3],
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+        time_ms
+    );
+    
+    let len = writer.pos;
+    let static_buf: &'static mut [u8; 80] = Box::leak(Box::new(*buf));
     core::str::from_utf8(&static_buf[..len]).unwrap_or("Network ready")
 }

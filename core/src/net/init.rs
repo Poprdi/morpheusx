@@ -134,12 +134,12 @@ impl NetworkInit {
         debug_log(InitStage::PciScan, "Scanning PCI bus");
         poll_display();
         let device = Self::create_device(config)?;
-        debug_log(InitStage::VirtioDevice, "Network device created");
+        debug_log(InitStage::VirtioDevice, "Device created, self-test passed");
         poll_display();
 
         // Step 4: Get MAC address before we move the device
         let mac_address = device.mac_address();
-        debug_log(InitStage::VirtioDevice, "MAC address retrieved");
+        debug_log(InitStage::VirtioDevice, "TX/RX queues ready");
         poll_display();
 
         // Step 5: Create HTTP client with DHCP

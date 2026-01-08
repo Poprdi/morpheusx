@@ -142,7 +142,42 @@ impl<H: Hal, T: Transport> VirtioNetDevice<H, T> {
         // Submit initial RX buffers to the device
         device.refill_rx_queue()?;
 
+        // Verify device is actually ready
+        device.self_test()?;
+
         Ok(device)
+    }
+
+    /// Quick self-test to verify TX/RX channels are operational.
+    /// 
+    /// Checks:
+    /// 1. TX queue is accepting packets (can_send)
+    /// 2. RX buffers were submitted successfully (checked in refill_rx_queue)
+    /// 3. MAC address is valid (not all zeros or all ones)
+    fn self_test(&self) -> Result<()> {
+        // Check TX queue is ready
+        if !self.inner.can_send() {
+            return Err(NetworkError::DeviceError(
+                alloc::string::String::from("TX queue not ready")
+            ));
+        }
+
+        // Check we have at least one RX buffer submitted
+        let rx_submitted = self.rx_buffers.iter().any(|b| b.token.is_some());
+        if !rx_submitted {
+            return Err(NetworkError::DeviceError(
+                alloc::string::String::from("No RX buffers submitted")
+            ));
+        }
+
+        // Check MAC is valid (not all zeros or broadcast)
+        if self.mac == [0, 0, 0, 0, 0, 0] || self.mac == [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] {
+            return Err(NetworkError::DeviceError(
+                alloc::string::String::from("Invalid MAC address")
+            ));
+        }
+
+        Ok(())
     }
 
     /// Get the underlying driver for advanced operations.
