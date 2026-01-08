@@ -1,0 +1,18 @@
+[package]
+name = "morpheus-ping"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone no_std ICMP ping utility for MorpheusX connectivity testing"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[lib]
+name = "morpheus_ping"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Enable std for testing
+std = []
+
+[dependencies]

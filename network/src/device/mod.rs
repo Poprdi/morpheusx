@@ -9,6 +9,17 @@
 //! - [`intel`] - Intel NICs (placeholder)
 //! - [`broadcom`] - Broadcom NICs (placeholder)
 //!
+//! # Device Factory
+//!
+//! The [`factory`] module provides unified device creation:
+//!
+//! ```ignore
+//! use morpheus_network::device::factory::{DeviceFactory, DeviceConfig};
+//!
+//! // Auto-detect and create device
+//! let device = DeviceFactory::create_auto(&DeviceConfig::default())?;
+//! ```
+//!
 //! # HAL Layer
 //!
 //! The [`hal`] module provides hardware abstraction for DMA and memory mapping.
@@ -27,6 +38,7 @@
 
 use crate::error::{NetworkError, Result};
 
+pub mod factory;
 pub mod hal;
 pub mod pci;
 pub mod virtio;
@@ -34,6 +46,9 @@ pub mod realtek;
 pub mod intel;
 pub mod broadcom;
 pub mod registers;
+
+// Re-export factory types for convenience
+pub use factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType};
 
 /// Unified network device interface MorpheusX drivers must implement.
 pub trait NetworkDevice {

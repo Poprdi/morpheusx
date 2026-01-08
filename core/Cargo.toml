@@ -9,5 +9,9 @@ gpt_disk_types = { version = "0.16", default-features = false }
 gpt_disk_io = { version = "0.16", default-features = false }
 uguid = { version = "2.1", default-features = false }
 
+# Network orchestration - calls into these crates
+dma-pool = { path = "../dma-pool" }
+morpheus-network = { path = "../network" }
+
 [features]
 fat32_debug = []

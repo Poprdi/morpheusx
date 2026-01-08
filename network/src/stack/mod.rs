@@ -75,7 +75,7 @@ impl<D: NetworkDevice> Device for DeviceAdapter<D> {
         match self.inner.receive(&mut temp_buf) {
             Ok(Some(len)) if len > 0 => {
                 // Track received packets
-                RX_PACKET_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                RX_PACKET_COUNTER.increment();
                 
                 // We have a packet! Create tokens with the data
                 let device_ptr: *mut D = &mut self.inner;
@@ -143,7 +143,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
         let result = f(&mut buffer[..len]);
         
         // Track packets sent
-        TX_PACKET_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        TX_PACKET_COUNTER.increment();
         
         // Check if this is a DHCP packet (UDP port 67/68)
         if len >= 42 {
@@ -154,7 +154,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
                 if protocol == 17 {  // UDP
                     let dst_port = u16::from_be_bytes([buffer[36], buffer[37]]);
                     if dst_port == 67 {
-                        DHCP_DISCOVER_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        DHCP_DISCOVER_COUNTER.increment();
                     }
                 }
             }
@@ -170,7 +170,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
             Err(_e) => {
                 // TX failed - log to static flag for debugging
                 // In a real implementation, we'd have a proper error channel
-                TX_ERROR_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                TX_ERROR_COUNTER.increment();
             }
         }
         
@@ -178,11 +178,54 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
     }
 }
 
-// Global counter for TX errors (debugging)
-static TX_ERROR_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-static TX_PACKET_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-static DHCP_DISCOVER_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-static RX_PACKET_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+// ============================================================================
+// Packet Statistics Ring Buffers
+// ============================================================================
+
+/// Ring buffer size for packet counters (must be power of 2 for efficient masking)
+const PACKET_COUNTER_SIZE: usize = 256;
+
+/// Ring buffer for packet statistics - tracks recent activity without overflow
+struct PacketCounterRing {
+    /// Write position (wraps automatically)
+    head: core::sync::atomic::AtomicUsize,
+    /// Total packets ever processed (uses wrapping arithmetic)
+    total: core::sync::atomic::AtomicU32,
+}
+
+impl PacketCounterRing {
+    const fn new() -> Self {
+        Self {
+            head: core::sync::atomic::AtomicUsize::new(0),
+            total: core::sync::atomic::AtomicU32::new(0),
+        }
+    }
+
+    /// Increment the counter (wraps safely)
+    fn increment(&self) {
+        // Advance head position (wraps at PACKET_COUNTER_SIZE)
+        self.head.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        // Increment total count (wraps at u32::MAX automatically)
+        self.total.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get total count (wraps safely at u32::MAX)
+    fn count(&self) -> u32 {
+        self.total.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Reset the counter
+    fn reset(&self) {
+        self.head.store(0, core::sync::atomic::Ordering::Relaxed);
+        self.total.store(0, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+// Global packet counter ring buffers
+static TX_ERROR_COUNTER: PacketCounterRing = PacketCounterRing::new();
+static TX_PACKET_COUNTER: PacketCounterRing = PacketCounterRing::new();
+static DHCP_DISCOVER_COUNTER: PacketCounterRing = PacketCounterRing::new();
+static RX_PACKET_COUNTER: PacketCounterRing = PacketCounterRing::new();
 
 // Debug marker for tracing initialization steps
 static DEBUG_INIT_STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -343,33 +386,20 @@ pub fn debug_stage() -> u32 {
 
 /// Get the number of TX errors that have occurred.
 pub fn tx_error_count() -> u32 {
-    TX_ERROR_COUNT.load(core::sync::atomic::Ordering::Relaxed)
-}
-
-/// Reset the TX error counter.
-pub fn reset_tx_error_count() {
-    TX_ERROR_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+    TX_ERROR_COUNTER.count()
 }
 
 /// Get the number of packets transmitted.
 pub fn tx_packet_count() -> u32 {
-    TX_PACKET_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+    TX_PACKET_COUNTER.count()
 }
 
 /// Get the number of DHCP discover packets sent.
 pub fn dhcp_discover_count() -> u32 {
-    DHCP_DISCOVER_COUNT.load(core::sync::atomic::Ordering::Relaxed)
+    DHCP_DISCOVER_COUNTER.count()
 }
 
 /// Get the number of packets received.
 pub fn rx_packet_count() -> u32 {
-    RX_PACKET_COUNT.load(core::sync::atomic::Ordering::Relaxed)
-}
-
-/// Reset all counters.
-pub fn reset_counters() {
-    TX_ERROR_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
-    TX_PACKET_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
-    DHCP_DISCOVER_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
-    RX_PACKET_COUNT.store(0, core::sync::atomic::Ordering::Relaxed);
+    RX_PACKET_COUNTER.count()
 }

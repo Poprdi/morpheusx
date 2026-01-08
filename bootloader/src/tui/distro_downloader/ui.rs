@@ -337,16 +337,51 @@ impl DistroDownloader {
 
     /// Execute the full ISO download flow
     ///
-    /// 1. Check disk space and find free regions
-    /// 2. Create chunk partitions
-    /// 3. Initialize HTTP client
+    /// 1. Check network connectivity (assumes bootstrap already initialized network)
+    /// 2. Check disk space and find free regions
+    /// 3. Create chunk partitions
     /// 4. Download with streaming to chunk writer
     /// 5. Finalize and register ISO
+    ///
+    /// # TODO
+    /// - HTTP client will be provided by network bootstrap phase
+    /// - Network should be initialized during bootloader bootstrap phase
+    /// - HTTP client will be accessed via a public static/global in network_check.rs
+    /// - For now, this will show an error when attempting download
     fn execute_download(&mut self, distro: &'static DistroEntry, screen: &mut Screen) {
+        // Time function for delays
+        fn get_time_ms() -> u64 {
+            let tsc = unsafe { morpheus_network::read_tsc() };
+            tsc / 2_000_000
+        }
+
         let total_size = distro.size_bytes;
         morpheus_core::logger::log(format!("Starting download: {} ({} bytes)", distro.name, total_size).leak());
 
-        // Step 1: Get block I/O protocol for disk operations
+        // STEP 1: Verify network is ready (connectivity check)
+        // Network initialization (DMA pool, PCI scan, VirtIO setup, DHCP) should have
+        // happened during bootstrap phase. This just verifies we're ready.
+        if let Err(e) = super::network_check::check_network_connectivity(screen) {
+            self.show_download_error(screen, e);
+            return;
+        }
+
+        // TODO: Get HTTP client from global state or pass as parameter
+        // For now, show error that HTTP client integration is pending
+        self.show_download_error(screen, "HTTP client not yet integrated - awaiting bootstrap implementation");
+        return;
+
+        // === UNREACHABLE CODE BELOW ===
+        // Will be enabled once HTTP client is passed in from bootstrap
+        #[allow(unreachable_code)]
+        {
+        const CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB max chunk size
+
+        // STEP 2: Now that network is ready, check disk space
+        screen.clear();
+        screen.put_str_at(5, 2, "=== Checking Disk Space ===", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(5, 4, "Scanning disk...", EFI_YELLOW, EFI_BLACK);
+        
         let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
             Some(p) => p,
             None => {
@@ -369,9 +404,25 @@ impl DistroDownloader {
         };
 
         // Calculate chunks needed (4GB per chunk)
-        const CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB
-        let chunks_needed = ((total_size + CHUNK_SIZE - 1) / CHUNK_SIZE) as usize;
-        
+        const MIN_CHUNK_SIZE: u64 = 512 * 1024 * 1024;  // 512 MB minimum
+        const MAX_CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024;  // 4 GB maximum
+        const MAX_CHUNKS: usize = 32;
+
+        // Calculate optimal chunk size based on ISO size
+        let chunk_size = if total_size <= MIN_CHUNK_SIZE {
+            // Small ISOs: use single chunk
+            total_size
+        } else if total_size <= MAX_CHUNK_SIZE {
+            // Medium ISOs: use single 4GB chunk
+            MAX_CHUNK_SIZE
+        } else {
+            // Large ISOs: distribute evenly across max chunks
+            // Round up to nearest MB for cleaner boundaries
+            let size = (total_size + (MAX_CHUNKS as u64 - 1)) / MAX_CHUNKS as u64;
+            ((size + (1024 * 1024 - 1)) / (1024 * 1024)) * (1024 * 1024)
+        };
+
+        let chunks_needed = ((total_size + chunk_size - 1) / chunk_size) as usize;
         if chunks_needed > MAX_CHUNKS {
             self.show_download_error(screen, "ISO too large (max 32GB)");
             return;
@@ -392,6 +443,8 @@ impl DistroDownloader {
                 return;
             }
         };
+
+        screen.put_str_at(5, 4, "Creating partitions...         ", EFI_YELLOW, EFI_BLACK);
 
         // Step 4: Create GPT partitions for each chunk
         // Re-acquire block_io since we need mutable access
@@ -428,16 +481,16 @@ impl DistroDownloader {
         
         let mut remaining = total_size;
         for i in 0..chunks_needed {
-            let chunk_size = remaining.min(CHUNK_SIZE);
+            let chunk_bytes = remaining.min(CHUNK_SIZE);
             chunks.chunks[i] = ChunkInfo {
                 partition_uuid: [0u8; 16],  // Will be set when partition is created
                 start_lba: chunk_partitions[i].0,
                 end_lba: chunk_partitions[i].1,
-                data_size: chunk_size,
+                data_size: chunk_bytes,
                 index: i as u8,
                 written: false,
             };
-            remaining -= chunk_size;
+            remaining -= chunk_bytes;
         }
         manifest.chunks = chunks;
 
@@ -455,9 +508,12 @@ impl DistroDownloader {
             }
         };
 
-        // Step 6: Initialize HTTP client and start download
-        // Note: Progress UI will be shown by download_with_chunk_writer after network init
+        screen.put_str_at(5, 4, "Disk ready! Starting download...", EFI_LIGHTGREEN, EFI_BLACK);
+        
+        let pause_start = get_time_ms();
+        while get_time_ms() - pause_start < 500 {}
 
+        // STEP 3: Now start the actual download with streaming to disk
         // Get fresh block_io for write operations
         let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
             Some(p) => p,
@@ -467,11 +523,11 @@ impl DistroDownloader {
             }
         };
 
-        // Use native VirtIO download (works without UEFI HTTP protocol)
-        morpheus_core::logger::log("Starting native network download (VirtIO)...");
+        morpheus_core::logger::log("Starting download to disk...");
         let download_result = self.download_with_chunk_writer(
             distro.url,
             distro.size_bytes,
+            &mut client,
             &mut chunk_writer,
             block_io_protocol,
             screen,
@@ -527,6 +583,7 @@ impl DistroDownloader {
 
         self.needs_full_redraw = true;
         self.render_full(screen);
+        } // End unreachable code block
     }
 
     /// Allocate chunk partitions from free space regions
@@ -573,518 +630,26 @@ impl DistroDownloader {
         }
     }
 
-    /// Download URL and write to chunks via ChunkWriter using NATIVE network stack.
-    /// This uses our bare-metal TCP/IP stack with VirtIO, running DMA from code caves
-    /// in our PE binary - completely firmware-agnostic.
+    /// Download URL and write to chunks via ChunkWriter.
+    /// Assumes network client is already initialized with DHCP complete and IP assigned.
     fn download_with_chunk_writer(
         &mut self,
         url: &str,
         expected_size: u64,
+        client: &mut morpheus_network::client::NativeHttpClient<morpheus_network::device::virtio::VirtioNetDevice<morpheus_network::device::hal::StaticHal, virtio_drivers::transport::pci::PciTransport>>,
         chunk_writer: &mut ChunkWriter,
         block_io_protocol: *mut BlockIoProtocol,
         screen: &mut Screen,
     ) -> Result<usize, &'static str> {
-        use dma_pool::DmaPool;
-        use morpheus_network::device::hal::StaticHal;
-        use morpheus_network::device::pci::{EcamAccess, PciScanner, ecam_bases};
-        use morpheus_network::device::virtio::VirtioNetDevice;
-        use morpheus_network::device::NetworkDevice;
-        use morpheus_network::client::NativeHttpClient;
-        use morpheus_network::stack::NetConfig;
-        use virtio_drivers::transport::pci::PciTransport;
-        use virtio_drivers::transport::pci::bus::{ConfigurationAccess, DeviceFunction, PciRoot};
         use gpt_disk_io::BlockIo;
         use core::cell::Cell;
-        use crate::uefi::file_system::get_loaded_image;
 
-        screen.clear();
-        screen.put_str_at(5, 2, "=== Native Network Download ===", EFI_LIGHTGREEN, EFI_BLACK);
-        
-        let mut log_y = 4;
-
-        // Time function for network stack using standalone assembly RDTSC
-        // We estimate ~2GHz CPU, so divide by 2_000_000 to get ms
+        // Time function for progress tracking
         fn get_time_ms() -> u64 {
-            // Use standalone assembly from morpheus_network
             let tsc = unsafe { morpheus_network::read_tsc() };
-            // Assume ~2GHz CPU, adjust if needed
             tsc / 2_000_000
         }
 
-        // Step 1: Initialize DMA pool from code caves in our PE binary
-        screen.put_str_at(5, log_y, "Initializing DMA pool...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        // Get PE load info using embedded relocation data
-        use morpheus_persistent::pe::embedded_reloc_data::ORIGINAL_IMAGE_BASE;
-        
-        let (image_base, image_size) = unsafe {
-            let bs = &*self.boot_services;
-            match get_loaded_image(bs, self.image_handle) {
-                Ok(loaded_image) => {
-                    let base = (*loaded_image).image_base as usize;
-                    let size = (*loaded_image).image_size as usize;
-                    (base, size)
-                }
-                Err(_) => (0, 0)
-            }
-        };
-
-        // Calculate relocation delta using compile-time embedded data
-        let reloc_delta = if image_base != 0 {
-            image_base as i64 - ORIGINAL_IMAGE_BASE as i64
-        } else {
-            0
-        };
-        
-        // Show detailed PE/DMA info for debugging
-        screen.put_str_at(7, log_y, &format!(
-            "Linker ImageBase: {:#x}", ORIGINAL_IMAGE_BASE
-        ), EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
-        
-        screen.put_str_at(7, log_y, &format!(
-            "Actual load addr: {:#x} (delta: {:+#x})",
-            image_base, reloc_delta
-        ), EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
-
-        // Check if PE is loaded below 4GB (required for VirtIO transitional 32-bit DMA)
-        let pe_under_4gb = image_base < 0x1_0000_0000;
-        screen.put_str_at(7, log_y, &format!(
-            "PE location: {}",
-            if pe_under_4gb { "<4GB (DMA OK)" } else { ">4GB (DMA RISK!)" }
-        ), if pe_under_4gb { EFI_LIGHTGREEN } else { EFI_RED }, EFI_BLACK);
-        log_y += 1;
-
-        // Initialize static pool - it's in our .bss, so same location as PE
-        DmaPool::init_static();
-        
-        // Show where static pool is located
-        let pool_base = DmaPool::base_address();
-        let pool_size = DmaPool::total_size();
-        let pool_under_4gb = pool_base < 0x1_0000_0000;
-        let pool_end = pool_base + pool_size;
-        
-        screen.put_str_at(7, log_y, &format!(
-            "DMA pool: {:#x}-{:#x} ({} KB)",
-            pool_base, pool_end, pool_size / 1024
-        ), EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
-        
-        screen.put_str_at(7, log_y, &format!(
-            "DMA range: {}",
-            if pool_under_4gb && pool_end < 0x1_0000_0000 { 
-                "<4GB OK" 
-            } else { 
-                ">4GB - VirtIO may fail!" 
-            }
-        ), if pool_under_4gb && pool_end < 0x1_0000_0000 { EFI_LIGHTGREEN } else { EFI_RED }, EFI_BLACK);
-        log_y += 1;
-
-        // Step 2: Initialize HAL
-        screen.put_str_at(5, log_y, "Initializing HAL...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        StaticHal::init();
-
-        // Step 3: Run PCI diagnostics first to understand the environment
-        screen.put_str_at(5, log_y, "Running PCI diagnostics...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-
-        use morpheus_network::device::pci::{LegacyIoAccess, diagnostics};
-        
-        // Run comprehensive diagnostics
-        let diag = diagnostics::run_diagnostics();
-        
-        // Display diagnostic results
-        let io_status = if diag.io_port_works { "OK" } else { "FAIL" };
-        screen.put_str_at(7, log_y, &format!(
-            "I/O ports: {} (0xCF8={:#010x})", io_status, diag.cf8_readback
-        ), if diag.io_port_works { EFI_YELLOW } else { EFI_RED }, EFI_BLACK);
-        log_y += 1;
-        
-        screen.put_str_at(7, log_y, &format!(
-            "Host bridge: {:04x}:{:04x}", diag.host_bridge_vendor, diag.host_bridge_device
-        ), EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
-
-        // Show what's at common VirtIO locations
-        screen.put_str_at(5, log_y, "All devices on bus 0:", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        // Show ALL detected devices with their status
-        for (loc, vendor, device) in diag.virtio_locations.iter() {
-            let status = if *vendor == 0x1AF4 { 
-                if *device == 0x1000 || *device == 0x1001 { "VirtIO-NET" }
-                else if *device == 0x1041 { "VirtIO-NET(M)" }
-                else if *device == 0x1050 { "VirtIO-GPU" }
-                else { "VirtIO" }
-            } else { 
-                "device" 
-            };
-            let color = if *vendor == 0x1AF4 && (*device == 0x1000 || *device == 0x1001 || *device == 0x1041) {
-                EFI_LIGHTGREEN
-            } else if *vendor == 0x1AF4 {
-                EFI_YELLOW
-            } else {
-                EFI_DARKGRAY
-            };
-            screen.put_str_at(7, log_y, &format!(
-                "  {:02x}:{:02x}.{}: {:04x}:{:04x} ({})",
-                loc.bus, loc.device, loc.function, vendor, device, status
-            ), color, EFI_BLACK);
-            log_y += 1;
-        }
-
-        // Step 4: Full PCI scan
-        screen.put_str_at(5, log_y, "Scanning PCI bus 0...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        let legacy_io = LegacyIoAccess::new();
-        let scanner = PciScanner::new(legacy_io);
-        
-        // Enumerate all devices on bus 0
-        let all_devices = scanner.scan_bus(0);
-        screen.put_str_at(7, log_y, &format!("Found: {} devices", all_devices.len()), EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
-        
-        // Show devices found
-        for dev in all_devices.iter().take(5) {
-            let mark = if dev.vendor_id == 0x1AF4 { "*" } else { " " };
-            screen.put_str_at(7, log_y, &format!(
-                "{}{:02x}:{:02x}.{} {:04x}:{:04x} {:02x}:{:02x}",
-                mark, dev.location.bus, dev.location.device, dev.location.function,
-                dev.vendor_id, dev.device_id, dev.class, dev.subclass
-            ), EFI_DARKGRAY, EFI_BLACK);
-            log_y += 1;
-        }
-        
-        let virtio_devices = scanner.find_virtio_net();
-        
-        if virtio_devices.is_empty() {
-            // Try ECAM fallback
-            screen.put_str_at(5, log_y, "Trying ECAM @ 0xB0000000...", EFI_YELLOW, EFI_BLACK);
-            log_y += 1;
-            
-            let ecam_base = ecam_bases::QEMU_Q35;
-            let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
-            let ecam_scanner = PciScanner::new(ecam);
-            let ecam_devices = ecam_scanner.scan_bus(0);
-            
-            screen.put_str_at(7, log_y, &format!("ECAM: {} devices", ecam_devices.len()), EFI_YELLOW, EFI_BLACK);
-            log_y += 1;
-            
-            for dev in ecam_devices.iter().take(5) {
-                let mark = if dev.vendor_id == 0x1AF4 { "*" } else { " " };
-                screen.put_str_at(7, log_y, &format!(
-                    "{}{:02x}:{:02x}.{} {:04x}:{:04x}",
-                    mark, dev.location.bus, dev.location.device, dev.location.function,
-                    dev.vendor_id, dev.device_id
-                ), EFI_DARKGRAY, EFI_BLACK);
-                log_y += 1;
-            }
-            
-            screen.put_str_at(5, log_y + 1, "ERROR: No VirtIO network device found!", EFI_RED, EFI_BLACK);
-            screen.put_str_at(5, log_y + 2, "Check QEMU -device virtio-net-pci", EFI_YELLOW, EFI_BLACK);
-            screen.put_str_at(5, log_y + 4, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
-            
-            // Simple busy-wait loop for ~3 seconds so user can see diagnostics
-            // This avoids needing keyboard access which requires system_table
-            for _ in 0..300_000_000u64 {
-                core::hint::spin_loop();
-            }
-            
-            return Err("No VirtIO network device found on PCI bus");
-        }
-
-        let device_info = virtio_devices[0];
-        screen.put_str_at(5, log_y, &format!(
-            "Found VirtIO @ {:02x}:{:02x}.{}",
-            device_info.location.bus, device_info.location.device, device_info.location.function
-        ), EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-
-        // Step 4: Create PCI transport
-        screen.put_str_at(5, log_y, "Creating PCI transport...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        let device_fn = DeviceFunction {
-            bus: device_info.location.bus,
-            device: device_info.location.device,
-            function: device_info.location.function,
-        };
-
-        // Legacy I/O configuration access for virtio-drivers
-        // Uses standalone assembly from morpheus_network (no inline asm)
-        struct LegacyConfigAccess;
-        impl ConfigurationAccess for LegacyConfigAccess {
-            fn read_word(&self, df: DeviceFunction, reg: u8) -> u32 {
-                // Use standalone assembly for PCI config read
-                use morpheus_network::device::pci::LegacyIoAccess;
-                use morpheus_network::device::pci::ConfigAccess;
-                let access = LegacyIoAccess::new();
-                let loc = morpheus_network::device::pci::DeviceFunction::new(
-                    df.bus, df.device, df.function
-                );
-                unsafe { access.read32(loc, reg) }
-            }
-            fn write_word(&mut self, df: DeviceFunction, reg: u8, data: u32) {
-                // Use standalone assembly for PCI config write
-                use morpheus_network::device::pci::LegacyIoAccess;
-                use morpheus_network::device::pci::ConfigAccess;
-                let access = LegacyIoAccess::new();
-                let loc = morpheus_network::device::pci::DeviceFunction::new(
-                    df.bus, df.device, df.function
-                );
-                unsafe { access.write32(loc, reg, data) }
-            }
-            unsafe fn unsafe_clone(&self) -> Self { Self }
-        }
-
-        // Read BARs for debug using direct PCI access
-        let bar0 = LegacyConfigAccess.read_word(device_fn, 0x10);
-        let bar1 = LegacyConfigAccess.read_word(device_fn, 0x14);
-        let bar2 = LegacyConfigAccess.read_word(device_fn, 0x18);
-        let bar4 = LegacyConfigAccess.read_word(device_fn, 0x20);
-        screen.put_str_at(7, log_y, &format!(
-            "BARs: 0={:#x} 1={:#x} 2={:#x} 4={:#x}",
-            bar0, bar1, bar2, bar4
-        ), EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
-
-        let cam = LegacyConfigAccess;
-        let mut pci_root = PciRoot::new(cam);
-        
-        let transport = match PciTransport::new::<StaticHal, LegacyConfigAccess>(&mut pci_root, device_fn) {
-            Ok(t) => t,
-            Err(e) => {
-                screen.put_str_at(5, log_y, &format!("PCI transport failed: {:?}", e), EFI_RED, EFI_BLACK);
-                return Err("Failed to create PCI transport");
-            }
-        };
-        
-        // Show DMA pool info after transport is created
-        let dma_base = DmaPool::base_address();
-        let dma_free = DmaPool::free_space();
-        screen.put_str_at(7, log_y, &format!(
-            "DMA: base={:#x} free={}KB",
-            dma_base, dma_free / 1024
-        ), EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
-
-        // Step 5: Create VirtIO network device
-        screen.put_str_at(5, log_y, "Creating VirtIO device...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        let mut virtio_device = match VirtioNetDevice::<StaticHal, PciTransport>::new(transport) {
-            Ok(d) => d,
-            Err(e) => {
-                screen.put_str_at(5, log_y, &format!("VirtIO failed: {:?}", e), EFI_RED, EFI_BLACK);
-                return Err("Failed to create VirtIO network device");
-            }
-        };
-        
-        let mac = virtio_device.mac_address();
-        screen.put_str_at(7, log_y, &format!(
-            "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-        ), EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
-
-        // Step 6: DHCP configuration
-        screen.put_str_at(5, log_y, "Starting DHCP...", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        // Test TX directly before creating smoltcp stack
-        screen.put_str_at(7, log_y, "Testing raw TX...           ", EFI_YELLOW, EFI_BLACK);
-        
-        // Create a dummy Ethernet frame (just to test TX path)
-        // Broadcast ARP-like frame - minimum 60 bytes for Ethernet
-        let test_frame: [u8; 60] = [
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff,  // Dest MAC (broadcast)
-            0x52, 0x54, 0x00, 0x12, 0x34, 0x56,  // Src MAC  
-            0x08, 0x06,                          // EtherType (ARP)
-            // ARP header (28 bytes)
-            0x00, 0x01,  // Hardware type (Ethernet)
-            0x08, 0x00,  // Protocol type (IPv4)
-            0x06,        // Hardware size
-            0x04,        // Protocol size
-            0x00, 0x01,  // Opcode (request)
-            0x52, 0x54, 0x00, 0x12, 0x34, 0x56,  // Sender MAC
-            0x0a, 0x00, 0x02, 0x0f,              // Sender IP (10.0.2.15)
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // Target MAC (unknown)
-            0x0a, 0x00, 0x02, 0x02,              // Target IP (10.0.2.2 - gateway)
-            // Padding to reach 60 bytes
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        
-        // NetworkDevice trait already imported at line 600
-        match virtio_device.transmit(&test_frame) {
-            Ok(()) => {
-                screen.put_str_at(7, log_y, "Test TX OK!                 ", EFI_LIGHTGREEN, EFI_BLACK);
-            }
-            Err(e) => {
-                screen.put_str_at(7, log_y, &format!("Test TX FAILED: {:?}", e), EFI_RED, EFI_BLACK);
-                log_y += 1;
-                
-                // Wait and return early
-                screen.put_str_at(7, log_y, "TX broken - cannot continue", EFI_RED, EFI_BLACK);
-                let spin_start = get_time_ms();
-                while get_time_ms() - spin_start < 10000 {}
-                return Err("VirtIO TX failed");
-            }
-        }
-        log_y += 1;
-        
-        // Reset TX error counter before starting
-        morpheus_network::stack::reset_counters();
-        
-        // Clear debug log ring buffer and reset stage
-        morpheus_network::debug_log_clear();
-        morpheus_network::stack::set_debug_stage(0);
-        
-        screen.put_str_at(7, log_y, "Creating NativeHttpClient...", EFI_YELLOW, EFI_BLACK);
-        log_y += 1;
-        
-        // Reserve lines for debug log display (ring buffer will be shown here)
-        let debug_log_start_y = log_y;
-        let debug_log_lines = 6; // Show up to 6 log lines
-        for i in 0..debug_log_lines {
-            screen.put_str_at(9, debug_log_start_y + i, "                                                        ", EFI_DARKGRAY, EFI_BLACK);
-        }
-        log_y += debug_log_lines;
-        
-        // Create the client - debug logs will accumulate in ring buffer
-        let mut client = NativeHttpClient::new(virtio_device, NetConfig::Dhcp, get_time_ms);
-        
-        // Drain debug ring buffer and display on screen
-        let mut log_line = 0;
-        while let Some(entry) = morpheus_network::debug_log_pop() {
-            if log_line < debug_log_lines {
-                // Convert message bytes to string
-                let msg = core::str::from_utf8(&entry.msg[..entry.len]).unwrap_or("???");
-                screen.put_str_at(9, debug_log_start_y + log_line, &format!(
-                    "[{:2}] {}                                    ", entry.stage, msg
-                ), EFI_LIGHTGREEN, EFI_BLACK);
-                log_line += 1;
-            }
-        }
-        
-        // Show final stage
-        let final_stage = morpheus_network::stack::debug_stage();
-        screen.put_str_at(7, log_y, &format!(
-            "Init complete (stage {})                         ", final_stage
-        ), EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        // Try to understand where we hang
-        screen.put_str_at(7, log_y, "Calling poll()...           ", EFI_YELLOW, EFI_BLACK);
-        
-        // Use a manual timeout loop instead of relying on internal timeout
-        let poll_start = get_time_ms();
-        let poll_timeout_ms = 5000; // 5 second timeout
-        
-        // Spawn poll in a way we can track
-        // Actually, poll() blocks internally, so we can't easily timeout it externally
-        // The hang is INSIDE smoltcp or our device driver
-        
-        // Let's just call poll and see what happens
-        client.poll();
-        
-        let poll_elapsed = get_time_ms() - poll_start;
-        screen.put_str_at(7, log_y, &format!("Poll returned in {}ms     ", poll_elapsed), EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-        
-        // Check counters
-        let tx_pkts = morpheus_network::stack::tx_packet_count();
-        let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
-        let rx_pkts = morpheus_network::stack::rx_packet_count();
-        let tx_errors = morpheus_network::stack::tx_error_count();
-        screen.put_str_at(7, log_y, &format!(
-            "TX:{} DHCP:{} RX:{} ERR:{}", tx_pkts, dhcp_pkts, rx_pkts, tx_errors
-        ), if tx_errors > 0 || rx_pkts == 0 { EFI_YELLOW } else { EFI_LIGHTGREEN }, EFI_BLACK);
-        log_y += 1;
-        
-        // Now do the DHCP loop
-        let start_time = get_time_ms();
-        let mut poll_count = 0u32;
-        let mut last_update = start_time;
-        
-        // Reserve a line for debug log output during DHCP
-        let dhcp_debug_y = log_y;
-        log_y += 1;
-        let dhcp_status_y = log_y;
-        log_y += 1;
-        
-        while !client.is_network_ready() {
-            client.poll();
-            poll_count += 1;
-            
-            // Drain any debug logs and show latest
-            while let Some(entry) = morpheus_network::debug_log_pop() {
-                let msg = core::str::from_utf8(&entry.msg[..entry.len]).unwrap_or("???");
-                screen.put_str_at(9, dhcp_debug_y, &format!(
-                    "[{:2}] {}                                      ", entry.stage, msg
-                ), EFI_YELLOW, EFI_BLACK);
-            }
-            
-            let now = get_time_ms();
-            if now - last_update > 1000 {
-                // Update every second with packet counters
-                let elapsed = (now - start_time) / 1000;
-                let tx_pkts = morpheus_network::stack::tx_packet_count();
-                let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
-                let rx_pkts = morpheus_network::stack::rx_packet_count();
-                let tx_errs = morpheus_network::stack::tx_error_count();
-                screen.put_str_at(7, dhcp_status_y, &format!(
-                    "{}s TX:{} DHCP:{} RX:{} ERR:{}        ", elapsed, tx_pkts, dhcp_pkts, rx_pkts, tx_errs
-                ), if rx_pkts > 0 { EFI_LIGHTGREEN } else { EFI_YELLOW }, EFI_BLACK);
-                last_update = now;
-            }
-            
-            if now - start_time > 30_000 {
-                let tx_pkts = morpheus_network::stack::tx_packet_count();
-                let dhcp_pkts = morpheus_network::stack::dhcp_discover_count();
-                let rx_pkts = morpheus_network::stack::rx_packet_count();
-                let tx_errs = morpheus_network::stack::tx_error_count();
-                screen.put_str_at(5, log_y, &format!(
-                    "DHCP timeout - TX:{} DHCP:{} RX:{} ERR:{}",
-                    tx_pkts, dhcp_pkts, rx_pkts, tx_errs
-                ), EFI_RED, EFI_BLACK);
-                log_y += 1;
-                
-                // Spin for 5 seconds so user can see the output
-                let spin_start = get_time_ms();
-                while get_time_ms() - spin_start < 5000 {}
-                
-                return Err("DHCP configuration timeout");
-            }
-        }
-        log_y += 1;
-        
-        // Show IP configuration after DHCP
-        if let Some(ip) = client.ip_address() {
-            screen.put_str_at(5, log_y, &format!("IP: {}", ip), EFI_LIGHTGREEN, EFI_BLACK);
-            log_y += 1;
-        } else {
-            screen.put_str_at(5, log_y, "WARNING: No IP assigned!", EFI_RED, EFI_BLACK);
-            log_y += 1;
-        }
-        
-        // Show final packet counts
-        let final_tx = morpheus_network::stack::tx_packet_count();
-        let final_rx = morpheus_network::stack::rx_packet_count();
-        screen.put_str_at(7, log_y, &format!("Final: TX:{} RX:{}", final_tx, final_rx), EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
-        
-        screen.put_str_at(5, log_y, "Network ready!", EFI_LIGHTGREEN, EFI_BLACK);
-        log_y += 1;
-
-        // Clear screen for download UI - cleaner look
-        // Small delay to let user see network ready message
-        let pause_start = get_time_ms();
-        while get_time_ms() - pause_start < 500 {}
-        
         screen.clear();
         
         // === DOWNLOAD SCREEN LAYOUT ===
