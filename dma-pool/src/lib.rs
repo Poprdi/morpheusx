@@ -729,8 +729,28 @@ static LOCK: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 fn lock() {
+    let mut retries = 0;
     while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
-        core::hint::spin_loop();
+        retries += 1;
+        if retries > 100 {
+            // After many spins, yield with a tiny delay
+            // Import TSC delay inline to avoid circular dependency
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                let start: u64;
+                core::arch::asm!("rdtsc", "shl rdx, 32", "or rax, rdx", out("rax") start, out("rdx") _);
+                let cycles = 2500; // ~1us at 2.5GHz
+                loop {
+                    let now: u64;
+                    core::arch::asm!("rdtsc", "shl rdx, 32", "or rax, rdx", out("rax") now, out("rdx") _);
+                    if now.wrapping_sub(start) >= cycles { break; }
+                    core::hint::spin_loop();
+                }
+            }
+            retries = 0; // Reset counter after delay
+        } else {
+            core::hint::spin_loop();
+        }
     }
 }
 

@@ -106,8 +106,7 @@ pub fn check_network_connectivity(screen: &mut Screen) -> Result<(), &'static st
         let tsc = unsafe { morpheus_network::read_tsc() };
         tsc / 2_000_000
     }
-    let pause_start = get_time_ms();
-    while get_time_ms() - pause_start < 1500 {}
+    morpheus_network::tsc_delay_us(1_500_000); // 1.5s
     
     Ok(())
 }

@@ -288,9 +288,15 @@ static DEBUG_RING_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::Ato
 
 /// Push a debug message to the ring buffer
 pub fn debug_log(stage: u32, msg: &str) {
-    // Simple spinlock
+    // Simple spinlock with backoff
+    let mut retries = 0;
     while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
-        core::hint::spin_loop();
+        retries += 1;
+        if retries > 10 {
+            crate::device::pci::tsc_delay_us(1); // 1us after several spins
+        } else {
+            core::hint::spin_loop();
+        }
     }
     
     unsafe {
@@ -316,9 +322,15 @@ pub fn debug_log(stage: u32, msg: &str) {
 /// Pop the next debug message from the ring buffer (FIFO order)
 /// Returns None if buffer is empty
 pub fn debug_log_pop() -> Option<DebugLogEntry> {
-    // Simple spinlock
+    // Simple spinlock with backoff
+    let mut retries = 0;
     while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
-        core::hint::spin_loop();
+        retries += 1;
+        if retries > 10 {
+            crate::device::pci::tsc_delay_us(1); // 1us after several spins
+        } else {
+            core::hint::spin_loop();
+        }
     }
     
     let result = unsafe {
@@ -343,8 +355,14 @@ pub fn debug_log_available() -> bool {
 
 /// Clear all debug messages
 pub fn debug_log_clear() {
+    let mut retries = 0;
     while DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
-        core::hint::spin_loop();
+        retries += 1;
+        if retries > 10 {
+            crate::device::pci::tsc_delay_us(1); // 1us after several spins
+        } else {
+            core::hint::spin_loop();
+        }
     }
     
     unsafe {

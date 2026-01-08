@@ -202,7 +202,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             }
             
             // Small delay to avoid busy-spinning
-            // In real implementation, could use timer or yield
+            crate::device::pci::tsc_delay_us(1000); // 1ms
         }
         
         Ok(())
@@ -247,6 +247,8 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                                 crate::stack::debug_log(45, "DNS timeout");
                                 break; // Timeout - fall through to hardcoded
                             }
+                            // Small delay to avoid CPU hammering
+                            crate::device::pci::tsc_delay_us(1000); // 1ms
                         }
                         Err(_) => {
                             crate::stack::debug_log(46, "DNS query failed");
@@ -321,6 +323,9 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 crate::stack::debug_log(54, "TCP conn TIMEOUT");
                 return Err(NetworkError::Timeout);
             }
+            
+            // Small delay to avoid CPU hammering
+            crate::device::pci::tsc_delay_us(1000); // 1ms
         }
 
         crate::stack::debug_log(55, "TCP connected OK");
@@ -344,6 +349,9 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             if self.now() - start > self.config.read_timeout_ms {
                 return Err(NetworkError::Timeout);
             }
+            
+            // Small delay to avoid CPU hammering
+            crate::device::pci::tsc_delay_us(100); // 100us (faster for TX)
         }
 
         Ok(())
@@ -368,6 +376,11 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
             if self.now() - start > self.config.read_timeout_ms {
                 return Err(NetworkError::Timeout);
+            }
+            
+            // Small delay to avoid CPU hammering
+            crate::device::pci::tsc_delay_us(1000); // 1ms
+        }
             }
         }
     }

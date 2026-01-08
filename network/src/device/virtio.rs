@@ -344,9 +344,7 @@ impl<H: Hal, T: Transport> NetworkDevice for VirtioNetDevice<H, T> {
             }
             
             // Small delay between polls to not hammer the device
-            for _ in 0..1000 {
-                core::hint::spin_loop();
-            }
+            crate::device::pci::tsc_delay_us(10); // 10us between polls
         }
     }
 

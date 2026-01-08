@@ -506,8 +506,7 @@ impl DistroDownloader {
 
         screen.put_str_at(5, 4, "Disk ready! Starting download...", EFI_LIGHTGREEN, EFI_BLACK);
         
-        let pause_start = get_time_ms();
-        while get_time_ms() - pause_start < 500 {}
+        morpheus_network::tsc_delay_us(500_000); // 500ms
 
         // STEP 3: Now start the actual download with streaming to disk
         // Get fresh block_io for write operations
@@ -795,8 +794,7 @@ impl DistroDownloader {
                 screen.put_str_at(5, status_y + 5, "Waiting 15s so you can read this...", EFI_DARKGRAY, EFI_BLACK);
                 
                 // Wait so user can see the error
-                let spin_start = get_time_ms();
-                while get_time_ms() - spin_start < 15000 {}
+                morpheus_network::tsc_delay_us(15_000_000); // 15s
                 
                 Err("Download failed")
             }
