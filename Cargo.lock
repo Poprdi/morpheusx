@@ -227,10 +227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "morpheus-ping"
-version = "0.1.0"
-
-[[package]]
 name = "morpheus-updater"
 version = "1.0.1"
 

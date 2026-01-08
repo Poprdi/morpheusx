@@ -122,7 +122,7 @@ unsafe impl<A: ConfigAccess + Sync> Sync for VirtioConfigBridge<A> {}
 #[derive(Debug, Clone)]
 pub struct DeviceConfig {
     /// ECAM base address for PCIe config access.
-    /// If None, uses legacy I/O ports (x86) or auto-detection.
+    /// If None, auto-probes available methods.
     pub ecam_base: Option<usize>,
     
     /// Prefer specific device type if multiple found.
@@ -132,10 +132,19 @@ pub struct DeviceConfig {
     pub scan_bus: u8,
 }
 
+/// Detected PCI access method after probing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PciAccessMethod {
+    /// Legacy I/O port access (CF8/CFC on x86).
+    LegacyIo,
+    /// PCIe ECAM memory-mapped access.
+    Ecam(usize),
+}
+
 impl Default for DeviceConfig {
     fn default() -> Self {
         Self {
-            ecam_base: Some(ecam_bases::QEMU_Q35),
+            ecam_base: None, // Auto-probe by default
             preferred_driver: PreferredDriver::Any,
             scan_bus: 0,
         }
@@ -344,28 +353,113 @@ impl fmt::Debug for UnifiedNetDevice {
 pub struct DeviceFactory;
 
 impl DeviceFactory {
+    /// Probe for available PCI access methods.
+    /// 
+    /// Checks each method by reading the host bridge (bus 0, dev 0, func 0).
+    /// A valid host bridge should always exist and return a non-0xFFFF vendor ID.
+    /// 
+    /// Returns the first working method found, or None if all fail.
+    #[cfg(target_arch = "x86_64")]
+    pub fn probe_pci_access() -> Option<PciAccessMethod> {
+        // Check 1: Try legacy I/O port access first (most compatible on x86)
+        {
+            let legacy = LegacyIoAccess::new();
+            let df = DeviceFunction::new(0, 0, 0);
+            let id = unsafe { legacy.read32(df, 0x00) };
+            let vendor = (id & 0xFFFF) as u16;
+            
+            // Valid vendor ID means this method works
+            if vendor != 0xFFFF && vendor != 0x0000 {
+                return Some(PciAccessMethod::LegacyIo);
+            }
+        }
+
+        // Check 2: Try common ECAM base addresses
+        const ECAM_CANDIDATES: &[usize] = &[
+            ecam_bases::QEMU_Q35,      // 0xB000_0000 - QEMU Q35
+            ecam_bases::QEMU_I440FX,   // 0xE000_0000 - QEMU i440FX
+            ecam_bases::INTEL_TYPICAL, // 0xE000_0000 - Intel platforms
+            0xF000_0000,               // Alternative ECAM location
+        ];
+
+        for &base in ECAM_CANDIDATES {
+            let ecam = unsafe { EcamAccess::new(base as *mut u8) };
+            let df = DeviceFunction::new(0, 0, 0);
+            let id = unsafe { ecam.read32(df, 0x00) };
+            let vendor = (id & 0xFFFF) as u16;
+
+            if vendor != 0xFFFF && vendor != 0x0000 {
+                return Some(PciAccessMethod::Ecam(base));
+            }
+        }
+
+        None
+    }
+
+    /// Probe for available PCI access methods (non-x86).
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn probe_pci_access() -> Option<PciAccessMethod> {
+        // On non-x86, we only have ECAM
+        const ECAM_CANDIDATES: &[usize] = &[
+            0x4000_0000, // ARM typical
+            0x8000_0000, // Alternative
+        ];
+
+        for &base in ECAM_CANDIDATES {
+            let ecam = unsafe { EcamAccess::new(base as *mut u8) };
+            let df = DeviceFunction::new(0, 0, 0);
+            let id = unsafe { ecam.read32(df, 0x00) };
+            let vendor = (id & 0xFFFF) as u16;
+
+            if vendor != 0xFFFF && vendor != 0x0000 {
+                return Some(PciAccessMethod::Ecam(base));
+            }
+        }
+
+        None
+    }
+
     /// Scan for network devices on the PCI bus.
+    /// 
+    /// If `config.ecam_base` is None, automatically probes for the correct
+    /// PCI access method first.
     pub fn scan(config: &DeviceConfig) -> Result<Vec<DetectedDevice>> {
+        // Determine which access method to use
+        let access_method = if let Some(ecam_base) = config.ecam_base {
+            // Explicit ECAM base provided
+            PciAccessMethod::Ecam(ecam_base)
+        } else {
+            // Auto-probe for working method
+            Self::probe_pci_access()
+                .ok_or_else(|| NetworkError::DeviceError(
+                    alloc::string::String::from("No working PCI access method found")
+                ))?
+        };
+
+        Self::scan_with_method(access_method, config.scan_bus)
+    }
+
+    /// Scan using a specific PCI access method.
+    #[cfg(target_arch = "x86_64")]
+    fn scan_with_method(method: PciAccessMethod, _scan_bus: u8) -> Result<Vec<DetectedDevice>> {
         let mut devices = Vec::new();
 
-        #[cfg(target_arch = "x86_64")]
-        {
-            if let Some(ecam_base) = config.ecam_base {
-                // Use ECAM access
-                let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
-                let scanner = PciScanner::new(ecam);
+        match method {
+            PciAccessMethod::LegacyIo => {
+                let legacy = LegacyIoAccess::new();
+                let scanner = PciScanner::new(legacy);
                 let pci_devices = scanner.find_network();
-                
+
                 for pci_info in pci_devices {
                     let driver_type = DriverType::from_pci_info(&pci_info);
                     devices.push(DetectedDevice { pci_info, driver_type });
                 }
-            } else {
-                // Use legacy I/O access
-                let legacy = LegacyIoAccess::new();
-                let scanner = PciScanner::new(legacy);
+            }
+            PciAccessMethod::Ecam(base) => {
+                let ecam = unsafe { EcamAccess::new(base as *mut u8) };
+                let scanner = PciScanner::new(ecam);
                 let pci_devices = scanner.find_network();
-                
+
                 for pci_info in pci_devices {
                     let driver_type = DriverType::from_pci_info(&pci_info);
                     devices.push(DetectedDevice { pci_info, driver_type });
@@ -373,17 +467,22 @@ impl DeviceFactory {
             }
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
-        {
-            if let Some(ecam_base) = config.ecam_base {
-                let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
-                let scanner = PciScanner::new(ecam);
-                let pci_devices = scanner.find_network();
-                
-                for pci_info in pci_devices {
-                    let driver_type = DriverType::from_pci_info(&pci_info);
-                    devices.push(DetectedDevice { pci_info, driver_type });
-                }
+        Ok(devices)
+    }
+
+    /// Scan using a specific PCI access method (non-x86).
+    #[cfg(not(target_arch = "x86_64"))]
+    fn scan_with_method(method: PciAccessMethod, _scan_bus: u8) -> Result<Vec<DetectedDevice>> {
+        let mut devices = Vec::new();
+
+        if let PciAccessMethod::Ecam(base) = method {
+            let ecam = unsafe { EcamAccess::new(base as *mut u8) };
+            let scanner = PciScanner::new(ecam);
+            let pci_devices = scanner.find_network();
+
+            for pci_info in pci_devices {
+                let driver_type = DriverType::from_pci_info(&pci_info);
+                devices.push(DetectedDevice { pci_info, driver_type });
             }
         }
 
@@ -397,9 +496,19 @@ impl DeviceFactory {
         detected: &DetectedDevice,
         config: &DeviceConfig,
     ) -> Result<UnifiedNetDevice> {
+        // Determine access method (probe if not specified)
+        let access_method = if let Some(ecam_base) = config.ecam_base {
+            PciAccessMethod::Ecam(ecam_base)
+        } else {
+            Self::probe_pci_access()
+                .ok_or_else(|| NetworkError::DeviceError(
+                    alloc::string::String::from("No working PCI access method")
+                ))?
+        };
+
         match detected.driver_type {
             DriverType::VirtIO => {
-                Self::create_virtio(&detected.pci_info, config)
+                Self::create_virtio(&detected.pci_info, access_method)
             }
             DriverType::IntelIgb | DriverType::IntelE1000 => {
                 Err(NetworkError::DeviceError(alloc::string::String::from("Intel NIC driver not yet implemented")))
@@ -457,7 +566,7 @@ impl DeviceFactory {
 
     /// Create a VirtIO network device.
     #[cfg(target_arch = "x86_64")]
-    fn create_virtio(pci_info: &PciDeviceInfo, config: &DeviceConfig) -> Result<UnifiedNetDevice> {
+    fn create_virtio(pci_info: &PciDeviceInfo, access_method: PciAccessMethod) -> Result<UnifiedNetDevice> {
         // Convert our DeviceFunction to virtio-drivers' DeviceFunction
         let virt_df = VirtioDeviceFunction {
             bus: pci_info.location.bus,
@@ -465,54 +574,57 @@ impl DeviceFactory {
             function: pci_info.location.function,
         };
 
-        if let Some(ecam_base) = config.ecam_base {
-            // ECAM path
-            let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
-            let bridge = VirtioConfigBridge::new(ecam);
-            let mut pci_root = PciRoot::new(bridge);
+        match access_method {
+            PciAccessMethod::Ecam(ecam_base) => {
+                let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
+                let bridge = VirtioConfigBridge::new(ecam);
+                let mut pci_root = PciRoot::new(bridge);
 
-            // Create PCI transport
-            let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
-                .map_err(|e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
+                let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
+                    .map_err(|_e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
 
-            // Create VirtIO device
-            let device = VirtioNetDevice::new(transport)
-                .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
+                let device = VirtioNetDevice::new(transport)
+                    .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
 
-            Ok(UnifiedNetDevice::VirtIO(device))
-        } else {
-            // Legacy I/O path
-            let legacy = LegacyIoAccess::new();
-            let bridge = VirtioConfigBridge::new(legacy);
-            let mut pci_root = PciRoot::new(bridge);
+                Ok(UnifiedNetDevice::VirtIO(device))
+            }
+            PciAccessMethod::LegacyIo => {
+                let legacy = LegacyIoAccess::new();
+                let bridge = VirtioConfigBridge::new(legacy);
+                let mut pci_root = PciRoot::new(bridge);
 
-            let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
-                .map_err(|e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
+                let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
+                    .map_err(|_e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
 
-            let device = VirtioNetDevice::new(transport)
-                .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
+                let device = VirtioNetDevice::new(transport)
+                    .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;
 
-            Ok(UnifiedNetDevice::VirtIO(device))
+                Ok(UnifiedNetDevice::VirtIO(device))
+            }
         }
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    fn create_virtio(pci_info: &PciDeviceInfo, config: &DeviceConfig) -> Result<UnifiedNetDevice> {
+    fn create_virtio(pci_info: &PciDeviceInfo, access_method: PciAccessMethod) -> Result<UnifiedNetDevice> {
         let virt_df = VirtioDeviceFunction {
             bus: pci_info.location.bus,
             device: pci_info.location.device,
             function: pci_info.location.function,
         };
 
-        let ecam_base = config.ecam_base
-            .ok_or(NetworkError::DeviceError(alloc::string::String::from("ECAM base required on non-x86")))?;
+        let ecam_base = match access_method {
+            PciAccessMethod::Ecam(base) => base,
+            PciAccessMethod::LegacyIo => {
+                return Err(NetworkError::DeviceError(alloc::string::String::from("Legacy I/O not available on this arch")));
+            }
+        };
         
         let ecam = unsafe { EcamAccess::new(ecam_base as *mut u8) };
         let bridge = VirtioConfigBridge::new(ecam);
         let mut pci_root = PciRoot::new(bridge);
 
         let transport = PciTransport::new::<StaticHal, _>(&mut pci_root, virt_df)
-            .map_err(|e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
+            .map_err(|_e| NetworkError::DeviceError(alloc::string::String::from("Failed to create PCI transport")))?;
 
         let device = VirtioNetDevice::new(transport)
             .map_err(|_| NetworkError::DeviceError(alloc::string::String::from("Failed to create VirtIO device")))?;

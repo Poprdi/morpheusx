@@ -53,13 +53,14 @@ impl InitConfig {
     }
 
     /// Create config for QEMU/VirtIO testing.
+    /// Uses legacy I/O port access which works more reliably in QEMU.
     pub fn for_qemu() -> Self {
         Self {
             dhcp_timeout_ms: 10_000, // Faster for testing
             use_static_dma: true,
             image_base: None,
             image_end: None,
-            ecam_base: Some(ECAM_BASE_QEMU_Q35),
+            ecam_base: None, // Use legacy I/O - more reliable in QEMU
             retry_count: 2,
             retry_delay_ms: 500,
         }
