@@ -13,10 +13,38 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §6.2, §6.3
 
-// TODO: Implement phase functions
-//
-// pub fn phase1_rx_refill(device: &mut impl NetworkDriver) { ... }
-// pub fn phase2_smoltcp_poll(iface: &mut Interface, device: &mut DeviceAdapter, sockets: &mut SocketSet, timestamp: Instant) { ... }
-// pub fn phase3_tx_drain(adapter: &mut DeviceAdapter, budget: usize) { ... }
-// pub fn phase4_app_step(app: &mut impl StateMachine, ...) -> StepResult { ... }
-// pub fn phase5_tx_completions(device: &mut impl NetworkDriver) { ... }
+use crate::driver::NetworkDriver;
+
+/// TX budget per iteration (max packets to send in Phase 3).
+pub const TX_BUDGET: usize = 16;
+
+/// Phase 1: Refill RX queue.
+///
+/// Ensures device has buffers to receive into.
+/// Budget: ~20µs
+pub fn phase1_rx_refill<D: NetworkDriver>(device: &mut D) {
+    device.refill_rx_queue();
+}
+
+/// Phase 5: Collect TX completions.
+///
+/// Reclaims TX buffers for reuse.
+/// Budget: ~20µs
+pub fn phase5_tx_completions<D: NetworkDriver>(device: &mut D) {
+    device.collect_tx_completions();
+}
+
+/// Check if timing warning should be emitted.
+///
+/// Returns true if iteration exceeded warning threshold.
+#[cfg(target_arch = "x86_64")]
+pub fn check_timing_warning(start_tsc: u64, warning_threshold_ticks: u64) -> bool {
+    let now = unsafe { crate::asm::core::tsc::read_tsc() };
+    let elapsed = now.wrapping_sub(start_tsc);
+    elapsed > warning_threshold_ticks
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn check_timing_warning(_start_tsc: u64, _warning_threshold_ticks: u64) -> bool {
+    false
+}

@@ -11,8 +11,16 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §2, ARCHITECTURE_V3.md
 
-// TODO: Conditional compilation based on target and features
-
 pub mod core;
 pub mod pci;
 pub mod drivers;
+
+// Re-exports for convenience
+#[cfg(target_arch = "x86_64")]
+pub use self::core::tsc::read_tsc;
+#[cfg(target_arch = "x86_64")]
+pub use self::core::barriers::{sfence, lfence, mfence};
+#[cfg(target_arch = "x86_64")]
+pub use self::core::mmio::{mmio_read32, mmio_write32};
+#[cfg(target_arch = "x86_64")]
+pub use self::core::pio::{inb, outb, inw, outw, inl, outl};

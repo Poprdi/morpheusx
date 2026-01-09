@@ -10,3 +10,9 @@ pub mod repr_c;
 pub mod virtio_hdr;
 pub mod ethernet;
 pub mod result;
+
+// Re-exports
+pub use repr_c::{VirtqueueState, RxResult, VirtqDesc, DriverState, RxPollResult, TxPollResult};
+pub use virtio_hdr::{VirtioNetHdr, VIRTIO_NET_HDR_GSO_NONE};
+pub use ethernet::{MacAddress, EthernetHeader, ETH_ALEN, ETH_HLEN, ETH_MTU, ETH_FRAME_MAX};
+pub use result::AsmResult;
