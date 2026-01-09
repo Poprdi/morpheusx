@@ -31,6 +31,7 @@ const ASM_VIRTIO: &[&str] = &[
     "asm/drivers/virtio/tx.s",
     "asm/drivers/virtio/rx.s",
     "asm/drivers/virtio/notify.s",
+    "asm/drivers/virtio/blk.s",
 ];
 
 const ASM_PHY: &[&str] = &[

@@ -35,6 +35,7 @@ pub mod tcp;
 pub mod http;
 pub mod download;
 pub mod dns;
+pub mod disk_writer;
 
 use core::fmt;
 use crate::boot::TimeoutConfig;

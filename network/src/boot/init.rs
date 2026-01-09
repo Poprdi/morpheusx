@@ -239,12 +239,11 @@ unsafe fn init_virtio_nic(
     
     // Create VirtIO config from handoff and DMA region
     let config = VirtioConfig {
-        mmio_base: handoff.nic_mmio_base,
-        queue_size: 32, // Standard queue size
         dma_cpu_base: dma.cpu_base(),
         dma_bus_base: dma.bus_base(),
+        dma_size: dma.size(),
+        queue_size: 32, // Standard queue size
         buffer_size: 2048,
-        tsc_freq: handoff.tsc_freq,
     };
     
     // Initialize device
@@ -253,12 +252,11 @@ unsafe fn init_virtio_nic(
     
     // Update config with negotiated features (for reference)
     let config = VirtioConfig {
-        mmio_base: handoff.nic_mmio_base,
-        queue_size: 32,
         dma_cpu_base: dma.cpu_base(),
         dma_bus_base: dma.bus_base(),
+        dma_size: dma.size(),
+        queue_size: 32,
         buffer_size: 2048,
-        tsc_freq: handoff.tsc_freq,
     };
     let _ = features; // Used for feature tracking if needed
     
