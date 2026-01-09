@@ -68,6 +68,21 @@ impl DmaRegion {
         Self { cpu_ptr, bus_addr, size }
     }
     
+    /// Get CPU base pointer.
+    pub fn cpu_base(&self) -> *mut u8 {
+        self.cpu_ptr
+    }
+    
+    /// Get bus base address.
+    pub fn bus_base(&self) -> u64 {
+        self.bus_addr
+    }
+    
+    /// Get total size.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+    
     /// Get CPU pointer for RX descriptor table.
     pub fn rx_desc_cpu(&self) -> *mut u8 {
         unsafe { self.cpu_ptr.add(Self::RX_DESC_OFFSET) }

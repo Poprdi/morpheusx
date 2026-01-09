@@ -49,8 +49,9 @@ impl HttpMethod {
 }
 
 /// Progress callback type for download operations.
-/// The parameters are: (bytes_downloaded, total_bytes, message)
-pub type ProgressCallback<'a> = &'a mut dyn FnMut(usize, usize, &str);
+/// Simple function pointer type (bytes_downloaded, total_bytes_or_none).
+pub type ProgressCallback = fn(usize, Option<usize>);
 
-/// Optional progress callback wrapper.
-pub type OptionalProgressCallback<'a> = Option<ProgressCallback<'a>>;
+/// Progress callback with message type for operations with status messages.
+/// Parameters: (bytes_downloaded, total_bytes, message)
+pub type ProgressCallbackWithMessage<'a> = Option<&'a mut dyn FnMut(usize, usize, &str)>;
