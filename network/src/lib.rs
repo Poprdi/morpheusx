@@ -92,6 +92,10 @@ pub mod types;        // Shared types (#[repr(C)] structs)
 pub mod dma;          // DMA buffer management with ownership tracking
 pub mod driver;       // Driver abstraction and implementations
 pub mod mainloop;     // 5-phase poll loop
+pub mod state;        // State machines (DHCP, TCP, HTTP, etc.)
+pub mod boot;         // Boot handoff and initialization
+pub mod time;         // Timing utilities
+pub mod pci;          // PCI bus access
 
 pub use error::{NetworkError, Result};
 pub use types::{HttpMethod, ProgressCallback};

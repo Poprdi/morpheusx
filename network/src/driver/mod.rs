@@ -6,12 +6,19 @@
 //! NETWORK_IMPL_GUIDE.md §8
 
 pub mod traits;
+pub mod block_traits;
 pub mod virtio;
+pub mod virtio_blk;
 // Future:
 // pub mod intel;
 // pub mod realtek;
 // pub mod broadcom;
 
-// Re-exports
+// Re-exports - Network
 pub use traits::{NetworkDriver, DriverInit, TxError, RxError};
 pub use virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};
+
+// Re-exports - Block
+pub use block_traits::{BlockDriver, BlockDriverInit, BlockError, BlockCompletion, BlockDeviceInfo};
+pub use virtio_blk::{VirtioBlkDriver, VirtioBlkConfig, VirtioBlkInitError};
+

@@ -464,14 +464,17 @@ pub fn has_invariant_tsc() -> bool {
     let result: u32;
     unsafe {
         core::arch::asm!(
+            // Save rbx since LLVM uses it internally
+            "push rbx",
             "mov eax, 0x80000007",
             "cpuid",
             "mov {0:e}, edx",
+            "pop rbx",
             out(reg) result,
             out("eax") _,
-            out("ebx") _,
             out("ecx") _,
             out("edx") _,
+            options(nostack)
         );
     }
     (result & (1 << 8)) != 0
