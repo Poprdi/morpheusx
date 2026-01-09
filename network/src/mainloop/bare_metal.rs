@@ -1,7 +1,7 @@
 //! Bare-metal main loop for post-ExitBootServices execution.
 //!
 //! This module provides the complete end-to-end runner that:
-//! 1. Initializes the VirtIO-net and VirtIO-blk drivers
+//! 1. Initializes the VirtIO-net driver using ASM layer
 //! 2. Creates the smoltcp interface and sockets
 //! 3. Runs the 5-phase main loop
 //! 4. Orchestrates ISO download and disk write
@@ -14,24 +14,27 @@
 
 use alloc::vec::Vec;
 use alloc::vec;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::format;
 
-use smoltcp::iface::{Config, Interface, SocketSet};
-use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;
+use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
+use smoltcp::socket::dhcpv4::{Socket as Dhcpv4Socket, Event as Dhcpv4Event};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Address, Ipv4Cidr};
 
 use crate::boot::handoff::BootHandoff;
 use crate::boot::init::TimeoutConfig;
-use crate::device::virtio::VirtioNetDevice;
-use crate::driver::NetworkDriver;
-use crate::state::download::{DownloadConfig, IsoDownloadState};
-use crate::state::StepResult;
+use crate::driver::virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};
+use crate::driver::traits::NetworkDriver;
 use crate::url::Url;
 
+// Import from sibling modules in the mainloop package
+use super::runner::{MainLoopConfig, get_tsc};
 use super::phases::{phase1_rx_refill, phase5_tx_completions};
-use super::runner::{get_tsc, MainLoopConfig};
+
+// Import download state machine from state module
+use crate::state::download::{DownloadConfig, IsoDownloadState};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SERIAL OUTPUT (POST-EBS)
@@ -91,14 +94,50 @@ pub fn serial_print_hex(value: u64) {
     }
 }
 
+/// Print an IPv4 address (e.g., "10.0.2.15").
+pub fn print_ipv4(ip: Ipv4Address) {
+    let octets = ip.as_bytes();
+    for (i, octet) in octets.iter().enumerate() {
+        if i > 0 { serial_print("."); }
+        serial_print_decimal(*octet as u32);
+    }
+}
+
+/// Print a decimal number.
+pub fn serial_print_decimal(value: u32) {
+    if value == 0 {
+        unsafe { serial_write_byte(b'0'); }
+        return;
+    }
+    let mut buf = [0u8; 10];
+    let mut i = 0;
+    let mut val = value;
+    while val > 0 {
+        buf[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        unsafe { serial_write_byte(buf[i]); }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SMOLTCP DEVICE ADAPTER
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Adapter bridging NetworkDriver to smoltcp Device trait.
+/// 
+/// This adapter uses a simple design where:
+/// - RX: Buffers received data internally, RxToken references it
+/// - TX: TxToken writes directly via the driver
 pub struct SmoltcpAdapter<'a, D: NetworkDriver> {
     driver: &'a mut D,
+    /// Temporary buffer for received packet
     rx_buffer: [u8; 2048],
+    /// Length of data in rx_buffer (0 if no pending packet)
+    rx_len: usize,
 }
 
 impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
@@ -106,11 +145,36 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
         Self {
             driver,
             rx_buffer: [0u8; 2048],
+            rx_len: 0,
         }
+    }
+    
+    /// Try to receive a packet into our internal buffer.
+    /// Called before polling smoltcp.
+    pub fn poll_receive(&mut self) {
+        if self.rx_len == 0 {
+            // No pending packet, try to receive
+            match self.driver.receive(&mut self.rx_buffer) {
+                Ok(Some(len)) => {
+                    self.rx_len = len;
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    /// Refill RX queue. Called in main loop Phase 1.
+    pub fn refill_rx(&mut self) {
+        self.driver.refill_rx_queue();
+    }
+    
+    /// Collect TX completions. Called in main loop Phase 5.
+    pub fn collect_tx(&mut self) {
+        self.driver.collect_tx_completions();
     }
 }
 
-/// RX token for smoltcp.
+/// RX token for smoltcp - owns the received data.
 pub struct RxToken {
     buffer: Vec<u8>,
 }
@@ -136,6 +200,7 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
     {
         let mut buffer = vec![0u8; len];
         let result = f(&mut buffer);
+        // Fire-and-forget transmit - don't wait for completion
         let _ = self.driver.transmit(&buffer);
         result
     }
@@ -146,14 +211,20 @@ impl<'a, D: NetworkDriver> smoltcp::phy::Device for SmoltcpAdapter<'a, D> {
     type TxToken<'b> = TxToken<'b, D> where Self: 'b;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        match self.driver.receive(&mut self.rx_buffer) {
-            Ok(Some(len)) => {
-                let buffer = self.rx_buffer[..len].to_vec();
-                // We need to split borrow - create tokens with separate references
-                // This is tricky with Rust's borrow checker, so we use a workaround
-                None // Simplified - proper implementation needs unsafe or restructuring
-            }
-            _ => None,
+        // First, try to receive if we don't have a pending packet
+        self.poll_receive();
+        
+        if self.rx_len > 0 {
+            // Copy the packet data to RxToken (it will own it)
+            let buffer = self.rx_buffer[..self.rx_len].to_vec();
+            self.rx_len = 0; // Mark buffer as consumed
+            
+            Some((
+                RxToken { buffer },
+                TxToken { driver: self.driver },
+            ))
+        } else {
+            None
         }
     }
 
@@ -270,17 +341,52 @@ pub unsafe fn bare_metal_main(
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 2: INITIALIZE NETWORK DEVICE
     // ═══════════════════════════════════════════════════════════════════════
-    serial_println("[INIT] Initializing VirtIO-net driver...");
+    serial_println("[INIT] Creating VirtIO config...");
     
-    // For now, we'll use a simplified flow that demonstrates the structure
-    // Full integration requires VirtioNetDevice from the init module
+    // Create VirtIO config from handoff data
+    let virtio_config = VirtioConfig {
+        dma_cpu_base: handoff.dma_cpu_ptr as *mut u8,
+        dma_bus_base: handoff.dma_cpu_ptr, // In identity-mapped post-EBS, bus=physical=virtual
+        dma_size: handoff.dma_size as usize,
+        queue_size: VirtioConfig::DEFAULT_QUEUE_SIZE,
+        buffer_size: VirtioConfig::DEFAULT_BUFFER_SIZE,
+    };
     
     serial_print("[INIT] NIC MMIO base: ");
     serial_print_hex(handoff.nic_mmio_base);
     serial_println("");
-
+    
+    serial_println("[INIT] Initializing VirtIO-net driver...");
+    
+    let mut driver = match VirtioNetDriver::new(handoff.nic_mmio_base, virtio_config) {
+        Ok(d) => {
+            serial_println("[OK] VirtIO driver initialized");
+            d
+        }
+        Err(e) => {
+            serial_print("[FAIL] VirtIO init error: ");
+            match e {
+                VirtioInitError::ResetTimeout => 
+                    serial_println("reset timeout"),
+                VirtioInitError::FeatureNegotiationFailed => 
+                    serial_println("feature negotiation failed"),
+                VirtioInitError::FeaturesRejected => 
+                    serial_println("features rejected by device"),
+                VirtioInitError::QueueSetupFailed => 
+                    serial_println("queue setup failed"),
+                VirtioInitError::RxPrefillFailed(_) => 
+                    serial_println("RX prefill failed"),
+                VirtioInitError::DeviceError => 
+                    serial_println("device error"),
+            }
+            return RunResult::InitFailed;
+        }
+    };
+    
+    // Print real MAC address from driver
     serial_print("[INIT] MAC address: ");
-    for (i, byte) in handoff.mac_address.iter().enumerate() {
+    let mac = driver.mac_address();
+    for (i, byte) in mac.iter().enumerate() {
         if i > 0 { serial_print(":"); }
         let hi = byte >> 4;
         let lo = byte & 0xF;
@@ -296,68 +402,555 @@ pub unsafe fn bare_metal_main(
     // ═══════════════════════════════════════════════════════════════════════
     serial_println("[INIT] Creating smoltcp interface...");
 
-    let mac = EthernetAddress(handoff.mac_address);
+    // Use the MAC address from the driver
+    let mac = EthernetAddress(driver.mac_address());
     let hw_addr = HardwareAddress::Ethernet(mac);
 
-    serial_println("[OK] smoltcp interface configured");
+    // Create smoltcp config
+    let mut iface_config = Config::new(hw_addr);
+    iface_config.random_seed = handoff.tsc_freq; // Use TSC frequency as random seed
+    
+    // Create the device adapter wrapping our VirtIO driver
+    let mut adapter = SmoltcpAdapter::new(&mut driver);
+
+    // Create smoltcp interface  
+    let mut iface = Interface::new(iface_config, &mut adapter, Instant::from_millis(0));
+
+    // Set up initial IP config (DHCP will configure this later)
+    iface.update_ip_addrs(|addrs| {
+        // Start with empty - DHCP will fill this
+    });
+
+    serial_println("[OK] smoltcp interface created");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 4: DHCP
     // ═══════════════════════════════════════════════════════════════════════
     serial_println("[NET] Starting DHCP discovery...");
 
+    // Create socket storage
+    let mut socket_storage: [SocketStorage; 8] = Default::default();
+    let mut sockets = SocketSet::new(&mut socket_storage[..]);
+    
+    // Create and add DHCP socket
+    let dhcp_socket = Dhcpv4Socket::new();
+    let dhcp_handle = sockets.add(dhcp_socket);
+
     let dhcp_start = get_tsc();
     let dhcp_timeout_ticks = timeouts.dhcp();
     
-    // DHCP state machine would run here
-    // For demonstration, we show the expected flow:
+    // Track if we got an IP
+    let mut got_ip = false;
+    let mut our_ip = Ipv4Address::UNSPECIFIED;
+    let mut gateway_ip = Ipv4Address::UNSPECIFIED;
+    
+    // DHCP polling loop
     serial_println("[NET] Sending DHCP DISCOVER...");
-    serial_println("[NET] Received DHCP OFFER");
-    serial_println("[NET] Sending DHCP REQUEST...");
-    serial_println("[NET] Received DHCP ACK");
-    serial_println("[OK] IP address: 10.0.2.15");
-    serial_println("[OK] Gateway: 10.0.2.2");
-    serial_println("[OK] DNS: 10.0.2.3");
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // STEP 5: HTTP DOWNLOAD
-    // ═══════════════════════════════════════════════════════════════════════
-    serial_print("[HTTP] Downloading from: ");
-    serial_println(&config.iso_url);
-
-    serial_println("[HTTP] Connecting to 10.0.2.2:8000...");
-    serial_println("[HTTP] Sending GET request...");
-    serial_println("[HTTP] Receiving headers...");
-    serial_println("[HTTP] Content-Length: 52428800 (50 MB)");
-    serial_println("[HTTP] Streaming body to disk...");
-
-    // Progress simulation (real implementation uses HttpDownloadState)
-    let total_chunks = 100;
-    for chunk in 0..total_chunks {
-        if chunk % 10 == 0 {
-            serial_print("[HTTP] Progress: ");
-            // Print percentage
-            let pct = chunk;
-            if pct >= 10 {
-                unsafe { serial_write_byte(b'0' + (pct / 10) as u8); }
-            }
-            unsafe { serial_write_byte(b'0' + (pct % 10) as u8); }
-            serial_println("%");
+    
+    loop {
+        let now_tsc = get_tsc();
+        
+        // Check timeout
+        if now_tsc.wrapping_sub(dhcp_start) > dhcp_timeout_ticks {
+            serial_println("[FAIL] DHCP timeout");
+            return RunResult::DhcpTimeout;
         }
         
-        // Simulate work
-        for _ in 0..10000 {
+        // Convert TSC to smoltcp Instant
+        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        
+        // Phase 1: Refill RX queue
+        adapter.refill_rx();
+        
+        // Phase 2: Poll smoltcp interface (EXACTLY ONCE per iteration)
+        let poll_result = iface.poll(timestamp, &mut adapter, &mut sockets);
+        
+        // Check for DHCP events
+        let dhcp_socket = sockets.get_mut::<Dhcpv4Socket>(dhcp_handle);
+        if let Some(event) = dhcp_socket.poll() {
+            match event {
+                Dhcpv4Event::Configured(dhcp_config) => {
+                    serial_println("[NET] Received DHCP ACK");
+                    
+                    // Apply the configuration
+                    our_ip = dhcp_config.address.address();
+                    
+                    // Print IP address
+                    serial_print("[OK] IP address: ");
+                    print_ipv4(our_ip);
+                    serial_println("");
+                    
+                    // Apply IP to interface
+                    iface.update_ip_addrs(|addrs| {
+                        // Clear existing and add new
+                        addrs.clear();
+                        addrs.push(IpCidr::Ipv4(dhcp_config.address)).ok();
+                    });
+                    
+                    // Set gateway
+                    if let Some(router) = dhcp_config.router {
+                        gateway_ip = router;
+                        iface.routes_mut().add_default_ipv4_route(router).ok();
+                        serial_print("[OK] Gateway: ");
+                        print_ipv4(router);
+                        serial_println("");
+                    }
+                    
+                    // Set DNS (if provided)
+                    if let Some(dns) = dhcp_config.dns_servers.get(0) {
+                        serial_print("[OK] DNS: ");
+                        print_ipv4(*dns);
+                        serial_println("");
+                    }
+                    
+                    got_ip = true;
+                    break;
+                }
+                Dhcpv4Event::Deconfigured => {
+                    serial_println("[NET] DHCP deconfigured");
+                }
+            }
+        }
+        
+        // Phase 5: Collect TX completions
+        adapter.collect_tx();
+        
+        // Brief yield (don't spin too tight)
+        for _ in 0..100 {
             core::hint::spin_loop();
         }
     }
-    serial_println("[HTTP] Progress: 100%");
+    
+    if !got_ip {
+        serial_println("[FAIL] DHCP did not obtain IP");
+        return RunResult::DhcpTimeout;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 6: DISK WRITE
+    // STEP 5: HTTP DOWNLOAD WITH FULL URL PARSING
     // ═══════════════════════════════════════════════════════════════════════
-    serial_println("[DISK] Flushing final buffers...");
-    serial_println("[DISK] Verifying write integrity...");
-    serial_println("[OK] ISO written successfully");
+    serial_print("[HTTP] Downloading from: ");
+    serial_println(config.iso_url);
+    
+    // Parse the URL properly
+    let url = match Url::parse(config.iso_url) {
+        Ok(u) => u,
+        Err(_) => {
+            serial_println("[FAIL] Invalid URL");
+            return RunResult::DownloadFailed;
+        }
+    };
+    
+    // Check if HTTPS (not supported)
+    if url.is_https() {
+        serial_println("[FAIL] HTTPS not supported in bare-metal mode");
+        return RunResult::DownloadFailed;
+    }
+    
+    // Get host and port
+    let server_port = url.port_or_default();
+    let host_header = url.host_header();
+    let request_uri = url.request_uri();
+    
+    // Resolve host to IP
+    // First check if it's already an IP address
+    let server_ip = if let Ok(ip) = url.host.parse::<Ipv4Address>() {
+        serial_print("[HTTP] Using IP: ");
+        print_ipv4(ip);
+        serial_println("");
+        ip
+    } else {
+        // Try common hostnames used in QEMU user networking
+        // 10.0.2.2 is the host gateway in QEMU user mode
+        // For real DNS, we'd need to implement DNS resolution
+        let resolved_ip = match url.host.as_str() {
+            "host.docker.internal" | "localhost" | "gateway" => gateway_ip,
+            "10.0.2.2" => Ipv4Address::new(10, 0, 2, 2),
+            _ => {
+                // Check if gateway matches common patterns
+                if url.host.contains("10.0.2") || url.host.starts_with("192.168") 
+                   || url.host.starts_with("172.") {
+                    // Try parsing as IP
+                    let parts: Vec<&str> = url.host.split('.').collect();
+                    if parts.len() == 4 {
+                        if let (Ok(a), Ok(b), Ok(c), Ok(d)) = (
+                            parts[0].parse::<u8>(),
+                            parts[1].parse::<u8>(),
+                            parts[2].parse::<u8>(),
+                            parts[3].parse::<u8>(),
+                        ) {
+                            Ipv4Address::new(a, b, c, d)
+                        } else {
+                            serial_print("[HTTP] Cannot resolve hostname: ");
+                            serial_println(&url.host);
+                            serial_println("[HTTP] Using gateway as fallback");
+                            gateway_ip
+                        }
+                    } else {
+                        gateway_ip
+                    }
+                } else {
+                    serial_print("[HTTP] Cannot resolve hostname: ");
+                    serial_println(&url.host);
+                    serial_println("[HTTP] Using gateway as fallback");
+                    gateway_ip
+                }
+            }
+        };
+        serial_print("[HTTP] Resolved to: ");
+        print_ipv4(resolved_ip);
+        serial_println("");
+        resolved_ip
+    };
+    
+    serial_print("[HTTP] Connecting to ");
+    print_ipv4(server_ip);
+    serial_print(":");
+    serial_print_decimal(server_port as u32);
+    serial_println("...");
+    
+    // Create a TCP socket for HTTP
+    let tcp_rx_buffer = TcpSocketBuffer::new(vec![0; 65535]);
+    let tcp_tx_buffer = TcpSocketBuffer::new(vec![0; 65535]);
+    let mut tcp_socket = TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer);
+    
+    // Connect to server
+    let local_port = 49152 + ((get_tsc() % 16384) as u16); // Random ephemeral port
+    let remote_endpoint = (smoltcp::wire::IpAddress::Ipv4(server_ip), server_port);
+    
+    if tcp_socket.connect(iface.context(), remote_endpoint, local_port).is_err() {
+        serial_println("[FAIL] TCP connect failed to initiate");
+        return RunResult::DownloadFailed;
+    }
+    
+    let tcp_handle = sockets.add(tcp_socket);
+    
+    // Wait for connection to establish
+    let connect_start = get_tsc();
+    let connect_timeout = timeouts.tcp_connect();
+    
+    loop {
+        let now_tsc = get_tsc();
+        if now_tsc.wrapping_sub(connect_start) > connect_timeout {
+            serial_println("[FAIL] TCP connect timeout");
+            return RunResult::DownloadFailed;
+        }
+        
+        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        adapter.refill_rx();
+        iface.poll(timestamp, &mut adapter, &mut sockets);
+        adapter.collect_tx();
+        
+        let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
+        if socket.may_send() {
+            serial_println("[OK] TCP connected");
+            break;
+        }
+        
+        if !socket.is_open() {
+            serial_println("[FAIL] TCP connection refused");
+            return RunResult::DownloadFailed;
+        }
+        
+        for _ in 0..100 { core::hint::spin_loop(); }
+    }
+    
+    // Build and send HTTP GET request
+    serial_println("[HTTP] Sending GET request...");
+    serial_print("[HTTP] GET ");
+    serial_println(&request_uri);
+    
+    // Build HTTP request with proper headers
+    let http_request = alloc::format!(
+        "GET {} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: MorpheusX/1.0\r\n\
+         Accept: */*\r\n\
+         Connection: close\r\n\
+         \r\n",
+        request_uri,
+        host_header
+    );
+    
+    {
+        let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
+        if socket.send_slice(http_request.as_bytes()).is_err() {
+            serial_println("[FAIL] Failed to send HTTP request");
+            return RunResult::DownloadFailed;
+        }
+    }
+    
+    // Poll to send the request (may need multiple polls for large requests)
+    let send_start = get_tsc();
+    let send_timeout = timeouts.http_send();
+    
+    loop {
+        let now_tsc = get_tsc();
+        if now_tsc.wrapping_sub(send_start) > send_timeout {
+            serial_println("[FAIL] HTTP send timeout");
+            return RunResult::DownloadFailed;
+        }
+        
+        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        adapter.refill_rx();
+        iface.poll(timestamp, &mut adapter, &mut sockets);
+        adapter.collect_tx();
+        
+        // Check if request has been sent (TX buffer drained)
+        let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
+        if socket.send_queue() == 0 {
+            serial_println("[HTTP] Request sent");
+            break;
+        }
+        
+        if !socket.is_open() {
+            serial_println("[FAIL] Connection closed during send");
+            return RunResult::DownloadFailed;
+        }
+        
+        for _ in 0..10 { core::hint::spin_loop(); }
+    }
+    
+    // Receive response
+    serial_println("[HTTP] Receiving response...");
+    
+    let mut total_received: usize = 0;
+    let mut headers_done = false;
+    let mut content_length: Option<usize> = None;
+    let mut body_received: usize = 0;
+    let mut http_status: Option<u16> = None;
+    let mut header_buffer = Vec::new();
+    let mut last_progress_kb: usize = 0;
+    
+    let recv_start = get_tsc();
+    let mut last_activity = recv_start;
+    let recv_timeout = handoff.tsc_freq * 300; // 5 minute timeout for large downloads
+    let idle_timeout = handoff.tsc_freq * 30;  // 30 second idle timeout
+    
+    loop {
+        let now_tsc = get_tsc();
+        
+        // Check total timeout
+        if now_tsc.wrapping_sub(recv_start) > recv_timeout {
+            serial_println("[FAIL] Download timeout (total time exceeded)");
+            return RunResult::DownloadFailed;
+        }
+        
+        // Check idle timeout (no data received for too long)
+        if now_tsc.wrapping_sub(last_activity) > idle_timeout && headers_done {
+            serial_println("[FAIL] Download timeout (connection stalled)");
+            return RunResult::DownloadFailed;
+        }
+        
+        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        adapter.refill_rx();
+        iface.poll(timestamp, &mut adapter, &mut sockets);
+        
+        let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
+        
+        // Try to receive data
+        let mut buf = [0u8; 8192]; // Larger buffer for better throughput
+        if socket.can_recv() {
+            match socket.recv_slice(&mut buf) {
+                Ok(len) if len > 0 => {
+                    total_received += len;
+                    last_activity = now_tsc;
+                    
+                    if !headers_done {
+                        // Accumulate header data
+                        header_buffer.extend_from_slice(&buf[..len]);
+                        
+                        // Check for header overflow (prevent DoS)
+                        if header_buffer.len() > 16384 {
+                            serial_println("[FAIL] HTTP headers too large");
+                            return RunResult::DownloadFailed;
+                        }
+                        
+                        // Look for end of headers
+                        if let Some(pos) = find_header_end(&header_buffer) {
+                            headers_done = true;
+                            serial_println("[HTTP] Headers received");
+                            
+                            // Parse HTTP status line and headers
+                            let header_str = core::str::from_utf8(&header_buffer[..pos]).unwrap_or("");
+                            let mut lines = header_str.lines();
+                            
+                            // Parse status line: "HTTP/1.1 200 OK"
+                            if let Some(status_line) = lines.next() {
+                                let parts: Vec<&str> = status_line.split_whitespace().collect();
+                                if parts.len() >= 2 {
+                                    if let Ok(status) = parts[1].parse::<u16>() {
+                                        http_status = Some(status);
+                                        serial_print("[HTTP] Status: ");
+                                        serial_print_decimal(status as u32);
+                                        serial_print(" ");
+                                        if parts.len() >= 3 {
+                                            serial_println(parts[2..].join(" ").as_str());
+                                        } else {
+                                            serial_println("");
+                                        }
+                                        
+                                        // Check for HTTP errors
+                                        if status >= 400 {
+                                            serial_print("[FAIL] HTTP error: ");
+                                            serial_print_decimal(status as u32);
+                                            serial_println("");
+                                            return RunResult::DownloadFailed;
+                                        }
+                                        
+                                        // Handle redirects (3xx)
+                                        if status >= 300 && status < 400 {
+                                            serial_println("[WARN] HTTP redirect - not following");
+                                            // In a full implementation, we'd follow the Location header
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Parse headers
+                            for line in lines {
+                                let line_lower = line.to_lowercase();
+                                
+                                if line_lower.starts_with("content-length:") {
+                                    if let Some(len_str) = line.split(':').nth(1) {
+                                        if let Ok(len) = len_str.trim().parse::<usize>() {
+                                            content_length = Some(len);
+                                            serial_print("[HTTP] Content-Length: ");
+                                            // Print in human readable format
+                                            if len >= 1024 * 1024 * 1024 {
+                                                serial_print_decimal((len / (1024 * 1024 * 1024)) as u32);
+                                                serial_println(" GB");
+                                            } else if len >= 1024 * 1024 {
+                                                serial_print_decimal((len / (1024 * 1024)) as u32);
+                                                serial_println(" MB");
+                                            } else if len >= 1024 {
+                                                serial_print_decimal((len / 1024) as u32);
+                                                serial_println(" KB");
+                                            } else {
+                                                serial_print_decimal(len as u32);
+                                                serial_println(" bytes");
+                                            }
+                                        }
+                                    }
+                                } else if line_lower.starts_with("content-type:") {
+                                    if let Some(ct) = line.split(':').nth(1) {
+                                        serial_print("[HTTP] Content-Type: ");
+                                        serial_println(ct.trim());
+                                    }
+                                } else if line_lower.starts_with("transfer-encoding:") {
+                                    if line_lower.contains("chunked") {
+                                        serial_println("[HTTP] Transfer-Encoding: chunked");
+                                        // NOTE: Chunked encoding would need special handling
+                                    }
+                                }
+                            }
+                            
+                            // Body starts after \r\n\r\n
+                            let body_start = pos + 4;
+                            if header_buffer.len() > body_start {
+                                body_received = header_buffer.len() - body_start;
+                            }
+                            
+                            serial_println("[HTTP] Streaming body...");
+                        }
+                    } else {
+                        body_received += len;
+                        
+                        // Print progress with percentage if content-length known
+                        let current_kb = body_received / 1024;
+                        if current_kb > last_progress_kb + 100 { // Every ~100KB
+                            last_progress_kb = current_kb;
+                            serial_print("[HTTP] Progress: ");
+                            serial_print_decimal(current_kb as u32);
+                            serial_print(" KB");
+                            
+                            if let Some(cl) = content_length {
+                                if cl > 0 {
+                                    let percent = (body_received as u64 * 100) / cl as u64;
+                                    serial_print(" (");
+                                    serial_print_decimal(percent as u32);
+                                    serial_print("%)");
+                                }
+                            }
+                            serial_println("");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // Check if download complete
+        if headers_done {
+            if let Some(cl) = content_length {
+                if body_received >= cl {
+                    serial_println("[HTTP] Download complete");
+                    break;
+                }
+            }
+            
+            // Also check if connection closed
+            if !socket.is_open() && socket.recv_queue() == 0 {
+                if content_length.is_none() {
+                    // No content-length, server closed = complete
+                    serial_println("[HTTP] Download complete (connection closed)");
+                } else if content_length.is_some() && body_received < content_length.unwrap() {
+                    // Had content-length but didn't get all data
+                    serial_println("[WARN] Connection closed before full content received");
+                }
+                break;
+            }
+        }
+        
+        adapter.collect_tx();
+        
+        for _ in 0..10 { core::hint::spin_loop(); }
+    }
+    
+    // Print download summary
+    serial_println("");
+    serial_println("=== DOWNLOAD SUMMARY ===");
+    serial_print("[HTTP] Total headers + body: ");
+    if total_received >= 1024 * 1024 {
+        serial_print_decimal((total_received / (1024 * 1024)) as u32);
+        serial_println(" MB");
+    } else {
+        serial_print_decimal((total_received / 1024) as u32);
+        serial_println(" KB");
+    }
+    serial_print("[HTTP] Body only: ");
+    if body_received >= 1024 * 1024 {
+        serial_print_decimal((body_received / (1024 * 1024)) as u32);
+        serial_println(" MB");
+    } else {
+        serial_print_decimal((body_received / 1024) as u32);
+        serial_println(" KB");
+    }
+    if let Some(status) = http_status {
+        serial_print("[HTTP] Final status: ");
+        serial_print_decimal(status as u32);
+        serial_println("");
+    }
+    
+    // Verify we got what we expected
+    if let Some(cl) = content_length {
+        if body_received >= cl {
+            serial_println("[OK] Download verified: received >= Content-Length");
+        } else {
+            serial_print("[WARN] Incomplete: received ");
+            serial_print_decimal(body_received as u32);
+            serial_print(" of ");
+            serial_print_decimal(cl as u32);
+            serial_println(" bytes");
+        }
+    }
+    serial_println("");
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 6: COMPLETE (Disk write would go here in full implementation)
+    // ═══════════════════════════════════════════════════════════════════════
+    serial_println("[NOTE] Disk write not implemented - data received but not persisted");
+    serial_println("");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 7: COMPLETE
@@ -466,4 +1059,11 @@ pub unsafe fn run_full_download<D: NetworkDriver>(
 fn tsc_to_instant(tsc: u64, tsc_freq: u64) -> Instant {
     let ms = tsc / (tsc_freq / 1000);
     Instant::from_millis(ms as i64)
+}
+
+/// Find the end of HTTP headers (\r\n\r\n).
+/// Returns the position of the first \r in \r\n\r\n.
+fn find_header_end(data: &[u8]) -> Option<usize> {
+    data.windows(4)
+        .position(|w| w == b"\r\n\r\n")
 }

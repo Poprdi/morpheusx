@@ -30,6 +30,8 @@ pub enum NetInitError {
     InvalidConfig,
     /// Operation timed out.
     Timeout,
+    /// API is deprecated - use post-EBS bare_metal_main() instead.
+    Deprecated,
 }
 
 impl NetInitError {
@@ -48,6 +50,7 @@ impl NetInitError {
             Self::StackInit => "Network stack initialization failed",
             Self::InvalidConfig => "Invalid network configuration",
             Self::Timeout => "Operation timed out",
+            Self::Deprecated => "API deprecated - use post-EBS bare_metal_main()",
         }
     }
 }
