@@ -19,7 +19,7 @@ extern crate alloc;
 use alloc::string::String;
 use core::ptr;
 
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW, EFI_RED, EFI_CYAN};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW, EFI_RED, EFI_CYAN, EFI_DARKGRAY};
 use crate::boot::network_boot::{prepare_handoff, enter_network_boot_url};
 use morpheus_network::boot::handoff::BootHandoff;
 
@@ -212,10 +212,14 @@ pub unsafe fn commit_to_download(
     for _ in 0..200_000_000u64 { core::hint::spin_loop(); }
     
     screen.put_str_at(5, log_y, "Exiting boot services NOW...", EFI_RED, EFI_BLACK);
+    log_y += 1;
     
     // ═══════════════════════════════════════════════════════════════════════
     // POINT OF NO RETURN - EXIT BOOT SERVICES
     // ═══════════════════════════════════════════════════════════════════════
+    
+    // Show progress since get_memory_map can be slow
+    screen.put_str_at(7, log_y, "Reading memory map...", EFI_YELLOW, EFI_BLACK);
     
     // Get memory map first
     let mut mmap_size: usize = 4096;
@@ -244,6 +248,8 @@ pub unsafe fn commit_to_download(
         &mut desc_size,
         &mut desc_version,
     );
+    
+    screen.put_str_at(7, log_y, "Memory map obtained       ", EFI_LIGHTGREEN, EFI_BLACK);
     
     if status != 0 {
         // Cannot display error properly at this point
