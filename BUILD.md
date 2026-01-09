@@ -15,13 +15,11 @@ OVMF path: `/usr/share/OVMF/OVMF_CODE.fd` (verify exists or update `testing/run.
 ## Quick Build
 
 ```bash
-cd testing
-./build.sh          # builds bootloader, extracts relocs, deploys to ESP
-./run.sh            # runs QEMU with OVMF, choose boot mode
+/setup-dev.sh -f
 ```
 
 Build does 2-pass compilation:
-1. Initial build → extract PE .reloc section
+1. Initial build -> extract PE .reloc section
 2. Rebuild with embedded reloc data (for unrelocating runtime image)
 
 Output: `testing/esp/EFI/BOOT/BOOTX64.EFI`
@@ -33,9 +31,7 @@ Output: `testing/esp/EFI/BOOT/BOOTX64.EFI`
 - `core/` - GPT, FAT32, disk I/O, logging
 - `persistent/` - PE/COFF parsing, relocation reversal
 - `updater/` - self-update logic
-- `network/` - HTTP over UEFI (WIP)
-- `cli/`, `registry/`, `utils/`, `xtask/`, `tools/` - dev helpers
-
+- `network/` - Bare metal networking (WIP)
 **Build requirements**:
 - `nasm` - assembles `trampoline32.asm` (bootloader/build.rs)
 - `ar` - creates static lib from .obj
@@ -44,13 +40,6 @@ Output: `testing/esp/EFI/BOOT/BOOTX64.EFI`
 **Profile**: `opt-level="z"`, `lto=true`, `panic="abort"`, stripped
 
 ## Testing Scripts (`testing/`)
-
-**Core workflow**:
-- `build.sh` - 2-pass build + reloc extraction + initrd rebuild
-- `run.sh` - creates ESP.img from esp/, boots QEMU with 3 modes:
-  1. ESP image only (legacy)
-  2. 50GB test disk (proper boot entries)
-  3. 10GB persistence test (boots from installed disk)
 
 **Distro installers**:
 - `install-arch.sh` - downloads Arch bootstrap (~500MB), creates 2GB rootfs
@@ -62,10 +51,6 @@ Output: `testing/esp/EFI/BOOT/BOOTX64.EFI`
 - `create-minimal-initrd.sh` - minimal test initrd with busybox
 - `rebuild-initrd.sh` - packs `esp/rootfs/` into initramfs (for Arch)
 - `setup-initrd.sh` - downloads Ubuntu netboot initrd
-
-**Disk setup**:
-- `create-test-disk.sh` - creates 50GB sparse disk with GPT+ESP
-- `run-persistence-test.sh` - boots only 10GB disk (no ESP mount)
 
 **Other**:
 - `test-boot.exp` - expect script (automated testing)
@@ -105,7 +90,7 @@ testing/esp/
 │   ├── initrd-tails.img
 │   ├── filesystem.squashfs  # Tails rootfs
 │   └── initramfs-arch.img
-└── rootfs/                  # Arch bootstrap (if installed)
+└── rootfs/                 # Arch bootstrap (if installed)
 ```
 
 ## Common Issues
@@ -154,7 +139,6 @@ Downloads Tails, builds, runs. ~10min on decent connection.
 | Script | Purpose |
 |--------|---------|
 | build.sh | 2-pass build with reloc extraction |
-| run.sh | Boot QEMU (3 modes: ESP/50GB/10GB) |
 | install-arch.sh | Arch bootstrap → rootfs → initramfs |
 | install-tails.sh | Download Tails ISO, extract kernel/initrd |
 | install-live-distro.sh | Menu installer for 5 distros |
@@ -178,5 +162,3 @@ Downloads Tails, builds, runs. ~10min on decent connection.
 7. Jump to kernel entry
 8. Kernel boots, runs init from initrd
 9. (Optional) Pivot to real root or stay in initramfs
-
-Persistence (WIP): Reverse relocations, write unrelocated image to disk ESP, add UEFI boot entry.
