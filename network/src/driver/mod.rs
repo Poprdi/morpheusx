@@ -11,3 +11,7 @@ pub mod virtio;
 // pub mod intel;
 // pub mod realtek;
 // pub mod broadcom;
+
+// Re-exports
+pub use traits::{NetworkDriver, DriverInit, TxError, RxError};
+pub use virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};

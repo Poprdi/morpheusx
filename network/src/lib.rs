@@ -72,12 +72,26 @@
 
 extern crate alloc;
 
+// ═══════════════════════════════════════════════════════════════
+// EXISTING MODULES (virtio-drivers based implementation)
+// ═══════════════════════════════════════════════════════════════
 pub mod error;
-pub mod types;
 pub mod http;
 pub mod url;
 pub mod transfer;
 pub mod client;
+pub mod device;
+pub mod stack;
+
+// ═══════════════════════════════════════════════════════════════
+// NEW BARE-METAL ASM-BASED MODULES
+// These provide post-ExitBootServices network support
+// ═══════════════════════════════════════════════════════════════
+pub mod asm;          // ASM bindings (TSC, MMIO, PIO, barriers)
+pub mod types;        // Shared types (#[repr(C)] structs)
+pub mod dma;          // DMA buffer management with ownership tracking
+pub mod driver;       // Driver abstraction and implementations
+pub mod mainloop;     // 5-phase poll loop
 pub mod device;
 pub mod stack;
 

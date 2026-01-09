@@ -9,3 +9,9 @@ pub mod region;
 pub mod ownership;
 pub mod buffer;
 pub mod pool;
+
+// Re-exports
+pub use region::DmaRegion;
+pub use ownership::BufferOwnership;
+pub use buffer::DmaBuffer;
+pub use pool::{BufferPool, MAX_POOL_SIZE};
