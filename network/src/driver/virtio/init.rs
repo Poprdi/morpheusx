@@ -17,6 +17,7 @@
 
 use super::config::{status, negotiate_features, features, VirtioConfig};
 use crate::types::{VirtqueueState, MacAddress};
+use crate::driver::traits::RxError;
 
 /// VirtIO initialization error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,12 @@ pub enum VirtioInitError {
     RxPrefillFailed(usize),
     /// Device error.
     DeviceError,
+}
+
+impl From<RxError> for VirtioInitError {
+    fn from(_err: RxError) -> Self {
+        VirtioInitError::DeviceError
+    }
 }
 
 /// Initialize VirtIO network device.
@@ -58,7 +65,7 @@ pub unsafe fn virtio_net_init(
     // STEP 1: RESET DEVICE
     // ═══════════════════════════════════════════════════════════
     let reset_result = device::reset(mmio_base);
-    if reset_result != 0 {
+    if !reset_result {
         return Err(VirtioInitError::ResetTimeout);
     }
     
@@ -124,9 +131,7 @@ pub unsafe fn virtio_net_init(
     // STEP 10: READ MAC ADDRESS
     // ═══════════════════════════════════════════════════════════
     let mac = if our_features & features::VIRTIO_NET_F_MAC != 0 {
-        let mut mac = [0u8; 6];
-        device::read_mac(mmio_base, &mut mac);
-        mac
+        device::read_mac(mmio_base).unwrap_or_else(generate_local_mac)
     } else {
         generate_local_mac()
     };

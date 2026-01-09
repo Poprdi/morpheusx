@@ -5,15 +5,8 @@ MorpheusX is a UEFI boot and Hardware exokernel like runtime that loads Linux ke
 ## What it does
 - Boots Linux kernels from the EFI system partition with custom GPT and FAT32 handling
 - Provides a boot-time TUI for selecting images and guiding installs
-- Includes a network stack (UEFI HTTP) for downloading ISOs and updates (work in progress)
+- Includes a network stack (Bare metal so after EBS "exit_bootservices") for downloading ISO's and updates (work in progress)
 - Lays groundwork for persistence: capturing the loaded image, reversing relocations, and writing a bootable copy back to disk
-
-## Repository layout
-- bootloader/ – UEFI entry point, EFI stub, kernel loader, TUI, installer
-- core/ – GPT management, disk and partition helpers, logging
-- network/ – HTTP client stack on bare metall (after EBS)
-- persistent/ – PE/COFF parsing and relocation reversal for self-persistence
-- cli/, installer/, registry/, utils/, xtask/, tools/ – supporting crates, helper tooling, and dev utilities
 
 ## Building
 Prerequisites: Rust 1.75+ with `rustup`, target `x86_64-unknown-uefi`, and a nightly or stable toolchain that supports `no_std` UEFI builds.
@@ -22,14 +15,14 @@ Prerequisites: Rust 1.75+ with `rustup`, target `x86_64-unknown-uefi`, and a nig
 rustup target add x86_64-unknown-uefi
 cargo build --release --target x86_64-unknown-uefi
 ```
-### Or you just use the /setup-dev.sh shell utility
+*Or you just use the /setup-dev.sh shell utility*
 
 It offers diverse preconfigured worflows. To see them just use:
 
 ```bash
 ./setup-dev.sh -h  
 ```
-Or if you want to automatically setup the whole env build and run qemu just use:
+Or if you want to automatically setup the whole environment, build and run qemu just use:
 
 ```bash
 ./setup-dev.sh

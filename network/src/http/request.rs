@@ -97,13 +97,7 @@ impl Request {
 
     /// Get the request method as string.
     pub fn method_str(&self) -> &'static str {
-        match self.method {
-            HttpMethod::Get => "GET",
-            HttpMethod::Head => "HEAD",
-            HttpMethod::Post => "POST",
-            HttpMethod::Put => "PUT",
-            HttpMethod::Delete => "DELETE",
-        }
+        self.method.as_str()
     }
 
     /// Serialize the request to HTTP/1.1 wire format.

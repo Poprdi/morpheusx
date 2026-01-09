@@ -31,16 +31,13 @@ pub fn receive(
 ) -> Result<Option<usize>, RxError> {
     use crate::asm::drivers::virtio::rx as asm_rx;
     
-    let mut result = RxResult::default();
-    
     // Poll via ASM (includes barriers)
-    let has_packet = unsafe {
-        asm_rx::poll(rx_state, &mut result)
-    };
+    let rx_result = asm_rx::poll(rx_state);
     
-    if has_packet == 0 {
-        return Ok(None); // No packet available
-    }
+    let result = match rx_result {
+        Some(r) => r,
+        None => return Ok(None), // No packet available
+    };
     
     // Get buffer (now driver-owned)
     let buf = rx_pool.get_mut(result.buffer_idx)
@@ -89,17 +86,15 @@ fn resubmit_buffer(
         unsafe { buf.mark_device_owned(); }
         
         let capacity = buf.capacity() as u16;
-        let result = unsafe {
-            asm_rx::submit(rx_state, buf_idx, capacity)
-        };
+        let success = asm_rx::submit(rx_state, buf_idx, capacity);
         
-        if result != 0 {
+        if !success {
             // Queue full - this shouldn't happen with proper sizing
             unsafe { buf.mark_driver_owned(); }
             // Buffer will be reclaimed on next refill cycle
         } else {
             // Notify device
-            unsafe { notify::notify(rx_state); }
+            notify::notify(rx_state);
         }
     }
 }
@@ -123,11 +118,9 @@ pub fn refill_queue(
         // Mark device-owned before submit
         unsafe { buf.mark_device_owned(); }
         
-        let result = unsafe {
-            asm_rx::submit(rx_state, buf_idx, capacity)
-        };
+        let success = asm_rx::submit(rx_state, buf_idx, capacity);
         
-        if result != 0 {
+        if !success {
             // Queue full - return buffer and stop
             unsafe { buf.mark_driver_owned(); }
             rx_pool.free(buf_idx);
@@ -139,7 +132,7 @@ pub fn refill_queue(
     
     // Notify device if we submitted any buffers
     if submitted > 0 {
-        unsafe { notify::notify(rx_state); }
+        notify::notify(rx_state);
     }
 }
 
@@ -162,11 +155,9 @@ pub fn prefill_queue(
         // Mark device-owned before submit
         unsafe { buf.mark_device_owned(); }
         
-        let result = unsafe {
-            asm_rx::submit(rx_state, buf_idx, capacity)
-        };
+        let success = asm_rx::submit(rx_state, buf_idx, capacity);
         
-        if result != 0 {
+        if !success {
             // Queue full - return buffer and stop
             unsafe { buf.mark_driver_owned(); }
             rx_pool.free(buf_idx);
@@ -178,7 +169,7 @@ pub fn prefill_queue(
     
     // Notify device
     if filled > 0 {
-        unsafe { notify::notify(rx_state); }
+        notify::notify(rx_state);
     }
     
     Ok(filled)

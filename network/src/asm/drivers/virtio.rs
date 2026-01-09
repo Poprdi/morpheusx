@@ -241,10 +241,34 @@ pub mod queue {
         unsafe { asm_vq_get_max_size(mmio_base) }
     }
     
+    /// Get queue size (alias for get_max_size for compatibility).
+    #[cfg(target_arch = "x86_64")]
+    pub fn get_size(mmio_base: u64) -> u16 {
+        unsafe { asm_vq_get_max_size(mmio_base) }
+    }
+    
     /// Set queue size.
     #[cfg(target_arch = "x86_64")]
     pub fn set_size(mmio_base: u64, size: u16) {
         unsafe { asm_vq_set_size(mmio_base, size) }
+    }
+    
+    /// Set descriptor table address.
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_desc_addr(mmio_base: u64, addr: u64) {
+        unsafe { asm_vq_set_desc(mmio_base, addr) }
+    }
+    
+    /// Set driver (available) ring address.
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_driver_addr(mmio_base: u64, addr: u64) {
+        unsafe { asm_vq_set_driver(mmio_base, addr) }
+    }
+    
+    /// Set device (used) ring address.
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_device_addr(mmio_base: u64, addr: u64) {
+        unsafe { asm_vq_set_device(mmio_base, addr) }
     }
     
     /// Enable the selected queue.
@@ -260,18 +284,35 @@ pub mod queue {
         unsafe { asm_vq_setup(mmio_base, queue_idx, size, desc_addr, driver_addr, device_addr) }
     }
     
+    /// Get notify offset for queue notifications.
+    /// For MMIO VirtIO, this is typically 0x50 (QueueNotify register).
+    #[cfg(target_arch = "x86_64")]
+    pub fn get_notify_offset(_mmio_base: u64) -> u64 {
+        0x50  // VirtIO MMIO QueueNotify register offset
+    }
+    
     // Stubs for non-x86_64
     #[cfg(not(target_arch = "x86_64"))]
     pub fn select(_mmio_base: u64, _queue_idx: u16) {}
     #[cfg(not(target_arch = "x86_64"))]
     pub fn get_max_size(_mmio_base: u64) -> u16 { 0 }
     #[cfg(not(target_arch = "x86_64"))]
+    pub fn get_size(_mmio_base: u64) -> u16 { 0 }
+    #[cfg(not(target_arch = "x86_64"))]
     pub fn set_size(_mmio_base: u64, _size: u16) {}
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn set_desc_addr(_mmio_base: u64, _addr: u64) {}
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn set_driver_addr(_mmio_base: u64, _addr: u64) {}
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn set_device_addr(_mmio_base: u64, _addr: u64) {}
     #[cfg(not(target_arch = "x86_64"))]
     pub fn enable(_mmio_base: u64) {}
     #[cfg(not(target_arch = "x86_64"))]
     pub fn setup(_mmio_base: u64, _queue_idx: u16, _size: u16,
                  _desc_addr: u64, _driver_addr: u64, _device_addr: u64) {}
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn get_notify_offset(_mmio_base: u64) -> u64 { 0x50 }
 }
 
 /// TX operations.

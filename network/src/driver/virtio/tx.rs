@@ -58,11 +58,9 @@ pub fn transmit(
     unsafe { buf.mark_device_owned(); }
     
     // Submit via ASM (includes barriers)
-    let result = unsafe {
-        asm_tx::submit(tx_state, buf_idx, total_len as u16)
-    };
+    let success = asm_tx::submit(tx_state, buf_idx, total_len as u16);
     
-    if result != 0 {
+    if !success {
         // Queue was full (shouldn't happen after collect, but handle it)
         // Need to get mutable reference back
         if let Some(buf) = tx_pool.get_mut(buf_idx) {
@@ -92,15 +90,16 @@ pub fn collect_completions(
     use crate::asm::drivers::virtio::tx as asm_tx;
     
     loop {
-        let idx = unsafe { asm_tx::poll_complete(tx_state) };
-        if idx == 0xFFFFFFFF {
-            break; // No more completions
-        }
-        
-        // Return buffer to pool
-        if let Some(buf) = tx_pool.get_mut(idx as u16) {
-            unsafe { buf.mark_driver_owned(); }
-            tx_pool.free(idx as u16);
+        let idx = asm_tx::poll_complete(tx_state);
+        match idx {
+            Some(buf_idx) => {
+                // Return buffer to pool
+                if let Some(buf) = tx_pool.get_mut(buf_idx) {
+                    unsafe { buf.mark_driver_owned(); }
+                    tx_pool.free(buf_idx);
+                }
+            }
+            None => break, // No more completions
         }
     }
 }
