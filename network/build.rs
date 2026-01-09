@@ -85,7 +85,7 @@ fn main() {
     ];
 
     for (category, files) in asm_categories {
-        for asm_path in *files {
+        for asm_path in files.iter() {
             if Path::new(asm_path).exists() {
                 println!("cargo:rerun-if-changed={}", asm_path);
                 match assemble_file_checked(asm_path, &out_dir, obj_format) {
