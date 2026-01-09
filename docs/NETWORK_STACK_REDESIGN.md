@@ -8,6 +8,137 @@
 
 ---
 
+## Execution Model (Locked)
+
+This section defines the fundamental execution model for the v1 network stack. These constraints are **non-negotiable** and apply to all code within this architecture.
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| Core count | 1 (BSP only) | No SMP, no inter-processor interrupts |
+| Thread count | 1 | No threading runtime, no task switching |
+| Interrupt state | Disabled | No ISRs, no timer interrupts |
+| Scheduling | Cooperative | Progress between function returns |
+| Execution pattern | Poll-driven | Explicit polling, no event callbacks |
+| Phase orientation | Sequential | RX → Process → TX → App → Repeat |
+| Preemption | None | No preemptive context switches |
+
+**Main Loop Contract**:
+```
+loop {
+    Phase 1: poll_rx()           // Collect received packets
+    Phase 2: smoltcp.poll()      // Process protocols (exactly once)
+    Phase 3: drain_tx()          // Submit outbound packets
+    Phase 4: app_state.step()    // Advance application state
+    Phase 5: collect_completions() // Handle TX completions
+}
+```
+
+**Invariants**:
+- Every function call returns in bounded time
+- No function may yield, await, or suspend
+- No function may loop waiting for external state
+- The main loop is the ONLY execution entry point
+
+**Audit Reference**: §2.8 (LOOP-1, LOOP-2), §7.2.8
+
+---
+
+## Time & Progress Guarantees
+
+This section documents what the v1 architecture **guarantees** and what it **does not guarantee** regarding timing.
+
+### Guaranteed
+
+| Property | Guarantee |
+|----------|-----------|
+| TSC monotonicity | TSC increases monotonically (single core) |
+| TSC invariance | TSC frequency does not change with P-states |
+| Timeout detection | Timeouts are detectable via TSC comparison |
+| Bounded iteration | Each main loop phase completes in bounded cycles |
+| Progress | Each poll advances state if work is available |
+
+### NOT Guaranteed
+
+| Property | Why Not Guaranteed |
+|----------|-------------------|
+| Wall-clock accuracy | TSC frequency varies per-CPU; calibrated, not exact |
+| Latency bounds | Hypervisor may preempt guest; firmware SMI possible |
+| Throughput | Single-core polling is CPU-bound |
+| Real-time deadlines | No real-time kernel; best-effort only |
+| Fairness | Single operation at a time; no fairness needed |
+
+**Contract**: All timeout values are **advisory**. The system makes best-effort progress but cannot guarantee deadlines.
+
+**Audit Reference**: §7.1.4, §7.1.5
+
+---
+
+## DMA & Memory Model Assumptions
+
+This section documents all memory model assumptions for DMA-based NIC operation.
+
+### x86-64 Memory Model
+
+| Property | Assumed Value | Notes |
+|----------|---------------|-------|
+| Cache coherency | **Yes** | x86 maintains cache coherency for DMA |
+| Store ordering | TSO (Total Store Order) | Stores visible in program order |
+| Load ordering | TSO | Loads visible in program order |
+| Store-Load reorder | Possible | Requires mfence if ordering needed |
+
+### DMA Requirements
+
+| Requirement | Mechanism |
+|-------------|-----------|
+| Allocation | `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL.AllocateBuffer()` |
+| Address translation | `Map()` returns bus address for device descriptors |
+| CPU access | Use CPU pointer from AllocateBuffer directly |
+| Device access | Use bus_addr from Map() in descriptor tables |
+| Memory type | UC or WC preferred; cacheable works on x86 |
+
+### Memory Barriers
+
+| Barrier | When Used |
+|---------|-----------|
+| `sfence` | Before device notification (ensure stores visible) |
+| `lfence` | After reading device-written memory (ensure loads complete) |
+| `mfence` | When both load and store ordering needed |
+| `clflush` | NOT required on x86 for DMA (cache coherent) |
+
+**Contract**: 
+- `mfence` ensures store visibility, NOT cache flush
+- `cli`/`sti` are NOT memory barriers
+- Compiler barriers (`volatile`, `asm!`) prevent compiler reordering only
+
+**Audit Reference**: §7.2.2, §7.2.3, §7.2.11
+
+---
+
+## Explicit Non-Goals (v1)
+
+This section documents architectural exclusions. These are not deferred features—they are explicit scope boundaries for v1.
+
+| Non-Goal | Rationale |
+|----------|-----------|
+| Interrupt support | Polling sufficient; avoids IDT complexity |
+| Multi-core / SMP | Avoids cache coherency, locking complexity |
+| Async runtime | No futures, no executor; explicit state machines |
+| Scheduler | Single execution context; no scheduling needed |
+| Kernel abstraction | We ARE the kernel; direct hardware access |
+| TLS / HTTPS | Trusted network; crypto complexity avoided |
+| IPv6 | IPv4 sufficient for bootstrap use case |
+| Jumbo frames | Standard 1500 MTU sufficient |
+| Zero-copy | Simplicity over performance |
+| Fair queuing | Single stream; no fairness needed |
+| Congestion control tuning | smoltcp defaults sufficient |
+| Hardware offloads | Checksum in software; portable |
+
+**These exclusions are architectural. Violating them requires a new architecture document.**
+
+**Audit Reference**: §5.1 (scope), §7.1.1 (constraints)
+
+---
+
 ## Section 1: Problem Statement
 
 ### 1.1 The Fundamental Deadlock
@@ -176,24 +307,7 @@ Correct NIC operation requires precise memory ordering. The following are distin
 | **TIME-2** | TSC frequency MUST be calibrated, never hardcoded |
 | **TIME-3** | No spin-waits; timeouts are checked, not waited |
 
-### 2.6 Explicit Non-Goals (v1)
-
-This section documents what the v1 architecture explicitly does NOT provide.
-
-| Non-Goal | Rationale |
-|----------|-----------|
-| Interrupt support | Complexity; polling sufficient for bootstrap |
-| Multi-core / SMP | Synchronization complexity |
-| Async / futures | No runtime; explicit state machines instead |
-| Scheduler fairness | Single operation at a time |
-| Kernel abstraction | Direct hardware access; we ARE the kernel |
-| Latency hiding | Explicit polling; latency is visible |
-| TLS / HTTPS | Crypto complexity; trusted network assumed |
-| IPv6 | IPv4 sufficient for bootstrap |
-| Jumbo frames | Standard MTU sufficient |
-| Zero-copy | Simplicity over performance |
-
-**These are not deferred features. They are architectural exclusions for v1.**
+**Non-Goals**: See global "Explicit Non-Goals (v1)" section for architectural exclusions.
 
 ---
 
@@ -1054,7 +1168,7 @@ This is SEPARATE from the 2MB DMA region.
 
 ---
 
-## Section 7: Timing, Polling Budgets & Determinism
+## Section 7: Timing, Polling Budgets & Determinism (Locked)
 
 **Audit Reference**: §7.1.4 (TSC calibration), §2.5 (TIME-2), §5.3 (timing patterns)
 
@@ -1302,7 +1416,7 @@ fn step(&mut self) -> StepResult {
 
 ---
 
-## Section 8: Protocol State Machines
+## Section 8: Protocol State Machines (Locked)
 
 **Audit Reference**: §2.7 (state machine patterns), §5.6 (protocol state machines)
 
@@ -1402,17 +1516,19 @@ pub enum HttpState {
 impl HttpState {
     /// Advance state machine by one step.
     /// Returns true if reached terminal state.
+    /// `timeouts` initialized from calibrated TSC frequency (no hardcoded values).
     pub fn step(
         &mut self,
         iface: &mut NetInterface,
         now_tsc: u64,
+        timeouts: &TimeoutConfig,
     ) -> bool {
         match self {
             HttpState::Idle => false,
             
             HttpState::Resolving { host, query_handle, start_tsc } => {
-                // Check timeout
-                if now_tsc - *start_tsc > timeouts::DNS_QUERY {
+                // Check timeout using calibrated value
+                if now_tsc - *start_tsc > timeouts.dns_query() {
                     *self = HttpState::Failed(HttpError::DnsTimeout);
                     return true;
                 }
@@ -1437,8 +1553,8 @@ impl HttpState {
             }
             
             HttpState::Connecting { ip, port, socket, start_tsc } => {
-                // Check timeout
-                if now_tsc - *start_tsc > timeouts::TCP_CONNECT {
+                // Check timeout using calibrated value
+                if now_tsc - *start_tsc > timeouts.tcp_connect() {
                     *self = HttpState::Failed(HttpError::ConnectTimeout);
                     return true;
                 }
@@ -1612,19 +1728,34 @@ Each state machine can be tested in isolation:
 ```rust
 #[test]
 fn test_dhcp_discovery_timeout() {
+    // Create timeout config with known calibrated value for testing
+    let timeouts = TimeoutConfig::new(2_500_000_000); // Test with 2.5GHz
+    
     let mut state = DhcpState::Discovering {
         start_tsc: 0,
         retries: 0,
     };
     
     // Simulate time passing without DHCP response
-    let timeout_tsc = timeouts::DHCP_DISCOVER + 1;
-    let done = state.step(&mut mock_iface(), timeout_tsc);
+    let timeout_tsc = timeouts.dhcp_discover() + 1;
+    let done = state.step(&mut mock_iface(), timeout_tsc, &timeouts);
     
     assert!(done);
     assert!(matches!(state, DhcpState::Failed(DhcpError::Timeout)));
 }
 ```
+
+### 8.7 Section 8 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **SM-1** | Every multi-step operation is a state machine, not a blocking loop |
+| **SM-2** | `step()` advances exactly one step and returns immediately |
+| **SM-3** | `step()` returns `true` only on terminal states (Done, Failed) |
+| **SM-4** | Each state carries its own `start_tsc` for timeout tracking |
+| **SM-5** | Timeouts passed via `TimeoutConfig`, never hardcoded |
+| **SM-6** | Higher-level machines compose lower-level machines |
+| **SM-7** | State machines testable in isolation with mock interfaces |
 
 ---
 
@@ -1827,15 +1958,72 @@ This design addresses the fundamental deadlock in MorpheusX's network stack by:
 4. **Using fixed polling budgets** for predictable timing
 5. **Designing for future expansion** to multi-core and interrupts
 
-### 12.2 Key Invariants (Enforced)
+### 12.2 Consolidated Invariant Index
 
-1. No function loops waiting for external state
-2. TX is fire-and-forget, completion collected separately
-3. RX is non-blocking poll only
-4. All timeouts are TSC-relative observations
-5. Main loop is the ONLY entry point for network activity
-6. ASM handles all timing-critical NIC operations
-7. Rust handles all protocol logic via smoltcp
+All invariants from this document, organized by category:
+
+**Memory & DMA (Section 2, 5)**
+| ID | Invariant |
+|----|-----------|
+| MEM-1 | x86 cache coherent for DMA; UC/WC mapping or clflush required only if device-specific |
+| MEM-2 | DMA memory allocated via PCI I/O Protocol AllocateBuffer, not raw AllocatePages |
+| MEM-3 | bus_addr from Map() passed to device, not CPU pointer |
+| MEM-4 | CPU pointer used for read/write, bus_addr for device descriptors |
+| DMA-1 | DMA region identity-mapped, accessible by both CPU and device |
+| DMA-2 | Minimum 2MB DMA reservation: 1MB RX + 1MB TX |
+| DMA-3 | Buffer ownership explicit: driver owns until returned to available ring |
+
+**Timing (Section 7)**
+| ID | Invariant |
+|----|-----------|
+| TIME-1 | TSC calibrated at boot via UEFI Stall(), not hardcoded |
+| TIME-2 | No hardcoded TSC frequency anywhere in codebase |
+| TIME-3 | All timeouts expressed in wall time, converted via TimeoutConfig |
+| TIME-4 | wrapping_sub() used for TSC comparisons |
+
+**Execution Model (Section 3)**
+| ID | Invariant |
+|----|-----------|
+| EXEC-1 | Single core, single thread, no preemption |
+| EXEC-2 | Main loop is ONLY entry point for all network activity |
+| EXEC-3 | Phase order: RX poll → smoltcp poll → TX drain → app step → TX completion |
+| EXEC-4 | No interrupts; purely poll-driven |
+
+**VirtIO Driver (Section 4)**
+| ID | Invariant |
+|----|-----------|
+| VIRTIO-1 | 12-byte header (flags, gso_type, hdr_len, gso_size, csum_start, csum_offset) |
+| VIRTIO-2 | Feature negotiation completes before ExitBootServices |
+| VIRTIO-3 | Queue size read from device via VIRTIO_PCI_QUEUE_NUM |
+| VIRTIO-4 | Descriptor chains: buffer addr + len + flags + next |
+| VIRTIO-5 | Memory barriers: sfence before queue notify, lfence after reading used ring |
+| VIRTIO-6 | Device notification via single 16-bit port write |
+
+**smoltcp Integration (Section 6)**
+| ID | Invariant |
+|----|-----------|
+| SMOLTCP-1 | poll() called exactly once per main loop iteration |
+| SMOLTCP-2 | Device receive() and transmit() return immediately |
+| SMOLTCP-3 | RxToken buffer valid until consume() returns |
+| SMOLTCP-4 | TxToken consume() submits packet without waiting |
+| SMOLTCP-5 | Timestamp derived from calibrated TSC |
+| SMOLTCP-6 | Socket buffer memory allocated at initialization |
+
+**State Machines (Section 8)**
+| ID | Invariant |
+|----|-----------|
+| SM-1 | Every multi-step operation is a state machine |
+| SM-2 | step() advances exactly one step and returns immediately |
+| SM-3 | step() returns true only on terminal states |
+| SM-4 | Each state carries its own start_tsc for timeout tracking |
+| SM-5 | Timeouts passed via TimeoutConfig |
+
+**Budgets (Section 7)**
+| ID | Invariant |
+|----|-----------|
+| BUDGET-1 | Each loop phase has bounded iteration count |
+| BUDGET-2 | Total main loop iteration target: 1ms wall time |
+| BUDGET-3 | No unbounded loops |
 
 ### 12.3 Success Criteria
 
@@ -1845,18 +2033,22 @@ This design addresses the fundamental deadlock in MorpheusX's network stack by:
 - [ ] Main loop iteration < 2ms guaranteed
 - [ ] No `tsc_delay_us()` calls remain in codebase
 - [ ] All blocking loops replaced with state machines
+- [ ] No hardcoded TSC values (grep for `2_500`, `2500000`)
+- [ ] All DMA allocation via PCI I/O Protocol
 
-### 12.4 Next Steps
+### 12.4 Document Status
 
-1. Review this document with stakeholders
-2. Prototype ASM VirtIO driver
-3. Integrate with existing smoltcp wrapper
-4. Test in QEMU
-5. Iterate based on findings
+This document represents the **frozen v1 architecture** for MorpheusX network stack.
+
+Changes to this document require:
+1. Audit against NETWORK_STACK_AUDIT.md
+2. Explicit invariant impact analysis
+3. Version increment
 
 ---
 
 **Document End**
 
-*Author: MorpheusX Architecture Team*
-*Status: Draft for Review*
+*Status: v1 Architecture (Frozen)*
+*Reconciled Against: NETWORK_STACK_AUDIT.md*
+*Last Reconciliation: 2024*
