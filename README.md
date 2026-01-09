@@ -31,8 +31,7 @@ The bootable binary is produced at `target/x86_64-unknown-uefi/release/morpheus-
 Use the provided scripts (requires QEMU and OVMF):
 
 ```bash
-cd testing
-./run.sh
+./setup-dev.sh -i
 ```
 
 See additional helper scripts in `testing/` for preparing initrds and disk images.
