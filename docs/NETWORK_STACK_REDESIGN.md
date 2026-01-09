@@ -1,9 +1,10 @@
-# MorpheusX Single-Core Bare-Metal Network Stack Redesign
+# MorpheusX Single-Core Bare-Metal Network Stack v1 Architecture
 
 ## Document Status
-- **Version**: 0.1 (Draft)
-- **Date**: 2026-01-08
-- **Scope**: Research & Architecture Design (No Implementation)
+- **Version**: 1.0 (Frozen)
+- **Date**: 2026-01-09
+- **Scope**: Post-ExitBootServices Bare-Metal Network Stack
+- **Authority**: This document is reconciled against NETWORK_STACK_AUDIT.md
 
 ---
 
@@ -22,23 +23,24 @@ smoltcp.poll()
   → calls VirtioNetDevice::transmit()
   → BLOCKS: loop { poll_transmit(); tsc_delay_us(10); }
   → Waits for VirtIO device to process packet
-  → BUT: Device completion may require US to poll RX
-  → DEADLOCK: We never return to poll RX
+  → DEADLOCK: Main loop never advances; no RX/TX progress
 ```
 
 **Why This Happens**:
 1. VirtIO is designed for interrupt-driven operation
 2. Guest submits buffer → hypervisor processes → hypervisor signals completion
 3. Without interrupts, we must poll for completion
-4. But polling inside `transmit()` blocks the entire system
-5. No other work can happen while we spin
+4. Polling inside `transmit()` blocks the entire system
+5. smoltcp.poll() never returns; no other work can happen
+
+**Audit Reference**: §3.7, §4.2.1 confirm this is the root cause.
 
 ### 1.2 The UEFI Interference Problem
 
 Before `ExitBootServices()`, UEFI firmware:
 - Maintains its own memory pools and DMA mappings
-- May intercept PCI/MMIO accesses
-- Handles hardware interrupts
+- May intercept PCI/MMIO accesses via its own drivers
+- Has active SNP/NII protocols that may be using the NIC
 - Can move memory regions unpredictably
 
 **Consequence**: Any NIC driver running while UEFI is active risks:
@@ -47,17 +49,25 @@ Before `ExitBootServices()`, UEFI firmware:
 - Unexpected device state changes
 - Memory corruption
 
-**Solution**: Full device control requires `ExitBootServices()` FIRST.
+**Contract**: Full device control requires `ExitBootServices()` FIRST.
 
-### 1.3 The Rust Compiler Problem
+**Audit Reference**: §7.2.9 confirms NIC initialization MUST occur AFTER ExitBootServices.
 
-The `virtio-drivers` Rust crate and compiler optimizations introduce:
-- **Instruction reordering**: Compiler may reorder MMIO accesses
-- **Hidden temporaries**: Stack spills at unpredictable times
-- **Timing variations**: Different optimization levels = different timing
-- **Opaque memory barriers**: `volatile` isn't sufficient for all cases
+### 1.3 The Memory Ordering Problem
 
-**For deterministic NIC operation**: Critical paths must be ASM.
+Correct NIC operation requires precise memory ordering. The following are distinct concerns:
+
+| Concern | Mechanism | Notes |
+|---------|-----------|-------|
+| Compiler reordering | `volatile` / inline ASM | Prevents Rust optimizer reordering |
+| CPU store buffer | `sfence` / `mfence` | Ensures stores visible to other agents |
+| Cache coherency | UC mapping OR `clflush` | **mfence does NOT flush cache** |
+
+**Critical Correction**: `cli`/`sti` are NOT memory barriers. They only control interrupt delivery.
+
+**Contract**: DMA buffer regions MUST be mapped Uncached (UC) or Write-Combining (WC), OR explicit cache line flushes MUST be performed before device access.
+
+**Audit Reference**: §7.2.2, §7.2.3, §7.2.11 — mfence does not ensure cache coherency; CLI is not a barrier.
 
 ### 1.4 Current Blocking Violations
 
@@ -74,19 +84,32 @@ The `virtio-drivers` Rust crate and compiler optimizations introduce:
 
 **Root Cause**: `tsc_delay_us()` is the blocking primitive enabling all violations.
 
+### 1.5 Section 1 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **BLOCK-1** | No function may loop waiting for external state change |
+| **BLOCK-2** | TX submission returns immediately; completion is collected separately |
+| **BLOCK-3** | RX polling returns immediately with `Some(packet)` or `None` |
+| **EBS-1** | NIC initialization occurs only AFTER ExitBootServices |
+| **MEM-1** | DMA regions are Uncached OR cache-flushed before device access |
+
 ---
 
-## Section 2: Design Constraints
+## Section 2: Design Constraints (Locked)
 
 ### 2.1 Hardware Constraints
 
-| Constraint | Description |
-|------------|-------------|
-| Single CPU core | Initial implementation targets one core only |
-| No preemption | No OS scheduler, no timer interrupts |
-| No FPU | `no_std`, soft-float only |
-| Identity-mapped memory | Physical == Virtual addresses |
-| Polling-only | No interrupt handlers installed |
+| Constraint | Value | Rationale |
+|------------|-------|-----------|
+| CPU Cores | 1 (BSP only) | No SMP synchronization complexity |
+| Interrupt State | Disabled | Pure polling; no ISRs |
+| Paging | Enabled, identity-mapped | UEFI leaves paging on; we maintain identity map for UEFI-managed regions |
+| Memory Model | x86-64 TSO | Strong ordering; explicit barriers for DMA only |
+| Floating Point | Disabled | no_std, soft-float; no FPU state save/restore |
+| Stack | Pre-allocated, 64KB minimum | Allocated before EBS, survives EBS |
+
+**Audit Reference**: §5.1.1, §7.1.1, §7.1.7
 
 ### 2.2 Execution Model Constraints
 
@@ -96,28 +119,85 @@ The `virtio-drivers` Rust crate and compiler optimizations introduce:
 | Bounded execution time | Every call completes in finite cycles |
 | Cooperative scheduling | Progress happens between calls, not within |
 | Explicit state machines | All multi-step operations use state enums |
+| Single poll() per iteration | smoltcp.poll() called exactly once per main loop |
+
+**Contract**: Every function call returns in bounded time. There are no exceptions.
+
+**Audit Reference**: §2.8 LOOP-1, LOOP-2; §7.2.8 confirms single poll() call
 
 ### 2.3 UEFI Lifecycle Constraints
 
 | Phase | What's Available | What's Forbidden |
 |-------|------------------|------------------|
-| Pre-ExitBootServices | Memory allocation, console, file I/O | Full NIC control, DMA ownership |
-| Post-ExitBootServices | Raw hardware access, identity map | Any UEFI call except Runtime Services |
+| Pre-ExitBootServices | Memory allocation, console, PCI I/O Protocol | Full NIC control, DMA submission |
+| Post-ExitBootServices | Raw hardware access, identity map | Any UEFI Boot Service call |
 
-**Critical Invariant**: NIC driver initialization MUST occur AFTER `ExitBootServices()`.
+**Memory Type Contract**: DMA region MUST be allocated as `EfiBootServicesData`:
+- Survives ExitBootServices
+- Not affected by `SetVirtualAddressMap()` (we don't call it)
+- Must be below 4GB for 32-bit DMA compatibility
+
+**DMA Allocation Contract**: Use `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL`:
+- `AllocateBuffer()` — returns memory suitable for DMA
+- `Map()` — returns device-visible bus address (handles IOMMU if present)
+- `SetAttributes()` — set UC/WC memory type
+
+**Audit Reference**: §7.2.1 (DMA allocation), §7.2.10 (memory type)
 
 ### 2.4 Timing Constraints
 
 | Constraint | Description |
 |------------|-------------|
-| No OS timers | No `sleep()`, no scheduler tick |
-| TSC-relative only | All timing via `rdtsc` instruction |
-| Polling budgets | Each subsystem gets cycle allocation |
-| Deterministic delays | ASM `nop` sequences for precise timing |
+| Time source | TSC (invariant TSC required) |
+| TSC calibration | MUST calibrate at boot; no hardcoded frequency |
+| Timeout mechanism | Check TSC delta; never spin-wait |
+| Maximum loop time | < 5ms per main loop iteration |
+
+**TSC Contract**:
+1. MUST verify CPUID.80000007H:EDX bit 8 (invariant TSC)
+2. MUST calibrate TSC frequency using UEFI Stall() or PIT before EBS
+3. TSC is monotonic on single core only (we are single core)
+4. Use `wrapping_sub()` for timeout comparisons
+
+**Audit Reference**: §1.2 T1-T4, §7.1.4, §7.1.5
+
+### 2.5 Section 2 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **EXEC-1** | Single core, single thread, no preemption |
+| **EXEC-2** | Interrupts disabled throughout execution |
+| **EXEC-3** | Every function returns in bounded time |
+| **EXEC-4** | smoltcp.poll() called exactly once per main loop iteration |
+| **MEM-2** | DMA region allocated via PCI I/O Protocol, not raw AllocatePages |
+| **MEM-3** | DMA region is EfiBootServicesData, mapped UC or WC |
+| **MEM-4** | Identity mapping only guaranteed for UEFI-described regions |
+| **TIME-1** | TSC invariant feature MUST be verified at boot |
+| **TIME-2** | TSC frequency MUST be calibrated, never hardcoded |
+| **TIME-3** | No spin-waits; timeouts are checked, not waited |
+
+### 2.6 Explicit Non-Goals (v1)
+
+This section documents what the v1 architecture explicitly does NOT provide.
+
+| Non-Goal | Rationale |
+|----------|-----------|
+| Interrupt support | Complexity; polling sufficient for bootstrap |
+| Multi-core / SMP | Synchronization complexity |
+| Async / futures | No runtime; explicit state machines instead |
+| Scheduler fairness | Single operation at a time |
+| Kernel abstraction | Direct hardware access; we ARE the kernel |
+| Latency hiding | Explicit polling; latency is visible |
+| TLS / HTTPS | Crypto complexity; trusted network assumed |
+| IPv6 | IPv4 sufficient for bootstrap |
+| Jumbo frames | Standard MTU sufficient |
+| Zero-copy | Simplicity over performance |
+
+**These are not deferred features. They are architectural exclusions for v1.**
 
 ---
 
-## Section 3: Architecture Overview
+## Section 3: Architecture Overview (Locked)
 
 ### 3.1 Layer Stack
 
@@ -133,796 +213,387 @@ The `virtio-drivers` Rust crate and compiler optimizations introduce:
 │                    Protocol Layer (smoltcp)                     │
 │            TCP, UDP, ICMP, DHCP, DNS, ARP, IPv4                │
 │              - Architecture-agnostic, no_std -                  │
+│              - Single poll() call per iteration -               │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Device Adapter (Rust)                         │
-│     Implements smoltcp Device trait, wraps ASM primitives      │
-│        - Translates poll() → asm_poll_rx/asm_poll_tx -         │
+│     Implements smoltcp Device trait, wraps VirtIO driver       │
+│           - Provides RxToken/TxToken to smoltcp -              │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ASM Driver Layer (x86_64)                    │
-│      Deterministic NIC control: virtqueue, DMA, MMIO           │
-│                  - Full temporal control -                      │
+│                    VirtIO Driver (Rust + ASM)                   │
+│      Virtqueue management, DMA buffer handling, MMIO           │
+│              - Memory barriers in ASM where needed -            │
 ├─────────────────────────────────────────────────────────────────┤
-│  Exports:                                                       │
-│    asm_nic_init(base_addr) → status                            │
-│    asm_poll_rx(buf_ptr, buf_len) → bytes_read | 0              │
-│    asm_poll_tx(buf_ptr, buf_len) → success | failure           │
-│    asm_get_mac(out_ptr) → void                                 │
-│    asm_read_tsc() → u64                                        │
+│  Key Operations:                                                │
+│    submit_rx_buffer(idx) → void                                │
+│    poll_rx() → Option<(idx, len)>                              │
+│    submit_tx(buf, len) → Result<()>                            │
+│    poll_tx_complete() → Option<idx>                            │
+│    notify_device(queue) → void                                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Hardware (VirtIO/Intel/etc)                  │
-│                   PCI MMIO, DMA rings, MAC                      │
+│                    Hardware (VirtIO-net)                        │
+│          PCI MMIO registers, Virtqueues, DMA buffers           │
+│            - 12-byte virtio_net_hdr + Ethernet frame -         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### 3.2 The Main Loop (Single Entry Point)
 
-All network activity flows through ONE loop. No nested polling.
+All network activity flows through ONE loop with ONE smoltcp.poll() call per iteration.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                     MAIN POLL LOOP                           │
 │                                                              │
 │  loop {                                                      │
-│      // Phase 1: RX polling (fixed cycle budget)            │
-│      for _ in 0..RX_BUDGET {                                │
-│          if let Some(pkt) = asm_poll_rx() {                 │
-│              rx_queue.push(pkt);                            │
-│          }                                                   │
-│      }                                                       │
+│      let now_tsc = rdtsc();                                 │
+│      let timestamp = tsc_to_instant(now_tsc);               │
 │                                                              │
-│      // Phase 2: Protocol processing                         │
-│      let now = asm_read_tsc();                              │
-│      smoltcp_iface.poll(now, &mut device, &mut sockets);    │
+│      // Phase 1: Refill RX queue with available buffers     │
+│      device.rx_queue_refill();                              │
 │                                                              │
-│      // Phase 3: TX drain (from smoltcp's queue)            │
-│      for _ in 0..TX_BUDGET {                                │
-│          if let Some(pkt) = tx_queue.pop() {                │
-│              asm_poll_tx(pkt);                              │
-│          }                                                   │
-│      }                                                       │
+│      // Phase 2: Single smoltcp poll (handles all TX/RX)    │
+│      // Do NOT call this multiple times per iteration       │
+│      iface.poll(timestamp, &mut device, &mut sockets);      │
+│                                                              │
+│      // Phase 3: Collect TX completions (return buffers)    │
+│      device.tx_collect_completions();                       │
 │                                                              │
 │      // Phase 4: Application state machine step             │
-│      app_state.step();                                      │
-│                                                              │
-│      // Phase 5: TX completion collection                    │
-│      asm_collect_tx_completions();                          │
+│      app_state.step(now_tsc);                               │
 │  }                                                           │
+│                                                              │
+│  INVARIANT: Each iteration < 5ms                            │
+│  INVARIANT: poll() called exactly once                      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 3.3 Key Invariants
+**Audit Reference**: §5.5, §7.2.8 — smoltcp.poll() is level-triggered; one call handles all pending work.
 
-1. **No function may loop waiting for external state**
-   - Loops bounded by input size only
-   - External conditions checked, not waited for
+### 3.3 Buffer Ownership Model
 
-2. **TX is fire-and-forget**
-   - Submit buffer, return immediately
-   - Completion collected opportunistically
+```
+INVARIANT DMA-OWN-1: Buffer Exclusive Ownership
 
-3. **RX is non-blocking poll**
-   - Returns `Some(packet)` or `None`
-   - Never waits
+  At any time, each buffer is in EXACTLY ONE state:
+  
+    ┌─────────┐    alloc()    ┌──────────────┐
+    │  FREE   │ ────────────► │ DRIVER-OWNED │
+    └─────────┘               └──────────────┘
+         ▲                           │
+         │                           │ submit to virtqueue
+         │ free()                    ▼
+         │                    ┌──────────────┐
+         └─────────────────── │ DEVICE-OWNED │
+              poll returns    └──────────────┘
 
-4. **Time is observation, not control**
-   - TSC checked for timeout decisions
-   - Never used to delay execution
+  DRIVER-OWNED: Rust code may read/write buffer
+  DEVICE-OWNED: Driver MUST NOT access buffer
+  FREE: Buffer available for allocation
+```
 
-5. **State machines, not loops**
-   - Multi-step operations encoded as enum states
-   - One step per main loop iteration
+**RX Buffer Lifecycle**:
+1. Allocate buffer → DRIVER-OWNED
+2. Submit to RX virtqueue → DEVICE-OWNED
+3. Device receives packet, marks used → still DEVICE-OWNED
+4. Driver polls used ring → DRIVER-OWNED
+5. smoltcp RxToken consumes data
+6. Resubmit to virtqueue OR free
+
+**TX Buffer Lifecycle**:
+1. Allocate buffer → DRIVER-OWNED
+2. Fill with packet data (12-byte header + frame)
+3. Submit to TX virtqueue → DEVICE-OWNED
+4. Device transmits, marks used → still DEVICE-OWNED
+5. Driver polls used ring → DRIVER-OWNED
+6. Free buffer (or reuse)
+
+### 3.4 Key Invariants (Locked)
+
+| ID | Invariant | Enforcement |
+|----|-----------|-------------|
+| **LOOP-1** | No function loops waiting for external state | Code review; no `while !condition` patterns |
+| **LOOP-2** | Main loop iteration < 5ms | Bounded budgets per phase |
+| **POLL-1** | smoltcp.poll() called exactly once per iteration | Structural; single call site |
+| **TX-1** | TX submit returns immediately | No completion wait |
+| **TX-2** | TX completion collected opportunistically | Separate phase in loop |
+| **RX-1** | RX poll returns immediately with Some or None | Non-blocking virtqueue poll |
+| **RX-2** | RX buffer remains valid while RxToken exists | Lifetime enforcement |
+| **TIME-4** | Time is observed, not waited | TSC checked, never spun on |
+| **STATE-1** | Multi-step operations are state machines | Enum per operation |
+
+### 3.5 Section 3 Invariant Summary
+
+**Execution Model**:
+- Single core, single thread, poll-driven, phase-oriented
+- No preemption, no interrupts, no async
+
+**Memory Ownership**:
+- Buffers have exactly one owner at any time
+- Ownership transfers are explicit (submit/poll)
+- Driver never accesses DEVICE-OWNED buffers
+
+**Progress Guarantees**:
+- Main loop always makes progress (no blocking)
+- Each phase has bounded work
+- smoltcp handles retransmission timers internally
+
+**Failure Semantics**:
+- TX queue full → backpressure (requeue packet)
+- RX queue full → drop packet (device behavior)
+- Timeout → state machine transitions to Failed
 
 ---
 
-## Section 4: ASM Driver Interface Specification
+## Section 4: VirtIO Driver Specification (Locked)
 
-### 4.1 Why ASM for NIC Drivers?
+### 4.1 Why Explicit Memory Barriers?
 
-| Rust Problem | ASM Solution |
-|--------------|--------------|
-| Compiler may reorder MMIO writes | Explicit instruction ordering |
-| Hidden temporaries on stack | Full register control |
-| Optimization-dependent timing | Exact cycle counts |
-| `volatile` not always sufficient | Direct hardware access |
-| Implicit memory barriers | Explicit `mfence`/`sfence` |
+Memory barriers are required for correctness, not just performance.
 
-**Critical Insight**: For VirtIO virtqueues, the order of:
-1. Write descriptor to available ring
-2. Memory barrier
-3. Write available index
-4. Notify device (MMIO write)
+| Concern | Mechanism | When Required |
+|---------|-----------|---------------|
+| Compiler reordering | `volatile` + compiler fence | All MMIO and DMA buffer access |
+| CPU store buffer | `sfence` | Before updating avail.idx |
+| Full serialization | `mfence` | Before device notification |
+| Cache coherency | UC memory type OR `clflush` | DMA buffer setup |
 
-...must be **exactly** as specified. Rust compiler can break this.
+**Critical Correction**: `cli`/`sti` are NOT memory barriers. They only control interrupt delivery. Do not use them for synchronization.
 
-### 4.2 Complete ASM Responsibilities Post-ExitBootServices
+**Audit Reference**: §7.2.11
 
-After ExitBootServices(), the ASM layer owns **everything** below smoltcp:
+### 4.2 VirtIO Feature Negotiation (Locked)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    WHAT ASM MUST HANDLE                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. DMA MEMORY MANAGEMENT                                       │
-│     - Pre-allocated region (from UEFI phase)                   │
-│     - Buffer allocation within region                          │
-│     - Physical address calculation (identity map)              │
-│     - Alignment enforcement (page/cache-line)                  │
-│                                                                 │
-│  2. PHY INITIALIZATION (for real NICs, not VirtIO)             │
-│     - MDIO/MDC bus access                                      │
-│     - Auto-negotiation or forced speed/duplex                  │
-│     - Link status detection                                    │
-│     - PHY reset sequences                                      │
-│                                                                 │
-│  3. MAC INITIALIZATION                                          │
-│     - Register reset sequence                                  │
-│     - MAC address programming                                  │
-│     - Interrupt masking (disable all)                          │
-│     - Feature negotiation                                      │
-│                                                                 │
-│  4. PACKET QUEUE MANAGEMENT                                     │
-│     - Descriptor ring setup (RX + TX)                          │
-│     - Buffer submission to hardware                            │
-│     - Completion detection (used ring polling)                 │
-│     - Ring wrap-around handling                                │
-│                                                                 │
-│  5. TIMING-CRITICAL OPERATIONS                                  │
-│     - Device notification (doorbell writes)                    │
-│     - Memory barriers between operations                       │
-│     - Hardware delay sequences                                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Required Features** (device MUST support; reject otherwise):
+| Feature | Bit | Purpose |
+|---------|-----|---------|
+| `VIRTIO_F_VERSION_1` | 32 | Modern device protocol |
 
-### 4.3 DMA Memory Architecture
+**Desired Features** (negotiate if available):
+| Feature | Bit | Purpose |
+|---------|-----|---------|
+| `VIRTIO_NET_F_MAC` | 5 | MAC address in config space |
+| `VIRTIO_NET_F_STATUS` | 16 | Link status reporting |
+| `VIRTIO_F_RING_EVENT_IDX` | 29 | Efficient notification suppression |
 
-**Critical**: DMA region must be allocated BEFORE ExitBootServices, then managed by ASM.
+**Forbidden Features** (MUST NOT negotiate):
+| Feature | Bit | Reason |
+|---------|-----|--------|
+| `VIRTIO_NET_F_GUEST_TSO4` | 7 | No TSO support |
+| `VIRTIO_NET_F_GUEST_TSO6` | 8 | No TSO support |
+| `VIRTIO_NET_F_GUEST_UFO` | 10 | No UFO support |
+| `VIRTIO_NET_F_MRG_RXBUF` | 15 | Simplifies header handling |
+| `VIRTIO_NET_F_CTRL_VQ` | 17 | Unnecessary complexity |
+
+**Audit Reference**: §7.2.4, §5.3.1
+
+### 4.3 Device Initialization Sequence (Locked)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                   DMA REGION LAYOUT (2MB)                       │
-│            Allocated by UEFI, Managed by ASM                    │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 0x000000: DMA Control Block (4KB)                         │  │
-│  │   - free_bitmap[256]   (tracks 64KB chunks)              │  │
-│  │   - next_free_index                                       │  │
-│  │   - total_allocated                                       │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 0x001000: VirtIO Structures (64KB)                        │  │
-│  │   - RX Descriptors (16 × 16B = 256B)                     │  │
-│  │   - RX Available Ring (6B + 16 × 2B = 38B)               │  │
-│  │   - RX Used Ring (6B + 16 × 8B = 134B)                   │  │
-│  │   - TX Descriptors (16 × 16B = 256B)                     │  │
-│  │   - TX Available Ring (38B)                               │  │
-│  │   - TX Used Ring (134B)                                   │  │
-│  │   - [padding to 4KB alignment]                           │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 0x011000: RX Packet Buffers (512KB)                       │  │
-│  │   - 256 × 2KB buffers                                     │  │
-│  │   - Each buffer: VirtIO header (12B) + packet (1514B)    │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 0x091000: TX Packet Buffers (512KB)                       │  │
-│  │   - 256 × 2KB buffers                                     │  │
-│  │   - Each buffer: VirtIO header (12B) + packet (1514B)    │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 0x111000: Scratch / Future Use (~900KB)                   │  │
-│  │   - Additional buffers if needed                         │  │
-│  │   - Intel/Realtek descriptor rings                       │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+SEQUENCE (must execute in this exact order):
+
+1. RESET
+   - Write 0 to status register
+   - Wait until status reads 0 (with timeout)
+   - Wait additional 100ms for conservative reset completion
+
+2. ACKNOWLEDGE
+   - Write STATUS_ACKNOWLEDGE (0x01) to status
+
+3. DRIVER
+   - Write STATUS_ACKNOWLEDGE | STATUS_DRIVER (0x03) to status
+
+4. FEATURE NEGOTIATION
+   - Read device_features register
+   - Compute our_features = device_features & ALLOWED_FEATURES
+   - Verify required features present
+   - Write our_features to driver_features register
+
+5. FEATURES_OK
+   - Write STATUS_FEATURES_OK (0x08) to status
+   - Read status back
+   - If FEATURES_OK not set → device rejected; write STATUS_FAILED, abort
+
+6. VIRTQUEUE SETUP
+   - For each queue (RX=0, TX=1):
+     a. Write queue index to queue_select
+     b. Read queue_num_max (device maximum size)
+     c. Choose size = min(32, queue_num_max)
+     d. Write size to queue_num
+     e. Write descriptor table address
+     f. Write available ring address
+     g. Write used ring address
+     h. Write 1 to queue_enable
+
+7. PRE-FILL RX QUEUE
+   - Submit 32 empty buffers to RX queue
+   - Each buffer: 12-byte header space + 1514-byte frame space
+
+8. DRIVER_OK
+   - Write STATUS_DRIVER_OK (0x04) to status
+   - Device is now operational
+
+ON ERROR at any step:
+   - Write STATUS_FAILED (0x80) to status
+   - Return initialization failure
 ```
 
-### 4.4 ASM DMA Allocator
+**Audit Reference**: §5.3.3, §7.2.3
 
-```nasm
-; =============================================================================
-; DMA Buffer Allocator (ASM-managed, fixed pool)
-; =============================================================================
+### 4.4 Virtqueue Size Contract
 
-section .data
-    dma_base:       dq 0        ; Set by asm_dma_init
-    dma_size:       dq 0
-    rx_buf_base:    dq 0        ; Start of RX buffer region
-    tx_buf_base:    dq 0        ; Start of TX buffer region
-    rx_buf_bitmap:  times 32 db 0   ; 256 bits = 256 buffers
-    tx_buf_bitmap:  times 32 db 0
-
-section .text
-
-; -----------------------------------------------------------------------------
-; asm_dma_init - Initialize DMA region (called once after EBS)
-;
-; Input:
-;   RCX: DMA region base (physical = virtual, identity mapped)
-;   RDX: DMA region size (must be >= 2MB)
-;
-; Output:
-;   RAX: 0 = success, 1 = region too small
-; -----------------------------------------------------------------------------
-global asm_dma_init
-asm_dma_init:
-    ; Verify minimum size
-    cmp rdx, 0x200000           ; 2MB minimum
-    jb .too_small
-    
-    ; Store base and size
-    mov [dma_base], rcx
-    mov [dma_size], rdx
-    
-    ; Calculate buffer region bases
-    lea rax, [rcx + 0x11000]    ; RX buffers at offset 0x11000
-    mov [rx_buf_base], rax
-    lea rax, [rcx + 0x91000]    ; TX buffers at offset 0x91000
-    mov [tx_buf_base], rax
-    
-    ; Clear bitmaps (all buffers free)
-    xor eax, eax
-    mov rdi, rx_buf_bitmap
-    mov rcx, 32
-    rep stosb
-    mov rdi, tx_buf_bitmap
-    mov rcx, 32
-    rep stosb
-    
-    xor eax, eax                ; Return success
-    ret
-    
-.too_small:
-    mov eax, 1
-    ret
-
-; -----------------------------------------------------------------------------
-; asm_alloc_rx_buffer - Allocate RX buffer from pool
-;
-; Output:
-;   RAX: Buffer physical address (0 if none available)
-;   RDX: Buffer index (for later free)
-; -----------------------------------------------------------------------------
-global asm_alloc_rx_buffer
-asm_alloc_rx_buffer:
-    ; Find first free bit in rx_buf_bitmap
-    mov rdi, rx_buf_bitmap
-    mov rcx, 256                ; 256 buffers
-    xor rdx, rdx                ; Buffer index
-    
-.find_loop:
-    mov al, [rdi]
-    cmp al, 0xFF                ; All 8 bits set?
-    jne .found_byte
-    inc rdi
-    add rdx, 8
-    cmp rdx, 256
-    jb .find_loop
-    
-    ; No free buffers
-    xor eax, eax
-    ret
-    
-.found_byte:
-    ; Find first zero bit in AL
-    xor ecx, ecx
-.find_bit:
-    bt eax, ecx
-    jnc .found_bit
-    inc ecx
-    cmp ecx, 8
-    jb .find_bit
-    
-.found_bit:
-    ; Set bit (mark allocated)
-    bts dword [rdi], ecx
-    
-    ; Calculate buffer index
-    add rdx, rcx
-    
-    ; Calculate buffer address: base + (index * 2048)
-    mov rax, rdx
-    shl rax, 11                 ; × 2048
-    add rax, [rx_buf_base]
-    
-    ret
-```
-
-### 4.5 PHY Initialization (For Real NICs)
-
-VirtIO doesn't have a PHY, but Intel/Realtek do:
-
-```nasm
-; =============================================================================
-; PHY Layer (Intel e1000 example)
-; =============================================================================
-
-; PHY registers (accessed via MDIO)
-PHY_CTRL        equ 0x00        ; Control register
-PHY_STATUS      equ 0x01        ; Status register  
-PHY_ID1         equ 0x02        ; PHY ID high
-PHY_ID2         equ 0x03        ; PHY ID low
-PHY_AUTONEG_ADV equ 0x04        ; Auto-neg advertisement
-PHY_LINK_PART   equ 0x05        ; Link partner ability
-
-; Intel NIC MDIC register (for PHY access)
-E1000_MDIC      equ 0x0020
-MDIC_DATA_MASK  equ 0x0000FFFF
-MDIC_REG_SHIFT  equ 16
-MDIC_PHY_SHIFT  equ 21
-MDIC_OP_READ    equ 0x08000000
-MDIC_OP_WRITE   equ 0x04000000
-MDIC_READY      equ 0x10000000
-MDIC_ERROR      equ 0x40000000
-
-; -----------------------------------------------------------------------------
-; asm_phy_read - Read PHY register via MDIO
-;
-; Input:
-;   RCX: NIC MMIO base
-;   DL:  PHY register address
-;
-; Output:
-;   AX:  Register value (0xFFFF on error)
-; -----------------------------------------------------------------------------
-global asm_phy_read
-asm_phy_read:
-    push rbx
-    
-    ; Build MDIC command: read, PHY 1, register DL
-    movzx eax, dl
-    shl eax, MDIC_REG_SHIFT
-    or eax, (1 << MDIC_PHY_SHIFT)   ; PHY address 1
-    or eax, MDIC_OP_READ
-    
-    ; Write to MDIC register
-    mov [rcx + E1000_MDIC], eax
-    
-    ; Wait for ready (with timeout)
-    mov ebx, 10000              ; Timeout counter
-.wait_ready:
-    mov eax, [rcx + E1000_MDIC]
-    test eax, MDIC_READY
-    jnz .ready
-    dec ebx
-    jnz .wait_ready
-    
-    ; Timeout - return error
-    mov ax, 0xFFFF
-    pop rbx
-    ret
-    
-.ready:
-    ; Check for error
-    test eax, MDIC_ERROR
-    jnz .error
-    
-    ; Extract data
-    and eax, MDIC_DATA_MASK
-    pop rbx
-    ret
-    
-.error:
-    mov ax, 0xFFFF
-    pop rbx
-    ret
-
-; -----------------------------------------------------------------------------
-; asm_phy_init - Initialize PHY, auto-negotiate link
-;
-; Input:
-;   RCX: NIC MMIO base
-;
-; Output:
-;   RAX: 0 = success, link up
-;        1 = timeout, no link
-;        2 = PHY error
-; -----------------------------------------------------------------------------
-global asm_phy_init
-asm_phy_init:
-    push rbx
-    push r12
-    mov r12, rcx                ; Save MMIO base
-    
-    ; Reset PHY
-    mov dl, PHY_CTRL
-    call asm_phy_read
-    or ax, 0x8000               ; Set reset bit
-    mov dl, PHY_CTRL
-    ; (would call asm_phy_write here)
-    
-    ; Wait for reset complete (~500ms worst case)
-    mov ebx, 50                 ; 50 × 10ms = 500ms
-.wait_reset:
-    ; Delay 10ms
-    mov ecx, 25000000           ; ~10ms at 2.5GHz
-.delay:
-    dec ecx
-    jnz .delay
-    
-    mov rcx, r12
-    mov dl, PHY_CTRL
-    call asm_phy_read
-    test ax, 0x8000             ; Reset bit cleared?
-    jz .reset_done
-    dec ebx
-    jnz .wait_reset
-    
-    ; Reset timeout
-    mov eax, 2
-    jmp .exit
-    
-.reset_done:
-    ; Enable auto-negotiation
-    mov rcx, r12
-    mov dl, PHY_CTRL
-    call asm_phy_read
-    or ax, 0x1200               ; Auto-neg enable + restart
-    ; (write back)
-    
-    ; Wait for link (up to 5 seconds)
-    mov ebx, 500                ; 500 × 10ms = 5s
-.wait_link:
-    mov ecx, 25000000
-.delay2:
-    dec ecx
-    jnz .delay2
-    
-    mov rcx, r12
-    mov dl, PHY_STATUS
-    call asm_phy_read
-    test ax, 0x0004             ; Link status bit
-    jnz .link_up
-    dec ebx
-    jnz .wait_link
-    
-    ; No link
-    mov eax, 1
-    jmp .exit
-    
-.link_up:
-    xor eax, eax                ; Success
-    
-.exit:
-    pop r12
-    pop rbx
-    ret
-```
-
-### 4.6 Packet Queue Ring Management (VirtIO)
-
-```nasm
-; =============================================================================
-; VirtIO Virtqueue Management
-; =============================================================================
-
-; Virtqueue state (per-queue)
-struc VIRTQ_STATE
-    .desc_addr:     resq 1      ; Descriptor table physical address
-    .avail_addr:    resq 1      ; Available ring physical address
-    .used_addr:     resq 1      ; Used ring physical address
-    .num_entries:   resd 1      ; Queue size (power of 2)
-    .free_head:     resw 1      ; First free descriptor
-    .num_free:      resw 1      ; Number of free descriptors
-    .last_used:     resw 1      ; Last seen used index
-    .padding:       resw 1
-endstruc
-
-; Descriptor structure
-struc VIRTQ_DESC
-    .addr:          resq 1      ; Buffer physical address
-    .len:           resd 1      ; Buffer length
-    .flags:         resw 1      ; NEXT, WRITE, INDIRECT
-    .next:          resw 1      ; Next descriptor (if NEXT set)
-endstruc
-
-VIRTQ_DESC_F_NEXT     equ 1
-VIRTQ_DESC_F_WRITE    equ 2     ; Buffer is write-only (device writes)
-
-section .data
-    align 64
-    rx_queue:   times VIRTQ_STATE_size db 0
-    tx_queue:   times VIRTQ_STATE_size db 0
-
-section .text
-
-; -----------------------------------------------------------------------------
-; asm_virtq_init - Initialize a virtqueue
-;
-; Input:
-;   RCX: Queue state pointer
-;   RDX: Descriptor ring physical address
-;   R8:  Available ring physical address
-;   R9:  Used ring physical address
-;   R10D: Number of entries
-; -----------------------------------------------------------------------------
-global asm_virtq_init
-asm_virtq_init:
-    mov [rcx + VIRTQ_STATE.desc_addr], rdx
-    mov [rcx + VIRTQ_STATE.avail_addr], r8
-    mov [rcx + VIRTQ_STATE.used_addr], r9
-    mov [rcx + VIRTQ_STATE.num_entries], r10d
-    
-    ; Initialize free list (chain all descriptors)
-    xor eax, eax
-    mov [rcx + VIRTQ_STATE.free_head], ax
-    mov ax, r10w
-    mov [rcx + VIRTQ_STATE.num_free], ax
-    xor eax, eax
-    mov [rcx + VIRTQ_STATE.last_used], ax
-    
-    ; Chain descriptors: 0→1→2→...→N-1
-    mov rdi, rdx                ; Descriptor table
-    xor esi, esi                ; Index
-.chain_loop:
-    lea eax, [esi + 1]          ; Next index
-    mov [rdi + VIRTQ_DESC.next], ax
-    add rdi, VIRTQ_DESC_size
-    inc esi
-    cmp esi, r10d
-    jb .chain_loop
-    
-    ret
-
-; -----------------------------------------------------------------------------
-; asm_virtq_add_buf - Add buffer to virtqueue (for TX or RX submission)
-;
-; Input:
-;   RCX: Queue state pointer
-;   RDX: Buffer physical address
-;   R8D: Buffer length
-;   R9D: Flags (WRITE for RX buffers)
-;
-; Output:
-;   RAX: Descriptor index used (0xFFFF if queue full)
-; -----------------------------------------------------------------------------
-global asm_virtq_add_buf
-asm_virtq_add_buf:
-    ; Check if queue has free descriptors
-    movzx eax, word [rcx + VIRTQ_STATE.num_free]
-    test eax, eax
-    jz .full
-    
-    ; Get free descriptor
-    movzx eax, word [rcx + VIRTQ_STATE.free_head]
-    push rax                    ; Save descriptor index for return
-    
-    ; Calculate descriptor address
-    mov rdi, [rcx + VIRTQ_STATE.desc_addr]
-    imul r10d, eax, VIRTQ_DESC_size
-    add rdi, r10
-    
-    ; Update free list head
-    movzx r10d, word [rdi + VIRTQ_DESC.next]
-    mov [rcx + VIRTQ_STATE.free_head], r10w
-    dec word [rcx + VIRTQ_STATE.num_free]
-    
-    ; Fill descriptor
-    mov [rdi + VIRTQ_DESC.addr], rdx
-    mov [rdi + VIRTQ_DESC.len], r8d
-    mov [rdi + VIRTQ_DESC.flags], r9w
-    
-    ; Add to available ring
-    mov rdi, [rcx + VIRTQ_STATE.avail_addr]
-    movzx r10d, word [rdi + 2]  ; avail->idx
-    mov r11d, [rcx + VIRTQ_STATE.num_entries]
-    dec r11d                    ; mask = num - 1
-    and r10d, r11d              ; ring index = idx & mask
-    
-    pop rax                     ; Descriptor index
-    mov [rdi + 4 + r10*2], ax   ; avail->ring[idx & mask] = desc
-    
-    ; Memory barrier before updating index
-    mfence
-    
-    ; Increment available index
-    inc word [rdi + 2]
-    
-    ret
-    
-.full:
-    mov eax, 0xFFFF
-    ret
-
-; -----------------------------------------------------------------------------
-; asm_virtq_get_used - Check for completed buffers in used ring
-;
-; Input:
-;   RCX: Queue state pointer
-;
-; Output:
-;   RAX: Descriptor index (0xFFFF if none)
-;   RDX: Length written by device
-; -----------------------------------------------------------------------------
-global asm_virtq_get_used
-asm_virtq_get_used:
-    mov rdi, [rcx + VIRTQ_STATE.used_addr]
-    
-    ; Check if used ring advanced
-    movzx eax, word [rdi + 2]   ; used->idx
-    movzx edx, word [rcx + VIRTQ_STATE.last_used]
-    cmp ax, dx
-    je .empty
-    
-    ; Get used entry
-    mov r8d, [rcx + VIRTQ_STATE.num_entries]
-    dec r8d                     ; mask
-    and edx, r8d                ; ring index
-    
-    ; used->ring[idx] is 8 bytes: id (4) + len (4)
-    mov eax, [rdi + 4 + rdx*8]      ; Descriptor index
-    mov edx, [rdi + 4 + rdx*8 + 4]  ; Length
-    
-    ; Update last_used
-    inc word [rcx + VIRTQ_STATE.last_used]
-    
-    ; Return descriptor to free list
-    push rax
-    push rdx
-    
-    ; ... (return to free list logic)
-    
-    pop rdx
-    pop rax
-    ret
-    
-.empty:
-    mov eax, 0xFFFF
-    xor edx, edx
-    ret
-```
-
-### 4.7 Complete ASM Interface (All Functions)
-
-```nasm
-; =============================================================================
-; NIC Driver ASM Interface (x86_64, Microsoft x64 ABI)
-; Complete function list post-ExitBootServices
-; =============================================================================
-
-; --- DMA Memory Management ---
-global asm_dma_init             ; Initialize DMA region
-global asm_alloc_rx_buffer      ; Allocate RX buffer
-global asm_alloc_tx_buffer      ; Allocate TX buffer
-global asm_free_rx_buffer       ; Free RX buffer
-global asm_free_tx_buffer       ; Free TX buffer
-
-; --- PHY Layer (Intel/Realtek only) ---
-global asm_phy_read             ; Read PHY register
-global asm_phy_write            ; Write PHY register
-global asm_phy_init             ; Initialize PHY, auto-negotiate
-global asm_phy_get_link         ; Check link status
-
-; --- MAC Layer ---
-global asm_mac_reset            ; Reset MAC controller
-global asm_mac_init             ; Initialize MAC (after PHY)
-global asm_mac_set_addr         ; Program MAC address
-global asm_mac_enable           ; Enable RX/TX
-
-; --- Virtqueue Management ---
-global asm_virtq_init           ; Initialize virtqueue structures
-global asm_virtq_add_buf        ; Add buffer to available ring
-global asm_virtq_get_used       ; Poll used ring for completions
-global asm_virtq_kick           ; Notify device (doorbell)
-
-; --- High-Level Packet Interface ---
-global asm_nic_init             ; Full NIC initialization sequence
-global asm_poll_rx              ; Non-blocking receive (returns packet or 0)
-global asm_poll_tx              ; Non-blocking transmit (fire-and-forget)
-global asm_collect_tx           ; Collect TX completions
-global asm_get_mac              ; Get MAC address
-
-; --- Timing ---
-global asm_read_tsc             ; Read timestamp counter
-global asm_delay_cycles         ; Spin for N cycles (for HW delays only)
-```
-
-### 4.8 Memory Layout for DMA (Detailed)
+Virtqueue size is NOT hardcoded. It MUST be negotiated:
 
 ```
-DMA Region Layout (must be page-aligned, identity-mapped):
+CONTRACT: Queue Size Negotiation
 
-┌─────────────────────────────────────────────────────────────┐
-│ Offset 0x0000: VirtIO Net Header Template (16 bytes)       │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0010: RX Descriptor Ring (16 entries × 16 bytes)  │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0110: RX Available Ring (header + 16 entries)     │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0140: RX Used Ring (header + 16 entries)          │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0200: TX Descriptor Ring (16 entries × 16 bytes)  │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0310: TX Available Ring (header + 16 entries)     │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0340: TX Used Ring (header + 16 entries)          │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0400: RX Buffers (16 × 2KB = 32KB)                │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x8400: TX Buffers (16 × 2KB = 32KB)                │
-├─────────────────────────────────────────────────────────────┤
-│ Total: ~66KB (fits in 17 pages)                            │
-└─────────────────────────────────────────────────────────────┘
+1. Read queue_num_max from device
+2. Choose queue_size where:
+   - queue_size >= 2
+   - queue_size <= queue_num_max
+   - queue_size <= 32768
+   - queue_size is power of 2
+3. Write queue_size to queue_num register
+4. Allocate structures accordingly
 ```
 
-### 4.9 VirtIO Notification Sequence (ASM Critical Section)
+**v1 Default**: Use 32 entries if device supports it.
+
+**Audit Reference**: §7.2.5
+
+### 4.5 Memory Barrier Contracts
+
+#### TX Submit Sequence
 
 ```
-DMA Region Layout (must be page-aligned, identity-mapped):
+CONTRACT MEM-ORD-1: TX Submission Ordering
 
-┌─────────────────────────────────────────────────────────────┐
-│ Offset 0x0000: VirtIO Net Header Template (16 bytes)       │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0010: RX Descriptor Ring (16 entries × 16 bytes)  │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0110: RX Available Ring (header + 16 entries)     │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0140: RX Used Ring (header + 16 entries)          │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0200: TX Descriptor Ring (16 entries × 16 bytes)  │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0310: TX Available Ring (header + 16 entries)     │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0340: TX Used Ring (header + 16 entries)          │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x0400: RX Buffers (16 × 2KB = 32KB)                │
-├─────────────────────────────────────────────────────────────┤
-│ Offset 0x8400: TX Buffers (16 × 2KB = 32KB)                │
-├─────────────────────────────────────────────────────────────┤
-│ Total: ~66KB (fits in 17 pages)                            │
-└─────────────────────────────────────────────────────────────┘
+SEQUENCE (must execute in this order):
+  1. WRITE: descriptor.addr, descriptor.len, descriptor.flags
+  2. BARRIER: sfence (ensures descriptor visible before index)
+  3. WRITE: avail.ring[idx & mask] = descriptor_index
+  4. BARRIER: sfence (ensures ring entry visible before index)
+  5. WRITE: avail.idx += 1
+  6. BARRIER: mfence (full barrier before notify)
+  7. CONDITIONAL: if notification needed, MMIO write to notify register
+
+RATIONALE:
+  - Device may read descriptors immediately after avail.idx changes
+  - Without barriers, device may see stale descriptor data
+  - mfence before notify ensures all writes complete
 ```
 
-### 4.4 VirtIO Notification Sequence (ASM Critical Section)
+#### RX Completion Sequence
 
-```nasm
-; Critical TX submit sequence - order MUST NOT change
-submit_tx_packet:
-    ; Step 1: Write descriptor (already done by caller)
-    
-    ; Step 2: Memory barrier - ensure descriptor visible before index
-    mfence
-    
-    ; Step 3: Increment available index
-    mov ax, [avail_idx]
-    inc ax
-    mov [avail_idx], ax
-    
-    ; Step 4: Memory barrier - ensure index visible before notify
-    mfence
-    
-    ; Step 5: Check if notification needed
-    mov ax, [used_flags]
-    test ax, VIRTQ_USED_F_NO_NOTIFY
-    jnz .skip_notify
-    
-    ; Step 6: Notify device (MMIO write to queue notify register)
-    mov eax, TX_QUEUE_INDEX
-    mov [notify_reg], eax
-    
-.skip_notify:
-    ret
 ```
+CONTRACT MEM-ORD-2: RX Completion Polling
+
+SEQUENCE:
+  1. READ: used.idx (volatile read)
+  2. COMPARE: if used.idx == last_used_idx, return None
+  3. BARRIER: lfence (ensures index read before entry read)
+  4. READ: used.ring[last_used_idx & mask]
+  5. READ: buffer contents
+  6. UPDATE: last_used_idx += 1
+  7. RETURN: buffer to caller
+
+RATIONALE:
+  - lfence prevents speculative read of ring entry
+  - Ensures we see device's writes before reading buffer
+```
+
+**Audit Reference**: §2.3, §5.4
+
+### 4.6 VirtIO Network Header (Locked)
+
+**Header Size**: 12 bytes (for modern VIRTIO_F_VERSION_1 devices)
+
+```rust
+#[repr(C)]
+pub struct VirtioNetHdr {
+    pub flags: u8,          // VIRTIO_NET_HDR_F_*
+    pub gso_type: u8,       // VIRTIO_NET_HDR_GSO_*
+    pub hdr_len: u16,       // Ethernet + IP + TCP header length
+    pub gso_size: u16,      // GSO segment size (0 if no GSO)
+    pub csum_start: u16,    // Checksum start offset
+    pub csum_offset: u16,   // Checksum offset from csum_start
+    pub num_buffers: u16,   // Only with MRG_RXBUF (we don't use it)
+}
+```
+
+**For our use (no offloads)**: Zero the entire 12-byte header.
+
+**Buffer Layout**:
+```
+Offset 0-11:  VirtioNetHdr (12 bytes, zeroed)
+Offset 12+:   Ethernet frame (14-byte header + IP payload)
+Total:        12 + 1514 = 1526 bytes minimum per buffer
+```
+
+**Audit Reference**: §7.2.7
+
+### 4.7 DMA Memory Layout (Locked)
+
+```
+DMA Region (2MB minimum, allocated via PCI I/O Protocol):
+
+Offset      Size      Content
+───────────────────────────────────────────────────────────
+0x0000      0x200     RX descriptor table (32 × 16 bytes)
+0x0200      0x048     RX available ring (4 + 32×2 + 2 bytes, padded)
+0x0400      0x108     RX used ring (4 + 32×8 + 2 bytes, padded)
+0x0800      0x200     TX descriptor table (32 × 16 bytes)
+0x0A00      0x048     TX available ring
+0x0C00      0x108     TX used ring
+0x1000      0x10000   RX buffers (32 × 2KB = 64KB)
+0x11000     0x10000   TX buffers (32 × 2KB = 64KB)
+0x21000     ...       Reserved (~1.87MB)
+───────────────────────────────────────────────────────────
+Total used: ~136KB
+```
+
+**Memory Type**: Uncached (UC) or Write-Combining (WC)
+**Alignment**: Page-aligned (4KB boundary)
+**Address**: Below 4GB (32-bit DMA compatibility)
+
+### 4.8 Notification Suppression (Simplified for v1)
+
+For v1, we use the simplest notification model:
+
+- Set `avail.flags = 0` (do not suppress device interrupts)
+- Ignore `used.flags` (we poll anyway)
+- Do NOT use `event_idx` feature
+- Always notify device after TX submit
+
+**Rationale**: Simplicity. Notification suppression is an optimization that adds complexity.
+
+**Audit Reference**: §7.2.6
+
+### 4.9 Section 4 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **VIRTIO-1** | Device initialization follows exact status sequence |
+| **VIRTIO-2** | Feature negotiation rejects forbidden features |
+| **VIRTIO-3** | Queue size read from device, never hardcoded |
+| **VIRTIO-4** | Header size is 12 bytes (VERSION_1 devices) |
+| **VIRTIO-5** | Memory barriers placed per MEM-ORD-1 and MEM-ORD-2 |
+| **DMA-1** | DMA region allocated via PCI I/O Protocol |
+| **DMA-2** | DMA region mapped UC or WC |
+| **DMA-3** | DMA region below 4GB |
+| **DMA-4** | Buffer ownership tracked; never access DEVICE-OWNED |
 
 ---
 
-## Section 5: Boot Sequence & ExitBootServices Boundary
+## Section 5: Boot Sequence & ExitBootServices Boundary (Locked)
 
 ### 5.1 The Two-Phase Boot Model
 
@@ -933,20 +604,22 @@ submit_tx_packet:
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  1. UEFI loads bootloader.efi                                  │
-│  2. Bootloader allocates memory for:                           │
-│     - Kernel/initrd buffers                                    │
-│     - DMA region (page-aligned, reserved)                      │
-│     - Stack for post-EBS execution                             │
-│  3. Bootloader scans PCI for NICs                              │
-│     - Records MMIO base addresses                              │
-│     - Records MAC addresses (optional)                         │
-│     - Does NOT initialize device drivers                       │
-│  4. Bootloader prepares memory map                             │
-│  5. Bootloader sets up identity page tables (if needed)        │
+│  2. Bootloader allocates memory via PCI I/O Protocol:          │
+│     - AllocateBuffer() for DMA region (returns CPU pointer)    │
+│     - Map() to get device-visible bus address                  │
+│     - SetAttributes() to mark UC or WC                         │
+│  3. Allocate stack (EfiLoaderData, 64KB minimum)               │
+│  4. Calibrate TSC using UEFI Stall() as reference              │
+│  5. Scan PCI for VirtIO NIC:                                   │
+│     - Record MMIO base addresses                               │
+│     - Does NOT initialize device                               │
+│  6. Get final memory map                                       │
+│  7. Populate BootHandoff structure                             │
 │                                                                 │
 │  ─────────── POINT OF NO RETURN ───────────                    │
 │                                                                 │
-│  6. Call ExitBootServices(image_handle, map_key)               │
+│  8. Call ExitBootServices(image_handle, map_key)               │
+│     - Retry with fresh map if map_key mismatch                 │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -956,145 +629,294 @@ submit_tx_packet:
 │              (Boot Services UNAVAILABLE)                        │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  7. Initialize serial/debug output (optional)                  │
-│  8. Call asm_nic_init(mmio_base, dma_base, dma_size)          │
-│     - Device reset, feature negotiation                        │
-│     - Virtqueue setup, RX buffer submission                    │
-│  9. Create smoltcp Interface with ASM device adapter           │
-│ 10. Enter main poll loop:                                      │
-│     - DHCP discovery/negotiation                               │
-│     - DNS resolution                                           │
-│     - TCP connections                                          │
-│     - HTTP requests                                            │
-│     - ISO download                                             │
-│ 11. Prepare kernel boot (load kernel, initrd)                  │
-│ 12. Jump to kernel entry point                                 │
+│  9. Switch to pre-allocated stack                              │
+│ 10. Remap DMA region as UC (if not done via SetAttributes)     │
+│ 11. Initialize VirtIO NIC (full sequence per §4.3)             │
+│ 12. Create smoltcp Interface with device adapter               │
+│ 13. Enter main poll loop (never returns)                       │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Pre-ExitBootServices Checklist
+**Audit Reference**: §5.2, §7.2.1, §7.2.9
 
-**MUST DO before calling ExitBootServices()**:
+### 5.2 Pre-ExitBootServices Requirements (Locked)
 
-| Task | Why |
-|------|-----|
-| Allocate DMA region | No allocator after EBS |
-| Record NIC MMIO base | PCI config access may fail after EBS |
-| Get memory map | Required for EBS call |
-| Set up page tables | If using virtual memory |
-| Reserve stack | Current stack may be in reclaimed region |
-| Store ACPI tables pointer | May need for hardware discovery |
+**MUST DO before ExitBootServices()**:
 
-**MUST NOT DO before calling ExitBootServices()**:
+| Task | Method | Why |
+|------|--------|-----|
+| Allocate DMA region | `EFI_PCI_ROOT_BRIDGE_IO.AllocateBuffer()` | Returns DMA-safe memory |
+| Get bus address | `EFI_PCI_ROOT_BRIDGE_IO.Map()` | Device-visible address (IOMMU-aware) |
+| Set memory attributes | `SetAttributes(UC or WC)` | Cache coherency |
+| Allocate stack | `AllocatePages(EfiLoaderData)` | Survives EBS |
+| Calibrate TSC | `Stall(1_000_000)` + `rdtsc` | Timing reference |
+| Record NIC location | PCI enumeration | MMIO base address |
+| Get memory map | `GetMemoryMap()` | Required for EBS call |
+
+**MUST NOT DO before ExitBootServices()**:
 
 | Action | Why Not |
 |--------|---------|
-| Initialize NIC driver | UEFI may conflict |
-| Submit DMA buffers | UEFI owns device state |
-| Write to device MMIO | Undefined behavior |
-| Set up virtqueues | Device state unknown |
+| Reset NIC | UEFI SNP/NII may be using it |
+| Write to NIC MMIO | Conflicts with firmware drivers |
+| Submit DMA buffers | Device state owned by UEFI |
+| Set up virtqueues | Wait until post-EBS |
 
-### 5.3 Post-ExitBootServices Constraints
+**Audit Reference**: §7.2.1, §7.2.9
 
-After `ExitBootServices()` returns successfully:
-
-| Available | Not Available |
-|-----------|---------------|
-| CPU registers | AllocatePool/FreePool |
-| Identity-mapped memory | Console output (GOP) |
-| PCI MMIO access | File system access |
-| TSC instruction | Timer services |
-| Raw port I/O | Memory map changes |
-| Pre-allocated DMA | Runtime services (limited) |
-
-### 5.4 Error Recovery
-
-**If ExitBootServices() fails** (map_key mismatch):
-1. Get new memory map
-2. Try again with new map_key
-3. If fails 3 times: fatal error, halt
-
-**If NIC init fails after ExitBootServices()**:
-1. No recovery possible (no allocator)
-2. Log to serial if available
-3. Attempt alternate NIC if discovered
-4. If all fail: boot without network
-
-### 5.5 Handoff Data Structure
+### 5.3 DMA Allocation Contract
 
 ```rust
-/// Data passed from UEFI phase to bare-metal phase
-#[repr(C)]
-pub struct BootHandoff {
-    /// MMIO base address for primary NIC
-    pub nic_mmio_base: u64,
-    /// DMA region base (page-aligned)
-    pub dma_base: u64,
-    /// DMA region size in bytes
-    pub dma_size: u64,
-    /// MAC address (6 bytes, may be zero if unknown)
-    pub mac_address: [u8; 6],
-    /// NIC type (0=VirtIO, 1=Intel, 2=Realtek, etc.)
-    pub nic_type: u16,
-    /// ACPI RSDP address (for future use)
-    pub acpi_rsdp: u64,
-    /// Stack top for post-EBS execution
-    pub stack_top: u64,
-    /// Framebuffer base (for debug output)
-    pub framebuffer_base: u64,
-    /// Framebuffer size
-    pub framebuffer_size: u64,
+/// Correct DMA buffer allocation using UEFI PCI I/O Protocol
+fn allocate_dma_buffer(
+    pci_io: &PciRootBridgeIo,
+    size: usize,
+) -> Result<DmaBuffer> {
+    // 1. Allocate via UEFI (handles alignment, type)
+    let cpu_address = pci_io.allocate_buffer(
+        AllocateType::MaxAddress(0xFFFF_FFFF),  // Below 4GB
+        MemoryType::BOOT_SERVICES_DATA,
+        size / PAGE_SIZE,
+    )?;
+    
+    // 2. Map to get device-visible address
+    let (bus_address, mapping) = pci_io.map(
+        PciIoOperation::BusMasterCommonBuffer,
+        cpu_address,
+        size,
+    )?;
+    
+    // 3. Set attributes for cache coherency
+    pci_io.set_attributes(
+        EFI_PCI_ATTRIBUTE_MEMORY_WRITE_COMBINE,  // Or UNCACHED
+        cpu_address,
+        size,
+    )?;
+    
+    Ok(DmaBuffer {
+        cpu_ptr: cpu_address,       // For Rust code access
+        bus_addr: bus_address,      // For device DMA programming
+        size,
+        mapping,
+    })
 }
 ```
 
----
+**Critical**: The `bus_addr` may differ from `cpu_ptr` if IOMMU is active. Always use `bus_addr` when programming device descriptors.
 
-## Section 6: smoltcp Integration
+**Audit Reference**: §7.2.1, §7.2.2
 
-### 6.1 The Device Trait Bridge
-
-smoltcp requires implementing its `Device` trait. The key insight:
-**smoltcp's `poll()` must never block, and neither can our device**.
+### 5.4 TSC Calibration Contract
 
 ```rust
-/// ASM-backed network device for smoltcp
-pub struct AsmNetDevice {
-    /// MMIO base (passed to ASM)
-    mmio_base: u64,
-    /// Pending RX packet (pre-fetched)
-    rx_pending: Option<RxPacket>,
-    /// TX queue status
-    tx_ready: bool,
+/// Calibrate TSC using UEFI Stall() as reference
+fn calibrate_tsc(boot_services: &BootServices) -> u64 {
+    let start = unsafe { core::arch::x86_64::_rdtsc() };
+    boot_services.stall(1_000_000);  // 1 second
+    let end = unsafe { core::arch::x86_64::_rdtsc() };
+    end - start  // TSC ticks per second
 }
 
-impl smoltcp::phy::Device for AsmNetDevice {
-    type RxToken<'a> = AsmRxToken;
-    type TxToken<'a> = AsmTxToken;
+// MUST verify invariant TSC before relying on this
+fn verify_invariant_tsc() -> bool {
+    // CPUID.80000007H:EDX bit 8
+    let result = unsafe { core::arch::x86_64::__cpuid(0x80000007) };
+    (result.edx & (1 << 8)) != 0
+}
+```
+
+**Audit Reference**: §7.1.4, §2.5 TIME-2
+
+### 5.5 Post-ExitBootServices Constraints (Locked)
+
+After `ExitBootServices()` returns successfully:
+
+| Available | NOT Available |
+|-----------|---------------|
+| CPU registers, stack | Boot Services (ANY) |
+| Pre-allocated DMA region | Memory allocation |
+| PCI MMIO access (via cached base) | Console output |
+| TSC instruction | File system |
+| Identity-mapped memory | Timer services |
+| Raw port I/O | PCI config via UEFI |
+
+### 5.6 Error Recovery
+
+**If ExitBootServices() fails** (map_key mismatch):
+```rust
+loop {
+    let (map, key) = get_memory_map()?;
+    match exit_boot_services(image, key) {
+        Ok(()) => break,
+        Err(Status::INVALID_PARAMETER) => continue,  // Retry
+        Err(e) => return Err(e),  // Fatal
+    }
+    retries -= 1;
+    if retries == 0 { halt(); }
+}
+```
+
+**If NIC init fails after ExitBootServices()**:
+- No recovery possible (no allocator)
+- Log error to serial/framebuffer if available
+- Halt with error code
+
+### 5.7 Handoff Data Structure (Locked)
+
+```rust
+/// Data passed from UEFI phase to bare-metal phase.
+/// Must be placed in EfiLoaderData memory that survives EBS.
+#[repr(C)]
+pub struct BootHandoff {
+    /// Magic number for validation: 0x4D4F5250_48455553 ("MORPHEUS")
+    pub magic: u64,
+    
+    /// Structure version (currently 1)
+    pub version: u32,
+    
+    /// Size of this structure in bytes
+    pub size: u32,
+    
+    // === NIC Information ===
+    
+    /// MMIO base address for VirtIO NIC (0 if none found)
+    pub nic_mmio_base: u64,
+    
+    /// PCI location: bus, device, function
+    pub nic_pci_bus: u8,
+    pub nic_pci_device: u8,
+    pub nic_pci_function: u8,
+    
+    /// NIC type: 0=None, 1=VirtIO, 2=Intel, 3=Realtek
+    pub nic_type: u8,
+    
+    /// MAC address (valid if nic_type != 0)
+    pub mac_address: [u8; 6],
+    
+    pub _pad1: [u8; 2],
+    
+    // === DMA Region ===
+    
+    /// DMA region CPU pointer (for Rust code access)
+    pub dma_cpu_ptr: u64,
+    
+    /// DMA region bus address (for device DMA programming)
+    pub dma_bus_addr: u64,
+    
+    /// DMA region size in bytes (minimum 2MB)
+    pub dma_size: u64,
+    
+    // === Timing ===
+    
+    /// TSC frequency in Hz (calibrated at boot)
+    pub tsc_freq: u64,
+    
+    // === Stack ===
+    
+    /// Stack top address for post-EBS execution
+    pub stack_top: u64,
+    
+    /// Stack size in bytes
+    pub stack_size: u64,
+    
+    // === Debug (optional) ===
+    
+    /// Framebuffer base for debug output (or 0)
+    pub framebuffer_base: u64,
+    pub framebuffer_size: u64,
+    pub framebuffer_width: u32,
+    pub framebuffer_height: u32,
+    pub framebuffer_stride: u32,
+    pub _pad2: u32,
+}
+
+impl BootHandoff {
+    pub const MAGIC: u64 = 0x4D4F5250_48455553;
+    pub const VERSION: u32 = 1;
+    
+    pub fn validate(&self) -> bool {
+        self.magic == Self::MAGIC &&
+        self.version == Self::VERSION &&
+        self.size as usize == core::mem::size_of::<Self>() &&
+        self.dma_cpu_ptr != 0 &&
+        self.dma_size >= 2 * 1024 * 1024 &&
+        self.tsc_freq > 0 &&
+        self.stack_top != 0
+    }
+}
+```
+
+**Audit Reference**: §5.8
+
+### 5.8 Section 5 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **BOOT-1** | DMA region allocated via PCI I/O Protocol, not AllocatePages |
+| **BOOT-2** | DMA bus address stored separately from CPU pointer |
+| **BOOT-3** | TSC frequency calibrated at boot, never hardcoded |
+| **BOOT-4** | Invariant TSC verified via CPUID before use |
+| **BOOT-5** | NIC initialization occurs only AFTER ExitBootServices |
+| **BOOT-6** | All required data stored in BootHandoff before EBS |
+
+---
+
+## Section 6: smoltcp Integration (Locked)
+
+### 6.1 smoltcp Verified Behaviors
+
+The following smoltcp behaviors have been verified against source (§3.6):
+
+| Behavior | Verified |
+|----------|----------|
+| `poll()` is non-blocking | ✓ Returns immediately |
+| `poll()` called once handles all work | ✓ Level-triggered |
+| RxToken valid until consumed | ✓ Lifetime-tied to device |
+| TxToken consume may be called with any size ≤ MTU | ✓ |
+| Millisecond timestamp resolution sufficient | ✓ |
+
+**Audit Reference**: §3.6, §4.3.1-4.3.3
+
+### 6.2 The Device Trait Bridge
+
+smoltcp requires implementing its `Device` trait. The device adapter wraps our VirtIO driver.
+
+```rust
+/// VirtIO-backed network device for smoltcp
+pub struct VirtioNetDevice {
+    /// VirtIO driver state
+    driver: VirtioNet,
+    /// TSC frequency (from boot handoff)
+    tsc_freq: u64,
+}
+
+impl smoltcp::phy::Device for VirtioNetDevice {
+    type RxToken<'a> = VirtioRxToken<'a>;
+    type TxToken<'a> = VirtioTxToken<'a>;
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1514;
+        caps.max_transmission_unit = 1514;  // Ethernet MTU
         caps.medium = Medium::Ethernet;
         caps
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        // Pre-poll RX in main loop, check result here
-        if let Some(pkt) = self.rx_pending.take() {
-            Some((
-                AsmRxToken { data: pkt },
-                AsmTxToken { device: self },
-            ))
-        } else {
-            None
+        // Poll virtqueue for received packet
+        match self.driver.poll_rx() {
+            Some((idx, len)) => Some((
+                VirtioRxToken { driver: &mut self.driver, idx, len },
+                VirtioTxToken { driver: &mut self.driver },
+            )),
+            None => None,
         }
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        // Check if TX queue has space (cached from last poll)
-        if self.tx_ready {
-            Some(AsmTxToken { device: self })
+        // Check if TX queue has space
+        if self.driver.tx_queue_has_space() {
+            Some(VirtioTxToken { driver: &mut self.driver })
         } else {
             None
         }
@@ -1102,58 +924,70 @@ impl smoltcp::phy::Device for AsmNetDevice {
 }
 ```
 
-### 6.2 Token Implementation
+### 6.3 Token Implementation
 
 ```rust
-pub struct AsmRxToken {
-    data: RxPacket,
+pub struct VirtioRxToken<'a> {
+    driver: &'a mut VirtioNet,
+    idx: u16,    // Buffer index
+    len: usize,  // Received length (including 12-byte header)
 }
 
-impl smoltcp::phy::RxToken for AsmRxToken {
+impl<'a> smoltcp::phy::RxToken for VirtioRxToken<'a> {
     fn consume<R, F>(self, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        // Data already in buffer, just call consumer
-        f(&mut self.data.buffer[..self.data.len])
+        // Get buffer, skip 12-byte VirtIO header
+        let buffer = self.driver.get_rx_buffer(self.idx);
+        let frame = &mut buffer[12..self.len];
+        let result = f(frame);
+        
+        // Resubmit buffer to RX queue
+        self.driver.submit_rx_buffer(self.idx);
+        
+        result
     }
 }
 
-pub struct AsmTxToken<'a> {
-    device: &'a mut AsmNetDevice,
+pub struct VirtioTxToken<'a> {
+    driver: &'a mut VirtioNet,
 }
 
-impl<'a> smoltcp::phy::TxToken for AsmTxToken<'a> {
+impl<'a> smoltcp::phy::TxToken for VirtioTxToken<'a> {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        // Allocate TX buffer
-        let mut buffer = [0u8; 1514];
-        let result = f(&mut buffer[..len]);
+        // Allocate TX buffer from pool
+        let idx = self.driver.alloc_tx_buffer();
+        let buffer = self.driver.get_tx_buffer(idx);
         
-        // Submit via ASM - NON-BLOCKING
-        // Returns immediately, completion tracked separately
-        unsafe {
-            asm_poll_tx(buffer.as_ptr(), len);
-        }
+        // Zero the 12-byte VirtIO header (no offloads)
+        buffer[..12].fill(0);
+        
+        // Let smoltcp fill the frame
+        let result = f(&mut buffer[12..12 + len]);
+        
+        // Submit to TX queue - NON-BLOCKING, fire-and-forget
+        self.driver.submit_tx(idx, 12 + len);
         
         result
     }
 }
 ```
 
-### 6.3 The Critical Difference
+### 6.4 The Critical Difference
 
 **WRONG (current implementation)**:
 ```rust
 fn transmit(&mut self, packet: &[u8]) -> Result<()> {
     let token = self.inner.transmit_begin(&tx_buf)?;
-    loop {  // ← BLOCKING LOOP
+    loop {  // ← BLOCKING LOOP - FORBIDDEN
         if let Some(t) = self.inner.poll_transmit() {
             if t == token { return Ok(()); }
         }
-        tsc_delay_us(10);  // ← BUSY WAIT
+        tsc_delay_us(10);  // ← BUSY WAIT - FORBIDDEN
     }
 }
 ```
@@ -1161,98 +995,92 @@ fn transmit(&mut self, packet: &[u8]) -> Result<()> {
 **CORRECT (new design)**:
 ```rust
 fn transmit(&mut self, packet: &[u8]) -> Result<()> {
-    // Just submit, don't wait
-    unsafe { asm_poll_tx(packet.as_ptr(), packet.len()) };
+    // Submit and return immediately
+    self.driver.submit_tx(idx, len);
     Ok(())
-    // Completion will be collected in main loop's Phase 5
+    // Completion collected in main loop's Phase 3
 }
 ```
 
-### 6.4 Timestamp Handling
+### 6.5 Timestamp Handling (Corrected)
 
-smoltcp needs timestamps for timeouts. We use TSC-derived milliseconds:
+smoltcp needs timestamps in milliseconds. TSC frequency is calibrated at boot.
 
 ```rust
-/// Convert TSC to milliseconds (assuming ~2.5GHz CPU)
-fn tsc_to_millis(tsc: u64) -> i64 {
-    const TSC_PER_MS: u64 = 2_500_000; // 2.5GHz / 1000
-    (tsc / TSC_PER_MS) as i64
+/// Convert TSC ticks to smoltcp Instant
+fn tsc_to_instant(tsc: u64, tsc_freq: u64) -> Instant {
+    // tsc_freq is ticks per second
+    // Convert to milliseconds: tsc * 1000 / tsc_freq
+    let millis = tsc / (tsc_freq / 1000);
+    Instant::from_millis(millis as i64)
 }
 
-/// Get current timestamp for smoltcp
-fn now() -> Instant {
-    let tsc = unsafe { asm_read_tsc() };
-    Instant::from_millis(tsc_to_millis(tsc))
-}
+// In main loop:
+let now_tsc = rdtsc();
+let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+iface.poll(timestamp, &mut device, &mut sockets);
 ```
 
-### 6.5 Socket State Machine Integration
+**Contract**: `tsc_freq` comes from `BootHandoff`, calibrated at boot. Never hardcoded.
 
-smoltcp sockets must be polled repeatedly. The pattern:
+**Audit Reference**: §7.1.4, §2.5 TIME-2
 
-```rust
-pub enum DhcpState {
-    Discovering { start_tsc: u64 },
-    Requesting { start_tsc: u64 },
-    Bound { ip: Ipv4Addr, lease_start: u64 },
-    Failed(DhcpError),
-}
+### 6.6 smoltcp Memory Requirements
 
-impl DhcpState {
-    /// Advance state by one step. Returns true if terminal.
-    pub fn step(&mut self, iface: &mut Interface, now_tsc: u64) -> bool {
-        match self {
-            DhcpState::Discovering { start_tsc } => {
-                // Check timeout
-                if now_tsc - *start_tsc > DHCP_DISCOVER_TIMEOUT_TSC {
-                    *self = DhcpState::Failed(DhcpError::DiscoverTimeout);
-                    return true;
-                }
-                
-                // Check if DHCP socket got offer
-                if let Some(config) = iface.dhcp_poll() {
-                    *self = DhcpState::Bound { 
-                        ip: config.address, 
-                        lease_start: now_tsc 
-                    };
-                    return true;
-                }
-                
-                false // Still discovering
-            }
-            DhcpState::Bound { .. } => true,  // Terminal success
-            DhcpState::Failed(_) => true,      // Terminal failure
-            _ => false,
-        }
-    }
-}
-```
+Per socket buffer allocation (must be done at initialization):
+
+| Resource | Size | Notes |
+|----------|------|-------|
+| TCP socket RX buffer | 64KB | Per socket |
+| TCP socket TX buffer | 64KB | Per socket |
+| Interface overhead | ~10KB | ARP cache, etc. |
+
+**Total for 3 TCP sockets**: ~400KB
+
+This is SEPARATE from the 2MB DMA region.
+
+**Audit Reference**: §4.3.2
+
+### 6.7 Section 6 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **SMOLTCP-1** | poll() called exactly once per main loop iteration |
+| **SMOLTCP-2** | Device receive() and transmit() return immediately |
+| **SMOLTCP-3** | RxToken buffer valid until consume() returns |
+| **SMOLTCP-4** | TxToken consume() submits packet without waiting |
+| **SMOLTCP-5** | Timestamp derived from calibrated TSC, never hardcoded |
+| **SMOLTCP-6** | Socket buffer memory allocated at initialization |
 
 ---
 
 ## Section 7: Timing, Polling Budgets & Determinism
 
+**Audit Reference**: §7.1.4 (TSC calibration), §2.5 (TIME-2), §5.3 (timing patterns)
+
 ### 7.1 The Polling Budget Model
 
-Each main loop iteration has a **fixed cycle budget**:
+Each main loop iteration has a **fixed time budget** (independent of CPU frequency):
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    MAIN LOOP CYCLE BUDGET                        │
+│                    MAIN LOOP TIME BUDGET                         │
 │                   (Target: 1ms per iteration)                    │
 ├─────────────────────────────┬────────────────────────────────────┤
-│ Phase                       │ Budget (cycles @ 2.5GHz)          │
+│ Phase                       │ Budget (wall time)                │
 ├─────────────────────────────┼────────────────────────────────────┤
-│ 1. RX Poll (16 checks)      │ ~50,000 cycles (20µs)             │
-│ 2. smoltcp poll()           │ ~500,000 cycles (200µs)           │
-│ 3. TX Drain (16 packets)    │ ~100,000 cycles (40µs)            │
-│ 4. App state step           │ ~1,000,000 cycles (400µs)         │
-│ 5. TX completion collect    │ ~50,000 cycles (20µs)             │
-│ 6. Overhead/margin          │ ~800,000 cycles (320µs)           │
+│ 1. RX Poll (16 checks)      │ ~20µs                             │
+│ 2. smoltcp poll()           │ ~200µs                            │
+│ 3. TX Drain (16 packets)    │ ~40µs                             │
+│ 4. App state step           │ ~400µs                            │
+│ 5. TX completion collect    │ ~20µs                             │
+│ 6. Overhead/margin          │ ~320µs                            │
 ├─────────────────────────────┼────────────────────────────────────┤
-│ TOTAL                       │ 2,500,000 cycles (1ms)            │
+│ TOTAL                       │ 1ms                               │
 └─────────────────────────────┴────────────────────────────────────┘
 ```
+
+**Contract**: Cycle counts are derived from `tsc_freq * time_budget_seconds`. Never hardcode cycle counts.
 
 ### 7.2 RX Polling Strategy
 
@@ -1302,65 +1130,107 @@ fn drain_tx_phase(tx_queue: &mut TxQueue) {
 }
 ```
 
-### 7.4 Timeout Calculation
+### 7.4 Timeout Calculation (Parameterized)
 
-All timeouts expressed in TSC cycles, not wall time:
+All timeouts computed from calibrated `tsc_freq`. **No hardcoded cycle counts.**
 
 ```rust
-/// Timeout constants (assuming 2.5GHz TSC)
-pub mod timeouts {
-    pub const TSC_PER_US: u64 = 2_500;
-    pub const TSC_PER_MS: u64 = 2_500_000;
-    pub const TSC_PER_SEC: u64 = 2_500_000_000;
+/// Timeout configuration - all values in SECONDS or MILLISECONDS
+/// Actual TSC ticks computed at runtime using tsc_freq
+pub struct TimeoutConfig {
+    pub tsc_freq: u64,  // From BootHandoff, calibrated at boot
+}
+
+impl TimeoutConfig {
+    /// Create from calibrated TSC frequency
+    pub fn new(tsc_freq: u64) -> Self {
+        Self { tsc_freq }
+    }
     
-    pub const DHCP_DISCOVER: u64 = 5 * TSC_PER_SEC;   // 5 seconds
-    pub const DHCP_REQUEST: u64 = 3 * TSC_PER_SEC;    // 3 seconds
-    pub const TCP_CONNECT: u64 = 30 * TSC_PER_SEC;    // 30 seconds
-    pub const TCP_KEEPALIVE: u64 = 60 * TSC_PER_SEC;  // 60 seconds
-    pub const DNS_QUERY: u64 = 5 * TSC_PER_SEC;       // 5 seconds
+    /// Convert microseconds to TSC ticks
+    #[inline]
+    pub fn us_to_ticks(&self, us: u64) -> u64 {
+        us * self.tsc_freq / 1_000_000
+    }
+    
+    /// Convert milliseconds to TSC ticks
+    #[inline]
+    pub fn ms_to_ticks(&self, ms: u64) -> u64 {
+        ms * self.tsc_freq / 1_000
+    }
+    
+    /// Convert seconds to TSC ticks
+    #[inline]
+    pub fn sec_to_ticks(&self, sec: u64) -> u64 {
+        sec * self.tsc_freq
+    }
+    
+    // Protocol timeouts (in wall time, converted to ticks when needed)
+    pub fn dhcp_discover(&self) -> u64 { self.sec_to_ticks(5) }
+    pub fn dhcp_request(&self) -> u64 { self.sec_to_ticks(3) }
+    pub fn tcp_connect(&self) -> u64 { self.sec_to_ticks(30) }
+    pub fn tcp_keepalive(&self) -> u64 { self.sec_to_ticks(60) }
+    pub fn dns_query(&self) -> u64 { self.sec_to_ticks(5) }
 }
 ```
+
+**Contract**: `TimeoutConfig` initialized once from `BootHandoff.tsc_freq`, passed to all timeout checks.
+
+**Audit Reference**: §7.1.4, TIME-2 invariant
 
 ### 7.5 Timeout Checking Pattern
 
 ```rust
 /// Check timeout without blocking
-fn is_timed_out(start_tsc: u64, timeout_tsc: u64) -> bool {
+fn is_timed_out(start_tsc: u64, timeout_ticks: u64) -> bool {
     let now = unsafe { asm_read_tsc() };
-    now.wrapping_sub(start_tsc) > timeout_tsc
+    now.wrapping_sub(start_tsc) > timeout_ticks
 }
 
-// Usage in state machine:
-match &mut self.state {
-    State::Connecting { start_tsc, .. } => {
-        if is_timed_out(*start_tsc, timeouts::TCP_CONNECT) {
-            self.state = State::Failed(Error::Timeout);
-            return StepResult::Done;
+// Usage in state machine (timeout_ticks from TimeoutConfig):
+fn step(&mut self, timeouts: &TimeoutConfig) -> StepResult {
+    match &mut self.state {
+        State::Connecting { start_tsc, .. } => {
+            if is_timed_out(*start_tsc, timeouts.tcp_connect()) {
+                self.state = State::Failed(Error::Timeout);
+                return StepResult::Done;
+            }
+            // Check connection status...
         }
-        // Check connection status...
+        // ...
     }
-    // ...
 }
 ```
 
-### 7.6 TSC Calibration
+### 7.6 TSC Calibration (Pre-ExitBootServices)
 
-At boot, calibrate TSC against known reference:
+TSC calibration MUST occur before ExitBootServices using UEFI Stall():
 
 ```rust
-/// Calibrate TSC using PIT or HPET (before ExitBootServices)
-fn calibrate_tsc() -> u64 {
-    // Option 1: Use UEFI Stall() as reference
+/// Calibrate TSC using UEFI Stall() - MUST be called before ExitBootServices
+fn calibrate_tsc(boot_services: &BootServices) -> u64 {
+    // Stall for 100ms (100,000 microseconds) - balance accuracy vs boot time
     let start = unsafe { asm_read_tsc() };
-    uefi_stall(1_000_000); // 1 second
+    boot_services.stall(100_000); // 100ms
     let end = unsafe { asm_read_tsc() };
     
-    end - start // TSC ticks per second
+    // Scale to ticks per second
+    (end - start) * 10
 }
 
-// Store for later use
-static mut TSC_FREQ: u64 = 2_500_000_000; // Default 2.5GHz
+// Store in BootHandoff - NO DEFAULT VALUE
+pub struct BootHandoff {
+    pub tsc_freq: u64,  // REQUIRED, no default
+    // ... other fields
+}
 ```
+
+**Contract**: 
+- Calibration MUST occur before ExitBootServices
+- No default/fallback values - if calibration fails, boot fails
+- Result stored in `BootHandoff.tsc_freq` and passed to all timing code
+
+**Audit Reference**: §7.1.4 "calibrate_tsc() MUST be called before ExitBootServices"
 
 ### 7.7 Determinism Guarantees
 
@@ -1417,9 +1287,24 @@ fn step(&mut self) -> StepResult {
 }
 ```
 
+### 7.9 Section 7 Invariant Summary
+
+| Invariant | Description |
+|-----------|-------------|
+| **TIME-1** | TSC calibrated at boot via UEFI Stall(), not hardcoded |
+| **TIME-2** | No hardcoded TSC frequency (no `2_500_000`, no "@ 2.5GHz") |
+| **TIME-3** | All timeouts expressed in wall time, converted via `TimeoutConfig` |
+| **TIME-4** | `wrapping_sub()` used for TSC comparisons (handles wraparound) |
+| **BUDGET-1** | Each loop phase has bounded iteration count (e.g., `RX_POLL_BUDGET: 16`) |
+| **BUDGET-2** | Total main loop iteration target: 1ms wall time |
+| **BUDGET-3** | No unbounded loops (`while condition {}` forbidden) |
+| **DETER-1** | Timing variance ±100µs via ASM critical paths |
+
 ---
 
 ## Section 8: Protocol State Machines
+
+**Audit Reference**: §2.7 (state machine patterns), §5.6 (protocol state machines)
 
 ### 8.1 The State Machine Principle
 
