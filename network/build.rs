@@ -1,10 +1,43 @@
 //! Build script for morpheus-network.
 //!
-//! Assembles the PCI I/O assembly file for x86_64 targets.
+//! Assembles all ASM files for x86_64 targets:
+//! - Legacy pci_io.S (existing)
+//! - New ASM layer in asm/ (core, pci, drivers, phy)
 
 use std::env;
 use std::process::Command;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::fs;
+
+/// All ASM source files organized by category
+const ASM_CORE: &[&str] = &[
+    "asm/core/tsc.s",
+    "asm/core/barriers.s",
+    "asm/core/mmio.s",
+    "asm/core/pio.s",
+    "asm/core/cache.s",
+    "asm/core/delay.s",
+];
+
+const ASM_PCI: &[&str] = &[
+    "asm/pci/legacy.s",
+    "asm/pci/ecam.s",
+    "asm/pci/bar.s",
+];
+
+const ASM_VIRTIO: &[&str] = &[
+    "asm/drivers/virtio/init.s",
+    "asm/drivers/virtio/queue.s",
+    "asm/drivers/virtio/tx.s",
+    "asm/drivers/virtio/rx.s",
+    "asm/drivers/virtio/notify.s",
+];
+
+const ASM_PHY: &[&str] = &[
+    "asm/phy/mdio.s",
+    "asm/phy/mii.s",
+    "asm/phy/link.s",
+];
 
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
@@ -14,63 +47,141 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     // Only build assembly for x86_64 targets
-    if target.contains("x86_64") {
-        println!("cargo:rerun-if-changed=src/device/pci_io.S");
-        println!("cargo:warning=Building PCI I/O assembly for target: {}", target);
-
-        let asm_path = "src/device/pci_io.S";
-        let obj_path = out_dir.join("pci_io.o");
-        let lib_path = out_dir.join("libpci_io.a");
-
-        // Determine output format based on target
-        // UEFI uses PE/COFF format (win64)
-        let obj_format = if target.contains("windows") || target.contains("uefi") {
-            "win64"  // PE/COFF format for UEFI
-        } else {
-            "elf64"
-        };
-
-        println!("cargo:warning=Using object format: {}", obj_format);
-
-        // Assemble with nasm
-        let nasm_output = Command::new("nasm")
-            .args([
-                "-f", obj_format,
-                "-o", obj_path.to_str().unwrap(),
-                asm_path,
-            ])
-            .output()
-            .expect("Failed to run nasm. Is nasm installed?");
-
-        if !nasm_output.status.success() {
-            let stderr = String::from_utf8_lossy(&nasm_output.stderr);
-            panic!("nasm failed to assemble pci_io.S: {}", stderr);
-        }
-
-        println!("cargo:warning=Assembled {} -> {}", asm_path, obj_path.display());
-
-        // Use regular ar - it handles COFF files fine
-        // (llvm-ar would be more "correct" but ar works and is more available)
-        let ar_output = Command::new("ar")
-            .args([
-                "crs",
-                lib_path.to_str().unwrap(),
-                obj_path.to_str().unwrap(),
-            ])
-            .output()
-            .expect("Failed to run ar. Is binutils installed?");
-
-        if !ar_output.status.success() {
-            let stderr = String::from_utf8_lossy(&ar_output.stderr);
-            panic!("ar failed to create libpci_io.a: {}", stderr);
-        }
-
-        println!("cargo:warning=Created static library: {}", lib_path.display());
-
-        // Tell cargo to link the library
-        println!("cargo:rustc-link-search=native={}", out_dir.display());
-        println!("cargo:rustc-link-lib=static=pci_io");
-    } else {
-        println!("cargo:warning=Skipping PCI I/O assembly for non-x86_64 target: {}", target);
+    if !target.contains("x86_64") {
+        println!("cargo:warning=Skipping assembly for non-x86_64 target: {}", target);
+        return;
     }
+
+    // Determine output format based on target
+    // UEFI uses PE/COFF format (win64)
+    let obj_format = if target.contains("windows") || target.contains("uefi") {
+        "win64"  // PE/COFF format for UEFI
+    } else {
+        "elf64"
+    };
+
+    println!("cargo:warning=Building ASM for target: {} (format: {})", target, obj_format);
+
+    let mut all_objects = Vec::new();
+
+    // =========================================================================
+    // Build legacy pci_io.S (existing)
+    // =========================================================================
+    let legacy_asm = "src/device/pci_io.S";
+    if Path::new(legacy_asm).exists() {
+        println!("cargo:rerun-if-changed={}", legacy_asm);
+        let obj = assemble_file(legacy_asm, &out_dir, obj_format);
+        all_objects.push(obj);
+    }
+
+    // =========================================================================
+    // Build new ASM layer (if feature enabled or files exist)
+    // =========================================================================
+    let asm_categories = [
+        ("core", ASM_CORE),
+        ("pci", ASM_PCI),
+        ("virtio", ASM_VIRTIO),
+        ("phy", ASM_PHY),
+    ];
+
+    for (category, files) in asm_categories {
+        for asm_path in *files {
+            if Path::new(asm_path).exists() {
+                println!("cargo:rerun-if-changed={}", asm_path);
+                match assemble_file_checked(asm_path, &out_dir, obj_format) {
+                    Ok(obj) => {
+                        all_objects.push(obj);
+                    }
+                    Err(e) => {
+                        println!("cargo:warning=Failed to assemble {} ({}): {}", asm_path, category, e);
+                        // Continue with other files
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Create static library from all objects
+    // =========================================================================
+    if all_objects.is_empty() {
+        println!("cargo:warning=No ASM files assembled!");
+        return;
+    }
+
+    let lib_path = out_dir.join("libnetwork_asm.a");
+    
+    // Use ar to create archive
+    let mut ar_args = vec!["crs".to_string(), lib_path.to_str().unwrap().to_string()];
+    for obj in &all_objects {
+        ar_args.push(obj.to_str().unwrap().to_string());
+    }
+
+    let ar_output = Command::new("ar")
+        .args(&ar_args)
+        .output()
+        .expect("Failed to run ar. Is binutils installed?");
+
+    if !ar_output.status.success() {
+        let stderr = String::from_utf8_lossy(&ar_output.stderr);
+        panic!("ar failed to create libnetwork_asm.a: {}", stderr);
+    }
+
+    println!("cargo:warning=Created static library with {} objects: {}", 
+             all_objects.len(), lib_path.display());
+
+    // Tell cargo to link the library
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=network_asm");
+}
+
+/// Assemble a single file, panic on failure
+fn assemble_file(asm_path: &str, out_dir: &Path, obj_format: &str) -> PathBuf {
+    assemble_file_checked(asm_path, out_dir, obj_format)
+        .unwrap_or_else(|e| panic!("Failed to assemble {}: {}", asm_path, e))
+}
+
+/// Assemble a single file, return Result
+fn assemble_file_checked(asm_path: &str, out_dir: &Path, obj_format: &str) -> Result<PathBuf, String> {
+    let stem = Path::new(asm_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("Invalid path: {}", asm_path))?;
+    
+    // Create unique object name to avoid collisions
+    let obj_name = asm_path
+        .replace('/', "_")
+        .replace('\\', "_")
+        .replace(".s", ".o")
+        .replace(".S", ".o");
+    
+    let obj_path = out_dir.join(&obj_name);
+
+    // Get include paths for ASM files that use external references
+    let mut nasm_args = vec![
+        "-f".to_string(),
+        obj_format.to_string(),
+        "-o".to_string(),
+        obj_path.to_str().unwrap().to_string(),
+    ];
+    
+    // Add include path for cross-file references
+    if asm_path.contains("asm/") {
+        nasm_args.push("-I".to_string());
+        nasm_args.push("asm/".to_string());
+    }
+    
+    nasm_args.push(asm_path.to_string());
+
+    let nasm_output = Command::new("nasm")
+        .args(&nasm_args)
+        .output()
+        .map_err(|e| format!("Failed to run nasm: {}", e))?;
+
+    if !nasm_output.status.success() {
+        let stderr = String::from_utf8_lossy(&nasm_output.stderr);
+        return Err(format!("nasm error: {}", stderr));
+    }
+
+    Ok(obj_path)
 }
