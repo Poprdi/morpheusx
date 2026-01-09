@@ -215,7 +215,6 @@ version = "1.0.1"
 dependencies = [
  "dma-pool",
  "smoltcp",
- "virtio-drivers",
 ]
 
 [[package]]

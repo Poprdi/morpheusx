@@ -1,9 +1,9 @@
 //! MorpheusX Network Stack
 //!
-//! Firmware-agnostic bare-metal HTTP client for bootloader environments.
-//! Uses code caves in our PE binary for DMA memory - no firmware calls needed.
+//! ASM-first bare-metal HTTP client for bootloader environments.
+//! Designed for post-ExitBootServices execution with no firmware dependencies.
 //!
-//! # Architecture
+//! # Architecture (ASM-First)
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
@@ -23,47 +23,32 @@
 //! │  Abstraction over hardware: transmit, receive, mac_address │
 //! └─────────────────────────────────────────────────────────────┘
 //!                              │
-//!         ┌────────────────────┼────────────────────┐
-//!         ▼                    ▼                    ▼
-//!    VirtIO-net           Intel i210           Realtek RTL
-//!    (QEMU/KVM)           (future)             (future)
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │              VirtioNetDriver (ASM-backed)                   │
+//! │  Uses hand-written assembly for all hardware access         │
+//! │  - MMIO with explicit barriers                              │
+//! │  - Virtqueue descriptor ring management                     │
+//! │  - Fire-and-forget TX, poll-based RX                        │
+//! └─────────────────────────────────────────────────────────────┘
 //!                              │
 //!                              ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │              StaticHal (dma-pool crate)                     │
-//! │  DMA memory from code caves in PE section padding           │
+//! │              ASM Layer (network/asm/)                       │
+//! │  Core: TSC, barriers, MMIO, PIO, cache                      │
+//! │  VirtIO: init, queue, TX, RX, notify                        │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! # Quick Start
+//! # Usage (Post-ExitBootServices)
 //!
 //! ```ignore
-//! use dma_pool::{DmaPool, MemoryDiscovery, PaddingPattern};
-//! use morpheus_network::device::virtio::VirtioNetDevice;
-//! use morpheus_network::device::hal::StaticHal;
-//! use morpheus_network::client::NativeHttpClient;
-//! use morpheus_network::stack::NetConfig;
+//! use morpheus_network::{VirtioNetDriver, VirtioConfig, NetworkDriver};
+//! use morpheus_network::boot::BootHandoff;
+//! use morpheus_network::mainloop::bare_metal_main;
 //!
-//! // Initialize DMA pool from caves in our PE image
-//! unsafe { DmaPool::init_from_caves(image_base, image_end) };
-//!
-//! // Initialize HAL
-//! StaticHal::init();
-//!
-//! // Create network device (VirtIO for QEMU)
-//! let device = VirtioNetDevice::<StaticHal, _>::new(transport)?;
-//!
-//! // Create HTTP client with DHCP
-//! let mut client = NativeHttpClient::new(device, NetConfig::Dhcp, get_time_ms);
-//!
-//! // Wait for network
-//! client.wait_for_network(30_000)?;
-//!
-//! // Download ISO
-//! client.get_streaming("http://mirror.example.com/tails.iso", |chunk| {
-//!     write_to_disk(chunk)?;
-//!     Ok(())
-//! })?;
+//! // After ExitBootServices, with BootHandoff from pre-EBS setup:
+//! let result = unsafe { bare_metal_main(handoff, config) };
 //! ```
 
 #![no_std]
@@ -73,7 +58,7 @@
 extern crate alloc;
 
 // ═══════════════════════════════════════════════════════════════
-// EXISTING MODULES (virtio-drivers based implementation)
+// CORE MODULES
 // ═══════════════════════════════════════════════════════════════
 pub mod error;
 pub mod http;
@@ -84,8 +69,9 @@ pub mod device;
 pub mod stack;
 
 // ═══════════════════════════════════════════════════════════════
-// NEW BARE-METAL ASM-BASED MODULES
-// These provide post-ExitBootServices network support
+// ASM-FIRST BARE-METAL MODULES
+// These provide post-ExitBootServices network support using
+// hand-written assembly for all hardware access.
 // ═══════════════════════════════════════════════════════════════
 pub mod asm;          // ASM bindings (TSC, MMIO, PIO, barriers)
 pub mod types;        // Shared types (#[repr(C)] structs)
@@ -97,20 +83,28 @@ pub mod boot;         // Boot handoff and initialization
 pub mod time;         // Timing utilities
 pub mod pci;          // PCI bus access
 
+// ═══════════════════════════════════════════════════════════════
+// RE-EXPORTS
+// ═══════════════════════════════════════════════════════════════
+
+// Core types
 pub use error::{NetworkError, Result};
 pub use types::{HttpMethod, ProgressCallback};
+pub use device::NetworkDevice;
+
+// Client
 pub use client::HttpClient;
 pub use client::NativeHttpClient;
-pub use device::NetworkDevice;
+
+// Stack (smoltcp integration)
 pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState, ecam_bases};
 pub use stack::{set_debug_stage, debug_stage};  // Debug stage tracking
 pub use stack::{debug_log, debug_log_pop, debug_log_available, debug_log_clear, DebugLogEntry};  // Ring buffer logging
-pub use device::hal::StaticHal;
 
-// Re-export device factory types
-pub use device::factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType, PciAccessMethod};
+// ASM-backed VirtIO driver (primary driver for post-EBS execution)
+pub use driver::{NetworkDriver as AsmNetworkDriver, VirtioNetDriver, VirtioConfig};
 
-// Re-export standalone assembly functions
+// Standalone assembly functions
 #[cfg(target_arch = "x86_64")]
 pub use device::pci::{read_tsc, pci_io_test, tsc_delay_us};
 

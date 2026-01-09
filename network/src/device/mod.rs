@@ -1,36 +1,16 @@
 //! Network device abstraction for smoltcp integration.
 //!
-//! This keeps the core stack generic over concrete NIC drivers (PCIe/USB/SPI).
+//! This module provides the core `NetworkDevice` trait that all NIC drivers must implement,
+//! along with PCI discovery utilities for device enumeration.
 //!
-//! # Available Drivers
+//! # Architecture (ASM-First)
 //!
-//! - [`virtio`] - VirtIO-net for virtual machines (QEMU, KVM, VirtualBox)
-//! - [`realtek`] - Realtek NICs (placeholder)
-//! - [`intel`] - Intel NICs (placeholder)
-//! - [`broadcom`] - Broadcom NICs (placeholder)
+//! The MorpheusX network stack uses an ASM-first design where all hardware access
+//! (MMIO, barriers, descriptor rings) is performed by hand-written assembly for
+//! guaranteed correctness in bare-metal post-ExitBootServices execution.
 //!
-//! # Device Factory
-//!
-//! The [`factory`] module provides unified device creation:
-//!
-//! ```ignore
-//! use morpheus_network::device::factory::{DeviceFactory, DeviceConfig};
-//!
-//! // Auto-detect and create device
-//! let device = DeviceFactory::create_auto(&DeviceConfig::default())?;
-//! ```
-//!
-//! # HAL Layer
-//!
-//! The [`hal`] module provides hardware abstraction for DMA and memory mapping.
-//! Uses the `dma-pool` crate for firmware-agnostic memory allocation.
-//!
-//! - [`hal::StaticHal`] - Unified HAL for all device drivers
-//!
-//! Initialize with one of:
-//! - `StaticHal::init()` - Uses compiled-in static pool
-//! - `StaticHal::init_discover(start, end)` - Runtime memory discovery
-//! - `StaticHal::init_external(base, size)` - Caller-provided region
+//! The actual drivers are in `crate::driver::`:
+//! - [`crate::driver::virtio::VirtioNetDriver`] - VirtIO-net using ASM layer
 //!
 //! # PCI Discovery
 //!
@@ -38,19 +18,11 @@
 
 use crate::error::{NetworkError, Result};
 
-pub mod factory;
-pub mod hal;
 pub mod pci;
-pub mod virtio;
 pub mod registers;
 
-// Future hardware drivers (not yet implemented):
-// pub mod intel;    // Intel e1000/i210/i225
-// pub mod realtek;  // Realtek RTL8111/8168
-// pub mod broadcom; // Broadcom NetXtreme
-
-// Re-export factory types for convenience
-pub use factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType};
+// NOTE: Legacy modules removed (virtio.rs, factory.rs, hal/)
+// The ASM-backed VirtIO driver is in crate::driver::virtio
 
 /// Unified network device interface MorpheusX drivers must implement.
 pub trait NetworkDevice {
