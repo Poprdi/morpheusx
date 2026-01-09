@@ -109,7 +109,7 @@ struct ConfigurationTable {
 }
 
 #[repr(C)]
-struct BootServices {
+pub struct BootServices {
     _header: [u8; 24],
     // Task Priority Services
     _raise_tpl: usize,
@@ -195,6 +195,11 @@ struct BootServices {
     _exit: extern "efiapi" fn(*mut (), usize, *const u16) -> usize,
     pub unload_image: extern "efiapi" fn(image_handle: *mut ()) -> usize,
     pub exit_boot_services: extern "efiapi" fn(image_handle: *mut (), map_key: usize) -> usize,
+    // Miscellaneous Services
+    _get_next_monotonic_count: usize,
+    /// Stall for microseconds
+    pub stall: extern "efiapi" fn(microseconds: usize) -> usize,
+    _set_watchdog_timer: usize,
 }
 
 #[no_mangle]
@@ -299,18 +304,16 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
         morpheus_core::logger::log("Main menu system ready");
         boot_seq.render(&mut screen, boot_x, boot_y);
 
-        // Initialize network stack
-        // Time function using TSC (timestamp counter)
-        fn get_time_ms() -> u64 {
-            // SAFETY: Reading TSC is always safe on x86_64
-            let tsc = unsafe { morpheus_network::read_tsc() };
-            // Approximate conversion - 2GHz assumed (TODO: calibrate properly)
-            tsc / 2_000_000
-        }
-
-        let _network_result = boot_seq.init_network(&mut screen, boot_x, boot_y, get_time_ms);
-        // Network result stored for later use by distro downloader
-        // TODO: Store in global or pass to menu system
+        // NOTE: Network is NOT initialized during bootstrap anymore.
+        // Network initialization happens post-ExitBootServices when user
+        // actually starts a download. This avoids conflicts between
+        // smoltcp (bare-metal TCP/IP) and UEFI's active timer interrupts.
+        //
+        // The download flow is:
+        // 1. User selects ISO in TUI (catalog is static, no network needed)
+        // 2. User confirms download → ExitBootServices called
+        // 3. Bare-metal network stack initializes (VirtIO + smoltcp)
+        // 4. Download completes, system reboots
 
         boot_seq.mark_complete();
         boot_seq.render(&mut screen, boot_x, boot_y);

@@ -27,9 +27,11 @@ pub mod state;
 pub mod renderer;
 pub mod ui;
 pub mod manifest_io;
-pub mod network_check; // Network connectivity verification
+pub mod network_check; // Network connectivity verification (deprecated - see commit_download)
+pub mod commit_download; // Post-EBS download flow
 
 pub use catalog::{DistroCategory, DistroEntry, CATEGORIES, DISTRO_CATALOG, get_by_category};
 pub use manifest_io::{persist_manifest, load_manifests_from_esp, delete_manifest, ManifestIoError};
 pub use state::{DownloadState, DownloadStatus, UiMode, UiState};
 pub use ui::{DistroDownloader, ManageAction};
+pub use commit_download::{commit_to_download, CommitResult, DownloadCommitConfig};

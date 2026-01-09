@@ -42,10 +42,12 @@ pub mod factory;
 pub mod hal;
 pub mod pci;
 pub mod virtio;
-pub mod realtek;
-pub mod intel;
-pub mod broadcom;
 pub mod registers;
+
+// Future hardware drivers (not yet implemented):
+// pub mod intel;    // Intel e1000/i210/i225
+// pub mod realtek;  // Realtek RTL8111/8168
+// pub mod broadcom; // Broadcom NetXtreme
 
 // Re-export factory types for convenience
 pub use factory::{DeviceFactory, DeviceConfig, UnifiedNetDevice, DetectedDevice, DriverType};
