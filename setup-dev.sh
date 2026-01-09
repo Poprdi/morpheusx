@@ -385,7 +385,7 @@ do_launch_qemu() {
             -m 4G \
             -vga virtio \
             -display gtk,gl=on \
-            -serial mon:stdio
+            -serial stdio
     else
         qemu-system-x86_64 \
             -bios "$ovmf_path" \
@@ -396,7 +396,7 @@ do_launch_qemu() {
             -m 4G \
             -vga virtio \
             -display gtk,gl=on \
-            -serial mon:stdio
+            -serial stdio
     fi
 }
 

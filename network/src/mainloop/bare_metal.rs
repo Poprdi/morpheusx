@@ -194,9 +194,12 @@ pub enum RunResult {
 }
 
 /// Configuration for the bare-metal runner.
+/// 
+/// NOTE: Uses &'static str instead of String because we cannot allocate
+/// after ExitBootServices (the UEFI allocator is gone).
 pub struct BareMetalConfig {
-    /// URL to download ISO from.
-    pub iso_url: String,
+    /// URL to download ISO from (must be 'static - allocated before EBS).
+    pub iso_url: &'static str,
     /// Target disk sector to start writing at.
     pub target_start_sector: u64,
     /// Maximum download size in bytes.
@@ -206,7 +209,7 @@ pub struct BareMetalConfig {
 impl Default for BareMetalConfig {
     fn default() -> Self {
         Self {
-            iso_url: String::from("http://10.0.2.2:8000/test-iso.img"),
+            iso_url: "http://10.0.2.2:8000/test-iso.img",
             target_start_sector: 2048, // Start at 1MB offset
             max_download_size: 4 * 1024 * 1024 * 1024, // 4GB max
         }

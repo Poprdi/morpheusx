@@ -29,12 +29,17 @@ pub unsafe fn enter_network_boot(handoff: &'static BootHandoff) -> RunResult {
 }
 
 /// Network boot with custom URL.
+/// 
+/// # Safety
+/// - Must be called after ExitBootServices()
+/// - `handoff` must point to valid, populated BootHandoff
+/// - `iso_url` must be a 'static str (allocated before EBS, e.g., via Box::leak)
 pub unsafe fn enter_network_boot_url(
     handoff: &'static BootHandoff,
-    iso_url: &str,
+    iso_url: &'static str,
 ) -> RunResult {
     let config = BareMetalConfig {
-        iso_url: alloc::string::String::from(iso_url),
+        iso_url,
         ..BareMetalConfig::default()
     };
     
