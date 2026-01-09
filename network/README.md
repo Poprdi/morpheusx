@@ -2,26 +2,12 @@
 
 HTTP client for downloading ISOs and other files in the UEFI bootloader environment.
 
-## Architecture
 
-### Core Abstractions (`src/`)
-
-```
-network/
-├── client.rs        - HttpClient trait (platform-agnostic interface)
-├── types.rs         - HTTP types (Request, Response, Method, etc.)
-├── error.rs         - Error types and Result alias
-├── download.rs      - High-level DownloadManager
-└── uefi_impl/       - UEFI-specific implementation
-    └── uefi_client.rs - UefiHttpClient (implements HttpClient)
-```
 
 ### Design Principles
 
 1. **Platform Abstraction**: `HttpClient` trait allows multiple implementations
-2. **UEFI-First**: Primary implementation uses UEFI HTTP protocols
-3. **No External Deps**: Everything built on UEFI primitives
-4. **Progress Tracking**: Built-in support for download progress callbacks
+3. **No External Deps**: Everything built on primitives
 5. **Error Handling**: Comprehensive error types for network operations
 
 ## Usage
@@ -65,42 +51,9 @@ if let Some(size) = downloader.get_file_size("http://example.com/file.iso")? {
 }
 ```
 
-## UEFI Protocol Usage
+## Implementation 
 
-The UEFI implementation uses:
-
-- `EFI_HTTP_PROTOCOL` - HTTP/HTTPS requests
-- `EFI_SERVICE_BINDING_PROTOCOL` - Create/destroy HTTP instances
-- `EFI_DHCP4_PROTOCOL` - Auto network configuration (future)
-
-### Protocol Bindings
-
-UEFI protocol definitions are in `bootloader/src/uefi/`:
-- `http.rs` - EFI_HTTP_PROTOCOL structures and constants
-- `service_binding.rs` - EFI_SERVICE_BINDING_PROTOCOL
-
-## Implementation Status
-
-### ✅ Completed
-- [x] Core trait definitions
-- [x] HTTP request/response types
-- [x] Error handling
-- [x] Download manager API
-- [x] UEFI protocol bindings
-
-### 🚧 In Progress
-- [ ] UefiHttpClient implementation
-- [ ] URL parsing
-- [ ] Header handling
-- [ ] Progress tracking
-
-### 📋 Planned
-- [ ] HTTPS/TLS support
-- [ ] Resume/range requests
-- [ ] Connection pooling
-- [ ] DNS caching
-- [ ] Redirect following
-- [ ] Timeout handling
+### See /docs/
 
 ## Error Handling
 
