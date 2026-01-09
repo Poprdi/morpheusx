@@ -1,11 +1,10 @@
 //! PCI enumeration and access module.
 //!
-//! Rust logic layer for PCI device discovery and configuration.
+//! This module is a placeholder for future PCI enumeration.
+//! The actual PCI discovery is handled in `device/factory.rs` using `virtio_drivers::transport::pci`.
 //!
 //! # Reference
 //! ARCHITECTURE_V3.md - PCI layer
 
-pub mod types;
-pub mod scanner;
-pub mod ids;
-pub mod access;
+// Note: PCI discovery is currently handled by virtio_drivers crate directly.
+// This module will be expanded for non-VirtIO drivers in the future.
