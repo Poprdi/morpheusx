@@ -7,6 +7,7 @@ pub mod iso_boot;
 pub mod kernel_loader;
 pub mod loader;
 pub mod memory;
+pub mod network_boot;
 
 // Architecture-specific boot code
 #[cfg(target_arch = "x86_64")]
@@ -20,3 +21,4 @@ pub use loader::boot_linux_kernel;
 pub use memory::{
     allocate_boot_params, allocate_cmdline, allocate_kernel_memory, load_kernel_image,
 };
+pub use network_boot::{enter_network_boot, prepare_handoff, validate_handoff};

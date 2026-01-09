@@ -1,112 +1,60 @@
 //! Network connectivity verification for distro downloader
 //!
-//! Verifies network was properly initialized during bootstrap phase.
-//! Does NOT perform initialization - only validates existing setup.
+//! ARCHITECTURE CHANGE: Network initialization now happens post-ExitBootServices.
+//! This module is DEPRECATED - network check is no longer done during UEFI phase.
+//!
+//! The new flow is:
+//! 1. User browses catalog (no network needed - static data)
+//! 2. User selects ISO and confirms download
+//! 3. ExitBootServices is called
+//! 4. Bare-metal network stack initializes (VirtIO + smoltcp)  
+//! 5. Download proceeds in bare-metal mode
+//!
+//! This check function now always succeeds since network isn't initialized yet.
 
 extern crate alloc;
 
-use alloc::format;
 use crate::tui::renderer::{
-    Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW, EFI_RED, EFI_DARKGRAY,
+    Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW,
 };
-use dma_pool::DmaPool;
 
-/// Check network connectivity
+/// Check network connectivity (DEPRECATED - always succeeds)
 ///
-/// Verifies that network stack was properly initialized during bootstrap:
-/// 1. DMA pool is initialized and valid
-/// 2. Network stack has seen traffic (RX packets > 0 indicates DHCP worked)
-/// 3. DMA pool is in valid address range for VirtIO (<4GB)
+/// Previously verified network was initialized during bootstrap.
+/// Now network init is deferred to download time (post-ExitBootServices).
+/// This function is kept for API compatibility but always returns Ok.
 ///
 /// # Arguments
 /// * `screen` - Display screen for user feedback
 ///
 /// # Returns
-/// - `Ok(())` - Network appears to be ready
-/// - `Err(msg)` - Error message if connectivity check fails
+/// Always returns `Ok(())` - network will be initialized post-EBS
+#[deprecated(note = "Network init moved to post-EBS. Remove this check.")]
 pub fn check_network_connectivity(screen: &mut Screen) -> Result<(), &'static str> {
     screen.clear();
-    screen.put_str_at(5, 2, "=== Network Connectivity Check ===", EFI_LIGHTGREEN, EFI_BLACK);
+    screen.put_str_at(5, 2, "=== Network Status ===", EFI_LIGHTGREEN, EFI_BLACK);
     
     let mut log_y = 4;
 
-    // Check 1: Verify DMA pool is initialized
-    screen.put_str_at(5, log_y, "Checking DMA pool...", EFI_YELLOW, EFI_BLACK);
-    log_y += 1;
-    
-    let pool_base = DmaPool::base_address();
-    let pool_size = DmaPool::total_size();
-    
-    if pool_size == 0 {
-        screen.put_str_at(7, log_y, "DMA pool not initialized!", EFI_RED, EFI_BLACK);
-        log_y += 2;
-        screen.put_str_at(5, log_y, "Network stack requires DMA pool", EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
-        screen.put_str_at(5, log_y, "Should be initialized during bootstrap", EFI_DARKGRAY, EFI_BLACK);
-        return Err("DMA pool not initialized - network not set up");
-    }
-    
-    screen.put_str_at(7, log_y, &format!(
-        "Base: {:#x}, Size: {} KB",
-        pool_base, pool_size / 1024
-    ), EFI_DARKGRAY, EFI_BLACK);
-    log_y += 1;
-    
-    // Check if DMA pool is in valid range (<4GB for VirtIO)
-    let pool_end = pool_base + pool_size;
-    let pool_valid = pool_base < 0x1_0000_0000 && pool_end <= 0x1_0000_0000;
-    
-    if !pool_valid {
-        screen.put_str_at(7, log_y, "WARNING: DMA pool >4GB", EFI_RED, EFI_BLACK);
-        log_y += 1;
-        screen.put_str_at(7, log_y, "VirtIO may not work correctly", EFI_DARKGRAY, EFI_BLACK);
-        // Don't fail completely, but warn
-    } else {
-        screen.put_str_at(7, log_y, "DMA range: <4GB (OK)", EFI_LIGHTGREEN, EFI_BLACK);
-    }
+    // Inform user about deferred network init
+    screen.put_str_at(5, log_y, "Network initialization is deferred.", EFI_YELLOW, EFI_BLACK);
     log_y += 2;
     
-    // Check 2: Verify network stack has seen traffic
-    screen.put_str_at(5, log_y, "Checking network stack...", EFI_YELLOW, EFI_BLACK);
+    screen.put_str_at(5, log_y, "When download starts:", EFI_LIGHTGREEN, EFI_BLACK);
     log_y += 1;
-    
-    let rx_count = morpheus_network::stack::rx_packet_count();
-    let tx_count = morpheus_network::stack::tx_packet_count();
-    
-    screen.put_str_at(7, log_y, &format!(
-        "RX: {} packets, TX: {} packets",
-        rx_count, tx_count
-    ), EFI_DARKGRAY, EFI_BLACK);
+    screen.put_str_at(7, log_y, "1. UEFI Boot Services will exit", EFI_YELLOW, EFI_BLACK);
     log_y += 1;
-    
-    // If we've received packets, it means:
-    // - VirtIO device is working
-    // - DHCP likely completed (we got DHCP offer/ack)
-    // - Network stack is functional
-    if rx_count == 0 {
-        screen.put_str_at(7, log_y, "No RX packets - DHCP may have failed", EFI_RED, EFI_BLACK);
-        log_y += 2;
-        screen.put_str_at(5, log_y, "Network stack appears inactive", EFI_DARKGRAY, EFI_BLACK);
-        log_y += 1;
-        screen.put_str_at(5, log_y, "Bootstrap should complete DHCP first", EFI_DARKGRAY, EFI_BLACK);
-        return Err("No network traffic detected - DHCP not completed");
-    }
-    
-    screen.put_str_at(7, log_y, "Network traffic detected (OK)", EFI_LIGHTGREEN, EFI_BLACK);
+    screen.put_str_at(7, log_y, "2. VirtIO network driver initializes", EFI_YELLOW, EFI_BLACK);
+    log_y += 1;  
+    screen.put_str_at(7, log_y, "3. DHCP acquires IP address", EFI_YELLOW, EFI_BLACK);
+    log_y += 1;
+    screen.put_str_at(7, log_y, "4. Download proceeds in bare-metal mode", EFI_YELLOW, EFI_BLACK);
     log_y += 2;
     
-    // Success!
-    screen.put_str_at(5, log_y, "Network connectivity verified!", EFI_LIGHTGREEN, EFI_BLACK);
-    log_y += 2;
+    screen.put_str_at(5, log_y, "Ready to proceed!", EFI_LIGHTGREEN, EFI_BLACK);
     
-    screen.put_str_at(5, log_y, "Press any key to continue...", EFI_DARKGRAY, EFI_BLACK);
-    
-    // Small delay so user can see the check results
-    fn get_time_ms() -> u64 {
-        let tsc = unsafe { morpheus_network::read_tsc() };
-        tsc / 2_000_000
-    }
-    morpheus_network::tsc_delay_us(1_500_000); // 1.5s
-    
+    // Brief pause so user can see message
+    for _ in 0..50_000_000 { core::hint::spin_loop(); }
+
     Ok(())
 }

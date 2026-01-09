@@ -414,7 +414,9 @@ impl IsoDownloadState {
             
             IsoDownloadState::WaitingForNetwork { mut dhcp, config } => {
                 // Step DHCP state machine
-                let result = dhcp.step(dhcp_event, now_tsc, dhcp_timeout);
+                // Convert Option<Result<DhcpConfig, ()>> to Option<DhcpConfig>
+                let dhcp_config = dhcp_event.and_then(|r| r.ok());
+                let result = dhcp.step(dhcp_config, now_tsc, dhcp_timeout);
                 
                 match result {
                     StepResult::Done => {

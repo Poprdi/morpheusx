@@ -325,15 +325,34 @@ impl DistroDownloader {
     }
 
     /// Start downloading a distribution
+    /// 
+    /// This triggers the commit flow that exits UEFI boot services and
+    /// downloads in bare-metal mode. This function will NEVER RETURN
+    /// on success - the system will reboot after download completes.
     fn start_download(&mut self, distro: &'static DistroEntry, screen: &mut Screen) {
         self.ui_state.start_download();
         self.download_state.start_check(distro.filename);
         self.needs_full_redraw = true;
         self.render_full(screen);
 
-        // Note: execute_download requires a client - this is called without one
-        // The caller should use execute_download_with_client instead
-        self.show_download_error(screen, "HTTP client required - use execute_download_with_client");
+        // Build download configuration
+        let config = super::commit_download::DownloadCommitConfig {
+            iso_url: alloc::string::String::from(distro.url),
+            iso_size: distro.size_bytes,
+            distro_name: alloc::string::String::from(distro.name),
+        };
+        
+        // COMMIT TO DOWNLOAD - THIS DOES NOT RETURN
+        // Exits UEFI boot services and downloads in bare-metal mode
+        unsafe {
+            super::commit_download::commit_to_download(
+                self.boot_services,
+                self.image_handle,
+                screen,
+                config,
+            );
+        }
+        // NOTE: We never reach here - commit_to_download is divergent (-> !)
     }
 
     /// Execute the full ISO download flow with an HTTP client
