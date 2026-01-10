@@ -1,12 +1,15 @@
-# MorpheusX
+## MorpheusX
 
-MorpheusX is a UEFI boot and Hardware exokernel like runtime that loads Linux kernels directly from firmware space, treats distributions as disposable layers, and aims at keeping userland state persistent. It is written in Rust with a no_std core. Aswell as Asm firmware and ops. 
+MorpheusX is a UEFI boot and hardware exokernel-like runtime that loads Linux kernels directly from firmware space, treats distributions as disposable layers, and aims to keep userland state persistent. It is implemented in Rust (#![no_std]) and X86_64 assembly, with custom assembler and extensive use of hand-written ASM for compiler-hostile or firmware-critical paths.
+Features
 
-## What it does
-- Boots Linux kernels from the EFI system partition with custom GPT and FAT32 handling
-- Provides a boot-time TUI for selecting images and guiding installs
-- Includes a network stack (Bare metal so after EBS "exit_bootservices") for downloading ISO's and updates (work in progress)
-- Lays groundwork for persistence: capturing the loaded image, reversing relocations, and writing a bootable copy back to disk
+-Boots Linux kernels from the EFI system partition with custom GPT and FAT32 handling.
+-Provides a boot-time TUI for selecting images and guiding installs.
+-Includes a bare-metal network stack (operating after ExitBootServices) for downloading ISOs and updates. (Work in progress)
+-##Implements a self-persisting runtime##: The in-memory, relocated PE loader can clone itself, reverse its own relocations, and reconstruct a fully bootable on-disk binary—enabling live regeneration, on-the-fly firmware updates, and runtime self-propagation with bit-exact fidelity.
+-Contains the ##full## iso9660-rs implementation: A pure no_std, Rust ISO9660 and El Torito parser/reader, written for MorpheusX and developed in this repository; enables direct extraction and booting of Linux kernels from ISO images and live optical filesystems at firmware or runtime.
+-Implements a custom, standalone FAT32 filesystem library: Written from scratch for this project (no_std, Rust), enabling direct parsing, allocation, and manipulation of FAT32 volumes and boot records—with full control and no reliance on OS or firmware stacks.
+
 
 ## Building
 Prerequisites: Rust 1.75+ with `rustup`, target `x86_64-unknown-uefi`, and a nightly or stable toolchain that supports `no_std` UEFI builds.
