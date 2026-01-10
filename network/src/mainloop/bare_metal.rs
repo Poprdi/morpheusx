@@ -896,6 +896,10 @@ pub unsafe fn bare_metal_main(
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 1: POST-EBS INITIALIZATION
     // ═══════════════════════════════════════════════════════════════════════
+    serial_println("[INIT] Initializing post-EBS heap allocator...");
+    crate::alloc_heap::init_heap();
+    serial_println("[OK] Heap allocator ready (1MB)");
+    
     serial_println("[INIT] Validating BootHandoff...");
     
     if let Err(e) = handoff.validate() {
