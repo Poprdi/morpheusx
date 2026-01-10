@@ -207,7 +207,11 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
     unsafe {
         let system_table = &*(system_table as *const SystemTable);
 
-        // Set global boot services pointer for allocator
+        // Initialize heap allocator FIRST - before any allocations
+        // Uses static buffer, works during UEFI and post-EBS
+        morpheus_network::alloc_heap::init_heap();
+
+        // Set global boot services pointer (for other UEFI operations)
         BOOT_SERVICES_PTR = system_table.boot_services;
 
         let mut screen = Screen::new(system_table.con_out);
@@ -439,45 +443,5 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-// UEFI allocator using boot services
-use core::alloc::{GlobalAlloc, Layout};
-
-struct UefiAllocator;
-
+// Boot services pointer for UEFI operations (not allocator)
 static mut BOOT_SERVICES_PTR: *const BootServices = core::ptr::null();
-
-unsafe impl GlobalAlloc for UefiAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let bs = BOOT_SERVICES_PTR;
-        if bs.is_null() {
-            return core::ptr::null_mut();
-        }
-
-        let bs = &*bs;
-        let mut buffer: *mut u8 = core::ptr::null_mut();
-
-        // EfiBootServicesData = 2
-        let status = (bs.allocate_pool)(2, layout.size(), &mut buffer);
-
-        if status == 0 {
-            tui::debug::track_allocation(layout.size());
-            buffer
-        } else {
-            core::ptr::null_mut()
-        }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let bs = BOOT_SERVICES_PTR;
-        if bs.is_null() || ptr.is_null() {
-            return;
-        }
-
-        let bs = &*bs;
-        let _ = (bs.free_pool)(ptr);
-        tui::debug::track_free(layout.size());
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: UefiAllocator = UefiAllocator;

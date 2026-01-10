@@ -30,6 +30,12 @@
 //! let s = String::from("hello");
 //! ```
 //!
+//! # Feature Flags
+//!
+//! - `post_ebs_allocator`: Enable `#[global_allocator]` attribute.
+//!   Only enable this when running standalone post-EBS, not when used
+//!   as a library by the bootloader (which has its own UEFI allocator).
+//!
 //! # Safety
 //!
 //! - `init_heap()` must be called exactly ONCE before any allocations

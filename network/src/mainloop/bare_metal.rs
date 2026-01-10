@@ -30,8 +30,10 @@ use crate::boot::init::TimeoutConfig;
 use crate::driver::virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};
 use crate::driver::virtio::{VirtioTransport, TransportType, PciModernConfig};
 use crate::driver::virtio_blk::{VirtioBlkDriver, VirtioBlkConfig, VirtioBlkInitError};
+use crate::driver::block_io_adapter::VirtioBlkBlockIo;
 use crate::driver::traits::NetworkDriver;
 use crate::driver::block_traits::BlockDriver;
+use crate::transfer::disk::{ManifestWriter, ChunkSet, ChunkPartition, PartitionInfo, MAX_CHUNK_PARTITIONS};
 use crate::url::Url;
 
 // Import manifest support from morpheus-core
@@ -379,13 +381,19 @@ unsafe fn write_manifest_to_disk(
 /// Create and write a completed ISO manifest to disk.
 /// 
 /// Called after HTTP download completes to record the ISO location.
+/// 
+/// # Strategy
+/// - If `esp_start_lba > 0`: Write to FAT32 ESP at `/morpheus/isos/<name>.manifest`
+/// - Else if `manifest_sector > 0`: Write to raw sector (legacy)
+/// - Else: Skip manifest writing
 unsafe fn finalize_manifest(
     blk_driver: &mut VirtioBlkDriver,
     config: &BareMetalConfig,
     total_bytes: u64,
 ) -> bool {
-    if config.manifest_sector == 0 {
-        serial_println("[MANIFEST] Manifest sector not configured, skipping");
+    // Check if we have any manifest destination configured
+    if config.esp_start_lba == 0 && config.manifest_sector == 0 {
+        serial_println("[MANIFEST] No manifest destination configured, skipping");
         return true;
     }
     
@@ -397,13 +405,112 @@ unsafe fn finalize_manifest(
     serial_print_decimal((total_bytes / (1024 * 1024)) as u32);
     serial_println(" MB");
     
-    // Create manifest
-    let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
-    
     // Calculate end sector
     let bytes_in_sectors = ((total_bytes + 511) / 512) * 512;
     let num_sectors = bytes_in_sectors / 512;
     let end_sector = config.target_start_sector + num_sectors;
+    
+    serial_print("[MANIFEST] Sectors: ");
+    serial_print_hex(config.target_start_sector);
+    serial_print(" - ");
+    serial_print_hex(end_sector);
+    serial_println("");
+    
+    // Prefer FAT32 writing if ESP is configured
+    if config.esp_start_lba > 0 {
+        return finalize_manifest_fat32(blk_driver, config, total_bytes, end_sector);
+    }
+    
+    // Fall back to legacy raw sector write
+    finalize_manifest_raw(blk_driver, config, total_bytes, end_sector)
+}
+
+/// Write manifest to FAT32 ESP filesystem.
+/// 
+/// Creates `/morpheus/isos/<name>.manifest` file on the ESP.
+unsafe fn finalize_manifest_fat32(
+    blk_driver: &mut VirtioBlkDriver,
+    config: &BareMetalConfig,
+    total_bytes: u64,
+    end_sector: u64,
+) -> bool {
+    serial_println("[MANIFEST] Writing to FAT32 ESP...");
+    serial_print("[MANIFEST] ESP start LBA: ");
+    serial_print_hex(config.esp_start_lba);
+    serial_println("");
+    
+    // Create ManifestWriter (our disk module's version)
+    let mut manifest = ManifestWriter::new(config.iso_name, total_bytes);
+    manifest.set_complete(true);
+    
+    // Build chunk set with partition info
+    let mut chunks = ChunkSet::new();
+    chunks.count = 1;
+    chunks.total_size = total_bytes;
+    chunks.bytes_written = total_bytes;
+    
+    // Set up the partition info
+    let mut part_info = PartitionInfo::new(0, config.target_start_sector, end_sector, config.partition_uuid);
+    part_info.set_name(config.iso_name);
+    
+    // Create chunk partition
+    let mut chunk = ChunkPartition::new(part_info, 0);
+    chunk.bytes_written = total_bytes;
+    chunk.complete = true;
+    chunks.chunks[0] = chunk;
+    
+    // Create BlockIo adapter for FAT32 operations
+    // Use our static DMA buffer (reuse the write buffer since download is done)
+    let dma_buffer = &mut DISK_WRITE_BUFFER;
+    let dma_buffer_phys = dma_buffer.as_ptr() as u64;
+    let timeout_ticks = 100_000_000u64; // ~100ms
+    
+    let mut adapter = match VirtioBlkBlockIo::new(
+        blk_driver,
+        dma_buffer,
+        dma_buffer_phys,
+        timeout_ticks,
+    ) {
+        Ok(a) => a,
+        Err(_) => {
+            serial_println("[MANIFEST] ERROR: Failed to create BlockIo adapter");
+            return false;
+        }
+    };
+    
+    // Write manifest to FAT32
+    match manifest.write_to_esp_fat32(&mut adapter, config.esp_start_lba, &chunks) {
+        Ok(()) => {
+            serial_println("[MANIFEST] OK: Written to /morpheus/isos/<name>.manifest");
+            true
+        }
+        Err(e) => {
+            serial_print("[MANIFEST] ERROR: FAT32 write failed: ");
+            serial_println(match e {
+                crate::transfer::disk::DiskError::IoError => "IO error",
+                crate::transfer::disk::DiskError::ManifestError => "Manifest error",
+                crate::transfer::disk::DiskError::BufferTooSmall => "Buffer too small",
+                _ => "Unknown error",
+            });
+            false
+        }
+    }
+}
+
+/// Write manifest to raw disk sector (legacy method).
+unsafe fn finalize_manifest_raw(
+    blk_driver: &mut VirtioBlkDriver,
+    config: &BareMetalConfig,
+    total_bytes: u64,
+    end_sector: u64,
+) -> bool {
+    serial_println("[MANIFEST] Writing to raw sector (legacy)...");
+    serial_print("[MANIFEST] Sector: ");
+    serial_print_hex(config.manifest_sector);
+    serial_println("");
+    
+    // Use morpheus_core's IsoManifest for raw sector write
+    let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
     
     // Add chunk entry
     match manifest.add_chunk(
@@ -414,10 +521,6 @@ unsafe fn finalize_manifest(
         Ok(idx) => {
             serial_print("[MANIFEST] Added chunk ");
             serial_print_decimal(idx as u32);
-            serial_print(": sectors ");
-            serial_print_hex(config.target_start_sector);
-            serial_print(" - ");
-            serial_print_hex(end_sector);
             serial_println("");
         }
         Err(_) => {
@@ -817,9 +920,12 @@ pub struct BareMetalConfig {
     pub iso_name: &'static str,
     /// Target disk sector to start writing ISO data at.
     pub target_start_sector: u64,
-    /// Sector where manifest is stored (read/write).
-    /// Set to 0 to disable manifest functionality.
+    /// Sector where manifest is stored (raw sector write, legacy).
+    /// Set to 0 to use FAT32 manifest instead.
     pub manifest_sector: u64,
+    /// ESP partition start LBA for FAT32 manifest writing.
+    /// If non-zero, writes manifest to /morpheus/isos/<name>.manifest on ESP.
+    pub esp_start_lba: u64,
     /// Maximum download size in bytes.
     pub max_download_size: u64,
     /// Whether to write to disk (requires VirtIO-blk).
@@ -834,7 +940,8 @@ impl Default for BareMetalConfig {
             iso_url: "http://10.0.2.2:8000/test-iso.img",
             iso_name: "download.iso",
             target_start_sector: 2048, // Start at 1MB offset (after manifest)
-            manifest_sector: 1024,     // Manifest at sector 1024 (512KB offset)
+            manifest_sector: 0,        // Use FAT32 by default (set non-zero for raw sector)
+            esp_start_lba: 2048,       // Standard GPT ESP at sector 2048
             max_download_size: 4 * 1024 * 1024 * 1024, // 4GB max
             write_to_disk: true, // Enable disk writes by default
             partition_uuid: [0u8; 16], // Will be set by bootloader if known
