@@ -20,7 +20,7 @@ use alloc::string::String;
 use core::ptr;
 
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW, EFI_RED, EFI_CYAN, EFI_DARKGRAY};
-use crate::boot::network_boot::{prepare_handoff, enter_network_boot_url, NicProbeResult};
+use crate::boot::network_boot::{prepare_handoff_with_blk, enter_network_boot_url, NicProbeResult, BlkProbeResult};
 use morpheus_network::boot::handoff::BootHandoff;
 
 /// Result of download commit operation.
@@ -152,6 +152,20 @@ pub unsafe fn commit_to_download(
     }
     log_y += 1;
     
+    // Phase 4b: Probe VirtIO block device for disk writes
+    screen.put_str_at(5, log_y, "Probing VirtIO block device...", EFI_YELLOW, EFI_BLACK);
+    log_y += 1;
+    
+    let blk_probe = probe_virtio_blk_with_debug(screen, &mut log_y);
+    if blk_probe.mmio_base != 0 {
+        screen.put_str_at(7, log_y, &alloc::format!(
+            "VirtIO-blk found at {:#x}", blk_probe.mmio_base
+        ), EFI_LIGHTGREEN, EFI_BLACK);
+    } else {
+        screen.put_str_at(7, log_y, "No VirtIO-blk found (ISO won't be saved to disk)", EFI_YELLOW, EFI_BLACK);
+    }
+    log_y += 1;
+    
     // Phase 5: Prepare BootHandoff (static allocation for post-EBS)
     screen.put_str_at(5, log_y, "Preparing boot handoff...", EFI_YELLOW, EFI_BLACK);
     log_y += 1;
@@ -172,8 +186,9 @@ pub unsafe fn commit_to_download(
     
     let handoff_ptr = handoff_page as *mut BootHandoff;
     
-    let handoff = prepare_handoff(
+    let handoff = prepare_handoff_with_blk(
         &nic_probe,
+        &blk_probe,
         [0x52, 0x54, 0x00, 0x12, 0x34, 0x56], // QEMU default MAC (placeholder)
         dma_region,
         dma_region, // Bus addr = CPU addr (no IOMMU)
@@ -635,6 +650,121 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicPro
     *log_y += 1;
     
     NicProbeResult::zeroed() // Not found
+}
+
+/// Probe for VirtIO-blk device via PCI config space.
+/// Returns BlkProbeResult with device information.
+fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkProbeResult {
+    // VirtIO vendor ID: 0x1AF4
+    // VirtIO-blk device IDs: 0x1001 (transitional), 0x1042 (modern)
+    const VIRTIO_VENDOR: u16 = 0x1AF4;
+    const VIRTIO_BLK_LEGACY: u16 = 0x1001;
+    const VIRTIO_BLK_MODERN: u16 = 0x1042;
+    
+    // PCI config space access (same as NIC probe)
+    const PCI_CONFIG_ADDR: u16 = 0xCF8;
+    const PCI_CONFIG_DATA: u16 = 0xCFC;
+    
+    fn pci_read32(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
+        let addr: u32 = (1 << 31)
+            | ((bus as u32) << 16)
+            | ((device as u32) << 11)
+            | ((func as u32) << 8)
+            | ((offset as u32) & 0xFC);
+        
+        unsafe {
+            core::arch::asm!(
+                "out dx, eax",
+                in("dx") PCI_CONFIG_ADDR,
+                in("eax") addr,
+                options(nomem, nostack)
+            );
+            let value: u32;
+            core::arch::asm!(
+                "in eax, dx",
+                in("dx") PCI_CONFIG_DATA,
+                out("eax") value,
+                options(nomem, nostack)
+            );
+            value
+        }
+    }
+    
+    fn read_bar(bus: u8, device: u8, func: u8, bar_index: u8) -> u64 {
+        let bar_offset = 0x10 + bar_index * 4;
+        let bar_val = pci_read32(bus, device, func, bar_offset);
+        
+        if bar_val & 1 == 0 {
+            let base = (bar_val & 0xFFFFFFF0) as u64;
+            if (bar_val >> 1) & 3 == 2 {
+                let bar_hi = pci_read32(bus, device, func, bar_offset + 4);
+                base | ((bar_hi as u64) << 32)
+            } else {
+                base
+            }
+        } else {
+            (bar_val & 0xFFFFFFFC) as u64
+        }
+    }
+    
+    // Scan PCI bus 0 for VirtIO-blk
+    // Note: We want the SECOND VirtIO-blk device (first one might be the ESP)
+    let mut found_count = 0;
+    
+    for device in 0..32u8 {
+        let id = pci_read32(0, device, 0, 0);
+        
+        if id == 0xFFFFFFFF || id == 0 {
+            continue;
+        }
+        
+        let vendor = (id & 0xFFFF) as u16;
+        let dev_id = ((id >> 16) & 0xFFFF) as u16;
+        
+        // Check for VirtIO block device
+        if vendor == VIRTIO_VENDOR && (dev_id == VIRTIO_BLK_LEGACY || dev_id == VIRTIO_BLK_MODERN) {
+            found_count += 1;
+            
+            // Skip first VirtIO-blk (ESP), use second one (target disk)
+            // In QEMU: addr=0x04 is ESP, addr=0x05 is target
+            if found_count < 2 {
+                screen.put_str_at(9, *log_y, &alloc::format!(
+                    "PCI 0:{:02}:0 - VirtIO-blk (ESP, skipping)", device
+                ), EFI_DARKGRAY, EFI_BLACK);
+                *log_y += 1;
+                continue;
+            }
+            
+            screen.put_str_at(9, *log_y, &alloc::format!(
+                "PCI 0:{:02}:0 - VirtIO-blk target disk found", device
+            ), EFI_LIGHTGREEN, EFI_BLACK);
+            *log_y += 1;
+            
+            // Read BAR0 for MMIO base
+            let bar0 = pci_read32(0, device, 0, 0x10);
+            let mmio_base = if bar0 & 1 == 0 {
+                let base = (bar0 & 0xFFFFFFF0) as u64;
+                if (bar0 >> 1) & 3 == 2 {
+                    let bar1 = pci_read32(0, device, 0, 0x14);
+                    base | ((bar1 as u64) << 32)
+                } else {
+                    base
+                }
+            } else {
+                // I/O BAR not supported for our use
+                continue;
+            };
+            
+            screen.put_str_at(9, *log_y, &alloc::format!(
+                "  MMIO base: {:#x}", mmio_base
+            ), EFI_CYAN, EFI_BLACK);
+            *log_y += 1;
+            
+            return BlkProbeResult::virtio(mmio_base, 0, device, 0);
+        }
+    }
+    
+    BlkProbeResult::zeroed() // Not found
 }
 
 /// Leak a string so it becomes 'static.

@@ -247,25 +247,13 @@ pub fn error_log_clear() {
 ///
 /// Call this periodically during init or after errors to capture
 /// network stack debug output.
+///
+/// NOTE: This is currently a stub. The network crate dependency was removed
+/// to break a cyclic dependency. Network logging should be handled directly
+/// in the network crate or via a shared types crate in the future.
 pub fn drain_network_logs() {
-    // Import from network crate's ring buffer
-    use morpheus_network::stack::{debug_log_pop, debug_log_available};
-    
-    while debug_log_available() {
-        if let Some(net_entry) = debug_log_pop() {
-            // Convert network entry to our format
-            // Network crate uses u32 for stage, we use u8
-            let stage = InitStage::from_network_stage(net_entry.stage as u8);
-            
-            // Get message from network entry
-            let len = net_entry.len;
-            let msg_bytes = &net_entry.msg[..len.min(64)]; // Network uses 64-byte messages
-            if let Ok(msg) = core::str::from_utf8(msg_bytes) {
-                // Forward as debug log (network crate entries aren't necessarily errors)
-                debug_log(stage, msg);
-            }
-        }
-    }
+    // Stub implementation - network crate dependency removed to break cycle
+    // See morpheus-network::stack for direct logging access if needed
 }
 
 #[cfg(test)]

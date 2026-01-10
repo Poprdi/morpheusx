@@ -21,4 +21,4 @@ pub use loader::boot_linux_kernel;
 pub use memory::{
     allocate_boot_params, allocate_cmdline, allocate_kernel_memory, load_kernel_image,
 };
-pub use network_boot::{enter_network_boot, prepare_handoff, validate_handoff, NicProbeResult};
+pub use network_boot::{enter_network_boot, prepare_handoff, prepare_handoff_with_blk, validate_handoff, NicProbeResult, BlkProbeResult};

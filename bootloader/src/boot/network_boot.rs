@@ -130,6 +130,53 @@ impl NicProbeResult {
     }
 }
 
+/// Block device probe result.
+#[derive(Debug, Clone, Copy)]
+pub struct BlkProbeResult {
+    /// MMIO base address
+    pub mmio_base: u64,
+    /// PCI bus number
+    pub pci_bus: u8,
+    /// PCI device number
+    pub pci_device: u8,
+    /// PCI function number
+    pub pci_function: u8,
+    /// Device type: 0=None, 1=VirtIO-blk
+    pub device_type: u8,
+    /// Sector size (typically 512)
+    pub sector_size: u32,
+    /// Total sectors
+    pub total_sectors: u64,
+}
+
+impl BlkProbeResult {
+    /// Create a new zeroed probe result (no device found).
+    pub const fn zeroed() -> Self {
+        Self {
+            mmio_base: 0,
+            pci_bus: 0,
+            pci_device: 0,
+            pci_function: 0,
+            device_type: 0,
+            sector_size: 512,
+            total_sectors: 0,
+        }
+    }
+    
+    /// Create VirtIO-blk result.
+    pub const fn virtio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
+        Self {
+            mmio_base,
+            pci_bus: bus,
+            pci_device: device,
+            pci_function: function,
+            device_type: 1, // BLK_TYPE_VIRTIO
+            sector_size: 512,
+            total_sectors: 0, // Will be read from device
+        }
+    }
+}
+
 /// Prepare BootHandoff from UEFI boot services.
 ///
 /// Call this BEFORE ExitBootServices to populate handoff structure.
@@ -143,8 +190,36 @@ pub fn prepare_handoff(
     stack_top: u64,
     stack_size: u64,
 ) -> BootHandoff {
+    // Delegate to full version with no block device
+    prepare_handoff_with_blk(
+        nic, 
+        &BlkProbeResult::zeroed(),
+        mac_address,
+        dma_cpu_ptr,
+        dma_bus_addr,
+        dma_size,
+        tsc_freq,
+        stack_top,
+        stack_size,
+    )
+}
+
+/// Prepare BootHandoff with both NIC and block device info.
+///
+/// Call this BEFORE ExitBootServices to populate handoff structure.
+pub fn prepare_handoff_with_blk(
+    nic: &NicProbeResult,
+    blk: &BlkProbeResult,
+    mac_address: [u8; 6],
+    dma_cpu_ptr: u64,
+    dma_bus_addr: u64,
+    dma_size: u64,
+    tsc_freq: u64,
+    stack_top: u64,
+    stack_size: u64,
+) -> BootHandoff {
     use morpheus_network::boot::handoff::{
-        HANDOFF_MAGIC, HANDOFF_VERSION, NIC_TYPE_VIRTIO, BLK_TYPE_NONE,
+        HANDOFF_MAGIC, HANDOFF_VERSION, NIC_TYPE_VIRTIO,
     };
     
     BootHandoff {
@@ -160,13 +235,13 @@ pub fn prepare_handoff(
         mac_address,
         _nic_pad: [0; 2],
         
-        blk_mmio_base: 0,
-        blk_pci_bus: 0,
-        blk_pci_device: 0,
-        blk_pci_function: 0,
-        blk_type: BLK_TYPE_NONE,
-        blk_sector_size: 512,
-        blk_total_sectors: 0,
+        blk_mmio_base: blk.mmio_base,
+        blk_pci_bus: blk.pci_bus,
+        blk_pci_device: blk.pci_device,
+        blk_pci_function: blk.pci_function,
+        blk_type: blk.device_type,
+        blk_sector_size: blk.sector_size,
+        blk_total_sectors: blk.total_sectors,
         
         dma_cpu_ptr,
         dma_bus_addr,

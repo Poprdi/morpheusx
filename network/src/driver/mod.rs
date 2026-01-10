@@ -7,6 +7,7 @@
 
 pub mod traits;
 pub mod block_traits;
+pub mod block_io_adapter;
 pub mod virtio;
 pub mod virtio_blk;
 // Future:
@@ -21,4 +22,7 @@ pub use virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};
 // Re-exports - Block
 pub use block_traits::{BlockDriver, BlockDriverInit, BlockError, BlockCompletion, BlockDeviceInfo};
 pub use virtio_blk::{VirtioBlkDriver, VirtioBlkConfig, VirtioBlkInitError};
+
+// Re-exports - BlockIo adapter (for filesystem compatibility)
+pub use block_io_adapter::{VirtioBlkBlockIo, BlockIoError};
 

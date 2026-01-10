@@ -8,6 +8,11 @@ default = []
 
 [dependencies]
 dma-pool = { workspace = true }
+morpheus-core = { workspace = true }
+
+# GPT disk I/O trait for filesystem compatibility
+gpt_disk_io = { version = "0.16", default-features = false }
+gpt_disk_types = { version = "0.16", default-features = false }
 
 smoltcp = { version = "0.11", default-features = false, features = [
     "alloc",

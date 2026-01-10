@@ -9,9 +9,12 @@ gpt_disk_types = { version = "0.16", default-features = false }
 gpt_disk_io = { version = "0.16", default-features = false }
 uguid = { version = "2.1", default-features = false }
 
-# Network orchestration - calls into these crates
+# DMA pool for buffer management
 dma-pool = { path = "../dma-pool" }
-morpheus-network = { path = "../network" }
+
+# NOTE: morpheus-network dependency removed to break cyclic dependency.
+# Network crate now depends on core for IsoManifest types.
+# The drain_network_logs() function is stubbed out.
 
 [features]
 fat32_debug = []

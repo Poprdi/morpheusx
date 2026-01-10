@@ -77,6 +77,7 @@ global asm_vq_is_ready
 global asm_vq_setup
 global asm_vq_init_desc
 global asm_vq_init_desc_chain
+global asm_virtio_setup_queue
 
 ; ───────────────────────────────────────────────────────────────────────────
 ; asm_vq_select
@@ -431,6 +432,98 @@ asm_vq_init_desc_chain:
     jmp     .loop
     
 .done:
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; ───────────────────────────────────────────────────────────────────────────
+; asm_virtio_setup_queue
+; ───────────────────────────────────────────────────────────────────────────
+; Setup a virtqueue with direct parameters (matches virtio_blk.rs signature)
+;
+; Parameters:
+;   RCX = MMIO base address
+;   EDX = queue index
+;   R8  = descriptor table physical address
+;   R9  = available ring physical address
+;   [RSP+40] = used ring physical address (5th param)
+;   [RSP+48] = queue size (6th param)
+; Returns:
+;   EAX = 0 on success, 1 if queue unavailable
+;
+; Note: This is an alternative entry point that takes individual addresses
+;       instead of a pointer to a VirtqueueConfig struct.
+; ───────────────────────────────────────────────────────────────────────────
+asm_virtio_setup_queue:
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    push    rsi
+    push    rdi
+    
+    mov     r12, rcx            ; MMIO base
+    mov     r13d, edx           ; queue index
+    mov     r14, r8             ; desc_phys
+    mov     r15, r9             ; avail_phys
+    mov     rsi, [rsp + 40 + 56] ; used_phys (5th param, after 7 pushes + shadow)
+    mov     edi, [rsp + 48 + 56] ; queue_size (6th param)
+    
+    ; Select queue
+    mov     [r12 + VIRTIO_MMIO_QUEUE_SEL], r13d
+    mfence
+    
+    ; Check queue is available (max_size > 0)
+    mov     eax, [r12 + VIRTIO_MMIO_QUEUE_NUM_MAX]
+    test    eax, eax
+    jz      .setup_q_unavailable
+    
+    ; Verify requested size <= max
+    cmp     edi, eax
+    ja      .setup_q_unavailable
+    
+    ; Set queue size
+    mov     [r12 + VIRTIO_MMIO_QUEUE_NUM], edi
+    mfence
+    
+    ; Set descriptor table address (r14 = desc_phys)
+    mov     rax, r14
+    mov     [r12 + VIRTIO_MMIO_QUEUE_DESC_LOW], eax
+    shr     rax, 32
+    mov     [r12 + VIRTIO_MMIO_QUEUE_DESC_HIGH], eax
+    mfence
+    
+    ; Set available ring address (r15 = avail_phys)
+    mov     rax, r15
+    mov     [r12 + VIRTIO_MMIO_QUEUE_DRIVER_LOW], eax
+    shr     rax, 32
+    mov     [r12 + VIRTIO_MMIO_QUEUE_DRIVER_HIGH], eax
+    mfence
+    
+    ; Set used ring address (rsi = used_phys)
+    mov     rax, rsi
+    mov     [r12 + VIRTIO_MMIO_QUEUE_DEVICE_LOW], eax
+    shr     rax, 32
+    mov     [r12 + VIRTIO_MMIO_QUEUE_DEVICE_HIGH], eax
+    mfence
+    
+    ; Enable queue
+    mov     dword [r12 + VIRTIO_MMIO_QUEUE_READY], 1
+    mfence
+    
+    xor     eax, eax            ; Success
+    jmp     .setup_q_done
+    
+.setup_q_unavailable:
+    mov     eax, 1              ; Failure
+    
+.setup_q_done:
+    pop     rdi
+    pop     rsi
     pop     r15
     pop     r14
     pop     r13

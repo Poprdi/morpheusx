@@ -5,6 +5,7 @@
 //! 2. Creates the smoltcp interface and sockets
 //! 3. Runs the 5-phase main loop
 //! 4. Orchestrates ISO download and disk write
+//! 5. Writes manifest to disk for boot entry discovery
 //!
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §6, §7
@@ -24,12 +25,17 @@ use smoltcp::socket::dns::{Socket as DnsSocket, GetQueryResultError};
 use smoltcp::time::Instant;
 use smoltcp::wire::{DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr};
 
-use crate::boot::handoff::{BootHandoff, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
+use crate::boot::handoff::{BootHandoff, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN, BLK_TYPE_VIRTIO};
 use crate::boot::init::TimeoutConfig;
 use crate::driver::virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};
 use crate::driver::virtio::{VirtioTransport, TransportType, PciModernConfig};
+use crate::driver::virtio_blk::{VirtioBlkDriver, VirtioBlkConfig, VirtioBlkInitError};
 use crate::driver::traits::NetworkDriver;
+use crate::driver::block_traits::BlockDriver;
 use crate::url::Url;
+
+// Import manifest support from morpheus-core
+use morpheus_core::iso::{IsoManifest, MAX_MANIFEST_SIZE};
 
 // Import from sibling modules in the mainloop package
 use super::runner::{MainLoopConfig, get_tsc};
@@ -123,6 +129,316 @@ pub fn serial_print_decimal(value: u32) {
         i -= 1;
         unsafe { serial_write_byte(buf[i]); }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STREAMING DISK WRITE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Flush the disk write buffer to the block device.
+/// 
+/// Writes the buffered data as one or more sector writes.
+/// Returns the number of bytes written, or 0 on error.
+unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
+    if DISK_WRITE_BUFFER_FILL == 0 {
+        return 0;
+    }
+    
+    // Calculate sectors to write (round up)
+    let bytes_to_write = DISK_WRITE_BUFFER_FILL;
+    let num_sectors = ((bytes_to_write + 511) / 512) as u32;
+    
+    // Get the buffer physical address (we're identity mapped post-EBS)
+    let buffer_phys = DISK_WRITE_BUFFER.as_ptr() as u64;
+    
+    // Submit write request
+    let request_id = DISK_NEXT_REQUEST_ID;
+    DISK_NEXT_REQUEST_ID = DISK_NEXT_REQUEST_ID.wrapping_add(1);
+    
+    // Poll for completion space first (drain any pending completions)
+    while let Some(_completion) = blk_driver.poll_completion() {
+        // Just drain pending completions
+    }
+    
+    // Check if driver can accept a request
+    if !blk_driver.can_submit() {
+        serial_println("[DISK] ERROR: Block queue full, cannot submit");
+        return 0;
+    }
+    
+    // Submit the write
+    if let Err(e) = blk_driver.submit_write(
+        DISK_NEXT_SECTOR,
+        buffer_phys,
+        num_sectors,
+        request_id,
+    ) {
+        serial_print("[DISK] ERROR: Write submit failed at sector ");
+        serial_print_hex(DISK_NEXT_SECTOR);
+        serial_println("");
+        return 0;
+    }
+    
+    // Notify the device
+    blk_driver.notify();
+    
+    // Poll for completion (with timeout)
+    let start_tsc = super::runner::get_tsc();
+    let timeout_ticks = 100_000_000; // ~100ms at 1GHz TSC
+    
+    loop {
+        if let Some(completion) = blk_driver.poll_completion() {
+            if completion.request_id == request_id {
+                if completion.status == 0 {
+                    // Success!
+                    DISK_NEXT_SECTOR += num_sectors as u64;
+                    DISK_TOTAL_BYTES += bytes_to_write as u64;
+                    DISK_WRITE_BUFFER_FILL = 0;
+                    return bytes_to_write;
+                } else {
+                    serial_print("[DISK] ERROR: Write completion status ");
+                    serial_print_decimal(completion.status as u32);
+                    serial_println("");
+                    return 0;
+                }
+            }
+        }
+        
+        let now = super::runner::get_tsc();
+        if now.wrapping_sub(start_tsc) > timeout_ticks {
+            serial_println("[DISK] ERROR: Write completion timeout");
+            return 0;
+        }
+        
+        core::hint::spin_loop();
+    }
+}
+
+/// Add data to the disk write buffer.
+/// Automatically flushes when buffer is full.
+/// Returns the number of bytes consumed from the input.
+unsafe fn buffer_disk_write(
+    blk_driver: &mut VirtioBlkDriver,
+    data: &[u8],
+) -> usize {
+    let mut consumed = 0;
+    let mut remaining = data;
+    
+    while !remaining.is_empty() {
+        // Calculate how much fits in current buffer
+        let space_left = DISK_WRITE_BUFFER_SIZE - DISK_WRITE_BUFFER_FILL;
+        let to_copy = remaining.len().min(space_left);
+        
+        // Copy to buffer
+        let dst_start = DISK_WRITE_BUFFER_FILL;
+        DISK_WRITE_BUFFER[dst_start..dst_start + to_copy].copy_from_slice(&remaining[..to_copy]);
+        DISK_WRITE_BUFFER_FILL += to_copy;
+        consumed += to_copy;
+        remaining = &remaining[to_copy..];
+        
+        // Flush if buffer is full
+        if DISK_WRITE_BUFFER_FILL >= DISK_WRITE_BUFFER_SIZE {
+            let written = flush_disk_buffer(blk_driver);
+            if written == 0 {
+                // Write failed, stop
+                break;
+            }
+        }
+    }
+    
+    consumed
+}
+
+/// Flush any remaining data in the buffer (for end of download).
+unsafe fn flush_remaining_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> bool {
+    if DISK_WRITE_BUFFER_FILL > 0 {
+        // Pad the rest with zeros (needed for sector alignment)
+        for i in DISK_WRITE_BUFFER_FILL..DISK_WRITE_BUFFER_SIZE {
+            DISK_WRITE_BUFFER[i] = 0;
+        }
+        let written = flush_disk_buffer(blk_driver);
+        return written > 0;
+    }
+    true
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MANIFEST WRITING (POST-EBS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Static buffer for manifest serialization (1 sector = 512 bytes, but 
+/// manifest can be up to ~1KB, so use 2 sectors).
+static mut MANIFEST_BUFFER: [u8; 1024] = [0u8; 1024];
+
+/// Write an ISO manifest to disk at the specified sector.
+/// 
+/// The manifest is serialized and written to the manifest sector.
+/// This allows the bootloader to discover downloaded ISOs on next boot.
+/// 
+/// # Arguments
+/// * `blk_driver` - The block driver to write with
+/// * `manifest_sector` - Sector number to write manifest at
+/// * `manifest` - The manifest to write
+/// 
+/// # Returns
+/// true if write successful, false otherwise
+unsafe fn write_manifest_to_disk(
+    blk_driver: &mut VirtioBlkDriver,
+    manifest_sector: u64,
+    manifest: &IsoManifest,
+) -> bool {
+    serial_println("[MANIFEST] Serializing manifest...");
+    
+    // Clear buffer
+    for b in MANIFEST_BUFFER.iter_mut() {
+        *b = 0;
+    }
+    
+    // Serialize manifest
+    let manifest_buffer = &mut MANIFEST_BUFFER;
+    let size = match manifest.serialize(manifest_buffer) {
+        Ok(s) => s,
+        Err(_) => {
+            serial_println("[MANIFEST] ERROR: Failed to serialize manifest");
+            return false;
+        }
+    };
+    
+    serial_print("[MANIFEST] Manifest size: ");
+    serial_print_decimal(size as u32);
+    serial_println(" bytes");
+    
+    // Calculate sectors needed (round up)
+    let num_sectors = ((size + 511) / 512) as u32;
+    serial_print("[MANIFEST] Writing ");
+    serial_print_decimal(num_sectors);
+    serial_print(" sector(s) to sector ");
+    serial_print_hex(manifest_sector);
+    serial_println("");
+    
+    // Get the buffer physical address
+    let buffer_phys = manifest_buffer.as_ptr() as u64;
+    
+    // Poll for completion space first
+    while let Some(_completion) = blk_driver.poll_completion() {
+        // Drain pending completions
+    }
+    
+    // Check if driver can accept a request
+    if !blk_driver.can_submit() {
+        serial_println("[MANIFEST] ERROR: Block queue full");
+        return false;
+    }
+    
+    // Submit the write
+    let request_id = DISK_NEXT_REQUEST_ID;
+    DISK_NEXT_REQUEST_ID = DISK_NEXT_REQUEST_ID.wrapping_add(1);
+    
+    if let Err(_) = blk_driver.submit_write(
+        manifest_sector,
+        buffer_phys,
+        num_sectors,
+        request_id,
+    ) {
+        serial_println("[MANIFEST] ERROR: Write submit failed");
+        return false;
+    }
+    
+    // Notify the device
+    blk_driver.notify();
+    
+    // Poll for completion (with timeout)
+    let start_tsc = super::runner::get_tsc();
+    let timeout_ticks = 100_000_000; // ~100ms at 1GHz TSC
+    
+    loop {
+        if let Some(completion) = blk_driver.poll_completion() {
+            if completion.request_id == request_id {
+                if completion.status == 0 {
+                    serial_println("[MANIFEST] OK: Manifest written to disk");
+                    return true;
+                } else {
+                    serial_print("[MANIFEST] ERROR: Write completion status ");
+                    serial_print_decimal(completion.status as u32);
+                    serial_println("");
+                    return false;
+                }
+            }
+        }
+        
+        let now = super::runner::get_tsc();
+        if now.wrapping_sub(start_tsc) > timeout_ticks {
+            serial_println("[MANIFEST] ERROR: Write timeout");
+            return false;
+        }
+        
+        core::hint::spin_loop();
+    }
+}
+
+/// Create and write a completed ISO manifest to disk.
+/// 
+/// Called after HTTP download completes to record the ISO location.
+unsafe fn finalize_manifest(
+    blk_driver: &mut VirtioBlkDriver,
+    config: &BareMetalConfig,
+    total_bytes: u64,
+) -> bool {
+    if config.manifest_sector == 0 {
+        serial_println("[MANIFEST] Manifest sector not configured, skipping");
+        return true;
+    }
+    
+    serial_println("");
+    serial_println("=== WRITING ISO MANIFEST ===");
+    serial_print("[MANIFEST] ISO name: ");
+    serial_println(config.iso_name);
+    serial_print("[MANIFEST] Total size: ");
+    serial_print_decimal((total_bytes / (1024 * 1024)) as u32);
+    serial_println(" MB");
+    
+    // Create manifest
+    let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
+    
+    // Calculate end sector
+    let bytes_in_sectors = ((total_bytes + 511) / 512) * 512;
+    let num_sectors = bytes_in_sectors / 512;
+    let end_sector = config.target_start_sector + num_sectors;
+    
+    // Add chunk entry
+    match manifest.add_chunk(
+        config.partition_uuid,
+        config.target_start_sector,
+        end_sector,
+    ) {
+        Ok(idx) => {
+            serial_print("[MANIFEST] Added chunk ");
+            serial_print_decimal(idx as u32);
+            serial_print(": sectors ");
+            serial_print_hex(config.target_start_sector);
+            serial_print(" - ");
+            serial_print_hex(end_sector);
+            serial_println("");
+        }
+        Err(_) => {
+            serial_println("[MANIFEST] ERROR: Failed to add chunk");
+            return false;
+        }
+    }
+    
+    // Update chunk with data size
+    if let Some(chunk) = manifest.chunks.chunks.get_mut(0) {
+        chunk.data_size = total_bytes;
+        chunk.written = true;
+    }
+    
+    // Mark as complete
+    manifest.mark_complete();
+    
+    serial_println("[MANIFEST] Manifest marked as COMPLETE");
+    
+    // Write to disk
+    write_manifest_to_disk(blk_driver, config.manifest_sector, &manifest)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -497,21 +813,59 @@ pub enum RunResult {
 pub struct BareMetalConfig {
     /// URL to download ISO from (must be 'static - allocated before EBS).
     pub iso_url: &'static str,
-    /// Target disk sector to start writing at.
+    /// ISO filename for manifest (e.g., "tails-6.0.iso").
+    pub iso_name: &'static str,
+    /// Target disk sector to start writing ISO data at.
     pub target_start_sector: u64,
+    /// Sector where manifest is stored (read/write).
+    /// Set to 0 to disable manifest functionality.
+    pub manifest_sector: u64,
     /// Maximum download size in bytes.
     pub max_download_size: u64,
+    /// Whether to write to disk (requires VirtIO-blk).
+    pub write_to_disk: bool,
+    /// Partition UUID for chunk tracking (16 bytes, or zeros if unknown).
+    pub partition_uuid: [u8; 16],
 }
 
 impl Default for BareMetalConfig {
     fn default() -> Self {
         Self {
             iso_url: "http://10.0.2.2:8000/test-iso.img",
-            target_start_sector: 2048, // Start at 1MB offset
+            iso_name: "download.iso",
+            target_start_sector: 2048, // Start at 1MB offset (after manifest)
+            manifest_sector: 1024,     // Manifest at sector 1024 (512KB offset)
             max_download_size: 4 * 1024 * 1024 * 1024, // 4GB max
+            write_to_disk: true, // Enable disk writes by default
+            partition_uuid: [0u8; 16], // Will be set by bootloader if known
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DISK WRITE BUFFER (Static - no heap allocation)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Size of write buffer: 64KB = 128 sectors (optimal for VirtIO-blk)
+const DISK_WRITE_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Number of sectors per write operation
+const SECTORS_PER_WRITE: u32 = (DISK_WRITE_BUFFER_SIZE / 512) as u32;
+
+/// Static buffer for accumulating data before disk write
+static mut DISK_WRITE_BUFFER: [u8; DISK_WRITE_BUFFER_SIZE] = [0u8; DISK_WRITE_BUFFER_SIZE];
+
+/// Current fill level of write buffer
+static mut DISK_WRITE_BUFFER_FILL: usize = 0;
+
+/// Next sector to write to
+static mut DISK_NEXT_SECTOR: u64 = 0;
+
+/// Total bytes written to disk
+static mut DISK_TOTAL_BYTES: u64 = 0;
+
+/// Next request ID for block driver
+static mut DISK_NEXT_REQUEST_ID: u32 = 1;
 
 /// Main bare-metal entry point.
 ///
@@ -661,6 +1015,88 @@ pub unsafe fn bare_metal_main(
         }
     }
     serial_println("");
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 2.5: INITIALIZE BLOCK DEVICE (VirtIO-blk)
+    // ═══════════════════════════════════════════════════════════════════════
+    let mut blk_driver: Option<VirtioBlkDriver> = None;
+    
+    if config.write_to_disk && handoff.has_block_device() {
+        serial_println("[INIT] Initializing VirtIO-blk driver...");
+        serial_print("[INIT] Block MMIO base: ");
+        serial_print_hex(handoff.blk_mmio_base);
+        serial_println("");
+        serial_print("[INIT] Block sector size: ");
+        serial_print_decimal(handoff.blk_sector_size);
+        serial_println("");
+        serial_print("[INIT] Block total sectors: ");
+        serial_print_hex(handoff.blk_total_sectors);
+        serial_println("");
+        
+        // Calculate DMA region for block device
+        // Use second half of DMA region (first half is for network)
+        let blk_dma_offset = handoff.dma_size / 2;
+        let blk_dma_base = handoff.dma_cpu_ptr + blk_dma_offset;
+        
+        // VirtIO-blk queue layout:
+        // - Descriptors: 32 * 16 = 512 bytes
+        // - Avail ring: 4 + 32*2 + 2 = 70 bytes (pad to 512)
+        // - Used ring: 4 + 32*8 + 2 = 262 bytes (pad to 512)
+        // - Headers: 32 * 16 = 512 bytes (one header per desc set)
+        // - Status: 32 bytes (one per desc set)
+        // - Data buffers: 32 * 64KB = 2MB (for larger writes)
+        
+        let blk_config = VirtioBlkConfig {
+            queue_size: 32,
+            desc_phys: blk_dma_base,
+            avail_phys: blk_dma_base + 512,
+            used_phys: blk_dma_base + 1024,
+            headers_phys: blk_dma_base + 2048,
+            status_phys: blk_dma_base + 2048 + 512,
+            headers_cpu: blk_dma_base + 2048,
+            status_cpu: blk_dma_base + 2048 + 512,
+            notify_addr: handoff.blk_mmio_base + 0x50, // MMIO notify offset
+        };
+        
+        match VirtioBlkDriver::new(handoff.blk_mmio_base, blk_config) {
+            Ok(d) => {
+                let info = d.info();
+                serial_println("[OK] VirtIO-blk driver initialized");
+                serial_print("[OK] Disk capacity: ");
+                let total_bytes = info.total_sectors * info.sector_size as u64;
+                if total_bytes >= 1024 * 1024 * 1024 {
+                    serial_print_decimal((total_bytes / (1024 * 1024 * 1024)) as u32);
+                    serial_println(" GB");
+                } else {
+                    serial_print_decimal((total_bytes / (1024 * 1024)) as u32);
+                    serial_println(" MB");
+                }
+                
+                // Initialize disk write state
+                DISK_NEXT_SECTOR = config.target_start_sector;
+                DISK_WRITE_BUFFER_FILL = 0;
+                DISK_TOTAL_BYTES = 0;
+                DISK_NEXT_REQUEST_ID = 1;
+                
+                blk_driver = Some(d);
+            }
+            Err(e) => {
+                serial_print("[WARN] VirtIO-blk init failed: ");
+                match e {
+                    VirtioBlkInitError::ResetFailed => serial_println("reset failed"),
+                    VirtioBlkInitError::FeatureNegotiationFailed => serial_println("feature negotiation failed"),
+                    VirtioBlkInitError::QueueSetupFailed => serial_println("queue setup failed"),
+                    VirtioBlkInitError::DeviceFailed => serial_println("device error"),
+                    VirtioBlkInitError::InvalidConfig => serial_println("invalid config"),
+                }
+                serial_println("[WARN] Continuing without disk write support");
+            }
+        }
+    } else if config.write_to_disk {
+        serial_println("[WARN] No block device in handoff - disk writes disabled");
+    } else {
+        serial_println("[INFO] Disk writes disabled by config");
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 3: CREATE SMOLTCP INTERFACE
@@ -1200,13 +1636,30 @@ pub unsafe fn bare_metal_main(
                             // Body starts after \r\n\r\n
                             let body_start = pos + 4;
                             if header_len > body_start {
-                                body_received = header_len - body_start;
+                                let initial_body = &header_buffer[body_start..header_len];
+                                body_received = initial_body.len();
+                                
+                                // Write initial body data to disk if enabled
+                                if let Some(ref mut blk) = blk_driver {
+                                    let written = buffer_disk_write(blk, initial_body);
+                                    if written != initial_body.len() {
+                                        serial_println("[WARN] Failed to write initial body to disk");
+                                    }
+                                }
                             }
                             
                             serial_println("[HTTP] Streaming body...");
                         }
                     } else {
                         body_received += len;
+                        
+                        // Write received data to disk if enabled
+                        if let Some(ref mut blk) = blk_driver {
+                            let written = buffer_disk_write(blk, &buf[..len]);
+                            if written != len {
+                                serial_println("[WARN] Incomplete disk write");
+                            }
+                        }
                         
                         // Print progress with percentage if content-length known
                         let current_kb = body_received / 1024;
@@ -1224,6 +1677,15 @@ pub unsafe fn bare_metal_main(
                                     serial_print("%)");
                                 }
                             }
+                            
+                            // Also show disk write progress if writing
+                            if blk_driver.is_some() {
+                                serial_print(" | Disk: ");
+                                let disk_kb = (DISK_TOTAL_BYTES / 1024) as u32;
+                                serial_print_decimal(disk_kb);
+                                serial_print(" KB");
+                            }
+                            
                             serial_println("");
                         }
                     }
@@ -1299,9 +1761,56 @@ pub unsafe fn bare_metal_main(
     serial_println("");
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 6: COMPLETE (Disk write would go here in full implementation)
+    // STEP 6: FINALIZE DISK WRITE
     // ═══════════════════════════════════════════════════════════════════════
-    serial_println("[NOTE] Disk write not implemented - data received but not persisted");
+    if let Some(ref mut blk) = blk_driver {
+        serial_println("[DISK] Flushing remaining data to disk...");
+        
+        // Flush any remaining buffered data
+        if flush_remaining_disk_buffer(blk) {
+            serial_println("[OK] Disk write finalized");
+        } else {
+            serial_println("[WARN] Final flush failed");
+        }
+        
+        // Print disk write summary
+        serial_println("");
+        serial_println("=== DISK WRITE SUMMARY ===");
+        serial_print("[DISK] Total bytes written: ");
+        if DISK_TOTAL_BYTES >= 1024 * 1024 * 1024 {
+            serial_print_decimal((DISK_TOTAL_BYTES / (1024 * 1024 * 1024)) as u32);
+            serial_println(" GB");
+        } else if DISK_TOTAL_BYTES >= 1024 * 1024 {
+            serial_print_decimal((DISK_TOTAL_BYTES / (1024 * 1024)) as u32);
+            serial_println(" MB");
+        } else {
+            serial_print_decimal((DISK_TOTAL_BYTES / 1024) as u32);
+            serial_println(" KB");
+        }
+        serial_print("[DISK] Start sector: ");
+        serial_print_decimal(config.target_start_sector as u32);
+        serial_println("");
+        serial_print("[DISK] End sector: ");
+        serial_print_decimal(DISK_NEXT_SECTOR as u32);
+        serial_println("");
+        serial_print("[DISK] Sectors written: ");
+        serial_print_decimal((DISK_NEXT_SECTOR - config.target_start_sector) as u32);
+        serial_println("");
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.5: WRITE ISO MANIFEST
+        // ═══════════════════════════════════════════════════════════════════
+        // Write manifest so bootloader can discover this ISO on next boot
+        if DISK_TOTAL_BYTES > 0 {
+            if finalize_manifest(blk, &config, DISK_TOTAL_BYTES) {
+                serial_println("[OK] ISO manifest written successfully");
+            } else {
+                serial_println("[WARN] Failed to write ISO manifest");
+            }
+        }
+    } else {
+        serial_println("[NOTE] Disk write disabled - data received but not persisted");
+    }
     serial_println("");
 
     // ═══════════════════════════════════════════════════════════════════════
