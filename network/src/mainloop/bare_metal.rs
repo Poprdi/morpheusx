@@ -20,8 +20,9 @@ use alloc::format;
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::socket::dhcpv4::{Socket as Dhcpv4Socket, Event as Dhcpv4Event};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
+use smoltcp::socket::dns::{Socket as DnsSocket, GetQueryResultError};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Address, Ipv4Cidr};
+use smoltcp::wire::{DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr};
 
 use crate::boot::handoff::{BootHandoff, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
 use crate::boot::init::TimeoutConfig;
@@ -235,6 +236,67 @@ fn format_http_get(buffer: &mut [u8], path: &str, host: &str) -> Option<usize> {
     Some(pos)
 }
 
+/// Case-insensitive starts_with for ASCII strings (no heap allocation).
+fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
+    if s.len() < prefix.len() {
+        return false;
+    }
+    let s_bytes = s.as_bytes();
+    let p_bytes = prefix.as_bytes();
+    for i in 0..p_bytes.len() {
+        let a = s_bytes[i].to_ascii_lowercase();
+        let b = p_bytes[i].to_ascii_lowercase();
+        if a != b {
+            return false;
+        }
+    }
+    true
+}
+
+/// Case-insensitive contains for ASCII strings (no heap allocation).
+fn contains_ignore_case(s: &str, needle: &str) -> bool {
+    if needle.len() > s.len() {
+        return false;
+    }
+    let s_bytes = s.as_bytes();
+    let n_bytes = needle.as_bytes();
+    
+    for i in 0..=(s_bytes.len() - n_bytes.len()) {
+        let mut found = true;
+        for j in 0..n_bytes.len() {
+            if s_bytes[i + j].to_ascii_lowercase() != n_bytes[j].to_ascii_lowercase() {
+                found = false;
+                break;
+            }
+        }
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
+/// Parse usize from string without allocation.
+fn parse_usize(s: &str) -> Option<usize> {
+    let mut result: usize = 0;
+    let mut has_digit = false;
+    for c in s.bytes() {
+        if c >= b'0' && c <= b'9' {
+            has_digit = true;
+            result = result.checked_mul(10)?;
+            result = result.checked_add((c - b'0') as usize)?;
+        } else if c == b' ' || c == b'\t' {
+            // Skip whitespace at beginning
+            if has_digit {
+                break; // Stop at whitespace after digits
+            }
+        } else {
+            break; // Stop at non-digit, non-whitespace
+        }
+    }
+    if has_digit { Some(result) } else { None }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // REENTRANCY GUARD
 // ═══════════════════════════════════════════════════════════════════════════
@@ -346,10 +408,6 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        serial_print("[ADAPTER-TX] TxToken::consume called, len=");
-        serial_print_decimal(len as u32);
-        serial_println("");
-        
         // Use stack-allocated buffer (NO HEAP!) - max Ethernet frame + some margin
         // Max frame is 1514 bytes, but smoltcp may request up to ~1600 for headers
         const MAX_FRAME: usize = 2048;
@@ -364,19 +422,9 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
         
         let result = f(&mut buffer[..actual_len]);
         
-        serial_println("[ADAPTER-TX] Frame filled, calling driver.transmit...");
-        
         // Fire-and-forget transmit - don't wait for completion
-        match self.driver.transmit(&buffer[..actual_len]) {
-            Ok(()) => {
-                serial_println("[ADAPTER-TX] transmit OK");
-            }
-            Err(_) => {
-                serial_println("[ADAPTER-TX] transmit FAILED");
-            }
-        }
+        let _ = self.driver.transmit(&buffer[..actual_len]);
         
-        serial_println("[ADAPTER-TX] returning from consume");
         result
     }
 }
@@ -660,6 +708,7 @@ pub unsafe fn bare_metal_main(
     let mut got_ip = false;
     let mut our_ip = Ipv4Address::UNSPECIFIED;
     let mut gateway_ip = Ipv4Address::UNSPECIFIED;
+    let mut dns_ip = Ipv4Address::UNSPECIFIED;
     
     // DHCP polling loop
     serial_println("[NET] Sending DHCP DISCOVER...");
@@ -717,6 +766,7 @@ pub unsafe fn bare_metal_main(
                     
                     // Set DNS (if provided)
                     if let Some(dns) = dhcp_config.dns_servers.get(0) {
+                        dns_ip = *dns;
                         serial_print("[OK] DNS: ");
                         print_ipv4(*dns);
                         serial_println("");
@@ -794,7 +844,7 @@ pub unsafe fn bare_metal_main(
     serial_print("[HTTP] Path: ");
     serial_println(path);
     
-    // Parse host as IP address (no DNS in bare-metal mode)
+    // Parse host as IP address or do DNS resolution
     let server_ip = match parse_ipv4(host_str) {
         Some(ip) => {
             serial_print("[HTTP] Using IP: ");
@@ -803,12 +853,89 @@ pub unsafe fn bare_metal_main(
             ip
         }
         None => {
-            // For non-IP hostnames, we'd need DNS resolution
-            // For now, use gateway as fallback (works in QEMU user mode)
-            serial_print("[HTTP] Cannot parse as IP: ");
+            // Need DNS resolution
+            serial_print("[HTTP] Resolving hostname: ");
             serial_println(host_str);
-            serial_println("[HTTP] Using gateway as fallback (for DNS, need real resolver)");
-            gateway_ip
+            
+            if dns_ip == Ipv4Address::UNSPECIFIED {
+                serial_println("[FAIL] No DNS server available");
+                return RunResult::DownloadFailed;
+            }
+            
+            // Create DNS socket with the DHCP-provided DNS server
+            // Use static storage for DNS queries (smoltcp requires this)
+            static mut DNS_QUERIES: [Option<smoltcp::socket::dns::DnsQuery>; 1] = [None];
+            
+            let dns_servers: &[IpAddress] = &[IpAddress::Ipv4(dns_ip)];
+            let dns_socket = DnsSocket::new(dns_servers, unsafe { &mut DNS_QUERIES[..] });
+            let dns_handle = sockets.add(dns_socket);
+            
+            // Start DNS query
+            let query_handle = {
+                let dns = sockets.get_mut::<DnsSocket>(dns_handle);
+                match dns.start_query(iface.context(), host_str, DnsQueryType::A) {
+                    Ok(h) => h,
+                    Err(_) => {
+                        serial_println("[FAIL] DNS query start failed");
+                        return RunResult::DownloadFailed;
+                    }
+                }
+            };
+            
+            serial_println("[DNS] Query started, waiting for response...");
+            
+            // Poll until we get DNS response
+            let dns_start = get_tsc();
+            let dns_timeout = timeouts.tcp_connect(); // Use same timeout as TCP
+            
+            let resolved_ip = loop {
+                let now_tsc = get_tsc();
+                if now_tsc.wrapping_sub(dns_start) > dns_timeout {
+                    serial_println("[FAIL] DNS timeout");
+                    return RunResult::DownloadFailed;
+                }
+                
+                let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+                adapter.refill_rx();
+                iface.poll(timestamp, &mut adapter, &mut sockets);
+                adapter.collect_tx();
+                
+                let dns = sockets.get_mut::<DnsSocket>(dns_handle);
+                match dns.get_query_result(query_handle) {
+                    Ok(addrs) => {
+                        // Find first IPv4 address
+                        let mut found_ip = None;
+                        for addr in addrs {
+                            if let IpAddress::Ipv4(v4) = addr {
+                                found_ip = Some(v4);
+                                break;
+                            }
+                        }
+                        match found_ip {
+                            Some(ip) => break ip,
+                            None => {
+                                serial_println("[FAIL] DNS response has no IPv4 address");
+                                return RunResult::DownloadFailed;
+                            }
+                        }
+                    }
+                    Err(GetQueryResultError::Pending) => {
+                        // Still waiting, continue polling
+                        for _ in 0..100 {
+                            core::hint::spin_loop();
+                        }
+                    }
+                    Err(GetQueryResultError::Failed) => {
+                        serial_println("[FAIL] DNS query failed");
+                        return RunResult::DownloadFailed;
+                    }
+                }
+            };
+            
+            serial_print("[OK] DNS resolved: ");
+            print_ipv4(resolved_ip);
+            serial_println("");
+            resolved_ip
         }
     };
     
@@ -929,7 +1056,10 @@ pub unsafe fn bare_metal_main(
     let mut content_length: Option<usize> = None;
     let mut body_received: usize = 0;
     let mut http_status: Option<u16> = None;
-    let mut header_buffer = Vec::new();
+    
+    // Static buffer for headers (no heap!)
+    static mut HEADER_BUFFER: [u8; 16384] = [0u8; 16384];
+    let mut header_len: usize = 0;
     let mut last_progress_kb: usize = 0;
     
     let recv_start = get_tsc();
@@ -967,35 +1097,46 @@ pub unsafe fn bare_metal_main(
                     last_activity = now_tsc;
                     
                     if !headers_done {
-                        // Accumulate header data
-                        header_buffer.extend_from_slice(&buf[..len]);
+                        // Accumulate header data in static buffer
+                        let header_buffer = unsafe { &mut HEADER_BUFFER };
+                        let space_left = header_buffer.len() - header_len;
                         
-                        // Check for header overflow (prevent DoS)
-                        if header_buffer.len() > 16384 {
+                        if len > space_left {
                             serial_println("[FAIL] HTTP headers too large");
                             return RunResult::DownloadFailed;
                         }
                         
+                        header_buffer[header_len..header_len + len].copy_from_slice(&buf[..len]);
+                        header_len += len;
+                        
                         // Look for end of headers
-                        if let Some(pos) = find_header_end(&header_buffer) {
+                        if let Some(pos) = find_header_end(&header_buffer[..header_len]) {
                             headers_done = true;
                             serial_println("[HTTP] Headers received");
                             
-                            // Parse HTTP status line and headers
+                            // Parse HTTP status line (NO HEAP!)
+                            // Format: "HTTP/1.1 200 OK\r\n"
                             let header_str = core::str::from_utf8(&header_buffer[..pos]).unwrap_or("");
-                            let mut lines = header_str.lines();
                             
-                            // Parse status line: "HTTP/1.1 200 OK"
-                            if let Some(status_line) = lines.next() {
-                                let parts: Vec<&str> = status_line.split_whitespace().collect();
-                                if parts.len() >= 2 {
-                                    if let Ok(status) = parts[1].parse::<u16>() {
+                            // Find first line (status line)
+                            if let Some(first_line_end) = header_str.find('\r') {
+                                let status_line = &header_str[..first_line_end];
+                                
+                                // Parse status code manually (avoid split().collect())
+                                // Find "HTTP/x.x " prefix, then parse number
+                                if let Some(space_after_http) = status_line.find(' ') {
+                                    let after_http = &status_line[space_after_http + 1..];
+                                    // Find the status code (3 digits)
+                                    let status_end = after_http.find(' ').unwrap_or(after_http.len());
+                                    let status_str = &after_http[..status_end];
+                                    
+                                    if let Some(status) = parse_u16(status_str) {
                                         http_status = Some(status);
                                         serial_print("[HTTP] Status: ");
                                         serial_print_decimal(status as u32);
-                                        serial_print(" ");
-                                        if parts.len() >= 3 {
-                                            serial_println(parts[2..].join(" ").as_str());
+                                        if status_end < after_http.len() {
+                                            serial_print(" ");
+                                            serial_println(&after_http[status_end + 1..]);
                                         } else {
                                             serial_println("");
                                         }
@@ -1011,19 +1152,19 @@ pub unsafe fn bare_metal_main(
                                         // Handle redirects (3xx)
                                         if status >= 300 && status < 400 {
                                             serial_println("[WARN] HTTP redirect - not following");
-                                            // In a full implementation, we'd follow the Location header
                                         }
                                     }
                                 }
                             }
                             
-                            // Parse headers
-                            for line in lines {
-                                let line_lower = line.to_lowercase();
-                                
-                                if line_lower.starts_with("content-length:") {
-                                    if let Some(len_str) = line.split(':').nth(1) {
-                                        if let Ok(len) = len_str.trim().parse::<usize>() {
+                            // Parse headers - look for Content-Length (case-insensitive, NO HEAP!)
+                            for line in header_str.lines().skip(1) {
+                                // Case-insensitive comparison without allocation
+                                if starts_with_ignore_case(line, "content-length:") {
+                                    // Find the ':' and parse the number after it
+                                    if let Some(colon_pos) = line.find(':') {
+                                        let value_str = line[colon_pos + 1..].trim();
+                                        if let Some(len) = parse_usize(value_str) {
                                             content_length = Some(len);
                                             serial_print("[HTTP] Content-Length: ");
                                             // Print in human readable format
@@ -1042,13 +1183,14 @@ pub unsafe fn bare_metal_main(
                                             }
                                         }
                                     }
-                                } else if line_lower.starts_with("content-type:") {
-                                    if let Some(ct) = line.split(':').nth(1) {
+                                } else if starts_with_ignore_case(line, "content-type:") {
+                                    if let Some(colon_pos) = line.find(':') {
+                                        let value = line[colon_pos + 1..].trim();
                                         serial_print("[HTTP] Content-Type: ");
-                                        serial_println(ct.trim());
+                                        serial_println(value);
                                     }
-                                } else if line_lower.starts_with("transfer-encoding:") {
-                                    if line_lower.contains("chunked") {
+                                } else if starts_with_ignore_case(line, "transfer-encoding:") {
+                                    if contains_ignore_case(line, "chunked") {
                                         serial_println("[HTTP] Transfer-Encoding: chunked");
                                         // NOTE: Chunked encoding would need special handling
                                     }
@@ -1057,8 +1199,8 @@ pub unsafe fn bare_metal_main(
                             
                             // Body starts after \r\n\r\n
                             let body_start = pos + 4;
-                            if header_buffer.len() > body_start {
-                                body_received = header_buffer.len() - body_start;
+                            if header_len > body_start {
+                                body_received = header_len - body_start;
                             }
                             
                             serial_println("[HTTP] Streaming body...");
