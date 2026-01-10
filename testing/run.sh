@@ -74,11 +74,13 @@ case $REPLY in
         
         echo "Booting from 50GB test disk..."
         echo ""
+        # NOTE: Using disable-legacy=on to force VirtIO PCI Modern mode
+        # This requires the VirtIO PCI Modern driver (see docs/VIRTIO_PCI_MODERN_IMPLEMENTATION.md)
         qemu-system-x86_64 \
             -s \
             -bios /usr/share/OVMF/x64/OVMF_CODE.4m.fd \
             -drive format=raw,file=test-disk-50g.img \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
             -m 12G \
@@ -90,11 +92,12 @@ case $REPLY in
         echo "Booting ONLY test-disk-10g.img (persistence test)..."
         echo "If Morpheus boots, installation succeeded!"
         echo ""
+        # NOTE: Using disable-legacy=on to force VirtIO PCI Modern mode
         qemu-system-x86_64 \
             -s \
             -bios /usr/share/OVMF/x64/OVMF_CODE.4m.fd \
             -drive format=raw,file=test-disk-10g.img \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
             -m 12G \
@@ -105,11 +108,12 @@ case $REPLY in
     *)
         echo "Booting from ESP image (legacy mode)..."
         echo ""
+        # NOTE: Using disable-legacy=on to force VirtIO PCI Modern mode
         qemu-system-x86_64 \
             -s \
             -bios /usr/share/OVMF/x64/OVMF_CODE.4m.fd \
             -drive format=raw,file=esp.img \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
             -m 12G \
