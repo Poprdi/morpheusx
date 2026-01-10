@@ -16,6 +16,7 @@
 //! NETWORK_IMPL_GUIDE.md §4.5
 
 use super::config::{status, negotiate_features, features, VirtioConfig};
+use super::transport::{VirtioTransport, TransportType};
 use crate::types::{VirtqueueState, MacAddress};
 use crate::driver::traits::RxError;
 
@@ -233,11 +234,229 @@ fn generate_local_mac() -> MacAddress {
     [0x02, 0x00, 0x00, 0x00, 0x00, 0x01]
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// TRANSPORT-AWARE INITIALIZATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Initialize VirtIO network device using transport abstraction.
+///
+/// This function auto-selects the correct initialization path based
+/// on the transport type (MMIO or PCI Modern).
+///
+/// # Arguments
+/// - `transport`: Transport handle (already configured with addresses)
+/// - `config`: Pre-allocated DMA configuration
+/// - `tsc_freq`: TSC frequency for timeout calculations
+///
+/// # Returns
+/// Tuple of (negotiated_features, rx_queue_state, tx_queue_state, mac_address)
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn virtio_net_init_transport(
+    transport: &VirtioTransport,
+    config: &VirtioConfig,
+    tsc_freq: u64,
+) -> Result<(u64, VirtqueueState, VirtqueueState, MacAddress), VirtioInitError> {
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 1: RESET DEVICE
+    // ═══════════════════════════════════════════════════════════
+    if !transport.reset(tsc_freq) {
+        return Err(VirtioInitError::ResetTimeout);
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 2: SET ACKNOWLEDGE
+    // ═══════════════════════════════════════════════════════════
+    transport.set_status(status::ACKNOWLEDGE);
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 3: SET DRIVER
+    // ═══════════════════════════════════════════════════════════
+    transport.set_status(status::ACKNOWLEDGE | status::DRIVER);
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 4: FEATURE NEGOTIATION
+    // ═══════════════════════════════════════════════════════════
+    let device_features = transport.read_features();
+    let our_features = negotiate_features(device_features)
+        .map_err(|_| VirtioInitError::FeatureNegotiationFailed)?;
+    transport.write_features(our_features);
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 5: SET FEATURES_OK
+    // ═══════════════════════════════════════════════════════════
+    transport.set_status(
+        status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK,
+    );
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 6: VERIFY FEATURES_OK
+    // ═══════════════════════════════════════════════════════════
+    let current_status = transport.get_status();
+    if current_status & status::FEATURES_OK == 0 {
+        transport.set_status(status::FAILED);
+        return Err(VirtioInitError::FeaturesRejected);
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 7: CONFIGURE VIRTQUEUES
+    // ═══════════════════════════════════════════════════════════
+    
+    // Setup RX queue (index 0)
+    let rx_queue = setup_queue_transport(transport, 0, config)?;
+    
+    // Setup TX queue (index 1)
+    let tx_queue = setup_queue_transport(transport, 1, config)?;
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 9: SET DRIVER_OK
+    // ═══════════════════════════════════════════════════════════
+    transport.set_status(
+        status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK | status::DRIVER_OK,
+    );
+    
+    // ═══════════════════════════════════════════════════════════
+    // STEP 10: READ MAC ADDRESS
+    // ═══════════════════════════════════════════════════════════
+    let mac = if our_features & features::VIRTIO_NET_F_MAC != 0 {
+        let mut mac_buf = [0u8; 6];
+        if transport.read_mac(&mut mac_buf) {
+            mac_buf
+        } else {
+            generate_local_mac()
+        }
+    } else {
+        generate_local_mac()
+    };
+    
+    Ok((our_features, rx_queue, tx_queue, mac))
+}
+
+/// Setup a single virtqueue using transport abstraction.
+#[cfg(target_arch = "x86_64")]
+unsafe fn setup_queue_transport(
+    transport: &VirtioTransport,
+    queue_index: u16,
+    config: &VirtioConfig,
+) -> Result<VirtqueueState, VirtioInitError> {
+    use crate::dma::DmaRegion;
+    
+    // Select queue
+    transport.select_queue(queue_index);
+    
+    // Get queue size from device
+    let device_queue_size = transport.get_queue_size();
+    let queue_size = core::cmp::min(device_queue_size, config.queue_size);
+    
+    if queue_size == 0 {
+        return Err(VirtioInitError::QueueSetupFailed);
+    }
+    
+    // Calculate offsets based on queue index
+    let (desc_offset, avail_offset, used_offset, buffer_offset) = if queue_index == 0 {
+        // RX queue
+        (
+            DmaRegion::RX_DESC_OFFSET,
+            DmaRegion::RX_AVAIL_OFFSET,
+            DmaRegion::RX_USED_OFFSET,
+            DmaRegion::RX_BUFFERS_OFFSET,
+        )
+    } else {
+        // TX queue
+        (
+            DmaRegion::TX_DESC_OFFSET,
+            DmaRegion::TX_AVAIL_OFFSET,
+            DmaRegion::TX_USED_OFFSET,
+            DmaRegion::TX_BUFFERS_OFFSET,
+        )
+    };
+    
+    // Calculate bus addresses
+    let desc_bus = config.dma_bus_base + desc_offset as u64;
+    let avail_bus = config.dma_bus_base + avail_offset as u64;
+    let used_bus = config.dma_bus_base + used_offset as u64;
+    let buffer_bus = config.dma_bus_base + buffer_offset as u64;
+    
+    // Calculate CPU pointers
+    let buffer_cpu = config.dma_cpu_base.add(buffer_offset);
+    let desc_cpu = config.dma_cpu_base.add(desc_offset);
+    
+    // Set queue size
+    transport.set_queue_size(queue_size);
+    
+    // Set queue addresses
+    transport.set_queue_desc(desc_bus);
+    transport.set_queue_avail(avail_bus);
+    transport.set_queue_used(used_bus);
+    
+    // Enable queue
+    transport.enable_queue();
+    
+    // Get notify address
+    let notify_addr = transport.get_notify_addr(queue_index);
+    
+    // DEBUG: Print all critical addresses for this queue
+    #[cfg(target_arch = "x86_64")]
+    {
+        use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_hex, serial_print_decimal};
+        serial_print("[QUEUE-SETUP] queue_index=");
+        serial_print_decimal(queue_index as u32);
+        serial_print(" queue_size=");
+        serial_print_decimal(queue_size as u32);
+        serial_println("");
+        serial_print("  desc_bus=");
+        serial_print_hex(desc_bus);
+        serial_print(" avail_bus=");
+        serial_print_hex(avail_bus);
+        serial_println("");
+        serial_print("  used_bus=");
+        serial_print_hex(used_bus);
+        serial_print(" buffer_bus=");
+        serial_print_hex(buffer_bus);
+        serial_println("");
+        serial_print("  desc_cpu=");
+        serial_print_hex(desc_cpu as u64);
+        serial_print(" buffer_cpu=");
+        serial_print_hex(buffer_cpu as u64);
+        serial_println("");
+        serial_print("  notify_addr=");
+        serial_print_hex(notify_addr);
+        serial_println("");
+        
+        // Sanity check notify_addr
+        if notify_addr == 0 {
+            serial_println("  WARNING: notify_addr is ZERO!");
+        } else if notify_addr < 0x1000 {
+            serial_println("  WARNING: notify_addr looks suspiciously low!");
+        }
+    }
+    
+    // Create queue state
+    Ok(VirtqueueState {
+        desc_base: desc_bus,
+        avail_base: avail_bus,
+        used_base: used_bus,
+        queue_size,
+        queue_index,
+        _pad: 0,
+        notify_addr,
+        last_used_idx: 0,
+        next_avail_idx: 0,
+        _pad2: 0,
+        desc_cpu_ptr: desc_cpu as u64,
+        buffer_cpu_base: buffer_cpu as u64,
+        buffer_bus_base: buffer_bus,
+        buffer_size: config.buffer_size as u32,
+        buffer_count: queue_size as u32,
+    })
+}
+
 // Stub for non-x86_64 platforms
 #[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn virtio_net_init(
-    _mmio_base: u64,
+pub unsafe fn virtio_net_init_transport(
+    _transport: &VirtioTransport,
     _config: &VirtioConfig,
+    _tsc_freq: u64,
 ) -> Result<(u64, VirtqueueState, VirtqueueState, MacAddress), VirtioInitError> {
     Err(VirtioInitError::DeviceError)
 }

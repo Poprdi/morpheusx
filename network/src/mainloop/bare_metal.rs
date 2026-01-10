@@ -23,9 +23,10 @@ use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer}
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Address, Ipv4Cidr};
 
-use crate::boot::handoff::BootHandoff;
+use crate::boot::handoff::{BootHandoff, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
 use crate::boot::init::TimeoutConfig;
 use crate::driver::virtio::{VirtioNetDriver, VirtioConfig, VirtioInitError};
+use crate::driver::virtio::{VirtioTransport, TransportType, PciModernConfig};
 use crate::driver::traits::NetworkDriver;
 use crate::url::Url;
 
@@ -124,6 +125,151 @@ pub fn serial_print_decimal(value: u32) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// NO-HEAP PARSING HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Parse a u16 from a string without allocation.
+fn parse_u16(s: &str) -> Option<u16> {
+    let mut result: u16 = 0;
+    for c in s.bytes() {
+        if c < b'0' || c > b'9' {
+            return None;
+        }
+        result = result.checked_mul(10)?;
+        result = result.checked_add((c - b'0') as u16)?;
+    }
+    Some(result)
+}
+
+/// Parse a u8 from a string without allocation.
+fn parse_u8(s: &str) -> Option<u8> {
+    let mut result: u16 = 0;
+    for c in s.bytes() {
+        if c < b'0' || c > b'9' {
+            return None;
+        }
+        result = result * 10 + (c - b'0') as u16;
+        if result > 255 {
+            return None;
+        }
+    }
+    Some(result as u8)
+}
+
+/// Parse IPv4 address from string without allocation.
+/// Format: "a.b.c.d" where a,b,c,d are 0-255.
+fn parse_ipv4(s: &str) -> Option<Ipv4Address> {
+    let bytes = s.as_bytes();
+    let mut octets = [0u8; 4];
+    let mut octet_idx = 0;
+    let mut current: u16 = 0;
+    let mut digit_count = 0;
+    
+    for &b in bytes {
+        if b == b'.' {
+            if digit_count == 0 || current > 255 {
+                return None;
+            }
+            if octet_idx >= 3 {
+                return None;
+            }
+            octets[octet_idx] = current as u8;
+            octet_idx += 1;
+            current = 0;
+            digit_count = 0;
+        } else if b >= b'0' && b <= b'9' {
+            current = current * 10 + (b - b'0') as u16;
+            digit_count += 1;
+            if digit_count > 3 || current > 255 {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    
+    // Handle last octet
+    if digit_count == 0 || current > 255 || octet_idx != 3 {
+        return None;
+    }
+    octets[3] = current as u8;
+    
+    Some(Ipv4Address::new(octets[0], octets[1], octets[2], octets[3]))
+}
+
+/// Format an HTTP GET request into a static buffer.
+/// Returns the number of bytes written, or None if buffer too small.
+fn format_http_get(buffer: &mut [u8], path: &str, host: &str) -> Option<usize> {
+    let mut pos = 0;
+    
+    // "GET "
+    let prefix = b"GET ";
+    if pos + prefix.len() > buffer.len() { return None; }
+    buffer[pos..pos + prefix.len()].copy_from_slice(prefix);
+    pos += prefix.len();
+    
+    // path
+    let path_bytes = path.as_bytes();
+    if pos + path_bytes.len() > buffer.len() { return None; }
+    buffer[pos..pos + path_bytes.len()].copy_from_slice(path_bytes);
+    pos += path_bytes.len();
+    
+    // " HTTP/1.1\r\nHost: "
+    let mid = b" HTTP/1.1\r\nHost: ";
+    if pos + mid.len() > buffer.len() { return None; }
+    buffer[pos..pos + mid.len()].copy_from_slice(mid);
+    pos += mid.len();
+    
+    // host
+    let host_bytes = host.as_bytes();
+    if pos + host_bytes.len() > buffer.len() { return None; }
+    buffer[pos..pos + host_bytes.len()].copy_from_slice(host_bytes);
+    pos += host_bytes.len();
+    
+    // Headers and terminator
+    let suffix = b"\r\nUser-Agent: MorpheusX/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+    if pos + suffix.len() > buffer.len() { return None; }
+    buffer[pos..pos + suffix.len()].copy_from_slice(suffix);
+    pos += suffix.len();
+    
+    Some(pos)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REENTRANCY GUARD
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Static flag to detect reentrancy in polling loop.
+/// If this is > 1 during a poll, we have a bug.
+static mut POLL_DEPTH: u32 = 0;
+
+/// Increment poll depth, panic if already polling.
+#[inline(always)]
+fn enter_poll() {
+    unsafe {
+        POLL_DEPTH += 1;
+        if POLL_DEPTH > 1 {
+            serial_println("!!! REENTRANCY BUG DETECTED !!!");
+            serial_print("Poll depth: ");
+            serial_print_decimal(POLL_DEPTH);
+            serial_println("");
+            // Halt to prevent further corruption
+            loop { core::hint::spin_loop(); }
+        }
+    }
+}
+
+/// Decrement poll depth.
+#[inline(always)]
+fn exit_poll() {
+    unsafe {
+        if POLL_DEPTH > 0 {
+            POLL_DEPTH -= 1;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SMOLTCP DEVICE ADAPTER
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -174,9 +320,11 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
     }
 }
 
-/// RX token for smoltcp - owns the received data.
+/// RX token for smoltcp - uses a fixed-size buffer (no heap allocation).
+/// Maximum Ethernet frame size is 1514 bytes.
 pub struct RxToken {
-    buffer: Vec<u8>,
+    buffer: [u8; 2048],
+    len: usize,
 }
 
 impl smoltcp::phy::RxToken for RxToken {
@@ -184,11 +332,11 @@ impl smoltcp::phy::RxToken for RxToken {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        f(&mut self.buffer)
+        f(&mut self.buffer[..self.len])
     }
 }
 
-/// TX token for smoltcp.
+/// TX token for smoltcp - uses a fixed-size stack buffer (no heap allocation).
 pub struct TxToken<'a, D: NetworkDriver> {
     driver: &'a mut D,
 }
@@ -198,10 +346,37 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let mut buffer = vec![0u8; len];
-        let result = f(&mut buffer);
+        serial_print("[ADAPTER-TX] TxToken::consume called, len=");
+        serial_print_decimal(len as u32);
+        serial_println("");
+        
+        // Use stack-allocated buffer (NO HEAP!) - max Ethernet frame + some margin
+        // Max frame is 1514 bytes, but smoltcp may request up to ~1600 for headers
+        const MAX_FRAME: usize = 2048;
+        let mut buffer = [0u8; MAX_FRAME];
+        
+        let actual_len = if len > MAX_FRAME {
+            serial_println("[ADAPTER-TX] ERROR: requested len exceeds buffer!");
+            MAX_FRAME
+        } else {
+            len
+        };
+        
+        let result = f(&mut buffer[..actual_len]);
+        
+        serial_println("[ADAPTER-TX] Frame filled, calling driver.transmit...");
+        
         // Fire-and-forget transmit - don't wait for completion
-        let _ = self.driver.transmit(&buffer);
+        match self.driver.transmit(&buffer[..actual_len]) {
+            Ok(()) => {
+                serial_println("[ADAPTER-TX] transmit OK");
+            }
+            Err(_) => {
+                serial_println("[ADAPTER-TX] transmit FAILED");
+            }
+        }
+        
+        serial_println("[ADAPTER-TX] returning from consume");
         result
     }
 }
@@ -215,12 +390,15 @@ impl<'a, D: NetworkDriver> smoltcp::phy::Device for SmoltcpAdapter<'a, D> {
         self.poll_receive();
         
         if self.rx_len > 0 {
-            // Copy the packet data to RxToken (it will own it)
-            let buffer = self.rx_buffer[..self.rx_len].to_vec();
+            // Copy the packet data to RxToken using fixed buffer (NO HEAP!)
+            let mut rx_buf = [0u8; 2048];
+            let copy_len = self.rx_len.min(rx_buf.len());
+            rx_buf[..copy_len].copy_from_slice(&self.rx_buffer[..copy_len]);
+            let rx_len = copy_len;
             self.rx_len = 0; // Mark buffer as consumed
             
             Some((
-                RxToken { buffer },
+                RxToken { buffer: rx_buf, len: rx_len },
                 TxToken { driver: self.driver },
             ))
         } else {
@@ -352,13 +530,52 @@ pub unsafe fn bare_metal_main(
         buffer_size: VirtioConfig::DEFAULT_BUFFER_SIZE,
     };
     
-    serial_print("[INIT] NIC MMIO base: ");
-    serial_print_hex(handoff.nic_mmio_base);
-    serial_println("");
+    // Determine transport type from handoff
+    serial_print("[INIT] Transport type: ");
+    let transport = match handoff.nic_transport_type {
+        TRANSPORT_PCI_MODERN => {
+            serial_println("PCI Modern");
+            serial_print("[INIT] Common cfg: ");
+            serial_print_hex(handoff.nic_common_cfg);
+            serial_println("");
+            serial_print("[INIT] Notify cfg: ");
+            serial_print_hex(handoff.nic_notify_cfg);
+            serial_println("");
+            serial_print("[INIT] Device cfg: ");
+            serial_print_hex(handoff.nic_device_cfg);
+            serial_println("");
+            serial_print("[INIT] Notify off multiplier: ");
+            serial_print_decimal(handoff.nic_notify_off_multiplier);
+            serial_println("");
+            
+            VirtioTransport::pci_modern(PciModernConfig {
+                common_cfg: handoff.nic_common_cfg,
+                notify_cfg: handoff.nic_notify_cfg,
+                notify_off_multiplier: handoff.nic_notify_off_multiplier,
+                isr_cfg: handoff.nic_isr_cfg,
+                device_cfg: handoff.nic_device_cfg,
+                pci_cfg: 0, // Not used for now
+            })
+        }
+        TRANSPORT_MMIO => {
+            serial_println("MMIO");
+            serial_print("[INIT] MMIO base: ");
+            serial_print_hex(handoff.nic_mmio_base);
+            serial_println("");
+            VirtioTransport::mmio(handoff.nic_mmio_base)
+        }
+        _ => {
+            serial_println("Unknown (defaulting to MMIO)");
+            serial_print("[INIT] NIC MMIO base: ");
+            serial_print_hex(handoff.nic_mmio_base);
+            serial_println("");
+            VirtioTransport::mmio(handoff.nic_mmio_base)
+        }
+    };
     
     serial_println("[INIT] Initializing VirtIO-net driver...");
     
-    let mut driver = match VirtioNetDriver::new(handoff.nic_mmio_base, virtio_config) {
+    let mut driver = match VirtioNetDriver::new_with_transport(transport, virtio_config, handoff.tsc_freq) {
         Ok(d) => {
             serial_println("[OK] VirtIO driver initialized");
             d
@@ -463,7 +680,9 @@ pub unsafe fn bare_metal_main(
         adapter.refill_rx();
         
         // Phase 2: Poll smoltcp interface (EXACTLY ONCE per iteration)
+        enter_poll();  // Reentrancy guard
         let poll_result = iface.poll(timestamp, &mut adapter, &mut sockets);
+        exit_poll();   // Reentrancy guard
         
         // Check for DHCP events
         let dhcp_socket = sockets.get_mut::<Dhcpv4Socket>(dhcp_handle);
@@ -527,80 +746,70 @@ pub unsafe fn bare_metal_main(
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 5: HTTP DOWNLOAD WITH FULL URL PARSING
+    // STEP 5: HTTP DOWNLOAD - NO HEAP ALLOCATION VERSION
     // ═══════════════════════════════════════════════════════════════════════
     serial_print("[HTTP] Downloading from: ");
     serial_println(config.iso_url);
     
-    // Parse the URL properly
-    let url = match Url::parse(config.iso_url) {
-        Ok(u) => u,
-        Err(_) => {
-            serial_println("[FAIL] Invalid URL");
-            return RunResult::DownloadFailed;
-        }
-    };
+    // Parse URL without heap allocation
+    // Format: http://host[:port]/path
+    let url_str = config.iso_url;
     
-    // Check if HTTPS (not supported)
-    if url.is_https() {
+    // Check scheme
+    if url_str.starts_with("https://") {
         serial_println("[FAIL] HTTPS not supported in bare-metal mode");
         return RunResult::DownloadFailed;
     }
     
-    // Get host and port
-    let server_port = url.port_or_default();
-    let host_header = url.host_header();
-    let request_uri = url.request_uri();
-    
-    // Resolve host to IP
-    // First check if it's already an IP address
-    let server_ip = if let Ok(ip) = url.host.parse::<Ipv4Address>() {
-        serial_print("[HTTP] Using IP: ");
-        print_ipv4(ip);
-        serial_println("");
-        ip
+    let rest = if let Some(r) = url_str.strip_prefix("http://") {
+        r
     } else {
-        // Try common hostnames used in QEMU user networking
-        // 10.0.2.2 is the host gateway in QEMU user mode
-        // For real DNS, we'd need to implement DNS resolution
-        let resolved_ip = match url.host.as_str() {
-            "host.docker.internal" | "localhost" | "gateway" => gateway_ip,
-            "10.0.2.2" => Ipv4Address::new(10, 0, 2, 2),
-            _ => {
-                // Check if gateway matches common patterns
-                if url.host.contains("10.0.2") || url.host.starts_with("192.168") 
-                   || url.host.starts_with("172.") {
-                    // Try parsing as IP
-                    let parts: Vec<&str> = url.host.split('.').collect();
-                    if parts.len() == 4 {
-                        if let (Ok(a), Ok(b), Ok(c), Ok(d)) = (
-                            parts[0].parse::<u8>(),
-                            parts[1].parse::<u8>(),
-                            parts[2].parse::<u8>(),
-                            parts[3].parse::<u8>(),
-                        ) {
-                            Ipv4Address::new(a, b, c, d)
-                        } else {
-                            serial_print("[HTTP] Cannot resolve hostname: ");
-                            serial_println(&url.host);
-                            serial_println("[HTTP] Using gateway as fallback");
-                            gateway_ip
-                        }
-                    } else {
-                        gateway_ip
-                    }
-                } else {
-                    serial_print("[HTTP] Cannot resolve hostname: ");
-                    serial_println(&url.host);
-                    serial_println("[HTTP] Using gateway as fallback");
-                    gateway_ip
-                }
-            }
-        };
-        serial_print("[HTTP] Resolved to: ");
-        print_ipv4(resolved_ip);
-        serial_println("");
-        resolved_ip
+        serial_println("[FAIL] Invalid URL scheme (must be http://)");
+        return RunResult::DownloadFailed;
+    };
+    
+    // Split host[:port] from path
+    let (authority, path) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, "/"),
+    };
+    
+    // Parse host and port from authority
+    let (host_str, server_port): (&str, u16) = if let Some(colon_idx) = authority.rfind(':') {
+        let h = &authority[..colon_idx];
+        let p = &authority[colon_idx + 1..];
+        match parse_u16(p) {
+            Some(port) => (h, port),
+            None => (authority, 80),
+        }
+    } else {
+        (authority, 80)
+    };
+    
+    serial_print("[HTTP] Host: ");
+    serial_println(host_str);
+    serial_print("[HTTP] Port: ");
+    serial_print_decimal(server_port as u32);
+    serial_println("");
+    serial_print("[HTTP] Path: ");
+    serial_println(path);
+    
+    // Parse host as IP address (no DNS in bare-metal mode)
+    let server_ip = match parse_ipv4(host_str) {
+        Some(ip) => {
+            serial_print("[HTTP] Using IP: ");
+            print_ipv4(ip);
+            serial_println("");
+            ip
+        }
+        None => {
+            // For non-IP hostnames, we'd need DNS resolution
+            // For now, use gateway as fallback (works in QEMU user mode)
+            serial_print("[HTTP] Cannot parse as IP: ");
+            serial_println(host_str);
+            serial_println("[HTTP] Using gateway as fallback (for DNS, need real resolver)");
+            gateway_ip
+        }
     };
     
     serial_print("[HTTP] Connecting to ");
@@ -609,9 +818,12 @@ pub unsafe fn bare_metal_main(
     serial_print_decimal(server_port as u32);
     serial_println("...");
     
-    // Create a TCP socket for HTTP
-    let tcp_rx_buffer = TcpSocketBuffer::new(vec![0; 65535]);
-    let tcp_tx_buffer = TcpSocketBuffer::new(vec![0; 65535]);
+    // Create TCP socket with STATIC buffers (no heap!)
+    static mut TCP_RX_STORAGE: [u8; 8192] = [0u8; 8192];
+    static mut TCP_TX_STORAGE: [u8; 4096] = [0u8; 4096];
+    
+    let tcp_rx_buffer = TcpSocketBuffer::new(unsafe { &mut TCP_RX_STORAGE[..] });
+    let tcp_tx_buffer = TcpSocketBuffer::new(unsafe { &mut TCP_TX_STORAGE[..] });
     let mut tcp_socket = TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer);
     
     // Connect to server
@@ -655,26 +867,24 @@ pub unsafe fn bare_metal_main(
         for _ in 0..100 { core::hint::spin_loop(); }
     }
     
-    // Build and send HTTP GET request
+    // Build and send HTTP GET request (NO HEAP!)
     serial_println("[HTTP] Sending GET request...");
     serial_print("[HTTP] GET ");
-    serial_println(&request_uri);
+    serial_println(path);
     
-    // Build HTTP request with proper headers
-    let http_request = alloc::format!(
-        "GET {} HTTP/1.1\r\n\
-         Host: {}\r\n\
-         User-Agent: MorpheusX/1.0\r\n\
-         Accept: */*\r\n\
-         Connection: close\r\n\
-         \r\n",
-        request_uri,
-        host_header
-    );
+    // Build HTTP request in static buffer
+    static mut HTTP_REQUEST_BUF: [u8; 1024] = [0u8; 1024];
+    let request_len = match format_http_get(unsafe { &mut HTTP_REQUEST_BUF }, path, host_str) {
+        Some(len) => len,
+        None => {
+            serial_println("[FAIL] HTTP request too large for buffer");
+            return RunResult::DownloadFailed;
+        }
+    };
     
     {
         let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
-        if socket.send_slice(http_request.as_bytes()).is_err() {
+        if socket.send_slice(unsafe { &HTTP_REQUEST_BUF[..request_len] }).is_err() {
             serial_println("[FAIL] Failed to send HTTP request");
             return RunResult::DownloadFailed;
         }

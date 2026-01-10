@@ -64,6 +64,17 @@ pub const BLK_TYPE_NVME: u8 = 2;
 pub const BLK_TYPE_AHCI: u8 = 3;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TRANSPORT TYPE CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// VirtIO MMIO transport
+pub const TRANSPORT_MMIO: u8 = 0;
+/// VirtIO PCI Modern transport (capability-based)
+pub const TRANSPORT_PCI_MODERN: u8 = 1;
+/// VirtIO PCI Legacy transport (I/O ports)
+pub const TRANSPORT_PCI_LEGACY: u8 = 2;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // HANDOFF ERROR
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -255,10 +266,35 @@ pub struct BootHandoff {
     pub memory_map_desc_size: u32,
     
     // ═══════════════════════════════════════════════════════════════════════
-    // RESERVED (56 bytes for future expansion)
+    // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern devices
     // ═══════════════════════════════════════════════════════════════════════
     
-    pub _reserved: [u8; 56],
+    /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
+    pub nic_transport_type: u8,
+    
+    /// Padding
+    pub _transport_pad: [u8; 3],
+    
+    /// Notify offset multiplier (from VIRTIO_PCI_CAP_NOTIFY)
+    pub nic_notify_off_multiplier: u32,
+    
+    /// Common cfg address (BAR base + cap offset)
+    pub nic_common_cfg: u64,
+    
+    /// Notify cfg address (BAR base + cap offset)
+    pub nic_notify_cfg: u64,
+    
+    /// ISR cfg address (BAR base + cap offset)
+    pub nic_isr_cfg: u64,
+    
+    /// Device cfg address (BAR base + cap offset)
+    pub nic_device_cfg: u64,
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // RESERVED (8 bytes for future expansion)
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    pub _reserved: [u8; 8],
 }
 
 // Compile-time size check
@@ -308,7 +344,15 @@ impl BootHandoff {
             memory_map_ptr: 0,
             memory_map_size: 0,
             memory_map_desc_size: 0,
-            _reserved: [0; 56],
+            // PCI Modern transport fields
+            nic_transport_type: 0,  // 0 = MMIO
+            _transport_pad: [0; 3],
+            nic_notify_off_multiplier: 0,
+            nic_common_cfg: 0,
+            nic_notify_cfg: 0,
+            nic_isr_cfg: 0,
+            nic_device_cfg: 0,
+            _reserved: [0; 8],
         }
     }
     

@@ -33,6 +33,11 @@ pub fn transmit(
     frame: &[u8],
 ) -> Result<(), TxError> {
     use crate::asm::drivers::virtio::{tx as asm_tx, notify};
+    use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_hex};
+    
+    serial_print("[TX] transmit called, frame_len=");
+    serial_print_hex(frame.len() as u64);
+    serial_println("");
     
     // Check frame size
     let total_len = VirtioNetHdr::SIZE + frame.len();
@@ -47,6 +52,10 @@ pub fn transmit(
     let buf = tx_pool.alloc().ok_or(TxError::QueueFull)?;
     let buf_idx = buf.index();
     
+    serial_print("[TX] buf_idx=");
+    serial_print_hex(buf_idx as u64);
+    serial_println("");
+    
     // Write VirtIO header (12 bytes, all zeros)
     let hdr = VirtioNetHdr::zeroed();
     buf.as_mut_slice()[..VirtioNetHdr::SIZE].copy_from_slice(hdr.as_bytes());
@@ -57,8 +66,13 @@ pub fn transmit(
     // Mark device-owned BEFORE submit
     unsafe { buf.mark_device_owned(); }
     
+    serial_println("[TX] submitting to queue...");
+    
     // Submit via ASM (includes barriers)
     let success = asm_tx::submit(tx_state, buf_idx, total_len as u16);
+    
+    serial_print("[TX] submit result=");
+    serial_println(if success { "ok" } else { "fail" });
     
     if !success {
         // Queue was full (shouldn't happen after collect, but handle it)
@@ -69,6 +83,14 @@ pub fn transmit(
         tx_pool.free(buf_idx);
         return Err(TxError::QueueFull);
     }
+    
+    // Debug: Print notify address before calling
+    serial_print("[TX] notify_addr=");
+    serial_print_hex(tx_state.notify_addr);
+    serial_print(" queue_idx=");
+    serial_print_hex(tx_state.queue_index as u64);
+    serial_println("");
+    serial_println("[TX] calling notify...");
     
     // Notify device
     unsafe { notify::notify(tx_state); }

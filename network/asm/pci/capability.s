@@ -230,7 +230,7 @@ asm_pci_find_cap:
     ja      .not_found
     
     ; Read capability header at current offset
-    mov     r9b, r11b
+    movzx   r9d, r11b           ; Move low byte to r9d (using movzx instead of mov r9b)
     call    asm_pci_read_cap_header
     
     ; Check if this is the capability we want
@@ -239,8 +239,10 @@ asm_pci_find_cap:
     je      .found
     
     ; Move to next capability
-    movzx   r11d, ah            ; Next pointer
-    and     r11d, 0xFC          ; Align
+    ; AH contains next pointer - extract via shift
+    shr     eax, 8              ; Shift to get next byte
+    and     eax, 0xFC           ; Align
+    mov     r11d, eax           ; Store as new offset
     jmp     .walk_loop
     
 .found:
@@ -287,8 +289,9 @@ asm_pci_find_cap_next:
     
     ; First, read the next pointer from the starting capability
     call    asm_pci_read_cap_header
-    movzx   r11d, ah            ; Move to next cap
-    and     r11d, 0xFC
+    shr     eax, 8              ; Get next pointer from AH
+    and     eax, 0xFC
+    mov     r11d, eax           ; Move to next cap
     
 .walk_loop:
     dec     r12d
@@ -300,15 +303,16 @@ asm_pci_find_cap_next:
     ja      .not_found
     
     ; Read this capability
-    mov     r9b, r11b
+    movzx   r9d, r11b           ; Use movzx instead of mov r9b
     call    asm_pci_read_cap_header
     
     movzx   ebx, al
     cmp     ebx, r13d
     je      .found
     
-    movzx   r11d, ah
-    and     r11d, 0xFC
+    shr     eax, 8              ; Get next pointer from AH via shift
+    and     eax, 0xFC
+    mov     r11d, eax
     jmp     .walk_loop
     
 .found:

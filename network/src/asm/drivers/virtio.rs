@@ -398,7 +398,38 @@ pub mod notify {
     /// Notify device about queue activity.
     #[cfg(target_arch = "x86_64")]
     pub fn notify(vq: &mut VirtqueueState) {
+        // DEBUG: Print VirtqueueState info before calling ASM
+        {
+            use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_hex};
+            serial_print("[ASM-NOTIFY] vq ptr=");
+            serial_print_hex(vq as *mut _ as u64);
+            serial_print(" notify_addr=");
+            serial_print_hex(vq.notify_addr);
+            serial_print(" queue_idx=");
+            serial_print_hex(vq.queue_index as u64);
+            serial_println("");
+            
+            // Sanity check the notify_addr
+            if vq.notify_addr == 0 {
+                serial_println("[ASM-NOTIFY] ERROR: notify_addr is ZERO!");
+                return;
+            }
+            if vq.notify_addr < 0x1000 {
+                serial_println("[ASM-NOTIFY] ERROR: notify_addr suspiciously low!");
+                return;
+            }
+            if vq.notify_addr > 0xFFFF_FFFF_FFFF {
+                serial_println("[ASM-NOTIFY] ERROR: notify_addr looks garbage!");
+                return;
+            }
+            
+            serial_println("[ASM-NOTIFY] calling asm_vq_notify...");
+        }
         unsafe { asm_vq_notify(vq) }
+        {
+            use crate::mainloop::bare_metal::serial_println;
+            serial_println("[ASM-NOTIFY] asm_vq_notify returned");
+        }
     }
     
     /// Direct notify with explicit address.

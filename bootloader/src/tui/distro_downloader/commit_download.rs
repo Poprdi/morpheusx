@@ -20,7 +20,7 @@ use alloc::string::String;
 use core::ptr;
 
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_LIGHTGREEN, EFI_YELLOW, EFI_RED, EFI_CYAN, EFI_DARKGRAY};
-use crate::boot::network_boot::{prepare_handoff, enter_network_boot_url};
+use crate::boot::network_boot::{prepare_handoff, enter_network_boot_url, NicProbeResult};
 use morpheus_network::boot::handoff::BootHandoff;
 
 /// Result of download commit operation.
@@ -145,15 +145,11 @@ pub unsafe fn commit_to_download(
     screen.put_str_at(5, log_y, "Probing VirtIO network device...", EFI_YELLOW, EFI_BLACK);
     log_y += 1;
     
-    let (nic_base, is_io_space) = probe_virtio_nic_with_debug(screen, &mut log_y);
-    if nic_base == 0 {
+    let nic_probe = probe_virtio_nic_with_debug(screen, &mut log_y);
+    if nic_probe.mmio_base == 0 {
         screen.put_str_at(7, log_y, "Ensure QEMU has: -device virtio-net-pci,netdev=...", EFI_RED, EFI_BLACK);
         loop { core::hint::spin_loop(); }
     }
-    
-    // Note: We store the base address regardless of type (IO vs MMIO)
-    // The actual driver init happens post-EBS
-    let nic_mmio_base = nic_base;
     log_y += 1;
     
     // Phase 5: Prepare BootHandoff (static allocation for post-EBS)
@@ -177,7 +173,7 @@ pub unsafe fn commit_to_download(
     let handoff_ptr = handoff_page as *mut BootHandoff;
     
     let handoff = prepare_handoff(
-        nic_mmio_base,
+        &nic_probe,
         [0x52, 0x54, 0x00, 0x12, 0x34, 0x56], // QEMU default MAC (placeholder)
         dma_region,
         dma_region, // Bus addr = CPU addr (no IOMMU)
@@ -356,13 +352,24 @@ fn read_tsc() -> u64 {
 }
 
 /// Probe for VirtIO NIC via PCI config space.
-/// Returns (MMIO/IO base address, is_io_space) or (0, false) if not found.
-fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> (u64, bool) {
+/// Returns NicProbeResult with full transport information.
+fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeResult {
     // VirtIO vendor ID: 0x1AF4
     // VirtIO-net device IDs: 0x1000 (transitional), 0x1041 (modern)
     const VIRTIO_VENDOR: u16 = 0x1AF4;
     const VIRTIO_NET_LEGACY: u16 = 0x1000;
     const VIRTIO_NET_MODERN: u16 = 0x1041;
+    
+    // PCI config space constants
+    const PCI_STATUS_REG: u8 = 0x06;
+    const PCI_CAP_PTR: u8 = 0x34;
+    const PCI_CAP_ID_VNDR: u8 = 0x09; // Vendor-specific (VirtIO uses this)
+    
+    // VirtIO PCI capability types
+    const VIRTIO_PCI_CAP_COMMON: u8 = 1;
+    const VIRTIO_PCI_CAP_NOTIFY: u8 = 2;
+    const VIRTIO_PCI_CAP_ISR: u8 = 3;
+    const VIRTIO_PCI_CAP_DEVICE: u8 = 4;
     
     // Use legacy PCI config space access (port I/O)
     const PCI_CONFIG_ADDR: u16 = 0xCF8;
@@ -393,6 +400,37 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> (u64, 
         }
     }
     
+    fn pci_read16(bus: u8, device: u8, func: u8, offset: u8) -> u16 {
+        let val32 = pci_read32(bus, device, func, offset & 0xFC);
+        ((val32 >> ((offset & 2) * 8)) & 0xFFFF) as u16
+    }
+    
+    fn pci_read8(bus: u8, device: u8, func: u8, offset: u8) -> u8 {
+        let val32 = pci_read32(bus, device, func, offset & 0xFC);
+        ((val32 >> ((offset & 3) * 8)) & 0xFF) as u8
+    }
+    
+    /// Read BAR address, handling 32-bit and 64-bit BARs.
+    fn read_bar(bus: u8, device: u8, func: u8, bar_index: u8) -> u64 {
+        let bar_offset = 0x10 + bar_index * 4;
+        let bar_val = pci_read32(bus, device, func, bar_offset);
+        
+        if bar_val & 1 == 0 {
+            // Memory BAR
+            let base = (bar_val & 0xFFFFFFF0) as u64;
+            if (bar_val >> 1) & 3 == 2 {
+                // 64-bit BAR - read upper 32 bits from next BAR
+                let bar_hi = pci_read32(bus, device, func, bar_offset + 4);
+                base | ((bar_hi as u64) << 32)
+            } else {
+                base
+            }
+        } else {
+            // I/O BAR
+            (bar_val & 0xFFFFFFFC) as u64
+        }
+    }
+    
     screen.put_str_at(7, *log_y, "Scanning PCI bus 0...", EFI_DARKGRAY, EFI_BLACK);
     *log_y += 1;
     
@@ -416,7 +454,11 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> (u64, 
         
         // Check for VirtIO network device
         if vendor == VIRTIO_VENDOR && (dev_id == VIRTIO_NET_LEGACY || dev_id == VIRTIO_NET_MODERN) {
-            screen.put_str_at(9, *log_y, "  ^ VirtIO-net found!", EFI_LIGHTGREEN, EFI_BLACK);
+            let is_modern = dev_id == VIRTIO_NET_MODERN;
+            screen.put_str_at(9, *log_y, &alloc::format!(
+                "  ^ VirtIO-net found! ({})", 
+                if is_modern { "PCI Modern" } else { "PCI Legacy/Transitional" }
+            ), EFI_LIGHTGREEN, EFI_BLACK);
             *log_y += 1;
             
             // Read BAR0 for base address
@@ -425,15 +467,153 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> (u64, 
             screen.put_str_at(9, *log_y, &alloc::format!("  BAR0: {:#010x}", bar0), EFI_DARKGRAY, EFI_BLACK);
             *log_y += 1;
             
-            // Check if I/O BAR (bit 0 = 1) or Memory BAR (bit 0 = 0)
-            if bar0 & 1 == 1 {
-                // I/O BAR - mask off type bit
-                let io_base = (bar0 & 0xFFFFFFFC) as u64;
-                screen.put_str_at(9, *log_y, &alloc::format!("  I/O base: {:#x}", io_base), EFI_CYAN, EFI_BLACK);
+            // Check if device has capabilities (for PCI Modern)
+            let status = pci_read16(0, device, 0, PCI_STATUS_REG);
+            let has_caps = (status & 0x10) != 0;
+            
+            if has_caps {
+                screen.put_str_at(9, *log_y, "  PCI Capabilities present", EFI_CYAN, EFI_BLACK);
                 *log_y += 1;
-                return (io_base, true);
+                
+                // Capability info storage
+                let mut common_bar: u8 = 0;
+                let mut common_offset: u32 = 0;
+                let mut notify_bar: u8 = 0;
+                let mut notify_offset: u32 = 0;
+                let mut notify_off_multiplier: u32 = 0;
+                let mut isr_bar: u8 = 0;
+                let mut isr_offset: u32 = 0;
+                let mut device_bar: u8 = 0;
+                let mut device_offset: u32 = 0;
+                
+                let mut found_common = false;
+                let mut found_notify = false;
+                let mut found_isr = false;
+                let mut found_device = false;
+                
+                // Walk capability chain to find VirtIO caps
+                let mut cap_offset = pci_read8(0, device, 0, PCI_CAP_PTR) & 0xFC;
+                
+                while cap_offset != 0 && cap_offset < 0xFF {
+                    let cap_id = pci_read8(0, device, 0, cap_offset);
+                    let next = pci_read8(0, device, 0, cap_offset + 1);
+                    
+                    if cap_id == PCI_CAP_ID_VNDR {
+                        // VirtIO capability structure (per spec 4.1.4.3):
+                        // +0: cap_vndr (0x09)
+                        // +1: cap_next
+                        // +2: cap_len
+                        // +3: cfg_type
+                        // +4: bar
+                        // +5-7: padding
+                        // +8: offset (4 bytes)
+                        // +12: length (4 bytes)
+                        // For notify: +16: notify_off_multiplier (4 bytes)
+                        
+                        let cfg_type = pci_read8(0, device, 0, cap_offset + 3);
+                        let bar = pci_read8(0, device, 0, cap_offset + 4);
+                        let offset = pci_read32(0, device, 0, cap_offset + 8);
+                        
+                        let cap_name = match cfg_type {
+                            1 => "common_cfg",
+                            2 => "notify_cfg",
+                            3 => "isr_cfg",
+                            4 => "device_cfg",
+                            5 => "pci_cfg",
+                            _ => "unknown",
+                        };
+                        
+                        screen.put_str_at(9, *log_y, &alloc::format!(
+                            "    Cap @{:#04x}: type={} bar={} off={:#x}",
+                            cap_offset, cap_name, bar, offset
+                        ), EFI_DARKGRAY, EFI_BLACK);
+                        *log_y += 1;
+                        
+                        match cfg_type {
+                            VIRTIO_PCI_CAP_COMMON => {
+                                found_common = true;
+                                common_bar = bar;
+                                common_offset = offset;
+                            }
+                            VIRTIO_PCI_CAP_NOTIFY => {
+                                found_notify = true;
+                                notify_bar = bar;
+                                notify_offset = offset;
+                                // Read notify_off_multiplier (at offset +16 in capability)
+                                notify_off_multiplier = pci_read32(0, device, 0, cap_offset + 16);
+                                screen.put_str_at(9, *log_y, &alloc::format!(
+                                    "      notify_off_multiplier: {}", notify_off_multiplier
+                                ), EFI_DARKGRAY, EFI_BLACK);
+                                *log_y += 1;
+                            }
+                            VIRTIO_PCI_CAP_ISR => {
+                                found_isr = true;
+                                isr_bar = bar;
+                                isr_offset = offset;
+                            }
+                            VIRTIO_PCI_CAP_DEVICE => {
+                                found_device = true;
+                                device_bar = bar;
+                                device_offset = offset;
+                            }
+                            _ => {}
+                        }
+                    }
+                    
+                    cap_offset = next & 0xFC;
+                }
+                
+                // If we found all required PCI Modern caps, use them
+                if found_common && found_notify {
+                    screen.put_str_at(9, *log_y, "  PCI Modern: All required caps found!", EFI_LIGHTGREEN, EFI_BLACK);
+                    *log_y += 1;
+                    
+                    // Read BAR bases for each capability
+                    let common_base = read_bar(0, device, 0, common_bar);
+                    let notify_base = read_bar(0, device, 0, notify_bar);
+                    let isr_base = if found_isr { read_bar(0, device, 0, isr_bar) } else { 0 };
+                    let device_base = if found_device { read_bar(0, device, 0, device_bar) } else { 0 };
+                    
+                    let common_cfg_addr = common_base + common_offset as u64;
+                    let notify_cfg_addr = notify_base + notify_offset as u64;
+                    let isr_cfg_addr = isr_base + isr_offset as u64;
+                    let device_cfg_addr = device_base + device_offset as u64;
+                    
+                    screen.put_str_at(9, *log_y, &alloc::format!(
+                        "  common_cfg: {:#x}", common_cfg_addr
+                    ), EFI_CYAN, EFI_BLACK);
+                    *log_y += 1;
+                    screen.put_str_at(9, *log_y, &alloc::format!(
+                        "  notify_cfg: {:#x}", notify_cfg_addr
+                    ), EFI_CYAN, EFI_BLACK);
+                    *log_y += 1;
+                    
+                    // Return PCI Modern result
+                    return NicProbeResult::pci_modern(
+                        common_cfg_addr,
+                        notify_cfg_addr,
+                        isr_cfg_addr,
+                        device_cfg_addr,
+                        notify_off_multiplier,
+                        0,      // bus
+                        device, // device
+                        0,      // function
+                    );
+                }
+            }
+            
+            // Fallback: Check if I/O BAR (bit 0 = 1) or Memory BAR (bit 0 = 0)
+            if bar0 & 1 == 1 {
+                // I/O BAR - mask off type bit (Legacy device)
+                let io_base = (bar0 & 0xFFFFFFFC) as u64;
+                screen.put_str_at(9, *log_y, &alloc::format!("  I/O base: {:#x} (Legacy)", io_base), EFI_CYAN, EFI_BLACK);
+                *log_y += 1;
+                // PCI Legacy (I/O ports) - use transport type 2
+                let mut result = NicProbeResult::mmio(io_base, 0, device, 0);
+                result.transport_type = 2; // TRANSPORT_PCI_LEGACY
+                return result;
             } else {
-                // Memory BAR - mask off type bits
+                // Memory BAR - mask off type bits (MMIO transport)
                 let mmio_base = (bar0 & 0xFFFFFFF0) as u64;
                 
                 // For 64-bit BAR, read upper 32 bits
@@ -446,7 +626,7 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> (u64, 
                 
                 screen.put_str_at(9, *log_y, &alloc::format!("  MMIO base: {:#x}", final_base), EFI_CYAN, EFI_BLACK);
                 *log_y += 1;
-                return (final_base, false);
+                return NicProbeResult::mmio(final_base, 0, device, 0);
             }
         }
     }
@@ -454,7 +634,7 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> (u64, 
     screen.put_str_at(7, *log_y, "No VirtIO-net device found on bus 0", EFI_RED, EFI_BLACK);
     *log_y += 1;
     
-    (0, false) // Not found
+    NicProbeResult::zeroed() // Not found
 }
 
 /// Leak a string so it becomes 'static.
