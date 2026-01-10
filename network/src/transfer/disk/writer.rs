@@ -340,7 +340,7 @@ impl IsoWriter {
     }
     
     /// Generate chunk partition name as str
-    fn chunk_name_str(&self, index: usize, buf: &mut [u8; 16]) -> &str {
+    fn chunk_name_str<'a>(&self, index: usize, buf: &'a mut [u8; 16]) -> &'a str {
         // "ISO_CHK_NN" format
         buf[0..8].copy_from_slice(b"ISO_CHK_");
         buf[8] = b'0' + (index / 10) as u8;

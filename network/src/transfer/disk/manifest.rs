@@ -10,8 +10,8 @@ use super::types::{
     DiskError, DiskResult, ChunkSet, MAX_CHUNK_PARTITIONS, MAX_ISO_NAME_LEN, SECTOR_SIZE,
 };
 
-/// Manifest magic: "MXISO\x02\x00\x00" (v2 for post-EBS format)
-pub const MANIFEST_MAGIC: [u8; 8] = [b'M', b'X', b'I', b'S', b'O', 0x02, 0x00, 0x00];
+/// Manifest magic: "MXISO\x01\x00\x00" (v1 - compatible with morpheus_core)
+pub const MANIFEST_MAGIC: [u8; 8] = [b'M', b'X', b'I', b'S', b'O', 0x01, 0x00, 0x00];
 
 /// Manifest header size
 pub const MANIFEST_HEADER_SIZE: usize = 128;
