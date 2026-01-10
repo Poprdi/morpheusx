@@ -263,24 +263,6 @@ impl VirtioTransport {
                     let queue_notify_off = pci_modern::get_queue_notify_off(self.base);
                     let notify_addr = self.pci_modern.notify_cfg + 
                         (queue_notify_off as u64 * self.pci_modern.notify_off_multiplier as u64);
-                    
-                    // DEBUG: Print the notify address calculation
-                    #[cfg(target_arch = "x86_64")]
-                    {
-                        use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_hex, serial_print_decimal};
-                        serial_print("[TRANSPORT] get_notify_addr: queue_idx=");
-                        serial_print_decimal(queue_idx as u32);
-                        serial_print(" notify_cfg=");
-                        serial_print_hex(self.pci_modern.notify_cfg);
-                        serial_print(" queue_notify_off=");
-                        serial_print_decimal(queue_notify_off);
-                        serial_print(" multiplier=");
-                        serial_print_decimal(self.pci_modern.notify_off_multiplier);
-                        serial_print(" -> notify_addr=");
-                        serial_print_hex(notify_addr);
-                        serial_println("");
-                    }
-                    
                     notify_addr
                 }
             }

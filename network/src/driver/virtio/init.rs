@@ -395,42 +395,6 @@ unsafe fn setup_queue_transport(
     // Get notify address
     let notify_addr = transport.get_notify_addr(queue_index);
     
-    // DEBUG: Print all critical addresses for this queue
-    #[cfg(target_arch = "x86_64")]
-    {
-        use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_hex, serial_print_decimal};
-        serial_print("[QUEUE-SETUP] queue_index=");
-        serial_print_decimal(queue_index as u32);
-        serial_print(" queue_size=");
-        serial_print_decimal(queue_size as u32);
-        serial_println("");
-        serial_print("  desc_bus=");
-        serial_print_hex(desc_bus);
-        serial_print(" avail_bus=");
-        serial_print_hex(avail_bus);
-        serial_println("");
-        serial_print("  used_bus=");
-        serial_print_hex(used_bus);
-        serial_print(" buffer_bus=");
-        serial_print_hex(buffer_bus);
-        serial_println("");
-        serial_print("  desc_cpu=");
-        serial_print_hex(desc_cpu as u64);
-        serial_print(" buffer_cpu=");
-        serial_print_hex(buffer_cpu as u64);
-        serial_println("");
-        serial_print("  notify_addr=");
-        serial_print_hex(notify_addr);
-        serial_println("");
-        
-        // Sanity check notify_addr
-        if notify_addr == 0 {
-            serial_println("  WARNING: notify_addr is ZERO!");
-        } else if notify_addr < 0x1000 {
-            serial_println("  WARNING: notify_addr looks suspiciously low!");
-        }
-    }
-    
     // Create queue state
     Ok(VirtqueueState {
         desc_base: desc_bus,
