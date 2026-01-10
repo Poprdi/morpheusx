@@ -39,10 +39,10 @@ mod writer;
 mod manifest;
 
 pub use types::{
-    DiskError, DiskResult, PartitionInfo, ChunkPartition,
+    DiskError, DiskResult, PartitionInfo, ChunkPartition, ChunkSet,
     SECTOR_SIZE, MAX_CHUNK_PARTITIONS,
 };
 pub use gpt::GptOps;
-pub use fat32::Fat32Formatter;
+pub use fat32::{Fat32Formatter, Fat32Info};
 pub use writer::IsoWriter;
-pub use manifest::ManifestWriter;
+pub use manifest::{ManifestWriter, ManifestReader, IsoManifestInfo};
