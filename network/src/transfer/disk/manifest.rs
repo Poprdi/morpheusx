@@ -3,6 +3,9 @@
 //! Binary manifest format for tracking ISO chunks.
 //! Written to ESP for bootloader to locate ISO data.
 
+#[cfg(feature = "fat32_manifest")]
+extern crate alloc;
+
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
@@ -189,6 +192,48 @@ impl ManifestWriter {
         }
         
         block_io.flush().map_err(|_| DiskError::IoError)?;
+        
+        Ok(())
+    }
+    
+    /// Write manifest as FAT32 file to ESP
+    ///
+    /// Writes to `/morpheus/isos/<name>.manifest` on the ESP.
+    /// This is the preferred method as it integrates with the bootloader scanner.
+    ///
+    /// # Requirements
+    /// - Heap allocator must be initialized (crate::alloc_heap::init_heap())
+    /// - ESP must be a valid FAT32 partition
+    ///
+    /// # Arguments
+    /// * `block_io` - Block I/O device
+    /// * `esp_start_lba` - Start LBA of ESP partition
+    /// * `chunks` - Chunk information to write
+    #[cfg(feature = "fat32_manifest")]
+    pub fn write_to_esp_fat32<B: BlockIo>(
+        &self,
+        block_io: &mut B,
+        esp_start_lba: u64,
+        chunks: &ChunkSet,
+    ) -> DiskResult<()> {
+        use alloc::string::String;
+        use alloc::format;
+        
+        // Serialize manifest to buffer
+        let mut buffer = [0u8; MAX_MANIFEST_SIZE];
+        let len = self.serialize(chunks, &mut buffer)?;
+        
+        // Build path: /morpheus/isos/<name>.manifest
+        let name_str = core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("unknown");
+        let path = format!("/morpheus/isos/{}.manifest", name_str);
+        
+        // Ensure directory exists
+        let _ = morpheus_core::fs::create_directory(block_io, esp_start_lba, "/morpheus");
+        let _ = morpheus_core::fs::create_directory(block_io, esp_start_lba, "/morpheus/isos");
+        
+        // Write manifest file
+        morpheus_core::fs::write_file(block_io, esp_start_lba, &path, &buffer[..len])
+            .map_err(|_| DiskError::ManifestError)?;
         
         Ok(())
     }
