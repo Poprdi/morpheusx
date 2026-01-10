@@ -99,20 +99,32 @@ unsafe impl GlobalAlloc for LockedHeap {
 #[global_allocator]
 static GLOBAL: LockedHeap = LockedHeap::empty();
 
-/// Initialize the post-EBS heap
+/// Track if heap is already initialized
+static mut HEAP_INITIALIZED: bool = false;
+
+/// Initialize the heap allocator
+///
+/// Safe to call multiple times - only initializes once.
+/// Should be called as early as possible (start of efi_main).
 ///
 /// # Safety
-/// - Must be called exactly ONCE
 /// - Must be called BEFORE any allocations (Vec, Box, String, etc.)
-/// - Must be called AFTER ExitBootServices
-///
-/// # Panics
-/// Does not panic, but allocations will fail if not initialized.
+/// - Thread-safety: Uses static bool guard, safe for single-core
 pub unsafe fn init_heap() {
+    if HEAP_INITIALIZED {
+        return; // Already initialized
+    }
+    
     let heap_start = HEAP_BUFFER.0.as_mut_ptr();
     let heap_size = HEAP_SIZE;
     
     GLOBAL.init(heap_start, heap_size);
+    HEAP_INITIALIZED = true;
+}
+
+/// Check if heap is initialized
+pub fn is_initialized() -> bool {
+    unsafe { HEAP_INITIALIZED }
 }
 
 /// Get heap statistics for debugging
