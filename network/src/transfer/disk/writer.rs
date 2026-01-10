@@ -119,7 +119,8 @@ impl IsoWriter {
         
         // Create partitions for each chunk
         for i in 0..num_chunks {
-            let chunk_name = self.make_chunk_name(i);
+            let mut name_buf = [0u8; 16];
+            let chunk_name = self.chunk_name_str(i, &mut name_buf);
             
             // Find free space
             let (start, end) = GptOps::find_free_space(block_io)?;
@@ -143,7 +144,7 @@ impl IsoWriter {
                 start,
                 part_end,
                 guid::BASIC_DATA,
-                &chunk_name,
+                chunk_name,
             )?;
             
             // Format as FAT32
@@ -151,12 +152,12 @@ impl IsoWriter {
                 block_io,
                 start,
                 sectors_needed,
-                &chunk_name,
+                chunk_name,
             )?;
             
             // Record chunk info
             let mut part_info = PartitionInfo::new(slot, start, part_end, guid::BASIC_DATA);
-            part_info.set_name(&chunk_name);
+            part_info.set_name(chunk_name);
             
             let chunk = ChunkPartition::new(part_info, i as u8);
             self.chunks.add(chunk)?;
@@ -187,8 +188,9 @@ impl IsoWriter {
         
         for (i, (&(start, end), &info)) in partitions.iter().zip(fat32_infos.iter()).enumerate() {
             let mut part_info = PartitionInfo::new(i as u8, start, end, guid::BASIC_DATA);
-            let name = self.make_chunk_name(i);
-            part_info.set_name(&name);
+            let mut name_buf = [0u8; 16];
+            let name = self.chunk_name_str(i, &mut name_buf);
+            part_info.set_name(name);
             
             let chunk = ChunkPartition::new(part_info, i as u8);
             self.chunks.add(chunk)?;
@@ -337,13 +339,14 @@ impl IsoWriter {
         Ok(())
     }
     
-    /// Generate chunk partition name
-    fn make_chunk_name(&self, index: usize) -> [u8; 16] {
-        let mut name = [0u8; 16];
+    /// Generate chunk partition name as str
+    fn chunk_name_str(&self, index: usize, buf: &mut [u8; 16]) -> &str {
         // "ISO_CHK_NN" format
-        name[0..8].copy_from_slice(b"ISO_CHK_");
-        name[8] = b'0' + (index / 10) as u8;
-        name[9] = b'0' + (index % 10) as u8;
-        name
+        buf[0..8].copy_from_slice(b"ISO_CHK_");
+        buf[8] = b'0' + (index / 10) as u8;
+        buf[9] = b'0' + (index % 10) as u8;
+        buf[10] = 0;
+        // Safe: we know this is valid ASCII
+        core::str::from_utf8(&buf[..10]).unwrap_or("ISO_CHK_00")
     }
 }

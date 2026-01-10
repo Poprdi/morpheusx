@@ -87,7 +87,7 @@ pub mod guid {
 }
 
 /// Information about a partition
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct PartitionInfo {
     /// Partition index in GPT table (0-127)
     pub index: u8,
@@ -99,6 +99,18 @@ pub struct PartitionInfo {
     pub type_guid: [u8; 16],
     /// Partition name (ASCII, null-terminated)
     pub name: [u8; 36],
+}
+
+impl Default for PartitionInfo {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            start_lba: 0,
+            end_lba: 0,
+            type_guid: [0; 16],
+            name: [0; 36],
+        }
+    }
 }
 
 impl PartitionInfo {
