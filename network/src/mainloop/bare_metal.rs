@@ -1001,11 +1001,17 @@ pub unsafe fn bare_metal_main(
     serial_println("");
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 1: POST-EBS INITIALIZATION
+    // STEP 1: VERIFY HEAP ALLOCATOR
     // ═══════════════════════════════════════════════════════════════════════
-    serial_println("[INIT] Initializing post-EBS heap allocator...");
+    // Heap should already be initialized by bootloader's efi_main
+    // Call init_heap() anyway - it's safe to call multiple times
     crate::alloc_heap::init_heap();
-    serial_println("[OK] Heap allocator ready (1MB)");
+    if crate::alloc_heap::is_initialized() {
+        serial_println("[OK] Heap allocator ready (1MB)");
+    } else {
+        serial_println("[FAIL] Heap allocator not initialized!");
+        return RunResult::InitFailed;
+    }
     
     serial_println("[INIT] Validating BootHandoff...");
     
