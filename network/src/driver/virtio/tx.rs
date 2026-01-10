@@ -69,8 +69,8 @@ pub fn transmit(
         return Err(TxError::QueueFull);
     }
     
-    // Notify device
-    unsafe { notify::notify(tx_state); }
+    // NOTE: Notification deferred to collect_completions() for batching throughput
+    // The notify happens in Phase 5 after all TX submissions for this iteration
     
     // *** DO NOT WAIT FOR COMPLETION ***
     // Completion collected in main loop Phase 5
@@ -78,16 +78,22 @@ pub fn transmit(
     Ok(())
 }
 
-/// Collect TX completions.
+/// Collect TX completions and notify device of any pending submissions.
 ///
 /// Call periodically (main loop Phase 5) to reclaim TX buffers.
+/// Also sends batched notification for any TX submissions since last call.
 #[cfg(target_arch = "x86_64")]
 pub fn collect_completions(
     tx_state: &mut VirtqueueState,
     tx_pool: &mut BufferPool,
 ) {
-    use crate::asm::drivers::virtio::tx as asm_tx;
+    use crate::asm::drivers::virtio::{tx as asm_tx, notify};
     
+    // First, notify device of any pending TX submissions (batched)
+    // This is safe to call even if no new submissions - device ignores redundant notifies
+    notify::notify(tx_state);
+    
+    // Then collect completions
     loop {
         let idx = asm_tx::poll_complete(tx_state);
         match idx {

@@ -675,16 +675,18 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
     
     /// Try to receive a packet into our internal buffer.
     /// Called before polling smoltcp.
-    pub fn poll_receive(&mut self) {
+    pub fn poll_receive(&mut self) -> bool {
         if self.rx_len == 0 {
             // No pending packet, try to receive
             match self.driver.receive(&mut self.rx_buffer) {
                 Ok(Some(len)) => {
                     self.rx_len = len;
+                    return true;
                 }
                 _ => {}
             }
         }
+        false
     }
     
     /// Refill RX queue. Called in main loop Phase 1.
@@ -782,7 +784,7 @@ impl<'a, D: NetworkDriver> smoltcp::phy::Device for SmoltcpAdapter<'a, D> {
         let mut caps = smoltcp::phy::DeviceCapabilities::default();
         caps.medium = smoltcp::phy::Medium::Ethernet;
         caps.max_transmission_unit = 1514;
-        caps.max_burst_size = Some(1);
+        caps.max_burst_size = Some(32); // Process up to 32 packets per poll for throughput
         caps
     }
 }
@@ -1382,12 +1384,22 @@ pub unsafe fn bare_metal_main(
     serial_println("...");
     
     // Create TCP socket with STATIC buffers (no heap!)
-    static mut TCP_RX_STORAGE: [u8; 8192] = [0u8; 8192];
-    static mut TCP_TX_STORAGE: [u8; 4096] = [0u8; 4096];
+    // Large buffers critical for throughput - 128KB RX allows TCP window scaling
+    static mut TCP_RX_STORAGE: [u8; 131072] = [0u8; 131072]; // 128KB RX
+    static mut TCP_TX_STORAGE: [u8; 65536] = [0u8; 65536];   // 64KB TX
     
     let tcp_rx_buffer = TcpSocketBuffer::new(unsafe { &mut TCP_RX_STORAGE[..] });
     let tcp_tx_buffer = TcpSocketBuffer::new(unsafe { &mut TCP_TX_STORAGE[..] });
     let mut tcp_socket = TcpSocket::new(tcp_rx_buffer, tcp_tx_buffer);
+    
+    // === THROUGHPUT OPTIMIZATIONS ===
+    // Disable Nagle's algorithm - we're doing bulk download, Nagle adds latency
+    // for small packets but we want ACKs to flow immediately
+    tcp_socket.set_nagle_enabled(false);
+    
+    // Disable delayed ACKs - send ACKs immediately to keep sender's window open
+    // Default is 10ms delay which can throttle high-throughput downloads
+    tcp_socket.set_ack_delay(None);
     
     // Connect to server
     let local_port = 49152 + ((get_tsc() % 16384) as u16); // Random ephemeral port
@@ -1426,8 +1438,7 @@ pub unsafe fn bare_metal_main(
             serial_println("[FAIL] TCP connection refused");
             return RunResult::DownloadFailed;
         }
-        
-        for _ in 0..100 { core::hint::spin_loop(); }
+        // No artificial delay - tight poll loop for throughput
     }
     
     // Build and send HTTP GET request (NO HEAP!)
@@ -1480,8 +1491,7 @@ pub unsafe fn bare_metal_main(
             serial_println("[FAIL] Connection closed during send");
             return RunResult::DownloadFailed;
         }
-        
-        for _ in 0..10 { core::hint::spin_loop(); }
+        // No artificial delay - tight poll loop for throughput
     }
     
     // Receive response
@@ -1518,14 +1528,49 @@ pub unsafe fn bare_metal_main(
             return RunResult::DownloadFailed;
         }
         
+        // === POLL-DRIVEN RECEIVE LOOP ===
+        // smoltcp is entirely poll-based: it won't process packets, send ACKs,
+        // or advance TCP state without poll(). We must poll frequently to keep
+        // ACKs flowing and prevent sender window stall.
         let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        
+        // Phase 1: Refill RX buffers so device can receive more packets
         adapter.refill_rx();
+        
+        // Debug: check if device has packets before poll
+        static mut RX_PKT_COUNT: u32 = 0;
+        let got_pkt = adapter.poll_receive();
+        if got_pkt {
+            unsafe { RX_PKT_COUNT += 1; }
+        }
+        
+        // Phase 2: Poll smoltcp - processes incoming packets, generates ACKs
         iface.poll(timestamp, &mut adapter, &mut sockets);
         
+        // Phase 3: Collect TX completions and notify device of pending TX
+        adapter.collect_tx();
+        
+        // Phase 4: Try to receive data from socket
+        let mut buf = [0u8; 32768];
         let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
         
-        // Try to receive data
-        let mut buf = [0u8; 8192]; // Larger buffer for better throughput
+        // Debug: print socket state occasionally
+        static mut DBG_COUNT: u32 = 0;
+        unsafe {
+            DBG_COUNT += 1;
+            if DBG_COUNT % 100000 == 0 {
+                serial_print("[DBG] rx_pkts=");
+                serial_print_decimal(RX_PKT_COUNT);
+                serial_print(" can_recv=");
+                if socket.can_recv() { serial_print("Y"); } else { serial_print("N"); }
+                serial_print(" recv_q=");
+                serial_print_decimal(socket.recv_queue() as u32);
+                serial_print(" open=");
+                if socket.is_open() { serial_print("Y"); } else { serial_print("N"); }
+                serial_println("");
+            }
+        }
+        
         if socket.can_recv() {
             match socket.recv_slice(&mut buf) {
                 Ok(len) if len > 0 => {
@@ -1661,44 +1706,60 @@ pub unsafe fn bare_metal_main(
                             }
                         }
                         
-                        // Print progress with percentage if content-length known
-                        let current_kb = body_received / 1024;
-                        if current_kb > last_progress_kb + 100 { // Every ~100KB
-                            last_progress_kb = current_kb;
-                            serial_print("[HTTP] Progress: ");
-                            serial_print_decimal(current_kb as u32);
-                            serial_print(" KB");
+                        // Print progress every 1MB with inline progress bar
+                        let current_mb = body_received / (1024 * 1024);
+                        let last_mb = last_progress_kb / 1024; // Reuse variable as MB tracker
+                        if current_mb > last_mb {
+                            last_progress_kb = current_mb * 1024; // Update tracker
                             
+                            // Carriage return to update in place
+                            serial_print("\r[");
+                            
+                            // Progress bar (20 chars wide)
                             if let Some(cl) = content_length {
-                                if cl > 0 {
-                                    let percent = (body_received as u64 * 100) / cl as u64;
-                                    serial_print(" (");
-                                    serial_print_decimal(percent as u32);
-                                    serial_print("%)");
+                                let percent = ((body_received as u64 * 100) / cl as u64) as usize;
+                                let filled = percent / 5; // 20 chars = 5% each
+                                for i in 0..20 {
+                                    if i < filled {
+                                        serial_print("=");
+                                    } else if i == filled {
+                                        serial_print(">");
+                                    } else {
+                                        serial_print(" ");
+                                    }
                                 }
+                                serial_print("] ");
+                                serial_print_decimal(percent as u32);
+                                serial_print("% ");
+                            } else {
+                                serial_print("====================] ");
                             }
                             
-                            // Also show disk write progress if writing
-                            if blk_driver.is_some() {
-                                serial_print(" | Disk: ");
-                                let disk_kb = (DISK_TOTAL_BYTES / 1024) as u32;
-                                serial_print_decimal(disk_kb);
-                                serial_print(" KB");
+                            // Size in MB
+                            serial_print_decimal(current_mb as u32);
+                            serial_print(" MB");
+                            
+                            // Speed estimate if we have content-length
+                            if let Some(cl) = content_length {
+                                serial_print(" / ");
+                                serial_print_decimal((cl / (1024 * 1024)) as u32);
+                                serial_print(" MB");
                             }
                             
-                            serial_println("");
+                            serial_print("   "); // Padding to clear old chars
                         }
                     }
                 }
-                _ => {}
+                _ => {} // No data this iteration, will poll again
             }
         }
         
         // Check if download complete
+        let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
         if headers_done {
             if let Some(cl) = content_length {
                 if body_received >= cl {
-                    serial_println("[HTTP] Download complete");
+                    serial_println("\n[HTTP] Download complete");
                     break;
                 }
             }
@@ -1707,18 +1768,15 @@ pub unsafe fn bare_metal_main(
             if !socket.is_open() && socket.recv_queue() == 0 {
                 if content_length.is_none() {
                     // No content-length, server closed = complete
-                    serial_println("[HTTP] Download complete (connection closed)");
+                    serial_println("\n[HTTP] Download complete (connection closed)");
                 } else if content_length.is_some() && body_received < content_length.unwrap() {
                     // Had content-length but didn't get all data
-                    serial_println("[WARN] Connection closed before full content received");
+                    serial_println("\n[WARN] Connection closed before full content received");
                 }
                 break;
             }
         }
-        
-        adapter.collect_tx();
-        
-        for _ in 0..10 { core::hint::spin_loop(); }
+        // Loop continues - poll again next iteration
     }
     
     // Print download summary
