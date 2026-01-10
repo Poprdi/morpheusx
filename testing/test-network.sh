@@ -230,8 +230,8 @@ QEMU_CMD=(
     # Target disk for ISO storage
     -drive format=raw,file=$TARGET_DISK,if=none,id=target
     -device virtio-blk-pci,drive=target,bus=pci.0,addr=0x05
-    # VirtIO network with user networking
-    -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,mac=52:54:00:12:34:56
+    # VirtIO network with user networking (modern mode for MMIO access)
+    -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,mac=52:54:00:12:34:56,disable-legacy=on,disable-modern=off
     -netdev "user,id=net0,hostfwd=tcp::2222-:22,guestfwd=tcp:10.0.2.100:${HTTP_PORT}-tcp:127.0.0.1:${HTTP_PORT}"
     # System config
     -smp 4

@@ -23,6 +23,8 @@ const ASM_PCI: &[&str] = &[
     "asm/pci/legacy.s",
     "asm/pci/ecam.s",
     "asm/pci/bar.s",
+    "asm/pci/capability.s",
+    "asm/pci/virtio_cap.s",
 ];
 
 const ASM_VIRTIO: &[&str] = &[
