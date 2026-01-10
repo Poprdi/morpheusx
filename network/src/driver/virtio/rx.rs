@@ -73,6 +73,8 @@ pub fn receive(
 }
 
 /// Resubmit RX buffer after processing.
+/// 
+/// Notifies device immediately to ensure packets keep flowing.
 #[cfg(target_arch = "x86_64")]
 fn resubmit_buffer(
     rx_state: &mut VirtqueueState,
@@ -93,7 +95,7 @@ fn resubmit_buffer(
             unsafe { buf.mark_driver_owned(); }
             // Buffer will be reclaimed on next refill cycle
         } else {
-            // Notify device
+            // Notify device that buffer is available
             notify::notify(rx_state);
         }
     }
