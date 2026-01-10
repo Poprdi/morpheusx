@@ -675,18 +675,16 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
     
     /// Try to receive a packet into our internal buffer.
     /// Called before polling smoltcp.
-    pub fn poll_receive(&mut self) -> bool {
+    pub fn poll_receive(&mut self) {
         if self.rx_len == 0 {
             // No pending packet, try to receive
             match self.driver.receive(&mut self.rx_buffer) {
                 Ok(Some(len)) => {
                     self.rx_len = len;
-                    return true;
                 }
                 _ => {}
             }
         }
-        false
     }
     
     /// Refill RX queue. Called in main loop Phase 1.
@@ -1537,13 +1535,6 @@ pub unsafe fn bare_metal_main(
         // Phase 1: Refill RX buffers so device can receive more packets
         adapter.refill_rx();
         
-        // Debug: check if device has packets before poll
-        static mut RX_PKT_COUNT: u32 = 0;
-        let got_pkt = adapter.poll_receive();
-        if got_pkt {
-            unsafe { RX_PKT_COUNT += 1; }
-        }
-        
         // Phase 2: Poll smoltcp - processes incoming packets, generates ACKs
         iface.poll(timestamp, &mut adapter, &mut sockets);
         
@@ -1553,23 +1544,6 @@ pub unsafe fn bare_metal_main(
         // Phase 4: Try to receive data from socket
         let mut buf = [0u8; 32768];
         let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
-        
-        // Debug: print socket state occasionally
-        static mut DBG_COUNT: u32 = 0;
-        unsafe {
-            DBG_COUNT += 1;
-            if DBG_COUNT % 100000 == 0 {
-                serial_print("[DBG] rx_pkts=");
-                serial_print_decimal(RX_PKT_COUNT);
-                serial_print(" can_recv=");
-                if socket.can_recv() { serial_print("Y"); } else { serial_print("N"); }
-                serial_print(" recv_q=");
-                serial_print_decimal(socket.recv_queue() as u32);
-                serial_print(" open=");
-                if socket.is_open() { serial_print("Y"); } else { serial_print("N"); }
-                serial_println("");
-            }
-        }
         
         if socket.can_recv() {
             match socket.recv_slice(&mut buf) {
