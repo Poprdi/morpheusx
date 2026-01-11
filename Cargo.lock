@@ -109,10 +109,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dma-pool"
-version = "1.0.1"
-
-[[package]]
 name = "enumn"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -206,7 +202,6 @@ checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
 name = "morpheus-bootloader"
 version = "1.0.1"
 dependencies = [
- "dma-pool",
  "gpt_disk_io",
  "gpt_disk_types",
  "iso9660-rs",
@@ -220,7 +215,6 @@ dependencies = [
 name = "morpheus-core"
 version = "1.0.1"
 dependencies = [
- "dma-pool",
  "gpt_disk_io",
  "gpt_disk_types",
  "uguid",
@@ -230,7 +224,6 @@ dependencies = [
 name = "morpheus-network"
 version = "1.0.1"
 dependencies = [
- "dma-pool",
  "gpt_disk_io",
  "gpt_disk_types",
  "linked_list_allocator",

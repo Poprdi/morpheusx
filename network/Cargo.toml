@@ -8,7 +8,6 @@ default = ["fat32_manifest"]
 fat32_manifest = []  # Enable FAT32 file write for manifests (requires heap allocator)
 
 [dependencies]
-dma-pool = { workspace = true }
 morpheus-core = { workspace = true }
 
 # GPT disk I/O trait for filesystem compatibility

@@ -10,7 +10,6 @@ iso9660 = { workspace = true }
 morpheus-core = { workspace = true }
 morpheus-persistent = { workspace = true }
 morpheus-network = { workspace = true }
-dma-pool = { workspace = true }
 gpt_disk_io = { version = "0.16", default-features = false }
 gpt_disk_types = { version = "0.16", default-features = false }
 virtio-drivers = { version = "0.12", default-features = false }
