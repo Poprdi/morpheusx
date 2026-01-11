@@ -41,6 +41,7 @@ pub unsafe fn enter_network_boot(handoff: &'static BootHandoff) -> RunResult {
 pub unsafe fn enter_network_boot_url(
     handoff: &'static BootHandoff,
     iso_url: &'static str,
+    esp_lba: u64,
 ) -> RunResult {
     // Extract ISO filename from URL (e.g., "tails-amd64-7.3.1.iso" from full URL)
     let iso_name = extract_iso_name_from_url(iso_url);
@@ -48,6 +49,7 @@ pub unsafe fn enter_network_boot_url(
     let config = BareMetalConfig {
         iso_url,
         iso_name,
+        esp_start_lba: esp_lba,
         ..BareMetalConfig::default()
     };
 

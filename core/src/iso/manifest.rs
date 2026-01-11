@@ -1,7 +1,7 @@
 //! ISO Manifest Format
 //!
 //! Binary manifest format for tracking ISO chunks. Stored on ESP at
-//! `/morpheus/isos/<name>.manifest`.
+//! `/.iso/<name>.manifest`.
 //!
 //! # Binary Format (v1)
 //!

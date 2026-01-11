@@ -18,7 +18,7 @@
 //!
 //! # Manifest Format
 //!
-//! Each ISO set has a manifest file stored on the ESP at `/morpheus/isos/<name>.manifest`:
+//! Each ISO set has a manifest file stored on the ESP at `/.iso/<name>.manifest`:
 //!
 //! ```text
 //! MORPHEUS_ISO_MANIFEST_V1

@@ -162,7 +162,7 @@ impl ManifestWriter {
 
     /// Write manifest to ESP partition
     ///
-    /// Writes to `/morpheus/isos/<name>.manifest` conceptually,
+    /// Writes to `/.iso/<name>.manifest` conceptually,
     /// but since we can't do FAT32 file ops without alloc, we write
     /// to a fixed location within the ESP.
     ///
@@ -200,7 +200,7 @@ impl ManifestWriter {
 
     /// Write manifest as FAT32 file to ESP
     ///
-    /// Writes to `/morpheus/isos/<short_name>.mfst` on the ESP.
+    /// Writes to `/.iso/<short_name>.mfst` on the ESP.
     /// Uses 8.3 compatible filenames for FAT32 compatibility.
     /// This is the preferred method as it integrates with the bootloader scanner.
     ///
@@ -230,11 +230,10 @@ impl ManifestWriter {
         // e.g., "tails-amd64-7.3.1.iso" -> "TAILS731.MFS"
         let name_str = core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("unknown");
         let short_name = make_8_3_filename(name_str);
-        let path = format!("/morpheus/isos/{}", short_name);
+        let path = format!("/.iso/{}", short_name);
 
-        // Ensure directory exists
-        let _ = morpheus_core::fs::create_directory(block_io, esp_start_lba, "/morpheus");
-        let _ = morpheus_core::fs::create_directory(block_io, esp_start_lba, "/morpheus/isos");
+        // Ensure .iso directory exists
+        let _ = morpheus_core::fs::create_directory(block_io, esp_start_lba, "/.iso");
 
         // Write manifest file
         morpheus_core::fs::write_file(block_io, esp_start_lba, &path, &buffer[..len])

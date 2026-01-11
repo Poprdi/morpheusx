@@ -389,17 +389,12 @@ impl DistroDownloader {
             format!("Starting download: {} ({} bytes)", distro.name, total_size).leak(),
         );
 
-        // STEP 1: Verify network is ready (connectivity check)
-        // Network initialization (DMA pool, PCI scan, VirtIO setup, DHCP) should have
-        // happened during bootstrap phase. This just verifies we're ready.
-        if let Err(e) = super::network_check::check_network_connectivity(screen) {
-            self.show_download_error(screen, e);
-            return;
-        }
+        // Network initialization now happens post-ExitBootServices in bare-metal mode.
+        // No pre-check needed here - network will be initialized when download starts.
 
         const CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB max chunk size
 
-        // STEP 2: Now that network is ready, check disk space
+        // STEP 1: Check disk space
         screen.clear();
         screen.put_str_at(
             5,

@@ -19,6 +19,10 @@ pub enum BlockError {
     ReadOnly,
     /// Unsupported operation.
     Unsupported,
+    /// Operation timed out.
+    Timeout,
+    /// Device reported an error.
+    DeviceError,
 }
 
 /// Result of a completed block I/O operation.

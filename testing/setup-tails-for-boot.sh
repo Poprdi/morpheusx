@@ -19,7 +19,7 @@ BASE_DIR="$(pwd)"
 ESP_DIR="$BASE_DIR/esp"
 KERNELS_DIR="$ESP_DIR/kernels"
 INITRD_DIR="$ESP_DIR/initrds"
-MANIFEST_DIR="$ESP_DIR/morpheus/isos"
+MANIFEST_DIR="$ESP_DIR/.iso"
 ISO_DIR="$ESP_DIR/.iso"
 WORK_DIR="/tmp/morpheus-tails-setup"
 
