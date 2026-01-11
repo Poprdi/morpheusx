@@ -3,7 +3,7 @@
 [![CI](https://github.com/Poprdi/morpheusx/actions/workflows/ci.yml/badge.svg)](https://github.com/Poprdi/morpheusx/actions/workflows/ci.yml)
 [![UEFI Build](https://github.com/Poprdi/morpheusx/actions/workflows/uefi-build.yml/badge.svg)](https://github.com/Poprdi/morpheusx/actions/workflows/uefi-build.yml)
 [![Security Audit](https://github.com/Poprdi/morpheusx/actions/workflows/audit.yml/badge.svg)](https://github.com/Poprdi/morpheusx/actions/workflows/audit.yml)
-![Docs Site](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://poprdi.github.io/morpheusx/)
+[![Docs Site](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://poprdi.github.io/morpheusx/)
 
 
 MorpheusX is a UEFI boot and hardware exokernel-like runtime that loads Linux kernels directly from firmware space, treats distributions as disposable layers, and aims to keep userland state persisten[...]
