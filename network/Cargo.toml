@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = ["fat32_manifest"]
 fat32_manifest = []  # Enable FAT32 file write for manifests (requires heap allocator)
+serial_debug = []    # Enable serial debug output for PCI capabilities
 
 [dependencies]
 morpheus-core = { workspace = true }

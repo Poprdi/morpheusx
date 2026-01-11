@@ -129,7 +129,7 @@ impl Url {
         })
     }
 
-    /// Parse authority (host[:port]).
+    /// Parse authority (host\[:port\]).
     fn parse_authority(authority: &str) -> Result<(&str, Option<u16>)> {
         // Check for IPv6 address [::1]:port
         if authority.starts_with('[') {

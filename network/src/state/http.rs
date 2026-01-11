@@ -157,7 +157,7 @@ impl HttpProgress {
 
 /// Internal state for accumulating headers.
 #[derive(Debug)]
-struct HeaderAccumulator {
+pub(crate) struct HeaderAccumulator {
     /// Raw header data
     buffer: Vec<u8>,
     /// Maximum header size (prevent DoS)
@@ -398,7 +398,7 @@ impl HttpDownloadState {
     /// Start the download.
     ///
     /// Transitions from Init to Resolving (or Connecting if IP known).
-    pub fn start(&mut self, now_tsc: u64) {
+    pub fn start(&mut self, _now_tsc: u64) {
         if let HttpDownloadState::Init { url } = self {
             let host = url.host.clone();
             let port = url.port_or_default();
@@ -410,7 +410,7 @@ impl HttpDownloadState {
             // Try to resolve without DNS first (IP or hardcoded)
             if let Some(ip) = resolve_without_dns(&host) {
                 // Skip DNS, go directly to connecting
-                let mut tcp = TcpConnState::new();
+                let tcp = TcpConnState::new();
                 // Note: actual connection initiation happens in step()
                 *self = HttpDownloadState::Connecting {
                     tcp,
@@ -421,7 +421,7 @@ impl HttpDownloadState {
                 };
             } else {
                 // Need DNS resolution
-                let mut dns = DnsResolveState::new();
+                let dns = DnsResolveState::new();
                 // Note: actual DNS query initiation happens in step()
                 *self = HttpDownloadState::Resolving {
                     dns,
@@ -459,7 +459,7 @@ impl HttpDownloadState {
         dns_result: Result<Option<Ipv4Addr>, ()>,
         tcp_state: TcpSocketState,
         recv_data: Option<&[u8]>,
-        can_send: bool,
+        _can_send: bool,
         now_tsc: u64,
         dns_timeout: u64,
         tcp_timeout: u64,
@@ -485,7 +485,7 @@ impl HttpDownloadState {
             dns_result,
             tcp_state,
             recv_data,
-            can_send,
+            _can_send,
             now_tsc,
             dns_timeout,
             tcp_timeout,
@@ -504,7 +504,7 @@ impl HttpDownloadState {
         dns_result: Result<Option<Ipv4Addr>, ()>,
         tcp_state: TcpSocketState,
         recv_data: Option<&[u8]>,
-        can_send: bool,
+        _can_send: bool,
         now_tsc: u64,
         dns_timeout: u64,
         tcp_timeout: u64,

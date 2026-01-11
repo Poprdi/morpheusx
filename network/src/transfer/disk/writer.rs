@@ -229,7 +229,7 @@ impl IsoWriter {
             }
 
             // Get current chunk's data start LBA
-            let chunk = &self.chunks.chunks[self.current_chunk];
+            let _chunk = &self.chunks.chunks[self.current_chunk];
             let fat32 = self.fat32_info[self.current_chunk].ok_or(DiskError::InvalidParameter)?;
 
             // Calculate sector offset within data area
