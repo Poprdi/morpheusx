@@ -230,6 +230,7 @@ mod tests {
 
     #[test]
     fn test_lba_translation() {
+        use crate::iso::MAX_CHUNKS;
         let mut ctx = IsoReadContext {
             chunk_lbas: [(0, 0); MAX_CHUNKS],
             chunk_sizes: [0; MAX_CHUNKS],
