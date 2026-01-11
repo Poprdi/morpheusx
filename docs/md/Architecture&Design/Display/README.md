@@ -41,7 +41,7 @@ MorpheusX display stack operates as a **bare-metal, post-ExitBootServices exoker
 
 | Principle | Description |
 |-----------|-------------|
-| **No firmware services** | All hardware control is manual after EBS; no UEFI GOP at runtime |
+| **No UEFI firmware services** | All hardware control is manual after EBS; no UEFI GOP at runtime |
 | **Deterministic control** | Explicit resource lifetimes, queue management, frame pacing |
 | **Minimal surface** | Only what's needed: mode set, scanout, resource upload, fence/wait |
 | **Hardware acceleration first** | Prioritize 3D-capable transports; 2D blit as degraded fallback |
@@ -97,7 +97,7 @@ Correctness > Performance > Elegance > Convenience
 | **Input latency** | ≤50 ms | Command submit → scanout visible |
 | **Throughput** | ≥100 MB/s | Texture upload bandwidth |
 
-## 2.2 Hardware Acceleration Requirements
+## 2.2 Hardware Acceleration Strategy
 
 The display stack **must** prioritize hardware-accelerated paths:
 
