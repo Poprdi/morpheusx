@@ -6,9 +6,9 @@
 BITS 64
 
 SECTION .text
-GLOBAL drop_to_protected_mode_asm
+GLOBAL drop_to_protected_mode
 
-drop_to_protected_mode_asm:
+drop_to_protected_mode:
     ; Args: RDI = entry_point (u32), RSI = boot_params (u32)
     ; Save 32-bit arguments in high registers
     mov r14d, edi
