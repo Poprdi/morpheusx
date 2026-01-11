@@ -104,7 +104,8 @@ jobs:
       - name: Add noindex meta to internal docs index
         run: |
           # Add noindex meta tag to internal documentation pages
-          find docs-output/internal -name "*.html" -type f -exec sed -i 's|<head>|<head><meta name="robots" content="noindex, nofollow">|' {} \;
+          # Insert after <head> tag to avoid issues with existing head content
+          find docs-output/internal -name "*.html" -type f -exec sed -i 's|<head>|<head>\n    <meta name="robots" content="noindex, nofollow">|' {} \;
 
       - name: Add root index
         run: |
