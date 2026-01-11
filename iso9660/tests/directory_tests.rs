@@ -9,18 +9,18 @@ use iso9660::{find_file, mount};
 #[test]
 fn test_find_root_directory() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
-    let volume = mount(&mut device, 0).expect("mount should succeed");
+    let _volume = mount(&mut device, 0).expect("mount should succeed");
 
     // Root directory is at the volume's root_extent_lba
-    assert_eq!(volume.root_extent_lba, 18);
+    assert_eq!(_volume.root_extent_lba, 18);
 }
 
 #[test]
 fn test_find_nonexistent_file() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
-    let volume = mount(&mut device, 0).expect("mount should succeed");
+    let _volume = mount(&mut device, 0).expect("mount should succeed");
 
-    let result = find_file(&mut device, &volume, "/nonexistent.txt");
+    let result = find_file(&mut device, &_volume, "/nonexistent.txt");
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), Iso9660Error::NotFound);
 }
@@ -64,7 +64,7 @@ fn test_path_depth_limit() {
 #[test]
 fn test_case_sensitivity() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
-    let volume = mount(&mut device, 0).expect("mount should succeed");
+    let _volume = mount(&mut device, 0).expect("mount should succeed");
 
     // ISO9660 is case-insensitive by spec
     // If we add a file "TEST.TXT", both "/test.txt" and "/TEST.TXT" should find it

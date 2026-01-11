@@ -13,8 +13,8 @@ fn test_read_file_content() {
     builder.add_file("TEST.TXT", b"Hello ISO9660");
     let mut device = builder.build();
 
-    let volume = mount(&mut device, 0).expect("mount");
-    let file = find_file(&mut device, &volume, "/TEST.TXT").expect("find");
+    let _volume = mount(&mut device, 0).expect("mount");
+    let file = find_file(&mut device, &_volume, "/TEST.TXT").expect("find");
 
     let mut content = vec![0u8; file.size as usize];
     read_file(&mut device, &file, &mut content).expect("read");
@@ -49,7 +49,7 @@ fn test_read_file_crossing_sectors() {
 fn test_read_partial_last_sector() {
     let mut builder = IsoBuilder::new();
     // 2050 bytes = 1 sector + 2 bytes
-    let mut expected_content = vec![0xAA; 2050];
+    let expected_content = vec![0xAA; 2050];
 
     builder.add_file("PARTIAL.DAT", &expected_content);
     let mut device = builder.build();
