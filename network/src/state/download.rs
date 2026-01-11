@@ -598,9 +598,9 @@ impl IsoDownloadState {
 
             IsoDownloadState::Verifying {
                 result,
-                expected_hash,
-                verified_bytes,
-                start_tsc,
+                expected_hash: _,
+                verified_bytes: _,
+                start_tsc: _,
             } => {
                 // TODO: Implement actual hash verification
                 // For now, skip verification (always pass)
@@ -658,11 +658,7 @@ impl IsoDownloadState {
                     bytes_written: *bytes_written,
                 }
             }
-            IsoDownloadState::Verifying {
-                result,
-                verified_bytes,
-                ..
-            } => DownloadProgress {
+            IsoDownloadState::Verifying { result, .. } => DownloadProgress {
                 phase: DownloadPhase::Verifying,
                 bytes_downloaded: result.total_bytes,
                 total_bytes: Some(result.total_bytes),

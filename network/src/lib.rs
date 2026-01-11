@@ -185,7 +185,7 @@ pub fn serial_u32(n: u32) {
     }
 }
 
-/// Log debug stage to serial - format: "[NET:XX] message\n"
+/// Log debug stage to serial - format: `[NET:XX] message`
 #[cfg(target_arch = "x86_64")]
 pub fn serial_stage(stage: u32, msg: &str) {
     serial_str("[NET:");

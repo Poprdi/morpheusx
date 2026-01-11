@@ -88,7 +88,7 @@ pub fn run_iteration<D: NetworkDriver>(
 /// Get current TSC value.
 #[cfg(target_arch = "x86_64")]
 pub fn get_tsc() -> u64 {
-    unsafe { crate::asm::core::tsc::read_tsc() }
+    crate::asm::core::tsc::read_tsc()
 }
 
 #[cfg(not(target_arch = "x86_64"))]
