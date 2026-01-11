@@ -167,13 +167,13 @@ run_qemu() {
     
     # KVM acceleration
     if [[ "$use_kvm" == "force" ]]; then
-        if [[ ! -e /dev/kvm ]]; then
-            log_error "KVM requested but /dev/kvm not available"
+        if [[ ! -e /dev/kvm ]] || [[ ! -r /dev/kvm ]] || [[ ! -w /dev/kvm ]]; then
+            log_error "KVM requested but /dev/kvm not available or not accessible"
             exit 2
         fi
         qemu_args+=(-enable-kvm)
         log_info "Using KVM acceleration"
-    elif [[ "$use_kvm" == "auto" ]] && [[ -e /dev/kvm ]]; then
+    elif [[ "$use_kvm" == "auto" ]] && [[ -e /dev/kvm ]] && [[ -r /dev/kvm ]] && [[ -w /dev/kvm ]]; then
         qemu_args+=(-enable-kvm)
         log_info "Using KVM acceleration (auto-detected)"
     else
