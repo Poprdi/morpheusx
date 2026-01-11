@@ -306,7 +306,7 @@ impl MemoryDiscovery {
     /// Caller must ensure the returned region doesn't overlap with stack or other data.
     pub unsafe fn find_after_bss(bss_end: usize, max_scan: usize) -> Option<MemoryRegion> {
         let start = align_up(bss_end, PAGE_SIZE);
-        let end = start + max_scan;
+        let _end = start + max_scan;
 
         // Simple heuristic: assume memory after BSS is usable
         // In real scenario, should check memory map
@@ -794,7 +794,8 @@ impl DmaPool {
             return;
         }
 
-        // SAFETY: Single-threaded init
+        // SAFETY: Single-threaded init, only called once during startup
+        #[allow(static_mut_refs)]
         unsafe {
             let base = STATIC_STORAGE.data.as_mut_ptr() as usize;
             core::ptr::write_bytes(STATIC_STORAGE.data.as_mut_ptr(), 0, DEFAULT_POOL_SIZE);
@@ -833,6 +834,8 @@ impl DmaPool {
         }
 
         // Fallback to static storage
+        // SAFETY: Single-threaded init, only called once
+        #[allow(static_mut_refs)]
         unsafe {
             let base = STATIC_STORAGE.data.as_mut_ptr() as usize;
             core::ptr::write_bytes(STATIC_STORAGE.data.as_mut_ptr(), 0, DEFAULT_POOL_SIZE);
@@ -894,10 +897,14 @@ impl DmaPool {
             &mut caves,
         );
 
-        if found == 0 {
-            // Fallback to static storage
-            let base = STATIC_STORAGE.data.as_mut_ptr() as usize;
-            core::ptr::write_bytes(STATIC_STORAGE.data.as_mut_ptr(), 0, DEFAULT_POOL_SIZE);
+        if f// SAFETY: Single-threaded init, only called once
+            #[allow(static_mut_refs)]
+            unsafe {
+                let base = STATIC_STORAGE.data.as_mut_ptr() as usize;
+                core::ptr::write_bytes(STATIC_STORAGE.data.as_mut_ptr(), 0, DEFAULT_POOL_SIZE);
+                POOL.base.store(base, Ordering::SeqCst);
+                POOL.size.store(DEFAULT_POOL_SIZE, Ordering::SeqCst);
+            }(), 0, DEFAULT_POOL_SIZE);
             POOL.base.store(base, Ordering::SeqCst);
             POOL.size.store(DEFAULT_POOL_SIZE, Ordering::SeqCst);
             return Ok(());
