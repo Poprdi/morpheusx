@@ -143,7 +143,6 @@ jobs:
             -p iso9660-rs \
             -p morpheus-core \
             -p morpheus-network \
-            -p dma-pool \
             -p updater
 
       # Run iso9660 integration tests that create fixtures
