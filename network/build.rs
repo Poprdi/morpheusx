@@ -5,7 +5,6 @@
 //! - New ASM layer in asm/ (core, pci, drivers, phy)
 
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -169,7 +168,7 @@ fn assemble_file_checked(
     out_dir: &Path,
     obj_format: &str,
 ) -> Result<PathBuf, String> {
-    let stem = Path::new(asm_path)
+    let _stem = Path::new(asm_path)
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("Invalid path: {}", asm_path))?;
