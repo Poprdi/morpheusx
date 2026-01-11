@@ -431,10 +431,10 @@ unsafe fn write_manifest_to_disk(
 
 /// Create and write a completed ISO manifest to disk.
 ///
-/// Called after HTTP download completes to record the ISO location.
+/// Called after HTTP download completes to record the ISO location.1G
 ///
 /// # Strategy
-/// - If `esp_start_lba > 0`: Write to FAT32 ESP at `/morpheus/isos/<name>.manifest`
+/// - If `esp_start_lba > 0`: Write to FAT32 ESP at `/.iso/<name>.manifest`
 /// - Else if `manifest_sector > 0`: Write to raw sector (legacy)
 /// - Else: Skip manifest writing
 unsafe fn finalize_manifest(
@@ -478,7 +478,7 @@ unsafe fn finalize_manifest(
 
 /// Write manifest to FAT32 ESP filesystem.
 ///
-/// Creates `/morpheus/isos/<name>.manifest` file on the ESP.
+/// Creates `/.iso/<name>.manifest` file on the ESP.
 /// Uses morpheus_core::iso::IsoManifest for compatibility with bootloader scanner.
 unsafe fn finalize_manifest_fat32(
     blk_driver: &mut VirtioBlkDriver,
@@ -556,15 +556,16 @@ unsafe fn finalize_manifest_fat32(
         }
     };
 
-    // Build manifest file path: /morpheus/isos/<name>.manifest
-    let manifest_path = format!("/morpheus/isos/{}.manifest", config.iso_name);
+    // Generate 8.3 compatible manifest filename (FAT32 limitation)
+    // Example: "tails-6.10.iso" -> "4B2A7C3D.MFS" (CRC32 hash)
+    let manifest_filename = morpheus_core::fs::generate_8_3_manifest_name(config.iso_name);
+    let manifest_path = format!("/.iso/{}", manifest_filename);
+
     serial_print("[MANIFEST] Writing to: ");
     serial_println(&manifest_path);
 
-    // Ensure directory structure exists
-    let _ = morpheus_core::fs::create_directory(&mut adapter, config.esp_start_lba, "/morpheus");
-    let _ =
-        morpheus_core::fs::create_directory(&mut adapter, config.esp_start_lba, "/morpheus/isos");
+    // Ensure .iso directory exists (no subdirectory needed)
+    let _ = morpheus_core::fs::create_directory(&mut adapter, config.esp_start_lba, "/.iso");
 
     // Write manifest file using morpheus_core FAT32 operations
     match morpheus_core::fs::write_file(
@@ -1180,7 +1181,7 @@ pub struct BareMetalConfig {
     /// Set to 0 to use FAT32 manifest instead.
     pub manifest_sector: u64,
     /// ESP partition start LBA for FAT32 manifest writing.
-    /// If non-zero, writes manifest to `/morpheus/isos/<name>.manifest` on ESP.
+    /// If non-zero, writes manifest to `/.iso/<name>.manifest` on ESP.
     pub esp_start_lba: u64,
     /// Maximum download size in bytes.
     pub max_download_size: u64,
@@ -2284,6 +2285,25 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                 serial_println("[OK] ISO manifest written successfully");
             } else {
                 serial_println("[WARN] Failed to write ISO manifest");
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.6: FINAL DISK SYNC
+        // ═══════════════════════════════════════════════════════════════════
+        // Flush VirtIO-blk write cache to ensure all data is persisted
+        serial_println("[DISK] Syncing disk cache...");
+        use crate::driver::block_traits::BlockDriver;
+        match blk.flush() {
+            Ok(()) => serial_println("[OK] Disk cache synced"),
+            Err(e) => {
+                serial_print("[WARN] Disk sync failed: ");
+                serial_println(match e {
+                    crate::driver::block_traits::BlockError::Unsupported => "not supported (assuming durable)",
+                    crate::driver::block_traits::BlockError::Timeout => "timeout",
+                    crate::driver::block_traits::BlockError::DeviceError => "device error",
+                    _ => "unknown error",
+                });
             }
         }
     } else {

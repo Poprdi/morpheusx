@@ -735,13 +735,90 @@ impl BlockDriver for VirtioBlkDriver {
     }
 
     fn flush(&mut self) -> Result<(), BlockError> {
+        // Check if flush is supported
         if self.features & VIRTIO_BLK_F_FLUSH == 0 {
-            return Err(BlockError::Unsupported);
+            // Flush not supported - assume writes are durable
+            return Ok(());
         }
 
-        // TODO: Implement flush command
-        // For now, consider it always successful
-        Ok(())
+        // Allocate descriptor set for flush request
+        let (desc_idx, slot_idx) = self.alloc_desc_set().ok_or(BlockError::QueueFull)?;
+
+        // Write header with TYPE_FLUSH
+        let header = VirtioBlkReqHeader {
+            req_type: VirtioBlkReqHeader::TYPE_FLUSH,
+            reserved: 0,
+            sector: 0, // Not used for flush
+        };
+        unsafe {
+            ptr::write_volatile(self.headers_cpu.add(slot_idx as usize), header);
+        }
+
+        // Initialize status
+        unsafe {
+            ptr::write_volatile(self.status_cpu.add(slot_idx as usize), 0xFF);
+        }
+
+        // For flush, we reuse the write submission but with 0 sectors
+        // This will create a 2-descriptor chain: header + status (no data)
+        let result = unsafe {
+            asm_virtio_blk_submit_write(
+                &mut self.queue,
+                0,                                      // sector (unused)
+                0,                                      // buffer_phys (unused, no data)
+                0,                                      // num_sectors = 0 for flush
+                self.header_phys(slot_idx as usize),
+                self.status_phys(slot_idx as usize),
+                desc_idx,
+            )
+        };
+
+        if result != 0 {
+            return Err(BlockError::QueueFull);
+        }
+
+        // Use a unique request ID for flush
+        let request_id = 0xFFFF_FFFF; // Special ID for flush
+        self.in_flight[slot_idx as usize] = InFlightRequest {
+            request_id,
+            desc_idx,
+            active: true,
+        };
+
+        // Notify device
+        self.notify();
+
+        // Poll for completion (blocking wait with timeout)
+        let timeout_ticks = 500_000_000u64; // ~500ms at 1GHz TSC
+        let start = unsafe {
+            let tsc: u64;
+            core::arch::asm!("rdtsc", "shl rdx, 32", "or rax, rdx", out("rax") tsc, out("rdx") _);
+            tsc
+        };
+
+        loop {
+            if let Some(completion) = self.poll_completion() {
+                if completion.request_id == request_id {
+                    if completion.status == 0 {
+                        return Ok(());
+                    } else {
+                        return Err(BlockError::DeviceError);
+                    }
+                }
+            }
+
+            // Check timeout
+            let now = unsafe {
+                let tsc: u64;
+                core::arch::asm!("rdtsc", "shl rdx, 32", "or rax, rdx", out("rax") tsc, out("rdx") _);
+                tsc
+            };
+            if now.wrapping_sub(start) > timeout_ticks {
+                return Err(BlockError::Timeout);
+            }
+
+            core::hint::spin_loop();
+        }
     }
 }
 

@@ -86,7 +86,7 @@ impl EntryScanner {
 
         unsafe {
             let bs = &*self.boot_services;
-            // Load manifests from /morpheus/isos/*.manifest on ESP
+            // Load manifests from /.iso/*.MFS on ESP
             if let Err(_) = crate::tui::distro_downloader::manifest_io::load_manifests_from_esp(
                 bs,
                 self.image_handle,

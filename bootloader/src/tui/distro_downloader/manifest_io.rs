@@ -1,17 +1,16 @@
 //! Manifest I/O operations
 //!
 //! Handles reading and writing ISO manifests to/from the ESP filesystem.
-//! Manifests are stored at `/morpheus/isos/<name>.manifest`.
+//! Manifests are stored at `/.iso/<CRC32-hash>.MFS`.
 //!
 //! # Storage Layout
 //!
 //! ```text
 //! ESP:/
-//! └── morpheus/
-//!     └── isos/
-//!         ├── ubuntu-24.04.iso.manifest
-//!         ├── fedora-40.iso.manifest
-//!         └── ...
+//! └── .iso/
+//!     ├── A1B2C3D4.MFS    (e.g., for tails-6.10.iso)
+//!     ├── E5F6A7B8.MFS    (e.g., for ubuntu-24.04.iso)
+//!     └── ...
 //! ```
 
 use crate::uefi::file_system::{
@@ -24,7 +23,7 @@ use alloc::vec::Vec;
 use morpheus_core::iso::{IsoManifest, IsoStorageManager, MAX_MANIFEST_SIZE};
 
 /// Manifest directory path on ESP (without leading backslash for open)
-const MANIFEST_DIR: &str = "\\morpheus\\isos";
+const MANIFEST_DIR: &str = "\\.iso";
 
 /// Maximum number of manifests to scan
 const MAX_MANIFESTS: usize = 16;
@@ -56,7 +55,7 @@ pub enum ManifestIoError {
 /// Persist a manifest to the ESP filesystem
 ///
 /// Creates the manifest directory if it doesn't exist, then writes
-/// the serialized manifest to `/morpheus/isos/<name>.manifest`.
+/// the serialized manifest to `/.iso/<CRC32-hash>.MFS`.
 ///
 /// # Arguments
 /// * `bs` - UEFI Boot Services
@@ -74,22 +73,18 @@ pub unsafe fn persist_manifest(
     // Get ESP root
     let root = get_esp_root(bs, image_handle)?;
 
-    // Ensure morpheus directory exists
-    let mut morpheus_path = [0u16; 32];
-    ascii_to_utf16("\\morpheus", &mut morpheus_path);
-    let _ = create_directory(root, &morpheus_path); // Ignore error if exists
+    // Ensure .iso directory exists on ESP root
+    let mut iso_path = [0u16; 32];
+    ascii_to_utf16("\\.iso", &mut iso_path);
+    let _ = create_directory(root, &iso_path); // Ignore error if exists
 
-    // Ensure isos subdirectory exists
-    let mut isos_path = [0u16; 32];
-    ascii_to_utf16("\\morpheus\\isos", &mut isos_path);
-    let _ = create_directory(root, &isos_path); // Ignore error if exists
-
-    // Build manifest filename: <name>.manifest
+    // Build manifest filename using 8.3 compatible hash: <CRC32>.MFS
+    // This matches the format used by network post-EBS code
     let name = manifest.name_str();
+    let manifest_filename = morpheus_core::fs::generate_8_3_manifest_name(name);
     let mut filename = String::new();
-    filename.push_str("\\morpheus\\isos\\");
-    filename.push_str(name);
-    filename.push_str(".manifest");
+    filename.push_str("\\.iso\\");
+    filename.push_str(&manifest_filename);
 
     // Convert to UTF-16
     let mut path_utf16 = [0u16; 128];
@@ -119,7 +114,7 @@ pub unsafe fn persist_manifest(
 
 /// Load all manifests from ESP and populate a storage manager
 ///
-/// Scans `/morpheus/isos/` for .manifest files and loads them.
+/// Scans `/.iso/` for .MFS manifest files and loads them.
 ///
 /// # Arguments
 /// * `bs` - UEFI Boot Services
@@ -139,7 +134,7 @@ pub unsafe fn load_manifests_from_esp(
 
     // Open manifest directory
     let mut dir_path = [0u16; 32];
-    ascii_to_utf16("\\morpheus\\isos", &mut dir_path);
+    ascii_to_utf16("\\.iso", &mut dir_path);
 
     let mut dir: *mut FileProtocol = core::ptr::null_mut();
     let status = ((*root).open)(root, &mut dir, dir_path.as_ptr(), EFI_FILE_MODE_READ, 0);
@@ -228,7 +223,7 @@ unsafe fn load_single_manifest(
 ) -> ManifestIoResult<IsoManifest> {
     // Build full path
     let mut full_path = String::new();
-    full_path.push_str("\\morpheus\\isos\\");
+    full_path.push_str("\\.iso\\");
     full_path.push_str(filename);
 
     // Convert to UTF-16
@@ -318,7 +313,7 @@ fn extract_filename_from_file_info(buffer: &[u8]) -> String {
 /// # Arguments
 /// * `bs` - UEFI Boot Services
 /// * `image_handle` - Current image handle  
-/// * `name` - ISO name (manifest filename will be `<name>.manifest`)
+/// * `name` - ISO name (manifest filename will be generated as CRC32 hash)
 pub unsafe fn delete_manifest(
     bs: &BootServices,
     image_handle: *mut (),
@@ -326,11 +321,11 @@ pub unsafe fn delete_manifest(
 ) -> ManifestIoResult<()> {
     let root = get_esp_root(bs, image_handle)?;
 
-    // Build manifest filename
+    // Build manifest filename using 8.3 compatible hash
+    let manifest_filename = morpheus_core::fs::generate_8_3_manifest_name(name);
     let mut filename = String::new();
-    filename.push_str("\\morpheus\\isos\\");
-    filename.push_str(name);
-    filename.push_str(".manifest");
+    filename.push_str("\\.iso\\");
+    filename.push_str(&manifest_filename);
 
     // Convert to UTF-16
     let mut path_utf16 = [0u16; 128];

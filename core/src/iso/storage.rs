@@ -33,7 +33,7 @@ use super::{DEFAULT_CHUNK_SIZE, FAT32_MAX_FILE_SIZE};
 pub const MAX_ISOS: usize = 8;
 
 /// Manifest directory path on ESP
-pub const MANIFEST_DIR: &str = "/morpheus/isos";
+pub const MANIFEST_DIR: &str = "/.iso";
 
 /// ISO storage entry (metadata only, no chunk data)
 #[derive(Clone)]

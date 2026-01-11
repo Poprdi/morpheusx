@@ -3,6 +3,7 @@
 mod context;
 mod directory;
 mod file_ops;
+pub mod filename;
 mod types;
 
 use super::Fat32Error;
