@@ -143,9 +143,7 @@ impl IsoManifest {
         }
 
         let info = ChunkInfo::new(partition_uuid, start_lba, end_lba, index as u8);
-        self.chunks
-            .add_chunk(info)
-            .ok_or(IsoError::IsoTooLarge)
+        self.chunks.add_chunk(info).ok_or(IsoError::IsoTooLarge)
     }
 
     /// Calculate required manifest size
@@ -226,7 +224,8 @@ impl IsoManifest {
         }
 
         // Verify CRC32
-        let stored_crc = u32::from_le_bytes([buffer[0x74], buffer[0x75], buffer[0x76], buffer[0x77]]);
+        let stored_crc =
+            u32::from_le_bytes([buffer[0x74], buffer[0x75], buffer[0x76], buffer[0x77]]);
         let computed_crc = crc32(&buffer[0..0x74]);
         if stored_crc != computed_crc {
             return Err(IsoError::DataCorruption);

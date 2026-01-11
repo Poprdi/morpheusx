@@ -130,8 +130,7 @@ impl Headers {
 
     /// Get Content-Length header as usize.
     pub fn content_length(&self) -> Option<usize> {
-        self.get("Content-Length")
-            .and_then(|v| v.parse().ok())
+        self.get("Content-Length").and_then(|v| v.parse().ok())
     }
 
     /// Set Content-Length header.
@@ -265,7 +264,7 @@ mod tests {
     fn test_get_case_insensitive() {
         let mut headers = Headers::new();
         headers.add("Content-Type", "text/plain");
-        
+
         assert_eq!(headers.get("content-type"), Some("text/plain"));
         assert_eq!(headers.get("CONTENT-TYPE"), Some("text/plain"));
         assert_eq!(headers.get("Content-TYPE"), Some("text/plain"));
@@ -275,7 +274,7 @@ mod tests {
     fn test_contains_case_insensitive() {
         let mut headers = Headers::new();
         headers.add("Host", "example.com");
-        
+
         assert!(headers.contains("host"));
         assert!(headers.contains("HOST"));
         assert!(headers.contains("Host"));
@@ -288,7 +287,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.add("Set-Cookie", "session=abc");
         headers.add("Set-Cookie", "user=123");
-        
+
         assert_eq!(headers.len(), 2);
         let cookies = headers.get_all("Set-Cookie");
         assert_eq!(cookies, vec!["session=abc", "user=123"]);
@@ -299,7 +298,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.set("Content-Type", "text/html");
         headers.set("Content-Type", "application/json");
-        
+
         assert_eq!(headers.len(), 1);
         assert_eq!(headers.get("Content-Type"), Some("application/json"));
     }
@@ -309,7 +308,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.set("content-type", "text/html");
         headers.set("Content-Type", "application/json");
-        
+
         assert_eq!(headers.len(), 1);
         assert_eq!(headers.get("content-type"), Some("application/json"));
     }
@@ -321,7 +320,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.add("Content-Type", "text/html");
         headers.add("Host", "example.com");
-        
+
         let removed = headers.remove("Content-Type");
         assert_eq!(removed, 1);
         assert_eq!(headers.len(), 1);
@@ -334,7 +333,7 @@ mod tests {
         headers.add("Set-Cookie", "a=1");
         headers.add("Set-Cookie", "b=2");
         headers.add("Host", "example.com");
-        
+
         let removed = headers.remove("Set-Cookie");
         assert_eq!(removed, 2);
         assert_eq!(headers.len(), 1);
@@ -344,7 +343,7 @@ mod tests {
     fn test_remove_nonexistent() {
         let mut headers = Headers::new();
         headers.add("Host", "example.com");
-        
+
         let removed = headers.remove("Content-Type");
         assert_eq!(removed, 0);
         assert_eq!(headers.len(), 1);
@@ -447,7 +446,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.add("Host", "example.com");
         headers.add("Accept", "*/*");
-        
+
         let names: Vec<&str> = headers.iter().map(|h| h.name.as_str()).collect();
         assert_eq!(names, vec!["Host", "Accept"]);
     }
@@ -457,7 +456,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.add("Host", "example.com");
         headers.add("Accept", "*/*");
-        
+
         headers.clear();
         assert!(headers.is_empty());
     }
@@ -469,7 +468,7 @@ mod tests {
         let mut headers = Headers::new();
         headers.add("Host", "example.com");
         headers.add("Accept", "*/*");
-        
+
         let wire = headers.to_wire_format();
         assert_eq!(wire, "Host: example.com\r\nAccept: */*\r\n");
     }
@@ -484,7 +483,7 @@ mod tests {
     fn test_from_wire_format() {
         let data = "Content-Type: text/html\r\nContent-Length: 123\r\n\r\n";
         let (headers, consumed) = Headers::from_wire_format(data);
-        
+
         assert_eq!(headers.len(), 2);
         assert_eq!(headers.get("Content-Type"), Some("text/html"));
         assert_eq!(headers.content_length(), Some(123));
@@ -495,7 +494,7 @@ mod tests {
     fn test_from_wire_format_trims_whitespace() {
         let data = "Content-Type:   text/html  \r\n\r\n";
         let (headers, _) = Headers::from_wire_format(data);
-        
+
         assert_eq!(headers.get("Content-Type"), Some("text/html"));
     }
 
@@ -503,7 +502,7 @@ mod tests {
     fn test_from_wire_format_ignores_invalid() {
         let data = "ValidHeader: value\r\nInvalidLineNoColon\r\n\r\n";
         let (headers, _) = Headers::from_wire_format(data);
-        
+
         assert_eq!(headers.len(), 1);
         assert_eq!(headers.get("ValidHeader"), Some("value"));
     }
@@ -517,9 +516,11 @@ mod tests {
         headers.set("User-Agent", "MorpheusX/1.0");
         headers.set("Accept", "*/*");
         headers.set("Connection", "close");
-        
+
         assert_eq!(headers.len(), 4);
-        assert!(headers.to_wire_format().contains("Host: api.example.com\r\n"));
+        assert!(headers
+            .to_wire_format()
+            .contains("Host: api.example.com\r\n"));
     }
 
     #[test]
@@ -531,11 +532,11 @@ mod tests {
             "Connection: close\r\n",
             "\r\n"
         );
-        
+
         // Skip the status line
         let headers_start = data.find("\r\n").unwrap() + 2;
         let (headers, _) = Headers::from_wire_format(&data[headers_start..]);
-        
+
         assert_eq!(headers.content_type(), Some("application/octet-stream"));
         assert_eq!(headers.content_length(), Some(1048576));
         assert_eq!(headers.connection(), Some("close"));

@@ -38,19 +38,14 @@ impl BufferPool {
     /// - `cpu_base` must point to valid DMA-capable memory
     /// - `bus_base` must be the corresponding device-visible address
     /// - Memory must be at least `buffer_size * count` bytes
-    pub unsafe fn new(
-        cpu_base: *mut u8,
-        bus_base: u64,
-        buffer_size: usize,
-        count: usize,
-    ) -> Self {
+    pub unsafe fn new(cpu_base: *mut u8, bus_base: u64, buffer_size: usize, count: usize) -> Self {
         assert!(count <= MAX_POOL_SIZE, "Pool size exceeds maximum");
         assert!(buffer_size > 0, "Buffer size must be positive");
-        
+
         // Initialize buffers array with None
         let mut buffers: [Option<DmaBuffer>; MAX_POOL_SIZE] = Default::default();
         let mut free_list = [0u16; MAX_POOL_SIZE];
-        
+
         // Create buffers
         for i in 0..count {
             let cpu_ptr = cpu_base.add(i * buffer_size);
@@ -58,7 +53,7 @@ impl BufferPool {
             buffers[i] = Some(DmaBuffer::new(cpu_ptr, bus_addr, buffer_size, i as u16));
             free_list[i] = i as u16;
         }
-        
+
         Self {
             buffers,
             free_list,
@@ -67,7 +62,7 @@ impl BufferPool {
             buffer_size,
         }
     }
-    
+
     /// Allocate a buffer from the pool.
     ///
     /// Returns `None` if pool is exhausted.
@@ -75,17 +70,19 @@ impl BufferPool {
         if self.free_count == 0 {
             return None;
         }
-        
+
         self.free_count -= 1;
         let idx = self.free_list[self.free_count] as usize;
-        
+
         let buf = self.buffers[idx].as_mut()?;
         debug_assert!(buf.is_free(), "Allocated buffer must be free");
-        unsafe { buf.mark_allocated(); }
-        
+        unsafe {
+            buf.mark_allocated();
+        }
+
         Some(buf)
     }
-    
+
     /// Return a buffer to the pool.
     ///
     /// # Arguments
@@ -93,16 +90,18 @@ impl BufferPool {
     pub fn free(&mut self, index: u16) {
         let idx = index as usize;
         assert!(idx < self.total_count, "Invalid buffer index");
-        
+
         if let Some(buf) = self.buffers[idx].as_mut() {
             debug_assert!(buf.is_driver_owned(), "Can only free driver-owned buffers");
-            unsafe { buf.mark_free(); }
-            
+            unsafe {
+                buf.mark_free();
+            }
+
             self.free_list[self.free_count] = index;
             self.free_count += 1;
         }
     }
-    
+
     /// Get mutable reference to buffer by index.
     ///
     /// # Panics
@@ -114,7 +113,7 @@ impl BufferPool {
         }
         self.buffers[idx].as_mut()
     }
-    
+
     /// Get reference to buffer by index.
     pub fn get(&self, index: u16) -> Option<&DmaBuffer> {
         let idx = index as usize;
@@ -123,42 +122,42 @@ impl BufferPool {
         }
         self.buffers[idx].as_ref()
     }
-    
+
     /// Get number of available (free) buffers.
     pub fn available(&self) -> usize {
         self.free_count
     }
-    
+
     /// Get total number of buffers in pool.
     pub fn total(&self) -> usize {
         self.total_count
     }
-    
+
     /// Get number of buffers currently in use.
     pub fn in_use(&self) -> usize {
         self.total_count - self.free_count
     }
-    
+
     /// Check if pool is empty (no free buffers).
     pub fn is_empty(&self) -> bool {
         self.free_count == 0
     }
-    
+
     /// Check if pool is full (all buffers free).
     pub fn is_full(&self) -> bool {
         self.free_count == self.total_count
     }
-    
+
     /// Get buffer size.
     pub fn buffer_size(&self) -> usize {
         self.buffer_size
     }
-    
+
     /// Iterate over all buffers (for debugging).
     pub fn iter(&self) -> impl Iterator<Item = &DmaBuffer> {
         self.buffers.iter().filter_map(|b| b.as_ref())
     }
-    
+
     /// Iterate over all buffers mutably.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut DmaBuffer> {
         self.buffers.iter_mut().filter_map(|b| b.as_mut())

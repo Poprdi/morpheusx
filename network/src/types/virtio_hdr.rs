@@ -28,7 +28,7 @@ pub struct VirtioNetHdr {
 impl VirtioNetHdr {
     /// Header size in bytes.
     pub const SIZE: usize = 12;
-    
+
     /// Create a zeroed header (correct for all our transmits).
     pub const fn zeroed() -> Self {
         Self {
@@ -41,15 +41,10 @@ impl VirtioNetHdr {
             num_buffers: 0,
         }
     }
-    
+
     /// Get header as byte slice.
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const _ as *const u8,
-                Self::SIZE
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, Self::SIZE) }
     }
 }
 

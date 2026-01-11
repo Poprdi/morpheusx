@@ -65,10 +65,10 @@ mod writer;
 pub use adapter::{ChunkedBlockIo, ChunkedReader, VirtualBlockIo};
 pub use chunk::{ChunkInfo, ChunkSet, MAX_CHUNKS};
 pub use error::IsoError;
-pub use iso9660_bridge::{IsoBlockIoAdapter, ChunkedIso};
+pub use iso9660_bridge::{ChunkedIso, IsoBlockIoAdapter};
 pub use manifest::{IsoManifest, MANIFEST_MAGIC, MAX_MANIFEST_SIZE};
 pub use reader::{ChunkReader, IsoReadContext};
-pub use storage::{IsoStorageManager, IsoEntry, PartitionRequest, MAX_ISOS, MANIFEST_DIR};
+pub use storage::{IsoEntry, IsoStorageManager, PartitionRequest, MANIFEST_DIR, MAX_ISOS};
 pub use writer::{ChunkWriter, WriterState};
 
 /// Maximum file size that FAT32 supports (4GB - 1 byte)

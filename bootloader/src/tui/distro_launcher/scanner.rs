@@ -1,10 +1,10 @@
 use super::entry::BootEntry;
 use super::iso_boot::IsoScanner;
-use crate::uefi::file_system::{FileProtocol, open_file_read, get_loaded_image};
+use crate::uefi::file_system::{get_loaded_image, open_file_read, FileProtocol};
 use crate::BootServices;
-use alloc::vec::Vec;
-use alloc::string::{String, ToString};
 use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use morpheus_core::iso::IsoStorageManager;
 
 const BOOT_ENTRIES_PATH: &str = "\\loader\\entries";
@@ -83,7 +83,7 @@ impl EntryScanner {
 
         // Create storage manager and load persisted manifests from ESP
         let mut storage = IsoStorageManager::new(esp_lba, disk_lba);
-        
+
         unsafe {
             let bs = &*self.boot_services;
             // Load manifests from /morpheus/isos/*.manifest on ESP
@@ -116,9 +116,7 @@ impl EntryScanner {
             ));
         }
 
-        morpheus_core::logger::log(
-            format!("Found {} chunked ISOs", entries.len()).leak(),
-        );
+        morpheus_core::logger::log(format!("Found {} chunked ISOs", entries.len()).leak());
 
         entries
     }
@@ -160,15 +158,12 @@ impl EntryScanner {
     unsafe fn get_esp_root(&self) -> Result<*mut FileProtocol, ()> {
         let loaded_image = get_loaded_image(&*self.boot_services, self.image_handle)?;
         let device_handle = (*loaded_image).device_handle;
-        
+
         let mut file_system: *mut () = core::ptr::null_mut();
         let guid = crate::uefi::file_system::SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
-        
-        let status = ((*self.boot_services).handle_protocol)(
-            device_handle,
-            &guid,
-            &mut file_system,
-        );
+
+        let status =
+            ((*self.boot_services).handle_protocol)(device_handle, &guid, &mut file_system);
 
         if status != 0 {
             return Err(());
@@ -176,7 +171,7 @@ impl EntryScanner {
 
         let fs_proto = file_system as *mut crate::uefi::file_system::SimpleFileSystemProtocol;
         let mut root: *mut FileProtocol = core::ptr::null_mut();
-        
+
         let status = ((*fs_proto).open_volume)(fs_proto, &mut root);
         if status != 0 {
             return Err(());
@@ -188,7 +183,7 @@ impl EntryScanner {
     unsafe fn scan_kernels(&self, root: *mut FileProtocol) -> Result<Vec<BootEntry>, ()> {
         let mut entries = Vec::new();
         let kernel_dir_path = Self::str_to_utf16("\\kernels");
-        
+
         if let Ok(kernel_dir) = open_file_read(root, &kernel_dir_path) {
             entries.extend(self.enumerate_kernels(kernel_dir)?);
             ((*kernel_dir).close)(kernel_dir);
@@ -200,11 +195,11 @@ impl EntryScanner {
     unsafe fn enumerate_kernels(&self, dir: *mut FileProtocol) -> Result<Vec<BootEntry>, ()> {
         let mut entries = Vec::new();
         let mut buffer = [0u8; 512];
-        
+
         loop {
             let mut buffer_size = buffer.len();
             let status = ((*dir).read)(dir, &mut buffer_size, buffer.as_mut_ptr());
-            
+
             if status != 0 || buffer_size == 0 {
                 break;
             }
@@ -225,22 +220,21 @@ impl EntryScanner {
 
         // Check if it's a directory (attribute bit 4)
         let attr = u64::from_le_bytes([
-            data[72], data[73], data[74], data[75],
-            data[76], data[77], data[78], data[79],
+            data[72], data[73], data[74], data[75], data[76], data[77], data[78], data[79],
         ]);
         if attr & 0x10 != 0 {
             return None;
         }
 
         let filename = Self::extract_filename(data)?;
-        
+
         if !filename.starts_with("vmlinuz") {
             return None;
         }
 
         let kernel_path = alloc::format!("\\kernels\\{}", filename);
         let distro_name = Self::extract_distro_name(&filename);
-        
+
         let initrd_path = Self::guess_initrd_path(&filename);
         let cmdline = Self::generate_cmdline(&distro_name);
 
@@ -262,14 +256,14 @@ impl EntryScanner {
         // offset 56: ModificationTime (16 bytes)
         // offset 72: Attribute (8 bytes)
         // offset 80: FileName[] (CHAR16, null-terminated)
-        
+
         if data.len() < 82 {
             return None;
         }
 
         let mut name = String::new();
         let mut i = 80;
-        
+
         while i + 1 < data.len() {
             let ch = u16::from_le_bytes([data[i], data[i + 1]]);
             if ch == 0 {
@@ -334,14 +328,15 @@ impl EntryScanner {
     unsafe fn scan_loader_entries(&self, root: *mut FileProtocol) -> Result<Vec<BootEntry>, ()> {
         let mut entries = Vec::new();
         let entries_path = Self::str_to_utf16(BOOT_ENTRIES_PATH);
-        
+
         if let Ok(entries_dir) = open_file_read(root, &entries_path) {
             let mut buffer = [0u8; 512];
-            
+
             loop {
                 let mut buffer_size = buffer.len();
-                let status = ((*entries_dir).read)(entries_dir, &mut buffer_size, buffer.as_mut_ptr());
-                
+                let status =
+                    ((*entries_dir).read)(entries_dir, &mut buffer_size, buffer.as_mut_ptr());
+
                 if status != 0 || buffer_size == 0 {
                     break;
                 }
@@ -355,7 +350,7 @@ impl EntryScanner {
                     }
                 }
             }
-            
+
             ((*entries_dir).close)(entries_dir);
         }
 
@@ -365,18 +360,18 @@ impl EntryScanner {
     unsafe fn parse_conf_file(&self, root: *mut FileProtocol, path: &str) -> Result<BootEntry, ()> {
         let path_utf16 = Self::str_to_utf16(path);
         let file = open_file_read(root, &path_utf16).map_err(|_| ())?;
-        
+
         let mut buffer = [0u8; MAX_FILE_SIZE];
         let mut size = MAX_FILE_SIZE;
         let status = ((*file).read)(file, &mut size, buffer.as_mut_ptr());
         ((*file).close)(file);
-        
+
         if status != 0 {
             return Err(());
         }
 
         let content = core::str::from_utf8(&buffer[..size]).map_err(|_| ())?;
-        
+
         let mut title = String::new();
         let mut linux = String::new();
         let mut initrd = None;

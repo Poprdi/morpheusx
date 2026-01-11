@@ -28,6 +28,7 @@ on:
   workflow_call:
     inputs:
       debug:
+        type: string
         description: "Enable debug output when called as a reusable workflow"
         required: false
         default: "false"

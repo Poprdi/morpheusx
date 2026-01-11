@@ -22,13 +22,13 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §5.6
 
-use core::net::Ipv4Addr;
 use alloc::string::{String, ToString};
+use core::net::Ipv4Addr;
 
-use super::{StepResult, StateError, TscTimestamp, Progress};
-use super::dhcp::{DhcpState, DhcpConfig, DhcpError};
+use super::dhcp::{DhcpConfig, DhcpError, DhcpState};
 use super::http::{HttpDownloadState, HttpError, HttpProgress, HttpResponseInfo};
 use super::tcp::TcpSocketState;
+use super::{Progress, StateError, StepResult, TscTimestamp};
 use crate::url::Url;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -113,19 +113,19 @@ impl DownloadConfig {
             sector_size: 512,
         }
     }
-    
+
     /// Set expected SHA-256 hash for verification.
     pub fn with_hash(mut self, hash: [u8; 32]) -> Self {
         self.expected_hash = Some(hash);
         self
     }
-    
+
     /// Set maximum allowed file size.
     pub fn with_max_size(mut self, max_size: usize) -> Self {
         self.max_size = Some(max_size);
         self
     }
-    
+
     /// Set target disk location.
     pub fn with_disk_location(mut self, start_sector: u64, sector_size: usize) -> Self {
         self.disk_start_sector = start_sector;
@@ -228,10 +228,8 @@ pub struct DownloadResult {
 #[derive(Debug)]
 pub enum IsoDownloadState {
     /// Initial state with configuration.
-    Init {
-        config: DownloadConfig,
-    },
-    
+    Init { config: DownloadConfig },
+
     /// Waiting for DHCP to obtain network configuration.
     WaitingForNetwork {
         /// DHCP state machine
@@ -239,7 +237,7 @@ pub enum IsoDownloadState {
         /// Download configuration
         config: DownloadConfig,
     },
-    
+
     /// Network ready, downloading ISO.
     Downloading {
         /// HTTP download state machine
@@ -255,7 +253,7 @@ pub enum IsoDownloadState {
         /// Total bytes written to disk
         bytes_written: usize,
     },
-    
+
     /// Download complete, verifying checksum (if hash provided).
     Verifying {
         /// Download result so far
@@ -267,16 +265,12 @@ pub enum IsoDownloadState {
         /// When verification started
         start_tsc: TscTimestamp,
     },
-    
+
     /// Download and verification complete.
-    Done {
-        result: DownloadResult,
-    },
-    
+    Done { result: DownloadResult },
+
     /// Download failed.
-    Failed {
-        error: DownloadError,
-    },
+    Failed { error: DownloadError },
 }
 
 impl IsoDownloadState {
@@ -284,21 +278,24 @@ impl IsoDownloadState {
     pub fn new(config: DownloadConfig) -> Self {
         IsoDownloadState::Init { config }
     }
-    
+
     /// Start the download.
     ///
     /// If already have network config, skip DHCP.
     /// Otherwise, start DHCP first.
     pub fn start(&mut self, existing_network: Option<DhcpConfig>, now_tsc: u64) {
         if let IsoDownloadState::Init { config } = self {
-            let config = core::mem::replace(config, DownloadConfig::new(Url {
-                scheme: crate::url::parser::Scheme::Http,
-                host: String::new(),
-                port: None,
-                path: String::new(),
-                query: None,
-            }));
-            
+            let config = core::mem::replace(
+                config,
+                DownloadConfig::new(Url {
+                    scheme: crate::url::parser::Scheme::Http,
+                    host: String::new(),
+                    port: None,
+                    path: String::new(),
+                    query: None,
+                }),
+            );
+
             if let Some(network_config) = existing_network {
                 // Already have network, start HTTP download
                 match HttpDownloadState::new(config.url.clone()) {
@@ -327,7 +324,7 @@ impl IsoDownloadState {
             }
         }
     }
-    
+
     /// Step the state machine.
     ///
     /// # Arguments
@@ -358,16 +355,19 @@ impl IsoDownloadState {
         http_recv_timeout: u64,
     ) -> StepResult {
         // Take ownership for state transitions
-        let current = core::mem::replace(self, IsoDownloadState::Init {
-            config: DownloadConfig::new(Url {
-                scheme: crate::url::parser::Scheme::Http,
-                host: String::new(),
-                port: None,
-                path: String::new(),
-                query: None,
-            }),
-        });
-        
+        let current = core::mem::replace(
+            self,
+            IsoDownloadState::Init {
+                config: DownloadConfig::new(Url {
+                    scheme: crate::url::parser::Scheme::Http,
+                    host: String::new(),
+                    port: None,
+                    path: String::new(),
+                    query: None,
+                }),
+            },
+        );
+
         let (new_state, result) = self.step_inner(
             current,
             dhcp_event,
@@ -383,11 +383,11 @@ impl IsoDownloadState {
             http_send_timeout,
             http_recv_timeout,
         );
-        
+
         *self = new_state;
         result
     }
-    
+
     /// Internal step implementation.
     #[allow(clippy::too_many_arguments)]
     fn step_inner(
@@ -411,54 +411,63 @@ impl IsoDownloadState {
                 // Not started yet
                 (IsoDownloadState::Init { config }, StepResult::Pending)
             }
-            
+
             IsoDownloadState::WaitingForNetwork { mut dhcp, config } => {
                 // Step DHCP state machine
                 // Convert Option<Result<DhcpConfig, ()>> to Option<DhcpConfig>
                 let dhcp_config = dhcp_event.and_then(|r| r.ok());
                 let result = dhcp.step(dhcp_config, now_tsc, dhcp_timeout);
-                
+
                 match result {
                     StepResult::Done => {
                         // Network ready, start HTTP download
                         let network_config = dhcp.config().unwrap().clone();
-                        
+
                         match HttpDownloadState::new(config.url.clone()) {
                             Ok(mut http) => {
                                 http.start(now_tsc);
-                                (IsoDownloadState::Downloading {
-                                    http,
-                                    network_config,
-                                    config,
-                                    disk_position: 0,
-                                    pending_write: 0,
-                                    bytes_written: 0,
-                                }, StepResult::Pending)
+                                (
+                                    IsoDownloadState::Downloading {
+                                        http,
+                                        network_config,
+                                        config,
+                                        disk_position: 0,
+                                        pending_write: 0,
+                                        bytes_written: 0,
+                                    },
+                                    StepResult::Pending,
+                                )
                             }
-                            Err(e) => {
-                                (IsoDownloadState::Failed {
+                            Err(e) => (
+                                IsoDownloadState::Failed {
                                     error: DownloadError::HttpError(e),
-                                }, StepResult::Failed)
-                            }
+                                },
+                                StepResult::Failed,
+                            ),
                         }
                     }
-                    StepResult::Pending => {
-                        (IsoDownloadState::WaitingForNetwork { dhcp, config }, StepResult::Pending)
-                    }
-                    StepResult::Timeout => {
-                        (IsoDownloadState::Failed {
+                    StepResult::Pending => (
+                        IsoDownloadState::WaitingForNetwork { dhcp, config },
+                        StepResult::Pending,
+                    ),
+                    StepResult::Timeout => (
+                        IsoDownloadState::Failed {
                             error: DownloadError::NetworkError(DhcpError::Timeout),
-                        }, StepResult::Timeout)
-                    }
+                        },
+                        StepResult::Timeout,
+                    ),
                     StepResult::Failed => {
                         let error = dhcp.error().unwrap_or(DhcpError::Timeout);
-                        (IsoDownloadState::Failed {
-                            error: DownloadError::NetworkError(error),
-                        }, StepResult::Failed)
+                        (
+                            IsoDownloadState::Failed {
+                                error: DownloadError::NetworkError(error),
+                            },
+                            StepResult::Failed,
+                        )
                     }
                 }
             }
-            
+
             IsoDownloadState::Downloading {
                 mut http,
                 network_config,
@@ -476,22 +485,31 @@ impl IsoDownloadState {
                             disk_position += (written / config.sector_size) as u64;
                         }
                         Err(()) => {
-                            return (IsoDownloadState::Failed {
-                                error: DownloadError::DiskWriteError,
-                            }, StepResult::Failed);
+                            return (
+                                IsoDownloadState::Failed {
+                                    error: DownloadError::DiskWriteError,
+                                },
+                                StepResult::Failed,
+                            );
                         }
                     }
                 }
-                
+
                 // Check max size before proceeding
-                if let (Some(max_size), Some(content_length)) = (config.max_size, http.response_info().and_then(|r| r.content_length)) {
+                if let (Some(max_size), Some(content_length)) = (
+                    config.max_size,
+                    http.response_info().and_then(|r| r.content_length),
+                ) {
                     if content_length > max_size {
-                        return (IsoDownloadState::Failed {
-                            error: DownloadError::IsoTooLarge,
-                        }, StepResult::Failed);
+                        return (
+                            IsoDownloadState::Failed {
+                                error: DownloadError::IsoTooLarge,
+                            },
+                            StepResult::Failed,
+                        );
                     }
                 }
-                
+
                 // Step HTTP state machine
                 let result = http.step(
                     dns_result,
@@ -504,7 +522,7 @@ impl IsoDownloadState {
                     http_send_timeout,
                     http_recv_timeout,
                 );
-                
+
                 // Track pending writes from received data
                 if let Some(data) = recv_data {
                     if http.response_info().is_some() {
@@ -512,59 +530,72 @@ impl IsoDownloadState {
                         pending_write += data.len();
                     }
                 }
-                
+
                 match result {
                     StepResult::Done => {
                         // HTTP complete
                         let (response_info, total_bytes) = http.result().unwrap();
                         let sectors_written = (bytes_written / config.sector_size) as u64;
-                        
+
                         let download_result = DownloadResult {
                             total_bytes,
                             response_info: response_info.clone(),
                             disk_start_sector: config.disk_start_sector,
                             sectors_written,
                         };
-                        
+
                         // Check if we need verification
                         if let Some(expected_hash) = config.expected_hash {
-                            (IsoDownloadState::Verifying {
-                                result: download_result,
-                                expected_hash,
-                                verified_bytes: 0,
-                                start_tsc: TscTimestamp::new(now_tsc),
-                            }, StepResult::Pending)
+                            (
+                                IsoDownloadState::Verifying {
+                                    result: download_result,
+                                    expected_hash,
+                                    verified_bytes: 0,
+                                    start_tsc: TscTimestamp::new(now_tsc),
+                                },
+                                StepResult::Pending,
+                            )
                         } else {
-                            (IsoDownloadState::Done {
-                                result: download_result,
-                            }, StepResult::Done)
+                            (
+                                IsoDownloadState::Done {
+                                    result: download_result,
+                                },
+                                StepResult::Done,
+                            )
                         }
                     }
-                    StepResult::Pending => {
-                        (IsoDownloadState::Downloading {
+                    StepResult::Pending => (
+                        IsoDownloadState::Downloading {
                             http,
                             network_config,
                             config,
                             disk_position,
                             pending_write,
                             bytes_written,
-                        }, StepResult::Pending)
-                    }
+                        },
+                        StepResult::Pending,
+                    ),
                     StepResult::Timeout => {
                         let error = http.error().cloned().unwrap_or(HttpError::ReceiveTimeout);
-                        (IsoDownloadState::Failed {
-                            error: DownloadError::HttpError(error),
-                        }, StepResult::Timeout)
+                        (
+                            IsoDownloadState::Failed {
+                                error: DownloadError::HttpError(error),
+                            },
+                            StepResult::Timeout,
+                        )
                     }
                     StepResult::Failed => {
                         let error = http.error().cloned().unwrap_or(HttpError::ConnectionClosed);
-                        (IsoDownloadState::Failed {
-                            error: DownloadError::HttpError(error),
-                        }, StepResult::Failed)
+                        (
+                            IsoDownloadState::Failed {
+                                error: DownloadError::HttpError(error),
+                            },
+                            StepResult::Failed,
+                        )
                     }
                 }
             }
-            
+
             IsoDownloadState::Verifying {
                 result,
                 expected_hash,
@@ -574,15 +605,15 @@ impl IsoDownloadState {
                 // TODO: Implement actual hash verification
                 // For now, skip verification (always pass)
                 // In real implementation, would read sectors back and compute SHA-256
-                
+
                 // Just mark as done for now
                 (IsoDownloadState::Done { result }, StepResult::Done)
             }
-            
+
             IsoDownloadState::Done { result } => {
                 (IsoDownloadState::Done { result }, StepResult::Done)
             }
-            
+
             IsoDownloadState::Failed { error } => {
                 let result = match &error {
                     DownloadError::NetworkError(DhcpError::Timeout)
@@ -594,7 +625,7 @@ impl IsoDownloadState {
             }
         }
     }
-    
+
     /// Get current progress.
     pub fn progress(&self) -> DownloadProgress {
         match self {
@@ -610,7 +641,11 @@ impl IsoDownloadState {
                 total_bytes: None,
                 bytes_written: 0,
             },
-            IsoDownloadState::Downloading { http, bytes_written, .. } => {
+            IsoDownloadState::Downloading {
+                http,
+                bytes_written,
+                ..
+            } => {
                 let http_progress = http.progress();
                 DownloadProgress {
                     phase: if http_progress.is_some() {
@@ -623,7 +658,11 @@ impl IsoDownloadState {
                     bytes_written: *bytes_written,
                 }
             }
-            IsoDownloadState::Verifying { result, verified_bytes, .. } => DownloadProgress {
+            IsoDownloadState::Verifying {
+                result,
+                verified_bytes,
+                ..
+            } => DownloadProgress {
                 phase: DownloadPhase::Verifying,
                 bytes_downloaded: result.total_bytes,
                 total_bytes: Some(result.total_bytes),
@@ -643,7 +682,7 @@ impl IsoDownloadState {
             },
         }
     }
-    
+
     /// Get download result (if complete).
     pub fn result(&self) -> Option<&DownloadResult> {
         if let IsoDownloadState::Done { result } = self {
@@ -652,7 +691,7 @@ impl IsoDownloadState {
             None
         }
     }
-    
+
     /// Get error (if failed).
     pub fn error(&self) -> Option<&DownloadError> {
         if let IsoDownloadState::Failed { error } = self {
@@ -661,7 +700,7 @@ impl IsoDownloadState {
             None
         }
     }
-    
+
     /// Get network config (if obtained).
     pub fn network_config(&self) -> Option<&DhcpConfig> {
         match self {
@@ -669,7 +708,7 @@ impl IsoDownloadState {
             _ => None,
         }
     }
-    
+
     /// Get HTTP socket handle (if downloading).
     pub fn socket_handle(&self) -> Option<usize> {
         if let IsoDownloadState::Downloading { http, .. } = self {
@@ -678,7 +717,7 @@ impl IsoDownloadState {
             None
         }
     }
-    
+
     /// Get bytes to send (if in send phase).
     pub fn pending_send(&self) -> Option<(&[u8], usize)> {
         if let IsoDownloadState::Downloading { http, .. } = self {
@@ -687,19 +726,25 @@ impl IsoDownloadState {
             None
         }
     }
-    
+
     /// Mark bytes as sent.
     pub fn mark_sent(&mut self, bytes: usize) {
         if let IsoDownloadState::Downloading { http, .. } = self {
             http.mark_sent(bytes);
         }
     }
-    
+
     /// Get data pending disk write.
     ///
     /// Returns (current_sector, bytes_pending)
     pub fn pending_disk_write(&self) -> Option<(u64, usize)> {
-        if let IsoDownloadState::Downloading { config, disk_position, pending_write, .. } = self {
+        if let IsoDownloadState::Downloading {
+            config,
+            disk_position,
+            pending_write,
+            ..
+        } = self
+        {
             if *pending_write > 0 {
                 Some((config.disk_start_sector + disk_position, *pending_write))
             } else {
@@ -709,22 +754,25 @@ impl IsoDownloadState {
             None
         }
     }
-    
+
     /// Check if download is complete (success or failure).
     pub fn is_terminal(&self) -> bool {
-        matches!(self, IsoDownloadState::Done { .. } | IsoDownloadState::Failed { .. })
+        matches!(
+            self,
+            IsoDownloadState::Done { .. } | IsoDownloadState::Failed { .. }
+        )
     }
-    
+
     /// Check if download is in progress.
     pub fn is_active(&self) -> bool {
         !matches!(
             self,
             IsoDownloadState::Init { .. }
-            | IsoDownloadState::Done { .. }
-            | IsoDownloadState::Failed { .. }
+                | IsoDownloadState::Done { .. }
+                | IsoDownloadState::Failed { .. }
         )
     }
-    
+
     /// Cancel the download.
     pub fn cancel(&mut self) {
         *self = IsoDownloadState::Failed {

@@ -107,31 +107,46 @@ impl ErrorLogEntry {
         let prefix = if self.is_error { "ERR " } else { "" };
         let stage = self.stage.name();
         let msg = self.message();
-        
+
         let mut pos = 0;
-        
+
         // Write "[STAGE] " prefix
-        if pos < buf.len() { buf[pos] = b'['; pos += 1; }
+        if pos < buf.len() {
+            buf[pos] = b'[';
+            pos += 1;
+        }
         for &b in prefix.as_bytes() {
-            if pos >= buf.len() { break; }
+            if pos >= buf.len() {
+                break;
+            }
             buf[pos] = b;
             pos += 1;
         }
         for &b in stage.as_bytes() {
-            if pos >= buf.len() { break; }
+            if pos >= buf.len() {
+                break;
+            }
             buf[pos] = b;
             pos += 1;
         }
-        if pos < buf.len() { buf[pos] = b']'; pos += 1; }
-        if pos < buf.len() { buf[pos] = b' '; pos += 1; }
-        
+        if pos < buf.len() {
+            buf[pos] = b']';
+            pos += 1;
+        }
+        if pos < buf.len() {
+            buf[pos] = b' ';
+            pos += 1;
+        }
+
         // Write message
         for &b in msg.as_bytes() {
-            if pos >= buf.len() { break; }
+            if pos >= buf.len() {
+                break;
+            }
             buf[pos] = b;
             pos += 1;
         }
-        
+
         pos
     }
 }
@@ -177,21 +192,21 @@ pub fn debug_log(stage: InitStage, msg: &str) {
 
 fn log_internal(stage: InitStage, msg: &str, is_error: bool) {
     let write_idx = WRITE_POS.fetch_add(1, Ordering::SeqCst) % ERROR_RING_SIZE;
-    
+
     let mut entry = ErrorLogEntry::empty();
     entry.stage = stage;
     entry.is_error = is_error;
-    
+
     let bytes = msg.as_bytes();
     let copy_len = bytes.len().min(ERROR_MSG_LEN);
     entry.msg[..copy_len].copy_from_slice(&bytes[..copy_len]);
     entry.len = copy_len as u8;
-    
+
     // SAFETY: Single writer assumed (bootloader is single-threaded during init)
     unsafe {
         ERROR_RING[write_idx] = entry;
     }
-    
+
     TOTAL_WRITTEN.fetch_add(1, Ordering::SeqCst);
 }
 
@@ -201,12 +216,12 @@ fn log_internal(stage: InitStage, msg: &str, is_error: bool) {
 pub fn error_log_pop() -> Option<ErrorLogEntry> {
     let total = TOTAL_WRITTEN.load(Ordering::SeqCst);
     let read = READ_POS.load(Ordering::SeqCst);
-    
+
     // Check if there are unread entries
     if read >= total {
         return None;
     }
-    
+
     // If we've overflowed, skip to newest available
     let available = total.saturating_sub(read);
     if available > ERROR_RING_SIZE {
@@ -214,9 +229,9 @@ pub fn error_log_pop() -> Option<ErrorLogEntry> {
         let skip = available - ERROR_RING_SIZE;
         READ_POS.fetch_add(skip, Ordering::SeqCst);
     }
-    
+
     let read_idx = READ_POS.fetch_add(1, Ordering::SeqCst) % ERROR_RING_SIZE;
-    
+
     // SAFETY: Single reader assumed
     let entry = unsafe { ERROR_RING[read_idx].clone() };
     Some(entry)
@@ -226,7 +241,7 @@ pub fn error_log_pop() -> Option<ErrorLogEntry> {
 pub fn error_log_available() -> usize {
     let total = TOTAL_WRITTEN.load(Ordering::SeqCst);
     let read = READ_POS.load(Ordering::SeqCst);
-    
+
     let available = total.saturating_sub(read);
     available.min(ERROR_RING_SIZE)
 }
@@ -264,9 +279,9 @@ mod tests {
     fn test_error_log_basic() {
         error_log_clear();
         error_log(InitStage::DmaPool, "Test error");
-        
+
         assert_eq!(error_log_available(), 1);
-        
+
         let entry = error_log_pop().unwrap();
         assert_eq!(entry.stage, InitStage::DmaPool);
         assert!(entry.is_error);
@@ -288,11 +303,11 @@ mod tests {
         let msg = b"No devices found";
         entry.msg[..msg.len()].copy_from_slice(msg);
         entry.len = msg.len() as u8;
-        
+
         let mut buf = [0u8; 128];
         let len = entry.format(&mut buf);
         let formatted = core::str::from_utf8(&buf[..len]).unwrap();
-        
+
         assert_eq!(formatted, "[ERR PCI] No devices found");
     }
 }

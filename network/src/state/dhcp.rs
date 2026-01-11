@@ -33,8 +33,8 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §5.3
 
+use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
-use super::{StepResult, StateError, TscTimestamp};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DHCP ERROR
@@ -88,13 +88,13 @@ pub struct DhcpConfig {
 pub enum DhcpState {
     /// Initial state - not started
     Init,
-    
+
     /// DHCP discovery in progress
     Discovering {
         /// When discovery started
         start_tsc: TscTimestamp,
     },
-    
+
     /// IP address obtained
     Bound {
         /// DHCP configuration
@@ -102,7 +102,7 @@ pub enum DhcpState {
         /// When bound
         bound_tsc: TscTimestamp,
     },
-    
+
     /// DHCP failed
     Failed {
         /// Error details
@@ -115,7 +115,7 @@ impl DhcpState {
     pub fn new() -> Self {
         DhcpState::Init
     }
-    
+
     /// Start DHCP discovery.
     ///
     /// # Arguments
@@ -125,7 +125,7 @@ impl DhcpState {
             start_tsc: TscTimestamp::new(now_tsc),
         };
     }
-    
+
     /// Step the state machine.
     ///
     /// # Arguments
@@ -149,14 +149,16 @@ impl DhcpState {
                 // Not started yet
                 StepResult::Pending
             }
-            
+
             DhcpState::Discovering { start_tsc } => {
                 // Check timeout first
                 if start_tsc.is_expired(now_tsc, timeout_ticks) {
-                    *self = DhcpState::Failed { error: DhcpError::Timeout };
+                    *self = DhcpState::Failed {
+                        error: DhcpError::Timeout,
+                    };
                     return StepResult::Timeout;
                 }
-                
+
                 // Check if smoltcp has configured an IP
                 if let Some(config) = dhcp_config {
                     *self = DhcpState::Bound {
@@ -165,13 +167,13 @@ impl DhcpState {
                     };
                     return StepResult::Done;
                 }
-                
+
                 // Still discovering
                 StepResult::Pending
             }
-            
+
             DhcpState::Bound { .. } => StepResult::Done,
-            
+
             DhcpState::Failed { error } => {
                 if *error == DhcpError::Timeout {
                     StepResult::Timeout
@@ -181,7 +183,7 @@ impl DhcpState {
             }
         }
     }
-    
+
     /// Get DHCP configuration (if bound).
     pub fn config(&self) -> Option<&DhcpConfig> {
         match self {
@@ -189,22 +191,22 @@ impl DhcpState {
             _ => None,
         }
     }
-    
+
     /// Get assigned IP address (if bound).
     pub fn ip(&self) -> Option<Ipv4Addr> {
         self.config().map(|c| c.ip)
     }
-    
+
     /// Get gateway (if bound and available).
     pub fn gateway(&self) -> Option<Ipv4Addr> {
         self.config().and_then(|c| c.gateway)
     }
-    
+
     /// Get DNS server (if bound and available).
     pub fn dns(&self) -> Option<Ipv4Addr> {
         self.config().and_then(|c| c.dns)
     }
-    
+
     /// Get error (if failed).
     pub fn error(&self) -> Option<DhcpError> {
         match self {
@@ -212,17 +214,17 @@ impl DhcpState {
             _ => None,
         }
     }
-    
+
     /// Check if DHCP is complete (bound or failed).
     pub fn is_terminal(&self) -> bool {
         matches!(self, DhcpState::Bound { .. } | DhcpState::Failed { .. })
     }
-    
+
     /// Check if successfully bound.
     pub fn is_bound(&self) -> bool {
         matches!(self, DhcpState::Bound { .. })
     }
-    
+
     /// Check if still discovering.
     pub fn is_discovering(&self) -> bool {
         matches!(self, DhcpState::Discovering { .. })

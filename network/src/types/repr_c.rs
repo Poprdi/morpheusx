@@ -123,7 +123,7 @@ impl VirtqDesc {
     pub const FLAG_WRITE: u16 = 2;
     /// INDIRECT flag - buffer contains indirect descriptor table.
     pub const FLAG_INDIRECT: u16 = 4;
-    
+
     pub const fn new() -> Self {
         Self {
             addr: 0,

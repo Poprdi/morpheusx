@@ -8,7 +8,7 @@
 //! `morpheus_core::fs::fat32_ops::write_file()` directly in the bootloader installer.
 //!
 //! This module exists as a future abstraction for multi-layer persistence:
-//! - Layer 0: ESP/FAT32 (primary bootable storage) 
+//! - Layer 0: ESP/FAT32 (primary bootable storage)
 //! - Layer 1: TPM (cryptographic attestation)
 //! - Layer 2: CMOS/NVRAM (emergency recovery stub)
 //! - Layer 3: HVRAM (hypervisor-hidden persistence)

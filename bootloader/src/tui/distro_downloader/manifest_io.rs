@@ -14,14 +14,14 @@
 //!         └── ...
 //! ```
 
-use alloc::vec::Vec;
-use alloc::string::String;
-use morpheus_core::iso::{IsoManifest, IsoStorageManager, MAX_MANIFEST_SIZE};
-use crate::BootServices;
 use crate::uefi::file_system::{
-    FileProtocol, create_directory, create_file, write_file, flush_file, close_file,
-    open_file_read, EFI_FILE_MODE_READ, ascii_to_utf16, get_loaded_image,
+    ascii_to_utf16, close_file, create_directory, create_file, flush_file, get_loaded_image,
+    open_file_read, write_file, FileProtocol, EFI_FILE_MODE_READ,
 };
+use crate::BootServices;
+use alloc::string::String;
+use alloc::vec::Vec;
+use morpheus_core::iso::{IsoManifest, IsoStorageManager, MAX_MANIFEST_SIZE};
 
 /// Manifest directory path on ESP (without leading backslash for open)
 const MANIFEST_DIR: &str = "\\morpheus\\isos";
@@ -100,7 +100,9 @@ pub unsafe fn persist_manifest(
 
     // Serialize manifest
     let mut buffer = [0u8; MAX_MANIFEST_SIZE];
-    let size = manifest.serialize(&mut buffer).map_err(|_| ManifestIoError::SerializeFailed)?;
+    let size = manifest
+        .serialize(&mut buffer)
+        .map_err(|_| ManifestIoError::SerializeFailed)?;
 
     // Write to file
     write_file(file, &buffer[..size]).map_err(|_| ManifestIoError::WriteFailed)?;
@@ -140,13 +142,7 @@ pub unsafe fn load_manifests_from_esp(
     ascii_to_utf16("\\morpheus\\isos", &mut dir_path);
 
     let mut dir: *mut FileProtocol = core::ptr::null_mut();
-    let status = ((*root).open)(
-        root,
-        &mut dir,
-        dir_path.as_ptr(),
-        EFI_FILE_MODE_READ,
-        0,
-    );
+    let status = ((*root).open)(root, &mut dir, dir_path.as_ptr(), EFI_FILE_MODE_READ, 0);
 
     if status != 0 || dir.is_null() {
         let _ = close_file(root);
@@ -177,8 +173,14 @@ pub unsafe fn load_manifests_from_esp(
         }
 
         let attributes = u64::from_le_bytes([
-            buffer[0x38], buffer[0x39], buffer[0x3A], buffer[0x3B],
-            buffer[0x3C], buffer[0x3D], buffer[0x3E], buffer[0x3F],
+            buffer[0x38],
+            buffer[0x39],
+            buffer[0x3A],
+            buffer[0x3B],
+            buffer[0x3C],
+            buffer[0x3D],
+            buffer[0x3E],
+            buffer[0x3F],
         ]);
 
         // Skip directories (attribute bit 4 = EFI_FILE_DIRECTORY)
@@ -188,16 +190,16 @@ pub unsafe fn load_manifests_from_esp(
 
         // Get filename from UTF-16 at offset 0x50
         let filename = extract_filename_from_file_info(&buffer);
-        
+
         // Debug: log each file found
         morpheus_core::logger::log(alloc::format!("Found file: {}", filename).leak());
-        
+
         // Check if it ends with .MFS or .manifest (support both, case insensitive)
         let filename_upper = filename.to_uppercase();
         if !filename_upper.ends_with(".MFS") && !filename_upper.ends_with(".MANIFEST") {
             continue;
         }
-        
+
         morpheus_core::logger::log(alloc::format!("Loading manifest: {}", filename).leak());
 
         // Load this manifest
@@ -235,13 +237,7 @@ unsafe fn load_single_manifest(
 
     // Open file
     let mut file: *mut FileProtocol = core::ptr::null_mut();
-    let status = ((*root).open)(
-        root,
-        &mut file,
-        path_utf16.as_ptr(),
-        EFI_FILE_MODE_READ,
-        0,
-    );
+    let status = ((*root).open)(root, &mut file, path_utf16.as_ptr(), EFI_FILE_MODE_READ, 0);
 
     if status != 0 || file.is_null() {
         return Err(ManifestIoError::NotFound);
@@ -268,8 +264,8 @@ unsafe fn get_esp_root(
     image_handle: *mut (),
 ) -> ManifestIoResult<*mut FileProtocol> {
     // Get loaded image to find device
-    let loaded_image = get_loaded_image(bs, image_handle)
-        .map_err(|_| ManifestIoError::EspAccessFailed)?;
+    let loaded_image =
+        get_loaded_image(bs, image_handle).map_err(|_| ManifestIoError::EspAccessFailed)?;
 
     let device_handle = (*loaded_image).device_handle;
 

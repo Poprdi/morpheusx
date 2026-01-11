@@ -25,16 +25,16 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §5.5
 
-use core::net::Ipv4Addr;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use alloc::vec;
+use alloc::vec::Vec;
+use core::net::Ipv4Addr;
 
-use super::{StepResult, StateError, TscTimestamp};
-use super::dns::{DnsResolveState, DnsError, resolve_without_dns};
-use super::tcp::{TcpConnState, TcpSocketState, TcpError};
-use crate::url::Url;
+use super::dns::{resolve_without_dns, DnsError, DnsResolveState};
+use super::tcp::{TcpConnState, TcpError, TcpSocketState};
+use super::{StateError, StepResult, TscTimestamp};
 use crate::http::Headers;
+use crate::url::Url;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HTTP ERROR
@@ -118,7 +118,7 @@ impl HttpResponseInfo {
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status_code)
     }
-    
+
     /// Check if response indicates redirect (3xx).
     pub fn is_redirect(&self) -> bool {
         (300..400).contains(&self.status_code)
@@ -166,83 +166,77 @@ struct HeaderAccumulator {
 
 impl HeaderAccumulator {
     const DEFAULT_MAX_SIZE: usize = 16 * 1024; // 16KB max headers
-    
+
     fn new() -> Self {
         Self {
             buffer: Vec::with_capacity(4096),
             max_size: Self::DEFAULT_MAX_SIZE,
         }
     }
-    
+
     /// Append data to buffer.
     /// Returns true if headers complete (\r\n\r\n found).
     fn append(&mut self, data: &[u8]) -> Result<bool, HttpError> {
         if self.buffer.len() + data.len() > self.max_size {
             return Err(HttpError::ResponseTooLarge);
         }
-        
+
         self.buffer.extend_from_slice(data);
-        
+
         // Check for end of headers: \r\n\r\n
         Ok(self.find_header_end().is_some())
     }
-    
+
     /// Find position of header/body separator.
     fn find_header_end(&self) -> Option<usize> {
-        self.buffer
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
+        self.buffer.windows(4).position(|w| w == b"\r\n\r\n")
     }
-    
+
     /// Parse headers and return body data.
     fn parse(&self) -> Result<(HttpResponseInfo, &[u8]), HttpError> {
-        let sep_pos = self.find_header_end()
-            .ok_or(HttpError::InvalidResponse)?;
-        
+        let sep_pos = self.find_header_end().ok_or(HttpError::InvalidResponse)?;
+
         let header_bytes = &self.buffer[..sep_pos];
         let body_bytes = &self.buffer[sep_pos + 4..];
-        
+
         let info = Self::parse_headers(header_bytes)?;
-        
+
         Ok((info, body_bytes))
     }
-    
+
     /// Parse HTTP response headers.
     fn parse_headers(data: &[u8]) -> Result<HttpResponseInfo, HttpError> {
-        let header_str = core::str::from_utf8(data)
-            .map_err(|_| HttpError::InvalidResponse)?;
-        
+        let header_str = core::str::from_utf8(data).map_err(|_| HttpError::InvalidResponse)?;
+
         let mut lines = header_str.lines();
-        
+
         // Parse status line: "HTTP/1.1 200 OK"
-        let status_line = lines.next()
-            .ok_or(HttpError::InvalidResponse)?;
-        
+        let status_line = lines.next().ok_or(HttpError::InvalidResponse)?;
+
         let (status_code, reason) = Self::parse_status_line(status_line)?;
-        
+
         // Parse headers
         let mut headers = Headers::new();
         for line in lines {
             if line.is_empty() {
                 break;
             }
-            
+
             if let Some((name, value)) = line.split_once(':') {
                 headers.set(name.trim(), value.trim());
             }
         }
-        
+
         // Extract key header values
-        let content_length = headers.get("Content-Length")
-            .and_then(|v| v.parse().ok());
-        
-        let content_type = headers.get("Content-Type")
-            .map(|v| v.to_string());
-        
-        let chunked = headers.get("Transfer-Encoding")
+        let content_length = headers.get("Content-Length").and_then(|v| v.parse().ok());
+
+        let content_type = headers.get("Content-Type").map(|v| v.to_string());
+
+        let chunked = headers
+            .get("Transfer-Encoding")
             .map(|v| v.eq_ignore_ascii_case("chunked"))
             .unwrap_or(false);
-        
+
         Ok(HttpResponseInfo {
             status_code,
             reason,
@@ -252,22 +246,19 @@ impl HeaderAccumulator {
             headers,
         })
     }
-    
+
     /// Parse HTTP status line.
     fn parse_status_line(line: &str) -> Result<(u16, String), HttpError> {
         // "HTTP/1.1 200 OK"
         let mut parts = line.split_whitespace();
-        
+
         // HTTP version
-        let _version = parts.next()
-            .ok_or(HttpError::InvalidResponse)?;
-        
+        let _version = parts.next().ok_or(HttpError::InvalidResponse)?;
+
         // Status code
-        let code_str = parts.next()
-            .ok_or(HttpError::InvalidResponse)?;
-        let code = code_str.parse()
-            .map_err(|_| HttpError::InvalidResponse)?;
-        
+        let code_str = parts.next().ok_or(HttpError::InvalidResponse)?;
+        let code = code_str.parse().map_err(|_| HttpError::InvalidResponse)?;
+
         // Reason phrase (rest of line)
         let reason: String = parts.collect::<Vec<_>>().join(" ");
         let reason = if reason.is_empty() {
@@ -275,10 +266,10 @@ impl HeaderAccumulator {
         } else {
             reason
         };
-        
+
         Ok((code, reason))
     }
-    
+
     /// Default reason phrase for status code.
     fn default_reason(code: u16) -> &'static str {
         match code {
@@ -312,10 +303,8 @@ impl HeaderAccumulator {
 #[derive(Debug)]
 pub enum HttpDownloadState {
     /// Initial state with target URL.
-    Init {
-        url: Url,
-    },
-    
+    Init { url: Url },
+
     /// Resolving hostname to IP address.
     Resolving {
         /// DNS state machine
@@ -329,7 +318,7 @@ pub enum HttpDownloadState {
         /// Query string (if any)
         query: Option<String>,
     },
-    
+
     /// Connecting to server.
     Connecting {
         /// TCP state machine
@@ -343,7 +332,7 @@ pub enum HttpDownloadState {
         /// Request path + query
         request_uri: String,
     },
-    
+
     /// Sending HTTP request.
     SendingRequest {
         /// Socket handle
@@ -355,7 +344,7 @@ pub enum HttpDownloadState {
         /// When send started
         start_tsc: TscTimestamp,
     },
-    
+
     /// Receiving HTTP response headers.
     ReceivingHeaders {
         /// Socket handle
@@ -365,7 +354,7 @@ pub enum HttpDownloadState {
         /// When receive started
         start_tsc: TscTimestamp,
     },
-    
+
     /// Receiving HTTP response body.
     ReceivingBody {
         /// Socket handle
@@ -379,7 +368,7 @@ pub enum HttpDownloadState {
         /// Last activity time (for idle timeout)
         last_activity_tsc: TscTimestamp,
     },
-    
+
     /// Download complete.
     Done {
         /// Response info
@@ -387,7 +376,7 @@ pub enum HttpDownloadState {
         /// Total bytes received (body only)
         total_bytes: usize,
     },
-    
+
     /// Download failed.
     Failed {
         /// Error details
@@ -402,10 +391,10 @@ impl HttpDownloadState {
         if url.is_https() {
             return Err(HttpError::HttpsNotSupported);
         }
-        
+
         Ok(HttpDownloadState::Init { url })
     }
-    
+
     /// Start the download.
     ///
     /// Transitions from Init to Resolving (or Connecting if IP known).
@@ -417,7 +406,7 @@ impl HttpDownloadState {
             let query = url.query.clone();
             let host_header = url.host_header();
             let request_uri = url.request_uri();
-            
+
             // Try to resolve without DNS first (IP or hardcoded)
             if let Some(ip) = resolve_without_dns(&host) {
                 // Skip DNS, go directly to connecting
@@ -444,7 +433,7 @@ impl HttpDownloadState {
             }
         }
     }
-    
+
     /// Step the state machine.
     ///
     /// # Arguments
@@ -478,16 +467,19 @@ impl HttpDownloadState {
         http_recv_timeout: u64,
     ) -> StepResult {
         // Take ownership for state transitions
-        let current = core::mem::replace(self, HttpDownloadState::Init {
-            url: Url {
-                scheme: crate::url::parser::Scheme::Http,
-                host: String::new(),
-                port: None,
-                path: String::new(),
-                query: None,
+        let current = core::mem::replace(
+            self,
+            HttpDownloadState::Init {
+                url: Url {
+                    scheme: crate::url::parser::Scheme::Http,
+                    host: String::new(),
+                    port: None,
+                    path: String::new(),
+                    query: None,
+                },
             },
-        });
-        
+        );
+
         let (new_state, result) = self.step_inner(
             current,
             dns_result,
@@ -500,11 +492,11 @@ impl HttpDownloadState {
             http_send_timeout,
             http_recv_timeout,
         );
-        
+
         *self = new_state;
         result
     }
-    
+
     /// Internal step implementation.
     fn step_inner(
         &self,
@@ -524,11 +516,17 @@ impl HttpDownloadState {
                 // Not started yet
                 (HttpDownloadState::Init { url }, StepResult::Pending)
             }
-            
-            HttpDownloadState::Resolving { mut dns, host, port, path, query } => {
+
+            HttpDownloadState::Resolving {
+                mut dns,
+                host,
+                port,
+                path,
+                query,
+            } => {
                 // Step DNS state machine
                 let result = dns.step(dns_result, now_tsc, dns_timeout);
-                
+
                 match result {
                     StepResult::Done => {
                         // DNS resolved, start TCP connection
@@ -542,115 +540,176 @@ impl HttpDownloadState {
                             Some(q) => alloc::format!("{}?{}", path, q),
                             None => path.clone(),
                         };
-                        
-                        (HttpDownloadState::Connecting {
-                            tcp: TcpConnState::new(),
-                            ip,
+
+                        (
+                            HttpDownloadState::Connecting {
+                                tcp: TcpConnState::new(),
+                                ip,
+                                port,
+                                host_header,
+                                request_uri,
+                            },
+                            StepResult::Pending,
+                        )
+                    }
+                    StepResult::Pending => (
+                        HttpDownloadState::Resolving {
+                            dns,
+                            host,
                             port,
-                            host_header,
-                            request_uri,
-                        }, StepResult::Pending)
-                    }
-                    StepResult::Pending => {
-                        (HttpDownloadState::Resolving { dns, host, port, path, query }, StepResult::Pending)
-                    }
-                    StepResult::Timeout => {
-                        (HttpDownloadState::Failed { 
-                            error: HttpError::DnsError(DnsError::Timeout)
-                        }, StepResult::Timeout)
-                    }
+                            path,
+                            query,
+                        },
+                        StepResult::Pending,
+                    ),
+                    StepResult::Timeout => (
+                        HttpDownloadState::Failed {
+                            error: HttpError::DnsError(DnsError::Timeout),
+                        },
+                        StepResult::Timeout,
+                    ),
                     StepResult::Failed => {
                         let error = dns.error().unwrap_or(DnsError::QueryFailed);
-                        (HttpDownloadState::Failed { 
-                            error: HttpError::DnsError(error)
-                        }, StepResult::Failed)
+                        (
+                            HttpDownloadState::Failed {
+                                error: HttpError::DnsError(error),
+                            },
+                            StepResult::Failed,
+                        )
                     }
                 }
             }
-            
-            HttpDownloadState::Connecting { mut tcp, ip, port, host_header, request_uri } => {
+
+            HttpDownloadState::Connecting {
+                mut tcp,
+                ip,
+                port,
+                host_header,
+                request_uri,
+            } => {
                 // Step TCP state machine
                 let result = tcp.step(tcp_state, now_tsc, tcp_timeout);
-                
+
                 match result {
                     StepResult::Done => {
                         // Connected! Build HTTP request
                         let socket_handle = tcp.socket_handle().unwrap();
                         let request = Self::build_request(&host_header, &request_uri);
-                        
-                        (HttpDownloadState::SendingRequest {
-                            socket_handle,
-                            request,
-                            sent: 0,
-                            start_tsc: TscTimestamp::new(now_tsc),
-                        }, StepResult::Pending)
+
+                        (
+                            HttpDownloadState::SendingRequest {
+                                socket_handle,
+                                request,
+                                sent: 0,
+                                start_tsc: TscTimestamp::new(now_tsc),
+                            },
+                            StepResult::Pending,
+                        )
                     }
-                    StepResult::Pending => {
-                        (HttpDownloadState::Connecting { tcp, ip, port, host_header, request_uri }, StepResult::Pending)
-                    }
-                    StepResult::Timeout => {
-                        (HttpDownloadState::Failed { 
-                            error: HttpError::TcpError(TcpError::ConnectTimeout)
-                        }, StepResult::Timeout)
-                    }
+                    StepResult::Pending => (
+                        HttpDownloadState::Connecting {
+                            tcp,
+                            ip,
+                            port,
+                            host_header,
+                            request_uri,
+                        },
+                        StepResult::Pending,
+                    ),
+                    StepResult::Timeout => (
+                        HttpDownloadState::Failed {
+                            error: HttpError::TcpError(TcpError::ConnectTimeout),
+                        },
+                        StepResult::Timeout,
+                    ),
                     StepResult::Failed => {
                         let error = tcp.error().unwrap_or(TcpError::ConnectionRefused);
-                        (HttpDownloadState::Failed { 
-                            error: HttpError::TcpError(error)
-                        }, StepResult::Failed)
+                        (
+                            HttpDownloadState::Failed {
+                                error: HttpError::TcpError(error),
+                            },
+                            StepResult::Failed,
+                        )
                     }
                 }
             }
-            
-            HttpDownloadState::SendingRequest { socket_handle, request, sent, start_tsc } => {
+
+            HttpDownloadState::SendingRequest {
+                socket_handle,
+                request,
+                sent,
+                start_tsc,
+            } => {
                 // Check timeout
                 if start_tsc.is_expired(now_tsc, http_send_timeout) {
-                    return (HttpDownloadState::Failed { 
-                        error: HttpError::SendTimeout 
-                    }, StepResult::Timeout);
+                    return (
+                        HttpDownloadState::Failed {
+                            error: HttpError::SendTimeout,
+                        },
+                        StepResult::Timeout,
+                    );
                 }
-                
+
                 // Check connection status
                 if tcp_state == TcpSocketState::Closed {
-                    return (HttpDownloadState::Failed {
-                        error: HttpError::ConnectionClosed
-                    }, StepResult::Failed);
+                    return (
+                        HttpDownloadState::Failed {
+                            error: HttpError::ConnectionClosed,
+                        },
+                        StepResult::Failed,
+                    );
                 }
-                
+
                 // Sending is tracked externally, we just track progress
                 if sent >= request.len() {
                     // Request fully sent, start receiving
-                    (HttpDownloadState::ReceivingHeaders {
-                        socket_handle,
-                        accumulator: HeaderAccumulator::new(),
-                        start_tsc: TscTimestamp::new(now_tsc),
-                    }, StepResult::Pending)
+                    (
+                        HttpDownloadState::ReceivingHeaders {
+                            socket_handle,
+                            accumulator: HeaderAccumulator::new(),
+                            start_tsc: TscTimestamp::new(now_tsc),
+                        },
+                        StepResult::Pending,
+                    )
                 } else {
                     // Still sending
-                    (HttpDownloadState::SendingRequest {
-                        socket_handle,
-                        request,
-                        sent,
-                        start_tsc,
-                    }, StepResult::Pending)
+                    (
+                        HttpDownloadState::SendingRequest {
+                            socket_handle,
+                            request,
+                            sent,
+                            start_tsc,
+                        },
+                        StepResult::Pending,
+                    )
                 }
             }
-            
-            HttpDownloadState::ReceivingHeaders { socket_handle, mut accumulator, start_tsc } => {
+
+            HttpDownloadState::ReceivingHeaders {
+                socket_handle,
+                mut accumulator,
+                start_tsc,
+            } => {
                 // Check timeout
                 if start_tsc.is_expired(now_tsc, http_recv_timeout) {
-                    return (HttpDownloadState::Failed { 
-                        error: HttpError::ReceiveTimeout 
-                    }, StepResult::Timeout);
+                    return (
+                        HttpDownloadState::Failed {
+                            error: HttpError::ReceiveTimeout,
+                        },
+                        StepResult::Timeout,
+                    );
                 }
-                
+
                 // Check connection status
                 if tcp_state == TcpSocketState::Closed {
-                    return (HttpDownloadState::Failed {
-                        error: HttpError::ConnectionClosed
-                    }, StepResult::Failed);
+                    return (
+                        HttpDownloadState::Failed {
+                            error: HttpError::ConnectionClosed,
+                        },
+                        StepResult::Failed,
+                    );
                 }
-                
+
                 // Process received data
                 if let Some(data) = recv_data {
                     match accumulator.append(data) {
@@ -660,25 +719,31 @@ impl HttpDownloadState {
                                 Ok((response_info, body_data)) => {
                                     // Check for HTTP error status
                                     if !response_info.is_success() && !response_info.is_redirect() {
-                                        return (HttpDownloadState::Failed {
-                                            error: HttpError::HttpStatus {
-                                                code: response_info.status_code,
-                                                reason: response_info.reason.clone(),
-                                            }
-                                        }, StepResult::Failed);
+                                        return (
+                                            HttpDownloadState::Failed {
+                                                error: HttpError::HttpStatus {
+                                                    code: response_info.status_code,
+                                                    reason: response_info.reason.clone(),
+                                                },
+                                            },
+                                            StepResult::Failed,
+                                        );
                                     }
-                                    
+
                                     // Start body reception
                                     // Note: body_data may contain initial body bytes
                                     let initial_received = body_data.len();
-                                    
-                                    (HttpDownloadState::ReceivingBody {
-                                        socket_handle,
-                                        response_info,
-                                        received: initial_received,
-                                        start_tsc: TscTimestamp::new(now_tsc),
-                                        last_activity_tsc: TscTimestamp::new(now_tsc),
-                                    }, StepResult::Pending)
+
+                                    (
+                                        HttpDownloadState::ReceivingBody {
+                                            socket_handle,
+                                            response_info,
+                                            received: initial_received,
+                                            start_tsc: TscTimestamp::new(now_tsc),
+                                            last_activity_tsc: TscTimestamp::new(now_tsc),
+                                        },
+                                        StepResult::Pending,
+                                    )
                                 }
                                 Err(e) => {
                                     (HttpDownloadState::Failed { error: e }, StepResult::Failed)
@@ -687,26 +752,30 @@ impl HttpDownloadState {
                         }
                         Ok(false) => {
                             // Headers not complete yet
-                            (HttpDownloadState::ReceivingHeaders {
-                                socket_handle,
-                                accumulator,
-                                start_tsc,
-                            }, StepResult::Pending)
+                            (
+                                HttpDownloadState::ReceivingHeaders {
+                                    socket_handle,
+                                    accumulator,
+                                    start_tsc,
+                                },
+                                StepResult::Pending,
+                            )
                         }
-                        Err(e) => {
-                            (HttpDownloadState::Failed { error: e }, StepResult::Failed)
-                        }
+                        Err(e) => (HttpDownloadState::Failed { error: e }, StepResult::Failed),
                     }
                 } else {
                     // No data received yet
-                    (HttpDownloadState::ReceivingHeaders {
-                        socket_handle,
-                        accumulator,
-                        start_tsc,
-                    }, StepResult::Pending)
+                    (
+                        HttpDownloadState::ReceivingHeaders {
+                            socket_handle,
+                            accumulator,
+                            start_tsc,
+                        },
+                        StepResult::Pending,
+                    )
                 }
             }
-            
+
             HttpDownloadState::ReceivingBody {
                 socket_handle,
                 response_info,
@@ -716,68 +785,90 @@ impl HttpDownloadState {
             } => {
                 // Check for idle timeout (no data for too long)
                 if last_activity_tsc.is_expired(now_tsc, http_recv_timeout) {
-                    return (HttpDownloadState::Failed { 
-                        error: HttpError::ReceiveTimeout 
-                    }, StepResult::Timeout);
+                    return (
+                        HttpDownloadState::Failed {
+                            error: HttpError::ReceiveTimeout,
+                        },
+                        StepResult::Timeout,
+                    );
                 }
-                
+
                 // Check if complete based on Content-Length
                 if let Some(content_length) = response_info.content_length {
                     if received >= content_length {
-                        return (HttpDownloadState::Done {
-                            response_info,
-                            total_bytes: received,
-                        }, StepResult::Done);
+                        return (
+                            HttpDownloadState::Done {
+                                response_info,
+                                total_bytes: received,
+                            },
+                            StepResult::Done,
+                        );
                     }
                 }
-                
+
                 // Check connection status
                 if tcp_state == TcpSocketState::Closed {
                     // Connection closed - check if we're done
                     if response_info.content_length.is_none() {
                         // No Content-Length, connection close means done
-                        return (HttpDownloadState::Done {
-                            response_info,
-                            total_bytes: received,
-                        }, StepResult::Done);
+                        return (
+                            HttpDownloadState::Done {
+                                response_info,
+                                total_bytes: received,
+                            },
+                            StepResult::Done,
+                        );
                     } else {
                         // Had Content-Length but didn't receive it all
-                        return (HttpDownloadState::Failed {
-                            error: HttpError::ConnectionClosed
-                        }, StepResult::Failed);
+                        return (
+                            HttpDownloadState::Failed {
+                                error: HttpError::ConnectionClosed,
+                            },
+                            StepResult::Failed,
+                        );
                     }
                 }
-                
+
                 // Process received data
                 let new_received = if let Some(data) = recv_data {
                     received + data.len()
                 } else {
                     received
                 };
-                
+
                 let new_last_activity = if recv_data.is_some() {
                     TscTimestamp::new(now_tsc)
                 } else {
                     last_activity_tsc
                 };
-                
-                (HttpDownloadState::ReceivingBody {
-                    socket_handle,
+
+                (
+                    HttpDownloadState::ReceivingBody {
+                        socket_handle,
+                        response_info,
+                        received: new_received,
+                        start_tsc,
+                        last_activity_tsc: new_last_activity,
+                    },
+                    StepResult::Pending,
+                )
+            }
+
+            HttpDownloadState::Done {
+                response_info,
+                total_bytes,
+            } => (
+                HttpDownloadState::Done {
                     response_info,
-                    received: new_received,
-                    start_tsc,
-                    last_activity_tsc: new_last_activity,
-                }, StepResult::Pending)
-            }
-            
-            HttpDownloadState::Done { response_info, total_bytes } => {
-                (HttpDownloadState::Done { response_info, total_bytes }, StepResult::Done)
-            }
-            
+                    total_bytes,
+                },
+                StepResult::Done,
+            ),
+
             HttpDownloadState::Failed { error } => {
                 let result = match &error {
-                    HttpError::SendTimeout 
-                    | HttpError::ReceiveTimeout 
+                    HttpError::SendTimeout
+                    | HttpError::ReceiveTimeout
                     | HttpError::DnsError(DnsError::Timeout)
                     | HttpError::TcpError(TcpError::ConnectTimeout)
                     | HttpError::TcpError(TcpError::CloseTimeout) => StepResult::Timeout,
@@ -787,7 +878,7 @@ impl HttpDownloadState {
             }
         }
     }
-    
+
     /// Build HTTP GET request.
     fn build_request(host: &str, request_uri: &str) -> Vec<u8> {
         // Build HTTP/1.1 GET request
@@ -801,10 +892,10 @@ impl HttpDownloadState {
             request_uri,
             host
         );
-        
+
         request.into_bytes()
     }
-    
+
     /// Get the request bytes to send (for SendingRequest state).
     pub fn request_bytes(&self) -> Option<(&[u8], usize)> {
         if let HttpDownloadState::SendingRequest { request, sent, .. } = self {
@@ -813,14 +904,14 @@ impl HttpDownloadState {
             None
         }
     }
-    
+
     /// Update bytes sent (for SendingRequest state).
     pub fn mark_sent(&mut self, additional: usize) {
         if let HttpDownloadState::SendingRequest { sent, .. } = self {
             *sent += additional;
         }
     }
-    
+
     /// Get socket handle (if connected).
     pub fn socket_handle(&self) -> Option<usize> {
         match self {
@@ -831,10 +922,15 @@ impl HttpDownloadState {
             _ => None,
         }
     }
-    
+
     /// Get download progress.
     pub fn progress(&self) -> Option<HttpProgress> {
-        if let HttpDownloadState::ReceivingBody { response_info, received, .. } = self {
+        if let HttpDownloadState::ReceivingBody {
+            response_info,
+            received,
+            ..
+        } = self
+        {
             Some(HttpProgress {
                 received: *received,
                 total: response_info.content_length,
@@ -843,7 +939,7 @@ impl HttpDownloadState {
             None
         }
     }
-    
+
     /// Get response info (if headers received).
     pub fn response_info(&self) -> Option<&HttpResponseInfo> {
         match self {
@@ -852,16 +948,20 @@ impl HttpDownloadState {
             _ => None,
         }
     }
-    
+
     /// Get result (if complete).
     pub fn result(&self) -> Option<(&HttpResponseInfo, usize)> {
-        if let HttpDownloadState::Done { response_info, total_bytes } = self {
+        if let HttpDownloadState::Done {
+            response_info,
+            total_bytes,
+        } = self
+        {
             Some((response_info, *total_bytes))
         } else {
             None
         }
     }
-    
+
     /// Get error (if failed).
     pub fn error(&self) -> Option<&HttpError> {
         if let HttpDownloadState::Failed { error } = self {
@@ -870,19 +970,22 @@ impl HttpDownloadState {
             None
         }
     }
-    
+
     /// Check if download is complete (success or failure).
     pub fn is_terminal(&self) -> bool {
-        matches!(self, HttpDownloadState::Done { .. } | HttpDownloadState::Failed { .. })
+        matches!(
+            self,
+            HttpDownloadState::Done { .. } | HttpDownloadState::Failed { .. }
+        )
     }
-    
+
     /// Check if download is in progress.
     pub fn is_active(&self) -> bool {
         !matches!(
             self,
             HttpDownloadState::Init { .. }
-            | HttpDownloadState::Done { .. }
-            | HttpDownloadState::Failed { .. }
+                | HttpDownloadState::Done { .. }
+                | HttpDownloadState::Failed { .. }
         )
     }
 }

@@ -10,64 +10,64 @@ pub type Result<T> = core::result::Result<T, Iso9660Error>;
 pub enum Iso9660Error {
     /// I/O error reading from block device
     IoError,
-    
+
     /// Invalid volume descriptor signature
     InvalidSignature,
-    
+
     /// Unsupported ISO9660 version
     UnsupportedVersion,
-    
+
     /// Corrupted directory record
     InvalidDirectoryRecord,
-    
+
     /// File or directory not found
     NotFound,
-    
+
     /// Path is too long
     PathTooLong,
-    
+
     /// Invalid path format
     InvalidPath,
-    
+
     /// File extent out of bounds
     ExtentOutOfBounds,
-    
+
     /// Invalid file flags
     InvalidFlags,
-    
+
     /// Invalid datetime format
     InvalidDatetime,
-    
+
     /// Invalid string encoding
     InvalidString,
-    
+
     /// Boot record not found
     NoBootRecord,
-    
+
     /// Invalid boot catalog
     InvalidBootCatalog,
-    
+
     /// No boot catalog found
     NoBootCatalog,
-    
+
     /// Invalid boot entry
     InvalidBootEntry,
-    
+
     /// Validation entry checksum failed
     ChecksumFailed,
-    
+
     /// Unsupported boot platform
     UnsupportedPlatform,
-    
+
     /// Rock Ridge extension error
     RockRidgeError,
-    
+
     /// Joliet extension error
     JolietError,
-    
+
     /// Read failed
     ReadFailed,
-    
+
     /// Internal error (should not occur)
     InternalError,
 }

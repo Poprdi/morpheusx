@@ -6,8 +6,8 @@
 //! NETWORK_IMPL_GUIDE.md §4.6
 
 use crate::dma::BufferPool;
-use crate::types::{VirtqueueState, VirtioNetHdr};
 use crate::driver::traits::TxError;
+use crate::types::{VirtioNetHdr, VirtqueueState};
 
 /// Maximum frame size including VirtIO header.
 pub const MAX_TX_FRAME_SIZE: usize = VirtioNetHdr::SIZE + 1514;
@@ -32,49 +32,53 @@ pub fn transmit(
     tx_pool: &mut BufferPool,
     frame: &[u8],
 ) -> Result<(), TxError> {
-    use crate::asm::drivers::virtio::{tx as asm_tx, notify};
-    
+    use crate::asm::drivers::virtio::{notify, tx as asm_tx};
+
     // Check frame size
     let total_len = VirtioNetHdr::SIZE + frame.len();
     if total_len > MAX_TX_FRAME_SIZE {
         return Err(TxError::FrameTooLarge);
     }
-    
+
     // Collect any pending completions first (reclaim buffers)
     collect_completions(tx_state, tx_pool);
-    
+
     // Allocate TX buffer
     let buf = tx_pool.alloc().ok_or(TxError::QueueFull)?;
     let buf_idx = buf.index();
-    
+
     // Write VirtIO header (12 bytes, all zeros)
     let hdr = VirtioNetHdr::zeroed();
     buf.as_mut_slice()[..VirtioNetHdr::SIZE].copy_from_slice(hdr.as_bytes());
-    
+
     // Copy frame after header
     buf.as_mut_slice()[VirtioNetHdr::SIZE..total_len].copy_from_slice(frame);
-    
+
     // Mark device-owned BEFORE submit
-    unsafe { buf.mark_device_owned(); }
-    
+    unsafe {
+        buf.mark_device_owned();
+    }
+
     // Submit via ASM (includes barriers)
     let success = asm_tx::submit(tx_state, buf_idx, total_len as u16);
-    
+
     if !success {
         // Queue was full (shouldn't happen after collect, but handle it)
         if let Some(buf) = tx_pool.get_mut(buf_idx) {
-            unsafe { buf.mark_driver_owned(); }
+            unsafe {
+                buf.mark_driver_owned();
+            }
         }
         tx_pool.free(buf_idx);
         return Err(TxError::QueueFull);
     }
-    
+
     // NOTE: Notification deferred to collect_completions() for batching throughput
     // The notify happens in Phase 5 after all TX submissions for this iteration
-    
+
     // *** DO NOT WAIT FOR COMPLETION ***
     // Completion collected in main loop Phase 5
-    
+
     Ok(())
 }
 
@@ -83,16 +87,13 @@ pub fn transmit(
 /// Call periodically (main loop Phase 5) to reclaim TX buffers.
 /// Also sends batched notification for any TX submissions since last call.
 #[cfg(target_arch = "x86_64")]
-pub fn collect_completions(
-    tx_state: &mut VirtqueueState,
-    tx_pool: &mut BufferPool,
-) {
-    use crate::asm::drivers::virtio::{tx as asm_tx, notify};
-    
+pub fn collect_completions(tx_state: &mut VirtqueueState, tx_pool: &mut BufferPool) {
+    use crate::asm::drivers::virtio::{notify, tx as asm_tx};
+
     // First, notify device of any pending TX submissions (batched)
     // This is safe to call even if no new submissions - device ignores redundant notifies
     notify::notify(tx_state);
-    
+
     // Then collect completions
     loop {
         let idx = asm_tx::poll_complete(tx_state);
@@ -100,7 +101,9 @@ pub fn collect_completions(
             Some(buf_idx) => {
                 // Return buffer to pool
                 if let Some(buf) = tx_pool.get_mut(buf_idx) {
-                    unsafe { buf.mark_driver_owned(); }
+                    unsafe {
+                        buf.mark_driver_owned();
+                    }
                     tx_pool.free(buf_idx);
                 }
             }
@@ -120,7 +123,4 @@ pub fn transmit(
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-pub fn collect_completions(
-    _tx_state: &mut VirtqueueState,
-    _tx_pool: &mut BufferPool,
-) {}
+pub fn collect_completions(_tx_state: &mut VirtqueueState, _tx_pool: &mut BufferPool) {}

@@ -9,19 +9,19 @@
 extern "win64" {
     /// Read 8-bit value from PCI config space.
     fn asm_pci_cfg_read8(bus: u8, device: u8, function: u8, offset: u8) -> u8;
-    
+
     /// Read 16-bit value from PCI config space.
     fn asm_pci_cfg_read16(bus: u8, device: u8, function: u8, offset: u8) -> u16;
-    
+
     /// Read 32-bit value from PCI config space.
     fn asm_pci_cfg_read32(bus: u8, device: u8, function: u8, offset: u8) -> u32;
-    
+
     /// Write 8-bit value to PCI config space.
     fn asm_pci_cfg_write8(bus: u8, device: u8, function: u8, offset: u8, value: u8);
-    
+
     /// Write 16-bit value to PCI config space.
     fn asm_pci_cfg_write16(bus: u8, device: u8, function: u8, offset: u8, value: u16);
-    
+
     /// Write 32-bit value to PCI config space.
     fn asm_pci_cfg_write32(bus: u8, device: u8, function: u8, offset: u8, value: u32);
 }
@@ -41,7 +41,11 @@ pub struct PciAddr {
 impl PciAddr {
     /// Create new PCI address.
     pub const fn new(bus: u8, device: u8, function: u8) -> Self {
-        Self { bus, device, function }
+        Self {
+            bus,
+            device,
+            function,
+        }
     }
 }
 

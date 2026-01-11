@@ -1,6 +1,6 @@
 use super::entry::BootEntry;
-use super::scanner::EntryScanner;
 use super::renderer::EntryRenderer;
+use super::scanner::EntryScanner;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::Screen;
@@ -14,13 +14,11 @@ pub struct DistroLauncher {
 impl DistroLauncher {
     pub fn new(boot_services: *const crate::BootServices, image_handle: *mut ()) -> Self {
         morpheus_core::logger::log("DistroLauncher::new() - scanning for boot entries");
-        
+
         let scanner = EntryScanner::new(boot_services, image_handle);
         let entries = scanner.scan_boot_entries();
 
-        morpheus_core::logger::log(
-            alloc::format!("Found {} boot entries", entries.len()).leak(),
-        );
+        morpheus_core::logger::log(alloc::format!("Found {} boot entries", entries.len()).leak());
 
         Self {
             entries,

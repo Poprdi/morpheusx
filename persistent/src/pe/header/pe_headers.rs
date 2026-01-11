@@ -1,11 +1,11 @@
 //! Main PeHeaders implementation with complex reconstruction logic
 
+use super::super::section::SectionTable;
+use super::super::{PeArch, PeError, PeResult};
 use super::coff_header::CoffHeader;
 use super::dos_header::DosHeader;
 use super::optional_header::OptionalHeader64;
 use super::utils::*;
-use super::super::section::SectionTable;
-use super::super::{PeArch, PeError, PeResult};
 
 extern crate alloc;
 

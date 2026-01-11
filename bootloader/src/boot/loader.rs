@@ -186,7 +186,7 @@ pub unsafe fn boot_linux_kernel(
 
             let ramdisk_start = initrd_ptr as u64;
             let ramdisk_end = ramdisk_start + initrd.len() as u64;
-            
+
             // Validate initrd address - these are critical errors, not warnings
             if ramdisk_start < INITRD_MIN_ADDR {
                 morpheus_core::logger::log(

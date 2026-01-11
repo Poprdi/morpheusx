@@ -14,16 +14,28 @@ impl FileFlags {
             not_final: byte & 0x80 != 0,
         }
     }
-    
+
     /// Convert to raw byte
     pub fn to_byte(&self) -> u8 {
         let mut byte = 0u8;
-        if self.hidden { byte |= 0x01; }
-        if self.directory { byte |= 0x02; }
-        if self.associated { byte |= 0x04; }
-        if self.extended_format { byte |= 0x08; }
-        if self.extended_permissions { byte |= 0x10; }
-        if self.not_final { byte |= 0x80; }
+        if self.hidden {
+            byte |= 0x01;
+        }
+        if self.directory {
+            byte |= 0x02;
+        }
+        if self.associated {
+            byte |= 0x04;
+        }
+        if self.extended_format {
+            byte |= 0x08;
+        }
+        if self.extended_permissions {
+            byte |= 0x10;
+        }
+        if self.not_final {
+            byte |= 0x80;
+        }
         byte
     }
 }

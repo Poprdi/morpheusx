@@ -1,6 +1,6 @@
-use core::ptr;
 use super::types::{MemoryError, MemoryMap, INITRD_MIN_ADDR};
 use crate::boot::{KernelImage, LinuxBootParams};
+use core::ptr;
 
 const PAGE_SIZE: usize = 4096;
 const EFI_ALLOCATE_ANY_PAGES: usize = 0;

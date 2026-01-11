@@ -6,16 +6,16 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §2.6, ARCHITECTURE_V3.md
 
-pub mod repr_c;
-pub mod virtio_hdr;
 pub mod ethernet;
+pub mod repr_c;
 pub mod result;
+pub mod virtio_hdr;
 
 // Re-exports
-pub use repr_c::{VirtqueueState, RxResult, VirtqDesc, DriverState, RxPollResult, TxPollResult};
-pub use virtio_hdr::{VirtioNetHdr, VIRTIO_NET_HDR_GSO_NONE};
-pub use ethernet::{MacAddress, EthernetHeader, ETH_ALEN, ETH_HLEN, ETH_MTU, ETH_FRAME_MAX};
+pub use ethernet::{EthernetHeader, MacAddress, ETH_ALEN, ETH_FRAME_MAX, ETH_HLEN, ETH_MTU};
+pub use repr_c::{DriverState, RxPollResult, RxResult, TxPollResult, VirtqDesc, VirtqueueState};
 pub use result::AsmResult;
+pub use virtio_hdr::{VirtioNetHdr, VIRTIO_NET_HDR_GSO_NONE};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HTTP Types

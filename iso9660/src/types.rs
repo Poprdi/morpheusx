@@ -37,25 +37,25 @@ pub enum VolumeDescriptorType {
 pub struct VolumeInfo {
     /// Volume identifier (32 chars)
     pub volume_id: [u8; 32],
-    
+
     /// Root directory extent location (LBA)
     pub root_extent_lba: u32,
-    
+
     /// Root directory extent length (bytes)
     pub root_extent_len: u32,
-    
+
     /// Logical block size (usually 2048)
     pub logical_block_size: u16,
-    
+
     /// Volume space size (total sectors)
     pub volume_space_size: u32,
-    
+
     /// El Torito boot catalog LBA (if present)
     pub boot_catalog_lba: Option<u32>,
-    
+
     /// Whether Joliet extensions are present
     pub has_joliet: bool,
-    
+
     /// Whether Rock Ridge extensions are present
     pub has_rock_ridge: bool,
 }
@@ -65,22 +65,22 @@ pub struct VolumeInfo {
 pub struct FileEntry {
     /// File identifier (name as UTF-8)
     pub name: alloc::string::String,
-    
+
     /// File size in bytes
     pub size: u64,
-    
+
     /// Extent location (LBA)
     pub extent_lba: u32,
-    
+
     /// Data length (bytes)
     pub data_length: u32,
-    
+
     /// File flags
     pub flags: FileFlags,
-    
+
     /// File unit size (interleaved files)
     pub file_unit_size: u8,
-    
+
     /// Interleave gap size
     pub interleave_gap: u8,
 }
@@ -90,19 +90,19 @@ pub struct FileEntry {
 pub struct FileFlags {
     /// Hidden file
     pub hidden: bool,
-    
+
     /// Directory (not a file)
     pub directory: bool,
-    
+
     /// Associated file
     pub associated: bool,
-    
+
     /// Extended attribute record format
     pub extended_format: bool,
-    
+
     /// Owner/group permissions in extended attributes
     pub extended_permissions: bool,
-    
+
     /// Not final directory record for this file
     pub not_final: bool,
 }
@@ -112,22 +112,22 @@ pub struct FileFlags {
 pub struct BootImage {
     /// Bootable flag
     pub bootable: bool,
-    
+
     /// Boot media type
     pub media_type: BootMediaType,
-    
+
     /// Load segment (x86)
     pub load_segment: u16,
-    
+
     /// System type
     pub system_type: u8,
-    
+
     /// Sector count
     pub sector_count: u16,
-    
+
     /// Virtual disk LBA
     pub load_rba: u32,
-    
+
     /// Platform ID
     pub platform: BootPlatform,
 }

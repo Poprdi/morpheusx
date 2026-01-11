@@ -8,23 +8,26 @@
 //! - Render initial state
 //! - Only re-render after handling input (no clear in render loop)
 
-use alloc::vec::Vec;
 use alloc::format;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 
-use super::catalog::{DistroEntry, CATEGORIES, get_by_category};
-use super::state::{DownloadState, DownloadStatus, UiState, UiMode};
+use super::catalog::{get_by_category, DistroEntry, CATEGORIES};
+use super::state::{DownloadState, DownloadStatus, UiMode, UiState};
 use crate::tui::input::{InputKey, Keyboard};
 use crate::tui::renderer::{
-    Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED,
-    EFI_YELLOW, EFI_WHITE, EFI_DARKGRAY,
+    Screen, EFI_BLACK, EFI_DARKGRAY, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_WHITE,
+    EFI_YELLOW,
 };
-use crate::BootServices;
 use crate::uefi::block_io::{BlockIoProtocol, EFI_BLOCK_IO_PROTOCOL_GUID};
 use crate::uefi::block_io_adapter::UefiBlockIo;
-use morpheus_core::disk::gpt_ops::{find_free_space, create_partition, FreeRegion, GptError};
+use crate::BootServices;
+use morpheus_core::disk::gpt_ops::{create_partition, find_free_space, FreeRegion, GptError};
 use morpheus_core::disk::partition::PartitionType;
-use morpheus_core::iso::{IsoStorageManager, IsoManifest, ChunkWriter, ChunkInfo, ChunkSet, MAX_ISOS, MAX_CHUNKS, IsoError};
+use morpheus_core::iso::{
+    ChunkInfo, ChunkSet, ChunkWriter, IsoError, IsoManifest, IsoStorageManager, MAX_CHUNKS,
+    MAX_ISOS,
+};
 
 // Layout constants
 const HEADER_Y: usize = 0;
@@ -147,7 +150,9 @@ impl DistroDownloader {
 
     /// Get currently selected distro
     pub fn selected_distro(&self) -> Option<&'static DistroEntry> {
-        self.current_distros.get(self.ui_state.selected_distro).copied()
+        self.current_distros
+            .get(self.ui_state.selected_distro)
+            .copied()
     }
 
     /// Handle input and return action
@@ -325,7 +330,7 @@ impl DistroDownloader {
     }
 
     /// Start downloading a distribution
-    /// 
+    ///
     /// This triggers the commit flow that exits UEFI boot services and
     /// downloads in bare-metal mode. This function will NEVER RETURN
     /// on success - the system will reboot after download completes.
@@ -341,7 +346,7 @@ impl DistroDownloader {
             iso_size: distro.size_bytes,
             distro_name: alloc::string::String::from(distro.name),
         };
-        
+
         // COMMIT TO DOWNLOAD - THIS DOES NOT RETURN
         // Exits UEFI boot services and downloads in bare-metal mode
         unsafe {
@@ -380,7 +385,9 @@ impl DistroDownloader {
         }
 
         let total_size = distro.size_bytes;
-        morpheus_core::logger::log(format!("Starting download: {} ({} bytes)", distro.name, total_size).leak());
+        morpheus_core::logger::log(
+            format!("Starting download: {} ({} bytes)", distro.name, total_size).leak(),
+        );
 
         // STEP 1: Verify network is ready (connectivity check)
         // Network initialization (DMA pool, PCI scan, VirtIO setup, DHCP) should have
@@ -394,10 +401,17 @@ impl DistroDownloader {
 
         // STEP 2: Now that network is ready, check disk space
         screen.clear();
-        screen.put_str_at(5, 2, "=== Checking Disk Space ===", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(
+            5,
+            2,
+            "=== Checking Disk Space ===",
+            EFI_LIGHTGREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(5, 4, "Scanning disk...", EFI_YELLOW, EFI_BLACK);
-        
-        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
+
+        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services })
+        {
             Some(p) => p,
             None => {
                 self.show_download_error(screen, "No disk device found");
@@ -419,8 +433,8 @@ impl DistroDownloader {
         };
 
         // Calculate chunks needed (4GB per chunk)
-        const MIN_CHUNK_SIZE: u64 = 512 * 1024 * 1024;  // 512 MB minimum
-        const MAX_CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024;  // 4 GB maximum
+        const MIN_CHUNK_SIZE: u64 = 512 * 1024 * 1024; // 512 MB minimum
+        const MAX_CHUNK_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4 GB maximum
         const MAX_CHUNKS: usize = 32;
 
         // Calculate optimal chunk size based on ISO size
@@ -443,7 +457,9 @@ impl DistroDownloader {
             return;
         }
 
-        morpheus_core::logger::log(format!("Need {} chunks for {} bytes", chunks_needed, total_size).leak());
+        morpheus_core::logger::log(
+            format!("Need {} chunks for {} bytes", chunks_needed, total_size).leak(),
+        );
 
         // Step 3: Allocate partitions from free space
         let chunk_partitions = match self.allocate_chunk_partitions(
@@ -459,11 +475,18 @@ impl DistroDownloader {
             }
         };
 
-        screen.put_str_at(5, 4, "Creating partitions...         ", EFI_YELLOW, EFI_BLACK);
+        screen.put_str_at(
+            5,
+            4,
+            "Creating partitions...         ",
+            EFI_YELLOW,
+            EFI_BLACK,
+        );
 
         // Step 4: Create GPT partitions for each chunk
         // Re-acquire block_io since we need mutable access
-        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
+        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services })
+        {
             Some(p) => p,
             None => {
                 self.show_download_error(screen, "Lost disk device");
@@ -472,8 +495,10 @@ impl DistroDownloader {
         };
 
         for (i, (start_lba, end_lba)) in chunk_partitions.iter().enumerate().take(chunks_needed) {
-            morpheus_core::logger::log(format!("Creating partition {}: LBA {} - {}", i, start_lba, end_lba).leak());
-            
+            morpheus_core::logger::log(
+                format!("Creating partition {}: LBA {} - {}", i, start_lba, end_lba).leak(),
+            );
+
             let uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
             if let Err(e) = create_partition(
                 uefi_block_io,
@@ -481,24 +506,27 @@ impl DistroDownloader {
                 *start_lba,
                 *end_lba,
             ) {
-                self.show_download_error(screen, &format!("Failed to create partition {}: {:?}", i, e));
+                self.show_download_error(
+                    screen,
+                    &format!("Failed to create partition {}: {:?}", i, e),
+                );
                 return;
             }
         }
 
         // Step 5: Prepare manifest and chunk writer
         let mut manifest = IsoManifest::new(distro.filename, total_size);
-        
+
         // Build chunk set with partition info
         let mut chunks = ChunkSet::new();
         chunks.total_size = total_size;
         chunks.count = chunks_needed;
-        
+
         let mut remaining = total_size;
         for i in 0..chunks_needed {
             let chunk_bytes = remaining.min(CHUNK_SIZE);
             chunks.chunks[i] = ChunkInfo {
-                partition_uuid: [0u8; 16],  // Will be set when partition is created
+                partition_uuid: [0u8; 16], // Will be set when partition is created
                 start_lba: chunk_partitions[i].0,
                 end_lba: chunk_partitions[i].1,
                 data_size: chunk_bytes,
@@ -510,11 +538,12 @@ impl DistroDownloader {
         manifest.chunks = chunks;
 
         // Create chunk writer
-        let partitions: Vec<_> = chunk_partitions.iter()
+        let partitions: Vec<_> = chunk_partitions
+            .iter()
             .take(chunks_needed)
             .copied()
             .collect();
-        
+
         let mut chunk_writer = match ChunkWriter::new(total_size, CHUNK_SIZE, &partitions) {
             Ok(w) => w,
             Err(e) => {
@@ -523,13 +552,20 @@ impl DistroDownloader {
             }
         };
 
-        screen.put_str_at(5, 4, "Disk ready! Starting download...", EFI_LIGHTGREEN, EFI_BLACK);
-        
+        screen.put_str_at(
+            5,
+            4,
+            "Disk ready! Starting download...",
+            EFI_LIGHTGREEN,
+            EFI_BLACK,
+        );
+
         morpheus_network::tsc_delay_us(500_000); // 500ms
 
         // STEP 3: Now start the actual download with streaming to disk
         // Get fresh block_io for write operations
-        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services }) {
+        let block_io_protocol = match Self::get_first_disk_block_io(unsafe { &*self.boot_services })
+        {
             Some(p) => p,
             None => {
                 self.show_download_error(screen, "Lost disk device");
@@ -549,8 +585,10 @@ impl DistroDownloader {
 
         match download_result {
             Ok(bytes_written) => {
-                morpheus_core::logger::log(format!("Download complete: {} bytes", bytes_written).leak());
-                
+                morpheus_core::logger::log(
+                    format!("Download complete: {} bytes", bytes_written).leak(),
+                );
+
                 // Finalize chunk writer and get final chunk set
                 let final_chunks = match chunk_writer.finalize() {
                     Ok(c) => c,
@@ -567,8 +605,13 @@ impl DistroDownloader {
                 // Persist manifest to ESP filesystem FIRST (so it survives reboots)
                 unsafe {
                     let bs = &*self.boot_services;
-                    if let Err(e) = super::manifest_io::persist_manifest(bs, self.image_handle, &manifest) {
-                        self.show_download_error(screen, &format!("Failed to persist manifest: {:?}", e));
+                    if let Err(e) =
+                        super::manifest_io::persist_manifest(bs, self.image_handle, &manifest)
+                    {
+                        self.show_download_error(
+                            screen,
+                            &format!("Failed to persist manifest: {:?}", e),
+                        );
                         return;
                     }
                     morpheus_core::logger::log("Manifest persisted to ESP");
@@ -577,14 +620,20 @@ impl DistroDownloader {
                 // Register ISO in storage manager (in-memory cache)
                 match self.iso_storage.finalize_download(manifest, final_chunks) {
                     Ok(idx) => {
-                        morpheus_core::logger::log(format!("ISO registered at index {}", idx).leak());
+                        morpheus_core::logger::log(
+                            format!("ISO registered at index {}", idx).leak(),
+                        );
                         self.refresh_iso_cache();
-                        let msg: &'static str = format!("Download complete: {}", distro.name).leak();
+                        let msg: &'static str =
+                            format!("Download complete: {}", distro.name).leak();
                         self.ui_state.show_result(msg);
                         self.download_state.complete();
                     }
                     Err(e) => {
-                        self.show_download_error(screen, &format!("Failed to register ISO: {:?}", e));
+                        self.show_download_error(
+                            screen,
+                            &format!("Failed to register ISO: {:?}", e),
+                        );
                         return;
                     }
                 }
@@ -622,7 +671,9 @@ impl DistroDownloader {
             let region_size = region.size_lba();
             let mut region_offset = 0u64;
 
-            while chunks_allocated < chunks_needed && region_offset + sectors_per_chunk <= region_size {
+            while chunks_allocated < chunks_needed
+                && region_offset + sectors_per_chunk <= region_size
+            {
                 let chunk_bytes = remaining_bytes.min(CHUNK_SIZE);
                 let sectors_needed = (chunk_bytes + block_size as u64 - 1) / block_size as u64;
 
@@ -654,8 +705,8 @@ impl DistroDownloader {
         block_io_protocol: *mut BlockIoProtocol,
         screen: &mut Screen,
     ) -> Result<usize, &'static str> {
-        use gpt_disk_io::BlockIo;
         use core::cell::Cell;
+        use gpt_disk_io::BlockIo;
 
         // Time function for progress tracking
         fn get_time_ms() -> u64 {
@@ -664,30 +715,48 @@ impl DistroDownloader {
         }
 
         screen.clear();
-        
+
         // === DOWNLOAD SCREEN LAYOUT ===
         // Row 2: Title
         screen.put_str_at(5, 2, "=== Downloading ISO ===", EFI_LIGHTGREEN, EFI_BLACK);
-        
+
         // Row 4: URL (truncated)
         let url_display = if url.len() > 65 { &url[..65] } else { url };
-        screen.put_str_at(5, 4, &format!("URL: {}", url_display), EFI_DARKGRAY, EFI_BLACK);
-        
+        screen.put_str_at(
+            5,
+            4,
+            &format!("URL: {}", url_display),
+            EFI_DARKGRAY,
+            EFI_BLACK,
+        );
+
         // Row 5: Expected size
         let size_mb = expected_size / (1024 * 1024);
-        screen.put_str_at(5, 5, &format!("Size: {} MB", size_mb), EFI_DARKGRAY, EFI_BLACK);
-        
+        screen.put_str_at(
+            5,
+            5,
+            &format!("Size: {} MB", size_mb),
+            EFI_DARKGRAY,
+            EFI_BLACK,
+        );
+
         // Row 8-9: Progress bar area (will be updated)
         let progress_y = 8;
-        
+
         // Row 12: Status line
         let status_y = 12;
         screen.put_str_at(5, status_y, "Status: Connecting...", EFI_YELLOW, EFI_BLACK);
 
         // Show what we're connecting to
         let host = url.split('/').nth(2).unwrap_or("unknown");
-        screen.put_str_at(5, status_y + 1, &format!("Host: {}", host), EFI_DARKGRAY, EFI_BLACK);
-        
+        screen.put_str_at(
+            5,
+            status_y + 1,
+            &format!("Host: {}", host),
+            EFI_DARKGRAY,
+            EFI_BLACK,
+        );
+
         let progress_bytes = Cell::new(0usize);
         let last_update = Cell::new(0u64);
         let chunks_received = Cell::new(0u32);
@@ -695,43 +764,52 @@ impl DistroDownloader {
 
         // Update status when streaming starts
         let status_updated = Cell::new(false);
-        
+
         let result = client.get_streaming(url, |chunk_data| {
             // Mark that we got data
             if !status_updated.get() {
                 status_updated.set(true);
-                screen.put_str_at(5, status_y, "Status: Downloading...              ", EFI_YELLOW, EFI_BLACK);
+                screen.put_str_at(
+                    5,
+                    status_y,
+                    "Status: Downloading...              ",
+                    EFI_YELLOW,
+                    EFI_BLACK,
+                );
             }
-            
+
             chunks_received.set(chunks_received.get() + 1);
-            
+
             let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
-            
-            chunk_writer.write(chunk_data, |part_start, sector_offset, data| {
-                let lba = part_start + sector_offset;
-                uefi_block_io.write_blocks(gpt_disk_types::Lba(lba), data)
-                    .map_err(|_| IsoError::IoError)
-            }).map_err(|_| morpheus_network::error::NetworkError::FileError)?;
+
+            chunk_writer
+                .write(chunk_data, |part_start, sector_offset, data| {
+                    let lba = part_start + sector_offset;
+                    uefi_block_io
+                        .write_blocks(gpt_disk_types::Lba(lba), data)
+                        .map_err(|_| IsoError::IoError)
+                })
+                .map_err(|_| morpheus_network::error::NetworkError::FileError)?;
 
             let new_total = progress_bytes.get() + chunk_data.len();
             progress_bytes.set(new_total);
-            
+
             // Update progress bar every 200ms
             let now = get_time_ms();
             if now - last_update.get() > 200 {
                 last_update.set(now);
-                
+
                 // Calculate percentage
                 let percent = if expected_size > 0 {
                     ((new_total as u64 * 100) / expected_size).min(100) as usize
                 } else {
                     0
                 };
-                
+
                 // Calculate speed (KB/s)
                 let elapsed_ms = now.saturating_sub(start_time).max(1);
                 let speed_kbps = (new_total as u64 * 1000) / elapsed_ms / 1024;
-                
+
                 // Draw progress bar: [==================>           ] 45%
                 let bar_width = 50;
                 let filled = (bar_width * percent) / 100;
@@ -748,22 +826,31 @@ impl DistroDownloader {
                 }
                 bar[51] = b']';
                 let bar_str = core::str::from_utf8(&bar).unwrap_or("[error]");
-                
+
                 // Row 8: Progress bar
                 screen.put_str_at(5, progress_y, bar_str, EFI_LIGHTGREEN, EFI_BLACK);
-                
+
                 // Row 9: Percentage and speed
-                screen.put_str_at(5, progress_y + 1, &format!(
-                    "  {}%  |  {} KB/s                    ",
-                    percent, speed_kbps
-                ), EFI_YELLOW, EFI_BLACK);
-                
+                screen.put_str_at(
+                    5,
+                    progress_y + 1,
+                    &format!("  {}%  |  {} KB/s                    ", percent, speed_kbps),
+                    EFI_YELLOW,
+                    EFI_BLACK,
+                );
+
                 // Row 10: Downloaded / Total
                 let downloaded_mb = new_total / (1024 * 1024);
-                screen.put_str_at(5, progress_y + 2, &format!(
-                    "  {} / {} MB                        ",
-                    downloaded_mb, size_mb
-                ), EFI_DARKGRAY, EFI_BLACK);
+                screen.put_str_at(
+                    5,
+                    progress_y + 2,
+                    &format!(
+                        "  {} / {} MB                        ",
+                        downloaded_mb, size_mb
+                    ),
+                    EFI_DARKGRAY,
+                    EFI_BLACK,
+                );
             }
             Ok(())
         });
@@ -776,32 +863,59 @@ impl DistroDownloader {
                 // Show completion
                 let bar_complete = "[##################################################]";
                 screen.put_str_at(5, progress_y, bar_complete, EFI_LIGHTGREEN, EFI_BLACK);
-                screen.put_str_at(5, progress_y + 1, "  100%  |  COMPLETE!                    ", EFI_LIGHTGREEN, EFI_BLACK);
-                
+                screen.put_str_at(
+                    5,
+                    progress_y + 1,
+                    "  100%  |  COMPLETE!                    ",
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
+
                 let downloaded_mb = bytes / (1024 * 1024);
-                screen.put_str_at(5, progress_y + 2, &format!(
-                    "  {} MB downloaded                  ",
-                    downloaded_mb
-                ), EFI_LIGHTGREEN, EFI_BLACK);
-                
-                screen.put_str_at(5, status_y, "Status: Download complete!          ", EFI_LIGHTGREEN, EFI_BLACK);
-                
+                screen.put_str_at(
+                    5,
+                    progress_y + 2,
+                    &format!("  {} MB downloaded                  ", downloaded_mb),
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
+
+                screen.put_str_at(
+                    5,
+                    status_y,
+                    "Status: Download complete!          ",
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
+
                 Ok(bytes)
             }
             Err(e) => {
-                screen.put_str_at(5, status_y, &format!("FAILED: {:?}                        ", e), EFI_RED, EFI_BLACK);
-                
+                screen.put_str_at(
+                    5,
+                    status_y,
+                    &format!("FAILED: {:?}                        ", e),
+                    EFI_RED,
+                    EFI_BLACK,
+                );
+
                 // Show detailed stats on error
                 let final_tx = morpheus_network::stack::tx_packet_count();
                 let final_rx = morpheus_network::stack::rx_packet_count();
                 let final_err = morpheus_network::stack::tx_error_count();
                 let chunks = chunks_received.get();
-                
-                screen.put_str_at(5, status_y + 2, &format!(
-                    "TX:{} RX:{} ERR:{} Chunks:{} Bytes:{}",
-                    final_tx, final_rx, final_err, chunks, final_bytes
-                ), EFI_YELLOW, EFI_BLACK);
-                
+
+                screen.put_str_at(
+                    5,
+                    status_y + 2,
+                    &format!(
+                        "TX:{} RX:{} ERR:{} Chunks:{} Bytes:{}",
+                        final_tx, final_rx, final_err, chunks, final_bytes
+                    ),
+                    EFI_YELLOW,
+                    EFI_BLACK,
+                );
+
                 // Show if we even connected
                 let connected_msg = if status_updated.get() {
                     "Connected OK, failed during download"
@@ -809,12 +923,18 @@ impl DistroDownloader {
                     "Failed before receiving any data (connection issue?)"
                 };
                 screen.put_str_at(5, status_y + 3, connected_msg, EFI_YELLOW, EFI_BLACK);
-                
-                screen.put_str_at(5, status_y + 5, "Waiting 15s so you can read this...", EFI_DARKGRAY, EFI_BLACK);
-                
+
+                screen.put_str_at(
+                    5,
+                    status_y + 5,
+                    "Waiting 15s so you can read this...",
+                    EFI_DARKGRAY,
+                    EFI_BLACK,
+                );
+
                 // Wait so user can see the error
                 morpheus_network::tsc_delay_us(15_000_000); // 15s
-                
+
                 Err("Download failed")
             }
         }
@@ -964,7 +1084,13 @@ impl DistroDownloader {
         let mut current_x = x;
 
         // Clear the category line
-        screen.put_str_at(x, y, "                                                                              ", EFI_BLACK, EFI_BLACK);
+        screen.put_str_at(
+            x,
+            y,
+            "                                                                              ",
+            EFI_BLACK,
+            EFI_BLACK,
+        );
 
         screen.put_str_at(x, y, "Category: ", EFI_GREEN, EFI_BLACK);
         current_x += 10;
@@ -994,14 +1120,32 @@ impl DistroDownloader {
         screen.put_str_at(x + 2, y, "Name              ", EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 22, y, "Version   ", EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 34, y, "Size         ", EFI_DARKGREEN, EFI_BLACK);
-        screen.put_str_at(x + 48, y, "Description                   ", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 48,
+            y,
+            "Description                   ",
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
 
         // Separator
-        screen.put_str_at(x, y + 1, "--------------------------------------------------------------------------------", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x,
+            y + 1,
+            "--------------------------------------------------------------------------------",
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
 
         // Clear list area
         for row in 0..VISIBLE_ITEMS {
-            screen.put_str_at(x, y + 2 + row, "                                                                                ", EFI_BLACK, EFI_BLACK);
+            screen.put_str_at(
+                x,
+                y + 2 + row,
+                "                                                                                ",
+                EFI_BLACK,
+                EFI_BLACK,
+            );
         }
 
         // Render visible items
@@ -1027,7 +1171,7 @@ impl DistroDownloader {
             let name = Self::pad_or_truncate(distro.name, 18);
             screen.put_str_at(x + 2, row_y, &name, fg, bg);
 
-            // Version (padded/truncated to 10 chars)  
+            // Version (padded/truncated to 10 chars)
             let version = Self::pad_or_truncate(distro.version, 10);
             screen.put_str_at(x + 22, row_y, &version, fg, bg);
 
@@ -1047,7 +1191,13 @@ impl DistroDownloader {
             screen.put_str_at(x + 78, y + 2, " ", EFI_BLACK, EFI_BLACK);
         }
         if visible_end < self.current_distros.len() {
-            screen.put_str_at(x + 78, y + 1 + VISIBLE_ITEMS, "v", EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(
+                x + 78,
+                y + 1 + VISIBLE_ITEMS,
+                "v",
+                EFI_LIGHTGREEN,
+                EFI_BLACK,
+            );
         } else {
             screen.put_str_at(x + 78, y + 1 + VISIBLE_ITEMS, " ", EFI_BLACK, EFI_BLACK);
         }
@@ -1059,7 +1209,13 @@ impl DistroDownloader {
 
         // Clear details area
         for row in 0..4 {
-            screen.put_str_at(x, y + row, "                                                                                ", EFI_BLACK, EFI_BLACK);
+            screen.put_str_at(
+                x,
+                y + row,
+                "                                                                                ",
+                EFI_BLACK,
+                EFI_BLACK,
+            );
         }
 
         if let Some(distro) = self.selected_distro() {
@@ -1077,13 +1233,23 @@ impl DistroDownloader {
             screen.put_str_at(x + 30, y + 1, "Arch: ", EFI_DARKGREEN, EFI_BLACK);
             screen.put_str_at(x + 36, y + 1, distro.arch, EFI_GREEN, EFI_BLACK);
             screen.put_str_at(x + 50, y + 1, "Live: ", EFI_DARKGREEN, EFI_BLACK);
-            screen.put_str_at(x + 56, y + 1, if distro.is_live { "Yes" } else { "No " }, EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(
+                x + 56,
+                y + 1,
+                if distro.is_live { "Yes" } else { "No " },
+                EFI_GREEN,
+                EFI_BLACK,
+            );
             screen.put_str_at(x + 78, y + 1, "|", EFI_GREEN, EFI_BLACK);
 
             // Content line 2 - URL
             screen.put_str_at(x, y + 2, "|", EFI_GREEN, EFI_BLACK);
             screen.put_str_at(x + 2, y + 2, "URL: ", EFI_DARKGREEN, EFI_BLACK);
-            let url_display = if distro.url.len() > 70 { &distro.url[..70] } else { distro.url };
+            let url_display = if distro.url.len() > 70 {
+                &distro.url[..70]
+            } else {
+                distro.url
+            };
             screen.put_str_at(x + 7, y + 2, url_display, EFI_GREEN, EFI_BLACK);
             screen.put_str_at(x + 78, y + 2, "|", EFI_GREEN, EFI_BLACK);
 
@@ -1126,15 +1292,69 @@ impl DistroDownloader {
             let y = 8;
 
             // Dialog box using ASCII (more compatible than Unicode box chars)
-            screen.put_str_at(x, y,     "+--------------------------------------------------------+", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 1, "|              CONFIRM DOWNLOAD                          |", EFI_LIGHTGREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 2, "+--------------------------------------------------------+", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 3, "|                                                        |", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 4, "|                                                        |", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 5, "|                                                        |", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 6, "+--------------------------------------------------------+", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 7, "|     Download to /isos/ on ESP?    [Y]es   [N]o         |", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(x, y + 8, "+--------------------------------------------------------+", EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(
+                x,
+                y,
+                "+--------------------------------------------------------+",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 1,
+                "|              CONFIRM DOWNLOAD                          |",
+                EFI_LIGHTGREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 2,
+                "+--------------------------------------------------------+",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 3,
+                "|                                                        |",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 4,
+                "|                                                        |",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 5,
+                "|                                                        |",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 6,
+                "+--------------------------------------------------------+",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 7,
+                "|     Download to /isos/ on ESP?    [Y]es   [N]o         |",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                x,
+                y + 8,
+                "+--------------------------------------------------------+",
+                EFI_GREEN,
+                EFI_BLACK,
+            );
 
             // Content
             screen.put_str_at(x + 3, y + 3, "Distro: ", EFI_DARKGREEN, EFI_BLACK);
@@ -1144,7 +1364,11 @@ impl DistroDownloader {
             screen.put_str_at(x + 11, y + 4, distro.size_str(), EFI_GREEN, EFI_BLACK);
 
             screen.put_str_at(x + 3, y + 5, "File:   ", EFI_DARKGREEN, EFI_BLACK);
-            let filename = if distro.filename.len() > 40 { &distro.filename[..40] } else { distro.filename };
+            let filename = if distro.filename.len() > 40 {
+                &distro.filename[..40]
+            } else {
+                distro.filename
+            };
             screen.put_str_at(x + 11, y + 5, filename, EFI_GREEN, EFI_BLACK);
         }
     }
@@ -1164,14 +1388,26 @@ impl DistroDownloader {
 
             screen.put_str_at(x, y + 2, "[", EFI_GREEN, EFI_BLACK);
             for i in 0..bar_width {
-                let ch = if i < filled { "=" } else if i == filled { ">" } else { " " };
+                let ch = if i < filled {
+                    "="
+                } else if i == filled {
+                    ">"
+                } else {
+                    " "
+                };
                 screen.put_str_at(x + 1 + i, y + 2, ch, EFI_LIGHTGREEN, EFI_BLACK);
             }
             screen.put_str_at(x + 1 + bar_width, y + 2, "]", EFI_GREEN, EFI_BLACK);
 
             // Status
             screen.put_str_at(x, y + 4, "Status: ", EFI_DARKGREEN, EFI_BLACK);
-            screen.put_str_at(x + 8, y + 4, self.download_state.status.as_str(), EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(
+                x + 8,
+                y + 4,
+                self.download_state.status.as_str(),
+                EFI_GREEN,
+                EFI_BLACK,
+            );
         }
     }
 
@@ -1185,11 +1421,20 @@ impl DistroDownloader {
             screen.put_str_at(x + 9, y, msg, EFI_LIGHTGREEN, EFI_BLACK);
         } else {
             screen.put_str_at(x, y, "FAILED: ", EFI_RED, EFI_BLACK);
-            let msg = self.download_state.error_message.unwrap_or("Download failed");
+            let msg = self
+                .download_state
+                .error_message
+                .unwrap_or("Download failed");
             screen.put_str_at(x + 8, y, msg, EFI_RED, EFI_BLACK);
         }
 
-        screen.put_str_at(x, y + 2, "Press any key to continue...", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x,
+            y + 2,
+            "Press any key to continue...",
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
     }
 
     /// Helper: pad or truncate string to exact length
@@ -1257,17 +1502,35 @@ impl DistroDownloader {
 
         if self.ui_state.iso_count == 0 {
             screen.put_str_at(x, y, "No ISOs stored.", EFI_DARKGRAY, EFI_BLACK);
-            screen.put_str_at(x, y + 1, "Download distros from the Browse view to see them here.", EFI_DARKGRAY, EFI_BLACK);
+            screen.put_str_at(
+                x,
+                y + 1,
+                "Download distros from the Browse view to see them here.",
+                EFI_DARKGRAY,
+                EFI_BLACK,
+            );
             return;
         }
 
         // Column headers
-        screen.put_str_at(x + 2, y, "NAME                                    ", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 2,
+            y,
+            "NAME                                    ",
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 44, y, "SIZE (MB)", EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 58, y, "STATUS", EFI_DARKGREEN, EFI_BLACK);
 
         // Separator
-        screen.put_str_at(x, y + 1, "------------------------------------------------------------------------", EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x,
+            y + 1,
+            "------------------------------------------------------------------------",
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
 
         // List ISOs
         for i in 0..self.ui_state.iso_count {
@@ -1283,13 +1546,13 @@ impl DistroDownloader {
             // Name (max 40 chars)
             let name = core::str::from_utf8(&self.iso_names[i][..self.iso_name_lens[i].min(40)])
                 .unwrap_or("???");
-            
+
             let (fg, bg) = if i == self.ui_state.selected_iso {
                 (EFI_BLACK, EFI_GREEN)
             } else {
                 (EFI_LIGHTGREEN, EFI_BLACK)
             };
-            
+
             let name_padded = Self::pad_or_truncate(name, 40);
             screen.put_str_at(x + 2, row_y, &name_padded, fg, bg);
 
@@ -1345,14 +1608,62 @@ impl DistroDownloader {
             "???"
         };
 
-        screen.put_str_at(x, y,     "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 1, "|                    CONFIRM                       |", EFI_LIGHTGREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 2, "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 3, "|                                                  |", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 4, "|                                                  |", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 5, "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 6, "|               [Y]es       [N]o                   |", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x, y + 7, "+--------------------------------------------------+", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(
+            x,
+            y,
+            "+--------------------------------------------------+",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 1,
+            "|                    CONFIRM                       |",
+            EFI_LIGHTGREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 2,
+            "+--------------------------------------------------+",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 3,
+            "|                                                  |",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 4,
+            "|                                                  |",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 5,
+            "+--------------------------------------------------+",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 6,
+            "|               [Y]es       [N]o                   |",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            x,
+            y + 7,
+            "+--------------------------------------------------+",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
 
         screen.put_str_at(x + 3, y + 3, message, EFI_WHITE, EFI_BLACK);
         screen.put_str_at(x + 3, y + 4, name, EFI_LIGHTGREEN, EFI_BLACK);
@@ -1381,10 +1692,10 @@ mod tests {
     fn test_refresh_distro_list_changes_with_category() {
         // Test that changing category changes the distro list
         let mut ui_state = UiState::new();
-        
+
         let cat1 = ui_state.current_category();
         let distros1: Vec<_> = get_by_category(cat1).collect();
-        
+
         ui_state.next_category(CATEGORIES.len());
         let cat2 = ui_state.current_category();
         let distros2: Vec<_> = get_by_category(cat2).collect();
@@ -1398,7 +1709,7 @@ mod tests {
     fn test_selected_distro_within_bounds() {
         let ui_state = UiState::new();
         let current_distros: Vec<_> = get_by_category(ui_state.current_category()).collect();
-        
+
         // Initial selection should be valid
         assert!(ui_state.selected_distro < current_distros.len() || current_distros.is_empty());
     }
@@ -1406,19 +1717,19 @@ mod tests {
     #[test]
     fn test_download_state_lifecycle() {
         let mut download_state = DownloadState::new();
-        
+
         // Start check
         download_state.start_check("test.iso");
         assert_eq!(download_state.status, DownloadStatus::Checking);
-        
+
         // Start download
         download_state.start_download(Some(1000));
         assert_eq!(download_state.status, DownloadStatus::Downloading);
-        
+
         // Progress updates
         download_state.update_progress(500);
         assert_eq!(download_state.progress_percent(), 50);
-        
+
         // Complete
         download_state.complete();
         assert_eq!(download_state.status, DownloadStatus::Complete);
@@ -1427,20 +1738,20 @@ mod tests {
     #[test]
     fn test_download_with_retry() {
         let mut download_state = DownloadState::new();
-        
+
         download_state.start_check("test.iso");
         download_state.fail("Connection refused");
-        
+
         // Try next mirror
         assert!(download_state.try_next_mirror(3));
         assert_eq!(download_state.status, DownloadStatus::Checking);
         assert_eq!(download_state.mirror_index, 1);
-        
+
         // Fail again
         download_state.fail("Timeout");
         assert!(download_state.try_next_mirror(3));
         assert_eq!(download_state.mirror_index, 2);
-        
+
         // No more mirrors
         download_state.fail("Error");
         assert!(!download_state.try_next_mirror(3));
@@ -1450,10 +1761,10 @@ mod tests {
     fn test_ui_mode_transitions_browse_to_confirm() {
         let mut ui_state = UiState::new();
         assert!(ui_state.is_browsing());
-        
+
         ui_state.show_confirm();
         assert!(ui_state.is_confirming());
-        
+
         ui_state.return_to_browse();
         assert!(ui_state.is_browsing());
     }
@@ -1461,7 +1772,7 @@ mod tests {
     #[test]
     fn test_ui_mode_transitions_confirm_to_download() {
         let mut ui_state = UiState::new();
-        
+
         ui_state.show_confirm();
         ui_state.start_download();
         assert!(ui_state.is_downloading());
@@ -1471,16 +1782,16 @@ mod tests {
     fn test_navigation_through_categories() {
         let mut ui_state = UiState::new();
         let num_cats = CATEGORIES.len();
-        
+
         // Navigate forward through all categories
         for i in 0..num_cats - 1 {
             assert_eq!(ui_state.selected_category, i);
             ui_state.next_category(num_cats);
         }
-        
+
         // At last category
         assert_eq!(ui_state.selected_category, num_cats - 1);
-        
+
         // Navigate back
         for i in (0..num_cats - 1).rev() {
             ui_state.prev_category();
@@ -1492,14 +1803,14 @@ mod tests {
     fn test_navigation_resets_selection() {
         let mut ui_state = UiState::new();
         let num_cats = CATEGORIES.len();
-        
+
         // Select some distro
         ui_state.selected_distro = 5;
         ui_state.scroll_offset = 2;
-        
+
         // Change category
         ui_state.next_category(num_cats);
-        
+
         // Selection should reset
         assert_eq!(ui_state.selected_distro, 0);
         assert_eq!(ui_state.scroll_offset, 0);

@@ -42,15 +42,15 @@ impl IsoBuilder {
         data[pvd_offset] = 1; // Primary
         data[pvd_offset + 1..pvd_offset + 6].copy_from_slice(b"CD001");
         data[pvd_offset + 6] = 1; // Version
-        
+
         // Root dir record in PVD
         let root_entry_len = 34; // 33 fixed + 1 name
-        data[pvd_offset + 156] = root_entry_len; 
+        data[pvd_offset + 156] = root_entry_len;
         // Extent LBA (both endian)
         Self::write_both_endian_u32(&mut data[pvd_offset + 158..], self.root_lba);
         // Data Length (both endian) - Root dir size (1 sector for now)
         Self::write_both_endian_u32(&mut data[pvd_offset + 166..], 2048);
-        
+
         data[pvd_offset + 181] = 0x02; // Directory flag
         data[pvd_offset + 188] = 1; // Name len
         data[pvd_offset + 189] = 0; // Name "."
@@ -73,14 +73,21 @@ impl IsoBuilder {
         // "." entry
         Self::write_dir_entry(&mut data, &mut dir_offset, self.root_lba, 2048, 0x02, "\0");
         // ".." entry
-        Self::write_dir_entry(&mut data, &mut dir_offset, self.root_lba, 2048, 0x02, "\x01");
+        Self::write_dir_entry(
+            &mut data,
+            &mut dir_offset,
+            self.root_lba,
+            2048,
+            0x02,
+            "\x01",
+        );
 
         // File entries
         for (name, content) in &self.files {
             let lba = file_lbas[name];
             let size = content.len() as u32;
             Self::write_dir_entry(&mut data, &mut dir_offset, lba, size, 0x00, name);
-            
+
             // Write file content
             let file_offset = lba as usize * 2048;
             data[file_offset..file_offset + content.len()].copy_from_slice(content);
@@ -99,28 +106,37 @@ impl IsoBuilder {
         dst[2..4].copy_from_slice(&value.to_be_bytes());
     }
 
-    fn write_dir_entry(data: &mut [u8], offset: &mut usize, lba: u32, size: u32, flags: u8, name: &str) {
+    fn write_dir_entry(
+        data: &mut [u8],
+        offset: &mut usize,
+        lba: u32,
+        size: u32,
+        flags: u8,
+        name: &str,
+    ) {
         let name_bytes = name.as_bytes();
         let name_len = name_bytes.len();
         let mut entry_len = 33 + name_len;
-        if entry_len % 2 != 0 { entry_len += 1; } // Padding to even
-        
+        if entry_len % 2 != 0 {
+            entry_len += 1;
+        } // Padding to even
+
         let start = *offset;
         data[start] = entry_len as u8;
         data[start + 1] = 0; // Ext attr len
-        
+
         Self::write_both_endian_u32(&mut data[start + 2..], lba);
         Self::write_both_endian_u32(&mut data[start + 10..], size);
-        
+
         // Date (7 bytes) - all zero is fine for test
-        
+
         data[start + 25] = flags;
-        
+
         data[start + 28] = 0; // Volume seq
         data[start + 32] = name_len as u8;
-        
+
         data[start + 33..start + 33 + name_len].copy_from_slice(name_bytes);
-        
+
         *offset += entry_len;
     }
 }

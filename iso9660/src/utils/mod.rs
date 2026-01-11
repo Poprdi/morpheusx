@@ -1,6 +1,6 @@
 //! Utility functions
 
-pub mod datetime;
-pub mod string;
-pub mod sector;
 pub mod checksum;
+pub mod datetime;
+pub mod sector;
+pub mod string;

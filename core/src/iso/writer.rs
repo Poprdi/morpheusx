@@ -8,7 +8,7 @@
 //!
 //! ```ignore
 //! let mut writer = ChunkWriter::new(manifest);
-//! 
+//!
 //! // Write data as it arrives (e.g., from HTTP download)
 //! while let Some(data) = download.next_chunk() {
 //!     writer.write(block_io, data)?;
@@ -91,7 +91,11 @@ impl ChunkWriter {
     }
 
     /// Create a chunk writer with explicit parameters
-    pub fn new(total_size: u64, chunk_size: u64, partitions: &[(u64, u64)]) -> Result<Self, IsoError> {
+    pub fn new(
+        total_size: u64,
+        chunk_size: u64,
+        partitions: &[(u64, u64)],
+    ) -> Result<Self, IsoError> {
         if partitions.is_empty() {
             return Err(IsoError::InsufficientPartitions);
         }

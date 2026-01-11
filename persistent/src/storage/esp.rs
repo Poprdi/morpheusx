@@ -23,7 +23,7 @@ use crate::pe::PeError;
 /// Primary bootable storage - writes to `/EFI/BOOT/BOOTX64.EFI` on the ESP.
 pub struct EspBackend {
     // Future fields:
-    // - block_io: Block I/O adapter  
+    // - block_io: Block I/O adapter
     // - partition_lba: Start LBA of ESP partition
     // - path: Path to bootloader file
     _private: (),

@@ -22,8 +22,8 @@
 //! assert_eq!(result, b"Hello");
 //! ```
 
-use alloc::vec::Vec;
 use crate::error::{NetworkError, Result};
+use alloc::vec::Vec;
 
 /// State of the chunked decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,11 +95,11 @@ impl ChunkedDecoder {
     pub fn decode(data: &[u8]) -> Result<Vec<u8>> {
         let mut decoder = ChunkedDecoder::new();
         decoder.feed(data)?;
-        
+
         if !decoder.is_done() {
             return Err(NetworkError::InvalidResponse);
         }
-        
+
         Ok(decoder.take_output())
     }
 
@@ -112,11 +112,12 @@ impl ChunkedDecoder {
         while consumed < data.len() && self.state != DecoderState::Done {
             let byte = data[consumed];
             consumed += 1;
-            
+
             match self.state {
                 DecoderState::ReadingSize => {
-                    if byte == b'\n' && !self.size_buffer.is_empty() 
-                        && self.size_buffer.last() == Some(&b'\r') 
+                    if byte == b'\n'
+                        && !self.size_buffer.is_empty()
+                        && self.size_buffer.last() == Some(&b'\r')
                     {
                         // Found end of size line
                         self.size_buffer.pop(); // Remove \r
@@ -128,7 +129,7 @@ impl ChunkedDecoder {
                 DecoderState::ReadingData => {
                     self.output.push(byte);
                     self.chunk_bytes_read += 1;
-                    
+
                     if self.chunk_bytes_read == self.current_chunk_size {
                         // Finished this chunk, expect trailing CRLF
                         self.state = DecoderState::ExpectingCR;
@@ -158,25 +159,25 @@ impl ChunkedDecoder {
 
     /// Parse the chunk size from size_buffer.
     fn parse_chunk_size(&mut self) -> Result<()> {
-        let size_str = core::str::from_utf8(&self.size_buffer)
-            .map_err(|_| NetworkError::InvalidResponse)?;
-        
+        let size_str =
+            core::str::from_utf8(&self.size_buffer).map_err(|_| NetworkError::InvalidResponse)?;
+
         // Handle chunk extensions (ignore everything after ;)
         let size_part = size_str.split(';').next().unwrap_or("").trim();
-        
-        self.current_chunk_size = usize::from_str_radix(size_part, 16)
-            .map_err(|_| NetworkError::InvalidResponse)?;
-        
+
+        self.current_chunk_size =
+            usize::from_str_radix(size_part, 16).map_err(|_| NetworkError::InvalidResponse)?;
+
         self.size_buffer.clear();
         self.chunk_bytes_read = 0;
-        
+
         if self.current_chunk_size == 0 {
             // Final chunk
             self.state = DecoderState::Done;
         } else {
             self.state = DecoderState::ReadingData;
         }
-        
+
         Ok(())
     }
 
@@ -263,14 +264,14 @@ mod tests {
     #[test]
     fn test_incremental_feed() {
         let mut decoder = ChunkedDecoder::new();
-        
+
         // Feed data in parts
         decoder.feed(b"5\r\nHel").unwrap();
         assert!(!decoder.is_done());
-        
+
         decoder.feed(b"lo\r\n0\r\n\r\n").unwrap();
         assert!(decoder.is_done());
-        
+
         assert_eq!(decoder.output(), b"Hello");
     }
 
@@ -278,11 +279,11 @@ mod tests {
     fn test_incremental_byte_by_byte() {
         let mut decoder = ChunkedDecoder::new();
         let data = b"3\r\nABC\r\n0\r\n\r\n";
-        
+
         for &byte in data.iter() {
             decoder.feed(&[byte]).unwrap();
         }
-        
+
         assert!(decoder.is_done());
         assert_eq!(decoder.output(), b"ABC");
     }
@@ -301,7 +302,7 @@ mod tests {
         let data = b"0\r\n\r\n";
         let mut decoder = ChunkedDecoder::new();
         decoder.feed(data).unwrap();
-        
+
         assert_eq!(decoder.state(), DecoderState::Done);
         assert!(decoder.is_done());
     }
@@ -310,12 +311,12 @@ mod tests {
     fn test_reset() {
         let mut decoder = ChunkedDecoder::new();
         decoder.feed(b"5\r\nHello\r\n0\r\n\r\n").unwrap();
-        
+
         assert!(decoder.is_done());
         assert!(!decoder.output().is_empty());
-        
+
         decoder.reset();
-        
+
         assert!(!decoder.is_done());
         assert!(decoder.output().is_empty());
         assert_eq!(decoder.state(), DecoderState::ReadingSize);
@@ -328,7 +329,7 @@ mod tests {
         let data = b"5\r\nHello\r\n0\r\n\r\n";
         let mut decoder = ChunkedDecoder::new();
         decoder.feed(data).unwrap();
-        
+
         let output = decoder.take_output();
         assert_eq!(output, b"Hello");
     }
@@ -357,7 +358,7 @@ mod tests {
         // 0x1f = 31 bytes for first chunk
         let chunk1 = b"<!DOCTYPE html>\n<html><body>";
         let chunk2 = b"</body></html>";
-        
+
         let mut data = Vec::new();
         data.extend_from_slice(format!("{:x}\r\n", chunk1.len()).as_bytes());
         data.extend_from_slice(chunk1);
@@ -365,7 +366,7 @@ mod tests {
         data.extend_from_slice(format!("{:x}\r\n", chunk2.len()).as_bytes());
         data.extend_from_slice(chunk2);
         data.extend_from_slice(b"\r\n0\r\n\r\n");
-        
+
         let result = ChunkedDecoder::decode(&data).unwrap();
         let html = core::str::from_utf8(&result).unwrap();
         assert!(html.starts_with("<!DOCTYPE html>"));
@@ -380,7 +381,7 @@ mod tests {
         data.extend_from_slice(b"5\r\n");
         data.extend_from_slice(&chunk_data);
         data.extend_from_slice(b"\r\n0\r\n\r\n");
-        
+
         let result = ChunkedDecoder::decode(&data).unwrap();
         assert_eq!(result, chunk_data);
     }

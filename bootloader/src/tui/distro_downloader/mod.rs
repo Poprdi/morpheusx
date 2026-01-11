@@ -23,15 +23,17 @@
 //! ```
 
 pub mod catalog;
-pub mod state;
-pub mod renderer;
-pub mod ui;
+pub mod commit_download;
 pub mod manifest_io;
 pub mod network_check; // Network connectivity verification (deprecated - see commit_download)
-pub mod commit_download; // Post-EBS download flow
+pub mod renderer;
+pub mod state;
+pub mod ui; // Post-EBS download flow
 
-pub use catalog::{DistroCategory, DistroEntry, CATEGORIES, DISTRO_CATALOG, get_by_category};
-pub use manifest_io::{persist_manifest, load_manifests_from_esp, delete_manifest, ManifestIoError};
+pub use catalog::{get_by_category, DistroCategory, DistroEntry, CATEGORIES, DISTRO_CATALOG};
+pub use commit_download::{commit_to_download, CommitResult, DownloadCommitConfig};
+pub use manifest_io::{
+    delete_manifest, load_manifests_from_esp, persist_manifest, ManifestIoError,
+};
 pub use state::{DownloadState, DownloadStatus, UiMode, UiState};
 pub use ui::{DistroDownloader, ManageAction};
-pub use commit_download::{commit_to_download, CommitResult, DownloadCommitConfig};

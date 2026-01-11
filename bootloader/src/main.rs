@@ -95,7 +95,7 @@ struct RuntimeServices {
     // Miscellaneous Services
     _get_next_high_monotonic_count: usize,
     pub reset_system: extern "efiapi" fn(
-        reset_type: u32,  // 0=Cold, 1=Warm, 2=Shutdown, 3=PlatformSpecific
+        reset_type: u32, // 0=Cold, 1=Warm, 2=Shutdown, 3=PlatformSpecific
         reset_status: usize,
         data_size: usize,
         reset_data: *const (),
@@ -326,7 +326,7 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
         // This token is detected by qemu-e2e.sh via serial output
         #[cfg(target_arch = "x86_64")]
         morpheus_network::serial_str("MORPHEUSX_BOOT_OK\n");
-        
+
         // Render rain one final time for visual effect before waiting
         rain.render_frame(&mut screen);
 
@@ -353,7 +353,9 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                     // ESP typically starts after GPT headers, disk size from first disk
                     let (esp_lba, disk_lba) = {
                         let mut dm = morpheus_core::disk::manager::DiskManager::new();
-                        if crate::uefi::disk::enumerate_disks(bs, &mut dm).is_ok() && dm.disk_count() > 0 {
+                        if crate::uefi::disk::enumerate_disks(bs, &mut dm).is_ok()
+                            && dm.disk_count() > 0
+                        {
                             if let Some(disk) = dm.get_disk(0) {
                                 // ESP usually at LBA 2048, use full disk size (last_block + 1)
                                 (2048, disk.last_block + 1)
@@ -405,7 +407,7 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
                         tui::renderer::EFI_LIGHTGREEN,
                         tui::renderer::EFI_BLACK,
                     );
-                    
+
                     // Actually exit to firmware using UEFI ResetSystem
                     unsafe {
                         let runtime_services = &*system_table.runtime_services;
@@ -431,7 +433,7 @@ fn panic(info: &PanicInfo) -> ! {
             // Just spin - at minimum don't silently hang
         }
     }
-    
+
     // Log the panic message if possible
     if let Some(location) = info.location() {
         // We can't allocate in panic handler, so just use static message
@@ -439,7 +441,7 @@ fn panic(info: &PanicInfo) -> ! {
     } else {
         morpheus_core::logger::log("PANIC occurred (no location)!");
     }
-    
+
     // Infinite loop - system is in bad state
     // TODO: Could trigger UEFI reset after timeout
     loop {

@@ -13,7 +13,7 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §7.6
 
-use super::handoff::{BootHandoff, HandoffError, NIC_TYPE_VIRTIO, BLK_TYPE_VIRTIO};
+use super::handoff::{BootHandoff, HandoffError, BLK_TYPE_VIRTIO, NIC_TYPE_VIRTIO};
 use crate::dma::DmaRegion;
 use crate::driver::virtio::VirtioConfig;
 use crate::types::VirtqueueState;
@@ -87,67 +87,67 @@ impl TimeoutConfig {
             ticks_per_ms: tsc_freq / 1_000,
         }
     }
-    
+
     /// DHCP timeout (30 seconds)
     #[inline]
     pub fn dhcp(&self) -> u64 {
         30_000 * self.ticks_per_ms
     }
-    
+
     /// DNS query timeout (5 seconds)
     #[inline]
     pub fn dns(&self) -> u64 {
         5_000 * self.ticks_per_ms
     }
-    
+
     /// TCP connect timeout (30 seconds)
     #[inline]
     pub fn tcp_connect(&self) -> u64 {
         30_000 * self.ticks_per_ms
     }
-    
+
     /// TCP close timeout (10 seconds)
     #[inline]
     pub fn tcp_close(&self) -> u64 {
         10_000 * self.ticks_per_ms
     }
-    
+
     /// HTTP send timeout (30 seconds)
     #[inline]
     pub fn http_send(&self) -> u64 {
         30_000 * self.ticks_per_ms
     }
-    
+
     /// HTTP receive timeout (60 seconds for slow connections)
     #[inline]
     pub fn http_receive(&self) -> u64 {
         60_000 * self.ticks_per_ms
     }
-    
+
     /// HTTP idle timeout between chunks (30 seconds)
     #[inline]
     pub fn http_idle(&self) -> u64 {
         30_000 * self.ticks_per_ms
     }
-    
+
     /// Main loop iteration warning threshold (5ms)
     #[inline]
     pub fn loop_warning(&self) -> u64 {
         5 * self.ticks_per_ms
     }
-    
+
     /// Device reset timeout (100ms)
     #[inline]
     pub fn device_reset(&self) -> u64 {
         100 * self.ticks_per_ms
     }
-    
+
     /// Convert milliseconds to ticks
     #[inline]
     pub fn ms_to_ticks(&self, ms: u64) -> u64 {
         ms * self.ticks_per_ms
     }
-    
+
     /// Convert ticks to milliseconds
     #[inline]
     pub fn ticks_to_ms(&self, ticks: u64) -> u64 {
@@ -179,25 +179,23 @@ pub unsafe fn post_ebs_init(handoff: &'static BootHandoff) -> Result<InitResult,
     // STEP 1: VALIDATE HANDOFF
     // ═══════════════════════════════════════════════════════════════════════
     handoff.validate()?;
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 2: INITIALIZE DMA REGION LAYOUT
     // ═══════════════════════════════════════════════════════════════════════
     let (dma_cpu, dma_bus, dma_size) = handoff.dma_region();
     let dma = DmaRegion::new(dma_cpu, dma_bus, dma_size as usize);
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 3: INITIALIZE NIC DRIVER
     // ═══════════════════════════════════════════════════════════════════════
     let (nic_config, rx_queue, tx_queue, mac_address) = match handoff.nic_type {
-        NIC_TYPE_VIRTIO => {
-            init_virtio_nic(handoff, &dma)?
-        }
+        NIC_TYPE_VIRTIO => init_virtio_nic(handoff, &dma)?,
         other => {
             return Err(InitError::UnsupportedNic(other));
         }
     };
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 4: INITIALIZE BLOCK DEVICE (if present)
     // ═══════════════════════════════════════════════════════════════════════
@@ -212,7 +210,7 @@ pub unsafe fn post_ebs_init(handoff: &'static BootHandoff) -> Result<InitResult,
     } else {
         None
     };
-    
+
     Ok(InitResult {
         handoff,
         dma,
@@ -236,7 +234,7 @@ unsafe fn init_virtio_nic(
     dma: &DmaRegion,
 ) -> Result<(VirtioConfig, VirtqueueState, VirtqueueState, [u8; 6]), InitError> {
     use crate::driver::virtio::init::virtio_net_init;
-    
+
     // Create VirtIO config from handoff and DMA region
     let config = VirtioConfig {
         dma_cpu_base: dma.cpu_base(),
@@ -245,11 +243,11 @@ unsafe fn init_virtio_nic(
         queue_size: 32, // Standard queue size
         buffer_size: 2048,
     };
-    
+
     // Initialize device
-    let (features, rx_queue, tx_queue, mac) = virtio_net_init(handoff.nic_mmio_base, &config)
-        .map_err(|_| InitError::NicInitFailed)?;
-    
+    let (features, rx_queue, tx_queue, mac) =
+        virtio_net_init(handoff.nic_mmio_base, &config).map_err(|_| InitError::NicInitFailed)?;
+
     // Update config with negotiated features (for reference)
     let config = VirtioConfig {
         dma_cpu_base: dma.cpu_base(),
@@ -259,7 +257,7 @@ unsafe fn init_virtio_nic(
         buffer_size: 2048,
     };
     let _ = features; // Used for feature tracking if needed
-    
+
     Ok((config, rx_queue, tx_queue, mac))
 }
 
@@ -287,7 +285,7 @@ unsafe fn init_virtio_nic(
 pub unsafe extern "C" fn _post_ebs_entry(handoff_ptr: *const BootHandoff) -> ! {
     // Convert to static reference (valid for program lifetime)
     let handoff = &*handoff_ptr;
-    
+
     // Initialize
     match post_ebs_init(handoff) {
         Ok(_result) => {

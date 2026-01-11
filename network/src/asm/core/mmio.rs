@@ -72,19 +72,25 @@ pub unsafe fn write32(addr: u64, value: u32) {
 // Stubs for non-x86_64
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-pub unsafe fn read8(_addr: u64) -> u8 { 0 }
+pub unsafe fn read8(_addr: u64) -> u8 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn write8(_addr: u64, _value: u8) {}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-pub unsafe fn read16(_addr: u64) -> u16 { 0 }
+pub unsafe fn read16(_addr: u64) -> u16 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn write16(_addr: u64, _value: u16) {}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-pub unsafe fn read32(_addr: u64) -> u32 { 0 }
+pub unsafe fn read32(_addr: u64) -> u32 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn write32(_addr: u64, _value: u32) {}

@@ -2,7 +2,7 @@
 //!
 //! State management for the ISO manager TUI.
 
-use morpheus_core::iso::{IsoStorageManager, IsoEntry, MAX_ISOS};
+use morpheus_core::iso::{IsoEntry, IsoStorageManager, MAX_ISOS};
 
 /// View mode for the ISO manager
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

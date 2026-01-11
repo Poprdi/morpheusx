@@ -52,7 +52,10 @@ impl MemoryImage {
     /// # Note
     /// Not yet implemented. See `bootloader/src/installer/operations.rs` for
     /// the current working implementation.
-    pub fn capture_from_memory(_image_base: *const u8, _image_size: usize) -> Result<Self, PeError> {
+    pub fn capture_from_memory(
+        _image_base: *const u8,
+        _image_size: usize,
+    ) -> Result<Self, PeError> {
         // Future implementation would:
         // 1. Copy image data to Vec
         // 2. Parse PE headers
@@ -68,6 +71,8 @@ impl MemoryImage {
     /// `PeHeaders::rva_to_file_layout()` for the current working implementation.
     pub fn create_bootable_image(&self) -> Result<alloc::vec::Vec<u8>, PeError> {
         // Future implementation would use the RelocationEngine trait
-        unimplemented!("Use PeHeaders::unrelocate_image() and rva_to_file_layout() directly for now")
+        unimplemented!(
+            "Use PeHeaders::unrelocate_image() and rva_to_file_layout() directly for now"
+        )
     }
 }

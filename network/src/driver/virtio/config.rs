@@ -7,32 +7,32 @@
 pub mod features {
     /// VirtIO 1.0+ (modern device).
     pub const VIRTIO_F_VERSION_1: u64 = 1 << 32;
-    
+
     /// Device has MAC address in config space.
     pub const VIRTIO_NET_F_MAC: u64 = 1 << 5;
-    
+
     /// Device has link status in config space.
     pub const VIRTIO_NET_F_STATUS: u64 = 1 << 16;
-    
+
     /// Checksum offload (host handles).
     pub const VIRTIO_NET_F_CSUM: u64 = 1 << 0;
-    
+
     // ═══════════════════════════════════════════════════════════
     // FORBIDDEN FEATURES - DO NOT NEGOTIATE
     // ═══════════════════════════════════════════════════════════
-    
+
     /// Guest TSO4 - complicates buffer management.
     pub const VIRTIO_NET_F_GUEST_TSO4: u64 = 1 << 7;
-    
+
     /// Guest TSO6 - complicates buffer management.
     pub const VIRTIO_NET_F_GUEST_TSO6: u64 = 1 << 8;
-    
+
     /// Guest UFO - complicates buffer management.
     pub const VIRTIO_NET_F_GUEST_UFO: u64 = 1 << 10;
-    
+
     /// Mergeable RX buffers - changes header semantics.
     pub const VIRTIO_NET_F_MRG_RXBUF: u64 = 1 << 15;
-    
+
     /// Control virtqueue - not needed for basic operation.
     pub const VIRTIO_NET_F_CTRL_VQ: u64 = 1 << 17;
 }
@@ -57,17 +57,14 @@ pub mod status {
 pub const REQUIRED_FEATURES: u64 = features::VIRTIO_F_VERSION_1;
 
 /// Desired features (use if available).
-pub const DESIRED_FEATURES: u64 =
-    features::VIRTIO_NET_F_MAC |
-    features::VIRTIO_NET_F_STATUS;
+pub const DESIRED_FEATURES: u64 = features::VIRTIO_NET_F_MAC | features::VIRTIO_NET_F_STATUS;
 
 /// Forbidden features (never negotiate).
-pub const FORBIDDEN_FEATURES: u64 =
-    features::VIRTIO_NET_F_GUEST_TSO4 |
-    features::VIRTIO_NET_F_GUEST_TSO6 |
-    features::VIRTIO_NET_F_GUEST_UFO |
-    features::VIRTIO_NET_F_MRG_RXBUF |
-    features::VIRTIO_NET_F_CTRL_VQ;
+pub const FORBIDDEN_FEATURES: u64 = features::VIRTIO_NET_F_GUEST_TSO4
+    | features::VIRTIO_NET_F_GUEST_TSO6
+    | features::VIRTIO_NET_F_GUEST_UFO
+    | features::VIRTIO_NET_F_MRG_RXBUF
+    | features::VIRTIO_NET_F_CTRL_VQ;
 
 /// Feature negotiation error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,12 +86,11 @@ pub fn negotiate_features(device_features: u64) -> Result<u64, FeatureError> {
     if device_features & REQUIRED_FEATURES != REQUIRED_FEATURES {
         return Err(FeatureError::MissingRequired(REQUIRED_FEATURES));
     }
-    
+
     // Select: required + (desired ∩ device) - forbidden
-    let our_features = REQUIRED_FEATURES
-        | (DESIRED_FEATURES & device_features)
-        & !FORBIDDEN_FEATURES;
-    
+    let our_features =
+        REQUIRED_FEATURES | (DESIRED_FEATURES & device_features) & !FORBIDDEN_FEATURES;
+
     Ok(our_features)
 }
 
@@ -103,8 +99,8 @@ pub const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
 
 /// VirtIO-net PCI device IDs.
 pub const VIRTIO_NET_DEVICE_IDS: &[u16] = &[
-    0x1000,  // Legacy virtio-net (transitional)
-    0x1041,  // Modern virtio-net (virtio 1.0+)
+    0x1000, // Legacy virtio-net (transitional)
+    0x1041, // Modern virtio-net (virtio 1.0+)
 ];
 
 /// Check if PCI device is VirtIO-net.
@@ -129,7 +125,7 @@ pub struct VirtioConfig {
 impl VirtioConfig {
     /// Default queue size.
     pub const DEFAULT_QUEUE_SIZE: u16 = 32;
-    
+
     /// Default buffer size (2KB).
     pub const DEFAULT_BUFFER_SIZE: usize = 2048;
 }

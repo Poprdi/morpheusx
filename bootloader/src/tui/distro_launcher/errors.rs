@@ -32,7 +32,7 @@ impl DistroLauncher {
 
         // Show the last N logs that fit on screen
         let max_logs_to_show = (screen.height() - start_y - 2).min(30);
-        
+
         for (i, log_msg) in morpheus_core::logger::get_last_n_logs(max_logs_to_show).enumerate() {
             let y = start_y + 1 + i;
             if y >= screen.height() - 1 {

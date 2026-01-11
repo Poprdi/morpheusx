@@ -25,14 +25,9 @@ pub mod init;
 
 // Re-exports
 pub use handoff::{
-    BootHandoff, HandoffError, TscCalibration,
-    HANDOFF_MAGIC, HANDOFF_VERSION,
-    NIC_TYPE_NONE, NIC_TYPE_VIRTIO, NIC_TYPE_INTEL, NIC_TYPE_REALTEK, NIC_TYPE_BROADCOM,
-    BLK_TYPE_NONE, BLK_TYPE_VIRTIO, BLK_TYPE_NVME, BLK_TYPE_AHCI,
-    has_invariant_tsc, read_tsc_raw,
+    has_invariant_tsc, read_tsc_raw, BootHandoff, HandoffError, TscCalibration, BLK_TYPE_AHCI,
+    BLK_TYPE_NONE, BLK_TYPE_NVME, BLK_TYPE_VIRTIO, HANDOFF_MAGIC, HANDOFF_VERSION,
+    NIC_TYPE_BROADCOM, NIC_TYPE_INTEL, NIC_TYPE_NONE, NIC_TYPE_REALTEK, NIC_TYPE_VIRTIO,
 };
 
-pub use init::{
-    InitError, InitResult, TimeoutConfig,
-    post_ebs_init,
-};
+pub use init::{post_ebs_init, InitError, InitResult, TimeoutConfig};

@@ -7,10 +7,10 @@
 //! - Status codes
 //! - Message formatting
 
+pub mod headers;
 pub mod request;
 pub mod response;
-pub mod headers;
 
+pub use headers::Headers;
 pub use request::Request;
 pub use response::Response;
-pub use headers::Headers;

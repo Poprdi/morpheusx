@@ -46,21 +46,21 @@
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::format;
 use core::net::Ipv4Addr;
 
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp::State as TcpState;
 
+use crate::client::HttpClient;
 use crate::device::NetworkDevice;
 use crate::error::{NetworkError, Result};
-use crate::http::{Request, Response, Headers};
-use crate::stack::{NetInterface, NetConfig, NetState};
-use crate::url::Url;
+use crate::http::{Headers, Request, Response};
+use crate::stack::{NetConfig, NetInterface, NetState};
 use crate::types::{HttpMethod, ProgressCallback};
-use crate::client::HttpClient;
+use crate::url::Url;
 
 /// Default timeout for operations (milliseconds).
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -191,17 +191,17 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Wait for network to be ready (DHCP complete or static configured).
     pub fn wait_for_network(&mut self, timeout_ms: u64) -> Result<()> {
         let start = self.now();
-        
+
         while !self.iface.has_ip() {
             self.poll();
-            
+
             if self.now() - start > timeout_ms {
                 return Err(NetworkError::Timeout);
             }
-            
+
             crate::device::pci::tsc_delay_us(1000); // 1ms
         }
-        
+
         Ok(())
     }
 
@@ -212,7 +212,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Resolve hostname to IP address using DNS or hardcoded fallbacks.
     pub fn resolve_host(&mut self, host: &str) -> Result<Ipv4Addr> {
         crate::stack::debug_log(40, "resolve_host start");
-        
+
         // Try parsing as IP address first
         if let Ok(ip) = host.parse::<Ipv4Addr>() {
             crate::stack::debug_log(41, "host is IP addr");
@@ -231,23 +231,22 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Attempt DNS resolution via UDP query.
     fn try_dns_query(&mut self, host: &str) -> Result<Ipv4Addr> {
         crate::stack::debug_log(42, "starting DNS query");
-        
+
         let start = self.now();
         let timeout_ms = 5000;
-        
-        let query_handle = self.iface.start_dns_query(host)
-            .map_err(|_| {
-                crate::stack::debug_log(47, "DNS start failed");
-                NetworkError::DnsResolutionFailed
-            })?;
+
+        let query_handle = self.iface.start_dns_query(host).map_err(|_| {
+            crate::stack::debug_log(47, "DNS start failed");
+            NetworkError::DnsResolutionFailed
+        })?;
 
         crate::stack::debug_log(43, "DNS query started");
-        
+
         // Poll until result or timeout
         loop {
             let now = self.now();
             self.iface.poll(now);
-            
+
             match self.iface.get_dns_result(query_handle) {
                 Ok(Some(ip)) => {
                     crate::stack::debug_log(44, "DNS resolved OK");
@@ -298,12 +297,12 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Connect to a remote host.
     fn connect(&mut self, ip: Ipv4Addr, port: u16) -> Result<()> {
         crate::stack::debug_log(50, "TCP connect start");
-        
+
         self.close_existing_socket();
         let handle = self.create_tcp_socket()?;
         self.initiate_connection(handle, ip, port)?;
         self.wait_for_connection(handle)?;
-        
+
         crate::stack::debug_log(55, "TCP connected OK");
         Ok(())
     }
@@ -334,7 +333,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Wait for TCP connection to complete.
     fn wait_for_connection(&mut self, handle: SocketHandle) -> Result<()> {
         let start = self.now();
-        
+
         while !self.iface.tcp_is_connected(handle) {
             self.poll();
 
@@ -348,7 +347,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 crate::stack::debug_log(54, "TCP conn TIMEOUT");
                 return Err(NetworkError::Timeout);
             }
-            
+
             crate::device::pci::tsc_delay_us(1000); // 1ms
         }
 
@@ -376,7 +375,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             if self.now() - start > self.config.read_timeout_ms {
                 return Err(NetworkError::Timeout);
             }
-            
+
             crate::device::pci::tsc_delay_us(100); // 100us
         }
 
@@ -403,7 +402,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             if self.now() - start > self.config.read_timeout_ms {
                 return Err(NetworkError::Timeout);
             }
-            
+
             crate::device::pci::tsc_delay_us(1000); // 1ms
         }
     }
@@ -423,7 +422,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 crate::stack::debug_log(68, "unexpected EOF");
                 return Err(NetworkError::UnexpectedEof);
             }
-            
+
             header_buf.extend_from_slice(&buffer[..n]);
 
             if find_header_end(&header_buf).is_some() {
@@ -435,8 +434,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Read full HTTP response (headers + body).
     fn read_full_response(&mut self) -> Result<Vec<u8>> {
         let mut response_data = self.read_headers()?;
-        let body_start = find_header_end(&response_data)
-            .ok_or(NetworkError::InvalidResponse)? + 4;
+        let body_start = find_header_end(&response_data).ok_or(NetworkError::InvalidResponse)? + 4;
 
         let headers_str = core::str::from_utf8(&response_data[..body_start - 4])
             .map_err(|_| NetworkError::InvalidResponse)?;
@@ -444,7 +442,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
         // Read remaining body
         self.read_remaining_body(&mut response_data, body_start, content_length)?;
-        
+
         Ok(response_data)
     }
 
@@ -470,7 +468,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 Ok(n) => {
                     response_data.extend_from_slice(&buffer[..n]);
                     total_body += n;
-                    
+
                     if response_data.len() > self.config.max_response_size {
                         return Err(NetworkError::ResponseTooLarge);
                     }
@@ -532,13 +530,13 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     fn do_request(&mut self, request: &Request) -> Result<Response> {
         let ip = self.resolve_host(&request.url.host)?;
         let port = request.url.port.unwrap_or(80);
-        
+
         self.connect(ip, port)?;
         self.send_all(&request.to_wire_format())?;
-        
+
         let response_data = self.read_full_response()?;
         let (response, _) = Response::parse(&response_data)?;
-        
+
         Ok(response)
     }
 
@@ -557,8 +555,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 return Err(NetworkError::TooManyRedirects);
             }
 
-            let location = response.location()
-                .ok_or(NetworkError::InvalidResponse)?;
+            let location = response.location().ok_or(NetworkError::InvalidResponse)?;
 
             request = self.build_redirect_request(&request, location)?;
             redirects += 1;
@@ -595,9 +592,9 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         F: FnMut(&[u8]) -> Result<()>,
     {
         crate::stack::debug_log(60, "get_streaming start");
-        
+
         let parsed_url = Url::parse(url)?;
-        
+
         if parsed_url.is_https() {
             crate::stack::debug_log(61, "HTTPS not supported!");
             return Err(NetworkError::TlsNotSupported);
@@ -607,11 +604,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     }
 
     /// Execute a streaming HTTP request.
-    fn execute_streaming_request<F>(
-        &mut self,
-        url: &Url,
-        callback: &mut F,
-    ) -> Result<usize>
+    fn execute_streaming_request<F>(&mut self, url: &Url, callback: &mut F) -> Result<usize>
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
@@ -638,10 +631,9 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     {
         crate::stack::debug_log(67, "reading headers...");
         let header_buf = self.read_headers()?;
-        
-        let body_start = find_header_end(&header_buf)
-            .ok_or(NetworkError::InvalidResponse)? + 4;
-        
+
+        let body_start = find_header_end(&header_buf).ok_or(NetworkError::InvalidResponse)? + 4;
+
         crate::stack::debug_log(69, "headers received");
 
         let headers_str = core::str::from_utf8(&header_buf[..body_start - 4])
@@ -649,7 +641,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         let content_length = parse_content_length(headers_str);
 
         let initial_body = &header_buf[body_start..];
-        
+
         crate::stack::debug_log(70, "streaming body...");
         self.stream_response_body(initial_body, content_length, callback)
     }
@@ -662,12 +654,12 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     pub fn close(&mut self) {
         if let Some(handle) = self.socket.take() {
             self.iface.tcp_close(handle);
-            
+
             // Poll to send FIN
             for _ in 0..10 {
                 self.poll();
             }
-            
+
             self.iface.remove_socket(handle);
         }
     }

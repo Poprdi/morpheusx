@@ -5,9 +5,9 @@
 //! - New ASM layer in asm/ (core, pci, drivers, phy)
 
 use std::env;
-use std::process::Command;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// All ASM source files organized by category
 const ASM_CORE: &[&str] = &[
@@ -37,11 +37,7 @@ const ASM_VIRTIO: &[&str] = &[
     "asm/drivers/virtio/pci_modern.s",
 ];
 
-const ASM_PHY: &[&str] = &[
-    "asm/phy/mdio.s",
-    "asm/phy/mii.s",
-    "asm/phy/link.s",
-];
+const ASM_PHY: &[&str] = &["asm/phy/mdio.s", "asm/phy/mii.s", "asm/phy/link.s"];
 
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
@@ -52,19 +48,25 @@ fn main() {
 
     // Only build assembly for x86_64 targets
     if !target.contains("x86_64") {
-        println!("cargo:warning=Skipping assembly for non-x86_64 target: {}", target);
+        println!(
+            "cargo:warning=Skipping assembly for non-x86_64 target: {}",
+            target
+        );
         return;
     }
 
     // Determine output format based on target
     // UEFI uses PE/COFF format (win64)
     let obj_format = if target.contains("windows") || target.contains("uefi") {
-        "win64"  // PE/COFF format for UEFI
+        "win64" // PE/COFF format for UEFI
     } else {
         "elf64"
     };
 
-    println!("cargo:warning=Building ASM for target: {} (format: {})", target, obj_format);
+    println!(
+        "cargo:warning=Building ASM for target: {} (format: {})",
+        target, obj_format
+    );
 
     let mut all_objects = Vec::new();
 
@@ -97,7 +99,10 @@ fn main() {
                         all_objects.push(obj);
                     }
                     Err(e) => {
-                        println!("cargo:warning=Failed to assemble {} ({}): {}", asm_path, category, e);
+                        println!(
+                            "cargo:warning=Failed to assemble {} ({}): {}",
+                            asm_path, category, e
+                        );
                         // Continue with other files
                     }
                 }
@@ -114,7 +119,7 @@ fn main() {
     }
 
     let lib_path = out_dir.join("libnetwork_asm.a");
-    
+
     // Use ar to create archive
     let mut ar_args = vec!["crs".to_string(), lib_path.to_str().unwrap().to_string()];
     for obj in &all_objects {
@@ -131,8 +136,11 @@ fn main() {
         panic!("ar failed to create libnetwork_asm.a: {}", stderr);
     }
 
-    println!("cargo:warning=Created static library with {} objects: {}", 
-             all_objects.len(), lib_path.display());
+    println!(
+        "cargo:warning=Created static library with {} objects: {}",
+        all_objects.len(),
+        lib_path.display()
+    );
 
     // Tell cargo to link the library
     println!("cargo:rustc-link-search=native={}", out_dir.display());
@@ -146,19 +154,23 @@ fn assemble_file(asm_path: &str, out_dir: &Path, obj_format: &str) -> PathBuf {
 }
 
 /// Assemble a single file, return Result
-fn assemble_file_checked(asm_path: &str, out_dir: &Path, obj_format: &str) -> Result<PathBuf, String> {
+fn assemble_file_checked(
+    asm_path: &str,
+    out_dir: &Path,
+    obj_format: &str,
+) -> Result<PathBuf, String> {
     let stem = Path::new(asm_path)
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("Invalid path: {}", asm_path))?;
-    
+
     // Create unique object name to avoid collisions
     let obj_name = asm_path
         .replace('/', "_")
         .replace('\\', "_")
         .replace(".s", ".o")
         .replace(".S", ".o");
-    
+
     let obj_path = out_dir.join(&obj_name);
 
     // Get include paths for ASM files that use external references
@@ -168,13 +180,13 @@ fn assemble_file_checked(asm_path: &str, out_dir: &Path, obj_format: &str) -> Re
         "-o".to_string(),
         obj_path.to_str().unwrap().to_string(),
     ];
-    
+
     // Add include path for cross-file references
     if asm_path.contains("asm/") {
         nasm_args.push("-I".to_string());
         nasm_args.push("asm/".to_string());
     }
-    
+
     nasm_args.push(asm_path.to_string());
 
     let nasm_output = Command::new("nasm")

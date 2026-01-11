@@ -35,7 +35,7 @@ impl EthernetHeader {
     pub fn ethertype_u16(&self) -> u16 {
         u16::from_be_bytes(self.ethertype)
     }
-    
+
     /// Set EtherType from u16.
     pub fn set_ethertype(&mut self, val: u16) {
         self.ethertype = val.to_be_bytes();

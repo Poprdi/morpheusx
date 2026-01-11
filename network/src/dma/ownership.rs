@@ -30,12 +30,12 @@ impl BufferOwnership {
     pub fn can_access(&self) -> bool {
         matches!(self, BufferOwnership::DriverOwned)
     }
-    
+
     /// Check if buffer is free.
     pub fn is_free(&self) -> bool {
         matches!(self, BufferOwnership::Free)
     }
-    
+
     /// Check if buffer is device-owned.
     pub fn is_device_owned(&self) -> bool {
         matches!(self, BufferOwnership::DeviceOwned)

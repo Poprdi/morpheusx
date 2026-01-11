@@ -15,21 +15,21 @@
 //! - Binary manifest for bootloader integration
 
 pub mod chunked;
-pub mod streaming;
 pub mod orchestrator;
+pub mod streaming;
 
 // Post-EBS disk operations (allocation-free, modular)
 pub mod disk;
 
 pub use chunked::{ChunkedDecoder, DecoderState};
-pub use streaming::{StreamReader, StreamWriter, StreamConfig, StreamState, ProgressTracker};
 pub use orchestrator::{
-    PersistenceOrchestrator, PersistenceConfig, PersistenceProgress, 
-    PersistencePhase, PersistenceResult, OrchestratorResult, OrchestratorError,
+    OrchestratorError, OrchestratorResult, PersistenceConfig, PersistenceOrchestrator,
+    PersistencePhase, PersistenceProgress, PersistenceResult,
 };
+pub use streaming::{ProgressTracker, StreamConfig, StreamReader, StreamState, StreamWriter};
 
 // Re-export disk module types for convenience
 pub use disk::{
-    DiskError, DiskResult, PartitionInfo, ChunkPartition, ChunkSet,
-    GptOps, Fat32Formatter, Fat32Info, IsoWriter, ManifestWriter, ManifestReader, IsoManifestInfo,
+    ChunkPartition, ChunkSet, DiskError, DiskResult, Fat32Formatter, Fat32Info, GptOps,
+    IsoManifestInfo, IsoWriter, ManifestReader, ManifestWriter, PartitionInfo,
 };

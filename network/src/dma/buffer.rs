@@ -27,12 +27,7 @@ impl DmaBuffer {
     /// # Safety
     /// - `cpu_ptr` must point to valid DMA-capable memory
     /// - `bus_addr` must be the corresponding device-visible address
-    pub unsafe fn new(
-        cpu_ptr: *mut u8,
-        bus_addr: u64,
-        capacity: usize,
-        index: u16,
-    ) -> Self {
+    pub unsafe fn new(cpu_ptr: *mut u8, bus_addr: u64, capacity: usize, index: u16) -> Self {
         Self {
             cpu_ptr,
             bus_addr,
@@ -41,7 +36,7 @@ impl DmaBuffer {
             index,
         }
     }
-    
+
     /// Get buffer data as slice.
     ///
     /// # Panics
@@ -54,7 +49,7 @@ impl DmaBuffer {
         );
         unsafe { core::slice::from_raw_parts(self.cpu_ptr, self.capacity) }
     }
-    
+
     /// Get buffer data as mutable slice.
     ///
     /// # Panics
@@ -67,56 +62,59 @@ impl DmaBuffer {
         );
         unsafe { core::slice::from_raw_parts_mut(self.cpu_ptr, self.capacity) }
     }
-    
+
     /// Get the first `len` bytes as mutable slice.
     ///
     /// # Panics
     /// Panics if buffer is not DriverOwned or len > capacity.
     pub fn as_mut_slice_len(&mut self, len: usize) -> &mut [u8] {
-        assert!(len <= self.capacity, "Requested length exceeds buffer capacity");
+        assert!(
+            len <= self.capacity,
+            "Requested length exceeds buffer capacity"
+        );
         &mut self.as_mut_slice()[..len]
     }
-    
+
     /// Get the device-visible bus address.
     pub fn bus_addr(&self) -> u64 {
         self.bus_addr
     }
-    
+
     /// Get the CPU pointer.
     pub fn cpu_ptr(&self) -> *mut u8 {
         self.cpu_ptr
     }
-    
+
     /// Get buffer index.
     pub fn index(&self) -> u16 {
         self.index
     }
-    
+
     /// Get buffer capacity.
     pub fn capacity(&self) -> usize {
         self.capacity
     }
-    
+
     /// Get current ownership state.
     pub fn ownership(&self) -> BufferOwnership {
         self.ownership
     }
-    
+
     /// Check if buffer can be allocated.
     pub fn is_free(&self) -> bool {
         self.ownership.is_free()
     }
-    
+
     /// Check if buffer is owned by driver.
     pub fn is_driver_owned(&self) -> bool {
         self.ownership.can_access()
     }
-    
+
     /// Check if buffer is owned by device.
     pub fn is_device_owned(&self) -> bool {
         self.ownership.is_device_owned()
     }
-    
+
     /// Mark buffer as allocated (Free -> DriverOwned).
     ///
     /// # Safety
@@ -125,7 +123,7 @@ impl DmaBuffer {
         debug_assert!(self.ownership.is_free(), "Buffer must be free to allocate");
         self.ownership = BufferOwnership::DriverOwned;
     }
-    
+
     /// Mark buffer as device-owned (DriverOwned -> DeviceOwned).
     ///
     /// # Safety
@@ -137,7 +135,7 @@ impl DmaBuffer {
         );
         self.ownership = BufferOwnership::DeviceOwned;
     }
-    
+
     /// Mark buffer as driver-owned (DeviceOwned -> DriverOwned).
     ///
     /// # Safety
@@ -149,7 +147,7 @@ impl DmaBuffer {
         );
         self.ownership = BufferOwnership::DriverOwned;
     }
-    
+
     /// Mark buffer as free (DriverOwned -> Free).
     ///
     /// # Safety

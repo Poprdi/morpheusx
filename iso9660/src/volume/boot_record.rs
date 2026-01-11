@@ -23,12 +23,12 @@ pub struct BootRecordVolumeDescriptor {
 impl BootRecordVolumeDescriptor {
     /// El Torito magic string
     pub const EL_TORITO_MAGIC: &'static [u8; 23] = b"EL TORITO SPECIFICATION";
-    
+
     /// Validate boot record
     pub fn validate(&self) -> bool {
         self.boot_system_id.starts_with(Self::EL_TORITO_MAGIC)
     }
-    
+
     /// Get boot catalog LBA
     pub fn catalog_lba(&self) -> u32 {
         self.boot_catalog_lba

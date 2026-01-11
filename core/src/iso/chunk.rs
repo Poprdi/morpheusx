@@ -50,12 +50,7 @@ impl ChunkInfo {
     }
 
     /// Create a new chunk info for a partition
-    pub const fn new(
-        partition_uuid: [u8; 16],
-        start_lba: u64,
-        end_lba: u64,
-        index: u8,
-    ) -> Self {
+    pub const fn new(partition_uuid: [u8; 16], start_lba: u64, end_lba: u64, index: u8) -> Self {
         Self {
             partition_uuid,
             start_lba,

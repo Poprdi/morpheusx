@@ -12,10 +12,10 @@
 //! assert_eq!(response.status_code, 200);
 //! ```
 
+use super::headers::Headers;
+use crate::error::{NetworkError, Result};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use crate::error::{NetworkError, Result};
-use super::headers::Headers;
 
 /// HTTP response.
 #[derive(Debug, Clone)]
@@ -122,15 +122,15 @@ impl Response {
     pub fn parse(data: &[u8]) -> Result<(Self, usize)> {
         // Convert to string for easier parsing (HTTP/1.1 is ASCII)
         let text = core::str::from_utf8(data).map_err(|_| NetworkError::InvalidResponse)?;
-        
+
         // Find end of headers
         let headers_end = text.find("\r\n\r\n").ok_or(NetworkError::InvalidResponse)?;
-        
+
         // Parse status line (first line)
         let first_line_end = text.find("\r\n").ok_or(NetworkError::InvalidResponse)?;
         let status_line = &text[..first_line_end];
         let (version, status_code, reason) = Self::parse_status_line(status_line)?;
-        
+
         // Parse headers (after first line, if any exist before headers_end)
         let headers_start = first_line_end + 2;
         let headers = if headers_start < headers_end {
@@ -139,15 +139,15 @@ impl Response {
         } else {
             Headers::new()
         };
-        
+
         // Calculate body start
         let body_start = headers_end + 4; // Skip \r\n\r\n
-        
+
         // Get body based on Content-Length or rest of data
         let body_len = headers.content_length().unwrap_or(data.len() - body_start);
         let body_end = body_start + body_len.min(data.len() - body_start);
         let body = data[body_start..body_end].to_vec();
-        
+
         let response = Self {
             version,
             status_code,
@@ -155,24 +155,26 @@ impl Response {
             headers,
             body,
         };
-        
+
         Ok((response, body_end))
     }
 
     /// Parse status line: "HTTP/1.1 200 OK"
     fn parse_status_line(line: &str) -> Result<(String, u16, String)> {
         let mut parts = line.splitn(3, ' ');
-        
+
         let version = parts.next().ok_or(NetworkError::InvalidResponse)?;
         if !version.starts_with("HTTP/") {
             return Err(NetworkError::InvalidResponse);
         }
-        
+
         let status_str = parts.next().ok_or(NetworkError::InvalidResponse)?;
-        let status_code = status_str.parse::<u16>().map_err(|_| NetworkError::InvalidResponse)?;
-        
+        let status_code = status_str
+            .parse::<u16>()
+            .map_err(|_| NetworkError::InvalidResponse)?;
+
         let reason = parts.next().unwrap_or("").to_string();
-        
+
         Ok((version.to_string(), status_code, reason))
     }
 
@@ -181,13 +183,13 @@ impl Response {
     /// Useful for HEAD responses or when body will be streamed separately.
     pub fn parse_headers_only(data: &[u8]) -> Result<(Self, usize)> {
         let text = core::str::from_utf8(data).map_err(|_| NetworkError::InvalidResponse)?;
-        
+
         let headers_end = text.find("\r\n\r\n").ok_or(NetworkError::InvalidResponse)?;
-        
+
         let first_line_end = text.find("\r\n").ok_or(NetworkError::InvalidResponse)?;
         let status_line = &text[..first_line_end];
         let (version, status_code, reason) = Self::parse_status_line(status_line)?;
-        
+
         let headers_start = first_line_end + 2;
         let headers = if headers_start < headers_end {
             let (h, _) = Headers::from_wire_format(&text[headers_start..headers_end]);
@@ -195,7 +197,7 @@ impl Response {
         } else {
             Headers::new()
         };
-        
+
         let response = Self {
             version,
             status_code,
@@ -203,7 +205,7 @@ impl Response {
             headers,
             body: Vec::new(),
         };
-        
+
         // Return byte offset where body would start
         Ok((response, headers_end + 4))
     }
@@ -284,7 +286,7 @@ mod tests {
     fn test_parse_simple_response() {
         let data = b"HTTP/1.1 200 OK\r\n\r\n";
         let (response, consumed) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.version, "HTTP/1.1");
         assert_eq!(response.status_code, 200);
         assert_eq!(response.reason, "OK");
@@ -295,7 +297,7 @@ mod tests {
     fn test_parse_response_with_headers() {
         let data = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n\r\nHello";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.status_code, 200);
         assert_eq!(response.content_type(), Some("text/html"));
         assert_eq!(response.content_length(), Some(5));
@@ -306,7 +308,7 @@ mod tests {
     fn test_parse_response_with_body() {
         let data = b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nHello World";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.body, b"Hello World");
     }
 
@@ -314,7 +316,7 @@ mod tests {
     fn test_parse_404_response() {
         let data = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.status_code, 404);
         assert_eq!(response.reason, "Not Found");
         assert!(!response.is_success());
@@ -326,16 +328,17 @@ mod tests {
     fn test_parse_redirect_response() {
         let data = b"HTTP/1.1 302 Found\r\nLocation: http://example.com/new\r\n\r\n";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert!(response.is_redirect());
         assert_eq!(response.location(), Some("http://example.com/new"));
     }
 
     #[test]
     fn test_parse_301_redirect() {
-        let data = b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://secure.example.com/\r\n\r\n";
+        let data =
+            b"HTTP/1.1 301 Moved Permanently\r\nLocation: https://secure.example.com/\r\n\r\n";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.status_code, 301);
         assert!(response.is_redirect());
         assert_eq!(response.location(), Some("https://secure.example.com/"));
@@ -347,7 +350,7 @@ mod tests {
     fn test_parse_chunked_response() {
         let data = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert!(response.is_chunked());
         assert_eq!(response.content_length(), None);
     }
@@ -358,11 +361,11 @@ mod tests {
     fn test_parse_headers_only() {
         let data = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nBody starts here...";
         let (response, body_offset) = Response::parse_headers_only(data).unwrap();
-        
+
         assert_eq!(response.status_code, 200);
         assert_eq!(response.content_length(), Some(1000));
         assert!(response.body.is_empty()); // Body not parsed
-        // 17 (status line) + 22 (header) + 2 (blank line) = 41 bytes
+                                           // 17 (status line) + 22 (header) + 2 (blank line) = 41 bytes
         assert_eq!(body_offset, 41); // Where body starts
     }
 
@@ -398,7 +401,7 @@ mod tests {
     fn test_parse_no_reason_phrase() {
         let data = b"HTTP/1.1 200 \r\n\r\n";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.status_code, 200);
         assert_eq!(response.reason, "");
     }
@@ -407,7 +410,7 @@ mod tests {
     fn test_parse_http_10() {
         let data = b"HTTP/1.0 200 OK\r\n\r\n";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.version, "HTTP/1.0");
     }
 
@@ -416,7 +419,7 @@ mod tests {
         // Body shorter than Content-Length
         let data = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nShort";
         let (response, _) = Response::parse(data).unwrap();
-        
+
         assert_eq!(response.body, b"Short");
     }
 
@@ -433,7 +436,7 @@ mod tests {
             "\r\n"
         );
         let (response, body_offset) = Response::parse_headers_only(data.as_bytes()).unwrap();
-        
+
         assert!(response.is_success());
         assert_eq!(response.content_type(), Some("application/octet-stream"));
         assert_eq!(response.content_length(), Some(1048576000)); // ~1GB
@@ -450,7 +453,7 @@ mod tests {
             "\r\n"
         );
         let (response, _) = Response::parse(data.as_bytes()).unwrap();
-        
+
         assert!(response.is_success());
         assert_eq!(response.content_length(), Some(3221225472)); // 3GB
         assert!(response.body.is_empty()); // HEAD has no body

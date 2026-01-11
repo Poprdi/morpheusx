@@ -106,19 +106,19 @@ impl PciDeviceInfo {
         if !self.is_virtio() {
             return false;
         }
-        
+
         // Modern VirtIO network device
         if self.device_id == VIRTIO_NET_DEVICE_ID {
             return true;
         }
-        
+
         // Transitional VirtIO network (device ID 0x1000, type = device_id - 0x1000 = 0 = reserved,
         // but QEMU uses 0x1000 for net). Also check 0x1001 just in case.
         if self.device_id == VIRTIO_DEVICE_ID_BASE || self.device_id == VIRTIO_DEVICE_ID_BASE + 1 {
             // For transitional devices, also verify it's a network class
             return self.class == 0x02;
         }
-        
+
         // Fallback: any VirtIO device with network class
         self.class == 0x02
     }
@@ -236,7 +236,7 @@ extern "C" {
     /// Test if PCI I/O ports are accessible.
     /// Returns the value read back from 0xCF8 (should have bit 31 set).
     pub fn pci_io_test() -> u32;
-    
+
     /// Read CPU timestamp counter.
     /// Returns 64-bit TSC value.
     pub fn read_tsc() -> u64;
@@ -261,7 +261,7 @@ pub fn tsc_delay_us(_us: u32) {
 }
 
 /// Legacy I/O port PCI configuration access (0xCF8/0xCFC).
-/// 
+///
 /// Uses standalone assembly (pci_io.S) for reliable I/O port access
 /// without compiler optimization interference.
 #[cfg(target_arch = "x86_64")]
@@ -447,11 +447,11 @@ pub mod diagnostics {
     pub fn raw_io_test() -> (u32, u32) {
         // Use our external assembly test function
         let cf8_readback = unsafe { pci_io_test() };
-        
+
         // Also read host bridge
         let legacy = LegacyIoAccess::new();
         let host_id = unsafe { legacy.read32(DeviceFunction::new(0, 0, 0), 0x00) };
-        
+
         (cf8_readback, host_id)
     }
 
@@ -479,7 +479,7 @@ pub mod diagnostics {
             let id = unsafe { legacy.read32(loc, 0x00) };
             let vendor = (id & 0xFFFF) as u16;
             let device = ((id >> 16) & 0xFFFF) as u16;
-            
+
             // Only add if device present (not 0xFFFF)
             if vendor != 0xFFFF {
                 results.push((loc, vendor, device));
@@ -488,7 +488,7 @@ pub mod diagnostics {
 
         results
     }
-    
+
     /// Scan specific device locations where QEMU typically places VirtIO.
     /// Returns raw vendor/device values (0xFFFF = no device).
     pub fn probe_common_virtio_locations() -> Vec<(DeviceFunction, u16, u16)> {
@@ -681,12 +681,7 @@ mod tests {
     #[test]
     fn test_scanner_finds_virtio() {
         let mut access = MockAccess::new();
-        access.add_device(
-            DeviceFunction::new(0, 3, 0),
-            VIRTIO_VENDOR_ID,
-            0x1001,
-            0x02,
-        );
+        access.add_device(DeviceFunction::new(0, 3, 0), VIRTIO_VENDOR_ID, 0x1001, 0x02);
 
         let scanner = PciScanner::new(access);
         let virtio = scanner.find_virtio_net();
@@ -718,18 +713,8 @@ mod tests {
 
         // Re-scan for just virtio (need new scanner due to move)
         let mut access2 = MockAccess::new();
-        access2.add_device(
-            DeviceFunction::new(0, 1, 0),
-            0x8086,
-            0x100E,
-            0x02,
-        );
-        access2.add_device(
-            DeviceFunction::new(0, 3, 0),
-            VIRTIO_VENDOR_ID,
-            0x1001,
-            0x02,
-        );
+        access2.add_device(DeviceFunction::new(0, 1, 0), 0x8086, 0x100E, 0x02);
+        access2.add_device(DeviceFunction::new(0, 3, 0), VIRTIO_VENDOR_ID, 0x1001, 0x02);
         let scanner2 = PciScanner::new(access2);
         let virtio = scanner2.find_virtio_net();
         assert_eq!(virtio.len(), 1);

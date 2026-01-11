@@ -142,183 +142,172 @@ pub struct BootHandoff {
     // ═══════════════════════════════════════════════════════════════════════
     // HEADER (16 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Magic number for validation: "MORPHEUS" = 0x5355_4548_5052_4F4D
     pub magic: u64,
-    
+
     /// Structure version (currently 1)
     pub version: u32,
-    
+
     /// Structure size in bytes (for forward compatibility)
     pub size: u32,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // NIC INFORMATION (24 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// VirtIO/NIC MMIO base address (from PCI BAR)
     pub nic_mmio_base: u64,
-    
+
     /// PCI bus number
     pub nic_pci_bus: u8,
-    
+
     /// PCI device number
     pub nic_pci_device: u8,
-    
+
     /// PCI function number
     pub nic_pci_function: u8,
-    
+
     /// NIC type: 0=None, 1=VirtIO, 2=Intel, 3=Realtek, 4=Broadcom
     pub nic_type: u8,
-    
+
     /// MAC address (6 bytes, may be zeros if not yet read)
     pub mac_address: [u8; 6],
-    
+
     /// Padding for alignment
     pub _nic_pad: [u8; 2],
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // BLOCK DEVICE INFORMATION (24 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Block device MMIO base address (legacy) or common_cfg (PCI Modern)
     pub blk_mmio_base: u64,
-    
+
     /// Block device PCI bus number
     pub blk_pci_bus: u8,
-    
+
     /// Block device PCI device number
     pub blk_pci_device: u8,
-    
+
     /// Block device PCI function number
     pub blk_pci_function: u8,
-    
+
     /// Block device type: 0=None, 1=VirtIO-blk, 2=NVMe, 3=AHCI
     pub blk_type: u8,
-    
+
     /// Block device sector size (typically 512)
     pub blk_sector_size: u32,
-    
+
     /// Block device total sectors
     pub blk_total_sectors: u64,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // DMA REGION (24 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// CPU pointer for software access
     pub dma_cpu_ptr: u64,
-    
+
     /// Bus address for device DMA (may differ from CPU addr with IOMMU)
     pub dma_bus_addr: u64,
-    
+
     /// Region size in bytes (minimum 2MB)
     pub dma_size: u64,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // TIMING (8 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Calibrated TSC frequency (ticks per second)
     /// MUST be calibrated at boot using UEFI Stall(). NO HARDCODED VALUES.
     pub tsc_freq: u64,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // STACK (16 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Top of stack (highest address, stack grows down)
     pub stack_top: u64,
-    
+
     /// Stack size in bytes (minimum 64KB)
     pub stack_size: u64,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // FRAMEBUFFER / DEBUG (24 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Framebuffer base address for debug output (0 if unavailable)
     pub framebuffer_base: u64,
-    
+
     /// Framebuffer width in pixels
     pub framebuffer_width: u32,
-    
+
     /// Framebuffer height in pixels
     pub framebuffer_height: u32,
-    
+
     /// Framebuffer stride (bytes per row)
     pub framebuffer_stride: u32,
-    
+
     /// Framebuffer pixel format: 0=BGR, 1=RGB
     pub framebuffer_format: u32,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // MEMORY MAP INFO (16 bytes)
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Pointer to UEFI memory map (copied before EBS)
     pub memory_map_ptr: u64,
-    
+
     /// Memory map size in bytes
     pub memory_map_size: u32,
-    
+
     /// Memory map descriptor size
     pub memory_map_desc_size: u32,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern NIC
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub nic_transport_type: u8,
-    
+
     /// Padding
     pub _transport_pad: [u8; 3],
-    
+
     /// Notify offset multiplier (from VIRTIO_PCI_CAP_NOTIFY)
     pub nic_notify_off_multiplier: u32,
-    
+
     /// Common cfg address (BAR base + cap offset)
     pub nic_common_cfg: u64,
-    
+
     /// Notify cfg address (BAR base + cap offset)
     pub nic_notify_cfg: u64,
-    
+
     /// ISR cfg address (BAR base + cap offset)
     pub nic_isr_cfg: u64,
-    
+
     /// Device cfg address (BAR base + cap offset)
     pub nic_device_cfg: u64,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern BLK
     // ═══════════════════════════════════════════════════════════════════════
-    
     /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub blk_transport_type: u8,
-    
+
     /// Padding
     pub _blk_transport_pad: [u8; 3],
-    
+
     /// Notify offset multiplier (from VIRTIO_PCI_CAP_NOTIFY)
     pub blk_notify_off_multiplier: u32,
-    
+
     /// Common cfg address (BAR base + cap offset) - same as blk_mmio_base for PCI Modern
     pub blk_common_cfg: u64,
-    
+
     /// Notify cfg address (BAR base + cap offset)
     pub blk_notify_cfg: u64,
-    
+
     /// ISR cfg address (BAR base + cap offset)
     pub blk_isr_cfg: u64,
-    
+
     /// Device cfg address (BAR base + cap offset)
     pub blk_device_cfg: u64,
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // RESERVED (8 bytes for future expansion)
     // ═══════════════════════════════════════════════════════════════════════
-    
     pub _reserved: [u8; 8],
 }
 
@@ -328,13 +317,13 @@ const _: () = assert!(core::mem::size_of::<BootHandoff>() == 256);
 impl BootHandoff {
     /// Magic number constant
     pub const MAGIC: u64 = HANDOFF_MAGIC;
-    
+
     /// Current version constant
     pub const VERSION: u32 = HANDOFF_VERSION;
-    
+
     /// Expected structure size
     pub const SIZE: u32 = 256;
-    
+
     /// Create a zeroed handoff structure with magic and version set.
     pub const fn new() -> Self {
         Self {
@@ -370,7 +359,7 @@ impl BootHandoff {
             memory_map_size: 0,
             memory_map_desc_size: 0,
             // PCI Modern transport fields (NIC)
-            nic_transport_type: 0,  // 0 = MMIO
+            nic_transport_type: 0, // 0 = MMIO
             _transport_pad: [0; 3],
             nic_notify_off_multiplier: 0,
             nic_common_cfg: 0,
@@ -378,7 +367,7 @@ impl BootHandoff {
             nic_isr_cfg: 0,
             nic_device_cfg: 0,
             // PCI Modern transport fields (BLK)
-            blk_transport_type: 0,  // 0 = MMIO
+            blk_transport_type: 0, // 0 = MMIO
             _blk_transport_pad: [0; 3],
             blk_notify_off_multiplier: 0,
             blk_common_cfg: 0,
@@ -388,7 +377,7 @@ impl BootHandoff {
             _reserved: [0; 8],
         }
     }
-    
+
     /// Validate the handoff structure.
     ///
     /// # Returns
@@ -405,12 +394,12 @@ impl BootHandoff {
         if self.size != Self::SIZE {
             return Err(HandoffError::SizeMismatch);
         }
-        
+
         // TSC validation (required)
         if self.tsc_freq < MIN_TSC_FREQ || self.tsc_freq > MAX_TSC_FREQ {
             return Err(HandoffError::InvalidTscFreq);
         }
-        
+
         // DMA validation (required)
         if self.dma_size < MIN_DMA_SIZE {
             return Err(HandoffError::DmaRegionTooSmall);
@@ -421,7 +410,7 @@ impl BootHandoff {
         if self.dma_bus_addr == 0 {
             return Err(HandoffError::DmaBusAddrZero);
         }
-        
+
         // Stack validation (required)
         if self.stack_size < MIN_STACK_SIZE {
             return Err(HandoffError::StackTooSmall);
@@ -429,7 +418,7 @@ impl BootHandoff {
         if self.stack_top == 0 {
             return Err(HandoffError::StackTopNull);
         }
-        
+
         // NIC validation (required for network boot)
         if self.nic_type == NIC_TYPE_NONE {
             return Err(HandoffError::NoNic);
@@ -437,55 +426,58 @@ impl BootHandoff {
         if self.nic_mmio_base == 0 {
             return Err(HandoffError::NicMmioZero);
         }
-        
+
         Ok(())
     }
-    
+
     /// Validate for network-only operation (block device optional).
     pub fn validate_network_only(&self) -> Result<(), HandoffError> {
         // Same as validate() - NIC is required
         self.validate()
     }
-    
+
     /// Check if block device is configured.
     pub fn has_block_device(&self) -> bool {
         // For PCI Modern, blk_mmio_base is 0 but blk_common_cfg is set
         // For Legacy MMIO, blk_mmio_base is set
-        self.blk_type != BLK_TYPE_NONE && 
-            (self.blk_mmio_base != 0 || self.blk_common_cfg != 0)
+        self.blk_type != BLK_TYPE_NONE && (self.blk_mmio_base != 0 || self.blk_common_cfg != 0)
     }
-    
+
     /// Check if framebuffer is available.
     pub fn has_framebuffer(&self) -> bool {
         self.framebuffer_base != 0 && self.framebuffer_width > 0 && self.framebuffer_height > 0
     }
-    
+
     /// Get DMA region as raw pointer and size.
     ///
     /// # Safety
     /// The returned pointer is only valid if the handoff has been validated.
     pub unsafe fn dma_region(&self) -> (*mut u8, u64, u64) {
-        (self.dma_cpu_ptr as *mut u8, self.dma_bus_addr, self.dma_size)
+        (
+            self.dma_cpu_ptr as *mut u8,
+            self.dma_bus_addr,
+            self.dma_size,
+        )
     }
-    
+
     /// Convert milliseconds to TSC ticks.
     #[inline]
     pub fn ms_to_ticks(&self, ms: u64) -> u64 {
         ms * self.tsc_freq / 1_000
     }
-    
+
     /// Convert TSC ticks to milliseconds.
     #[inline]
     pub fn ticks_to_ms(&self, ticks: u64) -> u64 {
         ticks * 1_000 / self.tsc_freq
     }
-    
+
     /// Convert microseconds to TSC ticks.
     #[inline]
     pub fn us_to_ticks(&self, us: u64) -> u64 {
         us * self.tsc_freq / 1_000_000
     }
-    
+
     /// Convert TSC ticks to microseconds.
     #[inline]
     pub fn ticks_to_us(&self, ticks: u64) -> u64 {

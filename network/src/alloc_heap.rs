@@ -69,9 +69,9 @@ impl LockedHeap {
             inner: spin::Mutex::new(Heap::empty()),
         }
     }
-    
+
     /// Initialize the heap with a memory region
-    /// 
+    ///
     /// # Safety
     /// - Must be called exactly once
     /// - Memory region must be valid and not used elsewhere
@@ -120,10 +120,10 @@ pub unsafe fn init_heap() {
     if HEAP_INITIALIZED {
         return; // Already initialized
     }
-    
+
     let heap_start = HEAP_BUFFER.0.as_mut_ptr();
     let heap_size = HEAP_SIZE;
-    
+
     GLOBAL.init(heap_start, heap_size);
     HEAP_INITIALIZED = true;
 }

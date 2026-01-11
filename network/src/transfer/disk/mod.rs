@@ -32,17 +32,17 @@
 //! 3. **Chunk partitions** - ISO split across FAT32 partitions (4GB limit each)
 //! 4. **Manifest tracking** - Binary manifest for bootloader to find chunks
 
-mod types;
-mod gpt;
 mod fat32;
-mod writer;
+mod gpt;
 mod manifest;
+mod types;
+mod writer;
 
-pub use types::{
-    DiskError, DiskResult, PartitionInfo, ChunkPartition, ChunkSet,
-    SECTOR_SIZE, MAX_CHUNK_PARTITIONS,
-};
-pub use gpt::GptOps;
 pub use fat32::{Fat32Formatter, Fat32Info};
+pub use gpt::GptOps;
+pub use manifest::{IsoManifestInfo, ManifestReader, ManifestWriter};
+pub use types::{
+    ChunkPartition, ChunkSet, DiskError, DiskResult, PartitionInfo, MAX_CHUNK_PARTITIONS,
+    SECTOR_SIZE,
+};
 pub use writer::IsoWriter;
-pub use manifest::{ManifestWriter, ManifestReader, IsoManifestInfo};

@@ -23,5 +23,5 @@
 pub mod disk;
 pub mod fs;
 pub mod iso;
-pub mod net;
 pub mod logger;
+pub mod net;

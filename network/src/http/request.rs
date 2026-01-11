@@ -13,11 +13,11 @@
 //! let wire = request.to_wire_format();
 //! ```
 
-use alloc::string::String;
-use alloc::vec::Vec;
+use super::headers::Headers;
 use crate::types::HttpMethod;
 use crate::url::Url;
-use super::headers::Headers;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// HTTP request.
 #[derive(Debug, Clone)]
@@ -36,13 +36,13 @@ impl Request {
     /// Create a new request with the given method and URL.
     pub fn new(method: HttpMethod, url: Url) -> Self {
         let mut headers = Headers::new();
-        
+
         // Set default headers
         headers.set_host(url.host_header());
         headers.set("User-Agent", "MorpheusX/1.0");
         headers.set("Accept", "*/*");
         headers.set("Connection", "close");
-        
+
         Self {
             method,
             url,
@@ -112,25 +112,25 @@ impl Request {
     /// ```
     pub fn to_wire_format(&self) -> Vec<u8> {
         let mut result = String::new();
-        
+
         // Request line: METHOD /path HTTP/1.1
         result.push_str(self.method_str());
         result.push(' ');
         result.push_str(&self.url.request_uri());
         result.push_str(" HTTP/1.1\r\n");
-        
+
         // Headers
         result.push_str(&self.headers.to_wire_format());
-        
+
         // Empty line to end headers
         result.push_str("\r\n");
-        
+
         // Convert to bytes and append body if present
         let mut bytes = result.into_bytes();
         if let Some(ref body) = self.body {
             bytes.extend_from_slice(body);
         }
-        
+
         bytes
     }
 
@@ -228,24 +228,22 @@ mod tests {
     fn test_with_body() {
         let body = b"Hello, World!".to_vec();
         let request = Request::post(test_url()).with_body(body.clone());
-        
+
         assert_eq!(request.body, Some(body));
         assert_eq!(request.headers.content_length(), Some(13));
     }
 
     #[test]
     fn test_with_header() {
-        let request = Request::get(test_url())
-            .with_header("X-Custom", "value");
-        
+        let request = Request::get(test_url()).with_header("X-Custom", "value");
+
         assert_eq!(request.headers.get("X-Custom"), Some("value"));
     }
 
     #[test]
     fn test_with_content_type() {
-        let request = Request::post(test_url())
-            .with_content_type("application/json");
-        
+        let request = Request::post(test_url()).with_content_type("application/json");
+
         assert_eq!(request.headers.content_type(), Some("application/json"));
     }
 
@@ -269,7 +267,7 @@ mod tests {
     fn test_to_wire_format_request_line() {
         let request = Request::get(test_url());
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.starts_with("GET /api/test HTTP/1.1\r\n"));
     }
 
@@ -277,7 +275,7 @@ mod tests {
     fn test_to_wire_format_headers() {
         let request = Request::get(test_url());
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.contains("Host: example.com\r\n"));
         assert!(wire.contains("User-Agent: MorpheusX/1.0\r\n"));
     }
@@ -286,7 +284,7 @@ mod tests {
     fn test_to_wire_format_ends_with_double_crlf() {
         let request = Request::get(test_url());
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.ends_with("\r\n\r\n"));
     }
 
@@ -295,10 +293,10 @@ mod tests {
         let body = b"test body".to_vec();
         let request = Request::post(test_url()).with_body(body);
         let wire = request.to_wire_format();
-        
+
         // Should end with body, not \r\n\r\n
         assert!(wire.ends_with(b"test body"));
-        
+
         // Should contain Content-Length
         let wire_str = String::from_utf8_lossy(&wire);
         assert!(wire_str.contains("Content-Length: 9\r\n"));
@@ -309,7 +307,7 @@ mod tests {
         let url = Url::parse("http://example.com/search?q=rust").unwrap();
         let request = Request::get(url);
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.starts_with("GET /search?q=rust HTTP/1.1\r\n"));
     }
 
@@ -317,12 +315,11 @@ mod tests {
 
     #[test]
     fn test_iso_download_request() {
-        let url = Url::parse(
-            "http://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
-        ).unwrap();
+        let url = Url::parse("http://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso")
+            .unwrap();
         let request = Request::get(url);
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.starts_with("GET /24.04/ubuntu-24.04-live-server-amd64.iso HTTP/1.1\r\n"));
         assert!(wire.contains("Host: releases.ubuntu.com\r\n"));
     }
@@ -332,7 +329,7 @@ mod tests {
         let url = Url::parse("http://mirror.example.com/file.iso").unwrap();
         let request = Request::head(url);
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.starts_with("HEAD /file.iso HTTP/1.1\r\n"));
     }
 
@@ -343,9 +340,9 @@ mod tests {
         let request = Request::post(url)
             .with_content_type("application/json")
             .with_body(body);
-        
+
         let wire = String::from_utf8(request.to_wire_format()).unwrap();
-        
+
         assert!(wire.starts_with("POST /v1/data HTTP/1.1\r\n"));
         assert!(wire.contains("Content-Type: application/json\r\n"));
         assert!(wire.contains("Content-Length: 16\r\n"));

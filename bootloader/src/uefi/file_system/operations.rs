@@ -1,4 +1,4 @@
-use super::{FileProtocol, LoadedImageProtocol, LOADED_IMAGE_PROTOCOL_GUID, EFI_FILE_MODE_READ};
+use super::{FileProtocol, LoadedImageProtocol, EFI_FILE_MODE_READ, LOADED_IMAGE_PROTOCOL_GUID};
 use crate::BootServices;
 
 pub fn ascii_to_utf16(ascii: &str, buf: &mut [u16]) -> usize {

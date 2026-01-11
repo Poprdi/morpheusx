@@ -3,7 +3,9 @@
 //! Renders the ISO manager TUI components.
 
 use super::state::{IsoManagerState, ViewMode};
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN, EFI_LIGHTGREEN, EFI_DARKGRAY, EFI_WHITE, EFI_RED, EFI_YELLOW};
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_DARKGRAY, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_WHITE, EFI_YELLOW,
+};
 
 /// Box drawing characters (ASCII fallback for UEFI)
 const BOX_H: char = '-';
@@ -16,7 +18,7 @@ const BOX_BR: char = '+';
 /// Render the ISO manager UI
 pub fn render(screen: &mut Screen, state: &IsoManagerState) {
     render_header(screen);
-    
+
     match state.mode {
         ViewMode::List => render_list(screen, state),
         ViewMode::Details => render_details(screen, state),
@@ -35,14 +37,14 @@ pub fn render(screen: &mut Screen, state: &IsoManagerState) {
 
 fn render_header(screen: &mut Screen) {
     let width = screen.width();
-    
+
     // Title bar
     screen.set_cursor(0, 0);
     screen.set_colors(EFI_BLACK, EFI_GREEN);
-    
+
     let title = " ISO MANAGER ";
     let padding = (width - title.len()) / 2;
-    
+
     for _ in 0..padding {
         screen.print_char(' ');
     }
@@ -55,7 +57,7 @@ fn render_header(screen: &mut Screen) {
     screen.set_cursor(0, 1);
     screen.set_colors(EFI_LIGHTGREEN, EFI_BLACK);
     screen.print("  Manage downloaded ISO images");
-    
+
     // Separator
     screen.set_cursor(0, 2);
     screen.set_colors(EFI_DARKGRAY, EFI_BLACK);
@@ -66,7 +68,7 @@ fn render_header(screen: &mut Screen) {
 
 fn render_list(screen: &mut Screen, state: &IsoManagerState) {
     let start_row = 4;
-    
+
     if state.count == 0 {
         screen.set_cursor(2, start_row);
         screen.set_colors(EFI_DARKGRAY, EFI_BLACK);
@@ -78,7 +80,7 @@ fn render_list(screen: &mut Screen, state: &IsoManagerState) {
     screen.set_cursor(2, start_row);
     screen.set_colors(EFI_GREEN, EFI_BLACK);
     screen.print("  NAME                                    SIZE      CHUNKS  STATUS");
-    
+
     screen.set_cursor(2, start_row + 1);
     screen.set_colors(EFI_DARKGRAY, EFI_BLACK);
     for _ in 0..70 {
@@ -100,10 +102,10 @@ fn render_list(screen: &mut Screen, state: &IsoManagerState) {
         }
 
         // Name (max 40 chars)
-        let name = core::str::from_utf8(&state.names[i][..state.name_lens[i].min(40)])
-            .unwrap_or("???");
+        let name =
+            core::str::from_utf8(&state.names[i][..state.name_lens[i].min(40)]).unwrap_or("???");
         screen.print(name);
-        
+
         // Padding after name
         for _ in name.len()..40 {
             screen.print_char(' ');
@@ -112,7 +114,7 @@ fn render_list(screen: &mut Screen, state: &IsoManagerState) {
         // Size
         screen.print("  ");
         print_size_mb(screen, state.sizes_mb[i]);
-        
+
         // Chunks
         screen.print("   ");
         let chunks = state.chunk_counts[i];
@@ -140,7 +142,7 @@ fn render_list(screen: &mut Screen, state: &IsoManagerState) {
 
 fn render_details(screen: &mut Screen, state: &IsoManagerState) {
     let start_row = 4;
-    
+
     if state.count == 0 {
         return;
     }
@@ -154,7 +156,7 @@ fn render_details(screen: &mut Screen, state: &IsoManagerState) {
     let box_left = 2;
     let box_width = 60;
     let box_top = start_row + 1;
-    
+
     // Top border
     screen.set_cursor(box_left, box_top);
     screen.set_colors(EFI_DARKGRAY, EFI_BLACK);
@@ -245,7 +247,7 @@ fn render_details(screen: &mut Screen, state: &IsoManagerState) {
 fn render_confirm_dialog(screen: &mut Screen, title: &str, item_name: &str) {
     let width = screen.width();
     let height = screen.height();
-    
+
     let dialog_width = 50;
     let dialog_height = 7;
     let left = (width - dialog_width) / 2;
@@ -313,7 +315,7 @@ fn render_footer(screen: &mut Screen, state: &IsoManagerState) {
     // Help text
     screen.set_cursor(2, height - 1);
     screen.set_colors(EFI_DARKGRAY, EFI_BLACK);
-    
+
     match state.mode {
         ViewMode::List => {
             if state.count > 0 {
@@ -339,7 +341,7 @@ fn print_number(screen: &mut Screen, n: u64) {
     let mut buf = [0u8; 20];
     let mut i = 0;
     let mut val = n;
-    
+
     while val > 0 {
         buf[i] = b'0' + (val % 10) as u8;
         val /= 10;

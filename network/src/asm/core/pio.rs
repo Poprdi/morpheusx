@@ -64,19 +64,25 @@ pub unsafe fn outl(port: u16, value: u32) {
 // Stubs for non-x86_64
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-pub unsafe fn inb(_port: u16) -> u8 { 0 }
+pub unsafe fn inb(_port: u16) -> u8 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn outb(_port: u16, _value: u8) {}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-pub unsafe fn inw(_port: u16) -> u16 { 0 }
+pub unsafe fn inw(_port: u16) -> u16 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn outw(_port: u16, _value: u16) {}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-pub unsafe fn inl(_port: u16) -> u32 { 0 }
+pub unsafe fn inl(_port: u16) -> u32 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn outl(_port: u16, _value: u32) {}

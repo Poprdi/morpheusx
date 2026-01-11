@@ -1,12 +1,14 @@
-use super::ui::DistroLauncher;
 use super::entry::BootEntry;
+use super::ui::DistroLauncher;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW};
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW,
+};
 use crate::uefi::file_system::FileProtocol;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::format;
 
 const MAX_KERNEL_BYTES: usize = 64 * 1024 * 1024;
 const PAGE_SIZE: usize = 4096;
@@ -76,7 +78,7 @@ impl DistroLauncher {
         let (initrd_ptr, initrd_size) = match &entry.initrd_path {
             Some(path) => {
                 morpheus_core::logger::log("initrd path found");
-                
+
                 match Self::read_file_to_uefi_pages(
                     boot_services,
                     image_handle,
@@ -163,7 +165,7 @@ impl DistroLauncher {
         screen.clear();
         screen.put_str_at(5, 2, "Booting from ISO", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(5, 3, "================", EFI_GREEN, EFI_BLACK);
-        
+
         let mut boot_seq = BootSequence::new();
         let mut progress_bar = ProgressBar::new(5, 5, 60, "Loading ISO:");
 
@@ -181,10 +183,7 @@ impl DistroLauncher {
             }
         };
 
-        let iso_path = entry
-            .cmdline
-            .strip_prefix("iso:")
-            .unwrap_or(&entry.cmdline);
+        let iso_path = entry.cmdline.strip_prefix("iso:").unwrap_or(&entry.cmdline);
 
         // Use progress callback to continuously update screen
         let mut last_log_count = morpheus_core::logger::total_log_count();
@@ -198,7 +197,7 @@ impl DistroLauncher {
                     last_percent = percent;
                 }
             }
-            
+
             let current_log_count = morpheus_core::logger::total_log_count();
             if current_log_count != last_log_count {
                 boot_seq.render(screen, 5, 8);
@@ -219,9 +218,7 @@ impl DistroLauncher {
                 files
             }
             Err(e) => {
-                morpheus_core::logger::log(
-                    alloc::format!("ISO Boot: FAILED - {:?}", e).leak()
-                );
+                morpheus_core::logger::log(alloc::format!("ISO Boot: FAILED - {:?}", e).leak());
                 boot_seq.render(screen, 5, 8);
                 unsafe {
                     ((*esp_root).close)(esp_root);
@@ -297,7 +294,9 @@ impl DistroLauncher {
         // Get disk info
         let (esp_lba, disk_lba) = {
             let mut dm = morpheus_core::disk::manager::DiskManager::new();
-            if crate::uefi::disk::enumerate_disks(boot_services, &mut dm).is_ok() && dm.disk_count() > 0 {
+            if crate::uefi::disk::enumerate_disks(boot_services, &mut dm).is_ok()
+                && dm.disk_count() > 0
+            {
                 if let Some(disk) = dm.get_disk(0) {
                     (2048_u64, disk.last_block + 1)
                 } else {
@@ -314,7 +313,7 @@ impl DistroLauncher {
 
         // Get ISO read context - load manifests from ESP first
         let mut storage = IsoStorageManager::new(esp_lba, disk_lba);
-        
+
         // Load persisted manifests from ESP filesystem
         if let Err(_) = unsafe {
             crate::tui::distro_downloader::manifest_io::load_manifests_from_esp(
@@ -325,19 +324,29 @@ impl DistroLauncher {
         } {
             morpheus_core::logger::log("Warning: Could not load manifests from ESP");
         }
-        
+
         let read_ctx = match storage.get_read_context(iso_idx) {
             Ok(ctx) => ctx,
             Err(_) => {
                 screen.put_str_at(5, 18, "ERROR: ISO not found in storage", EFI_RED, EFI_BLACK);
-                screen.put_str_at(5, 19, &format!("Index {} not in {} ISOs", iso_idx, storage.count()), EFI_YELLOW, EFI_BLACK);
+                screen.put_str_at(
+                    5,
+                    19,
+                    &format!("Index {} not in {} ISOs", iso_idx, storage.count()),
+                    EFI_YELLOW,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
                 return;
             }
         };
 
         morpheus_core::logger::log(
-            format!("Chunked ISO: {} chunks, {} bytes", read_ctx.num_chunks, read_ctx.total_size).leak()
+            format!(
+                "Chunked ISO: {} chunks, {} bytes",
+                read_ctx.num_chunks, read_ctx.total_size
+            )
+            .leak(),
         );
 
         // Get block I/O protocol for first physical disk
@@ -378,15 +387,15 @@ impl DistroLauncher {
 
         // Find kernel - check common paths for various distros
         // Tails: /live/vmlinuz
-        // Ubuntu: /casper/vmlinuz  
+        // Ubuntu: /casper/vmlinuz
         // Debian: /live/vmlinuz-*
         // Fedora: /images/pxeboot/vmlinuz or /isolinux/vmlinuz
         let kernel_paths = [
-            "/live/vmlinuz",           // Tails, Debian Live
-            "/casper/vmlinuz",         // Ubuntu
-            "/boot/vmlinuz",           // Alpine, some others
-            "/isolinux/vmlinuz",       // Generic syslinux
-            "/images/pxeboot/vmlinuz", // Fedora
+            "/live/vmlinuz",             // Tails, Debian Live
+            "/casper/vmlinuz",           // Ubuntu
+            "/boot/vmlinuz",             // Alpine, some others
+            "/isolinux/vmlinuz",         // Generic syslinux
+            "/images/pxeboot/vmlinuz",   // Fedora
             "/boot/x86_64/loader/linux", // openSUSE
         ];
 
@@ -419,11 +428,11 @@ impl DistroLauncher {
         // Ubuntu: /casper/initrd (no extension)
         // Debian: /live/initrd.img-*
         let initrd_paths = [
-            "/live/initrd.img",        // Tails, Debian Live
-            "/casper/initrd",          // Ubuntu (no extension)
-            "/casper/initrd.lz",       // Ubuntu compressed
-            "/boot/initrd.img",        // Alpine
-            "/isolinux/initrd.img",    // Generic syslinux
+            "/live/initrd.img",           // Tails, Debian Live
+            "/casper/initrd",             // Ubuntu (no extension)
+            "/casper/initrd.lz",          // Ubuntu compressed
+            "/boot/initrd.img",           // Alpine
+            "/isolinux/initrd.img",       // Generic syslinux
             "/images/pxeboot/initrd.img", // Fedora
             "/boot/x86_64/loader/initrd", // openSUSE
         ];
@@ -446,10 +455,11 @@ impl DistroLauncher {
 
         // Determine cmdline based on ISO name/type
         // Tails needs specific parameters for live boot
-        let iso_name = storage.get(iso_idx)
+        let iso_name = storage
+            .get(iso_idx)
             .map(|e| e.manifest.name_str())
             .unwrap_or("");
-        
+
         let cmdline = if iso_name.to_lowercase().contains("tails") {
             // Tails-specific: needs boot=live and findiso for squashfs
             "boot=live nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails quiet"
@@ -488,7 +498,9 @@ impl DistroLauncher {
     }
 
     /// Get BlockIoProtocol pointer for first physical disk
-    fn get_first_disk_block_io(boot_services: &crate::BootServices) -> Option<*mut crate::uefi::block_io::BlockIoProtocol> {
+    fn get_first_disk_block_io(
+        boot_services: &crate::BootServices,
+    ) -> Option<*mut crate::uefi::block_io::BlockIoProtocol> {
         use crate::uefi::block_io::{BlockIoProtocol, EFI_BLOCK_IO_PROTOCOL_GUID};
 
         // Get buffer size needed for all Block I/O handles
@@ -565,7 +577,9 @@ impl DistroLauncher {
         boot_services: &crate::BootServices,
         image_handle: *mut (),
     ) -> Result<*mut FileProtocol, ()> {
-        use crate::uefi::file_system::{get_file_system_protocol, get_loaded_image, open_root_volume};
+        use crate::uefi::file_system::{
+            get_file_system_protocol, get_loaded_image, open_root_volume,
+        };
 
         let loaded_image = get_loaded_image(boot_services, image_handle)?;
         let device_handle = (*loaded_image).device_handle;
@@ -584,15 +598,14 @@ impl DistroLauncher {
         use crate::uefi::file_system::*;
 
         unsafe {
-            let loaded_image = get_loaded_image(boot_services, image_handle)
-                .map_err(|_| {
-                    morpheus_core::logger::log("FAIL: get_loaded_image");
-                    "Failed to get loaded image"
-                })?;
+            let loaded_image = get_loaded_image(boot_services, image_handle).map_err(|_| {
+                morpheus_core::logger::log("FAIL: get_loaded_image");
+                "Failed to get loaded image"
+            })?;
 
             let device_handle = (*loaded_image).device_handle;
-            let fs_protocol = get_file_system_protocol(boot_services, device_handle)
-                .map_err(|_| {
+            let fs_protocol =
+                get_file_system_protocol(boot_services, device_handle).map_err(|_| {
                     morpheus_core::logger::log("FAIL: get_file_system_protocol");
                     "Failed to get file system protocol"
                 })?;
@@ -642,13 +655,9 @@ impl DistroLauncher {
             for &size in &chunk_sizes {
                 let pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE;
                 let mut addr = 0u64; // ANY_PAGES doesn't need initial address
-                
-                let status = (boot_services.allocate_pages)(
-                    alloc_type,
-                    mem_type,
-                    pages_needed,
-                    &mut addr,
-                );
+
+                let status =
+                    (boot_services.allocate_pages)(alloc_type, mem_type, pages_needed, &mut addr);
 
                 if status == 0 {
                     buffer_addr = addr;
@@ -667,8 +676,14 @@ impl DistroLauncher {
             let buffer_ptr = buffer_addr as *mut u8;
             let mut bytes_to_read = chunk_size;
 
-            screen.put_str_at(5, start_line + 2, "Reading file...", EFI_DARKGREEN, EFI_BLACK);
-            
+            screen.put_str_at(
+                5,
+                start_line + 2,
+                "Reading file...",
+                EFI_DARKGREEN,
+                EFI_BLACK,
+            );
+
             // Read up to chunk_size - UEFI will update bytes_to_read with actual amount
             let status = ((*file).read)(file, &mut bytes_to_read, buffer_ptr);
 

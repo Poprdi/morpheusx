@@ -16,7 +16,9 @@ extern "win64" {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn sfence() {
-    unsafe { asm_bar_sfence(); }
+    unsafe {
+        asm_bar_sfence();
+    }
 }
 
 /// Load fence - ensures all prior loads complete before subsequent.
@@ -25,7 +27,9 @@ pub fn sfence() {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn lfence() {
-    unsafe { asm_bar_lfence(); }
+    unsafe {
+        asm_bar_lfence();
+    }
 }
 
 /// Full memory fence - ensures all prior loads AND stores complete.
@@ -34,7 +38,9 @@ pub fn lfence() {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn mfence() {
-    unsafe { asm_bar_mfence(); }
+    unsafe {
+        asm_bar_mfence();
+    }
 }
 
 // Stubs for non-x86_64

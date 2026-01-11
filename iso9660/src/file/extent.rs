@@ -7,7 +7,7 @@
 pub struct Extent {
     /// Starting LBA
     pub lba: u32,
-    
+
     /// Length in bytes
     pub length: u32,
 }
@@ -17,12 +17,12 @@ impl Extent {
     pub fn new(lba: u32, length: u32) -> Self {
         Self { lba, length }
     }
-    
+
     /// Number of sectors (2048 bytes each)
     pub fn sector_count(&self) -> u32 {
         self.length.div_ceil(2048)
     }
-    
+
     /// End LBA (exclusive)
     pub fn end_lba(&self) -> u32 {
         self.lba + self.sector_count()

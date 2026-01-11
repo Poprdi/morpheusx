@@ -155,7 +155,9 @@ impl ChunkReader {
             return Ok(0); // EOF
         }
 
-        let chunk_index = self.chunk_index_for_offset(offset).ok_or(IsoError::ReadOverflow)?;
+        let chunk_index = self
+            .chunk_index_for_offset(offset)
+            .ok_or(IsoError::ReadOverflow)?;
         let chunk = &self.chunks.chunks[chunk_index];
 
         // Calculate offset within chunk

@@ -5,13 +5,13 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §3
 
-pub mod region;
-pub mod ownership;
 pub mod buffer;
+pub mod ownership;
 pub mod pool;
+pub mod region;
 
 // Re-exports
-pub use region::DmaRegion;
-pub use ownership::BufferOwnership;
 pub use buffer::DmaBuffer;
+pub use ownership::BufferOwnership;
 pub use pool::{BufferPool, MAX_POOL_SIZE};
+pub use region::DmaRegion;

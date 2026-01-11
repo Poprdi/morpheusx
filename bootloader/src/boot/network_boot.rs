@@ -1,7 +1,7 @@
 //! Network boot integration for post-ExitBootServices ISO download.
 //!
 //! This module bridges the UEFI bootloader and the bare-metal network stack.
-//! 
+//!
 //! # Flow
 //! 1. Bootloader runs pre-EBS: probes hardware, allocates DMA, calibrates TSC
 //! 2. Bootloader calls ExitBootServices
@@ -28,12 +28,12 @@ use morpheus_network::mainloop::{bare_metal_main, BareMetalConfig, RunResult};
 pub unsafe fn enter_network_boot(handoff: &'static BootHandoff) -> RunResult {
     // Default config: download from QEMU host HTTP server
     let config = BareMetalConfig::default();
-    
+
     bare_metal_main(handoff, config)
 }
 
 /// Network boot with custom URL.
-/// 
+///
 /// # Safety
 /// - Must be called after ExitBootServices()
 /// - `handoff` must point to valid, populated BootHandoff
@@ -44,13 +44,13 @@ pub unsafe fn enter_network_boot_url(
 ) -> RunResult {
     // Extract ISO filename from URL (e.g., "tails-amd64-7.3.1.iso" from full URL)
     let iso_name = extract_iso_name_from_url(iso_url);
-    
+
     let config = BareMetalConfig {
         iso_url,
         iso_name,
         ..BareMetalConfig::default()
     };
-    
+
     bare_metal_main(handoff, config)
 }
 
@@ -112,7 +112,7 @@ impl NicProbeResult {
             notify_off_multiplier: 0,
         }
     }
-    
+
     /// Create MMIO transport result.
     pub const fn mmio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
@@ -128,7 +128,7 @@ impl NicProbeResult {
             notify_off_multiplier: 0,
         }
     }
-    
+
     /// Create PCI Modern transport result.
     pub const fn pci_modern(
         common_cfg: u64,
@@ -208,7 +208,7 @@ impl BlkProbeResult {
             device_cfg: 0,
         }
     }
-    
+
     /// Create VirtIO-blk result (legacy MMIO).
     pub const fn virtio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
@@ -216,7 +216,7 @@ impl BlkProbeResult {
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            device_type: 1, // BLK_TYPE_VIRTIO
+            device_type: 1,    // BLK_TYPE_VIRTIO
             transport_type: 0, // MMIO
             _pad: [0; 3],
             sector_size: 512,
@@ -228,7 +228,7 @@ impl BlkProbeResult {
             device_cfg: 0,
         }
     }
-    
+
     /// Create VirtIO-blk result (PCI Modern).
     pub const fn pci_modern(
         common_cfg: u64,
@@ -245,7 +245,7 @@ impl BlkProbeResult {
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            device_type: 1, // BLK_TYPE_VIRTIO
+            device_type: 1,    // BLK_TYPE_VIRTIO
             transport_type: 1, // PCI Modern
             _pad: [0; 3],
             sector_size: 512,
@@ -274,7 +274,7 @@ pub fn prepare_handoff(
 ) -> BootHandoff {
     // Delegate to full version with no block device
     prepare_handoff_with_blk(
-        nic, 
+        nic,
         &BlkProbeResult::zeroed(),
         mac_address,
         dma_cpu_ptr,
@@ -300,15 +300,13 @@ pub fn prepare_handoff_with_blk(
     stack_top: u64,
     stack_size: u64,
 ) -> BootHandoff {
-    use morpheus_network::boot::handoff::{
-        HANDOFF_MAGIC, HANDOFF_VERSION, NIC_TYPE_VIRTIO,
-    };
-    
+    use morpheus_network::boot::handoff::{HANDOFF_MAGIC, HANDOFF_VERSION, NIC_TYPE_VIRTIO};
+
     BootHandoff {
         magic: HANDOFF_MAGIC,
         version: HANDOFF_VERSION,
         size: core::mem::size_of::<BootHandoff>() as u32,
-        
+
         nic_mmio_base: nic.mmio_base,
         nic_pci_bus: nic.pci_bus,
         nic_pci_device: nic.pci_device,
@@ -316,7 +314,7 @@ pub fn prepare_handoff_with_blk(
         nic_type: NIC_TYPE_VIRTIO,
         mac_address,
         _nic_pad: [0; 2],
-        
+
         blk_mmio_base: blk.mmio_base,
         blk_pci_bus: blk.pci_bus,
         blk_pci_device: blk.pci_device,
@@ -324,26 +322,26 @@ pub fn prepare_handoff_with_blk(
         blk_type: blk.device_type,
         blk_sector_size: blk.sector_size,
         blk_total_sectors: blk.total_sectors,
-        
+
         dma_cpu_ptr,
         dma_bus_addr,
         dma_size,
-        
+
         tsc_freq,
-        
+
         stack_top,
         stack_size,
-        
+
         framebuffer_base: 0,
         framebuffer_width: 0,
         framebuffer_height: 0,
         framebuffer_stride: 0,
         framebuffer_format: 0,
-        
+
         memory_map_ptr: 0,
         memory_map_size: 0,
         memory_map_desc_size: 0,
-        
+
         // PCI Modern transport fields (NIC)
         nic_transport_type: nic.transport_type,
         _transport_pad: [0; 3],
@@ -352,7 +350,7 @@ pub fn prepare_handoff_with_blk(
         nic_notify_cfg: nic.notify_cfg,
         nic_isr_cfg: nic.isr_cfg,
         nic_device_cfg: nic.device_cfg,
-        
+
         // PCI Modern transport fields (BLK)
         blk_transport_type: blk.transport_type,
         _blk_transport_pad: [0; 3],
@@ -361,7 +359,7 @@ pub fn prepare_handoff_with_blk(
         blk_notify_cfg: blk.notify_cfg,
         blk_isr_cfg: blk.isr_cfg,
         blk_device_cfg: blk.device_cfg,
-        
+
         _reserved: [0; 8],
     }
 }

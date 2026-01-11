@@ -22,8 +22,10 @@
 //! ```
 
 use crate::driver::block_traits::{BlockDriver, BlockError};
+use crate::state::disk_writer::{
+    DiskWriterConfig, DiskWriterError, DiskWriterProgress, DiskWriterState,
+};
 use crate::state::StepResult;
-use crate::state::disk_writer::{DiskWriterState, DiskWriterConfig, DiskWriterError, DiskWriterProgress};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -228,7 +230,7 @@ impl PersistenceOrchestrator {
             total_bytes: config.expected_size,
             sector_size: config.sector_size,
         };
-        
+
         Self {
             state: OrchestratorState::Init,
             disk_writer: DiskWriterState::new(disk_config),
@@ -244,7 +246,7 @@ impl PersistenceOrchestrator {
             cancelled: false,
         }
     }
-    
+
     /// Get current phase.
     pub fn phase(&self) -> PersistencePhase {
         match self.state {
@@ -258,17 +260,17 @@ impl PersistenceOrchestrator {
             OrchestratorState::Failed => PersistencePhase::Failed,
         }
     }
-    
+
     /// Get combined progress.
     pub fn progress(&self) -> PersistenceProgress {
         let disk_progress = self.disk_writer.progress();
-        
+
         let total = if self.expected_size > 0 {
             self.expected_size
         } else {
             0
         };
-        
+
         PersistenceProgress {
             phase: self.phase(),
             bytes_downloaded: self.bytes_downloaded,
@@ -287,7 +289,7 @@ impl PersistenceOrchestrator {
             pending_writes: disk_progress.pending_writes,
         }
     }
-    
+
     /// Get result (if complete).
     pub fn result(&self) -> Option<PersistenceResult> {
         if self.state == OrchestratorState::Done {
@@ -296,27 +298,27 @@ impl PersistenceOrchestrator {
             None
         }
     }
-    
+
     /// Get error (if failed).
     pub fn error(&self) -> Option<OrchestratorError> {
         self.error
     }
-    
+
     /// Check if complete.
     pub fn is_complete(&self) -> bool {
         self.state == OrchestratorState::Done
     }
-    
+
     /// Check if failed.
     pub fn is_failed(&self) -> bool {
         self.state == OrchestratorState::Failed
     }
-    
+
     /// Cancel the operation.
     pub fn cancel(&mut self) {
         self.cancelled = true;
     }
-    
+
     /// Start the orchestrator.
     ///
     /// Must be called before step().
@@ -328,16 +330,16 @@ impl PersistenceOrchestrator {
         if self.state != OrchestratorState::Init {
             return Ok(());
         }
-        
+
         // Start disk writer
         self.disk_writer.start(block_driver)?;
-        
+
         self.start_tsc = now_tsc;
         self.state = OrchestratorState::WaitingForDhcp;
-        
+
         Ok(())
     }
-    
+
     /// Signal that DHCP is complete.
     pub fn dhcp_complete(&mut self, now_tsc: u64) {
         if self.state == OrchestratorState::WaitingForDhcp {
@@ -345,20 +347,20 @@ impl PersistenceOrchestrator {
             self.download_start_tsc = now_tsc;
         }
     }
-    
+
     /// Signal that HTTP connection is established.
     pub fn connected(&mut self) {
         if self.state == OrchestratorState::Connecting {
             self.state = OrchestratorState::Streaming;
         }
     }
-    
+
     /// Set total expected size (from HTTP Content-Length).
     pub fn set_total_bytes(&mut self, total: u64) {
         self.expected_size = total;
         self.disk_writer.set_total_bytes(total);
     }
-    
+
     /// Step the orchestrator (poll completions).
     pub fn step<B: BlockDriver>(
         &mut self,
@@ -371,30 +373,24 @@ impl PersistenceOrchestrator {
             self.state = OrchestratorState::Failed;
             return OrchestratorResult::Failed(OrchestratorError::Cancelled);
         }
-        
+
         match self.state {
-            OrchestratorState::Init => {
-                OrchestratorResult::Pending
-            }
-            
-            OrchestratorState::WaitingForDhcp => {
-                OrchestratorResult::Pending
-            }
-            
-            OrchestratorState::Connecting => {
-                OrchestratorResult::Pending
-            }
-            
+            OrchestratorState::Init => OrchestratorResult::Pending,
+
+            OrchestratorState::WaitingForDhcp => OrchestratorResult::Pending,
+
+            OrchestratorState::Connecting => OrchestratorResult::Pending,
+
             OrchestratorState::Streaming => {
                 // Step disk writer to process completions
                 self.disk_writer.step(block_driver);
                 OrchestratorResult::Pending
             }
-            
+
             OrchestratorState::Flushing => {
                 // Step disk writer
                 let result = self.disk_writer.step(block_driver);
-                
+
                 match result {
                     StepResult::Done => {
                         if self.verify_checksum {
@@ -406,7 +402,9 @@ impl PersistenceOrchestrator {
                         }
                     }
                     StepResult::Failed => {
-                        let err = self.disk_writer.error()
+                        let err = self
+                            .disk_writer
+                            .error()
                             .map(OrchestratorError::DiskError)
                             .unwrap_or(OrchestratorError::InvalidState);
                         self.error = Some(err);
@@ -415,10 +413,10 @@ impl PersistenceOrchestrator {
                     }
                     _ => {}
                 }
-                
+
                 OrchestratorResult::Pending
             }
-            
+
             OrchestratorState::Verifying => {
                 // TODO: Read back data and verify checksum
                 // For now, skip verification
@@ -426,21 +424,19 @@ impl PersistenceOrchestrator {
                 self.state = OrchestratorState::Done;
                 OrchestratorResult::Done(self.result)
             }
-            
-            OrchestratorState::Done => {
-                OrchestratorResult::Done(self.result)
-            }
-            
+
+            OrchestratorState::Done => OrchestratorResult::Done(self.result),
+
             OrchestratorState::Failed => {
                 OrchestratorResult::Failed(self.error.unwrap_or(OrchestratorError::InvalidState))
             }
         }
     }
-    
+
     /// Finalize results.
     fn finalize(&mut self, now_tsc: u64) {
         let disk_progress = self.disk_writer.progress();
-        
+
         self.result = PersistenceResult {
             bytes_downloaded: self.bytes_downloaded,
             bytes_written: disk_progress.bytes_written,
@@ -450,7 +446,7 @@ impl PersistenceOrchestrator {
             write_ticks: now_tsc.wrapping_sub(self.start_tsc),
         };
     }
-    
+
     /// Write a chunk of data to disk.
     ///
     /// Called when HTTP data is received.
@@ -463,7 +459,7 @@ impl PersistenceOrchestrator {
         self.bytes_downloaded += len as u64;
         self.disk_writer.write_chunk(block_driver, buffer_phys, len)
     }
-    
+
     /// Signal that HTTP download is complete.
     pub fn http_complete(&mut self) {
         if self.state == OrchestratorState::Streaming {
@@ -471,23 +467,23 @@ impl PersistenceOrchestrator {
             self.state = OrchestratorState::Flushing;
         }
     }
-    
+
     /// Signal HTTP failure.
     pub fn http_failed(&mut self) {
         self.error = Some(OrchestratorError::HttpFailed);
         self.state = OrchestratorState::Failed;
     }
-    
+
     /// Check if writer can accept more data (backpressure).
     pub fn can_write(&self) -> bool {
         self.disk_writer.can_write()
     }
-    
+
     /// Get disk writer state.
     pub fn disk_writer(&self) -> &DiskWriterState {
         &self.disk_writer
     }
-    
+
     /// Get mutable disk writer.
     pub fn disk_writer_mut(&mut self) -> &mut DiskWriterState {
         &mut self.disk_writer
@@ -501,7 +497,7 @@ impl PersistenceOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_config_default() {
         let config = PersistenceConfig::default();
@@ -509,7 +505,7 @@ mod tests {
         assert_eq!(config.sector_size, 512);
         assert!(!config.verify_checksum);
     }
-    
+
     #[test]
     fn test_progress_default() {
         let progress = PersistenceProgress::default();

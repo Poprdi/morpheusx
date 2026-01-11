@@ -31,14 +31,14 @@
 //! NETWORK_IMPL_GUIDE.md §5
 
 pub mod dhcp;
-pub mod tcp;
-pub mod http;
-pub mod download;
-pub mod dns;
 pub mod disk_writer;
+pub mod dns;
+pub mod download;
+pub mod http;
+pub mod tcp;
 
-use core::fmt;
 use crate::boot::TimeoutConfig;
+use core::fmt;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STEP RESULT
@@ -52,15 +52,15 @@ use crate::boot::TimeoutConfig;
 pub enum StepResult {
     /// Operation in progress, call `step()` again next iteration.
     Pending,
-    
+
     /// Operation completed successfully.
     /// Call `output()` to get the result.
     Done,
-    
+
     /// Operation timed out.
     /// Call `error()` for details.
     Timeout,
-    
+
     /// Operation failed.
     /// Call `error()` for details.
     Failed,
@@ -72,19 +72,19 @@ impl StepResult {
     pub fn is_pending(self) -> bool {
         self == Self::Pending
     }
-    
+
     /// Check if operation completed successfully.
     #[inline]
     pub fn is_done(self) -> bool {
         self == Self::Done
     }
-    
+
     /// Check if operation terminated (done, timeout, or failed).
     #[inline]
     pub fn is_terminal(self) -> bool {
         !self.is_pending()
     }
-    
+
     /// Check if operation ended in error (timeout or failed).
     #[inline]
     pub fn is_error(self) -> bool {
@@ -164,20 +164,20 @@ impl TscTimestamp {
     pub const fn new(tsc: u64) -> Self {
         Self(tsc)
     }
-    
+
     /// Get raw TSC value.
     #[inline]
     pub const fn raw(self) -> u64 {
         self.0
     }
-    
+
     /// Calculate elapsed ticks since this timestamp.
     /// Uses wrapping subtraction to handle overflow.
     #[inline]
     pub fn elapsed(self, now: u64) -> u64 {
         now.wrapping_sub(self.0)
     }
-    
+
     /// Check if timeout has elapsed.
     #[inline]
     pub fn is_expired(self, now: u64, timeout_ticks: u64) -> bool {
@@ -214,13 +214,13 @@ impl StepContext {
             timeouts: TimeoutConfig::new(tsc_freq),
         }
     }
-    
+
     /// Create timestamp for current time.
     #[inline]
     pub fn now(&self) -> TscTimestamp {
         TscTimestamp(self.now_tsc)
     }
-    
+
     /// Check if timeout has elapsed since start.
     #[inline]
     pub fn is_expired(&self, start: TscTimestamp, timeout_ticks: u64) -> bool {
@@ -255,18 +255,18 @@ impl Progress {
             last_update_tsc: now_tsc,
         }
     }
-    
+
     /// Update progress.
     pub fn update(&mut self, bytes_done: u64, now_tsc: u64) {
         self.bytes_done = bytes_done;
         self.last_update_tsc = now_tsc;
     }
-    
+
     /// Set total bytes (when known).
     pub fn set_total(&mut self, total: u64) {
         self.bytes_total = total;
     }
-    
+
     /// Get percentage complete (0-100), or 0 if total unknown.
     pub fn percentage(&self) -> u8 {
         if self.bytes_total == 0 {
@@ -275,7 +275,7 @@ impl Progress {
             ((self.bytes_done * 100) / self.bytes_total) as u8
         }
     }
-    
+
     /// Calculate bytes per second (approximate).
     pub fn bytes_per_second(&self, now_tsc: u64, tsc_freq: u64) -> u64 {
         let elapsed = now_tsc.wrapping_sub(self.start_tsc);
@@ -297,7 +297,7 @@ impl Progress {
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub use dhcp::DhcpState;
-pub use tcp::TcpConnState;
-pub use http::HttpDownloadState;
-pub use download::IsoDownloadState;
 pub use dns::DnsResolveState;
+pub use download::IsoDownloadState;
+pub use http::HttpDownloadState;
+pub use tcp::TcpConnState;

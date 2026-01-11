@@ -3,8 +3,8 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §6.2
 
-use crate::driver::NetworkDriver;
 use super::phases::{phase1_rx_refill, phase5_tx_completions, TX_BUDGET};
+use crate::driver::NetworkDriver;
 
 /// Main loop configuration.
 pub struct MainLoopConfig {
@@ -23,7 +23,7 @@ impl MainLoopConfig {
             timing_warning_ticks: tsc_freq / 200,
         }
     }
-    
+
     /// Convert TSC ticks to milliseconds.
     pub fn ticks_to_ms(&self, ticks: u64) -> u64 {
         ticks * 1000 / self.tsc_freq
@@ -61,19 +61,19 @@ pub fn run_iteration<D: NetworkDriver>(
 ) -> IterationResult {
     // Phase 1: Refill RX queue
     phase1_rx_refill(device);
-    
+
     // Phase 2: Would call smoltcp poll here
     // (requires smoltcp integration - handled by caller)
-    
+
     // Phase 3: TX drain
     // (handled by smoltcp adapter)
-    
+
     // Phase 4: App state machine step
     // (handled by caller)
-    
+
     // Phase 5: Collect TX completions
     phase5_tx_completions(device);
-    
+
     IterationResult::Continue
 }
 

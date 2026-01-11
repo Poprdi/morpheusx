@@ -2,7 +2,7 @@ use super::super::StorageManager;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 
 impl StorageManager {
-        pub(in super::super) fn render_partition_view(&self, screen: &mut Screen) {
+    pub(in super::super) fn render_partition_view(&self, screen: &mut Screen) {
         let title = "=== PARTITION VIEW ===";
         screen.put_str_at(
             screen.center_x(title.len()),

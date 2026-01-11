@@ -6,9 +6,7 @@ mod installation;
 
 use crate::installer::EspInfo;
 use crate::tui::input::Keyboard;
-use crate::tui::renderer::{
-    Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN,
-};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 use crate::BootServices;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -80,13 +78,19 @@ impl InstallerMenu {
                                         self.image_handle,
                                     );
                                 }
-                            } else if key.unicode_char == b'r' as u16 || key.unicode_char == b'R' as u16 {
+                            } else if key.unicode_char == b'r' as u16
+                                || key.unicode_char == b'R' as u16
+                            {
                                 // Rescan
                                 self.scan_complete = false;
-                            } else if key.unicode_char == b'c' as u16 || key.unicode_char == b'C' as u16 {
+                            } else if key.unicode_char == b'c' as u16
+                                || key.unicode_char == b'C' as u16
+                            {
                                 // Show help or create ESP
                                 if self.esp_list.is_empty() {
-                                    if let Some(new_esp) = esp_creation::create_new_esp(screen, keyboard, bs) {
+                                    if let Some(new_esp) =
+                                        esp_creation::create_new_esp(screen, keyboard, bs)
+                                    {
                                         self.esp_list.push(new_esp);
                                         self.selected_esp = self.esp_list.len() - 1;
                                         self.scan_complete = false;
@@ -247,7 +251,14 @@ impl InstallerMenu {
         );
     }
 
-    fn render_esp_entry(&self, screen: &mut Screen, start_x: usize, y: &mut usize, idx: usize, esp: &EspInfo) {
+    fn render_esp_entry(
+        &self,
+        screen: &mut Screen,
+        start_x: usize,
+        y: &mut usize,
+        idx: usize,
+        esp: &EspInfo,
+    ) {
         let marker = if idx == self.selected_esp { "> " } else { "  " };
 
         let disk_str = esp.disk_index.to_string();

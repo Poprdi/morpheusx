@@ -32,9 +32,9 @@
 //! }
 //! ```
 
-use alloc::vec::Vec;
 use crate::error::{NetworkError, Result};
 use crate::types::ProgressCallback;
+use alloc::vec::Vec;
 
 /// State of a streaming transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,9 +67,9 @@ pub struct StreamConfig {
 impl Default for StreamConfig {
     fn default() -> Self {
         Self {
-            buffer_size: 64 * 1024,       // 64KB buffer
-            progress_interval: 16 * 1024, // Report every 16KB
-            max_size: None,               // No limit
+            buffer_size: 64 * 1024,        // 64KB buffer
+            progress_interval: 16 * 1024,  // Report every 16KB
+            max_size: None,                // No limit
             chunk_timeout_ms: Some(30000), // 30 second timeout
         }
     }
@@ -89,7 +89,7 @@ impl StreamConfig {
     /// Create config for large files (ISOs, etc).
     pub fn large() -> Self {
         Self {
-            buffer_size: 256 * 1024,       // 256KB buffer
+            buffer_size: 256 * 1024,        // 256KB buffer
             progress_interval: 1024 * 1024, // Report every 1MB
             max_size: None,
             chunk_timeout_ms: Some(60000), // 60 second timeout
@@ -534,11 +534,11 @@ mod tests {
     #[test]
     fn test_stream_reader_feed_basic() {
         let mut reader = StreamReader::new();
-        
+
         reader.feed(b"Hello ").unwrap();
         assert_eq!(reader.state(), StreamState::Receiving);
         assert_eq!(reader.bytes_received(), 6);
-        
+
         reader.feed(b"World").unwrap();
         assert_eq!(reader.bytes_received(), 11);
         assert_eq!(reader.data(), b"Hello World");
@@ -548,10 +548,10 @@ mod tests {
     fn test_stream_reader_with_expected_size() {
         let mut reader = StreamReader::new();
         reader.set_expected_size(Some(10));
-        
+
         reader.feed(b"12345").unwrap();
         assert!(!reader.is_complete());
-        
+
         reader.feed(b"67890").unwrap();
         assert!(reader.is_complete());
         assert_eq!(reader.state(), StreamState::Complete);
@@ -560,13 +560,13 @@ mod tests {
     #[test]
     fn test_stream_reader_cancel() {
         let mut reader = StreamReader::new();
-        
+
         reader.feed(b"Hello").unwrap();
         reader.cancel();
-        
+
         assert!(reader.is_cancelled());
         assert_eq!(reader.state(), StreamState::Cancelled);
-        
+
         // Further feeds should fail
         assert!(reader.feed(b"More").is_err());
     }
@@ -578,9 +578,9 @@ mod tests {
             ..Default::default()
         };
         let mut reader = StreamReader::with_config(config);
-        
+
         reader.feed(b"12345").unwrap();
-        
+
         // This should fail - exceeds max
         let result = reader.feed(b"67890X");
         assert!(result.is_err());
@@ -591,15 +591,15 @@ mod tests {
     fn test_stream_reader_progress_percent() {
         let mut reader = StreamReader::new();
         reader.set_expected_size(Some(100));
-        
+
         assert_eq!(reader.progress_percent(), Some(0));
-        
+
         reader.feed(&[0u8; 25]).unwrap();
         assert_eq!(reader.progress_percent(), Some(25));
-        
+
         reader.feed(&[0u8; 25]).unwrap();
         assert_eq!(reader.progress_percent(), Some(50));
-        
+
         reader.feed(&[0u8; 50]).unwrap();
         assert_eq!(reader.progress_percent(), Some(100));
     }
@@ -614,7 +614,7 @@ mod tests {
     fn test_stream_reader_finish() {
         let mut reader = StreamReader::new();
         reader.feed(b"Hello").unwrap();
-        
+
         assert!(!reader.is_complete());
         reader.finish();
         assert!(reader.is_complete());
@@ -624,7 +624,7 @@ mod tests {
     fn test_stream_reader_take_data() {
         let mut reader = StreamReader::new();
         reader.feed(b"Hello World").unwrap();
-        
+
         let data = reader.take_data();
         assert_eq!(data, b"Hello World");
     }
@@ -634,9 +634,9 @@ mod tests {
         let mut reader = StreamReader::new();
         reader.set_expected_size(Some(100));
         reader.feed(b"Hello").unwrap();
-        
+
         reader.reset();
-        
+
         assert_eq!(reader.state(), StreamState::Ready);
         assert_eq!(reader.bytes_received(), 0);
         assert!(reader.expected_size().is_none());
@@ -657,19 +657,19 @@ mod tests {
     fn test_stream_writer_next_chunk() {
         let source = b"Hello World!";
         let mut writer = StreamWriter::new(source.len(), 5);
-        
+
         let chunk1 = writer.next_chunk(source).unwrap();
         assert_eq!(chunk1, b"Hello");
         writer.chunk_sent(5);
-        
+
         let chunk2 = writer.next_chunk(source).unwrap();
         assert_eq!(chunk2, b" Worl");
         writer.chunk_sent(5);
-        
+
         let chunk3 = writer.next_chunk(source).unwrap();
         assert_eq!(chunk3, b"d!");
         writer.chunk_sent(2);
-        
+
         assert!(writer.is_complete());
         assert!(writer.next_chunk(source).is_none());
     }
@@ -677,15 +677,15 @@ mod tests {
     #[test]
     fn test_stream_writer_progress() {
         let mut writer = StreamWriter::new(100, 25);
-        
+
         assert_eq!(writer.progress_percent(), 0);
-        
+
         writer.chunk_sent(25);
         assert_eq!(writer.progress_percent(), 25);
-        
+
         writer.chunk_sent(25);
         assert_eq!(writer.progress_percent(), 50);
-        
+
         writer.chunk_sent(50);
         assert_eq!(writer.progress_percent(), 100);
     }
@@ -703,11 +703,11 @@ mod tests {
     #[test]
     fn test_progress_tracker_update() {
         let mut tracker = ProgressTracker::new(Some(100));
-        
+
         tracker.update(25);
         assert_eq!(tracker.transferred(), 25);
         assert_eq!(tracker.percent(), Some(25));
-        
+
         tracker.update(75);
         assert_eq!(tracker.transferred(), 100);
         assert_eq!(tracker.percent(), Some(100));
@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn test_progress_tracker_unknown_total() {
         let mut tracker = ProgressTracker::new(None);
-        
+
         tracker.update(500);
         assert_eq!(tracker.transferred(), 500);
         assert_eq!(tracker.percent(), None);
@@ -728,7 +728,7 @@ mod tests {
     fn test_progress_tracker_reset() {
         let mut tracker = ProgressTracker::new(Some(100));
         tracker.update(50);
-        
+
         tracker.reset();
         assert_eq!(tracker.transferred(), 0);
     }
@@ -743,32 +743,32 @@ mod tests {
 
     // Note: Testing callbacks requires thread_local or similar mechanism
     // For no_std, we use a simple static counter pattern in integration tests
-    
+
     #[test]
     fn test_stream_reader_progress_callback_integration() {
         // This tests that progress callback is properly wired up
         // In a real scenario, the callback would update UI
-        
+
         let config = StreamConfig {
             progress_interval: 10, // Report every 10 bytes
             ..Default::default()
         };
         let mut reader = StreamReader::with_config(config);
-        
+
         // We can't easily verify the callback was called without
         // thread-local storage, but we can verify it doesn't panic
         reader.set_progress_callback(|transferred, total| {
             // This callback runs during feed()
             let _ = (transferred, total);
         });
-        
+
         reader.set_expected_size(Some(100));
-        
+
         // Feed in chunks
         for _ in 0..10 {
             reader.feed(&[0u8; 10]).unwrap();
         }
-        
+
         assert!(reader.is_complete());
     }
 }

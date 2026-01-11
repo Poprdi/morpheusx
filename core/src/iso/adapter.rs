@@ -119,11 +119,7 @@ where
     }
 
     /// Read multiple sectors
-    pub fn read_sectors(
-        &mut self,
-        start_lba: u64,
-        buffer: &mut [u8],
-    ) -> Result<usize, IsoError> {
+    pub fn read_sectors(&mut self, start_lba: u64, buffer: &mut [u8]) -> Result<usize, IsoError> {
         let sector_count = buffer.len() / SECTOR_SIZE;
         let mut bytes_read = 0;
 
@@ -233,7 +229,8 @@ where
             let offset_in_sector = (current_pos % SECTOR_SIZE as u64) as usize;
 
             // Read the sector
-            self.block_io.read_sector(sector_lba, &mut self.sector_buf)?;
+            self.block_io
+                .read_sector(sector_lba, &mut self.sector_buf)?;
 
             // Copy relevant portion
             let remaining = to_read - bytes_read;

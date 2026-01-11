@@ -23,13 +23,13 @@
 //!
 //! ```ignore
 //! use iso9660::{mount, find_file, read_file};
-//! 
+//!
 //! // Mount ISO from block device at given start sector
 //! let volume = mount(&mut block_io, start_sector)?;
-//! 
+//!
 //! // Find a file by path
 //! let file = find_file(&mut block_io, &volume, "/isolinux/vmlinuz")?;
-//! 
+//!
 //! // Read file contents
 //! let kernel_data = read_file(&mut block_io, &volume, &file)?;
 //! ```
@@ -38,7 +38,7 @@
 //!
 //! ```ignore
 //! use iso9660::find_boot_image;
-//! 
+//!
 //! // Extract bootable image (kernel) from ISO
 //! let boot = find_boot_image(&mut block_io, &volume)?;
 //! let kernel = read_file(&mut block_io, &volume, &boot.file)?;
@@ -49,22 +49,22 @@
 
 extern crate alloc;
 
-pub mod error;
-pub mod types;
-pub mod volume;
-pub mod directory;
-pub mod file;
 pub mod boot;
+pub mod directory;
+pub mod error;
 pub mod extensions;
+pub mod file;
+pub mod types;
 pub mod utils;
+pub mod volume;
 
 pub use error::{Iso9660Error, Result};
-pub use types::{VolumeInfo, FileEntry, FileFlags, BootImage, BootMediaType, BootPlatform};
+pub use types::{BootImage, BootMediaType, BootPlatform, FileEntry, FileFlags, VolumeInfo};
 
 // High-level API exports
-pub use volume::mount;
+pub use boot::find_boot_image;
 pub use directory::find_file;
 pub use directory::iterator::DirectoryIterator;
-pub use file::{read_file, read_file_vec};
 pub use file::reader::FileReader;
-pub use boot::find_boot_image;
+pub use file::{read_file, read_file_vec};
+pub use volume::mount;

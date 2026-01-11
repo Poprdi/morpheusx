@@ -28,12 +28,12 @@ impl AsmResult {
     pub fn is_ok(&self) -> bool {
         matches!(self, AsmResult::Ok)
     }
-    
+
     /// Check if result is error.
     pub fn is_err(&self) -> bool {
         !self.is_ok()
     }
-    
+
     /// Convert from raw u32.
     pub fn from_u32(val: u32) -> Self {
         match val {

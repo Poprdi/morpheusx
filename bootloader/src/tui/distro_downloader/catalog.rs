@@ -175,7 +175,7 @@ pub static DISTRO_CATALOG: &[DistroEntry] = &[
         "test-1mb.iso",
         DistroCategory::Minimal,
     ),
-    
+
     DistroEntry::new(
         "Test ISO (10MB)",
         "Medium test file for network testing",
@@ -345,12 +345,17 @@ pub static CATEGORIES: &[DistroCategory] = &[
 
 /// Get distributions by category
 pub fn get_by_category(category: DistroCategory) -> impl Iterator<Item = &'static DistroEntry> {
-    DISTRO_CATALOG.iter().filter(move |d| d.category == category)
+    DISTRO_CATALOG
+        .iter()
+        .filter(move |d| d.category == category)
 }
 
 /// Count distributions in a category
 pub fn count_by_category(category: DistroCategory) -> usize {
-    DISTRO_CATALOG.iter().filter(|d| d.category == category).count()
+    DISTRO_CATALOG
+        .iter()
+        .filter(|d| d.category == category)
+        .count()
 }
 
 /// Find a distribution by name
@@ -451,11 +456,18 @@ mod tests {
     #[test]
     fn test_entry_with_mirrors() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "https://primary.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         )
-        .with_mirrors(&["https://mirror1.com/test.iso", "https://mirror2.com/test.iso"]);
+        .with_mirrors(&[
+            "https://mirror1.com/test.iso",
+            "https://mirror2.com/test.iso",
+        ]);
 
         assert_eq!(entry.mirrors.len(), 2);
         assert_eq!(entry.mirrors[0], "https://mirror1.com/test.iso");
@@ -464,9 +476,13 @@ mod tests {
     #[test]
     fn test_entry_with_sha256() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "https://example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::Security,
+            100_000_000,
+            "test.iso",
+            DistroCategory::Security,
         )
         .with_sha256("abcd1234");
 
@@ -476,9 +492,13 @@ mod tests {
     #[test]
     fn test_entry_with_arch() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "https://example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::Minimal,
+            100_000_000,
+            "test.iso",
+            DistroCategory::Minimal,
         )
         .with_arch("aarch64");
 
@@ -488,9 +508,13 @@ mod tests {
     #[test]
     fn test_entry_with_live() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "https://example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::Server,
+            100_000_000,
+            "test.iso",
+            DistroCategory::Server,
         )
         .with_live(false);
 
@@ -502,8 +526,13 @@ mod tests {
     #[test]
     fn test_size_str_under_100mb() {
         let entry = DistroEntry::new(
-            "Tiny", "Tiny", "1.0", "https://x.com/t.iso",
-            50_000_000, "t.iso", DistroCategory::Minimal,
+            "Tiny",
+            "Tiny",
+            "1.0",
+            "https://x.com/t.iso",
+            50_000_000,
+            "t.iso",
+            DistroCategory::Minimal,
         );
         assert_eq!(entry.size_str(), "< 100 MB");
     }
@@ -511,8 +540,13 @@ mod tests {
     #[test]
     fn test_size_str_100_500mb() {
         let entry = DistroEntry::new(
-            "Small", "Small", "1.0", "https://x.com/s.iso",
-            250_000_000, "s.iso", DistroCategory::Minimal,
+            "Small",
+            "Small",
+            "1.0",
+            "https://x.com/s.iso",
+            250_000_000,
+            "s.iso",
+            DistroCategory::Minimal,
         );
         assert_eq!(entry.size_str(), "100-500 MB");
     }
@@ -520,8 +554,13 @@ mod tests {
     #[test]
     fn test_size_str_500mb_1gb() {
         let entry = DistroEntry::new(
-            "Med", "Med", "1.0", "https://x.com/m.iso",
-            750_000_000, "m.iso", DistroCategory::General,
+            "Med",
+            "Med",
+            "1.0",
+            "https://x.com/m.iso",
+            750_000_000,
+            "m.iso",
+            DistroCategory::General,
         );
         assert_eq!(entry.size_str(), "500 MB - 1 GB");
     }
@@ -529,8 +568,13 @@ mod tests {
     #[test]
     fn test_size_str_1_2gb() {
         let entry = DistroEntry::new(
-            "Large", "Large", "1.0", "https://x.com/l.iso",
-            1_500_000_000, "l.iso", DistroCategory::General,
+            "Large",
+            "Large",
+            "1.0",
+            "https://x.com/l.iso",
+            1_500_000_000,
+            "l.iso",
+            DistroCategory::General,
         );
         assert_eq!(entry.size_str(), "1-2 GB");
     }
@@ -538,8 +582,13 @@ mod tests {
     #[test]
     fn test_size_str_2_4gb() {
         let entry = DistroEntry::new(
-            "XL", "XL", "1.0", "https://x.com/xl.iso",
-            3_000_000_000, "xl.iso", DistroCategory::General,
+            "XL",
+            "XL",
+            "1.0",
+            "https://x.com/xl.iso",
+            3_000_000_000,
+            "xl.iso",
+            DistroCategory::General,
         );
         assert_eq!(entry.size_str(), "2-4 GB");
     }
@@ -547,8 +596,13 @@ mod tests {
     #[test]
     fn test_size_str_over_4gb() {
         let entry = DistroEntry::new(
-            "Huge", "Huge", "1.0", "https://x.com/h.iso",
-            5_000_000_000, "h.iso", DistroCategory::General,
+            "Huge",
+            "Huge",
+            "1.0",
+            "https://x.com/h.iso",
+            5_000_000_000,
+            "h.iso",
+            DistroCategory::General,
         );
         assert_eq!(entry.size_str(), "> 4 GB");
     }
@@ -558,9 +612,13 @@ mod tests {
     #[test]
     fn test_valid_https_url() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "https://example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         );
         assert!(entry.is_valid_url());
     }
@@ -568,9 +626,13 @@ mod tests {
     #[test]
     fn test_valid_http_url() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "http://example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         );
         assert!(entry.is_valid_url());
     }
@@ -578,9 +640,13 @@ mod tests {
     #[test]
     fn test_invalid_url_ftp() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "ftp://example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         );
         assert!(!entry.is_valid_url());
     }
@@ -588,9 +654,13 @@ mod tests {
     #[test]
     fn test_invalid_url_no_scheme() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0",
+            "Test",
+            "Test",
+            "1.0",
             "example.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         );
         assert!(!entry.is_valid_url());
     }
@@ -600,8 +670,13 @@ mod tests {
     #[test]
     fn test_valid_filename() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://x.com/test.iso",
-            100_000_000, "test-1.0.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://x.com/test.iso",
+            100_000_000,
+            "test-1.0.iso",
+            DistroCategory::General,
         );
         assert!(entry.is_valid_filename());
     }
@@ -609,8 +684,13 @@ mod tests {
     #[test]
     fn test_invalid_filename_no_iso() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://x.com/test.iso",
-            100_000_000, "test.img", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://x.com/test.iso",
+            100_000_000,
+            "test.img",
+            DistroCategory::General,
         );
         assert!(!entry.is_valid_filename());
     }
@@ -618,8 +698,13 @@ mod tests {
     #[test]
     fn test_invalid_filename_with_path() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://x.com/test.iso",
-            100_000_000, "path/test.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://x.com/test.iso",
+            100_000_000,
+            "path/test.iso",
+            DistroCategory::General,
         );
         assert!(!entry.is_valid_filename());
     }
@@ -629,8 +714,13 @@ mod tests {
     #[test]
     fn test_url_count_no_mirrors() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://x.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://x.com/test.iso",
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         );
         assert_eq!(entry.url_count(), 1);
     }
@@ -638,8 +728,13 @@ mod tests {
     #[test]
     fn test_url_count_with_mirrors() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://primary.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://primary.com/test.iso",
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         )
         .with_mirrors(&["https://m1.com/test.iso", "https://m2.com/test.iso"]);
 
@@ -649,8 +744,13 @@ mod tests {
     #[test]
     fn test_get_url_primary() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://primary.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://primary.com/test.iso",
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         )
         .with_mirrors(&["https://mirror.com/test.iso"]);
 
@@ -660,8 +760,13 @@ mod tests {
     #[test]
     fn test_get_url_mirror() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://primary.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://primary.com/test.iso",
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         )
         .with_mirrors(&["https://mirror.com/test.iso"]);
 
@@ -671,8 +776,13 @@ mod tests {
     #[test]
     fn test_get_url_out_of_bounds() {
         let entry = DistroEntry::new(
-            "Test", "Test", "1.0", "https://primary.com/test.iso",
-            100_000_000, "test.iso", DistroCategory::General,
+            "Test",
+            "Test",
+            "1.0",
+            "https://primary.com/test.iso",
+            100_000_000,
+            "test.iso",
+            DistroCategory::General,
         );
 
         assert_eq!(entry.get_url(1), None);
@@ -684,7 +794,10 @@ mod tests {
     #[test]
     fn test_catalog_not_empty() {
         assert!(!DISTRO_CATALOG.is_empty());
-        assert!(DISTRO_CATALOG.len() >= 10, "Should have at least 10 distros");
+        assert!(
+            DISTRO_CATALOG.len() >= 10,
+            "Should have at least 10 distros"
+        );
     }
 
     #[test]
@@ -693,7 +806,8 @@ mod tests {
             assert!(
                 entry.is_valid_url(),
                 "{} has invalid URL: {}",
-                entry.name, entry.url
+                entry.name,
+                entry.url
             );
         }
     }
@@ -704,7 +818,8 @@ mod tests {
             assert!(
                 entry.is_valid_filename(),
                 "{} has invalid filename: {}",
-                entry.name, entry.filename
+                entry.name,
+                entry.filename
             );
         }
     }
@@ -715,12 +830,14 @@ mod tests {
             assert!(
                 entry.size_bytes >= 10_000_000,
                 "{} too small: {}",
-                entry.name, entry.size_bytes
+                entry.name,
+                entry.size_bytes
             );
             assert!(
                 entry.size_bytes <= 15_000_000_000,
                 "{} too large: {}",
-                entry.name, entry.size_bytes
+                entry.name,
+                entry.size_bytes
             );
         }
     }

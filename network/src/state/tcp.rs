@@ -39,8 +39,8 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §5.4
 
+use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
-use super::{StepResult, StateError, TscTimestamp};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TCP SOCKET STATE (mirrors smoltcp)
@@ -80,13 +80,13 @@ impl TcpSocketState {
     pub fn is_active(self) -> bool {
         matches!(self, Self::Established | Self::CloseWait)
     }
-    
+
     /// Check if connection attempt failed.
     pub fn is_failed(self) -> bool {
         // Closed after SynSent means connection refused
         self == Self::Closed
     }
-    
+
     /// Check if connection is closing.
     pub fn is_closing(self) -> bool {
         matches!(
@@ -155,7 +155,7 @@ pub struct TcpConnectionInfo {
 pub enum TcpConnState {
     /// Socket not connected
     Closed,
-    
+
     /// Connection initiated, waiting for establishment
     Connecting {
         /// Socket handle (opaque, passed to smoltcp)
@@ -169,7 +169,7 @@ pub enum TcpConnState {
         /// When connect started
         start_tsc: TscTimestamp,
     },
-    
+
     /// Connection established
     Established {
         /// Socket handle
@@ -177,7 +177,7 @@ pub enum TcpConnState {
         /// Connection info
         info: TcpConnectionInfo,
     },
-    
+
     /// Connection closing
     Closing {
         /// Socket handle
@@ -185,7 +185,7 @@ pub enum TcpConnState {
         /// When close started
         start_tsc: TscTimestamp,
     },
-    
+
     /// Error state
     Error {
         /// Error details
@@ -198,7 +198,7 @@ impl TcpConnState {
     pub fn new() -> Self {
         TcpConnState::Closed
     }
-    
+
     /// Initiate connection.
     ///
     /// Called AFTER smoltcp's `socket.connect()` has been called.
@@ -226,7 +226,7 @@ impl TcpConnState {
             start_tsc: TscTimestamp::new(now_tsc),
         };
     }
-    
+
     /// Step the state machine.
     ///
     /// # Arguments
@@ -250,7 +250,7 @@ impl TcpConnState {
                 // Not started
                 StepResult::Pending
             }
-            
+
             TcpConnState::Connecting {
                 socket_handle,
                 remote_ip,
@@ -260,10 +260,12 @@ impl TcpConnState {
             } => {
                 // Check timeout first
                 if start_tsc.is_expired(now_tsc, timeout_ticks) {
-                    *self = TcpConnState::Error { error: TcpError::ConnectTimeout };
+                    *self = TcpConnState::Error {
+                        error: TcpError::ConnectTimeout,
+                    };
                     return StepResult::Timeout;
                 }
-                
+
                 // Check socket state
                 if socket_state.is_active() {
                     // Connected!
@@ -279,49 +281,54 @@ impl TcpConnState {
                     };
                     return StepResult::Done;
                 }
-                
+
                 if socket_state == TcpSocketState::Closed {
                     // Connection refused or reset
-                    *self = TcpConnState::Error { error: TcpError::ConnectionRefused };
+                    *self = TcpConnState::Error {
+                        error: TcpError::ConnectionRefused,
+                    };
                     return StepResult::Failed;
                 }
-                
+
                 // Still connecting
                 StepResult::Pending
             }
-            
+
             TcpConnState::Established { .. } => {
                 // Already connected
                 StepResult::Done
             }
-            
-            TcpConnState::Closing { socket_handle, start_tsc } => {
+
+            TcpConnState::Closing {
+                socket_handle,
+                start_tsc,
+            } => {
                 // Check timeout
                 if start_tsc.is_expired(now_tsc, timeout_ticks) {
-                    *self = TcpConnState::Error { error: TcpError::CloseTimeout };
+                    *self = TcpConnState::Error {
+                        error: TcpError::CloseTimeout,
+                    };
                     return StepResult::Timeout;
                 }
-                
+
                 // Check if fully closed
                 if socket_state == TcpSocketState::Closed {
                     *self = TcpConnState::Closed;
                     return StepResult::Done;
                 }
-                
+
                 // Still closing
                 let _ = socket_handle;
                 StepResult::Pending
             }
-            
-            TcpConnState::Error { error } => {
-                match error {
-                    TcpError::ConnectTimeout | TcpError::CloseTimeout => StepResult::Timeout,
-                    _ => StepResult::Failed,
-                }
-            }
+
+            TcpConnState::Error { error } => match error {
+                TcpError::ConnectTimeout | TcpError::CloseTimeout => StepResult::Timeout,
+                _ => StepResult::Failed,
+            },
         }
     }
-    
+
     /// Start graceful close.
     ///
     /// Called AFTER smoltcp's `socket.close()` has been called.
@@ -334,17 +341,17 @@ impl TcpConnState {
             };
         }
     }
-    
+
     /// Abort connection immediately.
     pub fn abort(&mut self) {
         *self = TcpConnState::Closed;
     }
-    
+
     /// Mark as failed with error.
     pub fn fail(&mut self, error: TcpError) {
         *self = TcpConnState::Error { error };
     }
-    
+
     /// Get socket handle (if connecting or established).
     pub fn socket_handle(&self) -> Option<usize> {
         match self {
@@ -354,7 +361,7 @@ impl TcpConnState {
             _ => None,
         }
     }
-    
+
     /// Get connection info (if established).
     pub fn connection_info(&self) -> Option<&TcpConnectionInfo> {
         match self {
@@ -362,7 +369,7 @@ impl TcpConnState {
             _ => None,
         }
     }
-    
+
     /// Get error (if failed).
     pub fn error(&self) -> Option<TcpError> {
         match self {
@@ -370,22 +377,22 @@ impl TcpConnState {
             _ => None,
         }
     }
-    
+
     /// Check if connection is established.
     pub fn is_established(&self) -> bool {
         matches!(self, TcpConnState::Established { .. })
     }
-    
+
     /// Check if closed (initial or after close).
     pub fn is_closed(&self) -> bool {
         matches!(self, TcpConnState::Closed)
     }
-    
+
     /// Check if in error state.
     pub fn is_error(&self) -> bool {
         matches!(self, TcpConnState::Error { .. })
     }
-    
+
     /// Check if terminal (established, closed, or error).
     pub fn is_terminal(&self) -> bool {
         matches!(

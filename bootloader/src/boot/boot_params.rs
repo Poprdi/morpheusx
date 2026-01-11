@@ -1,8 +1,6 @@
 // Linux boot parameters (zero page)
 // Reference: https://www.kernel.org/doc/html/latest/x86/boot.html#linux-boot-parameters-linux-boot-param-structure
 // this was a pain in the ass to get right.....
-
-
 #[repr(C, packed)]
 pub struct LinuxBootParams {
     screen_info: ScreenInfo,        // 0x000

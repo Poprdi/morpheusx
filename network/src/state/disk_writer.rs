@@ -21,8 +21,8 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §5, §8
 
-use crate::driver::block_traits::{BlockDriver, BlockError, BlockCompletion};
 use super::StepResult;
+use crate::driver::block_traits::{BlockCompletion, BlockDriver, BlockError};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -150,12 +150,12 @@ impl DiskWriterProgress {
         let pct = (self.bytes_written * 100) / self.total_bytes;
         pct.min(100) as u8
     }
-    
+
     /// Check if all data has been written.
     pub fn is_complete(&self) -> bool {
         self.total_bytes > 0 && self.bytes_written >= self.total_bytes && self.pending_writes == 0
     }
-    
+
     /// Get bytes still in flight.
     pub fn bytes_in_flight(&self) -> u64 {
         self.bytes_submitted.saturating_sub(self.bytes_written)
@@ -246,22 +246,22 @@ impl DiskWriterState {
             error: None,
         }
     }
-    
+
     /// Get current state.
     pub fn state(&self) -> WriterState {
         self.state
     }
-    
+
     /// Get write progress.
     pub fn progress(&self) -> DiskWriterProgress {
         self.progress
     }
-    
+
     /// Get error (if in Failed state).
     pub fn error(&self) -> Option<DiskWriterError> {
         self.error
     }
-    
+
     /// Check if writer can accept more writes.
     ///
     /// Returns false if:
@@ -269,27 +269,25 @@ impl DiskWriterState {
     /// - Writer is not in Ready/Writing state
     pub fn can_write(&self) -> bool {
         match self.state {
-            WriterState::Ready | WriterState::Writing => {
-                self.pending_count < MAX_PENDING_WRITES
-            }
+            WriterState::Ready | WriterState::Writing => self.pending_count < MAX_PENDING_WRITES,
             _ => false,
         }
     }
-    
+
     /// Check if all writes are complete.
     pub fn is_complete(&self) -> bool {
         self.state == WriterState::Done
     }
-    
+
     /// Check if writer has pending writes.
     pub fn has_pending(&self) -> bool {
         self.pending_count > 0
     }
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // STATE TRANSITIONS
     // ═══════════════════════════════════════════════════════════════════════
-    
+
     /// Start the writer.
     ///
     /// Validates that disk has sufficient space.
@@ -297,14 +295,14 @@ impl DiskWriterState {
         if self.state != WriterState::Init {
             return Err(DiskWriterError::InvalidState);
         }
-        
+
         // Check disk capacity if total size known
         if self.config.total_bytes > 0 {
             let info = driver.info();
-            let required_sectors = (self.config.total_bytes + self.config.sector_size as u64 - 1) 
+            let required_sectors = (self.config.total_bytes + self.config.sector_size as u64 - 1)
                 / self.config.sector_size as u64;
             let available_sectors = info.total_sectors.saturating_sub(self.config.start_sector);
-            
+
             if required_sectors > available_sectors {
                 return Err(DiskWriterError::InsufficientSpace {
                     required: required_sectors * self.config.sector_size as u64,
@@ -312,11 +310,11 @@ impl DiskWriterState {
                 });
             }
         }
-        
+
         self.state = WriterState::Ready;
         Ok(())
     }
-    
+
     /// Write a chunk of data to disk.
     ///
     /// # Arguments
@@ -346,36 +344,31 @@ impl DiskWriterState {
             WriterState::Done => return Err(DiskWriterError::InvalidState),
             WriterState::Failed => return Err(self.error.unwrap_or(DiskWriterError::InvalidState)),
         }
-        
+
         // Backpressure check
         if self.pending_count >= MAX_PENDING_WRITES {
             return Err(DiskWriterError::QueueFull);
         }
-        
+
         // Driver queue check
         if !driver.can_submit() {
             return Err(DiskWriterError::QueueFull);
         }
-        
+
         // Calculate sectors
         let sector_size = self.config.sector_size as usize;
         let num_sectors = ((len + sector_size - 1) / sector_size) as u32;
-        
+
         // Find free pending slot
         let slot = self.find_free_slot().ok_or(DiskWriterError::QueueFull)?;
-        
+
         // Allocate request ID
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.wrapping_add(1);
-        
+
         // Submit write to driver
-        driver.submit_write(
-            self.current_sector,
-            buffer_phys,
-            num_sectors,
-            request_id,
-        )?;
-        
+        driver.submit_write(self.current_sector, buffer_phys, num_sectors, request_id)?;
+
         // Track pending write
         self.pending[slot] = PendingWrite {
             request_id,
@@ -385,18 +378,18 @@ impl DiskWriterState {
             active: true,
         };
         self.pending_count += 1;
-        
+
         // Update state
         self.current_sector += num_sectors as u64;
         self.progress.bytes_submitted += len as u64;
         self.state = WriterState::Writing;
-        
+
         // Notify driver
         driver.notify();
-        
+
         Ok(())
     }
-    
+
     /// Mark writing as finished (no more data coming).
     ///
     /// Transitions to Flushing state to wait for pending completions.
@@ -412,7 +405,7 @@ impl DiskWriterState {
             _ => {}
         }
     }
-    
+
     /// Step the state machine (poll completions).
     ///
     /// Should be called regularly to process write completions.
@@ -426,7 +419,7 @@ impl DiskWriterState {
         while let Some(completion) = driver.poll_completion() {
             self.handle_completion(completion);
         }
-        
+
         // Check state
         match self.state {
             WriterState::Init => StepResult::Pending,
@@ -444,24 +437,26 @@ impl DiskWriterState {
             WriterState::Failed => StepResult::Failed,
         }
     }
-    
+
     /// Process a write completion.
     fn handle_completion(&mut self, completion: BlockCompletion) {
         // Find matching pending write
-        let slot = self.pending.iter()
+        let slot = self
+            .pending
+            .iter()
             .position(|p| p.active && p.request_id == completion.request_id);
-        
+
         let Some(slot) = slot else {
             // Completion for unknown request (shouldn't happen)
             return;
         };
-        
+
         let pending = self.pending[slot];
-        
+
         // Mark slot as free
         self.pending[slot].active = false;
         self.pending_count = self.pending_count.saturating_sub(1);
-        
+
         // Check status
         if completion.status != 0 {
             // Write failed
@@ -473,40 +468,44 @@ impl DiskWriterState {
             self.state = WriterState::Failed;
             return;
         }
-        
+
         // Success
         self.progress.bytes_written += pending.bytes as u64;
         self.progress.completed_writes += 1;
-        
+
         // Check if done
         if self.state == WriterState::Flushing && self.pending_count == 0 {
             self.state = WriterState::Done;
         }
     }
-    
+
     /// Find a free pending slot.
     fn find_free_slot(&self) -> Option<usize> {
         self.pending.iter().position(|p| !p.active)
     }
-    
+
     // ═══════════════════════════════════════════════════════════════════════
     // HELPERS
     // ═══════════════════════════════════════════════════════════════════════
-    
+
     /// Get the next sector to write to.
     pub fn next_sector(&self) -> u64 {
         self.current_sector
     }
-    
+
     /// Get remaining bytes to write (if total known).
     pub fn remaining_bytes(&self) -> Option<u64> {
         if self.progress.total_bytes > 0 {
-            Some(self.progress.total_bytes.saturating_sub(self.progress.bytes_submitted))
+            Some(
+                self.progress
+                    .total_bytes
+                    .saturating_sub(self.progress.bytes_submitted),
+            )
         } else {
             None
         }
     }
-    
+
     /// Update total bytes (e.g., after HTTP Content-Length received).
     pub fn set_total_bytes(&mut self, total: u64) {
         self.progress.total_bytes = total;
@@ -576,57 +575,57 @@ impl ChunkQueue {
             next_sequence: 0,
         }
     }
-    
+
     /// Check if queue is empty.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
-    
+
     /// Check if queue is full.
     pub fn is_full(&self) -> bool {
         self.count >= MAX_PENDING_WRITES
     }
-    
+
     /// Get number of queued chunks.
     pub fn len(&self) -> usize {
         self.count
     }
-    
+
     /// Enqueue a chunk.
     pub fn enqueue(&mut self, buffer_phys: u64, buffer_cpu: *const u8, len: usize) -> Option<u32> {
         if self.is_full() {
             return None;
         }
-        
+
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-        
+
         self.chunks[self.tail] = WriteChunk {
             buffer_phys,
             buffer_cpu,
             len,
             sequence,
         };
-        
+
         self.tail = (self.tail + 1) % MAX_PENDING_WRITES;
         self.count += 1;
-        
+
         Some(sequence)
     }
-    
+
     /// Dequeue a chunk.
     pub fn dequeue(&mut self) -> Option<WriteChunk> {
         if self.is_empty() {
             return None;
         }
-        
+
         let chunk = self.chunks[self.head];
         self.head = (self.head + 1) % MAX_PENDING_WRITES;
         self.count -= 1;
-        
+
         Some(chunk)
     }
-    
+
     /// Peek at front chunk without removing.
     pub fn peek(&self) -> Option<&WriteChunk> {
         if self.is_empty() {
@@ -635,7 +634,7 @@ impl ChunkQueue {
             Some(&self.chunks[self.head])
         }
     }
-    
+
     /// Clear the queue.
     pub fn clear(&mut self) {
         self.head = 0;
@@ -657,19 +656,19 @@ impl Default for ChunkQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_chunk_queue() {
         let mut queue = ChunkQueue::new();
-        
+
         assert!(queue.is_empty());
         assert!(!queue.is_full());
-        
+
         // Enqueue
         let seq = queue.enqueue(0x1000, core::ptr::null(), 512);
         assert_eq!(seq, Some(0));
         assert_eq!(queue.len(), 1);
-        
+
         // Dequeue
         let chunk = queue.dequeue();
         assert!(chunk.is_some());
@@ -677,21 +676,21 @@ mod tests {
         assert_eq!(chunk.buffer_phys, 0x1000);
         assert_eq!(chunk.len, 512);
         assert_eq!(chunk.sequence, 0);
-        
+
         assert!(queue.is_empty());
     }
-    
+
     #[test]
     fn test_progress_percent() {
         let mut progress = DiskWriterProgress::default();
         progress.total_bytes = 1000;
-        
+
         progress.bytes_written = 0;
         assert_eq!(progress.percent_complete(), 0);
-        
+
         progress.bytes_written = 500;
         assert_eq!(progress.percent_complete(), 50);
-        
+
         progress.bytes_written = 1000;
         assert_eq!(progress.percent_complete(), 100);
     }

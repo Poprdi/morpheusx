@@ -10,7 +10,7 @@
 extern "win64" {
     /// Read TSC (non-serializing, ~40 cycles).
     fn asm_tsc_read() -> u64;
-    
+
     /// Read TSC with CPUID serialization (~200 cycles).
     fn asm_tsc_read_serialized() -> u64;
 }

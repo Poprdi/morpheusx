@@ -1,8 +1,8 @@
 // FAT32 file read/write operations
 
+use super::super::Fat32Error;
 use super::context::Fat32Context;
 use super::directory::add_dir_entry_to_cluster;
-use super::super::Fat32Error;
 use super::types::{DirEntry, ATTR_ARCHIVE, ATTR_DIRECTORY};
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
@@ -21,7 +21,15 @@ pub fn write_file_in_directory<B: BlockIo>(
     name: &str,
     data: &[u8],
 ) -> Result<(), Fat32Error> {
-    write_file_in_directory_with_progress(block_io, partition_start, ctx, dir_cluster, name, data, &mut None)
+    write_file_in_directory_with_progress(
+        block_io,
+        partition_start,
+        ctx,
+        dir_cluster,
+        name,
+        data,
+        &mut None,
+    )
 }
 
 pub fn write_file_in_directory_with_progress<B: BlockIo>(
@@ -34,12 +42,12 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
     progress: &mut Option<&mut dyn FnMut(usize, usize, &str)>,
 ) -> Result<(), Fat32Error> {
     let total_size = data.len();
-    
+
     // Report start
     if let Some(ref mut cb) = progress {
         cb(0, total_size, "Allocating clusters...");
     }
-    
+
     // Allocate clusters for file data
     let cluster_size = (ctx.sectors_per_cluster * SECTOR_SIZE as u32) as usize;
     let clusters_needed = ((data.len() + cluster_size - 1) / cluster_size).max(1);
@@ -81,13 +89,17 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
                     &cluster_data[start..end],
                 )
                 .map_err(|_| Fat32Error::IoError)?;
-            
+
             bytes_written += SECTOR_SIZE.min(total_size - bytes_written);
-            
+
             // Report progress after each sector
             if let Some(ref mut cb) = progress {
                 let percent = (bytes_written * 100) / total_size;
-                cb(bytes_written, total_size, alloc::format!("Writing... {}%", percent).leak());
+                cb(
+                    bytes_written,
+                    total_size,
+                    alloc::format!("Writing... {}%", percent).leak(),
+                );
             }
         }
     }
@@ -103,7 +115,7 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
         data.len() as u32,
         ATTR_ARCHIVE,
     )?;
-    
+
     // Report completion
     if let Some(ref mut cb) = progress {
         cb(total_size, total_size, "Write complete");
@@ -225,7 +237,8 @@ fn read_file_data<B: BlockIo>(
         }
 
         // Get next cluster from FAT
-        current_file_cluster = ctx.read_fat_entry(block_io, partition_start, current_file_cluster)?;
+        current_file_cluster =
+            ctx.read_fat_entry(block_io, partition_start, current_file_cluster)?;
     }
 
     Ok(data)

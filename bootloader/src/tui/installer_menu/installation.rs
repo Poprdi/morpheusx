@@ -2,7 +2,9 @@
 
 use crate::installer::{self, EspInfo};
 use crate::tui::input::Keyboard;
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_WHITE};
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_WHITE,
+};
 use crate::BootServices;
 use alloc::format;
 use morpheus_persistent::feedback::{FeedbackCategory, FeedbackCollector, FeedbackLevel};
@@ -90,8 +92,24 @@ pub fn install_to_selected(
     match pe_headers {
         Ok(headers) => {
             analyze_pe_headers(&headers, &mut feedback, screen, start_x, &mut y);
-            reconstruct_image_base(&headers, image_base, image_size, &mut feedback, screen, start_x, &mut y);
-            perform_installation(esp, bs, image_handle, &mut feedback, screen, start_x, &mut y);
+            reconstruct_image_base(
+                &headers,
+                image_base,
+                image_size,
+                &mut feedback,
+                screen,
+                start_x,
+                &mut y,
+            );
+            perform_installation(
+                esp,
+                bs,
+                image_handle,
+                &mut feedback,
+                screen,
+                start_x,
+                &mut y,
+            );
         }
         Err(e) => {
             feedback.error(
@@ -154,9 +172,8 @@ fn reconstruct_image_base(
     render_feedback(screen, feedback, start_x, y);
 
     let actual_load = image_base as u64;
-    let reconstruction = unsafe {
-        headers.reconstruct_original_image_base(image_base, image_size, actual_load)
-    };
+    let reconstruction =
+        unsafe { headers.reconstruct_original_image_base(image_base, image_size, actual_load) };
 
     match reconstruction {
         Ok((orig_base, valid_count, total_count)) => {
@@ -192,10 +209,7 @@ fn reconstruct_image_base(
 
             let actual_delta = image_base as u64 - orig_base;
             if actual_delta == 0 {
-                feedback.success(
-                    FeedbackCategory::Relocation,
-                    "Loaded at preferred address!",
-                );
+                feedback.success(FeedbackCategory::Relocation, "Loaded at preferred address!");
             } else {
                 feedback.warning(
                     FeedbackCategory::Relocation,
@@ -230,36 +244,45 @@ fn perform_installation(
 ) {
     use crate::tui::boot_sequence::BootSequence;
     use crate::tui::widgets::progressbar::ProgressBar;
-    
+
     // Clear screen for installation phase - fresh start
     screen.clear();
-    
+
     // Draw installation header
-    screen.put_str_at(start_x, 1, "=== PERSISTENCE INSTALLER ===", EFI_LIGHTGREEN, EFI_BLACK);
+    screen.put_str_at(
+        start_x,
+        1,
+        "=== PERSISTENCE INSTALLER ===",
+        EFI_LIGHTGREEN,
+        EFI_BLACK,
+    );
     screen.put_str_at(start_x, 3, "--- Writing to ESP ---", EFI_CYAN, EFI_BLACK);
     screen.put_str_at(
-        start_x, 
-        4, 
-        &format!("Target: Disk {} Part {} ({}MB)", esp.disk_index, esp.partition_index, esp.size_mb),
-        EFI_DARKGREEN, 
-        EFI_BLACK
+        start_x,
+        4,
+        &format!(
+            "Target: Disk {} Part {} ({}MB)",
+            esp.disk_index, esp.partition_index, esp.size_mb
+        ),
+        EFI_DARKGREEN,
+        EFI_BLACK,
     );
-    
+
     // Progress bar at fixed position
     let progress_y = 6;
     let logs_y = 9;
     let max_logs = (screen.height() - logs_y - 3).min(15); // Leave room for status message
-    
+
     let mut progress_bar = ProgressBar::new(start_x, progress_y, 60, "Installing:");
     progress_bar.render(screen);
-    
+
     // Log installation start - this will be the first log in our display
     morpheus_core::logger::log("Installation: Starting write to ESP...");
-    
+
     // Track the starting log count so we only show installation logs
     let install_start_log_count = morpheus_core::logger::total_log_count();
     let mut last_percent = 0usize;
-    
+
     let result = {
         let mut progress_callback = |bytes: usize, total: usize, msg: &str| {
             if total > 0 {
@@ -268,22 +291,24 @@ fn perform_installation(
                     progress_bar.set_progress(percent);
                     progress_bar.render(screen);
                     last_percent = percent;
-                    
+
                     // Log at every 1% for smooth updates  === PERSISTENCE INSTALLER ===
                     morpheus_core::logger::log(
-                        alloc::format!("Writing: {}% ({} KB / {} KB)", 
+                        alloc::format!(
+                            "Writing: {}% ({} KB / {} KB)",
                             percent,
-                            bytes / 1024, 
+                            bytes / 1024,
                             total / 1024
-                        ).leak()
+                        )
+                        .leak(),
                     );
-                    
+
                     // Render only installation logs (skip boot logs)
                     render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
                 }
             }
         };
-        
+
         installer::install_to_esp_with_progress(bs, esp, image_handle, Some(&mut progress_callback))
     };
 
@@ -295,39 +320,63 @@ fn perform_installation(
         Ok(()) => {
             morpheus_core::logger::log("Installation: Complete!");
             render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
-            
+
             let status_y = logs_y + max_logs + 1;
-            screen.put_str_at(start_x, status_y, "[OK] MorpheusX written successfully!", EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(
+                start_x,
+                status_y,
+                "[OK] MorpheusX written successfully!",
+                EFI_LIGHTGREEN,
+                EFI_BLACK,
+            );
             *y = status_y + 2;
         }
         Err(e) => {
             morpheus_core::logger::log(alloc::format!("Installation: FAILED - {:?}", e).leak());
             render_install_logs(screen, start_x, logs_y, max_logs, install_start_log_count);
-            
+
             let status_y = logs_y + max_logs + 1;
-            screen.put_str_at(start_x, status_y, &format!("[ERR] Installation failed: {:?}", e), EFI_WHITE, EFI_BLACK);
+            screen.put_str_at(
+                start_x,
+                status_y,
+                &format!("[ERR] Installation failed: {:?}", e),
+                EFI_WHITE,
+                EFI_BLACK,
+            );
             *y = status_y + 1;
         }
     }
 }
 
 /// Render only logs from installation (skip boot logs)
-fn render_install_logs(screen: &mut Screen, x: usize, y: usize, max_lines: usize, start_count: usize) {
+fn render_install_logs(
+    screen: &mut Screen,
+    x: usize,
+    y: usize,
+    max_lines: usize,
+    start_count: usize,
+) {
     let total_count = morpheus_core::logger::total_log_count();
     let install_log_count = total_count.saturating_sub(start_count);
-    
+
     // Get last N installation logs
     let logs_to_show = install_log_count.min(max_lines);
     let skip_count = install_log_count.saturating_sub(logs_to_show);
-    
+
     // Clear the log area first
     for i in 0..max_lines {
         let line_y = y + i;
         if line_y < screen.height() {
-            screen.put_str_at(x, line_y, "                                                                                ", EFI_BLACK, EFI_BLACK);
+            screen.put_str_at(
+                x,
+                line_y,
+                "                                                                                ",
+                EFI_BLACK,
+                EFI_BLACK,
+            );
         }
     }
-    
+
     // Render installation logs only
     let mut line_idx = 0;
     for (i, log) in morpheus_core::logger::get_logs_iter().enumerate() {
@@ -335,17 +384,17 @@ fn render_install_logs(screen: &mut Screen, x: usize, y: usize, max_lines: usize
         if i < start_count {
             continue;
         }
-        
+
         // Skip older installation logs if we have more than max_lines
         let install_idx = i - start_count;
         if install_idx < skip_count {
             continue;
         }
-        
+
         if line_idx >= max_lines {
             break;
         }
-        
+
         let line_y = y + line_idx;
         if line_y < screen.height() {
             screen.put_str_at(x, line_y, "[  OK  ] ", EFI_GREEN, EFI_BLACK);

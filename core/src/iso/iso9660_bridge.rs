@@ -21,8 +21,8 @@
 //! let kernel_file = find_file(&mut adapter, &volume, "/boot/vmlinuz")?;
 //! ```
 
-use super::reader::IsoReadContext;
 use super::chunk::MAX_CHUNKS;
+use super::reader::IsoReadContext;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
@@ -115,7 +115,7 @@ impl<'a, B: BlockIo> BlockIo for IsoBlockIoAdapter<'a, B> {
 
         for i in 0..num_blocks {
             let virtual_lba = start_lba.0 + i as u64;
-            
+
             // Check bounds
             if virtual_lba >= self.total_blocks() {
                 // Read beyond EOF - fill with zeros (common for ISO padding)
@@ -137,7 +137,8 @@ impl<'a, B: BlockIo> BlockIo for IsoBlockIoAdapter<'a, B> {
 
             // Read from disk
             let offset = i * BLOCK_SIZE;
-            self.block_io.read_blocks(Lba(physical_lba), &mut buffer[offset..offset + BLOCK_SIZE])?;
+            self.block_io
+                .read_blocks(Lba(physical_lba), &mut buffer[offset..offset + BLOCK_SIZE])?;
         }
 
         Ok(())

@@ -123,6 +123,4 @@ impl StorageManager {
             EFI_BLACK,
         );
     }
-
-
 }

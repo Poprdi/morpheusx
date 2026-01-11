@@ -6,9 +6,8 @@ use crate::uefi::gpt_adapter::UefiBlockIoAdapter;
 use crate::BootServices;
 use morpheus_core::disk::gpt_ops;
 
-
 impl StorageManager {
-        pub(in super::super) fn create_partition_ui(
+    pub(in super::super) fn create_partition_ui(
         &mut self,
         screen: &mut Screen,
         keyboard: &mut Keyboard,
@@ -274,5 +273,4 @@ impl StorageManager {
             }
         }
     }
-
 }

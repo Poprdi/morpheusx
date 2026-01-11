@@ -12,8 +12,8 @@
 //! assert_eq!(url.path, "/path");
 //! ```
 
-use alloc::string::{String, ToString};
 use crate::error::{NetworkError, Result};
+use alloc::string::{String, ToString};
 
 /// HTTP URL scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +97,11 @@ impl Url {
         let (path_part, query) = match rest.find('?') {
             Some(idx) => {
                 let q = &rest[idx + 1..];
-                let query = if q.is_empty() { None } else { Some(q.to_string()) };
+                let query = if q.is_empty() {
+                    None
+                } else {
+                    Some(q.to_string())
+                };
                 (&rest[..idx], query)
             }
             None => (rest, None),
@@ -139,7 +143,9 @@ impl Url {
             }
 
             if let Some(port_str) = rest.strip_prefix(':') {
-                let port = port_str.parse::<u16>().map_err(|_| NetworkError::InvalidUrl)?;
+                let port = port_str
+                    .parse::<u16>()
+                    .map_err(|_| NetworkError::InvalidUrl)?;
                 return Ok((host, Some(port)));
             }
 
@@ -151,13 +157,15 @@ impl Url {
             Some(idx) => {
                 let host = &authority[..idx];
                 let port_str = &authority[idx + 1..];
-                
+
                 // Validate it's actually a port (not part of IPv6)
                 if port_str.is_empty() {
                     return Err(NetworkError::InvalidUrl);
                 }
-                
-                let port = port_str.parse::<u16>().map_err(|_| NetworkError::InvalidUrl)?;
+
+                let port = port_str
+                    .parse::<u16>()
+                    .map_err(|_| NetworkError::InvalidUrl)?;
                 Ok((host, Some(port)))
             }
             None => Ok((authority, None)),
@@ -196,19 +204,19 @@ impl Url {
 impl core::fmt::Display for Url {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}://{}", self.scheme.as_str(), self.host)?;
-        
+
         if let Some(port) = self.port {
             if port != self.scheme.default_port() {
                 write!(f, ":{}", port)?;
             }
         }
-        
+
         write!(f, "{}", self.path)?;
-        
+
         if let Some(ref query) = self.query {
             write!(f, "?{}", query)?;
         }
-        
+
         Ok(())
     }
 }
@@ -448,18 +456,17 @@ mod tests {
 
     #[test]
     fn test_parse_ubuntu_iso() {
-        let url = Url::parse(
-            "http://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"
-        ).unwrap();
+        let url = Url::parse("http://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso")
+            .unwrap();
         assert_eq!(url.host, "releases.ubuntu.com");
         assert_eq!(url.path, "/24.04/ubuntu-24.04-live-server-amd64.iso");
     }
 
     #[test]
     fn test_parse_arch_mirror() {
-        let url = Url::parse(
-            "https://mirror.rackspace.com/archlinux/iso/latest/archlinux-x86_64.iso"
-        ).unwrap();
+        let url =
+            Url::parse("https://mirror.rackspace.com/archlinux/iso/latest/archlinux-x86_64.iso")
+                .unwrap();
         assert_eq!(url.scheme, Scheme::Https);
         assert_eq!(url.host, "mirror.rackspace.com");
     }

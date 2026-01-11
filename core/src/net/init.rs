@@ -19,11 +19,11 @@
 
 use super::config::InitConfig;
 use super::error::{NetInitError, NetInitResult};
-use super::status::NetworkStatus;
 use super::ring_buffer::{error_log, InitStage};
+use super::status::NetworkStatus;
 
 /// Network initialization result (DEPRECATED).
-/// 
+///
 /// This type is kept for API compatibility but `NetworkInit::initialize()`
 /// always returns an error directing callers to use post-EBS flow.
 #[deprecated(note = "Network init moved to post-EBS. Use bare_metal_main() instead.")]
@@ -119,4 +119,3 @@ mod tests {
         assert!(s.starts_with("192.168.1.100"));
     }
 }
-

@@ -1,7 +1,7 @@
 // FAT32 directory operations
 
-use super::context::Fat32Context;
 use super::super::Fat32Error;
+use super::context::Fat32Context;
 use super::types::{DirEntry, ATTR_DIRECTORY};
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;

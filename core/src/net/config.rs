@@ -32,7 +32,7 @@ impl Default for InitConfig {
     fn default() -> Self {
         Self {
             dhcp_timeout_ms: 30_000, // 30 seconds
-            use_static_dma: true,     // Use static as fallback
+            use_static_dma: true,    // Use static as fallback
             image_base: None,
             image_end: None,
             ecam_base: Some(ECAM_BASE_QEMU_Q35), // Default to Q35

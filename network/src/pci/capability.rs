@@ -6,7 +6,7 @@
 //! - PCI Spec 3.0 §6.7 (Capability List)
 //! - VirtIO Spec 1.2 §4.1.4 (PCI Device Discovery)
 
-use super::config::{PciAddr, pci_cfg_read8, pci_cfg_read16, pci_cfg_read32};
+use super::config::{pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ASM BINDINGS
@@ -15,31 +15,32 @@ use super::config::{PciAddr, pci_cfg_read8, pci_cfg_read16, pci_cfg_read32};
 extern "win64" {
     /// Check if device has capability list.
     fn asm_pci_has_capabilities(bus: u8, device: u8, function: u8) -> u32;
-    
+
     /// Get first capability pointer.
     fn asm_pci_get_cap_ptr(bus: u8, device: u8, function: u8) -> u32;
-    
+
     /// Find capability by ID.
     fn asm_pci_find_cap(bus: u8, device: u8, function: u8, cap_id: u8) -> u32;
-    
+
     /// Find VirtIO capability by cfg_type.
     fn asm_pci_find_virtio_cap(bus: u8, device: u8, function: u8, cfg_type: u8) -> u32;
-    
+
     /// Parse VirtIO capability at offset.
     fn asm_virtio_pci_parse_cap(
-        bus: u8, device: u8, function: u8, cap_offset: u8,
+        bus: u8,
+        device: u8,
+        function: u8,
+        cap_offset: u8,
         out: *mut VirtioCapInfo,
     ) -> u32;
-    
+
     /// Read BAR value.
     /// Returns: RAX = address, RDX = 1 if memory / 0 if IO
     fn asm_virtio_pci_read_bar(bus: u8, device: u8, function: u8, bar_idx: u8) -> u64;
-    
+
     /// Probe all VirtIO caps and fill array.
-    fn asm_virtio_pci_probe_caps(
-        bus: u8, device: u8, function: u8,
-        out: *mut VirtioCapInfo,
-    ) -> u32;
+    fn asm_virtio_pci_probe_caps(bus: u8, device: u8, function: u8, out: *mut VirtioCapInfo)
+        -> u32;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -122,12 +123,14 @@ impl VirtioPciCaps {
 
     /// Get the address for common config access.
     pub fn common_cfg_addr(&self) -> Option<u64> {
-        self.common.map(|c| self.bar_addrs[c.bar as usize] + c.offset as u64)
+        self.common
+            .map(|c| self.bar_addrs[c.bar as usize] + c.offset as u64)
     }
 
     /// Get the address for notification.
     pub fn notify_addr(&self) -> Option<u64> {
-        self.notify.map(|n| self.bar_addrs[n.bar as usize] + n.offset as u64)
+        self.notify
+            .map(|n| self.bar_addrs[n.bar as usize] + n.offset as u64)
     }
 
     /// Get the notify offset multiplier.
@@ -137,12 +140,14 @@ impl VirtioPciCaps {
 
     /// Get the address for device-specific config.
     pub fn device_cfg_addr(&self) -> Option<u64> {
-        self.device.map(|d| self.bar_addrs[d.bar as usize] + d.offset as u64)
+        self.device
+            .map(|d| self.bar_addrs[d.bar as usize] + d.offset as u64)
     }
 
     /// Get the address for ISR status.
     pub fn isr_addr(&self) -> Option<u64> {
-        self.isr.map(|i| self.bar_addrs[i.bar as usize] + i.offset as u64)
+        self.isr
+            .map(|i| self.bar_addrs[i.bar as usize] + i.offset as u64)
     }
 }
 
@@ -189,11 +194,7 @@ pub fn find_virtio_cap(addr: PciAddr, cfg_type: u8) -> Option<u8> {
 pub fn parse_virtio_cap(addr: PciAddr, cap_offset: u8) -> Option<VirtioCapInfo> {
     let mut info = VirtioCapInfo::default();
     let result = unsafe {
-        asm_virtio_pci_parse_cap(
-            addr.bus, addr.device, addr.function,
-            cap_offset,
-            &mut info,
-        )
+        asm_virtio_pci_parse_cap(addr.bus, addr.device, addr.function, cap_offset, &mut info)
     };
     if result != 0 {
         Some(info)
@@ -212,20 +213,17 @@ pub fn read_bar(addr: PciAddr, bar_idx: u8) -> u64 {
 /// This is the main entry point for VirtIO PCI device discovery.
 pub fn probe_virtio_caps(addr: PciAddr) -> VirtioPciCaps {
     let mut caps = VirtioPciCaps::default();
-    
+
     // Array to receive capability info (5 caps * 24 bytes each)
     let mut cap_array = [VirtioCapInfo::default(); 5];
-    
+
     // Probe via ASM
     let found = unsafe {
-        asm_virtio_pci_probe_caps(
-            addr.bus, addr.device, addr.function,
-            cap_array.as_mut_ptr(),
-        )
+        asm_virtio_pci_probe_caps(addr.bus, addr.device, addr.function, cap_array.as_mut_ptr())
     };
-    
+
     caps.found_mask = found as u8;
-    
+
     // Map results to struct
     if found & (1 << 0) != 0 {
         caps.common = Some(cap_array[0]);
@@ -242,12 +240,12 @@ pub fn probe_virtio_caps(addr: PciAddr) -> VirtioPciCaps {
     if found & (1 << 4) != 0 {
         caps.pci_cfg = Some(cap_array[4]);
     }
-    
+
     // Read all BAR addresses
     for i in 0..6 {
         caps.bar_addrs[i] = read_bar(addr, i as u8);
     }
-    
+
     caps
 }
 
@@ -270,13 +268,13 @@ impl WalkCaps {
     fn new(addr: PciAddr) -> Self {
         let status = pci_cfg_read16(addr, super::config::offset::STATUS);
         let has_caps = (status & super::config::status::CAP_LIST) != 0;
-        
+
         let start = if has_caps {
             pci_cfg_read8(addr, super::config::offset::CAP_PTR) & 0xFC
         } else {
             0
         };
-        
+
         Self {
             addr,
             current: start,
@@ -287,21 +285,21 @@ impl WalkCaps {
 
 impl Iterator for WalkCaps {
     type Item = (u8, u8); // (offset, cap_id)
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.current == 0 || self.count > 48 {
             return None;
         }
-        
+
         self.count += 1;
-        
+
         let offset = self.current;
         let header = pci_cfg_read16(self.addr, offset);
         let cap_id = (header & 0xFF) as u8;
         let next = ((header >> 8) & 0xFC) as u8;
-        
+
         self.current = next;
-        
+
         Some((offset, cap_id))
     }
 }
@@ -313,8 +311,8 @@ impl Iterator for WalkCaps {
 /// Dump all capabilities to serial (uses crate's serial_println if available).
 #[cfg(feature = "serial_debug")]
 pub fn dump_capabilities(addr: PciAddr) {
-    use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_hex};
-    
+    use crate::mainloop::bare_metal::{serial_print, serial_print_hex, serial_println};
+
     serial_print("PCI ");
     serial_print_hex(addr.bus as u64);
     serial_print(":");
@@ -322,35 +320,35 @@ pub fn dump_capabilities(addr: PciAddr) {
     serial_print(".");
     serial_print_hex(addr.function as u64);
     serial_println(" capabilities:");
-    
+
     for (offset, cap_id) in walk_capabilities_rust(addr) {
         serial_print("  [");
         serial_print_hex(offset as u64);
         serial_print("] ID=");
         serial_print_hex(cap_id as u64);
-        
+
         if cap_id == PCI_CAP_ID_VNDR {
             // VirtIO cap - read cfg_type
             let cfg_type = pci_cfg_read8(addr, offset + 3);
             serial_print(" VirtIO cfg_type=");
             serial_print_hex(cfg_type as u64);
-            
+
             // Read bar
             let bar = pci_cfg_read8(addr, offset + 4);
             serial_print(" bar=");
             serial_print_hex(bar as u64);
-            
+
             // Read offset
             let bar_offset = pci_cfg_read32(addr, offset + 8);
             serial_print(" off=");
             serial_print_hex(bar_offset as u64);
-            
+
             // Read length
             let length = pci_cfg_read32(addr, offset + 12);
             serial_print(" len=");
             serial_print_hex(length as u64);
         }
-        
+
         serial_println("");
     }
 }

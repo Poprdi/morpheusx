@@ -68,53 +68,53 @@ pub mod alloc_heap;
 // ═══════════════════════════════════════════════════════════════
 // CORE MODULES
 // ═══════════════════════════════════════════════════════════════
-pub mod error;
-pub mod http;
-pub mod url;
-pub mod transfer;
 pub mod client;
 pub mod device;
+pub mod error;
+pub mod http;
 pub mod stack;
+pub mod transfer;
+pub mod url;
 
 // ═══════════════════════════════════════════════════════════════
 // ASM-FIRST BARE-METAL MODULES
 // These provide post-ExitBootServices network support using
 // hand-written assembly for all hardware access.
 // ═══════════════════════════════════════════════════════════════
-pub mod asm;          // ASM bindings (TSC, MMIO, PIO, barriers)
-pub mod types;        // Shared types (#[repr(C)] structs)
-pub mod dma;          // DMA buffer management with ownership tracking
-pub mod driver;       // Driver abstraction and implementations
-pub mod mainloop;     // 5-phase poll loop
-pub mod state;        // State machines (DHCP, TCP, HTTP, etc.)
-pub mod boot;         // Boot handoff and initialization
-pub mod time;         // Timing utilities
-pub mod pci;          // PCI bus access
+pub mod asm; // ASM bindings (TSC, MMIO, PIO, barriers)
+pub mod boot; // Boot handoff and initialization
+pub mod dma; // DMA buffer management with ownership tracking
+pub mod driver; // Driver abstraction and implementations
+pub mod mainloop; // 5-phase poll loop
+pub mod pci;
+pub mod state; // State machines (DHCP, TCP, HTTP, etc.)
+pub mod time; // Timing utilities
+pub mod types; // Shared types (#[repr(C)] structs) // PCI bus access
 
 // ═══════════════════════════════════════════════════════════════
 // RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════
 
 // Core types
+pub use device::NetworkDevice;
 pub use error::{NetworkError, Result};
 pub use types::{HttpMethod, ProgressCallback};
-pub use device::NetworkDevice;
 
 // Client
 pub use client::HttpClient;
 pub use client::NativeHttpClient;
 
 // Stack (smoltcp integration)
-pub use stack::{DeviceAdapter, NetInterface, NetConfig, NetState, ecam_bases};
-pub use stack::{set_debug_stage, debug_stage};  // Debug stage tracking
-pub use stack::{debug_log, debug_log_pop, debug_log_available, debug_log_clear, DebugLogEntry};  // Ring buffer logging
+pub use stack::{debug_log, debug_log_available, debug_log_clear, debug_log_pop, DebugLogEntry};
+pub use stack::{debug_stage, set_debug_stage}; // Debug stage tracking
+pub use stack::{ecam_bases, DeviceAdapter, NetConfig, NetInterface, NetState}; // Ring buffer logging
 
 // ASM-backed VirtIO driver (primary driver for post-EBS execution)
-pub use driver::{NetworkDriver as AsmNetworkDriver, VirtioNetDriver, VirtioConfig};
+pub use driver::{NetworkDriver as AsmNetworkDriver, VirtioConfig, VirtioNetDriver};
 
 // Standalone assembly functions
 #[cfg(target_arch = "x86_64")]
-pub use device::pci::{read_tsc, pci_io_test, tsc_delay_us};
+pub use device::pci::{pci_io_test, read_tsc, tsc_delay_us};
 
 // ===================== Serial Debug Output =====================
 // Write directly to COM1 (0x3f8) for QEMU -serial stdio debugging
@@ -194,5 +194,3 @@ pub fn serial_stage(stage: u32, msg: &str) {
     serial_str(msg);
     serial_byte(b'\n');
 }
-
-

@@ -19,8 +19,8 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
-mod state;
 mod renderer;
+mod state;
 mod ui;
 
 pub use state::{IsoManagerState, ViewMode};

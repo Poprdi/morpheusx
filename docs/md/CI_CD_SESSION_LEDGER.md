@@ -235,18 +235,3 @@ This enables CI gating without complex parsing. Token emission should be:
 | 2026-01-11 | Weekly audit schedule | Security without blocking PRs |
 
 ---
-
-## TODOs
-
-- [x] Implement `scripts/qemu-e2e.sh`
-- [x] Implement `scripts/gen-fixtures.sh`
-- [x] Implement `scripts/ci-build-uefi.sh`
-- [x] Create `.github/workflows/ci.yml`
-- [x] Create `.github/workflows/uefi-build.yml`
-- [x] Create `.github/workflows/uefi-e2e.yml`
-- [x] Create `.github/workflows/audit.yml`
-- [x] Create `.github/workflows/release.yml`
-- [x] Create `deny.toml` for cargo-deny
-- [ ] Add CI boot token feature flag to bootloader
-- [ ] Update README with CI badges and E2E requirements
-- [ ] Test workflows in GitHub Actions

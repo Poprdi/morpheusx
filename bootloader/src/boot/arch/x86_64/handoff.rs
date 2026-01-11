@@ -28,7 +28,7 @@ type HandoverFunc = unsafe extern "efiapi" fn(*mut (), *mut (), *mut ()) -> !;
 ///   → Bootloader MUST call ExitBootServices before jumping
 #[derive(Debug, Copy, Clone)]
 pub enum BootPath {
-    /// EFI Handover Protocol 
+    /// EFI Handover Protocol
     /// Entry: kernel_addr + handover_offset + 512
     /// Boot services MUST be active (kernel will exit them)
     EfiHandover64 { entry: u64 },

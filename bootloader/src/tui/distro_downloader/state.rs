@@ -179,7 +179,8 @@ impl DownloadState {
 
     /// Get bytes remaining
     pub fn bytes_remaining(&self) -> Option<usize> {
-        self.total_bytes.map(|t| t.saturating_sub(self.bytes_downloaded))
+        self.total_bytes
+            .map(|t| t.saturating_sub(self.bytes_downloaded))
     }
 
     /// Format progress as string (e.g., "150 MB / 500 MB")
@@ -249,7 +250,7 @@ impl UiMode {
             Self::ConfirmDelete => "Confirm Delete",
         }
     }
-    
+
     /// Check if in management submenu
     pub const fn is_manage_related(&self) -> bool {
         matches!(self, Self::Manage | Self::ConfirmDelete)

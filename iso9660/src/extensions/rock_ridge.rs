@@ -7,13 +7,12 @@
 pub struct SystemUseEntry {
     /// Signature (2 bytes, e.g. "PX", "PN", "SL")
     pub signature: [u8; 2],
-    
+
     /// Length of entry
     pub length: u8,
-    
+
     /// Version
     pub version: u8,
-    
     // Followed by entry-specific data
 }
 
@@ -21,16 +20,16 @@ pub struct SystemUseEntry {
 #[repr(C, packed)]
 pub struct PosixAttributes {
     pub header: SystemUseEntry,
-    
+
     /// File mode (both-endian)
     pub mode: [u8; 8],
-    
+
     /// Number of links (both-endian)
     pub links: [u8; 8],
-    
+
     /// User ID (both-endian)
     pub uid: [u8; 8],
-    
+
     /// Group ID (both-endian)
     pub gid: [u8; 8],
 }
@@ -39,7 +38,7 @@ pub struct PosixAttributes {
 pub struct AlternateName {
     /// Flags
     pub flags: u8,
-    
+
     /// Name content
     pub name: alloc::string::String,
 }

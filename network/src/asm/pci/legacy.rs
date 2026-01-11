@@ -62,14 +62,20 @@ pub unsafe fn write32(bus: u8, dev: u8, func: u8, reg: u8, val: u32) {
 
 // Stubs for non-x86_64
 #[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn read8(_bus: u8, _dev: u8, _func: u8, _reg: u8) -> u8 { 0 }
+pub unsafe fn read8(_bus: u8, _dev: u8, _func: u8, _reg: u8) -> u8 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 pub unsafe fn write8(_bus: u8, _dev: u8, _func: u8, _reg: u8, _val: u8) {}
 #[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn read16(_bus: u8, _dev: u8, _func: u8, _reg: u8) -> u16 { 0 }
+pub unsafe fn read16(_bus: u8, _dev: u8, _func: u8, _reg: u8) -> u16 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 pub unsafe fn write16(_bus: u8, _dev: u8, _func: u8, _reg: u8, _val: u16) {}
 #[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn read32(_bus: u8, _dev: u8, _func: u8, _reg: u8) -> u32 { 0 }
+pub unsafe fn read32(_bus: u8, _dev: u8, _func: u8, _reg: u8) -> u32 {
+    0
+}
 #[cfg(not(target_arch = "x86_64"))]
 pub unsafe fn write32(_bus: u8, _dev: u8, _func: u8, _reg: u8, _val: u32) {}

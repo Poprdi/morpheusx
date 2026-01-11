@@ -5,13 +5,13 @@
 /// Used for El Torito validation entry
 pub fn checksum_16(data: &[u8]) -> u16 {
     let mut sum = 0u16;
-    
+
     // Process pairs of bytes as 16-bit words
     for chunk in data.chunks_exact(2) {
         let word = u16::from_le_bytes([chunk[0], chunk[1]]);
         sum = sum.wrapping_add(word);
     }
-    
+
     sum
 }
 
@@ -29,13 +29,13 @@ pub fn calculate_complement_16(data: &[u8]) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_checksum_16() {
         let data = [0x01, 0x00, 0x02, 0x00];
         assert_eq!(checksum_16(&data), 0x0003);
     }
-    
+
     #[test]
     fn test_verify_checksum() {
         let data = [0x01, 0x00, 0xFF, 0xFF];

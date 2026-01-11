@@ -52,10 +52,10 @@ pub struct BlockDeviceInfo {
 pub trait BlockDriver {
     /// Get device information.
     fn info(&self) -> BlockDeviceInfo;
-    
+
     /// Check if device can accept a new request.
     fn can_submit(&self) -> bool;
-    
+
     /// Submit a read request.
     ///
     /// # Arguments
@@ -78,7 +78,7 @@ pub trait BlockDriver {
         num_sectors: u32,
         request_id: u32,
     ) -> Result<(), BlockError>;
-    
+
     /// Submit a write request.
     ///
     /// # Arguments
@@ -97,19 +97,19 @@ pub trait BlockDriver {
         num_sectors: u32,
         request_id: u32,
     ) -> Result<(), BlockError>;
-    
+
     /// Poll for completed requests.
     ///
     /// # Returns
     /// - `Some(completion)`: A request completed
     /// - `None`: No completions available
     fn poll_completion(&mut self) -> Option<BlockCompletion>;
-    
+
     /// Notify device that requests are pending.
     ///
     /// Called after one or more submit calls.
     fn notify(&mut self);
-    
+
     /// Flush any pending writes (if supported).
     fn flush(&mut self) -> Result<(), BlockError> {
         // Default: no-op for devices without flush support
@@ -121,22 +121,21 @@ pub trait BlockDriver {
 pub trait BlockDriverInit: Sized {
     /// Error type for initialization failures.
     type Error: core::fmt::Debug;
-    
+
     /// Configuration type.
     type Config;
-    
+
     /// PCI vendor IDs this driver supports.
     fn supported_vendors() -> &'static [u16];
-    
+
     /// PCI device IDs this driver supports.
     fn supported_devices() -> &'static [u16];
-    
+
     /// Check if driver supports a PCI device.
     fn supports_device(vendor: u16, device: u16) -> bool {
-        Self::supported_vendors().contains(&vendor) &&
-        Self::supported_devices().contains(&device)
+        Self::supported_vendors().contains(&vendor) && Self::supported_devices().contains(&device)
     }
-    
+
     /// Create driver from MMIO base and configuration.
     ///
     /// # Safety

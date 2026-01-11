@@ -1,18 +1,20 @@
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGRAY, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW,
+};
 use alloc::boxed::Box;
 use core::cell::RefCell;
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW, EFI_CYAN, EFI_DARKGRAY};
 use morpheus_core::logger;
 
 // Note: Network initialization moved to post-ExitBootServices flow.
 // The following imports are kept for potential future use but init_network() is deprecated.
 #[allow(unused_imports)]
 use morpheus_core::net::{
-    NetworkInit, NetworkInitResult, InitConfig, NetworkStatus,
-    error_log_pop, error_log_clear, error_log_available, ErrorLogEntry,
+    error_log_available, error_log_clear, error_log_pop, ErrorLogEntry, InitConfig, NetworkInit,
+    NetworkInitResult, NetworkStatus,
 };
 
 /// Result of network initialization for bootstrap phase
-/// 
+///
 /// DEPRECATED: Network initialization now happens post-ExitBootServices.
 /// This enum is kept for API compatibility but Success variant won't be returned.
 pub enum NetworkBootResult {
@@ -45,10 +47,10 @@ impl BootSequence {
 
     pub fn render(&mut self, screen: &mut Screen, x: usize, y: usize) {
         let total_count = logger::total_log_count();
-        
+
         // Only show last 20 logs to fit on screen
         let logs_to_show = 20;
-        
+
         // Only re-render if logs have changed
         if total_count != self.last_total_count {
             // Collect logs into a buffer to compare
@@ -63,7 +65,7 @@ impl BootSequence {
                 }
                 line_idx += 1;
             }
-            
+
             // Clear any remaining lines if we have fewer logs now
             let current_log_count = logger::log_count().min(logs_to_show);
             for i in current_log_count..logs_to_show {
@@ -72,7 +74,7 @@ impl BootSequence {
                     screen.put_str_at(x, line_y, "                                                                                ", EFI_BLACK, EFI_BLACK);
                 }
             }
-            
+
             self.last_total_count = total_count;
         }
 
@@ -97,7 +99,7 @@ impl BootSequence {
     ///
     /// DEPRECATED: Network initialization now happens post-ExitBootServices.
     /// This function is kept for API compatibility but always returns Skipped.
-    /// 
+    ///
     /// The new flow is:
     /// 1. Bootstrap completes without network
     /// 2. User browses catalog (static data, no network needed)
@@ -129,7 +131,7 @@ impl BootSequence {
     }
 
     /// LEGACY: Display network error logs below the boot sequence.
-    /// 
+    ///
     /// DEPRECATED: No longer used since network init is post-EBS.
     #[deprecated(note = "Network init moved to post-EBS")]
     #[allow(dead_code)]

@@ -27,7 +27,7 @@ impl RelocationEngine for X64RelocationEngine {
                 if rva + 8 > image_data.len() {
                     return Err(PeError::InvalidOffset);
                 }
-                
+
                 // Read current 64-bit value
                 let current = u64::from_le_bytes([
                     image_data[rva],
@@ -39,12 +39,12 @@ impl RelocationEngine for X64RelocationEngine {
                     image_data[rva + 6],
                     image_data[rva + 7],
                 ]);
-                
+
                 // Apply relocation: add delta
                 let relocated = (current as i64 + delta) as u64;
                 let bytes = relocated.to_le_bytes();
                 image_data[rva..rva + 8].copy_from_slice(&bytes);
-                
+
                 Ok(())
             }
             _ => Err(PeError::UnsupportedFormat),
@@ -65,7 +65,7 @@ impl RelocationEngine for X64RelocationEngine {
                 if rva + 8 > image_data.len() {
                     return Err(PeError::InvalidOffset);
                 }
-                
+
                 // Read current 64-bit value
                 let current = u64::from_le_bytes([
                     image_data[rva],
@@ -77,12 +77,12 @@ impl RelocationEngine for X64RelocationEngine {
                     image_data[rva + 6],
                     image_data[rva + 7],
                 ]);
-                
+
                 // Unapply relocation: subtract delta
                 let original = (current as i64 - delta) as u64;
                 let bytes = original.to_le_bytes();
                 image_data[rva..rva + 8].copy_from_slice(&bytes);
-                
+
                 Ok(())
             }
             _ => Err(PeError::UnsupportedFormat),

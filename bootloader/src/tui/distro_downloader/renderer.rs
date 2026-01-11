@@ -2,8 +2,8 @@
 //!
 //! Rendering utilities for the distro downloader TUI.
 
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
 use super::catalog::{DistroCategory, DistroEntry, CATEGORIES};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED};
 
 const HEADER_ART: &[&str] = &[
     " ____  _     _              ____                      _                 _           ",
@@ -30,7 +30,11 @@ impl DownloaderRenderer {
         morpheus_core::logger::log("Renderer: render_header()");
         let width = screen.width();
         let header_width = HEADER_ART[0].len();
-        let x = if width > header_width { (width - header_width) / 2 } else { 0 };
+        let x = if width > header_width {
+            (width - header_width) / 2
+        } else {
+            0
+        };
 
         // Draw border top
         screen.put_str_at(x, 0, CORNER_TL, EFI_GREEN, EFI_BLACK);
@@ -171,11 +175,7 @@ impl DownloaderRenderer {
     }
 
     /// Render distro details panel
-    pub fn render_details(
-        screen: &mut Screen,
-        distro: &DistroEntry,
-        y: usize,
-    ) {
+    pub fn render_details(screen: &mut Screen, distro: &DistroEntry, y: usize) {
         morpheus_core::logger::log("Renderer: render_details()");
         let x = 2;
 
@@ -210,7 +210,13 @@ impl DownloaderRenderer {
         screen.put_str_at(x + 2, content_y, "Arch: ", EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 8, content_y, distro.arch, EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 20, content_y, "Live: ", EFI_DARKGREEN, EFI_BLACK);
-        screen.put_str_at(x + 26, content_y, if distro.is_live { "Yes" } else { "No" }, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 26,
+            content_y,
+            if distro.is_live { "Yes" } else { "No" },
+            EFI_GREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 78, content_y, "│", EFI_GREEN, EFI_BLACK);
 
         // Box bottom
@@ -236,7 +242,13 @@ impl DownloaderRenderer {
 
         // Clear area
         for i in 0..6 {
-            screen.put_str_at(x, y + i, &"                                                                                ", EFI_BLACK, EFI_BLACK);
+            screen.put_str_at(
+                x,
+                y + i,
+                &"                                                                                ",
+                EFI_BLACK,
+                EFI_BLACK,
+            );
         }
 
         // Status message
@@ -259,7 +271,13 @@ impl DownloaderRenderer {
         let bar_y = y + 2;
         screen.put_str_at(x, bar_y, "[", EFI_GREEN, EFI_BLACK);
         for i in 0..bar_width {
-            let ch = if i < filled { "=" } else if i == filled { ">" } else { " " };
+            let ch = if i < filled {
+                "="
+            } else if i == filled {
+                ">"
+            } else {
+                " "
+            };
             screen.put_str_at(x + 1 + i, bar_y, ch, EFI_LIGHTGREEN, EFI_BLACK);
         }
         screen.put_str_at(x + 1 + bar_width, bar_y, "]", EFI_GREEN, EFI_BLACK);
@@ -277,7 +295,13 @@ impl DownloaderRenderer {
         } else {
             "Downloading..."
         };
-        screen.put_str_at(x + bar_width + 4, bar_y, progress_text, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + bar_width + 4,
+            bar_y,
+            progress_text,
+            EFI_GREEN,
+            EFI_BLACK,
+        );
 
         // Status line
         let status_y = y + 4;

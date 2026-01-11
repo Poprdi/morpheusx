@@ -37,12 +37,12 @@
 mod interface;
 
 use crate::device::NetworkDevice;
+use core::marker::PhantomData;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
-use core::marker::PhantomData;
 
-pub use interface::{NetInterface, NetConfig, NetState, MAX_TCP_SOCKETS};
 pub use crate::device::pci::ecam_bases;
+pub use interface::{NetConfig, NetInterface, NetState, MAX_TCP_SOCKETS};
 
 const MTU: usize = 1536;
 
@@ -58,8 +58,14 @@ impl<D: NetworkDevice> DeviceAdapter<D> {
 }
 
 impl<D: NetworkDevice> Device for DeviceAdapter<D> {
-    type RxToken<'a> = AdapterRxToken<'a, D> where D: 'a;
-    type TxToken<'a> = AdapterTxToken<'a, D> where D: 'a;
+    type RxToken<'a>
+        = AdapterRxToken<'a, D>
+    where
+        D: 'a;
+    type TxToken<'a>
+        = AdapterTxToken<'a, D>
+    where
+        D: 'a;
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
@@ -76,7 +82,7 @@ impl<D: NetworkDevice> Device for DeviceAdapter<D> {
             Ok(Some(len)) if len > 0 => {
                 // Track received packets
                 RX_PACKET_COUNTER.increment();
-                
+
                 // We have a packet! Create tokens with the data
                 let device_ptr: *mut D = &mut self.inner;
                 let mut token = AdapterRxToken {
@@ -141,17 +147,19 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
     {
         let mut buffer = [0u8; MTU];
         let result = f(&mut buffer[..len]);
-        
+
         // Track packets sent
         TX_PACKET_COUNTER.increment();
-        
+
         // Check if this is a DHCP packet (UDP port 67/68)
         if len >= 42 {
             // Check if Ethernet + IP + UDP to port 67 (DHCP server)
             let ethertype = u16::from_be_bytes([buffer[12], buffer[13]]);
-            if ethertype == 0x0800 {  // IPv4
-                let protocol = buffer[23];  // IP protocol field
-                if protocol == 17 {  // UDP
+            if ethertype == 0x0800 {
+                // IPv4
+                let protocol = buffer[23]; // IP protocol field
+                if protocol == 17 {
+                    // UDP
                     let dst_port = u16::from_be_bytes([buffer[36], buffer[37]]);
                     if dst_port == 67 {
                         DHCP_DISCOVER_COUNTER.increment();
@@ -159,7 +167,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
                 }
             }
         }
-        
+
         // Attempt transmit and capture error for debugging
         // We still have to return `result` regardless of TX success
         // because that's what smoltcp expects
@@ -173,7 +181,7 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
                 TX_ERROR_COUNTER.increment();
             }
         }
-        
+
         result
     }
 }
@@ -204,9 +212,11 @@ impl PacketCounterRing {
     /// Increment the counter (wraps safely)
     fn increment(&self) {
         // Advance head position (wraps at PACKET_COUNTER_SIZE)
-        self.head.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        self.head
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         // Increment total count (wraps at u32::MAX automatically)
-        self.total.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        self.total
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     }
 
     /// Get total count (wraps safely at u32::MAX)
@@ -291,14 +301,14 @@ pub fn debug_log(stage: u32, msg: &str) {
     // ALWAYS write to serial first - this is visible even if we hang
     #[cfg(target_arch = "x86_64")]
     crate::serial_stage(stage, msg);
-    
+
     // Bounded try-lock: in single-threaded context, lock should never be held
     // If it is, we have a bug - don't spin forever, just skip the log
     if DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
         // Lock held - impossible in single-threaded, skip to avoid hang
         return;
     }
-    
+
     unsafe {
         let entry = &mut DEBUG_RING.entries[DEBUG_RING.write_idx];
         let bytes = msg.as_bytes();
@@ -306,7 +316,7 @@ pub fn debug_log(stage: u32, msg: &str) {
         entry.msg[..copy_len].copy_from_slice(&bytes[..copy_len]);
         entry.len = copy_len;
         entry.stage = stage;
-        
+
         DEBUG_RING.write_idx = (DEBUG_RING.write_idx + 1) % DEBUG_RING_SIZE;
         if DEBUG_RING.count < DEBUG_RING_SIZE {
             DEBUG_RING.count += 1;
@@ -315,7 +325,7 @@ pub fn debug_log(stage: u32, msg: &str) {
             DEBUG_RING.read_idx = (DEBUG_RING.read_idx + 1) % DEBUG_RING_SIZE;
         }
     }
-    
+
     DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
 }
 
@@ -327,7 +337,7 @@ pub fn debug_log_pop() -> Option<DebugLogEntry> {
         // Lock held - impossible in single-threaded, return None
         return None;
     }
-    
+
     let result = unsafe {
         if DEBUG_RING.count == 0 {
             None
@@ -338,7 +348,7 @@ pub fn debug_log_pop() -> Option<DebugLogEntry> {
             Some(entry)
         }
     };
-    
+
     DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
     result
 }
@@ -355,20 +365,20 @@ pub fn debug_log_clear() {
         // Lock held - impossible in single-threaded, skip
         return;
     }
-    
+
     unsafe {
         DEBUG_RING.write_idx = 0;
         DEBUG_RING.read_idx = 0;
         DEBUG_RING.count = 0;
     }
-    
+
     DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
 }
 
 /// Set debug init stage and log it
 pub fn set_debug_stage(stage: u32) {
     DEBUG_INIT_STAGE.store(stage, core::sync::atomic::Ordering::Relaxed);
-    
+
     // Also log to ring buffer with description
     let desc = match stage {
         10 => "entered NetInterface::new",

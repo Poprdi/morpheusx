@@ -69,20 +69,20 @@ pub type DiskResult<T> = Result<T, DiskError>;
 pub mod guid {
     /// EFI System Partition
     pub const EFI_SYSTEM: [u8; 16] = [
-        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
-        0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+        0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
+        0x3B,
     ];
-    
+
     /// Microsoft Basic Data (used for FAT32 data partitions)
     pub const BASIC_DATA: [u8; 16] = [
-        0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
-        0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+        0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99,
+        0xC7,
     ];
-    
+
     /// Linux filesystem
     pub const LINUX_FS: [u8; 16] = [
-        0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,
-        0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
+        0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D,
+        0xE4,
     ];
 }
 
@@ -124,7 +124,7 @@ impl PartitionInfo {
             name: [0u8; 36],
         }
     }
-    
+
     /// Set partition name
     pub fn set_name(&mut self, name: &str) {
         let bytes = name.as_bytes();
@@ -132,12 +132,12 @@ impl PartitionInfo {
         self.name[..len].copy_from_slice(&bytes[..len]);
         self.name[len] = 0;
     }
-    
+
     /// Get partition size in sectors
     pub fn size_sectors(&self) -> u64 {
         self.end_lba.saturating_sub(self.start_lba) + 1
     }
-    
+
     /// Get partition size in bytes
     pub fn size_bytes(&self) -> u64 {
         self.size_sectors() * SECTOR_SIZE as u64
@@ -167,7 +167,7 @@ impl ChunkPartition {
             complete: false,
         }
     }
-    
+
     /// Get data area start LBA (after FAT32 reserved + FAT tables)
     /// For a standard 4GB partition: ~8192 sectors reserved
     pub fn data_start_lba(&self) -> u64 {
@@ -175,7 +175,7 @@ impl ChunkPartition {
         const DATA_OFFSET_SECTORS: u64 = 8192;
         self.info.start_lba + DATA_OFFSET_SECTORS
     }
-    
+
     /// Get maximum data size for this chunk
     pub fn max_data_size(&self) -> u64 {
         let total_sectors = self.info.size_sectors();
@@ -223,7 +223,7 @@ impl ChunkSet {
             bytes_written: 0,
         }
     }
-    
+
     /// Add a chunk partition
     pub fn add(&mut self, chunk: ChunkPartition) -> DiskResult<()> {
         if self.count >= MAX_CHUNK_PARTITIONS {
@@ -233,7 +233,7 @@ impl ChunkSet {
         self.count += 1;
         Ok(())
     }
-    
+
     /// Get chunk by index
     pub fn get(&self, index: usize) -> Option<&ChunkPartition> {
         if index < self.count {
@@ -242,7 +242,7 @@ impl ChunkSet {
             None
         }
     }
-    
+
     /// Get mutable chunk by index  
     pub fn get_mut(&mut self, index: usize) -> Option<&mut ChunkPartition> {
         if index < self.count {

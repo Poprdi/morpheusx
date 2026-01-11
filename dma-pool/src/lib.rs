@@ -192,7 +192,8 @@ impl MemoryDiscovery {
                     // Found a suitable cave
                     let region_start = align_up(current + run_start, PAGE_SIZE);
                     let region_end = current + run_start + run_len;
-                    let aligned_size = align_down(region_end.saturating_sub(region_start), PAGE_SIZE);
+                    let aligned_size =
+                        align_down(region_end.saturating_sub(region_start), PAGE_SIZE);
                     if aligned_size >= min_size {
                         return Some(MemoryRegion::new(region_start, aligned_size));
                     }
@@ -230,7 +231,7 @@ impl MemoryDiscovery {
     ) -> usize {
         let mut found = 0usize;
         let max_caves = caves.len();
-        
+
         let current = align_up(start, 16);
         let end_aligned = align_down(end, PAGE_SIZE);
 
@@ -245,7 +246,7 @@ impl MemoryDiscovery {
 
         for i in 0..=scan_len {
             let b = if i < scan_len { *ptr.add(i) } else { 0xFF }; // Sentinel
-            
+
             if i < scan_len && Self::is_padding(b, pattern) {
                 if run_len == 0 {
                     run_start = i;
@@ -255,7 +256,8 @@ impl MemoryDiscovery {
                 if run_len >= min_size && found < max_caves {
                     let region_start = align_up(current + run_start, PAGE_SIZE);
                     let region_end = current + run_start + run_len;
-                    let aligned_size = align_down(region_end.saturating_sub(region_start), PAGE_SIZE);
+                    let aligned_size =
+                        align_down(region_end.saturating_sub(region_start), PAGE_SIZE);
                     if aligned_size >= min_size {
                         caves[found] = MemoryRegion::new(region_start, aligned_size);
                         found += 1;
@@ -286,7 +288,11 @@ impl MemoryDiscovery {
     ///
     /// - `start` and `end` must be valid, readable memory addresses.
     /// - The memory range should be part of our loaded image.
-    pub unsafe fn find_zero_regions(start: usize, end: usize, min_size: usize) -> Option<MemoryRegion> {
+    pub unsafe fn find_zero_regions(
+        start: usize,
+        end: usize,
+        min_size: usize,
+    ) -> Option<MemoryRegion> {
         Self::find_caves(start, end, min_size, PaddingPattern::Zero)
     }
 
@@ -578,7 +584,11 @@ struct Allocation {
 
 impl Allocation {
     const fn empty() -> Self {
-        Self { offset: 0, pages: 0, in_use: false }
+        Self {
+            offset: 0,
+            pages: 0,
+            in_use: false,
+        }
     }
 }
 
@@ -647,7 +657,8 @@ impl GlobalCavePool {
                 offsets[i] = 0;
                 total += cave.size;
             }
-            self.count.store(caves.len().min(MAX_CAVES), Ordering::SeqCst);
+            self.count
+                .store(caves.len().min(MAX_CAVES), Ordering::SeqCst);
             self.total.store(total, Ordering::SeqCst);
         }
         unlock();
@@ -730,7 +741,10 @@ static LOCK: AtomicBool = AtomicBool::new(false);
 #[inline]
 fn lock() {
     let mut retries = 0;
-    while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+    while LOCK
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
         retries += 1;
         if retries > 100 {
             // After many spins, yield with a tiny delay
@@ -743,7 +757,9 @@ fn lock() {
                 loop {
                     let now: u64;
                     core::arch::asm!("rdtsc", "shl rdx, 32", "or rax, rdx", out("rax") now, out("rdx") _);
-                    if now.wrapping_sub(start) >= cycles { break; }
+                    if now.wrapping_sub(start) >= cycles {
+                        break;
+                    }
                     core::hint::spin_loop();
                 }
             }
@@ -1114,4 +1130,3 @@ mod tests {
         assert!(!small.is_usable());
     }
 }
-

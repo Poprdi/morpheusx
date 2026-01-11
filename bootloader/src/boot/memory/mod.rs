@@ -1,5 +1,5 @@
-mod types;
 mod allocation;
+mod types;
 
-pub use types::*;
 pub use allocation::*;
+pub use types::*;

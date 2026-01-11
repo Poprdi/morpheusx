@@ -2,8 +2,8 @@
 //!
 //! Main UI component for the ISO manager.
 
-use super::state::{IsoManagerState, Action, ViewMode};
 use super::renderer;
+use super::state::{Action, IsoManagerState, ViewMode};
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::Screen;
 use morpheus_core::iso::IsoStorageManager;

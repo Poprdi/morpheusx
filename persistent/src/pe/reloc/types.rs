@@ -173,4 +173,3 @@ pub trait RelocationEngine {
     /// Get the architecture this engine handles
     fn arch(&self) -> super::super::PeArch;
 }
-

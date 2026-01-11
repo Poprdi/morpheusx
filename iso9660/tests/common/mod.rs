@@ -38,53 +38,53 @@ impl MemoryBlockDevice {
 
         // Primary Volume Descriptor (sector 16)
         let pvd_offset = 16 * 2048;
-        
+
         // Type code (1 = primary)
         data[pvd_offset] = 1;
-        
+
         // Standard identifier "CD001"
         data[pvd_offset + 1..pvd_offset + 6].copy_from_slice(b"CD001");
-        
+
         // Version (1)
         data[pvd_offset + 6] = 1;
-        
+
         // System identifier (32 bytes) - "TEST SYSTEM"
         data[pvd_offset + 8..pvd_offset + 19].copy_from_slice(b"TEST SYSTEM");
-        
+
         // Volume identifier (32 bytes) - "TEST VOLUME"
         data[pvd_offset + 40..pvd_offset + 51].copy_from_slice(b"TEST VOLUME");
-        
+
         // Volume space size (both byte orders) - 64 sectors
         data[pvd_offset + 80..pvd_offset + 84].copy_from_slice(&64u32.to_le_bytes());
         data[pvd_offset + 84..pvd_offset + 88].copy_from_slice(&64u32.to_be_bytes());
-        
+
         // Logical block size (both byte orders) - 2048 bytes
         data[pvd_offset + 128..pvd_offset + 130].copy_from_slice(&2048u16.to_le_bytes());
         data[pvd_offset + 130..pvd_offset + 132].copy_from_slice(&2048u16.to_be_bytes());
-        
+
         // Root directory record (at offset 156, 34 bytes)
         let root_offset = pvd_offset + 156;
-        
+
         // Length of directory record (34)
         data[root_offset] = 34;
-        
+
         // Extended attribute record length (0)
         data[root_offset + 1] = 0;
-        
+
         // Extent location (sector 18)
         data[root_offset + 2..root_offset + 6].copy_from_slice(&18u32.to_le_bytes());
         data[root_offset + 6..root_offset + 10].copy_from_slice(&18u32.to_be_bytes());
-        
+
         // Data length (2048 = 1 sector)
         data[root_offset + 10..root_offset + 14].copy_from_slice(&2048u32.to_le_bytes());
         data[root_offset + 14..root_offset + 18].copy_from_slice(&2048u32.to_be_bytes());
-        
+
         // File flags (0x02 = directory)
         data[root_offset + 25] = 0x02;
-        
+
         // File identifier length (1)
         data[root_offset + 32] = 1;
-        
+
         // File identifier (0x00 for root)
         data[root_offset + 33] = 0x00;
 
@@ -96,7 +96,7 @@ impl MemoryBlockDevice {
 
         // Root directory (sector 18)
         let root_dir_offset = 18 * 2048;
-        
+
         // "." entry (self)
         data[root_dir_offset] = 34; // Length
         data[root_dir_offset + 2..root_dir_offset + 6].copy_from_slice(&18u32.to_le_bytes());

@@ -16,8 +16,8 @@
 use crate::boot::loader::{boot_linux_kernel, BootError};
 use crate::tui::renderer::Screen;
 use crate::BootServices;
-use morpheus_core::iso::{IsoBlockIoAdapter, IsoReadContext, IsoError};
 use gpt_disk_io::BlockIo;
+use morpheus_core::iso::{IsoBlockIoAdapter, IsoError, IsoReadContext};
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -70,7 +70,13 @@ pub unsafe fn boot_from_iso<B: BlockIo>(
     let mut log_y = 5;
 
     // Create adapter
-    screen.put_str_at(5, log_y, "Mounting ISO filesystem...", EFI_LIGHTGREEN, EFI_BLACK);
+    screen.put_str_at(
+        5,
+        log_y,
+        "Mounting ISO filesystem...",
+        EFI_LIGHTGREEN,
+        EFI_BLACK,
+    );
     log_y += 1;
 
     let mut adapter = IsoBlockIoAdapter::new(ctx, block_io);
@@ -96,13 +102,13 @@ pub unsafe fn boot_from_iso<B: BlockIo>(
             "/images/pxeboot/vmlinuz",   // Fedora
             "/boot/x86_64/loader/linux", // openSUSE
         ];
-        
+
         let initrd_paths = [
-            "/live/initrd.img",          // Tails, Debian Live  
-            "/casper/initrd",            // Ubuntu (no extension)
-            "/casper/initrd.lz",         // Ubuntu compressed
-            "/isolinux/initrd.img",      // Generic syslinux
-            "/boot/initramfs",           // Alpine
+            "/live/initrd.img",           // Tails, Debian Live
+            "/casper/initrd",             // Ubuntu (no extension)
+            "/casper/initrd.lz",          // Ubuntu compressed
+            "/isolinux/initrd.img",       // Generic syslinux
+            "/boot/initramfs",            // Alpine
             "/images/pxeboot/initrd.img", // Fedora
             "/boot/x86_64/loader/initrd", // openSUSE
         ];
@@ -132,7 +138,13 @@ pub unsafe fn boot_from_iso<B: BlockIo>(
 
     let kernel_path = kernel_path.ok_or(IsoBootError::KernelNotFound)?;
 
-    screen.put_str_at(5, log_y, "Loading kernel from ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+    screen.put_str_at(
+        5,
+        log_y,
+        "Loading kernel from ISO...",
+        EFI_LIGHTGREEN,
+        EFI_BLACK,
+    );
     screen.put_str_at(7, log_y + 1, kernel_path, EFI_YELLOW, EFI_BLACK);
     log_y += 2;
 
@@ -144,17 +156,21 @@ pub unsafe fn boot_from_iso<B: BlockIo>(
 
     // Read initrd if available
     let initrd_data: Option<Vec<u8>> = if let Some(path) = initrd_path {
-        screen.put_str_at(5, log_y, "Loading initrd from ISO...", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(
+            5,
+            log_y,
+            "Loading initrd from ISO...",
+            EFI_LIGHTGREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(7, log_y + 1, path, EFI_YELLOW, EFI_BLACK);
         log_y += 2;
 
         match iso9660::find_file(&mut adapter, &volume, path) {
-            Ok(file) => {
-                match iso9660::read_file_vec(&mut adapter, &file) {
-                    Ok(data) => Some(data),
-                    Err(_) => None,
-                }
-            }
+            Ok(file) => match iso9660::read_file_vec(&mut adapter, &file) {
+                Ok(data) => Some(data),
+                Err(_) => None,
+            },
             Err(_) => None,
         }
     } else {
@@ -183,7 +199,7 @@ pub unsafe fn boot_from_iso<B: BlockIo>(
 /// Returns appropriate boot parameters based on ISO name.
 pub fn default_cmdline_for_iso(iso_name: &str) -> &'static str {
     let name_lower = iso_name.as_bytes();
-    
+
     // Check for common distros
     if contains_ignore_case(name_lower, b"tails") {
         return "boot=live noautologin";

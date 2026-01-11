@@ -5,16 +5,16 @@ use crate::types::BootPlatform;
 impl BootPlatform {
     /// x86 (PC-compatible)
     pub const X86: u8 = 0x00;
-    
+
     /// PowerPC
     pub const POWER_PC: u8 = 0x01;
-    
+
     /// Mac
     pub const MAC: u8 = 0x02;
-    
+
     /// EFI
     pub const EFI: u8 = 0xEF;
-    
+
     /// Parse from validation entry platform ID
     pub fn from_id(id: u8) -> Self {
         match id {
