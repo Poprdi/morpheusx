@@ -12,6 +12,10 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+extern crate alloc;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+
 use morpheus_network::boot::handoff::BootHandoff;
 use morpheus_network::mainloop::{bare_metal_main, BareMetalConfig, RunResult};
 
@@ -38,12 +42,33 @@ pub unsafe fn enter_network_boot_url(
     handoff: &'static BootHandoff,
     iso_url: &'static str,
 ) -> RunResult {
+    // Extract ISO filename from URL (e.g., "tails-amd64-7.3.1.iso" from full URL)
+    let iso_name = extract_iso_name_from_url(iso_url);
+    
     let config = BareMetalConfig {
         iso_url,
+        iso_name,
         ..BareMetalConfig::default()
     };
     
     bare_metal_main(handoff, config)
+}
+
+/// Extract ISO filename from URL.
+/// Returns the last path component, or "download.iso" if none found.
+fn extract_iso_name_from_url(url: &str) -> &'static str {
+    // Find the last '/' in the URL
+    if let Some(pos) = url.rfind('/') {
+        let filename = &url[pos + 1..];
+        // Check if it looks like an ISO filename
+        if filename.len() > 4 && (filename.ends_with(".iso") || filename.ends_with(".ISO")) {
+            // Leak the extracted filename to make it 'static
+            // This is safe since we're in bare-metal mode and won't free memory
+            let leaked: &'static str = Box::leak(filename.to_string().into_boxed_str());
+            return leaked;
+        }
+    }
+    "download.iso"
 }
 
 /// NIC probe result with transport information.
