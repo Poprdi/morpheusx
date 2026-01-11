@@ -3,32 +3,25 @@
 //! Handles transitions between 64-bit long mode (UEFI) and 32-bit protected mode (Linux kernel).
 
 // External assembly function for 64→32 bit transition
+// Both the trampoline and wrapper are defined in assembly (trampoline32.asm)
 extern "C" {
-    fn drop_to_protected_mode_asm(entry_point: u32, boot_params: u32) -> !;
-}
-
-/// Drop from 64-bit long mode to 32-bit protected mode
-///
-/// This is implemented in external assembly (trampoline32.asm) to properly
-/// handle the mode transition without compiler interference.
-///
-/// ONLY used for legacy kernels that don't support EFI handover protocol.
-/// Modern kernels (2.6.30+) use EFI handover and stay in 64-bit mode.
-///
-/// When using this path, the bootloader MUST call ExitBootServices first.
-///
-/// Arguments:
-/// - entry_point: 32-bit kernel entry address
-/// - boot_params: pointer to Linux boot_params (goes in ESI)
-///
-/// Does NOT return - jumps to kernel.
-#[unsafe(naked)]
-pub unsafe extern "C" fn drop_to_protected_mode(entry_point: u32, boot_params: u32) -> ! {
-    core::arch::naked_asm!(
-        "lea rax, [rip + drop_to_protected_mode_asm]",
-        "jmp rax",
-        "ud2",
-    )
+    /// Drop from 64-bit long mode to 32-bit protected mode
+    ///
+    /// This is implemented in external assembly (trampoline32.asm) to properly
+    /// handle the mode transition without compiler interference.
+    ///
+    /// ONLY used for legacy kernels that don't support EFI handover protocol.
+    /// Modern kernels (2.6.30+) use EFI handover and stay in 64-bit mode.
+    ///
+    /// When using this path, the bootloader MUST call ExitBootServices first.
+    ///
+    /// # Safety
+    /// - Must only be called after ExitBootServices
+    /// - entry_point must be valid 32-bit kernel entry address
+    /// - boot_params must point to valid Linux boot_params struct
+    ///
+    /// Does NOT return - jumps to kernel.
+    pub fn drop_to_protected_mode(entry_point: u32, boot_params: u32) -> !;
 }
 
 /// Check if kernel supports EFI handover protocol
