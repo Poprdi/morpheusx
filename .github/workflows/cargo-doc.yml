@@ -227,13 +227,6 @@ jobs:
                   <a href="iso9660_rs/index.html">View Docs →</a>
                   <span class="crate-status stable">Stable</span>
                 </div>
-
-                <div class="crate-card">
-                  <h3>🎯 dma-pool</h3>
-                  <p class="crate-desc">Pre-allocated DMA buffer pool manager for bare-metal I/O</p>
-                  <a href="dma_pool/index.html">View Docs →</a>
-                  <span class="crate-status stable">Stable</span>
-                </div>
               </div>
 
               <h2>Documentation Guidelines</h2>
