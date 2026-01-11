@@ -157,7 +157,7 @@ impl HttpProgress {
 
 /// Internal state for accumulating headers.
 #[derive(Debug)]
-pub(crate) struct HeaderAccumulator {
+pub struct HeaderAccumulator {
     /// Raw header data
     buffer: Vec<u8>,
     /// Maximum header size (prevent DoS)

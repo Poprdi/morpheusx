@@ -1568,8 +1568,11 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     let dhcp_timeout_ticks = timeouts.dhcp();
 
     // Track if we got an IP
+    #[allow(unused_assignments)]
     let mut got_ip = false;
+    #[allow(unused_assignments)]
     let mut our_ip = Ipv4Address::UNSPECIFIED;
+    #[allow(unused_assignments)]
     let mut gateway_ip = Ipv4Address::UNSPECIFIED;
     let mut dns_ip = Ipv4Address::UNSPECIFIED;
 
@@ -1619,6 +1622,7 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     });
 
                     // Set gateway
+                    #[allow(unused_assignments)]
                     if let Some(router) = dhcp_config.router {
                         gateway_ip = router;
                         iface.routes_mut().add_default_ipv4_route(router).ok();
