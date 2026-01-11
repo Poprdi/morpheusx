@@ -318,7 +318,7 @@ fn extract_filename_from_file_info(buffer: &[u8]) -> String {
 /// # Arguments
 /// * `bs` - UEFI Boot Services
 /// * `image_handle` - Current image handle  
-/// * `name` - ISO name (manifest filename will be <name>.manifest)
+/// * `name` - ISO name (manifest filename will be `<name>.manifest`)
 pub unsafe fn delete_manifest(
     bs: &BootServices,
     image_handle: *mut (),
