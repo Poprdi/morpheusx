@@ -121,7 +121,8 @@ pub unsafe fn init_heap() {
         return; // Already initialized
     }
 
-    let heap_start = HEAP_BUFFER.0.as_mut_ptr();
+    // Use raw pointer to avoid creating mutable reference to static
+    let heap_start = (&raw mut HEAP_BUFFER).cast::<u8>();
     let heap_size = HEAP_SIZE;
 
     GLOBAL.init(heap_start, heap_size);

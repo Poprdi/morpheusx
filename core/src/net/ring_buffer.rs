@@ -102,7 +102,7 @@ impl ErrorLogEntry {
         core::str::from_utf8(slice).unwrap_or("<invalid utf8>")
     }
 
-    /// Format entry for display: "[STAGE] message"
+    /// Format entry for display: "\[STAGE\] message"
     pub fn format(&self, buf: &mut [u8]) -> usize {
         let prefix = if self.is_error { "ERR " } else { "" };
         let stage = self.stage.name();

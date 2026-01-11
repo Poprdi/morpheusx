@@ -188,8 +188,8 @@ unsafe fn setup_queue(
 
     // Calculate CPU pointers
     let desc_cpu = config.dma_cpu_base.add(desc_offset);
-    let avail_cpu = config.dma_cpu_base.add(avail_offset);
-    let used_cpu = config.dma_cpu_base.add(used_offset);
+    let _avail_cpu = config.dma_cpu_base.add(avail_offset);
+    let _used_cpu = config.dma_cpu_base.add(used_offset);
     let buffer_cpu = config.dma_cpu_base.add(buffer_offset);
 
     // Set queue size

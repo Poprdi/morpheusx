@@ -335,10 +335,9 @@ impl<D: NetworkDevice> NetInterface<D> {
                 super::debug_log(82, "DNS got result");
                 // Find first IPv4 address
                 for addr in addrs {
-                    if let IpAddress::Ipv4(v4) = addr {
-                        let bytes = v4.as_bytes();
-                        return Ok(Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])));
-                    }
+                    let IpAddress::Ipv4(v4) = addr;
+                    let bytes = v4.as_bytes();
+                    return Ok(Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])));
                 }
                 super::debug_log(83, "DNS no IPv4 addr");
                 Err(NetworkError::DnsResolutionFailed)

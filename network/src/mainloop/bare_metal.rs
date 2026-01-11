@@ -167,7 +167,7 @@ unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
     let num_sectors = ((bytes_to_write + 511) / 512) as u32;
 
     // Get the buffer physical address (we're identity mapped post-EBS)
-    let buffer_phys = DISK_WRITE_BUFFER.as_ptr() as u64;
+    let buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
 
     // Submit write request
     let request_id = DISK_NEXT_REQUEST_ID;
@@ -304,13 +304,15 @@ unsafe fn write_manifest_to_disk(
 
     serial_println("[MANIFEST] Serializing manifest structure...");
 
-    // Clear buffer
-    for b in MANIFEST_BUFFER.iter_mut() {
-        *b = 0;
+    // Clear buffer using raw pointer
+    let manifest_ptr = (&raw mut MANIFEST_BUFFER).cast::<u8>();
+    for i in 0..1024 {
+        *manifest_ptr.add(i) = 0;
     }
 
-    // Serialize manifest
-    let manifest_buffer = &mut MANIFEST_BUFFER;
+    // Serialize manifest using raw pointer cast to slice
+    let manifest_buffer =
+        core::slice::from_raw_parts_mut((&raw mut MANIFEST_BUFFER).cast::<u8>(), 1024);
     let size = match manifest.serialize(manifest_buffer) {
         Ok(s) => s,
         Err(_) => {
@@ -520,8 +522,11 @@ unsafe fn finalize_manifest_fat32(
 
     // Create BlockIo adapter for FAT32 operations
     serial_println("[MANIFEST] Creating BlockIo adapter for FAT32...");
-    let dma_buffer = &mut DISK_WRITE_BUFFER;
-    let dma_buffer_phys = dma_buffer.as_ptr() as u64;
+    let dma_buffer = core::slice::from_raw_parts_mut(
+        (&raw mut DISK_WRITE_BUFFER).cast::<u8>(),
+        DISK_WRITE_BUFFER_SIZE,
+    );
+    let dma_buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
     let timeout_ticks = 500_000_000u64; // ~500ms (increased for FAT32 ops)
 
     let mut adapter =
@@ -697,8 +702,11 @@ unsafe fn create_iso_partition(
 
     // Create BlockIo adapter
     serial_println("[GPT] Creating BlockIO adapter...");
-    let dma_buffer = &mut DISK_WRITE_BUFFER;
-    let dma_buffer_phys = dma_buffer.as_ptr() as u64;
+    let dma_buffer = core::slice::from_raw_parts_mut(
+        (&raw mut DISK_WRITE_BUFFER).cast::<u8>(),
+        DISK_WRITE_BUFFER_SIZE,
+    );
+    let dma_buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
     let timeout_ticks = 100_000_000u64;
 
     let adapter =
@@ -1172,7 +1180,7 @@ pub struct BareMetalConfig {
     /// Set to 0 to use FAT32 manifest instead.
     pub manifest_sector: u64,
     /// ESP partition start LBA for FAT32 manifest writing.
-    /// If non-zero, writes manifest to /morpheus/isos/<name>.manifest on ESP.
+    /// If non-zero, writes manifest to `/morpheus/isos/<name>.manifest` on ESP.
     pub esp_start_lba: u64,
     /// Maximum download size in bytes.
     pub max_download_size: u64,
@@ -1761,10 +1769,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                         // Find first IPv4 address
                         let mut found_ip = None;
                         for addr in addrs {
-                            if let IpAddress::Ipv4(v4) = addr {
-                                found_ip = Some(v4);
-                                break;
-                            }
+                            let IpAddress::Ipv4(v4) = addr;
+                            found_ip = Some(v4);
+                            break;
                         }
                         match found_ip {
                             Some(ip) => break ip,
@@ -1868,7 +1875,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
 
     // Build HTTP request in static buffer
     static mut HTTP_REQUEST_BUF: [u8; 1024] = [0u8; 1024];
-    let request_len = match format_http_get(unsafe { &mut HTTP_REQUEST_BUF }, path, host_str) {
+    let http_request_slice =
+        unsafe { core::slice::from_raw_parts_mut((&raw mut HTTP_REQUEST_BUF).cast::<u8>(), 1024) };
+    let request_len = match format_http_get(http_request_slice, path, host_str) {
         Some(len) => len,
         None => {
             serial_println("[FAIL] HTTP request too large for buffer");
@@ -1879,7 +1888,7 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     {
         let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
         if socket
-            .send_slice(unsafe { &HTTP_REQUEST_BUF[..request_len] })
+            .send_slice(&http_request_slice[..request_len])
             .is_err()
         {
             serial_println("[FAIL] Failed to send HTTP request");
@@ -1928,6 +1937,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
 
     // Static buffer for headers (no heap!)
     static mut HEADER_BUFFER: [u8; 16384] = [0u8; 16384];
+    // Create slice once with raw pointer - avoids repeated mutable reference warnings
+    let header_buffer =
+        unsafe { core::slice::from_raw_parts_mut((&raw mut HEADER_BUFFER).cast::<u8>(), 16384) };
     let mut header_len: usize = 0;
     let mut last_progress_kb: usize = 0;
 
@@ -1978,7 +1990,6 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
 
                     if !headers_done {
                         // Accumulate header data in static buffer
-                        let header_buffer = unsafe { &mut HEADER_BUFFER };
                         let space_left = header_buffer.len() - header_len;
 
                         if len > space_left {

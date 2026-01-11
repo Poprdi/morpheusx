@@ -39,7 +39,7 @@ pub fn phase5_tx_completions<D: NetworkDriver>(device: &mut D) {
 /// Returns true if iteration exceeded warning threshold.
 #[cfg(target_arch = "x86_64")]
 pub fn check_timing_warning(start_tsc: u64, warning_threshold_ticks: u64) -> bool {
-    let now = unsafe { crate::asm::core::tsc::read_tsc() };
+    let now = crate::asm::core::tsc::read_tsc();
     let elapsed = now.wrapping_sub(start_tsc);
     elapsed > warning_threshold_ticks
 }
