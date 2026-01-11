@@ -7,7 +7,6 @@ members = [
     "updater",
     "network",
     "iso9660",
-    "dma-pool",
 ]
 
 [workspace.package]
@@ -23,7 +22,6 @@ morpheus-core = { path = "core" }
 morpheus-persistent = { path = "persistent" }
 morpheus-updater = { path = "updater" }
 morpheus-network = { path = "network" }
-dma-pool = { path = "dma-pool" }
 # Keep dependency name `iso9660` for code imports, while the package is published as `iso9660-rs`
 iso9660 = { path = "iso9660", package = "iso9660-rs" }
 
