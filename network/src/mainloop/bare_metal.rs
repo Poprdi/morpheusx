@@ -493,7 +493,11 @@ unsafe fn finalize_manifest_fat32(
     let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
 
     // Add chunk with partition UUID and LBA range
-    match manifest.add_chunk(config.partition_uuid, config.target_start_sector, end_sector) {
+    match manifest.add_chunk(
+        config.partition_uuid,
+        config.target_start_sector,
+        end_sector,
+    ) {
         Ok(idx) => {
             serial_print("[MANIFEST] Added chunk ");
             serial_print_decimal(idx as u32);
