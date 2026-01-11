@@ -43,6 +43,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install NASM
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nasm
           components: rustfmt, clippy
 
       - name: Cache cargo
