@@ -151,8 +151,11 @@ pub unsafe fn load_manifests_from_esp(
     if status != 0 || dir.is_null() {
         let _ = close_file(root);
         // Directory doesn't exist yet - that's OK, no manifests
+        morpheus_core::logger::log("Manifest dir not found or cannot open");
         return Ok(0);
     }
+
+    morpheus_core::logger::log("Scanning manifest directory...");
 
     // Scan directory for .manifest files
     let mut count = 0;
@@ -186,10 +189,16 @@ pub unsafe fn load_manifests_from_esp(
         // Get filename from UTF-16 at offset 0x50
         let filename = extract_filename_from_file_info(&buffer);
         
-        // Check if it ends with .MFS or .manifest (support both)
-        if !filename.ends_with(".MFS") && !filename.ends_with(".mfs") && !filename.ends_with(".manifest") {
+        // Debug: log each file found
+        morpheus_core::logger::log(alloc::format!("Found file: {}", filename).leak());
+        
+        // Check if it ends with .MFS or .manifest (support both, case insensitive)
+        let filename_upper = filename.to_uppercase();
+        if !filename_upper.ends_with(".MFS") && !filename_upper.ends_with(".MANIFEST") {
             continue;
         }
+        
+        morpheus_core::logger::log(alloc::format!("Loading manifest: {}", filename).leak());
 
         // Load this manifest
         if let Ok(manifest) = load_single_manifest(root, &filename) {
