@@ -321,6 +321,11 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
 
         boot_seq.mark_complete();
         boot_seq.render(&mut screen, boot_x, boot_y);
+
+        // Emit boot token for CI/CD E2E test validation
+        // This token is detected by qemu-e2e.sh via serial output
+        #[cfg(target_arch = "x86_64")]
+        morpheus_network::serial_str("MORPHEUSX_BOOT_OK\n");
         
         // Render rain one final time for visual effect before waiting
         rain.render_frame(&mut screen);

@@ -1,0 +1,170 @@
+# Security Audit Pipeline for MorpheusX
+#
+# Runs cargo-deny and cargo-audit to check for:
+# - Known security vulnerabilities (RustSec advisory DB)
+# - License compliance issues
+# - Unmaintained dependencies
+# - Duplicate dependencies (bloat)
+#
+# Scheduled to run weekly and on-demand.
+# Does NOT block PRs - results are advisory.
+#
+# Why not block PRs?
+# - False positives are common
+# - Upstream fixes may not be immediately available
+# - Human review is needed for actual risk assessment
+
+name: Security Audit
+
+on:
+  schedule:
+    # Weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  # Also run on PRs that modify dependencies
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # CARGO-AUDIT: Check for known vulnerabilities
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: Run cargo-audit
+        run: |
+          echo "=== Checking for known vulnerabilities ==="
+          cargo audit --json > audit-report.json || true
+          
+          # Pretty print summary
+          echo ""
+          echo "=== Audit Summary ==="
+          if command -v jq &> /dev/null; then
+            jq -r '.vulnerabilities.list[] | "⚠️  \(.advisory.id): \(.advisory.title) (\(.package.name))"' audit-report.json 2>/dev/null || echo "No vulnerabilities found"
+          else
+            cargo audit || true
+          fi
+        continue-on-error: true
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # CARGO-DENY: Comprehensive dependency analysis
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: Check for deny.toml
+        id: deny-config
+        run: |
+          if [[ -f "deny.toml" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "deny.toml not found, creating default config..."
+          fi
+
+      - name: Create default deny.toml (if missing)
+        if: steps.deny-config.outputs.exists == 'false'
+        run: |
+          cat > deny.toml << 'EOF'
+          # cargo-deny configuration for MorpheusX
+          # https://embarkstudios.github.io/cargo-deny/
+          
+          [advisories]
+          db-path = "~/.cargo/advisory-db"
+          db-urls = ["https://github.com/rustsec/advisory-db"]
+          vulnerability = "warn"
+          unmaintained = "warn"
+          yanked = "warn"
+          notice = "warn"
+          
+          [licenses]
+          # Allow common permissive licenses
+          allow = [
+            "MIT",
+            "Apache-2.0",
+            "Apache-2.0 WITH LLVM-exception",
+            "BSD-2-Clause",
+            "BSD-3-Clause",
+            "ISC",
+            "Zlib",
+            "MPL-2.0",
+            "Unicode-3.0",
+            "Unicode-DFS-2016",
+          ]
+          confidence-threshold = 0.8
+          
+          [bans]
+          # Warn on duplicate dependencies (different versions)
+          multiple-versions = "warn"
+          wildcards = "warn"
+          
+          [sources]
+          # Only allow crates.io
+          unknown-registry = "deny"
+          unknown-git = "warn"
+          allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+          EOF
+
+      - name: Run cargo-deny
+        run: |
+          echo "=== Running cargo-deny ==="
+          cargo deny check --show-stats 2>&1 | tee deny-report.txt || true
+          
+          # Count issues
+          ERRORS=$(grep -c "^error" deny-report.txt || echo "0")
+          WARNINGS=$(grep -c "^warning" deny-report.txt || echo "0")
+          
+          echo ""
+          echo "=== Deny Summary ==="
+          echo "Errors: $ERRORS"
+          echo "Warnings: $WARNINGS"
+        continue-on-error: true
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # UPLOAD REPORTS
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: Upload audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-${{ github.sha }}
+          path: |
+            audit-report.json
+            deny-report.txt
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Create summary
+        run: |
+          echo "## Security Audit Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -f audit-report.json ]]; then
+            VULN_COUNT=$(jq '.vulnerabilities.count // 0' audit-report.json 2>/dev/null || echo "0")
+            echo "### cargo-audit" >> $GITHUB_STEP_SUMMARY
+            echo "- Vulnerabilities found: $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "### cargo-deny" >> $GITHUB_STEP_SUMMARY
+          echo "See deny-report.txt artifact for details." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_This is an advisory check. Review results manually before taking action._" >> $GITHUB_STEP_SUMMARY

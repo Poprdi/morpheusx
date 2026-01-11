@@ -1,0 +1,217 @@
+# Release Pipeline for MorpheusX
+#
+# Triggered by version tags (v*.*.*).
+# Builds the UEFI bootloader and creates a GitHub release with artifacts.
+#
+# Artifacts:
+# - morpheusx-bootloader.efi (the main UEFI binary)
+# - BOOTX64.EFI (same file, standard UEFI name)
+# - Source code (automatic by GitHub)
+#
+# Tag format: v1.2.3 (semantic versioning)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g., v1.0.0)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.82"
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # VALIDATE: Check tag format and version
+  # ═══════════════════════════════════════════════════════════════════════════
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          
+          # Validate tag format
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid tag format: $TAG"
+            echo "Expected: v1.2.3"
+            exit 1
+          fi
+          
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          
+          echo "=== Release Info ==="
+          echo "Tag: $TAG"
+          echo "Version: $VERSION"
+
+      - name: Verify Cargo.toml version
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "Tag version: ${{ steps.version.outputs.version }}"
+          
+          if [[ "$CARGO_VERSION" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "::warning::Tag version (${{ steps.version.outputs.version }}) differs from Cargo.toml ($CARGO_VERSION)"
+          fi
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BUILD: Full 2-pass UEFI build
+  # ═══════════════════════════════════════════════════════════════════════════
+  build:
+    name: Build Release
+    runs-on: ubuntu-latest
+    needs: validate
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-unknown-uefi
+
+      - name: Install NASM
+        run: sudo apt-get install -y -qq nasm
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
+      # 2-pass build
+      - name: "Pass 1: Build bootloader"
+        run: cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
+
+      - name: "Extract relocation data"
+        run: |
+          chmod +x ./tools/extract-reloc-data.sh
+          ./tools/extract-reloc-data.sh
+
+      - name: "Pass 2: Rebuild with embedded relocations"
+        run: |
+          cargo clean -p morpheus-bootloader
+          cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p release
+          
+          # Main artifact
+          cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi \
+             release/morpheusx-bootloader-${{ needs.validate.outputs.version }}.efi
+          
+          # Standard UEFI name
+          cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi \
+             release/BOOTX64.EFI
+          
+          # Create SHA256 checksums
+          cd release
+          sha256sum *.efi > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ needs.validate.outputs.tag }}
+          path: release/
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # RELEASE: Create GitHub release
+  # ═══════════════════════════════════════════════════════════════════════════
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [validate, build]
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.validate.outputs.tag }}
+          path: release/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## MorpheusX ${{ needs.validate.outputs.tag }}
+          
+          ### Downloads
+          
+          | File | Description |
+          |------|-------------|
+          | `morpheusx-bootloader-${{ needs.validate.outputs.version }}.efi` | UEFI bootloader |
+          | `BOOTX64.EFI` | Same file, standard UEFI name (copy to `EFI/BOOT/BOOTX64.EFI`) |
+          | `SHA256SUMS.txt` | SHA256 checksums |
+          
+          ### Installation
+          
+          1. Create a FAT32 partition on your USB drive
+          2. Create the directory `EFI/BOOT/`
+          3. Copy `BOOTX64.EFI` to `EFI/BOOT/BOOTX64.EFI`
+          4. Boot from the USB drive in UEFI mode
+          
+          ### Verification
+          
+          ```bash
+          sha256sum -c SHA256SUMS.txt
+          ```
+          
+          ### Requirements
+          
+          - UEFI firmware (not Legacy BIOS)
+          - x86_64 architecture
+          - At least 512MB RAM
+          
+          ---
+          
+          See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
+          EOF
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: MorpheusX ${{ needs.validate.outputs.tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(needs.validate.outputs.tag, '-') }}
+          files: |
+            release/morpheusx-bootloader-${{ needs.validate.outputs.version }}.efi
+            release/BOOTX64.EFI
+            release/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
