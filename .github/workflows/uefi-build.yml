@@ -2,23 +2,11 @@
 #
 # Performs the full 2-pass build required for relocation embedding.
 # Uploads the .efi artifact for E2E testing and releases.
-#
-# This is separated from ci.yml because:
-# 1. 2-pass build is slower (~3-5 min)
-# 2. Requires NASM and UEFI target
-# 3. E2E workflow depends on this artifact
-#
-# Requirements:
-# - Rust 1.75+ with x86_64-unknown-uefi target
-# - NASM assembler
 
 name: UEFI Build
 
 on:
-  push:
-    branches: ["master"]
-  pull_request:
-    branches: ["master"]
+  # Make this reusable (called by E2E) and manually runnable. No push/pull triggers to avoid races.
   workflow_dispatch:
     inputs:
       debug:
@@ -37,17 +25,16 @@ env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.85"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# Remove concurrency here to avoid deadlocks with callers.
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.ref }}
+#   cancel-in-progress: true
 
 jobs:
   build-uefi:
     name: Build UEFI Bootloader
     runs-on: ubuntu-latest
-    outputs:
-      artifact-name: ${{ steps.artifact.outputs.name }}
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,10 +63,7 @@ jobs:
             ${{ runner.os }}-cargo-uefi-
             ${{ runner.os }}-cargo-
 
-      # ═══════════════════════════════════════════════════════════════════════
       # 2-PASS BUILD: Required for relocation embedding
-      # ═══════════════════════════════════════════════════════════════════════
-      
       - name: "Pass 1: Build bootloader"
         run: |
           cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
@@ -94,7 +78,6 @@ jobs:
 
       - name: "Pass 2: Rebuild with embedded relocations"
         run: |
-          # Clean only the bootloader to force rebuild with new reloc data
           cargo clean -p morpheus-bootloader
           cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
 
@@ -105,35 +88,23 @@ jobs:
             echo "ERROR: EFI file not found!"
             exit 1
           fi
-          
           echo "=== EFI File Info ==="
           ls -lh "$EFI_FILE"
           file "$EFI_FILE"
-          
-          # Verify it's a valid PE file
           if ! file "$EFI_FILE" | grep -q "PE32+"; then
             echo "ERROR: Not a valid PE32+ executable!"
             exit 1
           fi
-          
           echo "=== Build successful ==="
-
-      - name: Set artifact name
-        id: artifact
-        run: |
-          SHORT_SHA="${GITHUB_SHA::8}"
-          NAME="morpheusx-bootloader-${SHORT_SHA}"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Upload bootloader artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact.outputs.name }}
+          name: morpheus-bootloader
           path: target/x86_64-unknown-uefi/release/morpheus-bootloader.efi
           retention-days: 7
           if-no-files-found: error
 
-      # Also upload as BOOTX64.EFI for convenience
       - name: Upload as BOOTX64.EFI
         uses: actions/upload-artifact@v4
         with:
