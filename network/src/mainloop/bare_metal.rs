@@ -35,12 +35,10 @@ use crate::driver::traits::NetworkDriver;
 use crate::driver::virtio::{PciModernConfig, TransportType, VirtioTransport};
 use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
-use crate::transfer::disk::{
-    ChunkPartition, ChunkSet, ManifestWriter, PartitionInfo, MAX_CHUNK_PARTITIONS,
-};
+use crate::transfer::disk::{ChunkPartition, ChunkSet, PartitionInfo, MAX_CHUNK_PARTITIONS};
 use crate::url::Url;
 
-// Import manifest support from morpheus-core
+// Import manifest support from morpheus-core (same format bootloader scanner uses)
 use morpheus_core::iso::{IsoManifest, MAX_MANIFEST_SIZE};
 
 // Import from sibling modules in the mainloop package
@@ -479,6 +477,7 @@ unsafe fn finalize_manifest(
 /// Write manifest to FAT32 ESP filesystem.
 ///
 /// Creates `/morpheus/isos/<name>.manifest` file on the ESP.
+/// Uses morpheus_core::iso::IsoManifest for compatibility with bootloader scanner.
 unsafe fn finalize_manifest_fat32(
     blk_driver: &mut VirtioBlkDriver,
     config: &BareMetalConfig,
@@ -490,33 +489,32 @@ unsafe fn finalize_manifest_fat32(
     serial_print_hex(config.esp_start_lba);
     serial_println("");
 
-    // Create ManifestWriter (our disk module's version)
-    let mut manifest = ManifestWriter::new(config.iso_name, total_bytes);
-    manifest.set_complete(true);
+    // Create IsoManifest using morpheus_core (same format bootloader scanner expects)
+    let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
 
-    // Build chunk set with partition info
-    let mut chunks = ChunkSet::new();
-    chunks.count = 1;
-    chunks.total_size = total_bytes;
-    chunks.bytes_written = total_bytes;
+    // Add chunk with partition UUID and LBA range
+    match manifest.add_chunk(config.partition_uuid, config.target_start_sector, end_sector) {
+        Ok(idx) => {
+            serial_print("[MANIFEST] Added chunk ");
+            serial_print_decimal(idx as u32);
+            serial_println("");
 
-    // Set up the partition info
-    let mut part_info = PartitionInfo::new(
-        0,
-        config.target_start_sector,
-        end_sector,
-        config.partition_uuid,
-    );
-    part_info.set_name(config.iso_name);
+            // Update chunk with data size and mark as written
+            if let Some(chunk) = manifest.chunks.chunks.get_mut(idx) {
+                chunk.data_size = total_bytes;
+                chunk.written = true;
+            }
+        }
+        Err(_) => {
+            serial_println("[MANIFEST] ERROR: Failed to add chunk");
+            return false;
+        }
+    }
 
-    // Create chunk partition
-    let mut chunk = ChunkPartition::new(part_info, 0);
-    chunk.bytes_written = total_bytes;
-    chunk.complete = true;
-    chunks.chunks[0] = chunk;
+    // Mark manifest as complete
+    manifest.mark_complete();
 
     // Create BlockIo adapter for FAT32 operations
-    // Use our static DMA buffer (reuse the write buffer since download is done)
     serial_println("[MANIFEST] Creating BlockIo adapter for FAT32...");
     let dma_buffer = &mut DISK_WRITE_BUFFER;
     let dma_buffer_phys = dma_buffer.as_ptr() as u64;
@@ -534,26 +532,50 @@ unsafe fn finalize_manifest_fat32(
             }
         };
 
-    // Write manifest to FAT32
-    serial_println("[MANIFEST] Calling write_to_esp_fat32...");
-    serial_print("[MANIFEST] ISO name: ");
-    serial_println(config.iso_name);
-    serial_print("[MANIFEST] ESP LBA: ");
-    serial_print_hex(config.esp_start_lba);
-    serial_println("");
+    // Serialize manifest to buffer
+    let mut manifest_buffer = [0u8; MAX_MANIFEST_SIZE];
+    let manifest_len = match manifest.serialize(&mut manifest_buffer) {
+        Ok(len) => {
+            serial_print("[MANIFEST] Serialized ");
+            serial_print_decimal(len as u32);
+            serial_println(" bytes");
+            len
+        }
+        Err(_) => {
+            serial_println("[MANIFEST] ERROR: Failed to serialize manifest");
+            return false;
+        }
+    };
 
-    match manifest.write_to_esp_fat32(&mut adapter, config.esp_start_lba, &chunks) {
+    // Build manifest file path: /morpheus/isos/<name>.manifest
+    let manifest_path = format!("/morpheus/isos/{}.manifest", config.iso_name);
+    serial_print("[MANIFEST] Writing to: ");
+    serial_println(&manifest_path);
+
+    // Ensure directory structure exists
+    let _ = morpheus_core::fs::create_directory(&mut adapter, config.esp_start_lba, "/morpheus");
+    let _ =
+        morpheus_core::fs::create_directory(&mut adapter, config.esp_start_lba, "/morpheus/isos");
+
+    // Write manifest file using morpheus_core FAT32 operations
+    match morpheus_core::fs::write_file(
+        &mut adapter,
+        config.esp_start_lba,
+        &manifest_path,
+        &manifest_buffer[..manifest_len],
+    ) {
         Ok(()) => {
-            serial_println("[MANIFEST] OK: Written to /morpheus/isos/<name>.manifest");
+            serial_println("[MANIFEST] OK: Written to ESP");
             true
         }
         Err(e) => {
             serial_print("[MANIFEST] ERROR: FAT32 write failed: ");
             serial_println(match e {
-                crate::transfer::disk::DiskError::IoError => "IO error",
-                crate::transfer::disk::DiskError::ManifestError => "Manifest error",
-                crate::transfer::disk::DiskError::BufferTooSmall => "Buffer too small",
-                _ => "Unknown error",
+                morpheus_core::fs::Fat32Error::IoError => "IO error",
+                morpheus_core::fs::Fat32Error::PartitionTooSmall => "Partition too small",
+                morpheus_core::fs::Fat32Error::PartitionTooLarge => "Partition too large",
+                morpheus_core::fs::Fat32Error::InvalidBlockSize => "Invalid block size",
+                morpheus_core::fs::Fat32Error::NotImplemented => "Not implemented",
             });
             false
         }
