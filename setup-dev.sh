@@ -378,8 +378,9 @@ do_launch_qemu() {
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
         qemu-system-x86_64 \
             -bios "$ovmf_path" \
-            -drive format=raw,file="${TESTING_DIR}/test-disk-50g.img" \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0 \
+            -device virtio-blk-pci,drive=disk0,bus=pci.0,addr=0x04,disable-legacy=on \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 4 \
             -m 4G \
@@ -387,10 +388,24 @@ do_launch_qemu() {
             -display gtk,gl=on \
             -serial stdio
     else
+        # Create a temp ESP image for virtio-blk
+        local esp_img="${TESTING_DIR}/esp-temp.img"
+        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}" -nt "$esp_img" ]]; then
+            log_info "Creating ESP disk image..."
+            local esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
+            dd if=/dev/zero of="$esp_img" bs=1M count=$esp_size status=none 2>/dev/null || true
+            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1 || true
+            local mnt=$(mktemp -d)
+            sudo mount -o loop "$esp_img" "$mnt"
+            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
+            sudo umount "$mnt"
+            rmdir "$mnt"
+        fi
         qemu-system-x86_64 \
             -bios "$ovmf_path" \
-            -drive format=raw,file=fat:rw:"${ESP_DIR}" \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03 \
+            -drive file="$esp_img",format=raw,if=none,id=disk0 \
+            -device virtio-blk-pci,drive=disk0,bus=pci.0,addr=0x04,disable-legacy=on \
+            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 4 \
             -m 4G \

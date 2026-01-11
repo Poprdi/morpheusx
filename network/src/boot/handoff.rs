@@ -181,7 +181,7 @@ pub struct BootHandoff {
     // BLOCK DEVICE INFORMATION (24 bytes)
     // ═══════════════════════════════════════════════════════════════════════
     
-    /// Block device MMIO base address (from PCI BAR)
+    /// Block device MMIO base address (legacy) or common_cfg (PCI Modern)
     pub blk_mmio_base: u64,
     
     /// Block device PCI bus number
@@ -266,7 +266,7 @@ pub struct BootHandoff {
     pub memory_map_desc_size: u32,
     
     // ═══════════════════════════════════════════════════════════════════════
-    // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern devices
+    // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern NIC
     // ═══════════════════════════════════════════════════════════════════════
     
     /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
@@ -291,13 +291,38 @@ pub struct BootHandoff {
     pub nic_device_cfg: u64,
     
     // ═══════════════════════════════════════════════════════════════════════
+    // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern BLK
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
+    pub blk_transport_type: u8,
+    
+    /// Padding
+    pub _blk_transport_pad: [u8; 3],
+    
+    /// Notify offset multiplier (from VIRTIO_PCI_CAP_NOTIFY)
+    pub blk_notify_off_multiplier: u32,
+    
+    /// Common cfg address (BAR base + cap offset) - same as blk_mmio_base for PCI Modern
+    pub blk_common_cfg: u64,
+    
+    /// Notify cfg address (BAR base + cap offset)
+    pub blk_notify_cfg: u64,
+    
+    /// ISR cfg address (BAR base + cap offset)
+    pub blk_isr_cfg: u64,
+    
+    /// Device cfg address (BAR base + cap offset)
+    pub blk_device_cfg: u64,
+    
+    // ═══════════════════════════════════════════════════════════════════════
     // RESERVED (8 bytes for future expansion)
     // ═══════════════════════════════════════════════════════════════════════
     
     pub _reserved: [u8; 8],
 }
 
-// Compile-time size check
+// Compile-time size check (200 original + 40 blk PCI Modern = 240 fields, aligned to 64 = 256)
 const _: () = assert!(core::mem::size_of::<BootHandoff>() == 256);
 
 impl BootHandoff {
@@ -344,7 +369,7 @@ impl BootHandoff {
             memory_map_ptr: 0,
             memory_map_size: 0,
             memory_map_desc_size: 0,
-            // PCI Modern transport fields
+            // PCI Modern transport fields (NIC)
             nic_transport_type: 0,  // 0 = MMIO
             _transport_pad: [0; 3],
             nic_notify_off_multiplier: 0,
@@ -352,6 +377,14 @@ impl BootHandoff {
             nic_notify_cfg: 0,
             nic_isr_cfg: 0,
             nic_device_cfg: 0,
+            // PCI Modern transport fields (BLK)
+            blk_transport_type: 0,  // 0 = MMIO
+            _blk_transport_pad: [0; 3],
+            blk_notify_off_multiplier: 0,
+            blk_common_cfg: 0,
+            blk_notify_cfg: 0,
+            blk_isr_cfg: 0,
+            blk_device_cfg: 0,
             _reserved: [0; 8],
         }
     }
@@ -416,7 +449,10 @@ impl BootHandoff {
     
     /// Check if block device is configured.
     pub fn has_block_device(&self) -> bool {
-        self.blk_type != BLK_TYPE_NONE && self.blk_mmio_base != 0
+        // For PCI Modern, blk_mmio_base is 0 but blk_common_cfg is set
+        // For Legacy MMIO, blk_mmio_base is set
+        self.blk_type != BLK_TYPE_NONE && 
+            (self.blk_mmio_base != 0 || self.blk_common_cfg != 0)
     }
     
     /// Check if framebuffer is available.

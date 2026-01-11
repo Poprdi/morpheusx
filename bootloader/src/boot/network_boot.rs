@@ -133,7 +133,7 @@ impl NicProbeResult {
 /// Block device probe result.
 #[derive(Debug, Clone, Copy)]
 pub struct BlkProbeResult {
-    /// MMIO base address
+    /// MMIO base address (legacy) or 0 for PCI Modern
     pub mmio_base: u64,
     /// PCI bus number
     pub pci_bus: u8,
@@ -143,10 +143,24 @@ pub struct BlkProbeResult {
     pub pci_function: u8,
     /// Device type: 0=None, 1=VirtIO-blk
     pub device_type: u8,
+    /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
+    pub transport_type: u8,
+    /// Padding
+    pub _pad: [u8; 3],
     /// Sector size (typically 512)
     pub sector_size: u32,
     /// Total sectors
     pub total_sectors: u64,
+    /// PCI Modern: common_cfg address
+    pub common_cfg: u64,
+    /// PCI Modern: notify_cfg address
+    pub notify_cfg: u64,
+    /// PCI Modern: notify offset multiplier
+    pub notify_off_multiplier: u32,
+    /// PCI Modern: isr_cfg address
+    pub isr_cfg: u64,
+    /// PCI Modern: device_cfg address
+    pub device_cfg: u64,
 }
 
 impl BlkProbeResult {
@@ -158,12 +172,19 @@ impl BlkProbeResult {
             pci_device: 0,
             pci_function: 0,
             device_type: 0,
+            transport_type: 0,
+            _pad: [0; 3],
             sector_size: 512,
             total_sectors: 0,
+            common_cfg: 0,
+            notify_cfg: 0,
+            notify_off_multiplier: 0,
+            isr_cfg: 0,
+            device_cfg: 0,
         }
     }
     
-    /// Create VirtIO-blk result.
+    /// Create VirtIO-blk result (legacy MMIO).
     pub const fn virtio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
             mmio_base,
@@ -171,8 +192,44 @@ impl BlkProbeResult {
             pci_device: device,
             pci_function: function,
             device_type: 1, // BLK_TYPE_VIRTIO
+            transport_type: 0, // MMIO
+            _pad: [0; 3],
             sector_size: 512,
-            total_sectors: 0, // Will be read from device
+            total_sectors: 0,
+            common_cfg: 0,
+            notify_cfg: 0,
+            notify_off_multiplier: 0,
+            isr_cfg: 0,
+            device_cfg: 0,
+        }
+    }
+    
+    /// Create VirtIO-blk result (PCI Modern).
+    pub const fn pci_modern(
+        common_cfg: u64,
+        notify_cfg: u64,
+        isr_cfg: u64,
+        device_cfg: u64,
+        notify_off_multiplier: u32,
+        bus: u8,
+        device: u8,
+        function: u8,
+    ) -> Self {
+        Self {
+            mmio_base: 0, // No legacy MMIO for PCI Modern
+            pci_bus: bus,
+            pci_device: device,
+            pci_function: function,
+            device_type: 1, // BLK_TYPE_VIRTIO
+            transport_type: 1, // PCI Modern
+            _pad: [0; 3],
+            sector_size: 512,
+            total_sectors: 0,
+            common_cfg,
+            notify_cfg,
+            notify_off_multiplier,
+            isr_cfg,
+            device_cfg,
         }
     }
 }
@@ -262,7 +319,7 @@ pub fn prepare_handoff_with_blk(
         memory_map_size: 0,
         memory_map_desc_size: 0,
         
-        // PCI Modern transport fields
+        // PCI Modern transport fields (NIC)
         nic_transport_type: nic.transport_type,
         _transport_pad: [0; 3],
         nic_notify_off_multiplier: nic.notify_off_multiplier,
@@ -270,6 +327,15 @@ pub fn prepare_handoff_with_blk(
         nic_notify_cfg: nic.notify_cfg,
         nic_isr_cfg: nic.isr_cfg,
         nic_device_cfg: nic.device_cfg,
+        
+        // PCI Modern transport fields (BLK)
+        blk_transport_type: blk.transport_type,
+        _blk_transport_pad: [0; 3],
+        blk_notify_off_multiplier: blk.notify_off_multiplier,
+        blk_common_cfg: blk.common_cfg,
+        blk_notify_cfg: blk.notify_cfg,
+        blk_isr_cfg: blk.isr_cfg,
+        blk_device_cfg: blk.device_cfg,
         
         _reserved: [0; 8],
     }

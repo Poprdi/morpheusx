@@ -16,6 +16,7 @@
 use core::ptr;
 use crate::driver::block_traits::{BlockDriver, BlockDriverInit, BlockError, BlockCompletion, BlockDeviceInfo};
 use crate::types::VirtqueueState;
+use crate::driver::virtio::transport::{VirtioTransport, TransportType};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ASM BINDINGS
@@ -147,8 +148,10 @@ pub struct VirtioBlkConfig {
     pub headers_cpu: u64,
     /// CPU pointer to status bytes
     pub status_cpu: u64,
-    /// Physical address for notify MMIO
+    /// Physical address for notify MMIO (legacy) or computed from transport (PCI Modern)
     pub notify_addr: u64,
+    /// Transport type: 0=MMIO, 1=PCI Modern
+    pub transport_type: u8,
 }
 
 /// Initialization errors.
@@ -164,6 +167,22 @@ pub enum VirtioBlkInitError {
     DeviceFailed,
     /// Invalid configuration
     InvalidConfig,
+    /// Transport error (from VirtioInitError)
+    TransportError,
+}
+
+impl From<super::virtio::init::VirtioInitError> for VirtioBlkInitError {
+    fn from(err: super::virtio::init::VirtioInitError) -> Self {
+        use super::virtio::init::VirtioInitError;
+        match err {
+            VirtioInitError::ResetTimeout => VirtioBlkInitError::ResetFailed,
+            VirtioInitError::FeatureNegotiationFailed => VirtioBlkInitError::FeatureNegotiationFailed,
+            VirtioInitError::FeaturesRejected => VirtioBlkInitError::FeatureNegotiationFailed,
+            VirtioInitError::QueueSetupFailed => VirtioBlkInitError::QueueSetupFailed,
+            VirtioInitError::RxPrefillFailed(_) => VirtioBlkInitError::QueueSetupFailed,
+            VirtioInitError::DeviceError => VirtioBlkInitError::DeviceFailed,
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -200,8 +219,10 @@ const MAX_IN_FLIGHT: usize = 32;
 
 /// VirtIO block device driver.
 pub struct VirtioBlkDriver {
-    /// MMIO base address
+    /// MMIO base address (legacy) or common_cfg (PCI Modern)
     mmio_base: u64,
+    /// Transport handle for device operations
+    transport: VirtioTransport,
     /// Negotiated features
     features: u64,
     /// Device info
@@ -346,6 +367,147 @@ impl VirtioBlkDriver {
         
         Ok(Self {
             mmio_base,
+            transport: VirtioTransport::mmio(mmio_base),
+            features: our_features,
+            info,
+            queue,
+            in_flight: [InFlightRequest::default(); MAX_IN_FLIGHT],
+            next_desc_set: 0,
+            headers_cpu: config.headers_cpu as *mut VirtioBlkReqHeader,
+            status_cpu: config.status_cpu as *mut u8,
+        })
+    }
+    
+    /// Create and initialize VirtIO-blk driver using transport abstraction.
+    ///
+    /// This supports both MMIO (legacy) and PCI Modern transports.
+    ///
+    /// # Safety
+    /// - Transport addresses must be valid
+    /// - `config` must contain valid physical addresses
+    pub unsafe fn new_with_transport(
+        transport: VirtioTransport,
+        config: VirtioBlkConfig,
+        _tsc_freq: u64,
+    ) -> Result<Self, VirtioBlkInitError> {
+        // Validate config
+        if config.queue_size < 3 || config.queue_size > 256 {
+            return Err(VirtioBlkInitError::InvalidConfig);
+        }
+        
+        let base = transport.base;
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 1: Reset device
+        // ═══════════════════════════════════════════════════════════════════
+        transport.set_status(0);
+        
+        // Wait for reset (simple spin - bounded)
+        for _ in 0..1_000_000 {
+            if transport.get_status() == 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        
+        if transport.get_status() != 0 {
+            return Err(VirtioBlkInitError::ResetFailed);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 2: Set ACKNOWLEDGE
+        // ═══════════════════════════════════════════════════════════════════
+        transport.set_status(VIRTIO_STATUS_ACKNOWLEDGE);
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 3: Set DRIVER
+        // ═══════════════════════════════════════════════════════════════════
+        transport.set_status(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 4: Feature negotiation
+        // ═══════════════════════════════════════════════════════════════════
+        let device_features = transport.read_features();
+        
+        if device_features & REQUIRED_FEATURES != REQUIRED_FEATURES {
+            transport.set_status(VIRTIO_STATUS_FAILED);
+            return Err(VirtioBlkInitError::FeatureNegotiationFailed);
+        }
+        
+        let our_features = REQUIRED_FEATURES | (DESIRED_FEATURES & device_features);
+        transport.write_features(our_features);
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 5: Set FEATURES_OK
+        // ═══════════════════════════════════════════════════════════════════
+        transport.set_status(
+            VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK);
+        
+        // Verify features accepted
+        let status = transport.get_status();
+        if status & VIRTIO_STATUS_FEATURES_OK == 0 {
+            transport.set_status(VIRTIO_STATUS_FAILED);
+            return Err(VirtioBlkInitError::FeatureNegotiationFailed);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6: Setup virtqueue (queue 0)
+        // ═══════════════════════════════════════════════════════════════════
+        let notify_addr = transport.setup_queue(
+            0,  // queue index
+            config.desc_phys,
+            config.avail_phys,
+            config.used_phys,
+            config.queue_size,
+        )?;
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 7: Set DRIVER_OK
+        // ═══════════════════════════════════════════════════════════════════
+        transport.set_status(
+            VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | 
+            VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK);
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 8: Read device info
+        // ═══════════════════════════════════════════════════════════════════
+        let capacity = transport.read_blk_capacity();
+        let sector_size = if our_features & VIRTIO_BLK_F_BLK_SIZE != 0 {
+            transport.read_blk_size()
+        } else {
+            512
+        };
+        let read_only = device_features & VIRTIO_BLK_F_RO != 0;
+        
+        let info = BlockDeviceInfo {
+            total_sectors: capacity,
+            sector_size,
+            max_sectors_per_request: 128, // Conservative default
+            read_only,
+        };
+        
+        // Build queue state
+        let queue = VirtqueueState {
+            desc_base: config.desc_phys,
+            avail_base: config.avail_phys,
+            used_base: config.used_phys,
+            queue_size: config.queue_size,
+            queue_index: 0,
+            _pad: 0,
+            notify_addr,
+            last_used_idx: 0,
+            next_avail_idx: 0,
+            _pad2: 0,
+            desc_cpu_ptr: 0, // Not needed for blk
+            buffer_cpu_base: 0,
+            buffer_bus_base: 0,
+            buffer_size: 0,
+            buffer_count: 0,
+        };
+        
+        Ok(Self {
+            mmio_base: base,
+            transport,
             features: our_features,
             info,
             queue,

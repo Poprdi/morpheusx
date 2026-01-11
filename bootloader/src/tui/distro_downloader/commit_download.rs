@@ -157,10 +157,20 @@ pub unsafe fn commit_to_download(
     log_y += 1;
     
     let blk_probe = probe_virtio_blk_with_debug(screen, &mut log_y);
-    if blk_probe.mmio_base != 0 {
-        screen.put_str_at(7, log_y, &alloc::format!(
-            "VirtIO-blk found at {:#x}", blk_probe.mmio_base
-        ), EFI_LIGHTGREEN, EFI_BLACK);
+    // Check device_type for device presence (mmio_base is 0 for PCI Modern)
+    let has_blk = blk_probe.device_type != 0;
+    if has_blk {
+        if blk_probe.transport_type == 1 {
+            // PCI Modern
+            screen.put_str_at(7, log_y, &alloc::format!(
+                "VirtIO-blk (PCI Modern) common_cfg: {:#x}", blk_probe.common_cfg
+            ), EFI_LIGHTGREEN, EFI_BLACK);
+        } else {
+            // Legacy MMIO
+            screen.put_str_at(7, log_y, &alloc::format!(
+                "VirtIO-blk found at {:#x}", blk_probe.mmio_base
+            ), EFI_LIGHTGREEN, EFI_BLACK);
+        }
     } else {
         screen.put_str_at(7, log_y, "No VirtIO-blk found (ISO won't be saved to disk)", EFI_YELLOW, EFI_BLACK);
     }
@@ -654,6 +664,8 @@ fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicPro
 
 /// Probe for VirtIO-blk device via PCI config space.
 /// Returns BlkProbeResult with device information.
+/// Probe for VirtIO-blk device via PCI config space.
+/// Returns BlkProbeResult with device information.
 fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkProbeResult {
     // VirtIO vendor ID: 0x1AF4
     // VirtIO-blk device IDs: 0x1001 (transitional), 0x1042 (modern)
@@ -661,9 +673,18 @@ fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkPro
     const VIRTIO_BLK_LEGACY: u16 = 0x1001;
     const VIRTIO_BLK_MODERN: u16 = 0x1042;
     
-    // PCI config space access (same as NIC probe)
+    // PCI config space access constants
     const PCI_CONFIG_ADDR: u16 = 0xCF8;
     const PCI_CONFIG_DATA: u16 = 0xCFC;
+    const PCI_STATUS_REG: u8 = 0x06;
+    const PCI_CAP_PTR: u8 = 0x34;
+    const PCI_CAP_ID_VNDR: u8 = 0x09;
+    
+    // VirtIO capability types
+    const VIRTIO_PCI_CAP_COMMON: u8 = 1;
+    const VIRTIO_PCI_CAP_NOTIFY: u8 = 2;
+    const VIRTIO_PCI_CAP_ISR: u8 = 3;
+    const VIRTIO_PCI_CAP_DEVICE: u8 = 4;
     
     fn pci_read32(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
         let addr: u32 = (1 << 31)
@@ -690,6 +711,16 @@ fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkPro
         }
     }
     
+    fn pci_read16(bus: u8, device: u8, func: u8, offset: u8) -> u16 {
+        let dword = pci_read32(bus, device, func, offset & 0xFC);
+        ((dword >> ((offset & 2) * 8)) & 0xFFFF) as u16
+    }
+    
+    fn pci_read8(bus: u8, device: u8, func: u8, offset: u8) -> u8 {
+        let dword = pci_read32(bus, device, func, offset & 0xFC);
+        ((dword >> ((offset & 3) * 8)) & 0xFF) as u8
+    }
+    
     fn read_bar(bus: u8, device: u8, func: u8, bar_index: u8) -> u64 {
         let bar_offset = 0x10 + bar_index * 4;
         let bar_val = pci_read32(bus, device, func, bar_offset);
@@ -708,9 +739,6 @@ fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkPro
     }
     
     // Scan PCI bus 0 for VirtIO-blk
-    // Note: We want the SECOND VirtIO-blk device (first one might be the ESP)
-    let mut found_count = 0;
-    
     for device in 0..32u8 {
         let id = pci_read32(0, device, 0, 0);
         
@@ -723,24 +751,113 @@ fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkPro
         
         // Check for VirtIO block device
         if vendor == VIRTIO_VENDOR && (dev_id == VIRTIO_BLK_LEGACY || dev_id == VIRTIO_BLK_MODERN) {
-            found_count += 1;
-            
-            // Skip first VirtIO-blk (ESP), use second one (target disk)
-            // In QEMU: addr=0x04 is ESP, addr=0x05 is target
-            if found_count < 2 {
-                screen.put_str_at(9, *log_y, &alloc::format!(
-                    "PCI 0:{:02}:0 - VirtIO-blk (ESP, skipping)", device
-                ), EFI_DARKGRAY, EFI_BLACK);
-                *log_y += 1;
-                continue;
-            }
+            let is_modern = dev_id == VIRTIO_BLK_MODERN;
             
             screen.put_str_at(9, *log_y, &alloc::format!(
-                "PCI 0:{:02}:0 - VirtIO-blk target disk found", device
+                "PCI 0:{:02}:0 - VirtIO-blk ({})", device,
+                if is_modern { "Modern" } else { "Legacy" }
             ), EFI_LIGHTGREEN, EFI_BLACK);
             *log_y += 1;
             
-            // Read BAR0 for MMIO base
+            // Check for PCI capabilities (required for Modern)
+            let status = pci_read16(0, device, 0, PCI_STATUS_REG);
+            let has_caps = (status & 0x10) != 0;
+            
+            if is_modern && has_caps {
+                // PCI Modern: Parse capability chain to find common_cfg, notify, isr, device
+                let mut common_bar: u8 = 0;
+                let mut common_offset: u32 = 0;
+                let mut notify_bar: u8 = 0;
+                let mut notify_offset: u32 = 0;
+                let mut notify_off_multiplier: u32 = 0;
+                let mut isr_bar: u8 = 0;
+                let mut isr_offset: u32 = 0;
+                let mut device_bar: u8 = 0;
+                let mut device_offset: u32 = 0;
+                let mut found_common = false;
+                let mut found_notify = false;
+                let mut found_isr = false;
+                let mut found_device = false;
+                
+                let mut cap_offset = pci_read8(0, device, 0, PCI_CAP_PTR) & 0xFC;
+                
+                while cap_offset != 0 && cap_offset < 0xFF {
+                    let cap_id = pci_read8(0, device, 0, cap_offset);
+                    let next = pci_read8(0, device, 0, cap_offset + 1);
+                    
+                    if cap_id == PCI_CAP_ID_VNDR {
+                        let cfg_type = pci_read8(0, device, 0, cap_offset + 3);
+                        let bar = pci_read8(0, device, 0, cap_offset + 4);
+                        let offset = pci_read32(0, device, 0, cap_offset + 8);
+                        
+                        match cfg_type {
+                            VIRTIO_PCI_CAP_COMMON => {
+                                found_common = true;
+                                common_bar = bar;
+                                common_offset = offset;
+                            }
+                            VIRTIO_PCI_CAP_NOTIFY => {
+                                found_notify = true;
+                                notify_bar = bar;
+                                notify_offset = offset;
+                                notify_off_multiplier = pci_read32(0, device, 0, cap_offset + 16);
+                            }
+                            VIRTIO_PCI_CAP_ISR => {
+                                found_isr = true;
+                                isr_bar = bar;
+                                isr_offset = offset;
+                            }
+                            VIRTIO_PCI_CAP_DEVICE => {
+                                found_device = true;
+                                device_bar = bar;
+                                device_offset = offset;
+                            }
+                            _ => {}
+                        }
+                    }
+                    
+                    cap_offset = next & 0xFC;
+                }
+                
+                if found_common && found_notify {
+                    let common_base = read_bar(0, device, 0, common_bar);
+                    let notify_base = read_bar(0, device, 0, notify_bar);
+                    let common_cfg_addr = common_base + common_offset as u64;
+                    let notify_cfg_addr = notify_base + notify_offset as u64;
+                    
+                    // Get ISR and device cfg addresses if found
+                    let isr_cfg_addr = if found_isr {
+                        read_bar(0, device, 0, isr_bar) + isr_offset as u64
+                    } else { 0 };
+                    
+                    let device_cfg_addr = if found_device {
+                        read_bar(0, device, 0, device_bar) + device_offset as u64
+                    } else { 0 };
+                    
+                    screen.put_str_at(9, *log_y, &alloc::format!(
+                        "  common_cfg: {:#x}", common_cfg_addr
+                    ), EFI_CYAN, EFI_BLACK);
+                    *log_y += 1;
+                    screen.put_str_at(9, *log_y, &alloc::format!(
+                        "  notify_cfg: {:#x}", notify_cfg_addr
+                    ), EFI_CYAN, EFI_BLACK);
+                    *log_y += 1;
+                    
+                    // Return PCI Modern result
+                    return BlkProbeResult::pci_modern(
+                        common_cfg_addr,
+                        notify_cfg_addr,
+                        isr_cfg_addr,
+                        device_cfg_addr,
+                        notify_off_multiplier,
+                        0,      // bus
+                        device, // device
+                        0,      // function
+                    );
+                }
+            }
+            
+            // Fallback to Legacy BAR0
             let bar0 = pci_read32(0, device, 0, 0x10);
             let mmio_base = if bar0 & 1 == 0 {
                 let base = (bar0 & 0xFFFFFFF0) as u64;
@@ -751,7 +868,9 @@ fn probe_virtio_blk_with_debug(screen: &mut Screen, log_y: &mut usize) -> BlkPro
                     base
                 }
             } else {
-                // I/O BAR not supported for our use
+                // I/O BAR - not supported for block
+                screen.put_str_at(9, *log_y, "  I/O BAR not supported", EFI_RED, EFI_BLACK);
+                *log_y += 1;
                 continue;
             };
             

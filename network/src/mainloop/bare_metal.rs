@@ -289,7 +289,11 @@ unsafe fn write_manifest_to_disk(
     manifest_sector: u64,
     manifest: &IsoManifest,
 ) -> bool {
-    serial_println("[MANIFEST] Serializing manifest...");
+    serial_println("[MANIFEST] ═══════════════════════════════════════════════════");
+    serial_println("[MANIFEST] Writing ISO manifest to disk");
+    serial_println("[MANIFEST] ═══════════════════════════════════════════════════");
+    
+    serial_println("[MANIFEST] Serializing manifest structure...");
     
     // Clear buffer
     for b in MANIFEST_BUFFER.iter_mut() {
@@ -306,20 +310,54 @@ unsafe fn write_manifest_to_disk(
         }
     };
     
-    serial_print("[MANIFEST] Manifest size: ");
+    serial_print("[MANIFEST] Serialized size: ");
     serial_print_decimal(size as u32);
     serial_println(" bytes");
     
+    serial_print("[MANIFEST] ISO name: ");
+    // Print manifest name from the serialized buffer if possible
+    serial_println(manifest.name);
+    
+    serial_print("[MANIFEST] Total ISO size: ");
+    let total_mb = manifest.total_size / (1024 * 1024);
+    let total_gb = manifest.total_size / (1024 * 1024 * 1024);
+    if total_gb > 0 {
+        serial_print_decimal(total_gb as u32);
+        serial_print(" GB (");
+        serial_print_decimal(total_mb as u32);
+        serial_println(" MB)");
+    } else {
+        serial_print_decimal(total_mb as u32);
+        serial_println(" MB");
+    }
+    
+    serial_print("[MANIFEST] Chunk count: ");
+    serial_print_decimal(manifest.chunks.count as u32);
+    serial_println("");
+    
+    serial_print("[MANIFEST] Complete: ");
+    serial_println(if manifest.complete { "YES" } else { "NO" });
+    
     // Calculate sectors needed (round up)
     let num_sectors = ((size + 511) / 512) as u32;
-    serial_print("[MANIFEST] Writing ");
-    serial_print_decimal(num_sectors);
-    serial_print(" sector(s) to sector ");
+    
+    serial_println("[MANIFEST] ───────────────────────────────────────────────────");
+    serial_println("[MANIFEST] Write location:");
+    serial_print("[MANIFEST]   Sector (LBA): ");
     serial_print_hex(manifest_sector);
     serial_println("");
+    serial_print("[MANIFEST]   Byte offset: ");
+    serial_print_hex(manifest_sector * 512);
+    serial_println("");
+    serial_print("[MANIFEST]   Sectors to write: ");
+    serial_print_decimal(num_sectors);
+    serial_println("");
+    serial_println("[MANIFEST] ───────────────────────────────────────────────────");
     
     // Get the buffer physical address
     let buffer_phys = manifest_buffer.as_ptr() as u64;
+    
+    serial_println("[MANIFEST] Submitting write request...");
     
     // Poll for completion space first
     while let Some(_completion) = blk_driver.poll_completion() {
@@ -349,6 +387,8 @@ unsafe fn write_manifest_to_disk(
     // Notify the device
     blk_driver.notify();
     
+    serial_println("[MANIFEST] Write submitted, waiting for completion...");
+    
     // Poll for completion (with timeout)
     let start_tsc = super::runner::get_tsc();
     let timeout_ticks = 100_000_000; // ~100ms at 1GHz TSC
@@ -357,7 +397,9 @@ unsafe fn write_manifest_to_disk(
         if let Some(completion) = blk_driver.poll_completion() {
             if completion.request_id == request_id {
                 if completion.status == 0 {
-                    serial_println("[MANIFEST] OK: Manifest written to disk");
+                    serial_println("[MANIFEST] ═══════════════════════════════════════════════════");
+                    serial_println("[MANIFEST] MANIFEST WRITTEN SUCCESSFULLY");
+                    serial_println("[MANIFEST] ═══════════════════════════════════════════════════");
                     return true;
                 } else {
                     serial_print("[MANIFEST] ERROR: Write completion status ");
@@ -542,6 +584,134 @@ unsafe fn finalize_manifest_raw(
     
     // Write to disk
     write_manifest_to_disk(blk_driver, config.manifest_sector, &manifest)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GPT PARTITION CREATION FOR ISO DATA
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Create a GPT partition for ISO data storage.
+/// 
+/// This properly claims disk space so other tools won't overwrite our ISO.
+/// The partition is created at `start_sector` with size `size_bytes`.
+/// 
+/// Returns the partition GUID on success.
+unsafe fn create_iso_partition(
+    blk_driver: &mut VirtioBlkDriver,
+    start_sector: u64,
+    size_bytes: u64,
+    iso_name: &str,
+) -> Option<[u8; 16]> {
+    use morpheus_core::disk::gpt_ops::create_partition;
+    use morpheus_core::disk::partition::PartitionType;
+    
+    serial_println("[GPT] ═══════════════════════════════════════════════════════");
+    serial_println("[GPT] Creating partition for ISO data storage");
+    serial_println("[GPT] ═══════════════════════════════════════════════════════");
+    
+    serial_print("[GPT] ISO name: ");
+    serial_println(iso_name);
+    
+    serial_print("[GPT] Partition type: BasicData (");
+    // EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 is Microsoft Basic Data
+    serial_println("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7)");
+    
+    serial_print("[GPT] Start sector (LBA): ");
+    serial_print_hex(start_sector);
+    serial_print(" (byte offset: ");
+    serial_print_hex(start_sector * 512);
+    serial_println(")");
+    
+    // Calculate end sector
+    let sectors_needed = (size_bytes + 511) / 512;
+    let end_sector = start_sector + sectors_needed - 1;
+    
+    serial_print("[GPT] End sector (LBA): ");
+    serial_print_hex(end_sector);
+    serial_print(" (byte offset: ");
+    serial_print_hex(end_sector * 512);
+    serial_println(")");
+    
+    serial_print("[GPT] Sectors needed: ");
+    serial_print_decimal(sectors_needed as u32);
+    serial_println("");
+    
+    serial_print("[GPT] Partition size: ");
+    let size_mb = size_bytes / (1024 * 1024);
+    let size_gb = size_bytes / (1024 * 1024 * 1024);
+    if size_gb > 0 {
+        serial_print_decimal(size_gb as u32);
+        serial_print(" GB (");
+        serial_print_decimal(size_mb as u32);
+        serial_println(" MB)");
+    } else {
+        serial_print_decimal(size_mb as u32);
+        serial_println(" MB");
+    }
+    
+    // Create BlockIo adapter
+    serial_println("[GPT] Creating BlockIO adapter...");
+    let dma_buffer = &mut DISK_WRITE_BUFFER;
+    let dma_buffer_phys = dma_buffer.as_ptr() as u64;
+    let timeout_ticks = 100_000_000u64;
+    
+    let adapter = match VirtioBlkBlockIo::new(
+        blk_driver,
+        dma_buffer,
+        dma_buffer_phys,
+        timeout_ticks,
+    ) {
+        Ok(a) => {
+            serial_println("[GPT] BlockIO adapter created");
+            a
+        },
+        Err(_) => {
+            serial_println("[GPT] ERROR: Failed to create BlockIo adapter");
+            return None;
+        }
+    };
+    
+    // Create the partition (BasicData type for ISO storage)
+    serial_println("[GPT] Writing partition entry to GPT...");
+    serial_println("[GPT] (Reading existing GPT header, finding free slot, writing entry)");
+    
+    match create_partition(
+        adapter,
+        PartitionType::BasicData,
+        start_sector,
+        end_sector,
+    ) {
+        Ok(()) => {
+            serial_println("[GPT] ───────────────────────────────────────────────────────");
+            serial_println("[GPT] PARTITION CREATED SUCCESSFULLY");
+            serial_println("[GPT] ───────────────────────────────────────────────────────");
+            serial_print("[GPT] Location: sectors ");
+            serial_print_hex(start_sector);
+            serial_print(" - ");
+            serial_print_hex(end_sector);
+            serial_println("");
+            serial_println("[GPT] Type: Microsoft Basic Data");
+            serial_println("[GPT] Status: Active in GPT partition table");
+            serial_println("[GPT] ───────────────────────────────────────────────────────");
+            // Return a placeholder GUID - the create_partition function generates one
+            // TODO: Return actual GUID from create_partition
+            Some([0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 
+                  0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78])
+        }
+        Err(e) => {
+            serial_print("[GPT] ERROR: Failed to create partition: ");
+            serial_println(match e {
+                morpheus_core::disk::gpt_ops::GptError::IoError => "IO error (disk read/write failed)",
+                morpheus_core::disk::gpt_ops::GptError::InvalidHeader => "Invalid GPT header (disk may not have GPT)",
+                morpheus_core::disk::gpt_ops::GptError::InvalidSize => "Invalid size/range (outside usable area)",
+                morpheus_core::disk::gpt_ops::GptError::NoSpace => "No free partition slot in GPT table",
+                morpheus_core::disk::gpt_ops::GptError::PartitionNotFound => "Partition not found",
+                morpheus_core::disk::gpt_ops::GptError::OverlappingPartitions => "Range overlaps existing partition",
+                morpheus_core::disk::gpt_ops::GptError::AlignmentError => "Alignment error",
+            });
+            None
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -939,9 +1109,12 @@ impl Default for BareMetalConfig {
         Self {
             iso_url: "http://10.0.2.2:8000/test-iso.img",
             iso_name: "download.iso",
-            target_start_sector: 2048, // Start at 1MB offset (after manifest)
-            manifest_sector: 0,        // Use FAT32 by default (set non-zero for raw sector)
-            esp_start_lba: 2048,       // Standard GPT ESP at sector 2048
+            // Start writing ISO data AFTER the 4GB ESP partition
+            // ESP is sectors 2048 to ~8388608 (1MiB to 4GiB)
+            // We start at 4GiB = 8388608 sectors
+            target_start_sector: 8388608, // 4GiB in 512-byte sectors
+            manifest_sector: 0,           // Use FAT32 by default (set non-zero for raw sector)
+            esp_start_lba: 2048,          // Standard GPT ESP at sector 2048
             max_download_size: 4 * 1024 * 1024 * 1024, // 4GB max
             write_to_disk: true, // Enable disk writes by default
             partition_uuid: [0u8; 16], // Will be set by bootloader if known
@@ -1172,11 +1345,42 @@ pub unsafe fn bare_metal_main(
             status_phys: blk_dma_base + 2048 + 512,
             headers_cpu: blk_dma_base + 2048,
             status_cpu: blk_dma_base + 2048 + 512,
-            notify_addr: handoff.blk_mmio_base + 0x50, // MMIO notify offset
+            notify_addr: handoff.blk_mmio_base + 0x50, // Fallback for MMIO, computed for PCI Modern
+            transport_type: handoff.blk_transport_type,
         };
         
-        match VirtioBlkDriver::new(handoff.blk_mmio_base, blk_config) {
-            Ok(d) => {
+        // Create driver based on transport type
+        let driver_result = if handoff.blk_transport_type == TRANSPORT_PCI_MODERN {
+            serial_println("[INIT] Using PCI Modern transport for VirtIO-blk");
+            serial_print("[INIT] common_cfg: ");
+            serial_print_hex(handoff.blk_common_cfg);
+            serial_println("");
+            serial_print("[INIT] notify_cfg: ");
+            serial_print_hex(handoff.blk_notify_cfg);
+            serial_println("");
+            serial_print("[INIT] device_cfg: ");
+            serial_print_hex(handoff.blk_device_cfg);
+            serial_println("");
+            
+            // Build PCI Modern transport config
+            let pci_config = PciModernConfig {
+                common_cfg: handoff.blk_common_cfg,
+                notify_cfg: handoff.blk_notify_cfg,
+                notify_off_multiplier: handoff.blk_notify_off_multiplier,
+                isr_cfg: handoff.blk_isr_cfg,
+                device_cfg: handoff.blk_device_cfg,
+                pci_cfg: 0, // Not used
+            };
+            let transport = VirtioTransport::pci_modern(pci_config);
+            
+            unsafe { VirtioBlkDriver::new_with_transport(transport, blk_config, handoff.tsc_freq) }
+        } else {
+            serial_println("[INIT] Using MMIO transport for VirtIO-blk");
+            unsafe { VirtioBlkDriver::new(handoff.blk_mmio_base, blk_config) }
+        };
+        
+        match driver_result {
+            Ok(mut d) => {
                 let info = d.info();
                 serial_println("[OK] VirtIO-blk driver initialized");
                 serial_print("[OK] Disk capacity: ");
@@ -1187,6 +1391,23 @@ pub unsafe fn bare_metal_main(
                 } else {
                     serial_print_decimal((total_bytes / (1024 * 1024)) as u32);
                     serial_println(" MB");
+                }
+                
+                // Create GPT partition for ISO data BEFORE we start writing
+                // This properly claims the disk space so other tools won't overwrite it
+                serial_println("[INIT] Creating GPT partition for ISO storage...");
+                if let Some(part_uuid) = create_iso_partition(
+                    &mut d,
+                    config.target_start_sector,
+                    config.max_download_size,
+                    config.iso_name,
+                ) {
+                    serial_println("[OK] ISO partition created and claimed in GPT");
+                    // Store partition UUID for manifest
+                    // config.partition_uuid = part_uuid; // TODO: make config mutable or use separate storage
+                } else {
+                    serial_println("[WARN] Could not create GPT partition - ISO data may be overwritten!");
+                    serial_println("[WARN] Continuing anyway (data will be in unmapped space)");
                 }
                 
                 // Initialize disk write state
@@ -1205,6 +1426,7 @@ pub unsafe fn bare_metal_main(
                     VirtioBlkInitError::QueueSetupFailed => serial_println("queue setup failed"),
                     VirtioBlkInitError::DeviceFailed => serial_println("device error"),
                     VirtioBlkInitError::InvalidConfig => serial_println("invalid config"),
+                    VirtioBlkInitError::TransportError => serial_println("transport error"),
                 }
                 serial_println("[WARN] Continuing without disk write support");
             }
