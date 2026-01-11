@@ -55,6 +55,16 @@ fn main() {
         return;
     }
 
+    // Only build ASM for UEFI target - host builds don't need it
+    // The ASM is for bare-metal post-ExitBootServices execution
+    if !target.contains("uefi") {
+        println!(
+            "cargo:warning=Skipping assembly for non-UEFI target: {} (ASM only needed for bare-metal)",
+            target
+        );
+        return;
+    }
+
     // Determine output format based on target
     // UEFI uses PE/COFF format (win64)
     let obj_format = if target.contains("windows") || target.contains("uefi") {
