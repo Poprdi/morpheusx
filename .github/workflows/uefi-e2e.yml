@@ -1,10 +1,6 @@
 # UEFI End-to-End Test Pipeline for MorpheusX
 #
 # Boots the .efi bootloader in QEMU with OVMF and validates via serial output.
-# This is the integration test that proves the bootloader actually works.
-#
-# Test contract:
-# - Bootloader emits "MORPHEUSX_BOOT_OK" on serial when reaching stable state
 # - Test times out after 120s (allows for DHCP, etc.)
 # - Runs headless (no GUI required)
 #
@@ -17,9 +13,9 @@ name: UEFI E2E Test
 
 on:
   push:
-    branches: ["main"]
+    branches: ["master"]
   pull_request:
-    branches: ["main"]
+    branches: ["master"]
   workflow_dispatch:
     inputs:
       timeout:
@@ -31,25 +27,21 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: "1.85"
-  # E2E test configuration
   QEMU_TIMEOUT: ${{ github.event.inputs.timeout || '120' }}
   BOOT_TOKEN: "MORPHEUSX_BOOT_OK"
 
+# Keep concurrency only at the top-level workflow to avoid deadlocks with reusable workflows.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════════════════
   # BUILD: Reuse UEFI build job
-  # ═══════════════════════════════════════════════════════════════════════════
   build:
     name: Build UEFI
     uses: ./.github/workflows/uefi-build.yml
 
-  # ═══════════════════════════════════════════════════════════════════════════
   # E2E: Boot in QEMU and validate serial output
-  # ═══════════════════════════════════════════════════════════════════════════
   e2e-test:
     name: E2E Boot Test
     runs-on: ubuntu-latest
@@ -72,14 +64,12 @@ jobs:
       - name: Locate OVMF firmware
         id: ovmf
         run: |
-          # Find OVMF firmware (different paths on different distros)
           OVMF_PATHS=(
             "/usr/share/OVMF/OVMF_CODE.fd"
             "/usr/share/OVMF/OVMF_CODE_4M.fd"
             "/usr/share/qemu/OVMF.fd"
             "/usr/share/edk2/ovmf/OVMF_CODE.fd"
           )
-          
           for path in "${OVMF_PATHS[@]}"; do
             if [[ -f "$path" ]]; then
               echo "Found OVMF at: $path"
@@ -87,29 +77,22 @@ jobs:
               exit 0
             fi
           done
-          
           echo "ERROR: OVMF firmware not found!"
           exit 1
 
       - name: Download bootloader artifact
         uses: actions/download-artifact@v4
         with:
+          name: morpheus-bootloader
           path: ./artifact
 
       - name: Create FAT32 ESP image
         run: |
-          # Create 64MB FAT32 image for ESP
           dd if=/dev/zero of=esp.img bs=1M count=64
           mkfs.vfat -F 32 esp.img
-          
-          # Create EFI directory structure
           mmd -i esp.img ::/EFI
           mmd -i esp.img ::/EFI/BOOT
-          
-          # Copy bootloader
           mcopy -i esp.img ./artifact/morpheus-bootloader.efi ::/EFI/BOOT/BOOTX64.EFI
-          
-          # Verify
           echo "=== ESP Contents ==="
           mdir -i esp.img ::/EFI/BOOT/
 
@@ -118,21 +101,17 @@ jobs:
           cat > run-e2e.sh << 'SCRIPT'
           #!/bin/bash
           set -euo pipefail
-          
           OVMF_PATH="$1"
           ESP_IMG="$2"
           TIMEOUT="${3:-120}"
           BOOT_TOKEN="${4:-MORPHEUSX_BOOT_OK}"
           SERIAL_LOG="serial.log"
-          
           echo "=== Starting QEMU E2E Test ==="
           echo "OVMF: $OVMF_PATH"
           echo "ESP: $ESP_IMG"
           echo "Timeout: ${TIMEOUT}s"
           echo "Expected token: $BOOT_TOKEN"
           echo ""
-          
-          # Start QEMU in background, capture serial to file
           timeout "${TIMEOUT}" qemu-system-x86_64 \
             -enable-kvm \
             -m 512M \
@@ -143,17 +122,12 @@ jobs:
             -serial file:"$SERIAL_LOG" \
             -no-reboot \
             -no-shutdown &
-          
           QEMU_PID=$!
-          
           echo "QEMU started (PID: $QEMU_PID)"
           echo "Waiting for boot token..."
-          
-          # Poll serial log for boot token
           START_TIME=$(date +%s)
           while true; do
             ELAPSED=$(($(date +%s) - START_TIME))
-            
             if [[ $ELAPSED -ge $TIMEOUT ]]; then
               echo ""
               echo "=== TIMEOUT after ${TIMEOUT}s ==="
@@ -163,7 +137,6 @@ jobs:
               cat "$SERIAL_LOG" 2>/dev/null || echo "(empty)"
               exit 1
             fi
-            
             if [[ -f "$SERIAL_LOG" ]] && grep -q "$BOOT_TOKEN" "$SERIAL_LOG" 2>/dev/null; then
               echo ""
               echo "=== SUCCESS: Boot token found! ==="
@@ -173,44 +146,34 @@ jobs:
               cat "$SERIAL_LOG"
               exit 0
             fi
-            
-            # Check if QEMU is still running
             if ! kill -0 $QEMU_PID 2>/dev/null; then
               echo ""
               echo "=== QEMU exited ==="
               echo ""
               echo "=== Serial Log ==="
               cat "$SERIAL_LOG" 2>/dev/null || echo "(empty)"
-              
-              # Check if token was emitted before exit
               if [[ -f "$SERIAL_LOG" ]] && grep -q "$BOOT_TOKEN" "$SERIAL_LOG" 2>/dev/null; then
                 echo ""
                 echo "=== SUCCESS: Boot token found (QEMU exited) ==="
                 exit 0
               fi
-              
               echo ""
               echo "=== FAILURE: QEMU exited without boot token ==="
               exit 1
             fi
-            
             sleep 1
             printf "."
           done
           SCRIPT
-          
           chmod +x run-e2e.sh
 
       - name: Run E2E test
         id: e2e
         run: |
-          # Note: KVM may not be available on GitHub runners
-          # Fall back to TCG if needed
           if [[ ! -e /dev/kvm ]]; then
             echo "KVM not available, using TCG (slower)"
             sed -i 's/-enable-kvm//' run-e2e.sh
           fi
-          
           ./run-e2e.sh \
             "${{ steps.ovmf.outputs.path }}" \
             "esp.img" \
