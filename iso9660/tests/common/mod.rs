@@ -1,6 +1,7 @@
 //! Common test utilities and mock block devices
 
 pub mod builder;
+#[allow(unused_imports)]
 pub use builder::IsoBuilder;
 
 use gpt_disk_io::BlockIo;
@@ -31,6 +32,7 @@ impl MemoryBlockDevice {
     }
 
     /// Create a minimal valid ISO9660 volume for testing
+    #[allow(dead_code)]
     pub fn create_minimal_iso() -> Self {
         let mut data = vec![0u8; 64 * 2048]; // 64 sectors
 
