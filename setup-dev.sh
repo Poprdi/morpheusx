@@ -359,6 +359,10 @@ EOF
     sudo losetup -d "$loop_dev"
     trap - EXIT
     
+    # Ensure all disk writes are flushed before QEMU starts
+    sync
+    sleep 1
+    
     log_success "Test disk ready: $(du -h "$disk_img" | cut -f1) (sparse)"
 }
 
