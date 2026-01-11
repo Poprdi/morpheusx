@@ -1,0 +1,135 @@
+# UEFI Build Pipeline for MorpheusX
+#
+# Performs the full 2-pass build required for relocation embedding.
+# Uploads the .efi artifact for E2E testing and releases.
+#
+# This is separated from ci.yml because:
+# 1. 2-pass build is slower (~3-5 min)
+# 2. Requires NASM and UEFI target
+# 3. E2E workflow depends on this artifact
+#
+# Requirements:
+# - Rust 1.75+ with x86_64-unknown-uefi target
+# - NASM assembler
+
+name: UEFI Build
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Enable debug output"
+        required: false
+        default: "false"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.82"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-uefi:
+    name: Build UEFI Bootloader
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-unknown-uefi
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nasm
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-uefi-full-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-uefi-full-
+            ${{ runner.os }}-cargo-uefi-
+            ${{ runner.os }}-cargo-
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # 2-PASS BUILD: Required for relocation embedding
+      # ═══════════════════════════════════════════════════════════════════════
+      
+      - name: "Pass 1: Build bootloader"
+        run: |
+          cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
+          ls -la target/x86_64-unknown-uefi/release/
+
+      - name: "Extract relocation data"
+        run: |
+          chmod +x ./tools/extract-reloc-data.sh
+          ./tools/extract-reloc-data.sh
+          echo "Generated embedded_reloc_data.rs:"
+          head -30 persistent/src/pe/embedded_reloc_data.rs
+
+      - name: "Pass 2: Rebuild with embedded relocations"
+        run: |
+          # Clean only the bootloader to force rebuild with new reloc data
+          cargo clean -p morpheus-bootloader
+          cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
+
+      - name: Verify artifact
+        run: |
+          EFI_FILE="target/x86_64-unknown-uefi/release/morpheus-bootloader.efi"
+          if [[ ! -f "$EFI_FILE" ]]; then
+            echo "ERROR: EFI file not found!"
+            exit 1
+          fi
+          
+          echo "=== EFI File Info ==="
+          ls -lh "$EFI_FILE"
+          file "$EFI_FILE"
+          
+          # Verify it's a valid PE file
+          if ! file "$EFI_FILE" | grep -q "PE32+"; then
+            echo "ERROR: Not a valid PE32+ executable!"
+            exit 1
+          fi
+          
+          echo "=== Build successful ==="
+
+      - name: Set artifact name
+        id: artifact
+        run: |
+          SHORT_SHA="${GITHUB_SHA::8}"
+          NAME="morpheusx-bootloader-${SHORT_SHA}"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload bootloader artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/x86_64-unknown-uefi/release/morpheus-bootloader.efi
+          retention-days: 7
+          if-no-files-found: error
+
+      # Also upload as BOOTX64.EFI for convenience
+      - name: Upload as BOOTX64.EFI
+        uses: actions/upload-artifact@v4
+        with:
+          name: BOOTX64-${{ github.sha }}
+          path: target/x86_64-unknown-uefi/release/morpheus-bootloader.efi
+          retention-days: 7

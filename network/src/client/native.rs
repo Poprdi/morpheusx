@@ -740,8 +740,11 @@ mod tests {
 
     #[test]
     fn test_find_header_end() {
+        // find_header_end returns position of \r\n\r\n start, not end
+        // "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello"
+        //  0                16                 34   38
         let data = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello";
-        assert_eq!(find_header_end(data), Some(36));
+        assert_eq!(find_header_end(data), Some(34));
 
         let data = b"No headers here";
         assert_eq!(find_header_end(data), None);

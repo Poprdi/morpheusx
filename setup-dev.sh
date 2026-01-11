@@ -356,12 +356,21 @@ EOF
     
     sudo umount "$mnt"
     rmdir "$mnt"
-    sudo losetup -d "$loop_dev"
-    trap - EXIT
     
-    # Ensure all disk writes are flushed before QEMU starts
+    # Force filesystem sync and ensure loop device is fully detached
     sync
     sleep 1
+    
+    sudo losetup -d "$loop_dev" 2>/dev/null || {
+        log_warn "Failed to detach loop device, trying harder..."
+        sleep 2
+        sudo losetup -d "$loop_dev" 2>/dev/null || true
+    }
+    trap - EXIT
+    
+    # Final sync before QEMU uses the disk
+    sync
+    sleep 2
     
     log_success "Test disk ready: $(du -h "$disk_img" | cut -f1) (sparse)"
 }
@@ -455,6 +464,10 @@ run_full_auto() {
     do_create_disk
     
     printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
+    
+    # Kill any lingering QEMU processes before launching new one
+    pkill -9 qemu-system-x86_64 2>/dev/null || true
+    sleep 2
     
     if [[ "${SKIP_QEMU}" != "true" ]]; then
         do_launch_qemu

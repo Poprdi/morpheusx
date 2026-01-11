@@ -1,5 +1,9 @@
 ## MorpheusX
 
+[![CI](https://github.com/Poprdi/morpheusx/actions/workflows/ci.yml/badge.svg)](https://github.com/Poprdi/morpheusx/actions/workflows/ci.yml)
+[![UEFI Build](https://github.com/Poprdi/morpheusx/actions/workflows/uefi-build.yml/badge.svg)](https://github.com/Poprdi/morpheusx/actions/workflows/uefi-build.yml)
+[![Security Audit](https://github.com/Poprdi/morpheusx/actions/workflows/audit.yml/badge.svg)](https://github.com/Poprdi/morpheusx/actions/workflows/audit.yml)
+
 MorpheusX is a UEFI boot and hardware exokernel-like runtime that loads Linux kernels directly from firmware space, treats distributions as disposable layers, and aims to keep userland state persisten[...]
 
 ---
@@ -51,6 +55,33 @@ Use the provided scripts (requires QEMU and OVMF):
 ```
 
 See additional helper scripts in `testing/` for preparing initrds and disk images.
+
+---
+
+### CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration:
+
+| Workflow | Purpose |
+|----------|---------|
+| **CI** | Lint (rustfmt, clippy), build, and test on host |
+| **UEFI Build** | 2-pass build for relocation embedding |
+| **UEFI E2E** | Boot test in QEMU with OVMF |
+| **Security Audit** | Weekly cargo-audit and cargo-deny |
+| **Release** | Automated releases on version tags |
+
+#### Local CI Scripts
+
+```bash
+# Build UEFI bootloader (2-pass with reloc embedding)
+./scripts/ci-build-uefi.sh
+
+# Run E2E boot test
+./scripts/qemu-e2e.sh target/x86_64-unknown-uefi/release/morpheus-bootloader.efi
+
+# Generate test fixtures (ISO, FAT images)
+./scripts/gen-fixtures.sh fixtures/
+```
 
 ---
 

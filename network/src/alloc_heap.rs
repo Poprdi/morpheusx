@@ -96,7 +96,13 @@ unsafe impl GlobalAlloc for LockedHeap {
     }
 }
 
+// Only use custom allocator in actual no_std builds, not host tests
+#[cfg(not(test))]
 #[global_allocator]
+static GLOBAL: LockedHeap = LockedHeap::empty();
+
+// For test builds, we still need the static but it's not the global allocator
+#[cfg(test)]
 static GLOBAL: LockedHeap = LockedHeap::empty();
 
 /// Track if heap is already initialized

@@ -54,6 +54,9 @@
 #![no_std]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+// Allow never_loop - our poll-based state machines intentionally return
+// from loops early (single-threaded cooperative polling pattern)
+#![allow(clippy::never_loop)]
 
 extern crate alloc;
 
