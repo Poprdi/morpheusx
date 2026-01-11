@@ -2299,7 +2299,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
             Err(e) => {
                 serial_print("[WARN] Disk sync failed: ");
                 serial_println(match e {
-                    crate::driver::block_traits::BlockError::Unsupported => "not supported (assuming durable)",
+                    crate::driver::block_traits::BlockError::Unsupported => {
+                        "not supported (assuming durable)"
+                    }
                     crate::driver::block_traits::BlockError::Timeout => "timeout",
                     crate::driver::block_traits::BlockError::DeviceError => "device error",
                     _ => "unknown error",
