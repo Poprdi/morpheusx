@@ -502,9 +502,10 @@ unsafe fn finalize_manifest_fat32(
     
     // Create BlockIo adapter for FAT32 operations
     // Use our static DMA buffer (reuse the write buffer since download is done)
+    serial_println("[MANIFEST] Creating BlockIo adapter for FAT32...");
     let dma_buffer = &mut DISK_WRITE_BUFFER;
     let dma_buffer_phys = dma_buffer.as_ptr() as u64;
-    let timeout_ticks = 100_000_000u64; // ~100ms
+    let timeout_ticks = 500_000_000u64; // ~500ms (increased for FAT32 ops)
     
     let mut adapter = match VirtioBlkBlockIo::new(
         blk_driver,
@@ -512,7 +513,10 @@ unsafe fn finalize_manifest_fat32(
         dma_buffer_phys,
         timeout_ticks,
     ) {
-        Ok(a) => a,
+        Ok(a) => {
+            serial_println("[MANIFEST] BlockIo adapter created");
+            a
+        }
         Err(_) => {
             serial_println("[MANIFEST] ERROR: Failed to create BlockIo adapter");
             return false;
@@ -520,6 +524,13 @@ unsafe fn finalize_manifest_fat32(
     };
     
     // Write manifest to FAT32
+    serial_println("[MANIFEST] Calling write_to_esp_fat32...");
+    serial_print("[MANIFEST] ISO name: ");
+    serial_println(config.iso_name);
+    serial_print("[MANIFEST] ESP LBA: ");
+    serial_print_hex(config.esp_start_lba);
+    serial_println("");
+    
     match manifest.write_to_esp_fat32(&mut adapter, config.esp_start_lba, &chunks) {
         Ok(()) => {
             serial_println("[MANIFEST] OK: Written to /morpheus/isos/<name>.manifest");
@@ -537,7 +548,6 @@ unsafe fn finalize_manifest_fat32(
         }
     }
 }
-
 /// Write manifest to raw disk sector (legacy method).
 unsafe fn finalize_manifest_raw(
     blk_driver: &mut VirtioBlkDriver,
