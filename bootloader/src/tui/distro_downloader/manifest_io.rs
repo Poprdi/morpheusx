@@ -186,8 +186,8 @@ pub unsafe fn load_manifests_from_esp(
         // Get filename from UTF-16 at offset 0x50
         let filename = extract_filename_from_file_info(&buffer);
         
-        // Check if it ends with .manifest
-        if !filename.ends_with(".manifest") {
+        // Check if it ends with .MFS or .manifest (support both)
+        if !filename.ends_with(".MFS") && !filename.ends_with(".mfs") && !filename.ends_with(".manifest") {
             continue;
         }
 

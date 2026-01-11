@@ -198,7 +198,8 @@ impl ManifestWriter {
     
     /// Write manifest as FAT32 file to ESP
     ///
-    /// Writes to `/morpheus/isos/<name>.manifest` on the ESP.
+    /// Writes to `/morpheus/isos/<short_name>.mfst` on the ESP.
+    /// Uses 8.3 compatible filenames for FAT32 compatibility.
     /// This is the preferred method as it integrates with the bootloader scanner.
     ///
     /// # Requirements
@@ -223,9 +224,11 @@ impl ManifestWriter {
         let mut buffer = [0u8; MAX_MANIFEST_SIZE];
         let len = self.serialize(chunks, &mut buffer)?;
         
-        // Build path: /morpheus/isos/<name>.manifest
+        // Build 8.3 compatible filename from ISO name
+        // e.g., "tails-amd64-7.3.1.iso" -> "TAILS731.MFS"
         let name_str = core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("unknown");
-        let path = format!("/morpheus/isos/{}.manifest", name_str);
+        let short_name = make_8_3_filename(name_str);
+        let path = format!("/morpheus/isos/{}", short_name);
         
         // Ensure directory exists
         let _ = morpheus_core::fs::create_directory(block_io, esp_start_lba, "/morpheus");
@@ -237,6 +240,26 @@ impl ManifestWriter {
         
         Ok(())
     }
+}
+
+/// Generate an 8.3 compatible filename for FAT32
+/// Takes ISO name like "tails-amd64-7.3.1.iso" and returns "TAILS731.MFS"
+fn make_8_3_filename(name: &str) -> alloc::string::String {
+    use alloc::string::String;
+    
+    // Extract meaningful characters, uppercase, alphanumeric only
+    let clean: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(8)
+        .collect::<String>()
+        .to_uppercase();
+    
+    // Ensure we have at least something
+    let base = if clean.is_empty() { "MANIFEST" } else { &clean };
+    
+    // Use .MFS extension (short for manifest)
+    alloc::format!("{}.MFS", base)
 }
 
 /// Manifest reader for loading existing manifests
