@@ -315,8 +315,7 @@ unsafe fn write_manifest_to_disk(
     serial_println(" bytes");
     
     serial_print("[MANIFEST] ISO name: ");
-    // Print manifest name from the serialized buffer if possible
-    serial_println(manifest.name);
+    serial_println(manifest.name_str());
     
     serial_print("[MANIFEST] Total ISO size: ");
     let total_mb = manifest.total_size / (1024 * 1024);
@@ -336,7 +335,7 @@ unsafe fn write_manifest_to_disk(
     serial_println("");
     
     serial_print("[MANIFEST] Complete: ");
-    serial_println(if manifest.complete { "YES" } else { "NO" });
+    serial_println(if manifest.is_complete() { "YES" } else { "NO" });
     
     // Calculate sectors needed (round up)
     let num_sectors = ((size + 511) / 512) as u32;
