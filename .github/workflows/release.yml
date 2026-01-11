@@ -24,7 +24,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: "1.82"
+  RUST_VERSION: "1.85"
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════

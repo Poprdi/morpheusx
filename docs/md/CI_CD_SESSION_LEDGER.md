@@ -213,6 +213,21 @@ This enables CI gating without complex parsing. Token emission should be:
 | `scripts/ci-build-uefi.sh` | Wrapper for 2-pass UEFI build |
 
 ---
+## TODOs
+
+- [x] Implement `scripts/qemu-e2e.sh`
+- [x] Implement `scripts/gen-fixtures.sh`
+- [x] Implement `scripts/ci-build-uefi.sh`
+- [x] Create `.github/workflows/ci.yml`
+- [x] Create `.github/workflows/uefi-build.yml`
+- [x] Create `.github/workflows/uefi-e2e.yml`
+- [x] Create `.github/workflows/audit.yml`
+- [x] Create `.github/workflows/release.yml`
+- [x] Create `deny.toml` for cargo-deny
+- [ ] Add CI boot token feature flag to bootloader
+- [ ] Update README with CI badges and E2E requirements
+- [ ] Test workflows in GitHub Actions
+
 
 ## Assumptions
 

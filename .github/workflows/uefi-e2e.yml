@@ -30,7 +30,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: "1.82"
+  RUST_VERSION: "1.85"
   # E2E test configuration
   QEMU_TIMEOUT: ${{ github.event.inputs.timeout || '120' }}
   BOOT_TOKEN: "MORPHEUSX_BOOT_OK"

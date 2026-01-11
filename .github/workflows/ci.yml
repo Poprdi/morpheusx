@@ -21,7 +21,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # Pin toolchain for reproducibility
-  RUST_VERSION: "1.82"
+  RUST_VERSION: "1.85"
 
 # Cancel in-progress runs for same PR/branch
 concurrency:
