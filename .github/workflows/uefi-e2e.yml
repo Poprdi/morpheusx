@@ -93,7 +93,7 @@ jobs:
       - name: Download bootloader artifact
         uses: actions/download-artifact@v4
         with:
-          name: BOOTX64-${{ github.sha }}
+          name: ${{ needs.build.outputs.artifact-name }}
           path: ./artifact
 
       - name: Create FAT32 ESP image
