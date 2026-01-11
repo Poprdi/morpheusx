@@ -1,0 +1,314 @@
+# Cargo Documentation Generation and Publishing
+#
+# Builds rustdoc for all workspace crates and publishes to GitHub Pages.
+#
+# - Generates docs with private items visible (for completeness)
+# - Creates a root index page linking to all crates
+# - Publishes to gh-pages branch automatically on push to master
+
+name: Cargo Doc
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.85"
+  RUSTFLAGS: "--cap-lints warn"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build workspace documentation
+        run: |
+          # Build docs for all workspace crates with private items visible
+          cargo doc \
+            --workspace \
+            --all-features \
+            --no-deps \
+            --document-private-items
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      - name: Add root index
+        run: |
+          cat > target/doc/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>MorpheusX API Documentation</title>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <style>
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                margin: 0;
+                padding: 2rem;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+              }
+              .container {
+                max-width: 900px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 8px;
+                padding: 2rem;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+              }
+              h1 {
+                margin-top: 0;
+                color: #333;
+                border-bottom: 3px solid #667eea;
+                padding-bottom: 0.5rem;
+              }
+              .intro {
+                color: #666;
+                line-height: 1.6;
+                font-size: 1.1rem;
+              }
+              .crate-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 1.5rem;
+                margin-top: 2rem;
+              }
+              .crate-card {
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                padding: 1.5rem;
+                transition: all 0.3s ease;
+              }
+              .crate-card:hover {
+                border-color: #667eea;
+                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+                transform: translateY(-2px);
+              }
+              .crate-card h3 {
+                margin: 0 0 0.5rem 0;
+                color: #333;
+              }
+              .crate-card a {
+                color: #667eea;
+                text-decoration: none;
+                font-weight: 600;
+              }
+              .crate-card a:hover {
+                text-decoration: underline;
+              }
+              .crate-desc {
+                color: #666;
+                font-size: 0.95rem;
+                margin: 0.5rem 0;
+              }
+              .crate-status {
+                display: inline-block;
+                font-size: 0.8rem;
+                padding: 0.2rem 0.6rem;
+                border-radius: 3px;
+                margin-top: 0.5rem;
+                background: #f0f0f0;
+                color: #666;
+              }
+              .crate-status.stable {
+                background: #d4edda;
+                color: #155724;
+              }
+              .crate-status.experimental {
+                background: #fff3cd;
+                color: #856404;
+              }
+              footer {
+                margin-top: 2rem;
+                padding-top: 1rem;
+                border-top: 1px solid #ddd;
+                text-align: center;
+                color: #999;
+                font-size: 0.9rem;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>🔧 MorpheusX API Documentation</h1>
+              
+              <div class="intro">
+                <p>
+                  MorpheusX is a UEFI/bare-metal bootloader and exokernel with self-persisting runtime capabilities.
+                  This documentation covers all crates in the MorpheusX workspace.
+                </p>
+                <p>
+                  <strong>Key Features:</strong> Post-EBS networking, ISO9660 support, FAT32 filesystem, 
+                  UEFI compatibility, and self-updating capabilities.
+                </p>
+              </div>
+
+              <h2>Workspace Crates</h2>
+              <div class="crate-grid">
+                <div class="crate-card">
+                  <h3>📦 morpheus-bootloader</h3>
+                  <p class="crate-desc">UEFI bootloader and core kernel entry point</p>
+                  <a href="morpheus_bootloader/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+
+                <div class="crate-card">
+                  <h3>📚 morpheus-core</h3>
+                  <p class="crate-desc">Core types, ISO handling, and filesystem abstractions</p>
+                  <a href="morpheus_core/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+
+                <div class="crate-card">
+                  <h3>🌐 morpheus-network</h3>
+                  <p class="crate-desc">Post-EBS network stack with VirtIO drivers and smoltcp integration</p>
+                  <a href="morpheus_network/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+
+                <div class="crate-card">
+                  <h3>💾 morpheus-persistent</h3>
+                  <p class="crate-desc">Self-persistence layer for runtime survival across boots</p>
+                  <a href="morpheus_persistent/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+
+                <div class="crate-card">
+                  <h3>🔄 morpheus-updater</h3>
+                  <p class="crate-desc">In-place update mechanism for bootloader persistence</p>
+                  <a href="morpheus_updater/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+
+                <div class="crate-card">
+                  <h3>📀 iso9660-rs</h3>
+                  <p class="crate-desc">ISO 9660 filesystem parser and writer</p>
+                  <a href="iso9660_rs/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+
+                <div class="crate-card">
+                  <h3>🎯 dma-pool</h3>
+                  <p class="crate-desc">Pre-allocated DMA buffer pool manager for bare-metal I/O</p>
+                  <a href="dma_pool/index.html">View Docs →</a>
+                  <span class="crate-status stable">Stable</span>
+                </div>
+              </div>
+
+              <h2>Documentation Guidelines</h2>
+              <ul style="color: #666; line-height: 1.8;">
+                <li><strong>Module-level docs:</strong> Each module explains its purpose and usage patterns</li>
+                <li><strong>Private items:</strong> Included in docs for implementation reference</li>
+                <li><strong>Examples:</strong> See individual crate docs for code examples</li>
+                <li><strong>SAFETY comments:</strong> Unsafe code is extensively documented</li>
+              </ul>
+
+              <h2>Getting Started</h2>
+              <p style="color: #666;">
+                Start with <a href="morpheus_bootloader/index.html" style="color: #667eea; font-weight: 600;">morpheus-bootloader</a> 
+                for the main entry point, then explore individual crates for specific functionality.
+              </p>
+
+              <footer>
+                <p>Generated on {{ date }} • <a href="https://github.com/PopRdi/morpheusx" style="color: #667eea;">View on GitHub</a></p>
+              </footer>
+            </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        id: deployment
+        uses: actions/deploy-pages@v2
+
+      - name: Comment on PR with docs location
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '📚 Documentation built! View generated docs in the build artifacts.'
+            })
+
+  # Optional: Lint documentation
+  doc-lint:
+    name: Lint Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Check documentation syntax
+        run: |
+          cargo test --doc --all --all-features 2>&1 | grep -E "^(test|running|failures:|passed)" || true
+        continue-on-error: true
+
+      - name: Check for missing docs
+        run: |
+          # Warn about missing documentation on public items
+          cargo doc \
+            --workspace \
+            --all-features \
+            --no-deps 2>&1 | grep -E "warning.*missing.*doc" || true
+        continue-on-error: true
