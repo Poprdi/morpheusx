@@ -63,11 +63,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # Note: Excludes examples (UEFI-only) and tests (allocator issues)
       # Clippy on lib and bins only - tests have host/no_std conflicts
+      # Exclude bootloader (UEFI-only, has #![no_main])
       - name: Clippy (libraries and binaries)
         run: |
-          cargo clippy --all-features --lib --bins -- -W warnings
+          cargo clippy --workspace --exclude morpheus-bootloader --all-features --lib --bins -- -W warnings
 
   # ═══════════════════════════════════════════════════════════════════════════
   # BUILD-HOST: Compile all crates for host target
@@ -97,8 +97,9 @@ jobs:
             ${{ runner.os }}-cargo-build-
             ${{ runner.os }}-cargo-
 
-      - name: Build (all features)
-        run: cargo build --all-features
+      # Bootloader is UEFI-only (#![no_main], uses efi_main) - exclude from host builds
+      - name: Build (all features, exclude bootloader)
+        run: cargo build --workspace --exclude morpheus-bootloader --all-features
 
   # ═══════════════════════════════════════════════════════════════════════════
   # TEST-HOST: Run all tests on host target
