@@ -9,8 +9,7 @@ use morpheus_core::logger;
 // The following imports are kept for potential future use but init_network() is deprecated.
 #[allow(unused_imports)]
 use morpheus_core::net::{
-    error_log_available, error_log_clear, error_log_pop, ErrorLogEntry, InitConfig, NetworkInit,
-    NetworkInitResult, NetworkStatus,
+    error_log_available, error_log_clear, error_log_pop, ErrorLogEntry, InitConfig, NetworkStatus,
 };
 
 /// Result of network initialization for bootstrap phase
@@ -18,10 +17,6 @@ use morpheus_core::net::{
 /// DEPRECATED: Network initialization now happens post-ExitBootServices.
 /// This enum is kept for API compatibility but Success variant won't be returned.
 pub enum NetworkBootResult {
-    /// Network initialized successfully (no longer used)
-    Success(NetworkInitResult),
-    /// Network initialization failed (no longer used)
-    Failed,
     /// Network initialization skipped/deferred to download time
     Skipped,
 }

@@ -21,7 +21,6 @@
 //! let kernel_file = find_file(&mut adapter, &volume, "/boot/vmlinuz")?;
 //! ```
 
-use super::chunk::MAX_CHUNKS;
 use super::reader::IsoReadContext;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;

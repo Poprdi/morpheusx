@@ -19,6 +19,7 @@ pub struct SystemUseEntry {
 /// POSIX file attributes (PX entry)
 #[repr(C, packed)]
 pub struct PosixAttributes {
+    /// System Use Entry header
     pub header: SystemUseEntry,
 
     /// File mode (both-endian)
@@ -45,12 +46,20 @@ pub struct AlternateName {
 
 /// Signature constants
 pub mod signatures {
+    /// POSIX file attributes signature
     pub const POSIX_ATTRS: &[u8; 2] = b"PX";
+    /// POSIX device number signature
     pub const POSIX_DEV: &[u8; 2] = b"PN";
+    /// Symbolic link signature
     pub const SYMLINK: &[u8; 2] = b"SL";
+    /// Alternate name signature
     pub const ALTERNATE_NAME: &[u8; 2] = b"NM";
+    /// Child link signature
     pub const CHILD_LINK: &[u8; 2] = b"CL";
+    /// Parent link signature
     pub const PARENT_LINK: &[u8; 2] = b"PL";
+    /// Relocated directory signature
     pub const RELOCATED_DIR: &[u8; 2] = b"RE";
+    /// Timestamps signature
     pub const TIMESTAMPS: &[u8; 2] = b"TF";
 }

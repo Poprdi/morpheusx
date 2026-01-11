@@ -1,11 +1,7 @@
 // GPT operations using gpt-disk-rs
 
 use super::{FreeRegion, GptError};
-use crate::disk::partition::{PartitionInfo, PartitionTable, PartitionType};
 use gpt_disk_io::{BlockIo, Disk};
-use gpt_disk_types::{
-    guid, BlockSize, GptHeader, GptPartitionEntry, GptPartitionEntryArray, LbaLe, U32Le,
-};
 
 /// Scan disk for GPT and populate partition table
 pub fn find_free_space<B: BlockIo>(
