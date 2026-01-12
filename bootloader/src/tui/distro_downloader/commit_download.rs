@@ -338,29 +338,30 @@ pub unsafe fn commit_to_download(
     );
     log_y += 2;
 
-    // Brief pause for user to see message
-    for _ in 0..200_000_000u64 {
-        core::hint::spin_loop();
-    }
-
+    // Final message before freeze - ALL screen output must happen BEFORE GetMemoryMap
     screen.put_str_at(5, log_y, "Exiting boot services NOW...", EFI_RED, EFI_BLACK);
     log_y += 1;
+    screen.put_str_at(7, log_y, "(screen will freeze - progress on serial)", EFI_YELLOW, EFI_BLACK);
+
+    // Brief pause for user to see message (use stall instead of spin loop)
+    let _ = (bs.stall)(500_000); // 500ms
 
     // ═══════════════════════════════════════════════════════════════════════
-    // POINT OF NO RETURN - EXIT BOOT SERVICES
+    // FREEZE POINT - NO MORE BOOT SERVICES CALLS THAT ALLOCATE AFTER THIS
     // ═══════════════════════════════════════════════════════════════════════
 
-    // Show progress since get_memory_map can be slow
-    screen.put_str_at(7, log_y, "Reading memory map...", EFI_YELLOW, EFI_BLACK);
+    // CRITICAL: Disable watchdog timer BEFORE GetMemoryMap
+    // Some firmware stalls during EBS waiting for watchdog teardown
+    let _ = (bs.set_watchdog_timer)(0, 0, 0, core::ptr::null());
 
-    // Get memory map first
+    // Get memory map - NOTHING must touch boot services after this succeeds
     let mut mmap_size: usize = 4096;
     let mut mmap_buf = [0u8; 8192]; // Large enough buffer
     let mut map_key: usize = 0;
     let mut desc_size: usize = 0;
     let mut desc_version: u32 = 0;
 
-    // First call to get required size
+    // First call to get required size (may return BUFFER_TOO_SMALL)
     let _ = (bs.get_memory_map)(
         &mut mmap_size,
         mmap_buf.as_mut_ptr(),
@@ -370,7 +371,7 @@ pub unsafe fn commit_to_download(
     );
 
     // Increase buffer size to be safe
-    mmap_size += 1024;
+    mmap_size += 2048; // Extra margin for firmware overhead
 
     // Second call with proper size
     let status = (bs.get_memory_map)(
@@ -381,22 +382,17 @@ pub unsafe fn commit_to_download(
         &mut desc_version,
     );
 
-    screen.put_str_at(
-        7,
-        log_y,
-        "Memory map obtained       ",
-        EFI_LIGHTGREEN,
-        EFI_BLACK,
-    );
+    // CRITICAL: NO screen output here! It would invalidate map_key!
+    // The "Memory map obtained" message was causing the 15-second delay.
 
     if status != 0 {
-        // Cannot display error properly at this point
+        // Fatal - cannot even display error without invalidating map
         loop {
             core::hint::spin_loop();
         }
     }
 
-    // Exit boot services - MUST succeed
+    // Exit boot services IMMEDIATELY - no intervening calls!
     let status = (bs.exit_boot_services)(image_handle, map_key);
 
     if status != 0 {
