@@ -349,11 +349,43 @@ impl DistroLauncher {
             .leak(),
         );
 
-        // Get block I/O protocol for first physical disk
-        let block_io_protocol = match Self::get_first_disk_block_io(boot_services) {
+        // Debug: Log chunk partition LBAs to diagnose mount issues
+        // Also find the max LBA we need to read
+        let mut max_lba_needed: u64 = 0;
+        for i in 0..read_ctx.num_chunks {
+            let (start_lba, end_lba) = read_ctx.chunk_lbas[i];
+            let size = read_ctx.chunk_sizes[i];
+            morpheus_core::logger::log(
+                format!(
+                    "  Chunk {}: LBA {}..{}, size {} bytes",
+                    i, start_lba, end_lba, size
+                )
+                .leak(),
+            );
+            if end_lba > max_lba_needed {
+                max_lba_needed = end_lba;
+            }
+        }
+
+        // Get block I/O protocol for disk containing the ISO data
+        // We need a disk large enough to contain max_lba_needed
+        let block_io_protocol = match Self::get_disk_for_lba(boot_services, max_lba_needed) {
             Some(p) => p,
             None => {
-                screen.put_str_at(5, 18, "ERROR: No block I/O device", EFI_RED, EFI_BLACK);
+                screen.put_str_at(
+                    5,
+                    18,
+                    "ERROR: No disk contains ISO data",
+                    EFI_RED,
+                    EFI_BLACK,
+                );
+                screen.put_str_at(
+                    5,
+                    19,
+                    &format!("Need disk with LBA >= {}", max_lba_needed),
+                    EFI_YELLOW,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
                 return;
             }
@@ -363,23 +395,115 @@ impl DistroLauncher {
         // SAFETY: Protocol pointer is valid from get_first_disk_block_io
         let mut uefi_block_io = unsafe { UefiBlockIo::new(block_io_protocol) };
 
+        // DEBUG: Log block I/O info
+        morpheus_core::logger::log(
+            format!(
+                "UefiBlockIo: block_size={}, total_blocks={}",
+                uefi_block_io.block_size_bytes(),
+                uefi_block_io.total_blocks()
+            )
+            .leak(),
+        );
+
         // Create ISO adapter that bridges chunked storage to iso9660
         let mut iso_adapter = IsoBlockIoAdapter::new(read_ctx, &mut uefi_block_io);
 
+        // DEBUG: Clear screen and show debug info
+        screen.clear();
+        screen.put_str_at(5, 2, "=== ISO MOUNT DEBUG ===", EFI_YELLOW, EFI_BLACK);
+        {
+            use gpt_disk_io::BlockIo;
+            let mut test_buf = [0u8; 2048];
+
+            // Test read sectors 16, 17, 18 (volume descriptors)
+            for (row, sector) in [(4, 16u64), (6, 17u64), (8, 18u64)] {
+                let label = format!("Sector {}: ", sector);
+                if let Err(_e) = iso_adapter.read_blocks(gpt_disk_types::Lba(sector), &mut test_buf)
+                {
+                    screen.put_str_at(5, row, &format!("{}READ FAILED", label), EFI_RED, EFI_BLACK);
+                } else {
+                    let msg = format!(
+                        "{}{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                        label,
+                        test_buf[0],
+                        test_buf[1],
+                        test_buf[2],
+                        test_buf[3],
+                        test_buf[4],
+                        test_buf[5],
+                        test_buf[6],
+                        test_buf[7]
+                    );
+                    let color = if &test_buf[1..6] == b"CD001" {
+                        EFI_LIGHTGREEN
+                    } else {
+                        EFI_YELLOW
+                    };
+                    screen.put_str_at(5, row, &msg, color, EFI_BLACK);
+                }
+            }
+
+            // Also test reading sector 16 AGAIN to check for state issues
+            screen.put_str_at(5, 10, "Re-read sector 16...", EFI_CYAN, EFI_BLACK);
+            if let Err(_e) = iso_adapter.read_blocks(gpt_disk_types::Lba(16), &mut test_buf) {
+                screen.put_str_at(5, 11, "Re-read FAILED!", EFI_RED, EFI_BLACK);
+            } else {
+                let msg = format!(
+                    "Re-read: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                    test_buf[0],
+                    test_buf[1],
+                    test_buf[2],
+                    test_buf[3],
+                    test_buf[4],
+                    test_buf[5],
+                    test_buf[6],
+                    test_buf[7]
+                );
+                let color = if &test_buf[1..6] == b"CD001" {
+                    EFI_LIGHTGREEN
+                } else {
+                    EFI_RED
+                };
+                screen.put_str_at(5, 11, &msg, color, EFI_BLACK);
+            }
+
+            screen.put_str_at(
+                5,
+                13,
+                "Press any key to attempt mount...",
+                EFI_YELLOW,
+                EFI_BLACK,
+            );
+            keyboard.wait_for_key();
+        }
+
         // Mount ISO filesystem
-        progress_bar.set_progress(10);
-        progress_bar.render(screen);
-        morpheus_core::logger::log("Chunked ISO: Mounting filesystem...");
+        screen.put_str_at(5, 15, "Calling iso9660::mount()...", EFI_CYAN, EFI_BLACK);
 
         let volume = match iso9660::mount(&mut iso_adapter, 0) {
-            Ok(v) => v,
+            Ok(v) => {
+                screen.put_str_at(5, 15, "Mount: SUCCESS!", EFI_LIGHTGREEN, EFI_BLACK);
+                screen.put_str_at(
+                    5,
+                    17,
+                    "Press any key to continue boot...",
+                    EFI_YELLOW,
+                    EFI_BLACK,
+                );
+                keyboard.wait_for_key();
+                v
+            }
             Err(e) => {
-                screen.put_str_at(5, 18, "ERROR: Failed to mount ISO", EFI_RED, EFI_BLACK);
-                screen.put_str_at(5, 19, &format!("{:?}", e), EFI_YELLOW, EFI_BLACK);
+                screen.put_str_at(5, 15, "Mount: FAILED!", EFI_RED, EFI_BLACK);
+                screen.put_str_at(5, 17, &format!("Error: {:?}", e), EFI_YELLOW, EFI_BLACK);
+                screen.put_str_at(5, 19, "Press any key to exit...", EFI_YELLOW, EFI_BLACK);
                 keyboard.wait_for_key();
                 return;
             }
         };
+
+        // Clear debug and continue
+        screen.clear();
 
         progress_bar.set_progress(15);
         progress_bar.render(screen);
@@ -392,6 +516,7 @@ impl DistroLauncher {
         // Debian: /live/vmlinuz-*
         // Fedora: /images/pxeboot/vmlinuz or /isolinux/vmlinuz
         let kernel_paths = [
+            "/vmlinuz",                  // Puppy Linux, root-based distros
             "/live/vmlinuz",             // Tails, Debian Live
             "/casper/vmlinuz",           // Ubuntu
             "/boot/vmlinuz",             // Alpine, some others
@@ -400,15 +525,25 @@ impl DistroLauncher {
             "/boot/x86_64/loader/linux", // openSUSE
         ];
 
-        let mut kernel_data = None;
+        let mut kernel_data: Option<(u64, usize, usize)> = None;
         for (idx, kpath) in kernel_paths.iter().enumerate() {
             morpheus_core::logger::log(format!("Trying kernel path: {}", kpath).leak());
-            screen.put_str_at(5, 7, &format!("Trying: {}        ", kpath), EFI_CYAN, EFI_BLACK);
-            
+            screen.put_str_at(
+                5,
+                7,
+                &format!("Trying: {}        ", kpath),
+                EFI_CYAN,
+                EFI_BLACK,
+            );
+
             if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, kpath) {
                 let size_mb = file_entry.size / (1024 * 1024);
                 morpheus_core::logger::log(
-                    format!("Found kernel at {} ({} MB, LBA {})", kpath, size_mb, file_entry.extent_lba).leak(),
+                    format!(
+                        "Found kernel at {} ({} MB, LBA {})",
+                        kpath, size_mb, file_entry.extent_lba
+                    )
+                    .leak(),
                 );
                 screen.put_str_at(
                     5,
@@ -421,19 +556,52 @@ impl DistroLauncher {
                 progress_bar.render(screen);
 
                 morpheus_core::logger::log("Starting kernel read...");
-                if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
-                    morpheus_core::logger::log(
-                        format!("Kernel loaded: {} bytes", data.len()).leak(),
-                    );
-                    kernel_data = Some(data);
-                    break;
-                } else {
-                    morpheus_core::logger::log("ERROR: Failed to read kernel file");
+
+                // Allocate UEFI pages for kernel (Vec allocation fails - heap is only 1MB)
+                let file_size = file_entry.size as usize;
+                const PAGE_SIZE: usize = 4096;
+                let pages_needed = (file_size + PAGE_SIZE - 1) / PAGE_SIZE;
+                let mut buffer_addr = 0u64;
+
+                let alloc_status = (boot_services.allocate_pages)(
+                    0, // EFI_ALLOCATE_ANY_PAGES
+                    2, // EFI_LOADER_DATA
+                    pages_needed,
+                    &mut buffer_addr,
+                );
+
+                if alloc_status != 0 || buffer_addr == 0 {
+                    morpheus_core::logger::log("ERROR: Failed to allocate pages for kernel");
+                    continue;
+                }
+
+                // Read kernel directly into UEFI pages
+                let buffer = unsafe {
+                    core::slice::from_raw_parts_mut(
+                        buffer_addr as *mut u8,
+                        pages_needed * PAGE_SIZE,
+                    )
+                };
+
+                match iso9660::read_file(&mut iso_adapter, &file_entry, buffer) {
+                    Ok(bytes_read) => {
+                        morpheus_core::logger::log(
+                            format!("Kernel loaded: {} bytes", bytes_read).leak(),
+                        );
+                        // Create owned Vec from the UEFI pages (we'll need to track pages for cleanup)
+                        // For now, just use the buffer directly - it stays valid until we boot or fail
+                        kernel_data = Some((buffer_addr, file_size, pages_needed));
+                        break;
+                    }
+                    Err(_) => {
+                        morpheus_core::logger::log("ERROR: Failed to read kernel file");
+                        (boot_services.free_pages)(buffer_addr, pages_needed);
+                    }
                 }
             }
         }
 
-        let kernel_data = match kernel_data {
+        let (kernel_addr, kernel_size, kernel_pages) = match kernel_data {
             Some(d) => d,
             None => {
                 screen.put_str_at(5, 18, "ERROR: No kernel found in ISO", EFI_RED, EFI_BLACK);
@@ -451,6 +619,7 @@ impl DistroLauncher {
         // Ubuntu: /casper/initrd (no extension)
         // Debian: /live/initrd.img-*
         let initrd_paths = [
+            "/initrd.gz",                 // Puppy Linux
             "/live/initrd.img",           // Tails, Debian Live
             "/casper/initrd",             // Ubuntu (no extension)
             "/casper/initrd.lz",          // Ubuntu compressed
@@ -460,7 +629,7 @@ impl DistroLauncher {
             "/boot/x86_64/loader/initrd", // openSUSE
         ];
 
-        let mut initrd_data = None;
+        let mut initrd_data: Option<(u64, usize, usize)> = None;
         for ipath in &initrd_paths {
             if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, ipath) {
                 let size_mb = file_entry.size / (1024 * 1024);
@@ -477,12 +646,43 @@ impl DistroLauncher {
                 progress_bar.set_progress(50);
                 progress_bar.render(screen);
 
-                if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
-                    morpheus_core::logger::log(
-                        format!("Initrd loaded: {} bytes", data.len()).leak(),
-                    );
-                    initrd_data = Some(data);
-                    break;
+                // Allocate UEFI pages for initrd
+                let file_size = file_entry.size as usize;
+                const PAGE_SIZE: usize = 4096;
+                let pages_needed = (file_size + PAGE_SIZE - 1) / PAGE_SIZE;
+                let mut buffer_addr = 0u64;
+
+                let alloc_status = (boot_services.allocate_pages)(
+                    0, // EFI_ALLOCATE_ANY_PAGES
+                    2, // EFI_LOADER_DATA
+                    pages_needed,
+                    &mut buffer_addr,
+                );
+
+                if alloc_status != 0 || buffer_addr == 0 {
+                    morpheus_core::logger::log("ERROR: Failed to allocate pages for initrd");
+                    continue;
+                }
+
+                let buffer = unsafe {
+                    core::slice::from_raw_parts_mut(
+                        buffer_addr as *mut u8,
+                        pages_needed * PAGE_SIZE,
+                    )
+                };
+
+                match iso9660::read_file(&mut iso_adapter, &file_entry, buffer) {
+                    Ok(bytes_read) => {
+                        morpheus_core::logger::log(
+                            format!("Initrd loaded: {} bytes", bytes_read).leak(),
+                        );
+                        initrd_data = Some((buffer_addr, file_size, pages_needed));
+                        break;
+                    }
+                    Err(_) => {
+                        morpheus_core::logger::log("ERROR: Failed to read initrd file");
+                        (boot_services.free_pages)(buffer_addr, pages_needed);
+                    }
                 }
             }
         }
@@ -501,14 +701,23 @@ impl DistroLauncher {
 
         let cmdline = if iso_name.to_lowercase().contains("tails") {
             // Tails-specific: needs boot=live and findiso for squashfs
-            "boot=live nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails quiet"
+            // Add console=ttyS0 for serial output debugging
+            "boot=live nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
         } else if iso_name.to_lowercase().contains("ubuntu") {
-            "boot=casper quiet splash"
+            "boot=casper quiet splash console=ttyS0,115200"
         } else if iso_name.to_lowercase().contains("fedora") {
-            "rd.live.image quiet"
+            "rd.live.image quiet console=ttyS0,115200"
+        } else if iso_name.to_lowercase().contains("puppy")
+            || iso_name.to_lowercase().contains("fossapup")
+        {
+            // Puppy Linux - ISO data is in partition 2 which is valid ISO9660
+            // Try multiple approaches for Puppy to find its files:
+            // pmedia=usbhd - search USB/HD devices
+            // pdev1=vda2 - explicitly specify device (may need to be vda2 or sda2 depending on drivers)
+            "pmedia=usbhd pdev1=sda2 psubdir=/ console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
         } else {
-            // Generic live boot cmdline
-            "boot=live quiet splash"
+            // Generic live boot cmdline with max debug
+            "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 debug loglevel=7"
         };
 
         progress_bar.set_progress(100);
@@ -516,14 +725,105 @@ impl DistroLauncher {
 
         screen.put_str_at(5, 16, "Starting kernel...", EFI_LIGHTGREEN, EFI_BLACK);
 
+        // Convert UEFI page addresses to slices for boot
+        let kernel_slice =
+            unsafe { core::slice::from_raw_parts(kernel_addr as *const u8, kernel_size) };
+
+        let initrd_slice = initrd_data.map(|(addr, size, _pages)| unsafe {
+            core::slice::from_raw_parts(addr as *const u8, size)
+        });
+
+        // DEBUG: Show boot parameters before jumping
+        screen.clear();
+        screen.put_str_at(5, 2, "=== BOOT DEBUG ===", EFI_YELLOW, EFI_BLACK);
+        screen.put_str_at(
+            5,
+            4,
+            &format!("Kernel addr: 0x{:x}", kernel_addr),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
+        screen.put_str_at(
+            5,
+            5,
+            &format!("Kernel size: {} bytes", kernel_size),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
+        if let Some((iaddr, isize, _)) = initrd_data {
+            screen.put_str_at(
+                5,
+                6,
+                &format!("Initrd addr: 0x{:x}", iaddr),
+                EFI_CYAN,
+                EFI_BLACK,
+            );
+            screen.put_str_at(
+                5,
+                7,
+                &format!("Initrd size: {} bytes", isize),
+                EFI_CYAN,
+                EFI_BLACK,
+            );
+        }
+        screen.put_str_at(
+            5,
+            9,
+            &format!("Cmdline: {}", &cmdline[..cmdline.len().min(60)]),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
+        // Check kernel magic
+        let magic = u16::from_le_bytes([kernel_slice[510], kernel_slice[511]]);
+        screen.put_str_at(
+            5,
+            11,
+            &format!("Boot sector magic: 0x{:04x}", magic),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
+        if magic == 0xAA55 {
+            screen.put_str_at(5, 12, "Magic: VALID", EFI_LIGHTGREEN, EFI_BLACK);
+        } else {
+            screen.put_str_at(
+                5,
+                12,
+                "Magic: INVALID (expected 0xAA55)",
+                EFI_RED,
+                EFI_BLACK,
+            );
+        }
+        // Check for bzImage header at offset 0x202
+        let hdr_magic = u32::from_le_bytes([
+            kernel_slice[0x202],
+            kernel_slice[0x203],
+            kernel_slice[0x204],
+            kernel_slice[0x205],
+        ]);
+        screen.put_str_at(
+            5,
+            13,
+            &format!("Header magic: 0x{:08x}", hdr_magic),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
+        if hdr_magic == 0x53726448 {
+            // "HdrS"
+            screen.put_str_at(5, 14, "bzImage header: VALID", EFI_LIGHTGREEN, EFI_BLACK);
+        } else {
+            screen.put_str_at(5, 14, "bzImage header: NOT FOUND", EFI_RED, EFI_BLACK);
+        }
+        screen.put_str_at(5, 16, "Press any key to boot...", EFI_YELLOW, EFI_BLACK);
+        keyboard.wait_for_key();
+
         // SAFETY: Calling kernel boot with properly loaded kernel/initrd data
         let boot_result = unsafe {
             crate::boot::loader::boot_linux_kernel(
                 boot_services,
                 system_table,
                 image_handle,
-                &kernel_data,
-                initrd_data.as_deref(),
+                kernel_slice,
+                initrd_slice,
                 cmdline,
                 screen,
             )
@@ -603,6 +903,99 @@ impl DistroLauncher {
                     if !media.logical_partition && media.media_present {
                         result = Some(block_io_ptr as *mut BlockIoProtocol);
                         break;
+                    }
+                }
+            }
+        }
+
+        (boot_services.free_pool)(handle_buffer);
+        result
+    }
+
+    /// Get BlockIoProtocol for a disk that can contain the given LBA
+    /// This finds a physical disk (not partition) where last_block >= required_lba
+    fn get_disk_for_lba(
+        boot_services: &crate::BootServices,
+        required_lba: u64,
+    ) -> Option<*mut crate::uefi::block_io::BlockIoProtocol> {
+        use crate::uefi::block_io::{BlockIoProtocol, EFI_BLOCK_IO_PROTOCOL_GUID};
+
+        // Get buffer size needed for all Block I/O handles
+        let mut buffer_size: usize = 0;
+        let _ = (boot_services.locate_handle)(
+            2, // ByProtocol
+            &EFI_BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut buffer_size,
+            core::ptr::null_mut(),
+        );
+
+        if buffer_size == 0 {
+            return None;
+        }
+
+        // Allocate buffer for handles
+        let mut handle_buffer: *mut u8 = core::ptr::null_mut();
+        let alloc_status = (boot_services.allocate_pool)(2, buffer_size, &mut handle_buffer);
+
+        if alloc_status != 0 || handle_buffer.is_null() {
+            return None;
+        }
+
+        // Get all Block I/O handles
+        let status = (boot_services.locate_handle)(
+            2,
+            &EFI_BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut buffer_size,
+            handle_buffer as *mut *mut (),
+        );
+
+        if status != 0 {
+            (boot_services.free_pool)(handle_buffer);
+            return None;
+        }
+
+        // Iterate through handles and find disk with required capacity
+        let handles = handle_buffer as *const *mut ();
+        let handle_count = buffer_size / core::mem::size_of::<*mut ()>();
+
+        let mut result = None;
+        unsafe {
+            for i in 0..handle_count {
+                let handle = *handles.add(i);
+                let mut block_io_ptr: *mut () = core::ptr::null_mut();
+
+                let proto_status = (boot_services.handle_protocol)(
+                    handle,
+                    &EFI_BLOCK_IO_PROTOCOL_GUID,
+                    &mut block_io_ptr,
+                );
+
+                if proto_status == 0 && !block_io_ptr.is_null() {
+                    let block_io = &*(block_io_ptr as *const BlockIoProtocol);
+                    let media = &*block_io.media;
+
+                    // Only use physical disks, not partitions
+                    // AND check if disk is large enough for required_lba
+                    if !media.logical_partition && media.media_present {
+                        morpheus_core::logger::log(
+                            alloc::format!(
+                                "Disk {}: last_block={}, required={}",
+                                i,
+                                media.last_block,
+                                required_lba
+                            )
+                            .leak(),
+                        );
+
+                        if media.last_block >= required_lba {
+                            morpheus_core::logger::log(
+                                alloc::format!("Selected disk {} for ISO boot", i).leak(),
+                            );
+                            result = Some(block_io_ptr as *mut BlockIoProtocol);
+                            break;
+                        }
                     }
                 }
             }

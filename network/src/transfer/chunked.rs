@@ -123,6 +123,10 @@ impl ChunkedDecoder {
                         self.size_buffer.pop(); // Remove \r
                         self.parse_chunk_size()?;
                     } else {
+                        // Limit size buffer to prevent DoS (max chunk size is ~16 hex chars + extension)
+                        if self.size_buffer.len() >= 256 {
+                            return Err(NetworkError::InvalidResponse);
+                        }
                         self.size_buffer.push(byte);
                     }
                 }

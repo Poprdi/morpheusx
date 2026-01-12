@@ -198,7 +198,9 @@ unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
 
     // Poll for completion (with timeout)
     let start_tsc = super::runner::get_tsc();
-    let timeout_ticks = 100_000_000; // ~100ms at 1GHz TSC
+    // Use 1 second timeout at ~4GHz TSC (4 billion ticks)
+    // This accounts for high-frequency TSC and gives plenty of margin
+    let timeout_ticks: u64 = 4_000_000_000;
 
     loop {
         if let Some(completion) = blk_driver.poll_completion() {
@@ -212,6 +214,8 @@ unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
                 } else {
                     serial_print("[DISK] ERROR: Write completion status ");
                     serial_print_decimal(completion.status as u32);
+                    serial_print(" at sector ");
+                    serial_print_decimal(DISK_NEXT_SECTOR as u32);
                     serial_println("");
                     return 0;
                 }
@@ -220,7 +224,11 @@ unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
 
         let now = super::runner::get_tsc();
         if now.wrapping_sub(start_tsc) > timeout_ticks {
-            serial_println("[DISK] ERROR: Write completion timeout");
+            serial_print("[DISK] ERROR: Write timeout at sector ");
+            serial_print_decimal(DISK_NEXT_SECTOR as u32);
+            serial_print(", total bytes: ");
+            serial_print_decimal(DISK_TOTAL_BYTES as u32);
+            serial_println("");
             return 0;
         }
 
@@ -1203,7 +1211,7 @@ impl Default for BareMetalConfig {
             target_start_sector: 8388608, // 4GiB in 512-byte sectors
             manifest_sector: 0,           // Use FAT32 by default (set non-zero for raw sector)
             esp_start_lba: 2048,          // Standard GPT ESP at sector 2048
-            max_download_size: 4 * 1024 * 1024 * 1024, // 4GB max
+            max_download_size: 8 * 1024 * 1024 * 1024, // 8GB max (supports Kali, Parrot, etc.)
             write_to_disk: true,          // Enable disk writes by default
             partition_uuid: [0u8; 16],    // Will be set by bootloader if known
         }
@@ -2021,8 +2029,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
 
     let recv_start = get_tsc();
     let mut last_activity = recv_start;
-    let recv_timeout = handoff.tsc_freq * 300; // 5 minute timeout for large downloads
-    let idle_timeout = handoff.tsc_freq * 30; // 30 second idle timeout
+    let recv_timeout = handoff.tsc_freq * 3600; // 1 hour timeout for large downloads
+    let idle_timeout = handoff.tsc_freq * 60; // 60 second idle timeout (increased for slow connections)
 
     loop {
         let now_tsc = get_tsc();
@@ -2179,8 +2187,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                                     let written = buffer_disk_write(blk, initial_body);
                                     if written != initial_body.len() {
                                         serial_println(
-                                            "[WARN] Failed to write initial body to disk",
+                                            "[FAIL] Failed to write initial body to disk",
                                         );
+                                        return RunResult::DownloadFailed;
                                     }
                                 }
                             }
@@ -2194,7 +2203,14 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                         if let Some(ref mut blk) = blk_driver {
                             let written = buffer_disk_write(blk, &buf[..len]);
                             if written != len {
-                                serial_println("[WARN] Incomplete disk write");
+                                serial_print("[FAIL] Disk write failed at byte ");
+                                serial_print_decimal(DISK_TOTAL_BYTES as u32);
+                                serial_print(", wrote ");
+                                serial_print_decimal(written as u32);
+                                serial_print(" of ");
+                                serial_print_decimal(len as u32);
+                                serial_println(" bytes");
+                                return RunResult::DownloadFailed;
                             }
                         }
 
@@ -2258,12 +2274,14 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
 
             // Also check if connection closed
             if !socket.is_open() && socket.recv_queue() == 0 {
-                if content_length.is_none() {
+                if let Some(cl) = content_length {
+                    if body_received < cl {
+                        // Had content-length but didn't get all data
+                        serial_println("\n[WARN] Connection closed before full content received");
+                    }
+                } else {
                     // No content-length, server closed = complete
                     serial_println("\n[HTTP] Download complete (connection closed)");
-                } else if content_length.is_some() && body_received < content_length.unwrap() {
-                    // Had content-length but didn't get all data
-                    serial_println("\n[WARN] Connection closed before full content received");
                 }
                 break;
             }

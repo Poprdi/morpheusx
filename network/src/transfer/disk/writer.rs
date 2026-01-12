@@ -282,43 +282,51 @@ impl IsoWriter {
     ) -> DiskResult<()> {
         // Handle partial sector at start
         let offset_in_sector = (self.chunk_bytes % SECTOR_SIZE as u64) as usize;
+        let mut current_lba = start_lba;
+        let mut remaining = data;
 
         if offset_in_sector != 0 || data.len() < SECTOR_SIZE {
-            // Need read-modify-write for partial sector
+            // Need read-modify-write for partial sector at start
             let mut sector_buf = [0u8; SECTOR_SIZE];
             block_io
-                .read_blocks(Lba(start_lba), &mut sector_buf)
+                .read_blocks(Lba(current_lba), &mut sector_buf)
                 .map_err(|_| DiskError::IoError)?;
 
-            let copy_len = (SECTOR_SIZE - offset_in_sector).min(data.len());
+            let copy_len = (SECTOR_SIZE - offset_in_sector).min(remaining.len());
             sector_buf[offset_in_sector..offset_in_sector + copy_len]
-                .copy_from_slice(&data[..copy_len]);
+                .copy_from_slice(&remaining[..copy_len]);
 
             block_io
-                .write_blocks(Lba(start_lba), &sector_buf)
+                .write_blocks(Lba(current_lba), &sector_buf)
                 .map_err(|_| DiskError::IoError)?;
 
-            // Handle remaining full sectors
-            if data.len() > copy_len {
-                let full_sectors_data = &data[copy_len..];
-                let full_sectors = full_sectors_data.len() / SECTOR_SIZE;
+            current_lba += 1;
+            remaining = &remaining[copy_len..];
+        }
 
-                for i in 0..full_sectors {
-                    let sector_data = &full_sectors_data[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
-                    block_io
-                        .write_blocks(Lba(start_lba + 1 + i as u64), sector_data)
-                        .map_err(|_| DiskError::IoError)?;
-                }
-            }
-        } else {
-            // Full sectors - direct write
-            let full_sectors = data.len() / SECTOR_SIZE;
-            for i in 0..full_sectors {
-                let sector_data = &data[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
-                block_io
-                    .write_blocks(Lba(start_lba + i as u64), sector_data)
-                    .map_err(|_| DiskError::IoError)?;
-            }
+        // Write full sectors
+        let full_sectors = remaining.len() / SECTOR_SIZE;
+        for i in 0..full_sectors {
+            let sector_data = &remaining[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
+            block_io
+                .write_blocks(Lba(current_lba + i as u64), sector_data)
+                .map_err(|_| DiskError::IoError)?;
+        }
+
+        // Handle trailing partial sector
+        let trailing_bytes = remaining.len() % SECTOR_SIZE;
+        if trailing_bytes > 0 {
+            let trailing_lba = current_lba + full_sectors as u64;
+            let trailing_data = &remaining[full_sectors * SECTOR_SIZE..];
+
+            let mut sector_buf = [0u8; SECTOR_SIZE];
+            // Read existing sector data first (for read-modify-write)
+            let _ = block_io.read_blocks(Lba(trailing_lba), &mut sector_buf);
+
+            sector_buf[..trailing_bytes].copy_from_slice(trailing_data);
+            block_io
+                .write_blocks(Lba(trailing_lba), &sector_buf)
+                .map_err(|_| DiskError::IoError)?;
         }
 
         Ok(())

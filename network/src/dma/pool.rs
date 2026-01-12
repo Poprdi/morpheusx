@@ -92,11 +92,21 @@ impl BufferPool {
         assert!(idx < self.total_count, "Invalid buffer index");
 
         if let Some(buf) = self.buffers[idx].as_mut() {
-            debug_assert!(buf.is_driver_owned(), "Can only free driver-owned buffers");
+            // Verify buffer is driver-owned (not already free or device-owned)
+            // This prevents double-free which could corrupt free_list
+            assert!(
+                buf.is_driver_owned(),
+                "Can only free driver-owned buffers (double-free detected)"
+            );
             unsafe {
                 buf.mark_free();
             }
 
+            // Bounds check to prevent out-of-bounds write on corrupted state
+            assert!(
+                self.free_count < self.total_count,
+                "Free count overflow (pool corruption)"
+            );
             self.free_list[self.free_count] = index;
             self.free_count += 1;
         }
