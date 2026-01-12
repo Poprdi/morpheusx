@@ -138,84 +138,84 @@ pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
     // Use the main MorpheusX logo
     let start_y = 6;
     for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
-        screen.put_str_at(50, start_y + i, line, EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(43, start_y + i, line, EFI_LIGHTGREEN, EFI_BLACK);
     }
 
     // Message box below logo
     let msg_y = start_y + LOGO_LINES_RAW.len() + 2;
 
     screen.put_str_at(
-        50,
+        43,
         msg_y,
         "╔══════════════════════════════════════════════════════════════════╗",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 1,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 2,
         "║                   DOWNLOAD STARTING NOW                          ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 3,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 4,
         "║              System will reboot when finished                    ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 5,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 6,
         "║                     ⚠  DO NOT INTERRUPT  ⚠                         ║",
         EFI_RED,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 7,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 8,
         "║          Download may take a while depending on size!            ║",
         EFI_CYAN,
         EFI_BLACK,
     );
-    screen.put_str_at(
-        50,
+     screen.put_str_at(
+        43,
         msg_y + 9,
         "║  No its not stuck we just dont have a post EBS display stack yet ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        50,
+        43,
         msg_y + 10,
         "╚══════════════════════════════════════════════════════════════════╝",
         EFI_CYAN,
@@ -223,7 +223,7 @@ pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
     );
 
     // Brief pause so user can see the message
-    let _ = (bs.stall)(1_500_000); // 1.5 seconds
+    let _ = (bs.stall)(1_430_000); // 1.5 seconds
 }
 
 /// Display error screen with debug log and halt message.
