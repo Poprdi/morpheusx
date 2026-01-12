@@ -6,13 +6,20 @@ pub mod reader;
 
 use crate::error::{Iso9660Error, Result};
 use crate::types::{FileEntry, SECTOR_SIZE};
+use alloc::vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
+
+/// Maximum sectors to read in a single I/O operation
+/// 64 sectors = 128KB per read - balances memory usage vs read efficiency
+const MAX_SECTORS_PER_READ: usize = 64;
 
 /// Read file contents into a buffer
 ///
 /// Reads file data from the block device into the provided buffer.
 /// Returns the number of bytes actually read (may be less if file is smaller than buffer).
+///
+/// Uses bulk reads for improved performance with large files.
 ///
 /// # Arguments
 /// * `block_io` - Block device
@@ -44,25 +51,42 @@ pub fn read_file<B: BlockIo>(
     }
 
     // Calculate number of sectors needed for the requested bytes
-    let sector_count = bytes_to_read.div_ceil(SECTOR_SIZE);
+    let total_sectors = bytes_to_read.div_ceil(SECTOR_SIZE);
     let start_lba = file.extent_lba as u64;
 
-    // Allocate sector buffer once outside the loop
-    let mut sector = [0u8; SECTOR_SIZE];
+    // Read in chunks of MAX_SECTORS_PER_READ for efficiency
+    let mut sectors_read = 0usize;
 
-    // Read sectors
-    for i in 0..sector_count {
-        block_io
-            .read_blocks(Lba(start_lba + i as u64), &mut sector)
-            .map_err(|_| Iso9660Error::IoError)?;
+    while sectors_read < total_sectors {
+        let remaining_sectors = total_sectors - sectors_read;
+        let chunk_sectors = core::cmp::min(remaining_sectors, MAX_SECTORS_PER_READ);
+        let chunk_bytes = chunk_sectors * SECTOR_SIZE;
 
-        let offset = i * SECTOR_SIZE;
-        // Copy what we need from this sector
-        // The remaining bytes in the buffer might be less than a sector
-        let remaining = bytes_to_read - offset;
-        let len = core::cmp::min(SECTOR_SIZE, remaining);
+        let buf_offset = sectors_read * SECTOR_SIZE;
+        let buf_end = core::cmp::min(buf_offset + chunk_bytes, bytes_to_read);
 
-        buffer[offset..offset + len].copy_from_slice(&sector[..len]);
+        // For the last chunk, we might need to read into a temp buffer
+        // if the remaining buffer space isn't a multiple of SECTOR_SIZE
+        let remaining_buf = buf_end - buf_offset;
+
+        if remaining_buf >= chunk_bytes {
+            // Can read directly into buffer
+            block_io
+                .read_blocks(
+                    Lba(start_lba + sectors_read as u64),
+                    &mut buffer[buf_offset..buf_offset + chunk_bytes],
+                )
+                .map_err(|_| Iso9660Error::IoError)?;
+        } else {
+            // Last partial chunk - need temp buffer for full sector read
+            let mut temp = vec![0u8; chunk_bytes];
+            block_io
+                .read_blocks(Lba(start_lba + sectors_read as u64), &mut temp)
+                .map_err(|_| Iso9660Error::IoError)?;
+            buffer[buf_offset..buf_end].copy_from_slice(&temp[..remaining_buf]);
+        }
+
+        sectors_read += chunk_sectors;
     }
 
     Ok(bytes_to_read)

@@ -3,7 +3,7 @@ use super::ui::DistroLauncher;
 use crate::boot::loader::BootError;
 use crate::tui::input::Keyboard;
 use crate::tui::renderer::{
-    Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW,
+    Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW,
 };
 use crate::uefi::file_system::FileProtocol;
 use alloc::format;
@@ -381,7 +381,7 @@ impl DistroLauncher {
             }
         };
 
-        progress_bar.set_progress(20);
+        progress_bar.set_progress(15);
         progress_bar.render(screen);
         morpheus_core::logger::log("Chunked ISO: Looking for kernel...");
 
@@ -402,8 +402,24 @@ impl DistroLauncher {
         let mut kernel_data = None;
         for kpath in &kernel_paths {
             if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, kpath) {
-                morpheus_core::logger::log(format!("Found kernel at {}", kpath).leak());
+                let size_mb = file_entry.size / (1024 * 1024);
+                morpheus_core::logger::log(
+                    format!("Found kernel at {} ({} MB)", kpath, size_mb).leak(),
+                );
+                screen.put_str_at(
+                    5,
+                    7,
+                    &format!("Loading kernel: {} ({} MB)", kpath, size_mb),
+                    EFI_CYAN,
+                    EFI_BLACK,
+                );
+                progress_bar.set_progress(20);
+                progress_bar.render(screen);
+
                 if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
+                    morpheus_core::logger::log(
+                        format!("Kernel loaded: {} bytes", data.len()).leak(),
+                    );
                     kernel_data = Some(data);
                     break;
                 }
@@ -419,7 +435,7 @@ impl DistroLauncher {
             }
         };
 
-        progress_bar.set_progress(50);
+        progress_bar.set_progress(40);
         progress_bar.render(screen);
         morpheus_core::logger::log("Chunked ISO: Looking for initrd...");
 
@@ -440,8 +456,24 @@ impl DistroLauncher {
         let mut initrd_data = None;
         for ipath in &initrd_paths {
             if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, ipath) {
-                morpheus_core::logger::log(format!("Found initrd at {}", ipath).leak());
+                let size_mb = file_entry.size / (1024 * 1024);
+                morpheus_core::logger::log(
+                    format!("Found initrd at {} ({} MB)", ipath, size_mb).leak(),
+                );
+                screen.put_str_at(
+                    5,
+                    7,
+                    &format!("Loading initrd: {} ({} MB)   ", ipath, size_mb),
+                    EFI_CYAN,
+                    EFI_BLACK,
+                );
+                progress_bar.set_progress(50);
+                progress_bar.render(screen);
+
                 if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
+                    morpheus_core::logger::log(
+                        format!("Initrd loaded: {} bytes", data.len()).leak(),
+                    );
                     initrd_data = Some(data);
                     break;
                 }

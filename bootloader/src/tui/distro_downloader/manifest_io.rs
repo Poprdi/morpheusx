@@ -162,20 +162,20 @@ pub unsafe fn load_manifests_from_esp(
 
         // Parse EFI_FILE_INFO structure
         // Offset 0x50 (80) is where filename starts in EFI_FILE_INFO
-        // But we need to check the attribute at offset 0x48 (72) for directory flag
+        // Attribute is at offset 0x48 (72) for directory flag
         if size < 82 {
             continue;
         }
 
         let attributes = u64::from_le_bytes([
-            buffer[0x38],
-            buffer[0x39],
-            buffer[0x3A],
-            buffer[0x3B],
-            buffer[0x3C],
-            buffer[0x3D],
-            buffer[0x3E],
-            buffer[0x3F],
+            buffer[0x48],
+            buffer[0x49],
+            buffer[0x4A],
+            buffer[0x4B],
+            buffer[0x4C],
+            buffer[0x4D],
+            buffer[0x4E],
+            buffer[0x4F],
         ]);
 
         // Skip directories (attribute bit 4 = EFI_FILE_DIRECTORY)
@@ -192,18 +192,36 @@ pub unsafe fn load_manifests_from_esp(
         // Check if it ends with .MFS or .manifest (support both, case insensitive)
         let filename_upper = filename.to_uppercase();
         if !filename_upper.ends_with(".MFS") && !filename_upper.ends_with(".MANIFEST") {
+            morpheus_core::logger::log("  -> Not a manifest file, skipping");
             continue;
         }
 
         morpheus_core::logger::log(alloc::format!("Loading manifest: {}", filename).leak());
 
         // Load this manifest
-        if let Ok(manifest) = load_single_manifest(root, &filename) {
-            if storage.add_entry(manifest).is_ok() {
-                count += 1;
-                if count >= MAX_MANIFESTS {
-                    break;
+        match load_single_manifest(root, &filename) {
+            Ok(manifest) => {
+                morpheus_core::logger::log(
+                    alloc::format!(
+                        "  -> Loaded OK: name='{}', size={}, flags=0x{:02x}",
+                        manifest.name_str(),
+                        manifest.total_size,
+                        manifest.flags
+                    )
+                    .leak(),
+                );
+                if storage.add_entry(manifest).is_ok() {
+                    count += 1;
+                    morpheus_core::logger::log("  -> Added to storage");
+                    if count >= MAX_MANIFESTS {
+                        break;
+                    }
+                } else {
+                    morpheus_core::logger::log("  -> Failed to add to storage");
                 }
+            }
+            Err(e) => {
+                morpheus_core::logger::log(alloc::format!("  -> FAILED to load: {:?}", e).leak());
             }
         }
     }

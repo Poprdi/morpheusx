@@ -491,15 +491,17 @@ unsafe fn finalize_manifest_fat32(
     serial_print_hex(config.esp_start_lba);
     serial_println("");
 
+    // Use actual start sector (determined by free space scan)
+    let start_sector = unsafe { ACTUAL_START_SECTOR };
+    serial_print("[MANIFEST] ISO start sector: ");
+    serial_print_hex(start_sector);
+    serial_println("");
+
     // Create IsoManifest using morpheus_core (same format bootloader scanner expects)
     let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
 
     // Add chunk with partition UUID and LBA range
-    match manifest.add_chunk(
-        config.partition_uuid,
-        config.target_start_sector,
-        end_sector,
-    ) {
+    match manifest.add_chunk(config.partition_uuid, start_sector, end_sector) {
         Ok(idx) => {
             serial_print("[MANIFEST] Added chunk ");
             serial_print_decimal(idx as u32);
@@ -603,15 +605,14 @@ unsafe fn finalize_manifest_raw(
     serial_print_hex(config.manifest_sector);
     serial_println("");
 
+    // Use actual start sector (determined by free space scan)
+    let start_sector = ACTUAL_START_SECTOR;
+
     // Use morpheus_core's IsoManifest for raw sector write
     let mut manifest = IsoManifest::new(config.iso_name, total_bytes);
 
     // Add chunk entry
-    match manifest.add_chunk(
-        config.partition_uuid,
-        config.target_start_sector,
-        end_sector,
-    ) {
+    match manifest.add_chunk(config.partition_uuid, start_sector, end_sector) {
         Ok(idx) => {
             serial_print("[MANIFEST] Added chunk ");
             serial_print_decimal(idx as u32);
@@ -1228,6 +1229,9 @@ static mut DISK_WRITE_BUFFER_FILL: usize = 0;
 /// Next sector to write to
 static mut DISK_NEXT_SECTOR: u64 = 0;
 
+/// Actual start sector (after finding free space)
+static mut ACTUAL_START_SECTOR: u64 = 0;
+
 /// Total bytes written to disk
 static mut DISK_TOTAL_BYTES: u64 = 0;
 
@@ -1478,12 +1482,76 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     serial_println(" MB");
                 }
 
+                // CRITICAL: Find free space on disk to avoid overwriting existing partitions
+                serial_println("[INIT] Scanning GPT for existing partitions...");
+                let actual_start_sector = {
+                    let dma_buffer = core::slice::from_raw_parts_mut(
+                        (&raw mut DISK_WRITE_BUFFER).cast::<u8>(),
+                        DISK_WRITE_BUFFER_SIZE,
+                    );
+                    let dma_buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
+                    let timeout_ticks = 100_000_000u64;
+
+                    match VirtioBlkBlockIo::new(&mut d, dma_buffer, dma_buffer_phys, timeout_ticks)
+                    {
+                        Ok(mut adapter) => {
+                            match crate::transfer::disk::GptOps::find_free_space(&mut adapter) {
+                                Ok((free_start, free_end)) => {
+                                    let free_size = free_end - free_start + 1;
+                                    serial_print("[GPT] Free space found: sectors ");
+                                    serial_print_hex(free_start);
+                                    serial_print(" - ");
+                                    serial_print_hex(free_end);
+                                    serial_print(" (");
+                                    serial_print_decimal(
+                                        (free_size * 512 / (1024 * 1024 * 1024)) as u32,
+                                    );
+                                    serial_println(" GB)");
+
+                                    // Align to 1MB boundary for performance
+                                    let aligned_start = ((free_start + 2047) / 2048) * 2048;
+                                    serial_print("[GPT] Using aligned start sector: ");
+                                    serial_print_hex(aligned_start);
+                                    serial_println("");
+                                    aligned_start
+                                }
+                                Err(e) => {
+                                    serial_print("[GPT] WARNING: Could not find free space: ");
+                                    serial_println(match e {
+                                        crate::transfer::disk::DiskError::IoError => "IO error",
+                                        crate::transfer::disk::DiskError::InvalidGpt => {
+                                            "Invalid GPT"
+                                        }
+                                        crate::transfer::disk::DiskError::NoFreeSpace => {
+                                            "No free space"
+                                        }
+                                        _ => "Unknown error",
+                                    });
+                                    serial_println(
+                                        "[GPT] Falling back to config sector (may overlap!)",
+                                    );
+                                    config.target_start_sector
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            serial_println("[GPT] WARNING: Could not create BlockIo adapter");
+                            serial_println("[GPT] Falling back to config sector (may overlap!)");
+                            config.target_start_sector
+                        }
+                    }
+                };
+
+                serial_print("[INIT] ISO data will be written starting at sector: ");
+                serial_print_hex(actual_start_sector);
+                serial_println("");
+
                 // Create GPT partition for ISO data BEFORE we start writing
                 // This properly claims the disk space so other tools won't overwrite it
                 serial_println("[INIT] Creating GPT partition for ISO storage...");
                 if let Some(part_uuid) = create_iso_partition(
                     &mut d,
-                    config.target_start_sector,
+                    actual_start_sector,
                     config.max_download_size,
                     config.iso_name,
                 ) {
@@ -1497,11 +1565,14 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     serial_println("[WARN] Continuing anyway (data will be in unmapped space)");
                 }
 
-                // Initialize disk write state
-                DISK_NEXT_SECTOR = config.target_start_sector;
+                // Initialize disk write state using the actual (possibly updated) start sector
+                DISK_NEXT_SECTOR = actual_start_sector;
                 DISK_WRITE_BUFFER_FILL = 0;
                 DISK_TOTAL_BYTES = 0;
                 DISK_NEXT_REQUEST_ID = 1;
+
+                // Store actual start sector for manifest
+                ACTUAL_START_SECTOR = actual_start_sector;
 
                 blk_driver = Some(d);
             }
