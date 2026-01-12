@@ -7,6 +7,7 @@
 
 pub mod block_io_adapter;
 pub mod block_traits;
+pub mod intel;
 pub mod traits;
 pub mod virtio;
 pub mod virtio_blk;
@@ -18,6 +19,9 @@ pub mod virtio_blk;
 // Re-exports - Network
 pub use traits::{DriverInit, NetworkDriver, RxError, TxError};
 pub use virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
+
+// Re-exports - Intel e1000e
+pub use intel::{E1000eConfig, E1000eDriver, E1000eError, IntelNicInfo};
 
 // Re-exports - Block
 pub use block_traits::{
