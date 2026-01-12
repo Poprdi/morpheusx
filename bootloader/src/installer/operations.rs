@@ -241,18 +241,22 @@ pub fn install_to_esp_with_progress(
         // Write directly to FAT32 partition
         // Bypasses UEFI FS protocol (works on runtime-created partitions)
         use morpheus_core::fs::fat32_ops;
+        use morpheus_core::uefi_alloc;
 
         if let Some(ref mut cb) = progress {
             cb(0, binary_data.len(), "Writing BOOTX64.EFI...");
         }
 
         // Write to fallback boot path - UEFI auto-detects and boots this
-        fat32_ops::write_file_with_progress(
+        // Use UEFI allocate_pages for temporary buffers (we're still pre-EBS)
+        fat32_ops::write_file_with_progress_uefi(
             &mut adapter,
             esp.start_lba,
             "/EFI/BOOT/BOOTX64.EFI",
             &binary_data,
             &mut progress,
+            Some(bs.allocate_pages),
+            Some(bs.free_pages),
         )
         .map_err(|_| InstallError::IoError)?;
 

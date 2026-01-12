@@ -25,3 +25,4 @@ pub mod fs;
 pub mod iso;
 pub mod logger;
 pub mod net;
+pub mod uefi_alloc;

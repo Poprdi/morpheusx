@@ -4,8 +4,73 @@ use super::{mb_to_lba, GptError};
 use crate::disk::partition::PartitionType;
 use gpt_disk_io::{BlockIo, Disk};
 use gpt_disk_types::{
-    guid, BlockSize, GptHeader, GptPartitionEntry, GptPartitionEntryArray, LbaLe, U32Le,
+    guid, BlockSize, GptHeader, GptPartitionEntry, GptPartitionEntryArray,
+    GptPartitionEntryArrayLayout, LbaLe, U32Le,
 };
+
+/// Helper function to write both primary and secondary GPT headers and partition arrays.
+/// This ensures both copies stay in sync to avoid CRC mismatch errors.
+fn write_gpt_both<B: BlockIo>(
+    disk: &mut Disk<B>,
+    header: &mut GptHeader,
+    entry_array: &GptPartitionEntryArray,
+) -> Result<(), GptError> {
+    // Write primary GPT header
+    disk.write_primary_gpt_header(header, &mut [0u8; 512])
+        .map_err(|_| GptError::IoError)?;
+
+    // Write primary partition entry array
+    disk.write_gpt_partition_entry_array(entry_array)
+        .map_err(|_| GptError::IoError)?;
+
+    // Create secondary header (swap my_lba and alternate_lba)
+    let mut secondary_header = header.clone();
+    let primary_lba = header.my_lba;
+    let alternate_lba = header.alternate_lba;
+
+    secondary_header.my_lba = alternate_lba;
+    secondary_header.alternate_lba = primary_lba;
+
+    // Secondary partition entry array is before the secondary header
+    // Calculate: alternate_lba - (num_entries * entry_size / block_size)
+    let num_entries = header.number_of_partition_entries.to_u32() as u64;
+    let entry_size = header.size_of_partition_entry.to_u32() as u64;
+    let block_size = 512u64; // Assume 512-byte blocks
+    let entries_sectors = (num_entries * entry_size + block_size - 1) / block_size;
+    let secondary_entry_lba = alternate_lba.to_u64() - entries_sectors;
+
+    secondary_header.partition_entry_lba = LbaLe::from_u64(secondary_entry_lba);
+
+    // Recalculate CRC for secondary header (partition array CRC is the same)
+    secondary_header.update_header_crc32();
+
+    // Write secondary GPT header
+    disk.write_secondary_gpt_header(&secondary_header, &mut [0u8; 512])
+        .map_err(|_| GptError::IoError)?;
+
+    // Create secondary partition entry array with correct layout
+    let secondary_layout = secondary_header
+        .get_partition_entry_array_layout()
+        .map_err(|_| GptError::InvalidHeader)?;
+
+    // Copy primary entry data to a new buffer for secondary
+    let primary_storage = entry_array.storage();
+    let mut secondary_buf = [0u8; 16384];
+    secondary_buf[..primary_storage.len()].copy_from_slice(primary_storage);
+
+    let secondary_entry_array =
+        GptPartitionEntryArray::new(secondary_layout, BlockSize::BS_512, &mut secondary_buf)
+            .map_err(|_| GptError::IoError)?;
+
+    // Write secondary partition entry array
+    disk.write_gpt_partition_entry_array(&secondary_entry_array)
+        .map_err(|_| GptError::IoError)?;
+
+    // Flush to ensure all writes are committed
+    disk.flush().map_err(|_| GptError::IoError)?;
+
+    Ok(())
+}
 
 /// Scan disk for GPT and populate partition table
 pub fn create_gpt<B: BlockIo>(block_io: B, num_blocks: u64) -> Result<(), GptError> {
@@ -23,18 +88,12 @@ pub fn create_gpt<B: BlockIo>(block_io: B, num_blocks: u64) -> Result<(), GptErr
         ..Default::default()
     };
 
-    header.update_header_crc32();
-
     // Write protective MBR
     let mut buf = [0u8; 512];
     disk.write_protective_mbr(&mut buf)
         .map_err(|_| GptError::IoError)?;
 
-    // Write primary GPT header
-    disk.write_primary_gpt_header(&header, &mut buf)
-        .map_err(|_| GptError::IoError)?;
-
-    // Write empty partition array
+    // Create empty partition array
     let layout = header
         .get_partition_entry_array_layout()
         .map_err(|_| GptError::InvalidHeader)?;
@@ -45,11 +104,12 @@ pub fn create_gpt<B: BlockIo>(block_io: B, num_blocks: u64) -> Result<(), GptErr
     let entry_array = GptPartitionEntryArray::new(layout, block_size, &mut entry_buf)
         .map_err(|_| GptError::IoError)?;
 
-    disk.write_gpt_partition_entry_array(&entry_array)
-        .map_err(|_| GptError::IoError)?;
+    // Update header CRC with empty partition array
+    header.partition_entry_array_crc32 = entry_array.calculate_crc32();
+    header.update_header_crc32();
 
-    // Flush to ensure writes are committed
-    disk.flush().map_err(|_| GptError::IoError)?;
+    // Write both primary and secondary GPT
+    write_gpt_both(&mut disk, &mut header, &entry_array)?;
 
     Ok(())
 }
@@ -118,12 +178,8 @@ pub fn create_partition<B: BlockIo>(
     header.partition_entry_array_crc32 = entry_array.calculate_crc32();
     header.update_header_crc32();
 
-    // Write everything back
-    disk.write_primary_gpt_header(&header, &mut [0u8; 512])
-        .map_err(|_| GptError::IoError)?;
-
-    disk.write_gpt_partition_entry_array(&entry_array)
-        .map_err(|_| GptError::IoError)?;
+    // Write both primary and secondary GPT
+    write_gpt_both(&mut disk, &mut header, &entry_array)?;
 
     Ok(())
 }
@@ -156,12 +212,8 @@ pub fn delete_partition<B: BlockIo>(block_io: B, partition_index: usize) -> Resu
     header.partition_entry_array_crc32 = entry_array.calculate_crc32();
     header.update_header_crc32();
 
-    // Write back
-    disk.write_primary_gpt_header(&header, &mut [0u8; 512])
-        .map_err(|_| GptError::IoError)?;
-
-    disk.write_gpt_partition_entry_array(&entry_array)
-        .map_err(|_| GptError::IoError)?;
+    // Write both primary and secondary GPT
+    write_gpt_both(&mut disk, &mut header, &entry_array)?;
 
     Ok(())
 }
@@ -224,12 +276,8 @@ pub fn shrink_partition<B: BlockIo>(
     header.partition_entry_array_crc32 = entry_array.calculate_crc32();
     header.update_header_crc32();
 
-    // Write back
-    disk.write_primary_gpt_header(&header, &mut [0u8; 512])
-        .map_err(|_| GptError::IoError)?;
-
-    disk.write_gpt_partition_entry_array(&entry_array)
-        .map_err(|_| GptError::IoError)?;
+    // Write both primary and secondary GPT
+    write_gpt_both(&mut disk, &mut header, &entry_array)?;
 
     Ok(())
 }

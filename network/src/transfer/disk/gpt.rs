@@ -300,7 +300,7 @@ impl GptOps {
         primary_header[16..20].copy_from_slice(&primary_header_crc.to_le_bytes());
 
         // === Write primary GPT ===
-        
+
         // Write primary partition entries
         for i in 0..32 {
             let sector_buf = &entry_buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
@@ -315,7 +315,7 @@ impl GptOps {
             .map_err(|_| DiskError::IoError)?;
 
         // === Create and write backup GPT ===
-        
+
         // Backup partition entries come BEFORE the backup header
         let backup_entries_lba = alternate_lba - 32;
 
@@ -329,11 +329,11 @@ impl GptOps {
 
         // Create backup header (copy of primary with swapped LBAs)
         let mut backup_header = primary_header;
-        
+
         // Swap my_lba and alternate_lba
         backup_header[24..32].copy_from_slice(&alternate_lba.to_le_bytes()); // My LBA = backup position
         backup_header[32..40].copy_from_slice(&my_lba.to_le_bytes()); // Alternate = primary position
-        
+
         // Update partition entry array LBA to backup position
         backup_header[72..80].copy_from_slice(&backup_entries_lba.to_le_bytes());
 

@@ -692,41 +692,75 @@ impl DistroLauncher {
         morpheus_core::logger::log("Chunked ISO: Preparing boot...");
         boot_seq.render(screen, 5, 8);
 
-        // Determine cmdline based on ISO name/type
-        // Tails needs specific parameters for live boot
-        let iso_name = storage
+        // Get ISO manifest and determine partition number from first chunk's LBA
+        let (iso_name, partition_num) = storage
             .get(iso_idx)
-            .map(|e| e.manifest.name_str())
-            .unwrap_or("");
+            .map(|e| {
+                let name = e.manifest.name_str();
+                // Get partition number from first chunk's start LBA
+                // ESP partition 1 ends at ~8388608 LBA (4GB)
+                // Data partitions start after that, numbered sequentially
+                // Each ~4GB partition is ~8388608 sectors
+                let first_chunk_lba = if e.manifest.chunks.count > 0 {
+                    e.manifest.chunks.chunks[0].start_lba
+                } else {
+                    0
+                };
 
-        let cmdline = if iso_name.to_lowercase().contains("tails") {
-            // Tails-specific: needs boot=live and findiso for squashfs
-            // Add console=ttyS0 for serial output debugging
-            "boot=live nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
+                // Calculate partition number based on LBA ranges
+                // Partition 1 (ESP): ~0-8388608
+                // Partition 2+: sequential 4GB chunks
+                let part_num = if first_chunk_lba < 8_388_608 {
+                    1 // ESP (shouldn't happen for ISO data)
+                } else {
+                    // Data partitions: (LBA - ESP_size) / partition_size + 2
+                    // Simplified: estimate based on LBA position
+                    ((first_chunk_lba - 8_388_608) / 8_388_608) + 2
+                };
+
+                (name, part_num)
+            })
+            .unwrap_or(("", 2));
+
+        // Build device path dynamically based on actual partition
+        let device_path = alloc::format!("/dev/vda{}", partition_num);
+
+        morpheus_core::logger::log(
+            alloc::format!("ISO on partition {}: {}", partition_num, device_path).leak(),
+        );
+
+        // Determine cmdline based on ISO name/type - use actual partition
+        let cmdline: String = if iso_name.to_lowercase().contains("tails") {
+            // Tails-specific: needs boot=live with live-media to find the ISO
+            alloc::format!("boot=live live-media={} nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", device_path)
         } else if iso_name.to_lowercase().contains("kali") {
-            // Kali Linux - tell live-boot where to find the ISO filesystem
-            // The ISO data is stored in partition 2 which is a valid ISO9660 filesystem
-            // findiso tells live-boot to search for and mount the ISO from the specified device
-            // Kali has VirtIO support, so /dev/vda2 will work
-            "boot=live findiso=/dev/vda2 components quiet splash console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
+            // Kali Linux - uses live-boot with live-media parameter
+            alloc::format!("boot=live live-media={} components console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", device_path)
         } else if iso_name.to_lowercase().contains("ubuntu") {
-            "boot=casper quiet splash console=ttyS0,115200"
+            alloc::format!("boot=casper quiet splash console=ttyS0,115200")
         } else if iso_name.to_lowercase().contains("debian") {
-            // Debian Live also uses live-boot like Kali
-            "boot=live findiso=/dev/vda2 components quiet splash console=ttyS0,115200"
+            // Debian Live uses live-boot
+            alloc::format!("boot=live live-media={} components console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", device_path)
+        } else if iso_name.to_lowercase().contains("parrot") {
+            // Parrot OS - Debian-based, uses live-boot
+            alloc::format!("boot=live live-media={} components console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", device_path)
+        } else if iso_name.to_lowercase().contains("blackarch") {
+            // BlackArch - Arch-based live system
+            alloc::format!(
+                "archisodevice={} console=ttyS0,115200 earlyprintk=serial,ttyS0,115200",
+                device_path
+            )
         } else if iso_name.to_lowercase().contains("fedora") {
-            "rd.live.image quiet console=ttyS0,115200"
+            alloc::format!("rd.live.image quiet console=ttyS0,115200")
         } else if iso_name.to_lowercase().contains("puppy")
             || iso_name.to_lowercase().contains("fossapup")
         {
-            // Puppy Linux - ISO data is in partition 2 which is valid ISO9660
-            // Try multiple approaches for Puppy to find its files:
-            // pmedia=usbhd - search USB/HD devices
-            // pdev1=vda2 - explicitly specify device (may need to be vda2 or sda2 depending on drivers)
-            "pmedia=usbhd pdev1=sda2 psubdir=/ console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
+            // Puppy Linux - use sda instead of vda for compatibility
+            let sda_device = alloc::format!("sda{}", partition_num);
+            alloc::format!("pmedia=usbhd pdev1={} psubdir=/ console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", sda_device)
         } else {
-            // Generic live boot cmdline - try findiso for most Debian-based live distros
-            "boot=live findiso=/dev/vda2 components console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 debug loglevel=7"
+            // Generic live boot cmdline
+            alloc::format!("boot=live live-media={} components console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 debug loglevel=7", device_path)
         };
 
         progress_bar.set_progress(100);
@@ -782,6 +816,13 @@ impl DistroLauncher {
             EFI_CYAN,
             EFI_BLACK,
         );
+        screen.put_str_at(
+            5,
+            10,
+            &format!("Device: {}", device_path),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
         // Check kernel magic
         let magic = u16::from_le_bytes([kernel_slice[510], kernel_slice[511]]);
         screen.put_str_at(
@@ -833,7 +874,7 @@ impl DistroLauncher {
                 image_handle,
                 kernel_slice,
                 initrd_slice,
-                cmdline,
+                &cmdline,
                 screen,
             )
         };

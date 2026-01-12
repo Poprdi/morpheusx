@@ -6,9 +6,6 @@ use super::types::{DirEntry, ATTR_DIRECTORY};
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
-extern crate alloc;
-use alloc::vec;
-
 const SECTOR_SIZE: usize = 512;
 
 /// Compare two 8.3 names case-insensitively
@@ -153,8 +150,7 @@ pub fn create_directory_in_parent<B: BlockIo>(
     let new_cluster = ctx.allocate_cluster(block_io, partition_start)?;
 
     // Initialize new directory cluster with . and .. entries
-    let cluster_size = (ctx.sectors_per_cluster * SECTOR_SIZE as u32) as usize;
-    let mut cluster_data = vec![0u8; cluster_size];
+    // Use sector-sized stack buffer instead of vec! to avoid heap allocation
 
     // Create '.' entry (points to self)
     let mut dot_entry = DirEntry::empty();
@@ -168,20 +164,27 @@ pub fn create_directory_in_parent<B: BlockIo>(
     dotdot_entry.attr = ATTR_DIRECTORY;
     dotdot_entry.set_first_cluster(parent_cluster);
 
-    // Write entries to cluster data
+    // Write first sector with . and .. entries
+    let mut sector_data = [0u8; SECTOR_SIZE];
     let entries =
-        unsafe { core::slice::from_raw_parts_mut(cluster_data.as_mut_ptr() as *mut DirEntry, 2) };
+        unsafe { core::slice::from_raw_parts_mut(sector_data.as_mut_ptr() as *mut DirEntry, 2) };
     entries[0] = dot_entry;
     entries[1] = dotdot_entry;
 
     let sector = ctx.cluster_to_sector(new_cluster);
-    for sec_offset in 0..ctx.sectors_per_cluster {
-        let start = (sec_offset * SECTOR_SIZE as u32) as usize;
-        let end = start + SECTOR_SIZE;
+
+    // Write first sector (with . and .. entries)
+    block_io
+        .write_blocks(Lba(partition_start + sector as u64), &sector_data)
+        .map_err(|_| Fat32Error::IoError)?;
+
+    // Write remaining sectors as zeros
+    let zero_sector = [0u8; SECTOR_SIZE];
+    for sec_offset in 1..ctx.sectors_per_cluster {
         block_io
             .write_blocks(
                 Lba(partition_start + sector as u64 + sec_offset as u64),
-                &cluster_data[start..end],
+                &zero_sector,
             )
             .map_err(|_| Fat32Error::IoError)?;
     }
@@ -261,12 +264,28 @@ pub fn create_directory<B: BlockIo>(
     path: &str,
 ) -> Result<(), Fat32Error> {
     let path = path.trim_start_matches('/');
-    let parts: alloc::vec::Vec<&str> = path.split('/').collect();
+
+    // Use fixed array instead of Vec for path parts (no heap allocation)
+    const MAX_PATH_PARTS: usize = 8;
+    let mut parts: [&str; MAX_PATH_PARTS] = [""; MAX_PATH_PARTS];
+    let mut parts_count = 0;
+    for part in path.split('/') {
+        if parts_count >= MAX_PATH_PARTS {
+            return Err(Fat32Error::IoError); // Path too deep
+        }
+        parts[parts_count] = part;
+        parts_count += 1;
+    }
 
     let mut current_cluster = ctx.root_cluster;
-    for part in parts {
-        current_cluster =
-            ensure_directory_exists(block_io, partition_lba_start, ctx, current_cluster, part)?;
+    for i in 0..parts_count {
+        current_cluster = ensure_directory_exists(
+            block_io,
+            partition_lba_start,
+            ctx,
+            current_cluster,
+            parts[i],
+        )?;
     }
 
     Ok(())

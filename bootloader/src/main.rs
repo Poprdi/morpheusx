@@ -17,6 +17,7 @@ mod boot;
 mod installer;
 mod tui;
 mod uefi;
+mod uefi_allocator; // UEFI-backed global allocator
 
 use tui::boot_sequence::{BootSequence, NetworkBootResult};
 use tui::distro_launcher::DistroLauncher;
@@ -213,9 +214,9 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
     unsafe {
         let system_table = &*(system_table as *const SystemTable);
 
-        // Initialize heap allocator FIRST - before any allocations
-        // Uses static buffer, works during UEFI and post-EBS
-        morpheus_network::alloc_heap::init_heap();
+        // Set boot services for UEFI-backed global allocator
+        // This MUST happen before any heap allocations (Vec, String, Box, etc.)
+        uefi_allocator::set_boot_services(system_table.boot_services);
 
         // Set global boot services pointer (for other UEFI operations)
         BOOT_SERVICES_PTR = system_table.boot_services;

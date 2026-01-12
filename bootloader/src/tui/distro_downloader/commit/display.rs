@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+use crate::tui::logo::LOGO_LINES_RAW;
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW};
 
 /// Download commit configuration.
@@ -66,72 +67,189 @@ pub fn display_commit_countdown(
     let _ = (bs.stall)(1_000_000);
 }
 
-/// Display preparation phase header.
-pub fn display_preparation_header(screen: &mut Screen) -> usize {
-    screen.clear();
-    screen.put_str_at(
-        5,
-        2,
-        "=== Preparing Download Environment ===",
-        EFI_LIGHTGREEN,
-        EFI_BLACK,
-    );
-    4 // Return starting log line
+/// Debug log buffer for conditional display.
+pub struct DebugLog {
+    lines: [([u8; 80], u8); 32], // 32 lines, 80 chars each, with color
+    count: usize,
 }
 
-/// Display final pre-exit messages.
-pub fn display_final_warnings(screen: &mut Screen, log_y: &mut usize, bs: &crate::BootServices) {
+impl DebugLog {
+    /// Create empty debug log.
+    pub const fn new() -> Self {
+        Self {
+            lines: [([0u8; 80], 0); 32],
+            count: 0,
+        }
+    }
+
+    /// Add a line to the log.
+    pub fn add(&mut self, msg: &str, color: u8) {
+        if self.count < 32 {
+            let bytes = msg.as_bytes();
+            let len = bytes.len().min(80);
+            self.lines[self.count].0[..len].copy_from_slice(&bytes[..len]);
+            self.lines[self.count].1 = color;
+            self.count += 1;
+        }
+    }
+
+    /// Display the debug log on screen (only called on error).
+    pub fn display(&self, screen: &mut Screen) {
+        screen.clear();
+        screen.put_str_at(
+            5,
+            1,
+            "=== INITIALIZATION ERROR - DEBUG LOG ===",
+            EFI_RED,
+            EFI_BLACK,
+        );
+
+        for i in 0..self.count {
+            let line = &self.lines[i];
+            // Find actual string length
+            let len = line.0.iter().position(|&c| c == 0).unwrap_or(80);
+            if len > 0 {
+                // Safe conversion - we only stored ASCII
+                if let Ok(s) = core::str::from_utf8(&line.0[..len]) {
+                    let color = match line.1 {
+                        1 => EFI_YELLOW,
+                        2 => EFI_LIGHTGREEN,
+                        3 => EFI_RED,
+                        4 => EFI_CYAN,
+                        _ => EFI_YELLOW,
+                    };
+                    screen.put_str_at(5, 3 + i, s, color, EFI_BLACK);
+                }
+            }
+        }
+    }
+}
+
+/// Color constants for debug log.
+pub const LOG_YELLOW: u8 = 1;
+pub const LOG_GREEN: u8 = 2;
+pub const LOG_RED: u8 = 3;
+pub const LOG_CYAN: u8 = 4;
+
+/// Display clean ASCII art and final message before download (success path).
+pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
+    screen.clear();
+
+    // Use the main MorpheusX logo
+    let start_y = 6;
+    for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
+        screen.put_str_at(50, start_y + i, line, EFI_LIGHTGREEN, EFI_BLACK);
+    }
+
+    // Message box below logo
+    let msg_y = start_y + LOGO_LINES_RAW.len() + 2;
+
     screen.put_str_at(
-        5,
-        *log_y,
-        "=== EXITING BOOT SERVICES ===",
+        50,
+        msg_y,
+        "╔══════════════════════════════════════════════════════════════════╗",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
+    screen.put_str_at(
+        50,
+        msg_y + 1,
+        "║                                                                  ║",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
+    screen.put_str_at(
+        50,
+        msg_y + 2,
+        "║                   DOWNLOAD STARTING NOW                          ║",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
+    screen.put_str_at(
+        50,
+        msg_y + 3,
+        "║                                                                  ║",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
+    screen.put_str_at(
+        50,
+        msg_y + 4,
+        "║              System will reboot when finished                    ║",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
+    screen.put_str_at(
+        50,
+        msg_y + 5,
+        "║                                                                  ║",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
+    screen.put_str_at(
+        50,
+        msg_y + 6,
+        "║                     ⚠  DO NOT INTERRUPT  ⚠                         ║",
         EFI_RED,
         EFI_BLACK,
     );
-    *log_y += 1;
-    screen.put_str_at(5, *log_y, "After this point:", EFI_YELLOW, EFI_BLACK);
-    *log_y += 1;
     screen.put_str_at(
-        7,
-        *log_y,
-        "- Screen output will stop",
-        EFI_YELLOW,
+        50,
+        msg_y + 7,
+        "║                                                                  ║",
+        EFI_CYAN,
         EFI_BLACK,
     );
-    *log_y += 1;
     screen.put_str_at(
-        7,
-        *log_y,
-        "- Progress via serial console only",
-        EFI_YELLOW,
+        50,
+        msg_y + 8,
+        "║          Download may take a while depending on size!            ║",
+        EFI_CYAN,
         EFI_BLACK,
     );
-    *log_y += 1;
     screen.put_str_at(
-        7,
-        *log_y,
-        "- System will reboot when done",
-        EFI_YELLOW,
+        50,
+        msg_y + 9,
+        "║  No its not stuck we just dont have a post EBS display stack yet ║",
+        EFI_CYAN,
         EFI_BLACK,
     );
-    *log_y += 2;
+    screen.put_str_at(
+        50,
+        msg_y + 10,
+        "╚══════════════════════════════════════════════════════════════════╝",
+        EFI_CYAN,
+        EFI_BLACK,
+    );
 
+    // Brief pause so user can see the message
+    let _ = (bs.stall)(1_500_000); // 1.5 seconds
+}
+
+/// Display error screen with debug log and halt message.
+pub fn display_error_and_halt(
+    screen: &mut Screen,
+    debug_log: &DebugLog,
+    error_msg: &str,
+    bs: &crate::BootServices,
+) -> ! {
+    debug_log.display(screen);
+
+    let error_y = 3 + debug_log.count + 2;
+    screen.put_str_at(5, error_y, "FATAL ERROR:", EFI_RED, EFI_BLACK);
+    screen.put_str_at(7, error_y + 1, error_msg, EFI_RED, EFI_BLACK);
     screen.put_str_at(
         5,
-        *log_y,
-        "Exiting boot services NOW...",
-        EFI_RED,
-        EFI_BLACK,
-    );
-    *log_y += 1;
-    screen.put_str_at(
-        7,
-        *log_y,
-        "(screen will freeze - progress on serial)",
+        error_y + 3,
+        "System halted. Please reboot manually.",
         EFI_YELLOW,
         EFI_BLACK,
     );
 
-    // Brief pause for user to see message
-    let _ = (bs.stall)(500_000); // 500ms
+    // Give time to read
+    let _ = (bs.stall)(5_000_000);
+
+    loop {
+        core::hint::spin_loop();
+    }
 }

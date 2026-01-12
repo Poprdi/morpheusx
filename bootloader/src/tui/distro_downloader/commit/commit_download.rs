@@ -19,7 +19,8 @@ use crate::tui::renderer::Screen;
 pub use super::display::DownloadCommitConfig;
 
 use super::display::{
-    display_commit_countdown, display_final_warnings, display_preparation_header,
+    display_commit_countdown, display_download_start, display_error_and_halt, DebugLog, LOG_CYAN,
+    LOG_GREEN, LOG_RED, LOG_YELLOW,
 };
 use super::pci::{probe_virtio_blk_with_debug, probe_virtio_nic_with_debug};
 use super::resources::{
@@ -29,7 +30,7 @@ use super::uefi::{
     calibrate_tsc_with_stall, exit_boot_services_with_retry, find_esp_lba, leak_string,
 };
 
-use crate::tui::renderer::{EFI_BLACK, EFI_CYAN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW};
+use crate::tui::renderer::{EFI_BLACK, EFI_LIGHTGREEN, EFI_RED};
 
 /// Result of download commit operation.
 #[derive(Debug)]
@@ -60,104 +61,81 @@ pub unsafe fn commit_to_download(
     // Phase 0: Display countdown
     display_commit_countdown(screen, &config, bs);
 
-    // Phase 1: Setup display
-    let mut log_y = display_preparation_header(screen);
+    // Create debug log buffer (only displayed on error)
+    let mut debug_log = DebugLog::new();
 
-    // Phase 2: Allocate DMA region
-    screen.put_str_at(5, log_y, "Allocating DMA region...", EFI_YELLOW, EFI_BLACK);
-    log_y += 1;
-
-    let dma_region = match allocate_dma_region(bs, screen, &mut log_y) {
-        Ok(addr) => addr,
-        Err(_) => fatal_hang(),
+    // Phase 1: Allocate DMA region (silent, log for debug)
+    debug_log.add("Allocating DMA region...", LOG_YELLOW);
+    let dma_region = match allocate_dma_region(bs, screen, &mut 0) {
+        Ok(addr) => {
+            debug_log.add(&alloc::format!("  DMA region: {:#x}", addr), LOG_GREEN);
+            addr
+        }
+        Err(_) => {
+            display_error_and_halt(screen, &debug_log, "Failed to allocate DMA region", bs);
+        }
     };
-    log_y += 1;
 
-    // Phase 3: Allocate stack
-    screen.put_str_at(
-        5,
-        log_y,
-        "Allocating bare-metal stack...",
-        EFI_YELLOW,
-        EFI_BLACK,
-    );
-    log_y += 1;
-
-    let (_, stack_top) = match allocate_stack(bs, screen, &mut log_y) {
-        Ok(result) => result,
-        Err(_) => fatal_hang(),
+    // Phase 2: Allocate stack (silent)
+    debug_log.add("Allocating bare-metal stack...", LOG_YELLOW);
+    let (_, stack_top) = match allocate_stack(bs, screen, &mut 0) {
+        Ok(result) => {
+            debug_log.add(&alloc::format!("  Stack top: {:#x}", result.1), LOG_GREEN);
+            result
+        }
+        Err(_) => {
+            display_error_and_halt(screen, &debug_log, "Failed to allocate stack", bs);
+        }
     };
-    log_y += 1;
 
-    // Phase 4: Calibrate TSC
-    screen.put_str_at(5, log_y, "Calibrating TSC timing...", EFI_YELLOW, EFI_BLACK);
-    log_y += 1;
-
+    // Phase 3: Calibrate TSC
+    debug_log.add("Calibrating TSC timing...", LOG_YELLOW);
     let tsc_freq = calibrate_tsc_with_stall(bs);
-    screen.put_str_at(
-        7,
-        log_y,
-        &alloc::format!("TSC: {} Hz", tsc_freq),
-        EFI_CYAN,
-        EFI_BLACK,
-    );
-    log_y += 2;
+    debug_log.add(&alloc::format!("  TSC: {} Hz", tsc_freq), LOG_CYAN);
 
-    // Phase 5: Probe VirtIO NIC
-    screen.put_str_at(
-        5,
-        log_y,
-        "Probing VirtIO network device...",
-        EFI_YELLOW,
-        EFI_BLACK,
-    );
-    log_y += 1;
-
-    let nic_probe = probe_virtio_nic_with_debug(screen, &mut log_y);
+    // Phase 4: Probe VirtIO NIC
+    debug_log.add("Probing VirtIO network device...", LOG_YELLOW);
+    let nic_probe = probe_virtio_nic_with_debug(screen, &mut 0);
     if nic_probe.mmio_base == 0 {
-        screen.put_str_at(
-            7,
-            log_y,
-            "Ensure QEMU has: -device virtio-net-pci,netdev=...",
-            EFI_RED,
-            EFI_BLACK,
+        debug_log.add("  ERROR: No VirtIO NIC found!", LOG_RED);
+        display_error_and_halt(
+            screen,
+            &debug_log,
+            "No VirtIO NIC found. Ensure QEMU has: -device virtio-net-pci",
+            bs,
         );
-        fatal_hang();
     }
-    log_y += 1;
-
-    // Phase 6: Probe VirtIO block device
-    screen.put_str_at(
-        5,
-        log_y,
-        "Probing VirtIO block device...",
-        EFI_YELLOW,
-        EFI_BLACK,
+    debug_log.add(
+        &alloc::format!("  NIC MMIO: {:#x}", nic_probe.mmio_base),
+        LOG_GREEN,
     );
-    log_y += 1;
 
-    let blk_probe = probe_virtio_blk_with_debug(screen, &mut log_y);
-    display_block_device_status(screen, &mut log_y, &blk_probe);
-    log_y += 1;
+    // Phase 5: Probe VirtIO block device
+    debug_log.add("Probing VirtIO block device...", LOG_YELLOW);
+    let blk_probe = probe_virtio_blk_with_debug(screen, &mut 0);
+    if blk_probe.device_type != 0 {
+        if blk_probe.transport_type == 1 {
+            debug_log.add(
+                &alloc::format!("  BLK (PCI Modern) common_cfg: {:#x}", blk_probe.common_cfg),
+                LOG_GREEN,
+            );
+        } else {
+            debug_log.add(
+                &alloc::format!("  BLK MMIO: {:#x}", blk_probe.mmio_base),
+                LOG_GREEN,
+            );
+        }
+    } else {
+        debug_log.add("  No VirtIO-blk found (ISO won't persist)", LOG_YELLOW);
+    }
 
-    // Phase 7: Find ESP partition
-    screen.put_str_at(5, log_y, "Locating ESP partition...", EFI_YELLOW, EFI_BLACK);
-    log_y += 1;
-
+    // Phase 6: Find ESP partition
+    debug_log.add("Locating ESP partition...", LOG_YELLOW);
     let esp_lba = find_esp_lba(bs, image_handle).unwrap_or(2048);
-    screen.put_str_at(
-        7,
-        log_y,
-        &alloc::format!("ESP Start LBA: {}", esp_lba),
-        EFI_LIGHTGREEN,
-        EFI_BLACK,
-    );
-    log_y += 1;
+    debug_log.add(&alloc::format!("  ESP Start LBA: {}", esp_lba), LOG_GREEN);
 
-    // Phase 8: Prepare boot handoff
-    screen.put_str_at(5, log_y, "Preparing boot handoff...", EFI_YELLOW, EFI_BLACK);
-    log_y += 1;
-
+    // Phase 7: Prepare boot handoff
+    debug_log.add("Preparing boot handoff...", LOG_YELLOW);
     let handoff_ref = match prepare_boot_handoff(
         bs,
         &nic_probe,
@@ -168,22 +146,30 @@ pub unsafe fn commit_to_download(
         stack_top,
         STACK_SIZE as u64,
         screen,
-        &mut log_y,
+        &mut 0,
     ) {
-        Ok(handoff) => handoff,
-        Err(_) => fatal_hang(),
+        Ok(handoff) => {
+            debug_log.add("  Handoff prepared successfully", LOG_GREEN);
+            handoff
+        }
+        Err(_) => {
+            display_error_and_halt(screen, &debug_log, "Failed to prepare boot handoff", bs);
+        }
     };
-    log_y += 1;
 
-    // Phase 9: Leak URL for bare-metal use
+    // Phase 8: Leak URL for bare-metal use
     let url_copy = leak_string(&config.iso_url);
+    debug_log.add("All systems ready!", LOG_GREEN);
 
-    // Phase 10: Final warnings and exit boot services
-    display_final_warnings(screen, &mut log_y, bs);
+    // SUCCESS: Show clean ASCII art (debug log not needed)
+    display_download_start(screen, bs);
 
-    // CRITICAL: Exit boot services NOW (no more screen output!)
+    // CRITICAL: Exit boot services NOW
     if exit_boot_services_with_retry(bs, image_handle).is_err() {
-        fatal_hang();
+        // Can't show debug log after failed EBS attempt - just hang
+        loop {
+            core::hint::spin_loop();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -193,52 +179,6 @@ pub unsafe fn commit_to_download(
     let _result = enter_network_boot_url(handoff_ref, url_copy, esp_lba);
 
     // If we get here, download completed - must reset (can't return to UEFI)
-    fatal_hang()
-}
-
-/// Display block device probe status.
-fn display_block_device_status(
-    screen: &mut Screen,
-    log_y: &mut usize,
-    blk_probe: &crate::boot::network_boot::BlkProbeResult,
-) {
-    let has_blk = blk_probe.device_type != 0;
-    if has_blk {
-        if blk_probe.transport_type == 1 {
-            // PCI Modern
-            screen.put_str_at(
-                7,
-                *log_y,
-                &alloc::format!(
-                    "VirtIO-blk (PCI Modern) common_cfg: {:#x}",
-                    blk_probe.common_cfg
-                ),
-                EFI_LIGHTGREEN,
-                EFI_BLACK,
-            );
-        } else {
-            // Legacy MMIO
-            screen.put_str_at(
-                7,
-                *log_y,
-                &alloc::format!("VirtIO-blk found at {:#x}", blk_probe.mmio_base),
-                EFI_LIGHTGREEN,
-                EFI_BLACK,
-            );
-        }
-    } else {
-        screen.put_str_at(
-            7,
-            *log_y,
-            "No VirtIO-blk found (ISO won't be saved to disk)",
-            EFI_YELLOW,
-            EFI_BLACK,
-        );
-    }
-}
-
-/// Fatal hang - loop forever.
-fn fatal_hang() -> ! {
     loop {
         core::hint::spin_loop();
     }
