@@ -167,8 +167,9 @@ while !vsync_ready() {
     delay_us(100);
 }
 
-// ❌ FORBIDDEN: Inline assembly
-unsafe { core::arch::asm!("mfence"); }  // Use asm_bar_mfence() instead
+// ❌ FORBIDDEN: Inline assembly for hardware operations
+// Don't use inline asm! - use standalone ASM functions instead
+// unsafe { asm!("mfence"); }  // BAD: Use asm_bar_mfence() instead
 
 // ❌ FORBIDDEN: Hardcoded frame timing
 const FRAME_TIME_US: u64 = 16667;  // Use calibrated TSC value
@@ -950,14 +951,29 @@ impl FramePacer {
     pub fn calculate_jitter(&self) -> u64 {
         let sum: u64 = self.frame_times.iter().sum();
         let avg = sum / 16;
+        // Use saturating arithmetic to prevent overflow with large timing values
         let variance: u64 = self.frame_times.iter()
             .map(|&t| {
                 let diff = if t > avg { t - avg } else { avg - t };
-                diff * diff
+                // Saturate on overflow to prevent panic in debug builds
+                diff.saturating_mul(diff)
             })
-            .sum::<u64>() / 16;
-        // Return standard deviation in ticks
-        (variance as f64).sqrt() as u64
+            .fold(0u64, |acc, x| acc.saturating_add(x)) / 16;
+        // Return approximate standard deviation in ticks
+        // Note: This uses integer sqrt approximation for no_std compatibility
+        integer_sqrt(variance)
+    }
+    
+    /// Integer square root (for no_std environments)
+    fn integer_sqrt(n: u64) -> u64 {
+        if n == 0 { return 0; }
+        let mut x = n;
+        let mut y = (x + 1) / 2;
+        while y < x {
+            x = y;
+            y = (x + n / x) / 2;
+        }
+        x
     }
 }
 ```

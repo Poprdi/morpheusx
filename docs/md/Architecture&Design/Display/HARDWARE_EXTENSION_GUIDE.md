@@ -747,6 +747,11 @@ pub fn create_display_driver_with_fallback(
 ```nasm
 ; asm/amd_gpu.s
 
+section .data
+    ; Register offsets - defined per GPU family (example: RDNA2)
+    AMD_GPU_ID_OFFSET   equ 0x0000    ; GPU identification register
+    EXPECTED_ID         equ 0x73BF    ; Example: Navi 21 (RX 6800 XT)
+
 section .text
 
 global asm_amd_gpu_init
@@ -757,12 +762,12 @@ asm_amd_gpu_init:
     ; RCX = mmio_base
     ; RDX = doorbell_base
     
-    ; Read GPU ID
+    ; Read GPU ID from MMIO space
     mov     eax, [rcx + AMD_GPU_ID_OFFSET]
     cmp     eax, EXPECTED_ID
     jne     .init_failed
     
-    ; ... initialization sequence ...
+    ; ... initialization sequence (power up, reset, enable) ...
     
     xor     eax, eax    ; Success
     ret
