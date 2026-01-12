@@ -473,8 +473,8 @@ println!("3D: {}", caps.has_3d);
 #[deprecated(
     since = "1.0.0",
     note = "Use DisplayDriver::upload_resource() instead of BLT. \
-            See docs/md/Architecture&Design/Display/UEFI_COMPAT_LAYER.md \
-            for migration guide."
+            See docs/md/Architecture&Design/Display/IMPLEMENTATION_GUIDE.md \
+            for direct driver usage patterns."
 )]
 pub fn blt(&mut self, ...) -> Result<(), DisplayError> {
     // ...
