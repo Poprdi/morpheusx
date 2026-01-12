@@ -23,15 +23,15 @@
 //! ```
 
 pub mod catalog;
-pub mod commit_download;
+pub mod commit; // Modular commit download infrastructure
 pub mod manifest_io;
-pub mod network_check; // Network connectivity verification (deprecated - see commit_download)
+pub mod network_check; // Network connectivity verification (deprecated - see commit)
 pub mod renderer;
 pub mod state;
 pub mod ui; // Post-EBS download flow
 
 pub use catalog::{get_by_category, DistroCategory, DistroEntry, CATEGORIES, DISTRO_CATALOG};
-pub use commit_download::{commit_to_download, CommitResult, DownloadCommitConfig};
+pub use commit::{commit_to_download, CommitResult, DownloadCommitConfig};
 pub use manifest_io::{
     delete_manifest, load_manifests_from_esp, persist_manifest, ManifestIoError,
 };

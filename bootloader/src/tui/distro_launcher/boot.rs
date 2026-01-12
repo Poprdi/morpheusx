@@ -703,8 +703,17 @@ impl DistroLauncher {
             // Tails-specific: needs boot=live and findiso for squashfs
             // Add console=ttyS0 for serial output debugging
             "boot=live nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
+        } else if iso_name.to_lowercase().contains("kali") {
+            // Kali Linux - tell live-boot where to find the ISO filesystem
+            // The ISO data is stored in partition 2 which is a valid ISO9660 filesystem
+            // findiso tells live-boot to search for and mount the ISO from the specified device
+            // Kali has VirtIO support, so /dev/vda2 will work
+            "boot=live findiso=/dev/vda2 components quiet splash console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
         } else if iso_name.to_lowercase().contains("ubuntu") {
             "boot=casper quiet splash console=ttyS0,115200"
+        } else if iso_name.to_lowercase().contains("debian") {
+            // Debian Live also uses live-boot like Kali
+            "boot=live findiso=/dev/vda2 components quiet splash console=ttyS0,115200"
         } else if iso_name.to_lowercase().contains("fedora") {
             "rd.live.image quiet console=ttyS0,115200"
         } else if iso_name.to_lowercase().contains("puppy")
@@ -716,8 +725,8 @@ impl DistroLauncher {
             // pdev1=vda2 - explicitly specify device (may need to be vda2 or sda2 depending on drivers)
             "pmedia=usbhd pdev1=sda2 psubdir=/ console=ttyS0,115200 earlyprintk=serial,ttyS0,115200"
         } else {
-            // Generic live boot cmdline with max debug
-            "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 debug loglevel=7"
+            // Generic live boot cmdline - try findiso for most Debian-based live distros
+            "boot=live findiso=/dev/vda2 components console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 debug loglevel=7"
         };
 
         progress_bar.set_progress(100);

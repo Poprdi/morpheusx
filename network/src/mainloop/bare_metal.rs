@@ -710,6 +710,111 @@ unsafe fn create_iso_partition(
         serial_println(" MB");
     }
 
+    // === OVERLAP VERIFICATION ===
+    // Before creating the partition, verify the range is actually free
+    serial_println("[GPT] Verifying range is not already claimed...");
+
+    let dma_buffer = core::slice::from_raw_parts_mut(
+        (&raw mut DISK_WRITE_BUFFER).cast::<u8>(),
+        DISK_WRITE_BUFFER_SIZE,
+    );
+    let dma_buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
+    let timeout_ticks = 100_000_000u64;
+
+    let mut verify_adapter =
+        match VirtioBlkBlockIo::new(blk_driver, dma_buffer, dma_buffer_phys, timeout_ticks) {
+            Ok(a) => a,
+            Err(_) => {
+                serial_println("[GPT] ERROR: Failed to create BlockIo adapter for verification");
+                return None;
+            }
+        };
+
+    // Check if requested range is free, if not find alternative
+    let (actual_start, actual_end) = match crate::transfer::disk::GptOps::verify_range_free(
+        &mut verify_adapter,
+        start_sector,
+        end_sector,
+    ) {
+        Ok(true) => {
+            serial_println("[GPT] ✓ Range verified free - safe to create partition");
+            (start_sector, end_sector)
+        }
+        Ok(false) => {
+            serial_println("[GPT] WARNING: Requested range overlaps existing partition!");
+            serial_print("[GPT] Requested: ");
+            serial_print_hex(start_sector);
+            serial_print(" - ");
+            serial_print_hex(end_sector);
+            serial_println("");
+
+            serial_println("[GPT] Searching for alternative free space...");
+            match crate::transfer::disk::GptOps::find_free_space(&mut verify_adapter) {
+                Ok((free_start, free_end)) => {
+                    let free_size = free_end - free_start + 1;
+                    let needed_size = end_sector - start_sector + 1;
+
+                    if free_size >= needed_size {
+                        serial_print("[GPT] ✓ Found suitable free space: ");
+                        serial_print_hex(free_start);
+                        serial_print(" - ");
+                        serial_print_hex(free_end);
+                        serial_print(" (");
+                        serial_print_decimal((free_size * 512 / (1024 * 1024 * 1024)) as u32);
+                        serial_println(" GB)");
+
+                        // Align to 1MB boundary (2048 sectors)
+                        let aligned_start = ((free_start + 2047) / 2048) * 2048;
+                        let aligned_end = aligned_start + needed_size - 1;
+
+                        serial_print("[GPT] Using aligned range: ");
+                        serial_print_hex(aligned_start);
+                        serial_print(" - ");
+                        serial_print_hex(aligned_end);
+                        serial_println("");
+
+                        // Update global for manifest
+                        ACTUAL_START_SECTOR = aligned_start;
+
+                        (aligned_start, aligned_end)
+                    } else {
+                        serial_print("[GPT] ERROR: Free space too small (");
+                        serial_print_decimal((free_size * 512 / (1024 * 1024 * 1024)) as u32);
+                        serial_print(" GB < ");
+                        serial_print_decimal((needed_size * 512 / (1024 * 1024 * 1024)) as u32);
+                        serial_println(" GB needed)");
+                        return None;
+                    }
+                }
+                Err(e) => {
+                    serial_print("[GPT] ERROR: Could not find free space: ");
+                    serial_println(match e {
+                        crate::transfer::disk::DiskError::IoError => "IO error",
+                        crate::transfer::disk::DiskError::InvalidGpt => "Invalid GPT",
+                        crate::transfer::disk::DiskError::NoFreeSpace => "No free space",
+                        _ => "Unknown error",
+                    });
+                    serial_println("[GPT] ABORTING: Cannot create partition");
+                    return None;
+                }
+            }
+        }
+        Err(e) => {
+            serial_print("[GPT] ERROR: Could not verify range: ");
+            serial_println(match e {
+                crate::transfer::disk::DiskError::IoError => "IO error",
+                crate::transfer::disk::DiskError::InvalidGpt => "Invalid GPT",
+                _ => "Unknown error",
+            });
+            serial_println("[GPT] ABORTING: Cannot safely create partition");
+            return None;
+        }
+    };
+
+    // Use the verified range for partition creation
+    let start_sector = actual_start;
+    let end_sector = actual_end;
+
     // Create BlockIo adapter
     serial_println("[GPT] Creating BlockIO adapter...");
     let dma_buffer = core::slice::from_raw_parts_mut(
@@ -2403,19 +2508,50 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_println("");
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 7: COMPLETE
+    // STEP 7: SAFE SYSTEM SHUTDOWN/REBOOT
     // ═══════════════════════════════════════════════════════════════════════
     serial_println("");
     serial_println("=====================================");
     serial_println("  ISO Download Complete!");
     serial_println("=====================================");
     serial_println("");
-    serial_println("Ready to boot downloaded image.");
-    serial_println("System halted.");
+    serial_println("Initiating safe system reboot...");
 
-    // Halt
-    loop {
-        core::arch::asm!("hlt", options(nomem, nostack));
+    unsafe {
+        // 1) Keyboard controller reset (most compatible method)
+        serial_println("[REBOOT] Using keyboard controller reset (0x64 -> 0xFE)");
+        core::arch::asm!(
+            "out dx, al",
+            in("dx") 0x64u16,
+            in("al") 0xFEu8,
+            options(nomem, nostack)
+        );
+
+        // Wait for reboot (should happen quickly)
+        for _ in 0..50_000_000 {
+            core::hint::spin_loop();
+        }
+
+        // 2) Fallback: Port 0xCF9 reset (modern systems)
+        serial_println("[REBOOT] Fallback: Port 0xCF9 reset");
+        core::arch::asm!(
+            "out dx, al",
+            in("dx") 0xCF9u16,
+            in("al") 0x06u8,
+            options(nomem, nostack)
+        );
+
+        // Wait again
+        for _ in 0..50_000_000 {
+            core::hint::spin_loop();
+        }
+
+        // 3) If reboot failed, halt gracefully instead of triple-fault
+        serial_println("[REBOOT] Reboot methods failed - halting system");
+        serial_println("[REBOOT] Please manually power cycle the system");
+        loop {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
     }
 }
 

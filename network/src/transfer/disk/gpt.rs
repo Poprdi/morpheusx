@@ -171,17 +171,29 @@ impl GptOps {
         Ok((best_start, best_start + best_size - 1))
     }
 
-    /// Create a new partition
+    /// Verify that a given LBA range doesn't overlap any existing partition
     ///
-    /// Finds free slot in GPT and writes partition entry.
-    pub fn create_partition<B: BlockIo>(
+    /// Returns Ok(true) if range is free, Ok(false) if it overlaps.
+    pub fn verify_range_free<B: BlockIo>(
         block_io: &mut B,
         start_lba: u64,
         end_lba: u64,
-        type_guid: [u8; 16],
-        name: &str,
-    ) -> DiskResult<u8> {
-        // Read GPT header
+    ) -> DiskResult<bool> {
+        // Scan existing partitions
+        let (partitions, count) = Self::scan_partitions(block_io)?;
+
+        // Check for overlaps with any existing partition
+        for i in 0..count {
+            let part = &partitions[i];
+
+            // Check if ranges overlap
+            // Two ranges [a,b] and [c,d] overlap if: a <= d && c <= b
+            if start_lba <= part.end_lba && part.start_lba <= end_lba {
+                return Ok(false); // Overlap detected
+            }
+        }
+
+        // Also check against GPT usable area
         let mut header_buf = [0u8; SECTOR_SIZE];
         block_io
             .read_blocks(Lba(1), &mut header_buf)
@@ -191,9 +203,46 @@ impl GptOps {
             return Err(DiskError::InvalidGpt);
         }
 
-        let entry_lba = u64::from_le_bytes(header_buf[72..80].try_into().unwrap());
+        let first_usable = u64::from_le_bytes(header_buf[40..48].try_into().unwrap());
+        let last_usable = u64::from_le_bytes(header_buf[48..56].try_into().unwrap());
 
-        // Read partition entries
+        // Check if range is within usable area
+        if start_lba < first_usable || end_lba > last_usable {
+            return Ok(false); // Outside usable area
+        }
+
+        Ok(true) // Range is free
+    }
+
+    /// Create a new partition
+    ///
+    /// Finds free slot in GPT and writes partition entry.
+    /// Updates BOTH primary and backup GPT headers and partition arrays.
+    pub fn create_partition<B: BlockIo>(
+        block_io: &mut B,
+        start_lba: u64,
+        end_lba: u64,
+        type_guid: [u8; 16],
+        name: &str,
+    ) -> DiskResult<u8> {
+        // Read primary GPT header (LBA 1)
+        let mut primary_header = [0u8; SECTOR_SIZE];
+        block_io
+            .read_blocks(Lba(1), &mut primary_header)
+            .map_err(|_| DiskError::IoError)?;
+
+        if &primary_header[0..8] != GPT_SIGNATURE {
+            return Err(DiskError::InvalidGpt);
+        }
+
+        // Extract critical fields from primary header
+        let my_lba = u64::from_le_bytes(primary_header[24..32].try_into().unwrap()); // Should be 1
+        let alternate_lba = u64::from_le_bytes(primary_header[32..40].try_into().unwrap()); // Backup header LBA
+        let entry_lba = u64::from_le_bytes(primary_header[72..80].try_into().unwrap());
+        let num_entries = u32::from_le_bytes(primary_header[80..84].try_into().unwrap());
+        let entry_size = u32::from_le_bytes(primary_header[84..88].try_into().unwrap());
+
+        // Read partition entries (primary)
         let mut entry_buf = [0u8; SECTOR_SIZE * 32];
         for i in 0..32 {
             let sector_buf = &mut entry_buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
@@ -219,7 +268,7 @@ impl GptOps {
         // Build partition entry
         entry_buf[offset..offset + 16].copy_from_slice(&type_guid);
 
-        // Unique GUID (simple non-zero value)
+        // Unique GUID (simple non-zero value based on slot and timestamp-like value)
         entry_buf[offset + 16] = (slot + 1) as u8;
         entry_buf[offset + 17] = 0x12;
         entry_buf[offset + 18] = 0x34;
@@ -229,6 +278,9 @@ impl GptOps {
         entry_buf[offset + 32..offset + 40].copy_from_slice(&start_lba.to_le_bytes());
         entry_buf[offset + 40..offset + 48].copy_from_slice(&end_lba.to_le_bytes());
 
+        // Attributes (zero)
+        entry_buf[offset + 48..offset + 56].fill(0);
+
         // Name (UTF-16LE)
         let name_bytes = name.as_bytes();
         for (i, &b) in name_bytes.iter().take(36).enumerate() {
@@ -236,16 +288,20 @@ impl GptOps {
             entry_buf[offset + 56 + i * 2 + 1] = 0;
         }
 
-        // Calculate new CRC32 for partition array
+        // Calculate CRC32 for partition entry array
         let array_crc = crc32(&entry_buf[..MAX_PARTITION_ENTRIES * PARTITION_ENTRY_SIZE]);
-        header_buf[88..92].copy_from_slice(&array_crc.to_le_bytes());
 
-        // Recalculate header CRC32
-        header_buf[16..20].fill(0); // Zero CRC field first
-        let header_crc = crc32(&header_buf[0..92]);
-        header_buf[16..20].copy_from_slice(&header_crc.to_le_bytes());
+        // Update primary header with new array CRC
+        primary_header[88..92].copy_from_slice(&array_crc.to_le_bytes());
 
-        // Write back partition entries
+        // Recalculate primary header CRC32
+        primary_header[16..20].fill(0); // Zero CRC field first
+        let primary_header_crc = crc32(&primary_header[0..92]);
+        primary_header[16..20].copy_from_slice(&primary_header_crc.to_le_bytes());
+
+        // === Write primary GPT ===
+        
+        // Write primary partition entries
         for i in 0..32 {
             let sector_buf = &entry_buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
             block_io
@@ -253,11 +309,48 @@ impl GptOps {
                 .map_err(|_| DiskError::IoError)?;
         }
 
-        // Write back header
+        // Write primary header
         block_io
-            .write_blocks(Lba(1), &header_buf)
+            .write_blocks(Lba(1), &primary_header)
             .map_err(|_| DiskError::IoError)?;
 
+        // === Create and write backup GPT ===
+        
+        // Backup partition entries come BEFORE the backup header
+        let backup_entries_lba = alternate_lba - 32;
+
+        // Write backup partition entries (same as primary)
+        for i in 0..32 {
+            let sector_buf = &entry_buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
+            block_io
+                .write_blocks(Lba(backup_entries_lba + i as u64), sector_buf)
+                .map_err(|_| DiskError::IoError)?;
+        }
+
+        // Create backup header (copy of primary with swapped LBAs)
+        let mut backup_header = primary_header;
+        
+        // Swap my_lba and alternate_lba
+        backup_header[24..32].copy_from_slice(&alternate_lba.to_le_bytes()); // My LBA = backup position
+        backup_header[32..40].copy_from_slice(&my_lba.to_le_bytes()); // Alternate = primary position
+        
+        // Update partition entry array LBA to backup position
+        backup_header[72..80].copy_from_slice(&backup_entries_lba.to_le_bytes());
+
+        // Partition array CRC is the same (same entries)
+        backup_header[88..92].copy_from_slice(&array_crc.to_le_bytes());
+
+        // Recalculate backup header CRC32
+        backup_header[16..20].fill(0);
+        let backup_header_crc = crc32(&backup_header[0..92]);
+        backup_header[16..20].copy_from_slice(&backup_header_crc.to_le_bytes());
+
+        // Write backup header
+        block_io
+            .write_blocks(Lba(alternate_lba), &backup_header)
+            .map_err(|_| DiskError::IoError)?;
+
+        // Flush all writes
         block_io.flush().map_err(|_| DiskError::IoError)?;
 
         Ok(slot as u8)
