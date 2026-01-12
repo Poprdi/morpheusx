@@ -8,10 +8,34 @@ use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
 extern crate alloc;
+use crate::uefi_alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
 const SECTOR_SIZE: usize = 512;
+
+/// Helper to allocate and free a temporary buffer using UEFI
+/// Pre-EBS: uses UEFI allocate_pages
+/// Must provide boot_services_alloc when calling from pre-EBS context
+unsafe fn with_temp_buffer<F>(
+    size: usize,
+    boot_services_alloc: uefi_alloc::AllocatePages,
+    boot_services_free: uefi_alloc::FreePages,
+    f: F,
+) -> Result<(), Fat32Error>
+where
+    F: FnOnce(&mut [u8]) -> Result<(), Fat32Error>,
+{
+    let pages = uefi_alloc::bytes_to_pages(size);
+    let addr =
+        uefi_alloc::allocate_pages(boot_services_alloc, pages).map_err(|_| Fat32Error::IoError)?;
+
+    let buffer = core::slice::from_raw_parts_mut(addr as *mut u8, size);
+    let result = f(buffer);
+
+    let _ = uefi_alloc::free_pages(boot_services_free, addr, pages);
+    result
+}
 
 pub fn write_file_in_directory<B: BlockIo>(
     block_io: &mut B,
@@ -41,6 +65,32 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
     data: &[u8],
     progress: &mut Option<&mut dyn FnMut(usize, usize, &str)>,
 ) -> Result<(), Fat32Error> {
+    write_file_in_directory_with_progress_uefi(
+        block_io,
+        partition_start,
+        ctx,
+        dir_cluster,
+        name,
+        data,
+        progress,
+        None,
+        None,
+    )
+}
+
+/// UEFI-aware write that can use pre-EBS allocations
+/// When boot_services is Some, uses UEFI allocate_pages for temporary buffers
+pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
+    block_io: &mut B,
+    partition_start: u64,
+    ctx: &Fat32Context,
+    dir_cluster: u32,
+    name: &str,
+    data: &[u8],
+    progress: &mut Option<&mut dyn FnMut(usize, usize, &str)>,
+    boot_services_alloc: Option<uefi_alloc::AllocatePages>,
+    boot_services_free: Option<uefi_alloc::FreePages>,
+) -> Result<(), Fat32Error> {
     let total_size = data.len();
 
     // Report start
@@ -52,14 +102,21 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
     let cluster_size = (ctx.sectors_per_cluster * SECTOR_SIZE as u32) as usize;
     let clusters_needed = ((data.len() + cluster_size - 1) / cluster_size).max(1);
 
-    let mut file_clusters = Vec::new();
-    for _ in 0..clusters_needed {
+    // Use fixed-size array instead of Vec - no heap allocation pre-EBS
+    // 512 clusters * 4KB = 2MB max file size (enough for bootloader EFI)
+    const MAX_CLUSTERS: usize = 512;
+    if clusters_needed > MAX_CLUSTERS {
+        return Err(Fat32Error::IoError); // File too large
+    }
+
+    let mut file_clusters = [0u32; MAX_CLUSTERS];
+    for i in 0..clusters_needed {
         let cluster = ctx.allocate_cluster(block_io, partition_start)?;
-        file_clusters.push(cluster);
+        file_clusters[i] = cluster;
     }
 
     // Chain clusters together in FAT
-    for i in 0..file_clusters.len() - 1 {
+    for i in 0..clusters_needed - 1 {
         ctx.write_fat_entry(
             block_io,
             partition_start,
@@ -69,39 +126,44 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
     }
     // Last cluster is already marked with EOC by allocate_cluster
 
+    // Require UEFI allocation for pre-EBS
+    let alloc_fn = boot_services_alloc.ok_or(Fat32Error::IoError)?;
+    let free_fn = boot_services_free.ok_or(Fat32Error::IoError)?;
+
     // Write file data to clusters with progress reporting
     let mut bytes_written = 0;
-    for (i, &cluster) in file_clusters.iter().enumerate() {
+    for i in 0..clusters_needed {
+        let cluster = file_clusters[i];
         let data_offset = i * cluster_size;
         let data_end = (data_offset + cluster_size).min(data.len());
         let chunk_size = data_end - data_offset;
 
-        let mut cluster_data = vec![0u8; cluster_size];
-        cluster_data[..chunk_size].copy_from_slice(&data[data_offset..data_end]);
+        unsafe {
+            with_temp_buffer(cluster_size, alloc_fn, free_fn, |cluster_data| {
+                cluster_data[..chunk_size].copy_from_slice(&data[data_offset..data_end]);
 
-        let sector = ctx.cluster_to_sector(cluster);
-        for sec_offset in 0..ctx.sectors_per_cluster {
-            let start = (sec_offset * SECTOR_SIZE as u32) as usize;
-            let end = start + SECTOR_SIZE;
-            block_io
-                .write_blocks(
-                    Lba(partition_start + sector as u64 + sec_offset as u64),
-                    &cluster_data[start..end],
-                )
-                .map_err(|_| Fat32Error::IoError)?;
+                let sector = ctx.cluster_to_sector(cluster);
+                for sec_offset in 0..ctx.sectors_per_cluster {
+                    let start = (sec_offset * SECTOR_SIZE as u32) as usize;
+                    let end = start + SECTOR_SIZE;
+                    block_io
+                        .write_blocks(
+                            Lba(partition_start + sector as u64 + sec_offset as u64),
+                            &cluster_data[start..end],
+                        )
+                        .map_err(|_| Fat32Error::IoError)?;
 
-            bytes_written += SECTOR_SIZE.min(total_size - bytes_written);
+                    bytes_written += SECTOR_SIZE.min(total_size - bytes_written);
 
-            // Report progress after each sector
-            if let Some(ref mut cb) = progress {
-                let percent = (bytes_written * 100) / total_size;
-                cb(
-                    bytes_written,
-                    total_size,
-                    alloc::format!("Writing... {}%", percent).leak(),
-                );
-            }
-        }
+                    // Report progress after each sector
+                    // Use static message - no heap allocation pre-EBS
+                    if let Some(ref mut cb) = progress {
+                        cb(bytes_written, total_size, "Writing...");
+                    }
+                }
+                Ok(())
+            })
+        }?;
     }
 
     // Add directory entry

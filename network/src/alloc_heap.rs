@@ -96,13 +96,14 @@ unsafe impl GlobalAlloc for LockedHeap {
     }
 }
 
-// Only use custom allocator in actual no_std builds, not host tests
-#[cfg(not(test))]
+// Only use custom allocator when post_ebs_allocator feature is enabled
+// This allows the bootloader to use its own UEFI-backed allocator pre-EBS
+#[cfg(all(not(test), feature = "post_ebs_allocator"))]
 #[global_allocator]
 static GLOBAL: LockedHeap = LockedHeap::empty();
 
-// For test builds, we still need the static but it's not the global allocator
-#[cfg(test)]
+// For test builds or when not using as global allocator, still need the static
+#[cfg(any(test, not(feature = "post_ebs_allocator")))]
 static GLOBAL: LockedHeap = LockedHeap::empty();
 
 /// Track if heap is already initialized

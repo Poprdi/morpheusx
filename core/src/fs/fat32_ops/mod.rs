@@ -7,11 +7,12 @@ pub mod filename;
 mod types;
 
 use super::Fat32Error;
+use crate::uefi_alloc;
 use context::Fat32Context;
 use gpt_disk_io::BlockIo;
 
 extern crate alloc;
-use alloc::vec::Vec;
+use alloc::vec::Vec; // Only used by read_file (post-EBS)
 
 /// Progress callback type: (bytes_written, total_bytes, message)
 pub type ProgressCallback<'a> = Option<&'a mut dyn FnMut(usize, usize, &str)>;
@@ -34,16 +35,49 @@ pub fn write_file_with_progress<B: BlockIo>(
     data: &[u8],
     progress: &mut ProgressCallback,
 ) -> Result<(), Fat32Error> {
+    write_file_with_progress_uefi(
+        block_io,
+        partition_lba_start,
+        path,
+        data,
+        progress,
+        None,
+        None,
+    )
+}
+
+/// Write file to FAT32 partition with progress reporting and UEFI allocation support
+/// Pass Some() for boot_services_* to use UEFI allocate_pages for pre-EBS memory
+pub fn write_file_with_progress_uefi<B: BlockIo>(
+    block_io: &mut B,
+    partition_lba_start: u64,
+    path: &str,
+    data: &[u8],
+    progress: &mut ProgressCallback,
+    boot_services_alloc: Option<uefi_alloc::AllocatePages>,
+    boot_services_free: Option<uefi_alloc::FreePages>,
+) -> Result<(), Fat32Error> {
     let ctx = Fat32Context::from_boot_sector(block_io, partition_lba_start)?;
 
-    // Parse path
+    // Parse path - use fixed array instead of Vec (no heap allocation pre-EBS)
+    // Max 8 path components should be plenty for EFI paths
     let path = path.trim_start_matches('/');
-    let parts: Vec<&str> = path.split('/').collect();
+    const MAX_PATH_PARTS: usize = 8;
+    let mut parts: [&str; MAX_PATH_PARTS] = [""; MAX_PATH_PARTS];
+    let mut parts_count = 0;
+    for part in path.split('/') {
+        if parts_count >= MAX_PATH_PARTS {
+            return Err(Fat32Error::IoError); // Path too deep
+        }
+        parts[parts_count] = part;
+        parts_count += 1;
+    }
 
     // Navigate/create directory structure
     let mut current_cluster = ctx.root_cluster;
-    for (i, part) in parts.iter().enumerate() {
-        let is_last = i == parts.len() - 1;
+    for i in 0..parts_count {
+        let part = parts[i];
+        let is_last = i == parts_count - 1;
 
         if !is_last {
             // This is a directory component
@@ -55,8 +89,8 @@ pub fn write_file_with_progress<B: BlockIo>(
                 part,
             )?;
         } else {
-            // This is the file name - create/write it
-            file_ops::write_file_in_directory_with_progress(
+            // This is the file name - create/write it with UEFI support
+            file_ops::write_file_in_directory_with_progress_uefi(
                 block_io,
                 partition_lba_start,
                 &ctx,
@@ -64,6 +98,8 @@ pub fn write_file_with_progress<B: BlockIo>(
                 part,
                 data,
                 progress,
+                boot_services_alloc,
+                boot_services_free,
             )?;
         }
     }

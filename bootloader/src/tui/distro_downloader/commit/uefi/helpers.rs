@@ -3,6 +3,7 @@
 /// Exit boot services with memory map handling.
 ///
 /// Returns Ok(()) on success, Err(()) on failure.
+/// Also switches the allocator to post-EBS mode.
 pub unsafe fn exit_boot_services_with_retry(
     bs: &crate::BootServices,
     image_handle: *mut (),
@@ -58,6 +59,10 @@ pub unsafe fn exit_boot_services_with_retry(
             return Err(());
         }
     }
+
+    // CRITICAL: Switch allocator to post-EBS mode (uses linked_list_allocator)
+    // UEFI allocate_pool is no longer available after ExitBootServices
+    crate::uefi_allocator::switch_to_post_ebs();
 
     Ok(())
 }

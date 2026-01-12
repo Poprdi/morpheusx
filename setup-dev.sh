@@ -82,13 +82,11 @@ check_ovmf()       { get_ovmf_path &>/dev/null; }
 check_bootloader() { [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]]; }
 check_qemu()       { has_cmd qemu-system-x86_64; }
 check_disk_tools() { has_cmd qemu-img && has_cmd parted && has_cmd mkfs.vfat && has_cmd mkfs.ext4; }
-check_tails()      { [[ -f "${ESP_DIR}/kernels/vmlinuz-tails" ]]; }
-check_arch()       { [[ -f "${ESP_DIR}/kernels/vmlinuz-arch" ]]; }
-check_any_distro() { check_tails || check_arch || compgen -G "${ESP_DIR}/kernels/vmlinuz-*" > /dev/null 2>&1; }
+# Distribution checks removed - network downloader handles ISO acquisition
 check_disk_50g()   { [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; }
 
 ensure_dirs() {
-    mkdir -p "${ESP_DIR}"/{EFI/BOOT,kernels,initrds,loader/entries,.iso}
+    mkdir -p "${ESP_DIR}/EFI/BOOT"
     mkdir -p "${TESTING_DIR}"
 }
 
@@ -115,10 +113,6 @@ cmd_status() {
     
     printf "\n${C_DIM}── Build ──${C_RESET}\n"
     print_check "$(check_bootloader && echo 1 || echo 0)" "Bootloader (BOOTX64.EFI)"
-    
-    printf "\n${C_DIM}── Distributions ──${C_RESET}\n"
-    print_check "$(check_tails && echo 1 || echo 0)" "Tails OS"
-    print_check "$(check_arch && echo 1 || echo 0)" "Arch Linux"
     
     printf "\n${C_DIM}── Disk Images ──${C_RESET}\n"
     print_check "$(check_disk_50g && echo 1 || echo 0)" "Test Disk 50GB"
@@ -245,35 +239,9 @@ do_build() {
     log_success "Bootloader ready"
 }
 
-do_install_tails() {
-    log_step "Installing Tails OS"
-    
-    if check_tails && [[ "${FORCE_MODE}" != "true" ]]; then
-        log_success "Tails already installed"
-        return 0
-    fi
-    
-    pushd "${TESTING_DIR}" >/dev/null
-    yes y | ./install-tails.sh || ./install-tails.sh
-    popd >/dev/null
-    
-    log_success "Tails installed"
-}
+# do_install_tails removed - use network downloader in bootloader TUI
 
-do_install_arch() {
-    log_step "Installing Arch Linux"
-    
-    if check_arch && [[ "${FORCE_MODE}" != "true" ]]; then
-        log_success "Arch already installed"
-        return 0
-    fi
-    
-    pushd "${TESTING_DIR}" >/dev/null
-    ./install-arch.sh
-    popd >/dev/null
-    
-    log_success "Arch installed"
-}
+# do_install_arch removed - use network downloader in bootloader TUI
 
 do_create_disk() {
     log_step "Creating Test Disk"
@@ -289,70 +257,30 @@ do_create_disk() {
     rm -f "$disk_img"
     qemu-img create -f raw "$disk_img" 50G >/dev/null
     
-    log_info "Creating GPT partition table..."
+    log_info "Creating GPT partition table with ESP only..."
     parted -s "$disk_img" mklabel gpt
-    parted -s "$disk_img" mkpart primary fat32 1MiB 4GiB
+    parted -s "$disk_img" mkpart ESP fat32 1MiB 4GiB
     parted -s "$disk_img" set 1 esp on
-    parted -s "$disk_img" mkpart primary ext4 4GiB 100%
+    # Leave remaining space FREE for bootloader to create ISO partitions dynamically
     
-    log_info "Setting up partitions..."
+    log_info "Setting up ESP partition..."
     local loop_dev
     loop_dev=$(sudo losetup -fP --show "$disk_img")
     
     trap "sudo losetup -d '$loop_dev' 2>/dev/null || true" EXIT
     
     sudo mkfs.vfat -F 32 -n "ESP" "${loop_dev}p1" >/dev/null
-    sudo mkfs.ext4 -q -L "MORPHEUS_DATA" "${loop_dev}p2" >/dev/null
+    # No second partition - bootloader creates ISO partitions on-demand
     
     local mnt
     mnt=$(mktemp -d)
     sudo mount "${loop_dev}p1" "$mnt"
     
-    sudo mkdir -p "$mnt"/{EFI/BOOT,kernels,initrds,live,loader/entries,.iso}
+    sudo mkdir -p "$mnt/EFI/BOOT"
     
     [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
     
-    if [[ -f "${ESP_DIR}/initrds/filesystem.squashfs" ]]; then
-        log_info "Copying Tails squashfs (~2GB, this takes a moment)..."
-        sudo cp "${ESP_DIR}/initrds/filesystem.squashfs" "$mnt/live/"
-    fi
-
-    if compgen -G "${ESP_DIR}/.iso/*.iso" > /dev/null 2>&1; then
-        log_info "Copying ISO images into ESP .iso/ (for bootloader ISO scan)..."
-        sudo cp "${ESP_DIR}/.iso/"*.iso "$mnt/.iso/"
-    else
-        log_warn "No ISO images found in ${ESP_DIR}/.iso to copy"
-    fi
-    
-    for kernel in "${ESP_DIR}"/kernels/vmlinuz-*; do
-        [[ -f "$kernel" ]] || continue
-        local kname distro
-        kname=$(basename "$kernel")
-        distro=${kname#vmlinuz-}
-        
-        sudo cp "$kernel" "$mnt/kernels/"
-        [[ -f "${ESP_DIR}/initrds/initrd-${distro}.img" ]] && sudo cp "${ESP_DIR}/initrds/initrd-${distro}.img" "$mnt/initrds/"
-        
-        local title="$distro" cmdline="console=ttyS0,115200 console=tty0"
-        case "$distro" in
-            tails)  title="Tails OS"; cmdline="boot=live live-media-path=/live nopersistence noprompt splash=0 $cmdline" ;;
-            arch)   title="Arch Linux"; cmdline="root=/dev/ram0 rw debug $cmdline" ;;
-            ubuntu) title="Ubuntu"; cmdline="boot=casper quiet splash $cmdline" ;;
-            debian) title="Debian"; cmdline="boot=live quiet $cmdline" ;;
-            fedora) title="Fedora"; cmdline="rd.live.image quiet $cmdline" ;;
-        esac
-        
-        local initrd_line=""
-        [[ -f "$mnt/initrds/initrd-${distro}.img" ]] && initrd_line="initrd  /initrds/initrd-${distro}.img"
-        
-        sudo tee "$mnt/loader/entries/${distro}.conf" > /dev/null << EOF
-title   $title
-linux   /kernels/$kname
-$initrd_line
-options $cmdline
-EOF
-        log_info "Added boot entry: $title"
-    done
+    log_info "Disk ready - use network downloader in bootloader TUI to fetch distributions"
     
     sudo umount "$mnt"
     rmdir "$mnt"
@@ -461,13 +389,7 @@ run_full_auto() {
     
     do_build
     
-    if ! check_any_distro; then
-        log_step "Installing Distributions"
-        log_info "Installing Tails OS (this downloads ~1.3GB)..."
-        do_install_tails
-    else
-        log_success "Distributions ready"
-    fi
+    # Distributions are now downloaded via network downloader in bootloader TUI
     
     do_create_disk
     
@@ -515,23 +437,9 @@ run_interactive() {
         do_build
     fi
     
-    printf "\n${C_BOLD}Which distributions to install?${C_RESET}\n"
-    printf "  ${C_CYAN}[1]${C_RESET} Tails OS only (~1.3GB)\n"
-    printf "  ${C_CYAN}[2]${C_RESET} Arch Linux only (~2GB)\n"
-    printf "  ${C_CYAN}[3]${C_RESET} Both Tails and Arch\n"
-    printf "  ${C_CYAN}[4]${C_RESET} Skip - I'll add distros later\n"
-    printf "Choice [1]: "
-    read -r distro_choice
-    [[ -z "$distro_choice" ]] && distro_choice=1
+    # Distributions are now downloaded via network downloader in bootloader TUI
     
-    case "$distro_choice" in
-        1) do_install_tails ;;
-        2) do_install_arch ;;
-        3) do_install_tails; do_install_arch ;;
-        4) log_info "Skipping distributions" ;;
-    esac
-    
-    if ask "Create 50GB test disk with bootloader and distros?"; then
+    if ask "Create 50GB test disk with bootloader?"; then
         FORCE_MODE=true
         do_create_disk
     fi
@@ -580,25 +488,7 @@ cmd_disk() {
     esac
 }
 
-cmd_install() {
-    local target="${1:-}"
-    print_banner
-    
-    case "$target" in
-        tails)  FORCE_MODE=true; do_install_tails ;;
-        arch)   FORCE_MODE=true; do_install_arch ;;
-        both|all) FORCE_MODE=true; do_install_tails; do_install_arch ;;
-        "")
-            printf "Usage: %s install <target>\n\n" "$(basename "$0")"
-            printf "Targets:\n"
-            printf "  ${C_CYAN}tails${C_RESET}   Install Tails OS\n"
-            printf "  ${C_CYAN}arch${C_RESET}    Install Arch Linux\n"
-            printf "  ${C_CYAN}both${C_RESET}    Install both\n"
-            return 1
-            ;;
-        *) die "Unknown target: $target" ;;
-    esac
-}
+# cmd_install removed - distributions are downloaded via network downloader in bootloader TUI
 
 cmd_run() {
     print_banner
@@ -613,8 +503,7 @@ cmd_clean() {
     printf "What to clean?\n"
     printf "  ${C_CYAN}[1]${C_RESET} Build artifacts only\n"
     printf "  ${C_CYAN}[2]${C_RESET} Disk images only\n"
-    printf "  ${C_CYAN}[3]${C_RESET} Distributions only\n"
-    printf "  ${C_CYAN}[4]${C_RESET} Everything\n"
+    printf "  ${C_CYAN}[3]${C_RESET} Everything\n"
     printf "  ${C_CYAN}[0]${C_RESET} Cancel\n\n"
     
     read -r -n 1 -p "Choice: " choice
@@ -631,12 +520,6 @@ cmd_clean() {
             log_success "Disk images cleaned"
             ;;
         3)
-            rm -f "${ESP_DIR}/kernels"/*
-            rm -f "${ESP_DIR}/initrds"/*
-            rm -rf "${ESP_DIR}/rootfs"
-            log_success "Distributions cleaned"
-            ;;
-        4)
             rm -rf "${PROJECT_ROOT}/target"
             rm -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI"
             rm -f "${TESTING_DIR}"/*.img
@@ -655,7 +538,8 @@ usage() {
     
     printf "${C_BOLD}Default Behavior:${C_RESET}\n"
     printf "  Running without arguments does EVERYTHING automatically:\n"
-    printf "  installs deps, builds, downloads distros, creates disk, launches QEMU\n\n"
+    printf "  installs deps, builds, creates disk, launches QEMU\n"
+    printf "  ${C_DIM}(Use network downloader in bootloader TUI to fetch ISOs)${C_RESET}\n\n"
     
     printf "${C_BOLD}Options:${C_RESET}\n"
     printf "  ${C_CYAN}-i, --interactive${C_RESET}  Ask at each step what to do\n"
@@ -666,7 +550,6 @@ usage() {
     printf "\n${C_BOLD}Commands:${C_RESET} (for power users)\n"
     printf "  ${C_CYAN}setup${C_RESET}              Install dependencies only\n"
     printf "  ${C_CYAN}build${C_RESET}              Build bootloader only\n"
-    printf "  ${C_CYAN}install${C_RESET} <target>   Install distro (tails|arch|both)\n"
     printf "  ${C_CYAN}disk${C_RESET} [target]      Create disk image (50g|info)\n"
     printf "  ${C_CYAN}run${C_RESET}                Launch QEMU\n"
     printf "  ${C_CYAN}status${C_RESET}             Show environment status\n"
@@ -708,7 +591,6 @@ main() {
             ;;
         setup|init)      cmd_setup ;;
         build|compile)   cmd_build ;;
-        install|add)     cmd_install "${args[@]:-}" ;;
         disk|image)      cmd_disk "${args[@]:-}" ;;
         run|start|qemu)  cmd_run ;;
         status|info)     cmd_status ;;
