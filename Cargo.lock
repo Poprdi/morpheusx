@@ -205,9 +205,11 @@ dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
  "iso9660-rs",
+ "linked_list_allocator",
  "morpheus-core",
  "morpheus-network",
  "morpheus-persistent",
+ "spin",
  "virtio-drivers",
 ]
 

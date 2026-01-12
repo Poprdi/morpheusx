@@ -37,6 +37,44 @@ where
     result
 }
 
+/// Helper to write data to a cluster's sectors
+fn write_cluster_data<B: BlockIo>(
+    block_io: &mut B,
+    ctx: &Fat32Context,
+    partition_start: u64,
+    cluster: u32,
+    cluster_data: &mut [u8],
+    data_chunk: &[u8],
+    chunk_size: usize,
+    total_size: usize,
+    bytes_written: &mut usize,
+    progress: &mut Option<&mut dyn FnMut(usize, usize, &str)>,
+) -> Result<(), Fat32Error> {
+    // Clear buffer and copy data
+    cluster_data.fill(0);
+    cluster_data[..chunk_size].copy_from_slice(data_chunk);
+
+    let sector = ctx.cluster_to_sector(cluster);
+    for sec_offset in 0..ctx.sectors_per_cluster {
+        let start = (sec_offset * SECTOR_SIZE as u32) as usize;
+        let end = start + SECTOR_SIZE;
+        block_io
+            .write_blocks(
+                Lba(partition_start + sector as u64 + sec_offset as u64),
+                &cluster_data[start..end],
+            )
+            .map_err(|_| Fat32Error::IoError)?;
+
+        *bytes_written += SECTOR_SIZE.min(total_size - *bytes_written);
+
+        // Report progress after each sector
+        if let Some(ref mut cb) = progress {
+            cb(*bytes_written, total_size, "Writing...");
+        }
+    }
+    Ok(())
+}
+
 pub fn write_file_in_directory<B: BlockIo>(
     block_io: &mut B,
     partition_start: u64,
@@ -126,11 +164,8 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
     }
     // Last cluster is already marked with EOC by allocate_cluster
 
-    // Require UEFI allocation for pre-EBS
-    let alloc_fn = boot_services_alloc.ok_or(Fat32Error::IoError)?;
-    let free_fn = boot_services_free.ok_or(Fat32Error::IoError)?;
-
     // Write file data to clusters with progress reporting
+    // Use UEFI allocation if provided (pre-EBS), otherwise use global heap (post-EBS)
     let mut bytes_written = 0;
     for i in 0..clusters_needed {
         let cluster = file_clusters[i];
@@ -138,32 +173,41 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
         let data_end = (data_offset + cluster_size).min(data.len());
         let chunk_size = data_end - data_offset;
 
-        unsafe {
-            with_temp_buffer(cluster_size, alloc_fn, free_fn, |cluster_data| {
-                cluster_data[..chunk_size].copy_from_slice(&data[data_offset..data_end]);
-
-                let sector = ctx.cluster_to_sector(cluster);
-                for sec_offset in 0..ctx.sectors_per_cluster {
-                    let start = (sec_offset * SECTOR_SIZE as u32) as usize;
-                    let end = start + SECTOR_SIZE;
-                    block_io
-                        .write_blocks(
-                            Lba(partition_start + sector as u64 + sec_offset as u64),
-                            &cluster_data[start..end],
-                        )
-                        .map_err(|_| Fat32Error::IoError)?;
-
-                    bytes_written += SECTOR_SIZE.min(total_size - bytes_written);
-
-                    // Report progress after each sector
-                    // Use static message - no heap allocation pre-EBS
-                    if let Some(ref mut cb) = progress {
-                        cb(bytes_written, total_size, "Writing...");
-                    }
-                }
-                Ok(())
-            })
-        }?;
+        // Choose allocation strategy based on available UEFI services
+        if let (Some(alloc_fn), Some(free_fn)) = (boot_services_alloc, boot_services_free) {
+            // Pre-EBS: use UEFI allocate_pages
+            unsafe {
+                with_temp_buffer(cluster_size, alloc_fn, free_fn, |cluster_data| {
+                    write_cluster_data(
+                        block_io,
+                        ctx,
+                        partition_start,
+                        cluster,
+                        cluster_data,
+                        &data[data_offset..data_end],
+                        chunk_size,
+                        total_size,
+                        &mut bytes_written,
+                        progress,
+                    )
+                })?;
+            }
+        } else {
+            // Post-EBS: use global heap allocator (Vec)
+            let mut cluster_data = vec![0u8; cluster_size];
+            write_cluster_data(
+                block_io,
+                ctx,
+                partition_start,
+                cluster,
+                &mut cluster_data,
+                &data[data_offset..data_end],
+                chunk_size,
+                total_size,
+                &mut bytes_written,
+                progress,
+            )?;
+        }
     }
 
     // Add directory entry
