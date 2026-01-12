@@ -35,8 +35,16 @@ pub enum NetworkError {
     SendFailed,
     /// Receive operation failed.
     ReceiveFailed,
+    /// Receive error from device.
+    ReceiveError,
     /// Unexpected end of stream.
     UnexpectedEof,
+    /// Device not ready.
+    DeviceNotReady,
+    /// All buffers are in use.
+    BufferExhausted,
+    /// Packet too large to transmit.
+    PacketTooLarge,
     Unknown,
 }
 
@@ -63,7 +71,11 @@ impl fmt::Display for NetworkError {
             Self::TooManyRedirects => write!(f, "Too many redirects"),
             Self::SendFailed => write!(f, "Send failed"),
             Self::ReceiveFailed => write!(f, "Receive failed"),
+            Self::ReceiveError => write!(f, "Device receive error"),
             Self::UnexpectedEof => write!(f, "Unexpected end of stream"),
+            Self::DeviceNotReady => write!(f, "Device not ready"),
+            Self::BufferExhausted => write!(f, "All buffers in use"),
+            Self::PacketTooLarge => write!(f, "Packet too large"),
             Self::Unknown => write!(f, "Unknown error"),
         }
     }
