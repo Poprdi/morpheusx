@@ -11,9 +11,10 @@ use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
 /// Maximum sectors to read in a single I/O operation
-/// 512 sectors = 1MB per read - optimized for large files like kernel/initrd
-/// For 11MB kernel: ~11 reads, for 70MB initrd: ~70 reads
-const MAX_SECTORS_PER_READ: usize = 512;
+/// 32 sectors = 64KB per read - safe for UEFI firmware transfer limits
+/// Many UEFI implementations have max transfer sizes of 64-128KB
+/// For 11MB kernel: ~172 reads, for 70MB initrd: ~1094 reads
+const MAX_SECTORS_PER_READ: usize = 32;
 
 // Progress logging disabled in standalone iso9660 crate (no logger dependency)
 // const PROGRESS_INTERVAL_BYTES: usize = 4 * 1024 * 1024; // 4 MiB

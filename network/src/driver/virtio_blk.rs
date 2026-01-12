@@ -234,10 +234,14 @@ pub struct VirtioBlkDriver {
     in_flight: [InFlightRequest; MAX_IN_FLIGHT],
     /// Next free descriptor set (each request uses 3)
     next_desc_set: u16,
-    /// Headers CPU pointer
+    /// Headers CPU pointer (for writing request headers)
     headers_cpu: *mut VirtioBlkReqHeader,
-    /// Status CPU pointer
+    /// Status CPU pointer (for reading completion status)
     status_cpu: *mut u8,
+    /// Headers physical/bus address (for DMA descriptors)
+    headers_phys: u64,
+    /// Status physical/bus address (for DMA descriptors)
+    status_phys: u64,
 }
 
 impl VirtioBlkDriver {
@@ -382,6 +386,8 @@ impl VirtioBlkDriver {
             next_desc_set: 0,
             headers_cpu: config.headers_cpu as *mut VirtioBlkReqHeader,
             status_cpu: config.status_cpu as *mut u8,
+            headers_phys: config.headers_phys,
+            status_phys: config.status_phys,
         })
     }
 
@@ -526,6 +532,8 @@ impl VirtioBlkDriver {
             next_desc_set: 0,
             headers_cpu: config.headers_cpu as *mut VirtioBlkReqHeader,
             status_cpu: config.status_cpu as *mut u8,
+            headers_phys: config.headers_phys,
+            status_phys: config.status_phys,
         })
     }
 
@@ -543,15 +551,14 @@ impl VirtioBlkDriver {
 
     /// Get header physical address for a descriptor set.
     fn header_phys(&self, slot_idx: usize) -> u64 {
-        // Assuming headers are contiguous
-        let base = self.headers_cpu as u64;
-        base + (slot_idx * core::mem::size_of::<VirtioBlkReqHeader>()) as u64
+        // Use physical address for DMA - device needs bus address, not CPU pointer
+        self.headers_phys + (slot_idx * core::mem::size_of::<VirtioBlkReqHeader>()) as u64
     }
 
     /// Get status physical address for a descriptor set.
     fn status_phys(&self, slot_idx: usize) -> u64 {
-        let base = self.status_cpu as u64;
-        base + slot_idx as u64
+        // Use physical address for DMA - device needs bus address, not CPU pointer
+        self.status_phys + slot_idx as u64
     }
 
     /// Read status byte for a slot.
@@ -729,9 +736,8 @@ impl BlockDriver for VirtioBlkDriver {
     }
 
     fn notify(&mut self) {
-        unsafe {
-            asm_virtio_blk_notify(&mut self.queue);
-        }
+        // Use transport-aware notify (handles MMIO vs PCI Modern differences)
+        self.transport.notify_queue(0); // queue 0 for VirtIO-blk
     }
 
     fn flush(&mut self) -> Result<(), BlockError> {

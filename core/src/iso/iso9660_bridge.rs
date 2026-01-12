@@ -22,8 +22,8 @@
 //! ```
 
 extern crate alloc;
-use alloc::format;
 use super::reader::IsoReadContext;
+use alloc::format;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
@@ -89,13 +89,15 @@ impl<'a, B: BlockIo> IsoBlockIoAdapter<'a, B> {
     fn translate_byte_offset_to_disk_lba(&self, byte_offset: u64) -> Option<u64> {
         let (chunk_idx, offset_in_chunk) = self.find_chunk_for_offset(byte_offset)?;
 
-        // ISO data is written at DATA_START_SECTOR offset within the partition
-        // This must match the layout used by writer.rs
-        const DATA_START_SECTOR: u64 = 8192;
-
+        // Get partition start LBA from manifest
         let (part_start, _) = self.ctx.chunk_lbas[chunk_idx];
+
+        // Calculate sector within the chunk
+        // ISO data is written directly at partition start (no offset)
         let disk_sector_in_chunk = offset_in_chunk / DISK_BLOCK_SIZE as u64;
-        let physical_lba = part_start + DATA_START_SECTOR + disk_sector_in_chunk;
+
+        // Physical LBA = partition start + sector offset
+        let physical_lba = part_start + disk_sector_in_chunk;
 
         Some(physical_lba)
     }
@@ -181,16 +183,6 @@ impl<'a, B: BlockIo> BlockIo for IsoBlockIoAdapter<'a, B> {
             // Read the entire batch in one disk operation
             let buf_start = current_pos * ISO_SECTOR_SIZE;
             let buf_end = buf_start + batch_count * ISO_SECTOR_SIZE;
-            let total_disk_blocks = batch_count * BLOCKS_PER_ISO_SECTOR;
-
-            // Debug logging: trace batched read to help diagnose stalls
-            crate::logger::log(
-                format!(
-                    "ISO read batch: iso_lba={} iso_sectors={} disk_lba={} disk_blocks={}",
-                    iso_sector, batch_count, first_physical_lba, total_disk_blocks
-                )
-                .leak(),
-            );
 
             self.block_io
                 .read_blocks(Lba(first_physical_lba), &mut buffer[buf_start..buf_end])?;
@@ -302,17 +294,16 @@ mod tests {
         let mut mock = MockBlockIo { data: [0; 4096] };
         let adapter = IsoBlockIoAdapter::new(ctx, &mut mock);
 
-        // DATA_START_SECTOR = 8192, so physical LBA = part_start + 8192 + sector_in_chunk
-        // Byte offset 0 should translate to partition start + DATA_START_SECTOR
+        // Byte offset 0 should translate to partition start
         let phys = adapter.translate_byte_offset_to_disk_lba(0).unwrap();
-        assert_eq!(phys, 1000 + 8192); // 9192
+        assert_eq!(phys, 1000); // part_start
 
         // Byte offset 512 should be 1 disk sector further
         let phys = adapter.translate_byte_offset_to_disk_lba(512).unwrap();
-        assert_eq!(phys, 1000 + 8192 + 1); // 9193
+        assert_eq!(phys, 1000 + 1);
 
         // Byte offset 2048 (1 ISO sector) should be 4 disk sectors from start
         let phys = adapter.translate_byte_offset_to_disk_lba(2048).unwrap();
-        assert_eq!(phys, 1000 + 8192 + 4); // 9196
+        assert_eq!(phys, 1000 + 4);
     }
 }

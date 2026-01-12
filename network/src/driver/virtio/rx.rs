@@ -94,9 +94,8 @@ fn resubmit_buffer(rx_state: &mut VirtqueueState, rx_pool: &mut BufferPool, buf_
 
         if !success {
             // Queue full - this shouldn't happen with proper sizing
-            unsafe {
-                buf.mark_driver_owned();
-            }
+            // Submit failed, so device never took ownership - use force recovery
+            buf.force_driver_owned();
             // Buffer will be reclaimed on next refill cycle
         } else {
             // Notify device that buffer is available
@@ -127,9 +126,8 @@ pub fn refill_queue(rx_state: &mut VirtqueueState, rx_pool: &mut BufferPool) {
 
         if !success {
             // Queue full - return buffer and stop
-            unsafe {
-                buf.mark_driver_owned();
-            }
+            // Submit failed, device never took ownership - use force recovery
+            buf.force_driver_owned();
             rx_pool.free(buf_idx);
             break;
         }
@@ -168,9 +166,8 @@ pub fn prefill_queue(
 
         if !success {
             // Queue full - return buffer and stop
-            unsafe {
-                buf.mark_driver_owned();
-            }
+            // Submit failed, device never took ownership - use force recovery
+            buf.force_driver_owned();
             rx_pool.free(buf_idx);
             break;
         }

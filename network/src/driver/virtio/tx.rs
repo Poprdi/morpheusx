@@ -64,10 +64,12 @@ pub fn transmit(
 
     if !success {
         // Queue was full (shouldn't happen after collect, but handle it)
+        // Buffer was marked device-owned, need to reclaim it properly
         if let Some(buf) = tx_pool.get_mut(buf_idx) {
-            unsafe {
-                buf.mark_driver_owned();
-            }
+            // Since submit failed, device never took ownership, so we can
+            // directly transition back. We bypass the normal state machine
+            // because this is an error recovery path.
+            buf.force_driver_owned();
         }
         tx_pool.free(buf_idx);
         return Err(TxError::QueueFull);

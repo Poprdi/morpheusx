@@ -165,26 +165,6 @@ impl DistroEntry {
 
 /// Static catalog of available distributions
 pub static DISTRO_CATALOG: &[DistroEntry] = &[
-    // ============ TEST ENTRIES (HTTP - for development) ============
-    DistroEntry::new(
-        "Test ISO (Small)",
-        "Small test file for network testing",
-        "1.0",
-        "http://speedtest.tele2.net/1MB.zip",  // HTTP test endpoint
-        1_000_000,
-        "test-1mb.iso",
-        DistroCategory::Minimal,
-    ),
-
-    DistroEntry::new(
-        "Test ISO (10MB)",
-        "Medium test file for network testing",
-        "1.0",
-        "http://speedtest.tele2.net/10MB.zip",
-        10_000_000,
-        "test-10mb.iso",
-        DistroCategory::Minimal,
-    ),
 
     // ============ Privacy ============
     DistroEntry::new(
@@ -199,80 +179,33 @@ pub static DISTRO_CATALOG: &[DistroEntry] = &[
     .with_mirrors(&[
         "http://ftp.acc.umu.se/mirror/tails.boum.org/tails/stable/tails-amd64-6.10/tails-amd64-6.10.iso",
     ]),
-
-    DistroEntry::new(
-        "Whonix Gateway",
-        "Tor gateway for anonymous networking",
-        "17",
-        "https://download.whonix.org/linux/17/Whonix-Gateway-Xfce-17.2.3.2.iso",
-        1_200_000_000,
-        "whonix-gateway-17.iso",
-        DistroCategory::Privacy,
-    ),
-
     // ============ General Purpose ============
-    DistroEntry::new(
-        "Ubuntu Desktop",
-        "Popular user-friendly Linux distribution",
-        "24.04 LTS",
-        "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-desktop-amd64.iso",
-        5_800_000_000,
-        "ubuntu-24.04-desktop.iso",
-        DistroCategory::General,
-    )
-    .with_mirrors(&[
-        "https://mirror.us.leaseweb.net/ubuntu-releases/24.04/ubuntu-24.04.1-desktop-amd64.iso",
-        "https://mirrors.kernel.org/ubuntu-releases/24.04/ubuntu-24.04.1-desktop-amd64.iso",
-    ]),
 
     DistroEntry::new(
         "Ubuntu Server",
-        "Ubuntu for servers - minimal install",
-        "24.04 LTS",
-        "https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso",
+        "Ubuntu for servers - Live Server",
+        "25.10 Live Server",
+        "http://mirror.vcu.edu/pub/gnu_linux/ubuntu-releases/25.10/ubuntu-25.10-live-server-amd64.iso",
         2_600_000_000,
-        "ubuntu-24.04-server.iso",
+        "ubuntu-25.10-server.iso",
         DistroCategory::Server,
     ),
 
     DistroEntry::new(
-        "Fedora Workstation",
-        "Cutting-edge Linux workstation",
+        "Fedora Desktop",
+        "Cutting-edge desktop Linux",
         "41",
-        "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-41-1.4.iso",
+        "http://mirror.vcu.edu/pub/gnu_linux/fedora/releases/43/KDE/x86_64/iso/Fedora-KDE-Desktop-Live-43-1.6.x86_64.iso",
         2_300_000_000,
-        "fedora-41-workstation.iso",
-        DistroCategory::General,
-    ),
-
-    DistroEntry::new(
-        "Debian",
-        "The Universal Operating System - Stable",
-        "12.8",
-        "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.8.0-amd64-netinst.iso",
-        660_000_000,
-        "debian-12.8-netinst.iso",
-        DistroCategory::General,
-    )
-    .with_mirrors(&[
-        "https://mirror.us.leaseweb.net/debian-cd/current/amd64/iso-cd/debian-12.8.0-amd64-netinst.iso",
-    ]),
-
-    DistroEntry::new(
-        "Linux Mint",
-        "Elegant, easy to use desktop",
-        "22",
-        "https://mirrors.kernel.org/linuxmint/stable/22/linuxmint-22-cinnamon-64bit.iso",
-        2_800_000_000,
-        "linuxmint-22.iso",
+        "fedora-43-kde.iso",
         DistroCategory::General,
     ),
 
     DistroEntry::new(
         "Arch Linux",
         "Lightweight and flexible - rolling release",
-        "2024.12",
-        "https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso",
+        "2026.01.01",
+        "http://mirror.vcu.edu/pub/gnu_linux/archlinux/iso/latest/archlinux-2026.01.01-x86_64.iso",
         1_100_000_000,
         "archlinux-latest.iso",
         DistroCategory::General,
@@ -283,51 +216,22 @@ pub static DISTRO_CATALOG: &[DistroEntry] = &[
         "Kali Linux",
         "Penetration testing and security auditing",
         "2024.4",
-        "https://cdimage.kali.org/kali-2024.4/kali-linux-2024.4-live-amd64.iso",
+        "http://mirror.vcu.edu/pub/gnu_linux/kali-images/current/kali-linux-2025.1a-live-amd64.iso",
         4_000_000_000,
-        "kali-2024.4.iso",
+        "kali-2025.1a.live.iso",
         DistroCategory::Security,
     )
     .with_mirrors(&[
-        "https://kali.download/base-images/kali-2024.4/kali-linux-2024.4-live-amd64.iso",
+        "http://mirror.vcu.edu/pub/gnu_linux/kali-images/current/kali-linux-2025.1a-live-amd64.iso",
     ]),
 
-    DistroEntry::new(
-        "Parrot Security",
-        "Security, development, and privacy",
-        "6.2",
-        "https://deb.parrot.sh/parrot/iso/6.2/Parrot-security-6.2_amd64.iso",
-        5_200_000_000,
-        "parrot-security-6.2.iso",
-        DistroCategory::Security,
-    ),
-
     // ============ Minimal ============
-    DistroEntry::new(
-        "Alpine Linux",
-        "Security-oriented, lightweight distro",
-        "3.21",
-        "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-standard-3.21.0-x86_64.iso",
-        220_000_000,
-        "alpine-3.21.iso",
-        DistroCategory::Minimal,
-    ),
-
-    DistroEntry::new(
-        "Tiny Core Linux",
-        "Extremely minimal - runs in RAM",
-        "15.0",
-        "http://tinycorelinux.net/15.x/x86_64/release/TinyCorePure64-15.0.iso",
-        25_000_000,
-        "tinycore-15.0.iso",
-        DistroCategory::Minimal,
-    ),
 
     DistroEntry::new(
         "Puppy Linux",
         "Complete OS that fits on small media",
         "FossaPup64",
-        "https://distro.ibiblio.org/puppylinux/puppy-fossa/fossapup64-9.5.iso",
+        "http://mirror.vcu.edu/pub/gnu_linux/puppylinux/puppy-fossa/fossapup64-9.5.iso",
         430_000_000,
         "fossapup64-9.5.iso",
         DistroCategory::Minimal,

@@ -45,9 +45,28 @@ pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeIn
     loop {
         // Read current volume descriptor sector
         let lba = Lba(start_sector + sector);
+
+        // DEBUG: Log what we're about to read
+        #[cfg(feature = "debug")]
+        {
+            extern crate alloc;
+            use alloc::format;
+            // Print to serial if available
+        }
+
         block_io
             .read_blocks(lba, &mut buffer)
             .map_err(|_| Iso9660Error::IoError)?;
+
+        // DEBUG: Check what we got
+        // Return early with custom error showing actual bytes
+        #[cfg(feature = "debug-mount")]
+        {
+            let b = &buffer[0..8];
+            if b[1] != b'C' || b[2] != b'D' {
+                // Force a different error path that shows data
+            }
+        }
 
         // Parse header (first 7 bytes)
         let header = unsafe { &*(buffer.as_ptr() as *const VolumeDescriptorHeader) };
@@ -140,6 +159,7 @@ impl VolumeDescriptorHeader {
 
     /// Check if header is valid
     pub fn validate(&self) -> bool {
-        &self.identifier == Self::MAGIC && self.version == 1
+        // Version can be 1 or 2 (Joliet Supplementary VDs may use version 2)
+        &self.identifier == Self::MAGIC && (self.version == 1 || self.version == 2)
     }
 }

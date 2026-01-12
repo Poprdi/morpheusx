@@ -120,7 +120,7 @@ impl DmaBuffer {
     /// # Safety
     /// Only call during allocation from pool.
     pub(crate) unsafe fn mark_allocated(&mut self) {
-        debug_assert!(self.ownership.is_free(), "Buffer must be free to allocate");
+        assert!(self.ownership.is_free(), "Buffer must be free to allocate");
         self.ownership = BufferOwnership::DriverOwned;
     }
 
@@ -129,7 +129,7 @@ impl DmaBuffer {
     /// # Safety
     /// Only call immediately before submitting to device.
     pub unsafe fn mark_device_owned(&mut self) {
-        debug_assert!(
+        assert!(
             self.ownership == BufferOwnership::DriverOwned,
             "Buffer must be driver-owned before device transfer"
         );
@@ -141,10 +141,20 @@ impl DmaBuffer {
     /// # Safety
     /// Only call after device confirms ownership transfer (poll completion).
     pub unsafe fn mark_driver_owned(&mut self) {
-        debug_assert!(
+        assert!(
             self.ownership == BufferOwnership::DeviceOwned,
             "Buffer must be device-owned before reclaim"
         );
+        self.ownership = BufferOwnership::DriverOwned;
+    }
+
+    /// Force buffer to driver-owned state for error recovery.
+    ///
+    /// This bypasses normal state machine validation for cases where
+    /// a device operation failed and we need to reclaim the buffer
+    /// regardless of its current state (e.g., submit failed after
+    /// marking device-owned).
+    pub fn force_driver_owned(&mut self) {
         self.ownership = BufferOwnership::DriverOwned;
     }
 
@@ -153,7 +163,7 @@ impl DmaBuffer {
     /// # Safety
     /// Only call during return to pool.
     pub(crate) unsafe fn mark_free(&mut self) {
-        debug_assert!(
+        assert!(
             self.ownership == BufferOwnership::DriverOwned,
             "Buffer must be driver-owned before freeing"
         );
