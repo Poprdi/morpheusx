@@ -25,23 +25,27 @@ use super::reader::IsoReadContext;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
-/// ISO9660 sector size
-const SECTOR_SIZE: usize = 2048;
+/// ISO9660 sector size (what iso9660 crate expects)
+const ISO_SECTOR_SIZE: usize = 2048;
 
-/// Standard block size (for LBA calculations)
-const BLOCK_SIZE: usize = 512;
+/// Physical disk block size
+const DISK_BLOCK_SIZE: usize = 512;
+
+/// Ratio of ISO sectors to disk blocks
+const BLOCKS_PER_ISO_SECTOR: usize = ISO_SECTOR_SIZE / DISK_BLOCK_SIZE;
 
 /// Block I/O adapter that implements gpt_disk_io::BlockIo
 ///
 /// This allows iso9660 to read from chunked ISO storage transparently.
 /// The adapter translates virtual sector addresses to physical disk locations.
+///
+/// iso9660 uses 2048-byte sectors, but physical disk uses 512-byte blocks.
+/// This adapter handles the translation.
 pub struct IsoBlockIoAdapter<'a, B: BlockIo> {
     /// ISO read context (chunk partition info)
     ctx: IsoReadContext,
     /// Underlying block device
     block_io: &'a mut B,
-    /// Block size (512 for compatibility)
-    block_size: u32,
 }
 
 impl<'a, B: BlockIo> IsoBlockIoAdapter<'a, B> {
@@ -51,11 +55,7 @@ impl<'a, B: BlockIo> IsoBlockIoAdapter<'a, B> {
     /// * `ctx` - ISO read context from IsoStorageManager
     /// * `block_io` - Underlying disk block device
     pub fn new(ctx: IsoReadContext, block_io: &'a mut B) -> Self {
-        Self {
-            ctx,
-            block_io,
-            block_size: BLOCK_SIZE as u32,
-        }
+        Self { ctx, block_io }
     }
 
     /// Get total size in bytes
@@ -63,9 +63,9 @@ impl<'a, B: BlockIo> IsoBlockIoAdapter<'a, B> {
         self.ctx.total_size
     }
 
-    /// Get total number of 512-byte blocks
-    pub fn total_blocks(&self) -> u64 {
-        self.ctx.total_size / BLOCK_SIZE as u64
+    /// Get total number of ISO sectors (2048-byte sectors)
+    pub fn total_iso_sectors(&self) -> u64 {
+        self.ctx.total_size / ISO_SECTOR_SIZE as u64
     }
 
     /// Find which chunk contains a given byte offset
@@ -83,16 +83,14 @@ impl<'a, B: BlockIo> IsoBlockIoAdapter<'a, B> {
         None
     }
 
-    /// Translate virtual LBA to physical disk LBA
-    fn translate_lba(&self, virtual_lba: u64) -> Option<u64> {
-        let byte_offset = virtual_lba * BLOCK_SIZE as u64;
+    /// Translate ISO byte offset to physical disk LBA (512-byte sectors)
+    fn translate_byte_offset_to_disk_lba(&self, byte_offset: u64) -> Option<u64> {
         let (chunk_idx, offset_in_chunk) = self.find_chunk_for_offset(byte_offset)?;
 
-        // Data starts at sector 8192 in each chunk partition (FAT32 data area)
-        const DATA_START_SECTOR: u64 = 8192;
+        // ISO data is written directly to the partition start (raw mode)
         let (part_start, _) = self.ctx.chunk_lbas[chunk_idx];
-        let sector_in_chunk = offset_in_chunk / BLOCK_SIZE as u64;
-        let physical_lba = part_start + DATA_START_SECTOR + sector_in_chunk;
+        let disk_sector_in_chunk = offset_in_chunk / DISK_BLOCK_SIZE as u64;
+        let physical_lba = part_start + disk_sector_in_chunk;
 
         Some(physical_lba)
     }
@@ -102,42 +100,88 @@ impl<'a, B: BlockIo> BlockIo for IsoBlockIoAdapter<'a, B> {
     type Error = B::Error;
 
     fn block_size(&self) -> gpt_disk_types::BlockSize {
-        gpt_disk_types::BlockSize::new(self.block_size).unwrap()
+        // Report 2048-byte block size (ISO9660 sector size)
+        gpt_disk_types::BlockSize::new(ISO_SECTOR_SIZE as u32).unwrap()
     }
 
     fn num_blocks(&mut self) -> Result<u64, Self::Error> {
-        Ok(self.total_blocks())
+        Ok(self.total_iso_sectors())
     }
 
     fn read_blocks(&mut self, start_lba: Lba, buffer: &mut [u8]) -> Result<(), Self::Error> {
-        let num_blocks = buffer.len() / BLOCK_SIZE;
+        // iso9660 requests reads in 2048-byte sectors
+        let num_iso_sectors = buffer.len() / ISO_SECTOR_SIZE;
 
-        for i in 0..num_blocks {
-            let virtual_lba = start_lba.0 + i as u64;
+        if num_iso_sectors == 0 {
+            return Ok(());
+        }
+
+        // Try to batch contiguous reads for better performance
+        // This is critical for large files like initrd (70MB+)
+        let mut current_pos = 0usize;
+
+        while current_pos < num_iso_sectors {
+            let iso_sector = start_lba.0 + current_pos as u64;
+            let byte_offset = iso_sector * ISO_SECTOR_SIZE as u64;
 
             // Check bounds
-            if virtual_lba >= self.total_blocks() {
-                // Read beyond EOF - fill with zeros (common for ISO padding)
-                let offset = i * BLOCK_SIZE;
-                buffer[offset..offset + BLOCK_SIZE].fill(0);
-                continue;
+            if byte_offset >= self.ctx.total_size {
+                // Read beyond EOF - fill remaining with zeros
+                let buf_start = current_pos * ISO_SECTOR_SIZE;
+                buffer[buf_start..].fill(0);
+                break;
             }
 
-            // Translate to physical LBA
-            let physical_lba = match self.translate_lba(virtual_lba) {
+            // Get the physical LBA for the start of this ISO sector
+            let first_physical_lba = match self.translate_byte_offset_to_disk_lba(byte_offset) {
                 Some(lba) => lba,
                 None => {
-                    // Chunk not found - fill with zeros
-                    let offset = i * BLOCK_SIZE;
-                    buffer[offset..offset + BLOCK_SIZE].fill(0);
+                    // Chunk not found - fill this sector with zeros and continue
+                    let buf_offset = current_pos * ISO_SECTOR_SIZE;
+                    buffer[buf_offset..buf_offset + ISO_SECTOR_SIZE].fill(0);
+                    current_pos += 1;
                     continue;
                 }
             };
 
-            // Read from disk
-            let offset = i * BLOCK_SIZE;
+            // Determine how many contiguous ISO sectors we can read at once
+            // Sectors are contiguous if they map to consecutive physical LBAs
+            let mut batch_count = 1usize;
+
+            while current_pos + batch_count < num_iso_sectors {
+                let next_iso_sector = start_lba.0 + (current_pos + batch_count) as u64;
+                let next_byte_offset = next_iso_sector * ISO_SECTOR_SIZE as u64;
+
+                // Check bounds
+                if next_byte_offset >= self.ctx.total_size {
+                    break;
+                }
+
+                // Check if this sector is contiguous with the batch
+                let expected_lba =
+                    first_physical_lba + (batch_count * BLOCKS_PER_ISO_SECTOR) as u64;
+                let actual_lba = match self.translate_byte_offset_to_disk_lba(next_byte_offset) {
+                    Some(lba) => lba,
+                    None => break, // End batch at chunk boundary
+                };
+
+                if actual_lba != expected_lba {
+                    // Not contiguous (chunk boundary), end this batch
+                    break;
+                }
+
+                batch_count += 1;
+            }
+
+            // Read the entire batch in one disk operation
+            let buf_start = current_pos * ISO_SECTOR_SIZE;
+            let buf_end = buf_start + batch_count * ISO_SECTOR_SIZE;
+            let total_disk_blocks = batch_count * BLOCKS_PER_ISO_SECTOR;
+
             self.block_io
-                .read_blocks(Lba(physical_lba), &mut buffer[offset..offset + BLOCK_SIZE])?;
+                .read_blocks(Lba(first_physical_lba), &mut buffer[buf_start..buf_end])?;
+
+            current_pos += batch_count;
         }
 
         Ok(())
@@ -229,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lba_translation() {
+    fn test_byte_offset_translation() {
         use crate::iso::MAX_CHUNKS;
         let mut ctx = IsoReadContext {
             chunk_lbas: [(0, 0); MAX_CHUNKS],
@@ -237,18 +281,23 @@ mod tests {
             num_chunks: 1,
             total_size: 1_000_000,
         };
+        // Chunk starts at disk LBA 1000
         ctx.chunk_lbas[0] = (1000, 10000);
         ctx.chunk_sizes[0] = 1_000_000;
 
         let mut mock = MockBlockIo { data: [0; 4096] };
         let adapter = IsoBlockIoAdapter::new(ctx, &mut mock);
 
-        // LBA 0 should translate to partition start + data offset
-        let phys = adapter.translate_lba(0).unwrap();
-        assert_eq!(phys, 1000 + 8192); // part_start + DATA_START_SECTOR
+        // Byte offset 0 should translate to partition start (1000)
+        let phys = adapter.translate_byte_offset_to_disk_lba(0).unwrap();
+        assert_eq!(phys, 1000);
 
-        // LBA 10 should be 10 sectors further
-        let phys = adapter.translate_lba(10).unwrap();
-        assert_eq!(phys, 1000 + 8192 + 10);
+        // Byte offset 512 should be 1 disk sector further
+        let phys = adapter.translate_byte_offset_to_disk_lba(512).unwrap();
+        assert_eq!(phys, 1001);
+
+        // Byte offset 2048 (1 ISO sector) should be 4 disk sectors from start
+        let phys = adapter.translate_byte_offset_to_disk_lba(2048).unwrap();
+        assert_eq!(phys, 1004);
     }
 }

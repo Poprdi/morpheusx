@@ -66,17 +66,24 @@ impl EntryScanner {
     fn scan_chunked_isos(&self) -> Vec<BootEntry> {
         let mut entries = Vec::new();
 
+        morpheus_core::logger::log("=== SCANNING FOR CHUNKED ISOS ===");
+
         // Get disk info for storage manager
         let (esp_lba, disk_lba) = unsafe {
             let bs = &*self.boot_services;
             let mut dm = morpheus_core::disk::manager::DiskManager::new();
             if crate::uefi::disk::enumerate_disks(bs, &mut dm).is_ok() && dm.disk_count() > 0 {
                 if let Some(disk) = dm.get_disk(0) {
+                    morpheus_core::logger::log(
+                        format!("Disk found: {} blocks", disk.last_block + 1).leak(),
+                    );
                     (2048_u64, disk.last_block + 1)
                 } else {
+                    morpheus_core::logger::log("No disk found");
                     return entries;
                 }
             } else {
+                morpheus_core::logger::log("Failed to enumerate disks");
                 return entries;
             }
         };
@@ -87,20 +94,42 @@ impl EntryScanner {
         unsafe {
             let bs = &*self.boot_services;
             // Load manifests from /.iso/*.MFS on ESP
-            if let Err(_) = crate::tui::distro_downloader::manifest_io::load_manifests_from_esp(
+            match crate::tui::distro_downloader::manifest_io::load_manifests_from_esp(
                 bs,
                 self.image_handle,
                 &mut storage,
             ) {
-                morpheus_core::logger::log("Failed to load manifests from ESP");
+                Ok(count) => {
+                    morpheus_core::logger::log(
+                        format!("load_manifests_from_esp returned {} manifests", count).leak(),
+                    );
+                }
+                Err(e) => {
+                    morpheus_core::logger::log(
+                        format!("load_manifests_from_esp FAILED: {:?}", e).leak(),
+                    );
+                }
             }
         }
 
+        morpheus_core::logger::log(format!("Storage has {} entries", storage.count()).leak());
+
         for (idx, entry) in storage.iter().enumerate() {
             let manifest = &entry.1.manifest;
+            morpheus_core::logger::log(
+                format!(
+                    "Entry {}: name='{}', complete={}, flags=0x{:02x}",
+                    idx,
+                    manifest.name_str(),
+                    manifest.is_complete(),
+                    manifest.flags
+                )
+                .leak(),
+            );
 
             // Only show complete ISOs
             if !manifest.is_complete() {
+                morpheus_core::logger::log("  -> Skipping (not complete)");
                 continue;
             }
 
