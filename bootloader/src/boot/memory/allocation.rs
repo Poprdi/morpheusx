@@ -147,6 +147,10 @@ pub unsafe fn exit_boot_services(
     image_handle: *mut (),
     map: &mut MemoryMap,
 ) -> Result<(), MemoryError> {
+    // CRITICAL: Disable watchdog timer before EBS
+    // Some firmware stalls during EBS waiting for watchdog teardown
+    let _ = (boot_services.set_watchdog_timer)(0, 0, 0, core::ptr::null());
+
     loop {
         map.ensure_snapshot(boot_services)?;
 

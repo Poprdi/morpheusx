@@ -199,7 +199,13 @@ pub struct BootServices {
     _get_next_monotonic_count: usize,
     /// Stall for microseconds
     pub stall: extern "efiapi" fn(microseconds: usize) -> usize,
-    _set_watchdog_timer: usize,
+    /// Disable/set watchdog timer (timeout in seconds, 0 = disable)
+    pub set_watchdog_timer: extern "efiapi" fn(
+        timeout: usize,
+        watchdog_code: u64,
+        data_size: usize,
+        watchdog_data: *const u16,
+    ) -> usize,
 }
 
 #[no_mangle]
