@@ -384,6 +384,7 @@ impl DistroLauncher {
         progress_bar.set_progress(15);
         progress_bar.render(screen);
         morpheus_core::logger::log("Chunked ISO: Looking for kernel...");
+        screen.put_str_at(5, 7, "Searching for kernel...", EFI_CYAN, EFI_BLACK);
 
         // Find kernel - check common paths for various distros
         // Tails: /live/vmlinuz
@@ -400,28 +401,34 @@ impl DistroLauncher {
         ];
 
         let mut kernel_data = None;
-        for kpath in &kernel_paths {
+        for (idx, kpath) in kernel_paths.iter().enumerate() {
+            morpheus_core::logger::log(format!("Trying kernel path: {}", kpath).leak());
+            screen.put_str_at(5, 7, &format!("Trying: {}        ", kpath), EFI_CYAN, EFI_BLACK);
+            
             if let Ok(file_entry) = iso9660::find_file(&mut iso_adapter, &volume, kpath) {
                 let size_mb = file_entry.size / (1024 * 1024);
                 morpheus_core::logger::log(
-                    format!("Found kernel at {} ({} MB)", kpath, size_mb).leak(),
+                    format!("Found kernel at {} ({} MB, LBA {})", kpath, size_mb, file_entry.extent_lba).leak(),
                 );
                 screen.put_str_at(
                     5,
                     7,
-                    &format!("Loading kernel: {} ({} MB)", kpath, size_mb),
-                    EFI_CYAN,
+                    &format!("Loading: {} ({} MB)    ", kpath, size_mb),
+                    EFI_LIGHTGREEN,
                     EFI_BLACK,
                 );
                 progress_bar.set_progress(20);
                 progress_bar.render(screen);
 
+                morpheus_core::logger::log("Starting kernel read...");
                 if let Ok(data) = iso9660::read_file_vec(&mut iso_adapter, &file_entry) {
                     morpheus_core::logger::log(
                         format!("Kernel loaded: {} bytes", data.len()).leak(),
                     );
                     kernel_data = Some(data);
                     break;
+                } else {
+                    morpheus_core::logger::log("ERROR: Failed to read kernel file");
                 }
             }
         }
