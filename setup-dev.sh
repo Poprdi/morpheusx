@@ -390,13 +390,17 @@ do_launch_qemu() {
     
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
         qemu-system-x86_64 \
+            -enable-kvm \
+            -machine q35,accel=kvm \
+            -cpu host \
             -bios "$ovmf_path" \
-            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0 \
-            -device virtio-blk-pci,drive=disk0,bus=pci.0,addr=0x04,disable-legacy=on \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
+            -object iothread,id=iothread0 \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
+            -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
+            -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-            -smp 4 \
-            -m 4G \
+            -smp 8 \
+            -m 12G \
             -vga virtio \
             -display gtk,gl=on \
             -serial stdio
@@ -415,13 +419,17 @@ do_launch_qemu() {
             rmdir "$mnt"
         fi
         qemu-system-x86_64 \
+            -enable-kvm \
+            -machine q35,accel=kvm \
+            -cpu host \
             -bios "$ovmf_path" \
-            -drive file="$esp_img",format=raw,if=none,id=disk0 \
-            -device virtio-blk-pci,drive=disk0,bus=pci.0,addr=0x04,disable-legacy=on \
-            -device virtio-net-pci,netdev=net0,bus=pci.0,addr=0x03,disable-legacy=on \
+            -object iothread,id=iothread0 \
+            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
+            -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
+            -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-            -smp 4 \
-            -m 4G \
+            -smp 8 \
+            -m 12G \
             -vga virtio \
             -display gtk,gl=on \
             -serial stdio

@@ -341,7 +341,7 @@ impl DistroDownloader {
         self.render_full(screen);
 
         // Build download configuration
-        let config = super::commit_download::DownloadCommitConfig {
+        let config = super::commit::DownloadCommitConfig {
             iso_url: alloc::string::String::from(distro.url),
             iso_size: distro.size_bytes,
             distro_name: alloc::string::String::from(distro.name),
@@ -350,7 +350,7 @@ impl DistroDownloader {
         // COMMIT TO DOWNLOAD - THIS DOES NOT RETURN
         // Exits UEFI boot services and downloads in bare-metal mode
         unsafe {
-            super::commit_download::commit_to_download(
+            super::commit::commit_to_download(
                 self.boot_services,
                 self.image_handle,
                 screen,
