@@ -34,10 +34,10 @@ use crate::boot::handoff::{
 use crate::boot::init::TimeoutConfig;
 use crate::device::UnifiedBlockDevice;
 use crate::driver::ahci::{AhciConfig, AhciDriver, AhciInitError};
-use crate::driver::block_io_adapter::VirtioBlkBlockIo;
 use crate::driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver};
 use crate::driver::traits::NetworkDriver;
 use crate::driver::unified::{UnifiedDriverError, UnifiedNetworkDriver};
+use crate::driver::unified_block_io::{UnifiedBlockIo, UnifiedBlockIoError};
 use crate::driver::virtio::{PciModernConfig, TransportType, VirtioTransport};
 use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
@@ -316,25 +316,16 @@ unsafe fn flush_remaining_disk_buffer<D: BlockDriver>(blk_driver: &mut D) -> boo
 /// manifest can be up to ~1KB, so use 2 sectors).
 static mut MANIFEST_BUFFER: [u8; 1024] = [0u8; 1024];
 
-/// Write an ISO manifest to disk at the specified sector.
+/// Write an ISO manifest to disk using UnifiedBlockDevice.
 ///
-/// The manifest is serialized and written to the manifest sector.
-/// This allows the bootloader to discover downloaded ISOs on next boot.
-///
-/// # Arguments
-/// * `blk_driver` - The block driver to write with
-/// * `manifest_sector` - Sector number to write manifest at
-/// * `manifest` - The manifest to write
-///
-/// # Returns
-/// true if write successful, false otherwise
-unsafe fn write_manifest_to_disk(
-    blk_driver: &mut VirtioBlkDriver,
+/// Works with both VirtIO and AHCI block devices.
+unsafe fn write_manifest_to_disk_unified(
+    blk_device: &mut UnifiedBlockDevice,
     manifest_sector: u64,
     manifest: &IsoManifest,
 ) -> bool {
     serial_println("[MANIFEST] ═══════════════════════════════════════════════════");
-    serial_println("[MANIFEST] Writing ISO manifest to disk");
+    serial_println("[MANIFEST] Writing ISO manifest to disk (unified)");
     serial_println("[MANIFEST] ═══════════════════════════════════════════════════");
 
     serial_println("[MANIFEST] Serializing manifest structure...");
@@ -360,57 +351,25 @@ unsafe fn write_manifest_to_disk(
     serial_print_decimal(size as u32);
     serial_println(" bytes");
 
-    serial_print("[MANIFEST] ISO name: ");
-    serial_println(manifest.name_str());
-
-    serial_print("[MANIFEST] Total ISO size: ");
-    let total_mb = manifest.total_size / (1024 * 1024);
-    let total_gb = manifest.total_size / (1024 * 1024 * 1024);
-    if total_gb > 0 {
-        serial_print_decimal(total_gb as u32);
-        serial_print(" GB (");
-        serial_print_decimal(total_mb as u32);
-        serial_println(" MB)");
-    } else {
-        serial_print_decimal(total_mb as u32);
-        serial_println(" MB");
-    }
-
-    serial_print("[MANIFEST] Chunk count: ");
-    serial_print_decimal(manifest.chunks.count as u32);
-    serial_println("");
-
-    serial_print("[MANIFEST] Complete: ");
-    serial_println(if manifest.is_complete() { "YES" } else { "NO" });
-
     // Calculate sectors needed (round up)
     let num_sectors = ((size + 511) / 512) as u32;
 
-    serial_println("[MANIFEST] ───────────────────────────────────────────────────");
-    serial_println("[MANIFEST] Write location:");
-    serial_print("[MANIFEST]   Sector (LBA): ");
+    serial_print("[MANIFEST] Writing to sector: ");
     serial_print_hex(manifest_sector);
-    serial_println("");
-    serial_print("[MANIFEST]   Byte offset: ");
-    serial_print_hex(manifest_sector * 512);
-    serial_println("");
-    serial_print("[MANIFEST]   Sectors to write: ");
+    serial_print(" (");
     serial_print_decimal(num_sectors);
-    serial_println("");
-    serial_println("[MANIFEST] ───────────────────────────────────────────────────");
+    serial_println(" sectors)");
 
     // Get the buffer physical address
     let buffer_phys = manifest_buffer.as_ptr() as u64;
 
-    serial_println("[MANIFEST] Submitting write request...");
-
     // Poll for completion space first
-    while let Some(_completion) = blk_driver.poll_completion() {
+    while let Some(_completion) = blk_device.poll_completion() {
         // Drain pending completions
     }
 
     // Check if driver can accept a request
-    if !blk_driver.can_submit() {
+    if !blk_device.can_submit() {
         serial_println("[MANIFEST] ERROR: Block queue full");
         return false;
     }
@@ -419,13 +378,13 @@ unsafe fn write_manifest_to_disk(
     let request_id = DISK_NEXT_REQUEST_ID;
     DISK_NEXT_REQUEST_ID = DISK_NEXT_REQUEST_ID.wrapping_add(1);
 
-    if let Err(_) = blk_driver.submit_write(manifest_sector, buffer_phys, num_sectors, request_id) {
+    if let Err(_) = blk_device.submit_write(manifest_sector, buffer_phys, num_sectors, request_id) {
         serial_println("[MANIFEST] ERROR: Write submit failed");
         return false;
     }
 
     // Notify the device
-    blk_driver.notify();
+    blk_device.notify();
 
     serial_println("[MANIFEST] Write submitted, waiting for completion...");
 
@@ -434,7 +393,7 @@ unsafe fn write_manifest_to_disk(
     let timeout_ticks = 100_000_000; // ~100ms at 1GHz TSC
 
     loop {
-        if let Some(completion) = blk_driver.poll_completion() {
+        if let Some(completion) = blk_device.poll_completion() {
             if completion.request_id == request_id {
                 if completion.status == 0 {
                     serial_println(
@@ -473,7 +432,7 @@ unsafe fn write_manifest_to_disk(
 /// - Else if `manifest_sector > 0`: Write to raw sector (legacy)
 /// - Else: Skip manifest writing
 unsafe fn finalize_manifest(
-    blk_driver: &mut VirtioBlkDriver,
+    blk_device: &mut UnifiedBlockDevice,
     config: &BareMetalConfig,
     total_bytes: u64,
 ) -> bool {
@@ -504,11 +463,11 @@ unsafe fn finalize_manifest(
 
     // Prefer FAT32 writing if ESP is configured
     if config.esp_start_lba > 0 {
-        return finalize_manifest_fat32(blk_driver, config, total_bytes, end_sector);
+        return finalize_manifest_fat32(blk_device, config, total_bytes, end_sector);
     }
 
     // Fall back to legacy raw sector write
-    finalize_manifest_raw(blk_driver, config, total_bytes, end_sector)
+    finalize_manifest_raw(blk_device, config, total_bytes, end_sector)
 }
 
 /// Write manifest to FAT32 ESP filesystem.
@@ -516,7 +475,7 @@ unsafe fn finalize_manifest(
 /// Creates `/.iso/<name>.manifest` file on the ESP.
 /// Uses morpheus_core::iso::IsoManifest for compatibility with bootloader scanner.
 unsafe fn finalize_manifest_fat32(
-    blk_driver: &mut VirtioBlkDriver,
+    blk_device: &mut UnifiedBlockDevice,
     config: &BareMetalConfig,
     total_bytes: u64,
     end_sector: u64,
@@ -567,7 +526,7 @@ unsafe fn finalize_manifest_fat32(
     let timeout_ticks = 500_000_000u64; // ~500ms (increased for FAT32 ops)
 
     let mut adapter =
-        match VirtioBlkBlockIo::new(blk_driver, dma_buffer, dma_buffer_phys, timeout_ticks) {
+        match UnifiedBlockIo::new(blk_device, dma_buffer, dma_buffer_phys, timeout_ticks) {
             Ok(a) => {
                 serial_println("[MANIFEST] BlockIo adapter created");
                 a
@@ -630,7 +589,7 @@ unsafe fn finalize_manifest_fat32(
 }
 /// Write manifest to raw disk sector (legacy method).
 unsafe fn finalize_manifest_raw(
-    blk_driver: &mut VirtioBlkDriver,
+    blk_device: &mut UnifiedBlockDevice,
     config: &BareMetalConfig,
     total_bytes: u64,
     end_sector: u64,
@@ -670,8 +629,8 @@ unsafe fn finalize_manifest_raw(
 
     serial_println("[MANIFEST] Manifest marked as COMPLETE");
 
-    // Write to disk
-    write_manifest_to_disk(blk_driver, config.manifest_sector, &manifest)
+    // Write to disk using unified device
+    write_manifest_to_disk_unified(blk_device, config.manifest_sector, &manifest)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -685,7 +644,7 @@ unsafe fn finalize_manifest_raw(
 ///
 /// Returns the partition GUID on success.
 unsafe fn create_iso_partition(
-    blk_driver: &mut VirtioBlkDriver,
+    blk_device: &mut UnifiedBlockDevice,
     start_sector: u64,
     size_bytes: u64,
     iso_name: &str,
@@ -749,7 +708,7 @@ unsafe fn create_iso_partition(
     let timeout_ticks = 100_000_000u64;
 
     let mut verify_adapter =
-        match VirtioBlkBlockIo::new(blk_driver, dma_buffer, dma_buffer_phys, timeout_ticks) {
+        match UnifiedBlockIo::new(blk_device, dma_buffer, dma_buffer_phys, timeout_ticks) {
             Ok(a) => a,
             Err(_) => {
                 serial_println("[GPT] ERROR: Failed to create BlockIo adapter for verification");
@@ -851,17 +810,17 @@ unsafe fn create_iso_partition(
     let dma_buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
     let timeout_ticks = 100_000_000u64;
 
-    let adapter =
-        match VirtioBlkBlockIo::new(blk_driver, dma_buffer, dma_buffer_phys, timeout_ticks) {
-            Ok(a) => {
-                serial_println("[GPT] BlockIO adapter created");
-                a
-            }
-            Err(_) => {
-                serial_println("[GPT] ERROR: Failed to create BlockIo adapter");
-                return None;
-            }
-        };
+    let adapter = match UnifiedBlockIo::new(blk_device, dma_buffer, dma_buffer_phys, timeout_ticks)
+    {
+        Ok(a) => {
+            serial_println("[GPT] BlockIO adapter created");
+            a
+        }
+        Err(_) => {
+            serial_println("[GPT] ERROR: Failed to create BlockIo adapter");
+            return None;
+        }
+    };
 
     // Create the partition (BasicData type for ISO storage)
     serial_println("[GPT] Writing partition entry to GPT...");
@@ -1728,26 +1687,20 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
             serial_println("");
 
             // Create GPT partition for ISO data BEFORE we start writing
-            // NOTE: GPT partition creation only works with VirtIO currently
-            if let UnifiedBlockDevice::VirtIO(ref mut vd) = d {
-                serial_println("[INIT] Creating GPT partition for ISO storage...");
-                if let Some(part_uuid) = create_iso_partition(
-                    vd,
-                    actual_start_sector,
-                    config.max_download_size,
-                    config.iso_name,
-                ) {
-                    serial_println("[OK] ISO partition created and claimed in GPT");
-                } else {
-                    serial_println(
-                        "[WARN] Could not create GPT partition - ISO data may be overwritten!",
-                    );
-                    serial_println("[WARN] Continuing anyway (data will be in unmapped space)");
-                }
+            // Now works with both VirtIO and AHCI!
+            serial_println("[INIT] Creating GPT partition for ISO storage...");
+            if let Some(part_uuid) = create_iso_partition(
+                d,
+                actual_start_sector,
+                config.max_download_size,
+                config.iso_name,
+            ) {
+                serial_println("[OK] ISO partition created and claimed in GPT");
             } else {
                 serial_println(
-                    "[INFO] Skipping GPT partition creation for AHCI (not yet implemented)",
+                    "[WARN] Could not create GPT partition - ISO data may be overwritten!",
                 );
+                serial_println("[WARN] Continuing anyway (data will be in unmapped space)");
             }
 
             // Initialize disk write state
@@ -2528,16 +2481,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         // ═══════════════════════════════════════════════════════════════════
         // Write manifest so bootloader can discover this ISO on next boot
         if DISK_TOTAL_BYTES > 0 {
-            // Manifest writing only supported for VirtIO currently
-            let manifest_result = match blk {
-                UnifiedBlockDevice::VirtIO(ref mut vd) => {
-                    finalize_manifest(vd, &config, DISK_TOTAL_BYTES)
-                }
-                UnifiedBlockDevice::Ahci(_) => {
-                    serial_println("[INFO] Manifest writing not yet implemented for AHCI");
-                    true // Don't fail the download
-                }
-            };
+            // Now works with both VirtIO and AHCI!
+            let manifest_result = finalize_manifest(blk, &config, DISK_TOTAL_BYTES);
             if manifest_result {
                 serial_println("[OK] ISO manifest written successfully");
             } else {
