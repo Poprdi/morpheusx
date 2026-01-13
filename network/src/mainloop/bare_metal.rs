@@ -27,10 +27,15 @@ use smoltcp::wire::{
     DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr,
 };
 
-use crate::boot::handoff::{BootHandoff, BLK_TYPE_VIRTIO, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
+use crate::boot::handoff::{
+    BootHandoff, BLK_TYPE_AHCI, BLK_TYPE_VIRTIO, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO, TRANSPORT_MMIO,
+    TRANSPORT_PCI_MODERN,
+};
 use crate::boot::init::TimeoutConfig;
+use crate::device::UnifiedBlockDevice;
+use crate::driver::ahci::{AhciConfig, AhciDriver, AhciInitError};
 use crate::driver::block_io_adapter::VirtioBlkBlockIo;
-use crate::driver::block_traits::BlockDriver;
+use crate::driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver};
 use crate::driver::traits::NetworkDriver;
 use crate::driver::unified::{UnifiedDriverError, UnifiedNetworkDriver};
 use crate::driver::virtio::{PciModernConfig, TransportType, VirtioTransport};
@@ -91,6 +96,8 @@ pub fn serial_print(s: &str) {
             serial_write_byte(byte);
         }
     }
+    // Mirror to framebuffer display
+    crate::display::display_write(s);
 }
 
 /// Write string with newline.
@@ -102,16 +109,22 @@ pub fn serial_println(s: &str) {
 /// Print hex number.
 pub fn serial_print_hex(value: u64) {
     serial_print("0x");
-    for i in (0..16).rev() {
-        let nibble = ((value >> (i * 4)) & 0xF) as u8;
+    let mut buf = [0u8; 16];
+    for i in 0..16 {
+        let nibble = ((value >> ((15 - i) * 4)) & 0xF) as u8;
         let c = if nibble < 10 {
             b'0' + nibble
         } else {
             b'a' + nibble - 10
         };
+        buf[i] = c;
         unsafe {
             serial_write_byte(c);
         }
+    }
+    // Mirror to display
+    if let Ok(s) = core::str::from_utf8(&buf) {
+        crate::display::display_write(s);
     }
 }
 
@@ -132,8 +145,10 @@ pub fn serial_print_decimal(value: u32) {
         unsafe {
             serial_write_byte(b'0');
         }
+        crate::display::display_write("0");
         return;
     }
+    // Build digits in reverse order
     let mut buf = [0u8; 10];
     let mut i = 0;
     let mut val = value;
@@ -142,11 +157,22 @@ pub fn serial_print_decimal(value: u32) {
         val /= 10;
         i += 1;
     }
+    // Create display buffer in correct order
+    let mut display_buf = [0u8; 10];
+    let num_digits = i;
+    for j in 0..num_digits {
+        display_buf[j] = buf[num_digits - 1 - j];
+    }
+    // Write to serial (reverse order from buf)
     while i > 0 {
         i -= 1;
         unsafe {
             serial_write_byte(buf[i]);
         }
+    }
+    // Mirror to display
+    if let Ok(s) = core::str::from_utf8(&display_buf[..num_digits]) {
+        crate::display::display_write(s);
     }
 }
 
@@ -158,7 +184,7 @@ pub fn serial_print_decimal(value: u32) {
 ///
 /// Writes the buffered data as one or more sector writes.
 /// Returns the number of bytes written, or 0 on error.
-unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
+unsafe fn flush_disk_buffer<D: BlockDriver>(blk_driver: &mut D) -> usize {
     if DISK_WRITE_BUFFER_FILL == 0 {
         return 0;
     }
@@ -240,7 +266,7 @@ unsafe fn flush_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> usize {
 /// Add data to the disk write buffer.
 /// Automatically flushes when buffer is full.
 /// Returns the number of bytes consumed from the input.
-unsafe fn buffer_disk_write(blk_driver: &mut VirtioBlkDriver, data: &[u8]) -> usize {
+unsafe fn buffer_disk_write<D: BlockDriver>(blk_driver: &mut D, data: &[u8]) -> usize {
     let mut consumed = 0;
     let mut remaining = data;
 
@@ -270,7 +296,7 @@ unsafe fn buffer_disk_write(blk_driver: &mut VirtioBlkDriver, data: &[u8]) -> us
 }
 
 /// Flush any remaining data in the buffer (for end of download).
-unsafe fn flush_remaining_disk_buffer(blk_driver: &mut VirtioBlkDriver) -> bool {
+unsafe fn flush_remaining_disk_buffer<D: BlockDriver>(blk_driver: &mut D) -> bool {
     if DISK_WRITE_BUFFER_FILL > 0 {
         // Pad the rest with zeros (needed for sector alignment)
         for i in DISK_WRITE_BUFFER_FILL..DISK_WRITE_BUFFER_SIZE {
@@ -1406,6 +1432,34 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_print_hex(handoff.dma_cpu_ptr + handoff.dma_size);
     serial_println("");
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 1.5: INITIALIZE FRAMEBUFFER DISPLAY (if available)
+    // ═══════════════════════════════════════════════════════════════════════
+    if handoff.has_framebuffer() {
+        crate::display::init_display(
+            handoff.framebuffer_base,
+            handoff.framebuffer_width,
+            handoff.framebuffer_height,
+            handoff.framebuffer_stride,
+            handoff.framebuffer_format,
+        );
+
+        // Now that display is initialized, print banner (will appear on screen)
+        serial_println("");
+        serial_println("=====================================");
+        serial_println("  MorpheusX Post-EBS Network Stack");
+        serial_println("=====================================");
+        serial_println("");
+
+        serial_print("[OK] Framebuffer display: ");
+        serial_print_decimal(handoff.framebuffer_width);
+        serial_print("x");
+        serial_print_decimal(handoff.framebuffer_height);
+        serial_println("");
+    } else {
+        serial_println("[INFO] No framebuffer available");
+    }
+
     // Create timeout config
     let timeouts = TimeoutConfig::new(handoff.tsc_freq);
     let loop_config = MainLoopConfig::new(handoff.tsc_freq);
@@ -1462,14 +1516,12 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     serial_print("Intel e1000e error: ");
                     use crate::driver::intel::{E1000eError, E1000eInitError};
                     match ie {
-                        E1000eError::InitFailed(init_err) => {
-                            match init_err {
-                                E1000eInitError::ResetTimeout => serial_println("reset timeout"),
-                                E1000eInitError::InvalidMac => serial_println("invalid MAC"),
-                                E1000eInitError::MmioError => serial_println("MMIO error"),
-                                E1000eInitError::LinkTimeout => serial_println("link timeout"),
-                            }
-                        }
+                        E1000eError::InitFailed(init_err) => match init_err {
+                            E1000eInitError::ResetTimeout => serial_println("reset timeout"),
+                            E1000eInitError::InvalidMac => serial_println("invalid MAC"),
+                            E1000eInitError::MmioError => serial_println("MMIO error"),
+                            E1000eInitError::LinkTimeout => serial_println("link timeout"),
+                        },
                         E1000eError::NotReady => serial_println("device not ready"),
                         E1000eError::LinkDown => serial_println("link down"),
                     }
@@ -1497,20 +1549,16 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_println("");
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 2.5: INITIALIZE BLOCK DEVICE (VirtIO-blk)
+    // STEP 2.5: INITIALIZE BLOCK DEVICE (VirtIO-blk or AHCI)
     // ═══════════════════════════════════════════════════════════════════════
-    let mut blk_driver: Option<VirtioBlkDriver> = None;
+    let mut blk_driver: Option<UnifiedBlockDevice> = None;
 
     if config.write_to_disk && handoff.has_block_device() {
-        serial_println("[INIT] Initializing VirtIO-blk driver...");
-        serial_print("[INIT] Block MMIO base: ");
+        serial_print("[INIT] Block device type: ");
+        serial_print_decimal(handoff.blk_type as u32);
+        serial_println("");
+        serial_print("[INIT] Block MMIO/ABAR: ");
         serial_print_hex(handoff.blk_mmio_base);
-        serial_println("");
-        serial_print("[INIT] Block sector size: ");
-        serial_print_decimal(handoff.blk_sector_size);
-        serial_println("");
-        serial_print("[INIT] Block total sectors: ");
-        serial_print_hex(handoff.blk_total_sectors);
         serial_println("");
 
         // Calculate DMA region for block device
@@ -1518,179 +1566,196 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         let blk_dma_offset = handoff.dma_size / 2;
         let blk_dma_base = handoff.dma_cpu_ptr + blk_dma_offset;
 
-        // VirtIO-blk queue layout:
-        // - Descriptors: 32 * 16 = 512 bytes
-        // - Avail ring: 4 + 32*2 + 2 = 70 bytes (pad to 512)
-        // - Used ring: 4 + 32*8 + 2 = 262 bytes (pad to 512)
-        // - Headers: 32 * 16 = 512 bytes (one header per desc set)
-        // - Status: 32 bytes (one per desc set)
-        // - Data buffers: 32 * 64KB = 2MB (for larger writes)
-
-        let blk_config = VirtioBlkConfig {
-            queue_size: 32,
-            desc_phys: blk_dma_base,
-            avail_phys: blk_dma_base + 512,
-            used_phys: blk_dma_base + 1024,
-            headers_phys: blk_dma_base + 2048,
-            status_phys: blk_dma_base + 2048 + 512,
-            headers_cpu: blk_dma_base + 2048,
-            status_cpu: blk_dma_base + 2048 + 512,
-            notify_addr: handoff.blk_mmio_base + 0x50, // Fallback for MMIO, computed for PCI Modern
-            transport_type: handoff.blk_transport_type,
-        };
-
-        // Create driver based on transport type
-        let driver_result = if handoff.blk_transport_type == TRANSPORT_PCI_MODERN {
-            serial_println("[INIT] Using PCI Modern transport for VirtIO-blk");
-            serial_print("[INIT] common_cfg: ");
-            serial_print_hex(handoff.blk_common_cfg);
+        if handoff.blk_type == BLK_TYPE_VIRTIO {
+            // VirtIO-blk initialization
+            serial_println("[INIT] Initializing VirtIO-blk driver...");
+            serial_print("[INIT] Block sector size: ");
+            serial_print_decimal(handoff.blk_sector_size);
             serial_println("");
-            serial_print("[INIT] notify_cfg: ");
-            serial_print_hex(handoff.blk_notify_cfg);
-            serial_println("");
-            serial_print("[INIT] device_cfg: ");
-            serial_print_hex(handoff.blk_device_cfg);
+            serial_print("[INIT] Block total sectors: ");
+            serial_print_hex(handoff.blk_total_sectors);
             serial_println("");
 
-            // Build PCI Modern transport config
-            let pci_config = PciModernConfig {
-                common_cfg: handoff.blk_common_cfg,
-                notify_cfg: handoff.blk_notify_cfg,
-                notify_off_multiplier: handoff.blk_notify_off_multiplier,
-                isr_cfg: handoff.blk_isr_cfg,
-                device_cfg: handoff.blk_device_cfg,
-                pci_cfg: 0, // Not used
+            // VirtIO-blk queue layout
+            let blk_config = VirtioBlkConfig {
+                queue_size: 32,
+                desc_phys: blk_dma_base,
+                avail_phys: blk_dma_base + 512,
+                used_phys: blk_dma_base + 1024,
+                headers_phys: blk_dma_base + 2048,
+                status_phys: blk_dma_base + 2048 + 512,
+                headers_cpu: blk_dma_base + 2048,
+                status_cpu: blk_dma_base + 2048 + 512,
+                notify_addr: handoff.blk_mmio_base + 0x50,
+                transport_type: handoff.blk_transport_type,
             };
-            let transport = VirtioTransport::pci_modern(pci_config);
 
-            unsafe { VirtioBlkDriver::new_with_transport(transport, blk_config, handoff.tsc_freq) }
-        } else {
-            serial_println("[INIT] Using MMIO transport for VirtIO-blk");
-            unsafe { VirtioBlkDriver::new(handoff.blk_mmio_base, blk_config) }
-        };
-
-        match driver_result {
-            Ok(mut d) => {
-                let info = d.info();
-                serial_println("[OK] VirtIO-blk driver initialized");
-                serial_print("[OK] Disk capacity: ");
-                let total_bytes = info.total_sectors * info.sector_size as u64;
-                if total_bytes >= 1024 * 1024 * 1024 {
-                    serial_print_decimal((total_bytes / (1024 * 1024 * 1024)) as u32);
-                    serial_println(" GB");
-                } else {
-                    serial_print_decimal((total_bytes / (1024 * 1024)) as u32);
-                    serial_println(" MB");
-                }
-
-                // CRITICAL: Find free space on disk to avoid overwriting existing partitions
-                serial_println("[INIT] Scanning GPT for existing partitions...");
-                let actual_start_sector = {
-                    let dma_buffer = core::slice::from_raw_parts_mut(
-                        (&raw mut DISK_WRITE_BUFFER).cast::<u8>(),
-                        DISK_WRITE_BUFFER_SIZE,
-                    );
-                    let dma_buffer_phys = (&raw const DISK_WRITE_BUFFER).cast::<u8>() as u64;
-                    let timeout_ticks = 100_000_000u64;
-
-                    match VirtioBlkBlockIo::new(&mut d, dma_buffer, dma_buffer_phys, timeout_ticks)
-                    {
-                        Ok(mut adapter) => {
-                            match crate::transfer::disk::GptOps::find_free_space(&mut adapter) {
-                                Ok((free_start, free_end)) => {
-                                    let free_size = free_end - free_start + 1;
-                                    serial_print("[GPT] Free space found: sectors ");
-                                    serial_print_hex(free_start);
-                                    serial_print(" - ");
-                                    serial_print_hex(free_end);
-                                    serial_print(" (");
-                                    serial_print_decimal(
-                                        (free_size * 512 / (1024 * 1024 * 1024)) as u32,
-                                    );
-                                    serial_println(" GB)");
-
-                                    // Align to 1MB boundary for performance
-                                    let aligned_start = ((free_start + 2047) / 2048) * 2048;
-                                    serial_print("[GPT] Using aligned start sector: ");
-                                    serial_print_hex(aligned_start);
-                                    serial_println("");
-                                    aligned_start
-                                }
-                                Err(e) => {
-                                    serial_print("[GPT] WARNING: Could not find free space: ");
-                                    serial_println(match e {
-                                        crate::transfer::disk::DiskError::IoError => "IO error",
-                                        crate::transfer::disk::DiskError::InvalidGpt => {
-                                            "Invalid GPT"
-                                        }
-                                        crate::transfer::disk::DiskError::NoFreeSpace => {
-                                            "No free space"
-                                        }
-                                        _ => "Unknown error",
-                                    });
-                                    serial_println(
-                                        "[GPT] Falling back to config sector (may overlap!)",
-                                    );
-                                    config.target_start_sector
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            serial_println("[GPT] WARNING: Could not create BlockIo adapter");
-                            serial_println("[GPT] Falling back to config sector (may overlap!)");
-                            config.target_start_sector
-                        }
-                    }
-                };
-
-                serial_print("[INIT] ISO data will be written starting at sector: ");
-                serial_print_hex(actual_start_sector);
+            // Create driver based on transport type
+            let driver_result = if handoff.blk_transport_type == TRANSPORT_PCI_MODERN {
+                serial_println("[INIT] Using PCI Modern transport for VirtIO-blk");
+                serial_print("[INIT] common_cfg: ");
+                serial_print_hex(handoff.blk_common_cfg);
+                serial_println("");
+                serial_print("[INIT] notify_cfg: ");
+                serial_print_hex(handoff.blk_notify_cfg);
+                serial_println("");
+                serial_print("[INIT] device_cfg: ");
+                serial_print_hex(handoff.blk_device_cfg);
                 serial_println("");
 
-                // Create GPT partition for ISO data BEFORE we start writing
-                // This properly claims the disk space so other tools won't overwrite it
+                let pci_config = PciModernConfig {
+                    common_cfg: handoff.blk_common_cfg,
+                    notify_cfg: handoff.blk_notify_cfg,
+                    notify_off_multiplier: handoff.blk_notify_off_multiplier,
+                    isr_cfg: handoff.blk_isr_cfg,
+                    device_cfg: handoff.blk_device_cfg,
+                    pci_cfg: 0,
+                };
+                let transport = VirtioTransport::pci_modern(pci_config);
+                unsafe {
+                    VirtioBlkDriver::new_with_transport(transport, blk_config, handoff.tsc_freq)
+                }
+            } else {
+                serial_println("[INIT] Using MMIO transport for VirtIO-blk");
+                unsafe { VirtioBlkDriver::new(handoff.blk_mmio_base, blk_config) }
+            };
+
+            match driver_result {
+                Ok(d) => {
+                    serial_println("[OK] VirtIO-blk driver initialized");
+                    blk_driver = Some(UnifiedBlockDevice::VirtIO(d));
+                }
+                Err(e) => {
+                    serial_print("[WARN] VirtIO-blk init failed: ");
+                    match e {
+                        VirtioBlkInitError::ResetFailed => serial_println("reset failed"),
+                        VirtioBlkInitError::FeatureNegotiationFailed => {
+                            serial_println("feature negotiation failed")
+                        }
+                        VirtioBlkInitError::QueueSetupFailed => {
+                            serial_println("queue setup failed")
+                        }
+                        VirtioBlkInitError::DeviceFailed => serial_println("device error"),
+                        VirtioBlkInitError::InvalidConfig => serial_println("invalid config"),
+                        VirtioBlkInitError::TransportError => serial_println("transport error"),
+                    }
+                }
+            }
+        } else if handoff.blk_type == BLK_TYPE_AHCI {
+            // AHCI initialization
+            serial_println("[INIT] Initializing AHCI driver...");
+            serial_print("[INIT] ABAR: ");
+            serial_print_hex(handoff.blk_mmio_base);
+            serial_println("");
+
+            // AHCI DMA layout:
+            // - Command List: 1KB aligned, 1KB (at blk_dma_base)
+            // - FIS Receive: 256-byte aligned, 256 bytes (at +0x400)
+            // - Command Tables: 128-byte aligned, 32 * 256 = 8KB (at +0x800)
+            // - IDENTIFY buffer: 512 bytes (at +0x2800)
+            let cmd_list_phys = blk_dma_base;
+            let fis_phys = blk_dma_base + 0x400;
+            let cmd_tables_phys = blk_dma_base + 0x800;
+            let identify_phys = blk_dma_base + 0x2800;
+
+            let ahci_config = AhciConfig {
+                tsc_freq: handoff.tsc_freq,
+                cmd_list_cpu: cmd_list_phys as *mut u8,
+                cmd_list_phys,
+                fis_cpu: fis_phys as *mut u8,
+                fis_phys,
+                cmd_tables_cpu: cmd_tables_phys as *mut u8,
+                cmd_tables_phys,
+                identify_cpu: identify_phys as *mut u8,
+                identify_phys,
+            };
+
+            match unsafe { AhciDriver::new(handoff.blk_mmio_base, ahci_config) } {
+                Ok(d) => {
+                    serial_println("[OK] AHCI driver initialized");
+                    if d.link_up() {
+                        serial_println("[OK] SATA link established");
+                    } else {
+                        serial_println("[WARN] SATA link not up");
+                    }
+                    blk_driver = Some(UnifiedBlockDevice::Ahci(d));
+                }
+                Err(e) => {
+                    serial_print("[WARN] AHCI init failed: ");
+                    serial_println(match e {
+                        AhciInitError::InvalidConfig => "invalid config",
+                        AhciInitError::ResetFailed => "reset failed",
+                        AhciInitError::NoDeviceFound => "no device found",
+                        AhciInitError::PortStopTimeout => "port stop timeout",
+                        AhciInitError::PortStartFailed => "port start failed",
+                        AhciInitError::IdentifyFailed => "identify failed",
+                        AhciInitError::No64BitSupport => "no 64-bit support",
+                        AhciInitError::DeviceNotResponding => "device not responding",
+                        AhciInitError::DmaSetupFailed => "DMA setup failed",
+                    });
+                }
+            }
+        } else {
+            serial_print("[WARN] Unknown block device type: ");
+            serial_print_decimal(handoff.blk_type as u32);
+            serial_println("");
+        }
+
+        // If we have a block driver, set up disk writing state
+        if let Some(ref mut d) = blk_driver {
+            let info = d.info();
+            serial_print("[OK] Disk capacity: ");
+            let total_bytes = info.total_sectors * info.sector_size as u64;
+            if total_bytes >= 1024 * 1024 * 1024 {
+                serial_print_decimal((total_bytes / (1024 * 1024 * 1024)) as u32);
+                serial_println(" GB");
+            } else {
+                serial_print_decimal((total_bytes / (1024 * 1024)) as u32);
+                serial_println(" MB");
+            }
+
+            // Find free space on disk
+            serial_println("[INIT] Scanning GPT for existing partitions...");
+            let actual_start_sector = {
+                // For GPT operations, we need a BlockIo adapter
+                // This is a bit awkward with the unified driver, but we'll work with what we have
+                config.target_start_sector // Default fallback
+                                           // TODO: Implement GPT scanning for unified block device
+            };
+
+            serial_print("[INIT] ISO data will be written starting at sector: ");
+            serial_print_hex(actual_start_sector);
+            serial_println("");
+
+            // Create GPT partition for ISO data BEFORE we start writing
+            // NOTE: GPT partition creation only works with VirtIO currently
+            if let UnifiedBlockDevice::VirtIO(ref mut vd) = d {
                 serial_println("[INIT] Creating GPT partition for ISO storage...");
                 if let Some(part_uuid) = create_iso_partition(
-                    &mut d,
+                    vd,
                     actual_start_sector,
                     config.max_download_size,
                     config.iso_name,
                 ) {
                     serial_println("[OK] ISO partition created and claimed in GPT");
-                    // Store partition UUID for manifest
-                    // config.partition_uuid = part_uuid; // TODO: make config mutable or use separate storage
                 } else {
                     serial_println(
                         "[WARN] Could not create GPT partition - ISO data may be overwritten!",
                     );
                     serial_println("[WARN] Continuing anyway (data will be in unmapped space)");
                 }
-
-                // Initialize disk write state using the actual (possibly updated) start sector
-                DISK_NEXT_SECTOR = actual_start_sector;
-                DISK_WRITE_BUFFER_FILL = 0;
-                DISK_TOTAL_BYTES = 0;
-                DISK_NEXT_REQUEST_ID = 1;
-
-                // Store actual start sector for manifest
-                ACTUAL_START_SECTOR = actual_start_sector;
-
-                blk_driver = Some(d);
+            } else {
+                serial_println(
+                    "[INFO] Skipping GPT partition creation for AHCI (not yet implemented)",
+                );
             }
-            Err(e) => {
-                serial_print("[WARN] VirtIO-blk init failed: ");
-                match e {
-                    VirtioBlkInitError::ResetFailed => serial_println("reset failed"),
-                    VirtioBlkInitError::FeatureNegotiationFailed => {
-                        serial_println("feature negotiation failed")
-                    }
-                    VirtioBlkInitError::QueueSetupFailed => serial_println("queue setup failed"),
-                    VirtioBlkInitError::DeviceFailed => serial_println("device error"),
-                    VirtioBlkInitError::InvalidConfig => serial_println("invalid config"),
-                    VirtioBlkInitError::TransportError => serial_println("transport error"),
-                }
-                serial_println("[WARN] Continuing without disk write support");
-            }
+
+            // Initialize disk write state
+            DISK_NEXT_SECTOR = actual_start_sector;
+            DISK_WRITE_BUFFER_FILL = 0;
+            DISK_TOTAL_BYTES = 0;
+            DISK_NEXT_REQUEST_ID = 1;
+            ACTUAL_START_SECTOR = actual_start_sector;
         }
     } else if config.write_to_disk {
         serial_println("[WARN] No block device in handoff - disk writes disabled");
@@ -2463,7 +2528,17 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         // ═══════════════════════════════════════════════════════════════════
         // Write manifest so bootloader can discover this ISO on next boot
         if DISK_TOTAL_BYTES > 0 {
-            if finalize_manifest(blk, &config, DISK_TOTAL_BYTES) {
+            // Manifest writing only supported for VirtIO currently
+            let manifest_result = match blk {
+                UnifiedBlockDevice::VirtIO(ref mut vd) => {
+                    finalize_manifest(vd, &config, DISK_TOTAL_BYTES)
+                }
+                UnifiedBlockDevice::Ahci(_) => {
+                    serial_println("[INFO] Manifest writing not yet implemented for AHCI");
+                    true // Don't fail the download
+                }
+            };
+            if manifest_result {
                 serial_println("[OK] ISO manifest written successfully");
             } else {
                 serial_println("[WARN] Failed to write ISO manifest");

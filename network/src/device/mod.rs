@@ -24,7 +24,7 @@
 use crate::dma::DmaRegion;
 use crate::driver::intel::{E1000eDriver, E1000eError};
 use crate::driver::traits::NetworkDriver;
-use crate::driver::virtio::{VirtioNetDriver, VirtioInitError};
+use crate::driver::virtio::{VirtioInitError, VirtioNetDriver};
 use crate::error::{NetworkError, Result};
 
 pub mod pci;
@@ -125,8 +125,11 @@ impl UnifiedNetDevice {
     /// # Safety
     /// - DMA region must be properly allocated with correct bus addresses
     /// - TSC frequency must be calibrated at boot
-    pub unsafe fn probe(dma: &DmaRegion, tsc_freq: u64) -> core::result::Result<Self, UnifiedDeviceError> {
-        use crate::boot::probe::{probe_and_create_driver, ProbeResult, ProbeError};
+    pub unsafe fn probe(
+        dma: &DmaRegion,
+        tsc_freq: u64,
+    ) -> core::result::Result<Self, UnifiedDeviceError> {
+        use crate::boot::probe::{probe_and_create_driver, ProbeError, ProbeResult};
 
         match probe_and_create_driver(dma, tsc_freq) {
             Ok(ProbeResult::Intel(driver)) => Ok(UnifiedNetDevice::Intel(driver)),
@@ -195,37 +198,33 @@ impl NetworkDevice for UnifiedNetDevice {
 
     fn transmit(&mut self, packet: &[u8]) -> Result<()> {
         match self {
-            UnifiedNetDevice::VirtIO(d) => {
-                d.transmit(packet).map_err(|e| match e {
-                    crate::driver::traits::TxError::QueueFull => NetworkError::BufferExhausted,
-                    crate::driver::traits::TxError::FrameTooLarge => NetworkError::PacketTooLarge,
-                    crate::driver::traits::TxError::DeviceNotReady => NetworkError::DeviceNotReady,
-                })
-            }
-            UnifiedNetDevice::Intel(d) => {
-                d.transmit(packet).map_err(|e| match e {
-                    crate::driver::traits::TxError::QueueFull => NetworkError::BufferExhausted,
-                    crate::driver::traits::TxError::FrameTooLarge => NetworkError::PacketTooLarge,
-                    crate::driver::traits::TxError::DeviceNotReady => NetworkError::DeviceNotReady,
-                })
-            }
+            UnifiedNetDevice::VirtIO(d) => d.transmit(packet).map_err(|e| match e {
+                crate::driver::traits::TxError::QueueFull => NetworkError::BufferExhausted,
+                crate::driver::traits::TxError::FrameTooLarge => NetworkError::PacketTooLarge,
+                crate::driver::traits::TxError::DeviceNotReady => NetworkError::DeviceNotReady,
+            }),
+            UnifiedNetDevice::Intel(d) => d.transmit(packet).map_err(|e| match e {
+                crate::driver::traits::TxError::QueueFull => NetworkError::BufferExhausted,
+                crate::driver::traits::TxError::FrameTooLarge => NetworkError::PacketTooLarge,
+                crate::driver::traits::TxError::DeviceNotReady => NetworkError::DeviceNotReady,
+            }),
         }
     }
 
     fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>> {
         match self {
-            UnifiedNetDevice::VirtIO(d) => {
-                d.receive(buffer).map_err(|e| match e {
-                    crate::driver::traits::RxError::BufferTooSmall { .. } => NetworkError::BufferTooSmall,
-                    crate::driver::traits::RxError::DeviceError => NetworkError::ReceiveError,
-                })
-            }
-            UnifiedNetDevice::Intel(d) => {
-                d.receive(buffer).map_err(|e| match e {
-                    crate::driver::traits::RxError::BufferTooSmall { .. } => NetworkError::BufferTooSmall,
-                    crate::driver::traits::RxError::DeviceError => NetworkError::ReceiveError,
-                })
-            }
+            UnifiedNetDevice::VirtIO(d) => d.receive(buffer).map_err(|e| match e {
+                crate::driver::traits::RxError::BufferTooSmall { .. } => {
+                    NetworkError::BufferTooSmall
+                }
+                crate::driver::traits::RxError::DeviceError => NetworkError::ReceiveError,
+            }),
+            UnifiedNetDevice::Intel(d) => d.receive(buffer).map_err(|e| match e {
+                crate::driver::traits::RxError::BufferTooSmall { .. } => {
+                    NetworkError::BufferTooSmall
+                }
+                crate::driver::traits::RxError::DeviceError => NetworkError::ReceiveError,
+            }),
         }
     }
 }
@@ -331,8 +330,12 @@ impl BlockDriver for UnifiedBlockDevice {
         request_id: u32,
     ) -> core::result::Result<(), BlockError> {
         match self {
-            UnifiedBlockDevice::VirtIO(d) => d.submit_read(sector, buffer_phys, num_sectors, request_id),
-            UnifiedBlockDevice::Ahci(d) => d.submit_read(sector, buffer_phys, num_sectors, request_id),
+            UnifiedBlockDevice::VirtIO(d) => {
+                d.submit_read(sector, buffer_phys, num_sectors, request_id)
+            }
+            UnifiedBlockDevice::Ahci(d) => {
+                d.submit_read(sector, buffer_phys, num_sectors, request_id)
+            }
         }
     }
 
@@ -344,8 +347,12 @@ impl BlockDriver for UnifiedBlockDevice {
         request_id: u32,
     ) -> core::result::Result<(), BlockError> {
         match self {
-            UnifiedBlockDevice::VirtIO(d) => d.submit_write(sector, buffer_phys, num_sectors, request_id),
-            UnifiedBlockDevice::Ahci(d) => d.submit_write(sector, buffer_phys, num_sectors, request_id),
+            UnifiedBlockDevice::VirtIO(d) => {
+                d.submit_write(sector, buffer_phys, num_sectors, request_id)
+            }
+            UnifiedBlockDevice::Ahci(d) => {
+                d.submit_write(sector, buffer_phys, num_sectors, request_id)
+            }
         }
     }
 
@@ -399,4 +406,3 @@ impl NetworkDevice for NullDevice {
         Ok(None)
     }
 }
-

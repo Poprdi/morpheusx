@@ -50,20 +50,20 @@ pub mod port {
 
 /// Global Host Control bits
 pub mod ghc {
-    pub const HR: u32 = 1 << 0;  // HBA Reset
-    pub const IE: u32 = 1 << 1;  // Interrupt Enable
+    pub const HR: u32 = 1 << 0; // HBA Reset
+    pub const IE: u32 = 1 << 1; // Interrupt Enable
     pub const AE: u32 = 1 << 31; // AHCI Enable
 }
 
 /// Port Command bits
 pub mod cmd {
-    pub const ST: u32 = 1 << 0;   // Start
-    pub const SUD: u32 = 1 << 1;  // Spin-Up Device
-    pub const POD: u32 = 1 << 2;  // Power On Device
-    pub const CLO: u32 = 1 << 3;  // Command List Override
-    pub const FRE: u32 = 1 << 4;  // FIS Receive Enable
-    pub const FR: u32 = 1 << 14;  // FIS Receive Running
-    pub const CR: u32 = 1 << 15;  // Command List Running
+    pub const ST: u32 = 1 << 0; // Start
+    pub const SUD: u32 = 1 << 1; // Spin-Up Device
+    pub const POD: u32 = 1 << 2; // Power On Device
+    pub const CLO: u32 = 1 << 3; // Command List Override
+    pub const FRE: u32 = 1 << 4; // FIS Receive Enable
+    pub const FR: u32 = 1 << 14; // FIS Receive Running
+    pub const CR: u32 = 1 << 15; // Command List Running
 }
 
 /// Task File Data bits
@@ -75,10 +75,10 @@ pub mod tfd {
 
 /// Port Interrupt Status bits
 pub mod pxis {
-    pub const DHRS: u32 = 1 << 0;  // Device to Host Register FIS
-    pub const PSS: u32 = 1 << 1;   // PIO Setup FIS
-    pub const DSS: u32 = 1 << 2;   // DMA Setup FIS
-    pub const SDBS: u32 = 1 << 3;  // Set Device Bits FIS
+    pub const DHRS: u32 = 1 << 0; // Device to Host Register FIS
+    pub const PSS: u32 = 1 << 1; // PIO Setup FIS
+    pub const DSS: u32 = 1 << 2; // DMA Setup FIS
+    pub const SDBS: u32 = 1 << 3; // Set Device Bits FIS
     pub const TFES: u32 = 1 << 30; // Task File Error
 }
 

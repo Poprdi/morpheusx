@@ -22,11 +22,11 @@
 
 use crate::dma::DmaRegion;
 use crate::driver::intel::{
-    find_intel_nic, enable_device, validate_mmio_access, IntelNicInfo,
-    E1000eConfig, E1000eDriver, E1000eError,
+    enable_device, find_intel_nic, validate_mmio_access, E1000eConfig, E1000eDriver, E1000eError,
+    IntelNicInfo,
 };
-use crate::driver::virtio::{VirtioConfig, VirtioNetDriver, VirtioInitError};
-use crate::pci::config::{pci_cfg_read16, pci_cfg_read32, offset, PciAddr};
+use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
+use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, PciAddr};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -81,10 +81,7 @@ impl From<E1000eError> for ProbeError {
 #[derive(Debug, Clone, Copy)]
 pub enum DetectedNic {
     /// VirtIO network device
-    VirtIO {
-        pci_addr: PciAddr,
-        mmio_base: u64,
-    },
+    VirtIO { pci_addr: PciAddr, mmio_base: u64 },
     /// Intel e1000e network device
     Intel(IntelNicInfo),
 }
@@ -113,7 +110,10 @@ pub fn scan_for_nic() -> Option<DetectedNic> {
 
     // Fall back to VirtIO (QEMU, VMs)
     if let Some((pci_addr, mmio_base)) = find_virtio_nic() {
-        return Some(DetectedNic::VirtIO { pci_addr, mmio_base });
+        return Some(DetectedNic::VirtIO {
+            pci_addr,
+            mmio_base,
+        });
     }
 
     None
@@ -145,7 +145,7 @@ fn find_virtio_nic() -> Option<(PciAddr, u64)> {
                 }
 
                 let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
-                
+
                 // Check for VirtIO-net (transitional or modern)
                 if device_id != VIRTIO_NET_DEVICE_START && device_id != VIRTIO_NET_MODERN {
                     continue;
@@ -218,7 +218,10 @@ pub unsafe fn probe_and_create_driver(
             Ok(ProbeResult::Intel(driver))
         }
 
-        DetectedNic::VirtIO { pci_addr, mmio_base } => {
+        DetectedNic::VirtIO {
+            pci_addr,
+            mmio_base,
+        } => {
             // Enable device
             let cmd = pci_cfg_read16(pci_addr, offset::COMMAND);
             crate::pci::config::pci_cfg_write16(pci_addr, offset::COMMAND, cmd | 0x06);

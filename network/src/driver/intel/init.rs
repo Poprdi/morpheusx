@@ -142,7 +142,7 @@ pub unsafe fn init_e1000e(
 
     // ═══════════════════════════════════════════════════════════════════
     // STEP 5: WAKE PHY FROM POWER DOWN (CRITICAL POST-EBS)
-    // 
+    //
     // BIOS may have put PHY in power-down mode. We have no ACPI
     // or SMM handler to wake it. Must be done explicitly.
     // ═══════════════════════════════════════════════════════════════════
@@ -291,7 +291,7 @@ unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
             // Clear PDOWN bit to wake PHY
             let new_bmcr = bmcr & !regs::BMCR_PDOWN;
             let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
-            
+
             // Wait for PHY to wake (~1ms)
             // Use simple spin since we're in init
             let start = crate::asm::core::tsc::read_tsc();
@@ -301,7 +301,7 @@ unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
             }
         }
     }
-    
+
     // Also check/clear ISOLATE bit which can prevent operation
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
         if bmcr & regs::BMCR_ISOLATE != 0 {

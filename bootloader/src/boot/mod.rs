@@ -2,6 +2,7 @@
 
 pub mod boot_params;
 pub mod efi_stub;
+pub mod gop;
 pub mod handoff;
 pub mod iso_boot;
 pub mod kernel_loader;
@@ -14,6 +15,7 @@ pub mod network_boot;
 pub mod arch;
 
 pub use boot_params::LinuxBootParams;
+pub use gop::{query_gop, GopFramebufferInfo};
 pub use handoff::boot_kernel;
 pub use iso_boot::{boot_from_iso, default_cmdline_for_iso, IsoBootError};
 pub use kernel_loader::KernelImage;
@@ -22,6 +24,6 @@ pub use memory::{
     allocate_boot_params, allocate_cmdline, allocate_kernel_memory, load_kernel_image,
 };
 pub use network_boot::{
-    enter_network_boot, prepare_handoff, prepare_handoff_with_blk, validate_handoff,
-    BlkProbeResult, NicProbeResult,
+    enter_network_boot, prepare_handoff, prepare_handoff_full, prepare_handoff_with_blk,
+    validate_handoff, BlkProbeResult, NicProbeResult,
 };
