@@ -4,17 +4,19 @@
 //! All hardware access is via ASM bindings.
 //!
 //! # Initialization Sequence
-//! 1. Disable interrupts
-//! 2. Global reset
-//! 3. Wait for reset completion
-//! 4. Disable interrupts again (reset re-enables)
-//! 5. Read MAC address
-//! 6. Clear multicast table
-//! 7. Setup RX descriptor ring
-//! 8. Setup TX descriptor ring
-//! 9. Enable RX
-//! 10. Enable TX
-//! 11. Set link up
+//! 1. Wake from PCI D3 (if needed)
+//! 2. Disable interrupts
+//! 3. Global reset
+//! 4. Wait for reset completion
+//! 5. Disable interrupts again (reset re-enables)
+//! 6. Wake PHY from power down (CRITICAL for post-EBS)
+//! 7. Read MAC address
+//! 8. Clear multicast table
+//! 9. Setup RX descriptor ring
+//! 10. Setup TX descriptor ring
+//! 11. Enable RX
+//! 12. Enable TX
+//! 13. Set link up
 //!
 //! # Reference
 //! Intel 82579 Datasheet, Section 14 (Initialization)
@@ -22,7 +24,7 @@
 use crate::asm::drivers::intel::{
     asm_intel_clear_mta, asm_intel_disable_interrupts, asm_intel_enable_rx, asm_intel_enable_tx,
     asm_intel_read_mac, asm_intel_reset, asm_intel_set_link_up, asm_intel_setup_rx_ring,
-    asm_intel_setup_tx_ring,
+    asm_intel_setup_tx_ring, phy_read, phy_write,
 };
 use crate::dma::DmaRegion;
 use crate::types::MacAddress;
@@ -139,7 +141,15 @@ pub unsafe fn init_e1000e(
     asm_intel_disable_interrupts(mmio_base);
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 5: READ MAC ADDRESS
+    // STEP 5: WAKE PHY FROM POWER DOWN (CRITICAL POST-EBS)
+    // 
+    // BIOS may have put PHY in power-down mode. We have no ACPI
+    // or SMM handler to wake it. Must be done explicitly.
+    // ═══════════════════════════════════════════════════════════════════
+    wake_phy(mmio_base, config.tsc_freq);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 6: READ MAC ADDRESS
     // ═══════════════════════════════════════════════════════════════════
     let mut mac: MacAddress = [0u8; 6];
     let mac_result = asm_intel_read_mac(mmio_base, &mut mac);
@@ -153,12 +163,12 @@ pub unsafe fn init_e1000e(
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 6: CLEAR MULTICAST TABLE
+    // STEP 7: CLEAR MULTICAST TABLE
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_clear_mta(mmio_base);
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 7: SETUP RX DESCRIPTOR RING
+    // STEP 8: SETUP RX DESCRIPTOR RING
     // ═══════════════════════════════════════════════════════════════════
     let rx_desc_cpu = config.dma_cpu_base.add(DmaRegion::RX_DESC_OFFSET);
     let rx_desc_bus = config.dma_bus_base + DmaRegion::RX_DESC_OFFSET as u64;
@@ -185,7 +195,7 @@ pub unsafe fn init_e1000e(
     rx_ring.init_descriptors();
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 8: SETUP TX DESCRIPTOR RING
+    // STEP 9: SETUP TX DESCRIPTOR RING
     // ═══════════════════════════════════════════════════════════════════
     let tx_desc_cpu = config.dma_cpu_base.add(DmaRegion::TX_DESC_OFFSET);
     let tx_desc_bus = config.dma_bus_base + DmaRegion::TX_DESC_OFFSET as u64;
@@ -212,7 +222,7 @@ pub unsafe fn init_e1000e(
     tx_ring.init_descriptors();
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 9: ENABLE RX
+    // STEP 10: ENABLE RX
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_enable_rx(mmio_base);
 
@@ -220,12 +230,12 @@ pub unsafe fn init_e1000e(
     rx_ring.update_tail();
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 10: ENABLE TX
+    // STEP 11: ENABLE TX
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_enable_tx(mmio_base);
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 11: SET LINK UP
+    // STEP 12: SET LINK UP
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_set_link_up(mmio_base);
 
@@ -253,4 +263,50 @@ pub fn generate_fallback_mac(seed: u64) -> MacAddress {
     mac[5] = bytes[5];
 
     mac
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POWER MANAGEMENT HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Wake PHY from power-down mode.
+///
+/// CRITICAL for post-ExitBootServices operation!
+///
+/// BIOS may have enabled PHY power management (BMCR.PDOWN). In a normal
+/// OS environment, ACPI or SMM handlers would wake the PHY. Post-EBS,
+/// we are on our own - must explicitly check and clear PDOWN.
+///
+/// # Arguments
+/// - `mmio_base`: Device MMIO base address
+/// - `tsc_freq`: TSC frequency for timeout calculation
+///
+/// # Safety
+/// Called during init, MMIO must be valid.
+unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
+    // Read PHY BMCR register (Basic Mode Control Register)
+    if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
+        // Check if PHY is in power-down mode
+        if bmcr & regs::BMCR_PDOWN != 0 {
+            // Clear PDOWN bit to wake PHY
+            let new_bmcr = bmcr & !regs::BMCR_PDOWN;
+            let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
+            
+            // Wait for PHY to wake (~1ms)
+            // Use simple spin since we're in init
+            let start = crate::asm::core::tsc::read_tsc();
+            let delay_ticks = tsc_freq / 1000; // 1ms
+            while crate::asm::core::tsc::read_tsc().wrapping_sub(start) < delay_ticks {
+                core::hint::spin_loop();
+            }
+        }
+    }
+    
+    // Also check/clear ISOLATE bit which can prevent operation
+    if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
+        if bmcr & regs::BMCR_ISOLATE != 0 {
+            let new_bmcr = bmcr & !regs::BMCR_ISOLATE;
+            let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
+        }
+    }
 }

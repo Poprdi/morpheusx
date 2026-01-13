@@ -86,6 +86,10 @@ pub struct NicProbeResult {
     pub pci_function: u8,
     /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub transport_type: u8,
+    /// NIC type: 0=None, 1=VirtIO, 2=Intel, 3=Realtek, 4=Broadcom
+    pub nic_type: u8,
+    /// Padding
+    pub _pad: [u8; 3],
     /// Common cfg address (PCI Modern only)
     pub common_cfg: u64,
     /// Notify cfg address (PCI Modern only)
@@ -96,7 +100,16 @@ pub struct NicProbeResult {
     pub device_cfg: u64,
     /// Notify offset multiplier (PCI Modern only)
     pub notify_off_multiplier: u32,
+    /// Padding
+    pub _pad2: u32,
 }
+
+/// NIC type constants
+pub const NIC_TYPE_NONE: u8 = 0;
+pub const NIC_TYPE_VIRTIO: u8 = 1;
+pub const NIC_TYPE_INTEL: u8 = 2;
+pub const NIC_TYPE_REALTEK: u8 = 3;
+pub const NIC_TYPE_BROADCOM: u8 = 4;
 
 impl NicProbeResult {
     /// Create a new zeroed probe result.
@@ -107,31 +120,42 @@ impl NicProbeResult {
             pci_device: 0,
             pci_function: 0,
             transport_type: 0,
+            nic_type: NIC_TYPE_NONE,
+            _pad: [0; 3],
             common_cfg: 0,
             notify_cfg: 0,
             isr_cfg: 0,
             device_cfg: 0,
             notify_off_multiplier: 0,
+            _pad2: 0,
         }
     }
 
-    /// Create MMIO transport result.
-    pub const fn mmio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
+    /// Create MMIO transport result for VirtIO.
+    pub const fn virtio_mmio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
             mmio_base,
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
             transport_type: 0, // TRANSPORT_MMIO
+            nic_type: NIC_TYPE_VIRTIO,
+            _pad: [0; 3],
             common_cfg: 0,
             notify_cfg: 0,
             isr_cfg: 0,
             device_cfg: 0,
             notify_off_multiplier: 0,
+            _pad2: 0,
         }
     }
 
-    /// Create PCI Modern transport result.
+    /// Create MMIO transport result (generic, for backwards compat).
+    pub const fn mmio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
+        Self::virtio_mmio(mmio_base, bus, device, function)
+    }
+
+    /// Create PCI Modern transport result for VirtIO.
     pub const fn pci_modern(
         common_cfg: u64,
         notify_cfg: u64,
@@ -148,11 +172,33 @@ impl NicProbeResult {
             pci_device: device,
             pci_function: function,
             transport_type: 1, // TRANSPORT_PCI_MODERN
+            nic_type: NIC_TYPE_VIRTIO,
+            _pad: [0; 3],
             common_cfg,
             notify_cfg,
             isr_cfg,
             device_cfg,
             notify_off_multiplier,
+            _pad2: 0,
+        }
+    }
+
+    /// Create result for Intel e1000e NIC.
+    pub const fn intel(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
+        Self {
+            mmio_base,
+            pci_bus: bus,
+            pci_device: device,
+            pci_function: function,
+            transport_type: 0, // Intel uses plain MMIO
+            nic_type: NIC_TYPE_INTEL,
+            _pad: [0; 3],
+            common_cfg: 0,
+            notify_cfg: 0,
+            isr_cfg: 0,
+            device_cfg: 0,
+            notify_off_multiplier: 0,
+            _pad2: 0,
         }
     }
 }
@@ -302,7 +348,7 @@ pub fn prepare_handoff_with_blk(
     stack_top: u64,
     stack_size: u64,
 ) -> BootHandoff {
-    use morpheus_network::boot::handoff::{HANDOFF_MAGIC, HANDOFF_VERSION, NIC_TYPE_VIRTIO};
+    use morpheus_network::boot::handoff::{HANDOFF_MAGIC, HANDOFF_VERSION};
 
     BootHandoff {
         magic: HANDOFF_MAGIC,
@@ -313,7 +359,7 @@ pub fn prepare_handoff_with_blk(
         nic_pci_bus: nic.pci_bus,
         nic_pci_device: nic.pci_device,
         nic_pci_function: nic.pci_function,
-        nic_type: NIC_TYPE_VIRTIO,
+        nic_type: nic.nic_type,
         mac_address,
         _nic_pad: [0; 2],
 

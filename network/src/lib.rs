@@ -95,10 +95,29 @@ pub mod types; // Shared types (#[repr(C)] structs) // PCI bus access
 // RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════
 
-// Core types
+// Core types - Network
 pub use device::NetworkDevice;
+pub use device::UnifiedNetDevice;
 pub use error::{NetworkError, Result};
 pub use types::{HttpMethod, ProgressCallback};
+
+// Core types - Block (Unified Block Device)
+pub use device::UnifiedBlockDevice;
+pub use driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver, BlockError};
+
+// Block drivers
+pub use driver::ahci::{AhciConfig, AhciDriver, AhciInitError};
+pub use driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
+
+// BlockIo adapters (for filesystem compatibility)
+pub use driver::unified_block_io::{GenericBlockIo, UnifiedBlockIo, UnifiedBlockIoError};
+pub use driver::block_io_adapter::{BlockIoError, VirtioBlkBlockIo};
+
+// Block probe
+pub use boot::block_probe::{
+    BlockDmaConfig, BlockDeviceType, BlockProbeError, BlockProbeResult,
+    probe_and_create_block_driver, probe_unified_block_device, detect_block_device_type,
+};
 
 // Client
 pub use client::HttpClient;

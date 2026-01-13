@@ -496,6 +496,101 @@ cmd_run() {
     do_launch_qemu
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ThinkPad T450s Hardware Simulation
+# Simulates real hardware: Intel AHCI SATA + Intel e1000 NIC
+# Use this to test the unified device layer before deploying to real hardware
+# ══════════════════════════════════════════════════════════════════════════════
+
+do_launch_thinkpad() {
+    log_step "Launching QEMU (ThinkPad T450s Hardware Simulation)"
+    
+    local ovmf_path
+    ovmf_path=$(get_ovmf_path) || die "OVMF not found"
+    
+    local disk="${TESTING_DIR}/test-disk-50g.img"
+    
+    log_info "Hardware emulation:"
+    log_info "  • Storage: Intel AHCI SATA (ICH9)"
+    log_info "  • Network: Intel e1000 (82540EM)"
+    log_info "  • Chipset: Q35 (PCH-like)"
+    log_info ""
+    log_info "This matches ThinkPad T450s hardware:"
+    log_info "  • Intel Wildcat Point-LP SATA (0x8086:0x9C83)"
+    log_info "  • Intel I218-LM Ethernet (0x8086:0x155A)"
+    log_info ""
+    log_info "Press Ctrl+A X to exit QEMU"
+    printf "\n"
+    
+    if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
+        qemu-system-x86_64 \
+            -enable-kvm \
+            -machine q35,accel=kvm \
+            -cpu host \
+            -bios "$ovmf_path" \
+            -smbios type=0,vendor=LENOVO,version=JBET71WW,date=03/01/2019 \
+            -smbios type=1,manufacturer=LENOVO,product="ThinkPad T450s",version=ThinkPad,serial=PC0XXXXX,uuid=12345678-1234-1234-1234-123456789abc \
+            -smbios type=2,manufacturer=LENOVO,product=20BWS0XX00 \
+            -smbios type=3,manufacturer=LENOVO \
+            -object iothread,id=iothread0 \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
+            -device ich9-ahci,id=ahci0 \
+            -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
+            -device e1000,netdev=net0 \
+            -netdev user,id=net0 \
+            -smp 8 \
+            -m 12G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial stdio
+    else
+        # Create a temp ESP image for AHCI
+        local esp_img="${TESTING_DIR}/esp-temp.img"
+        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}" -nt "$esp_img" ]]; then
+            log_info "Creating ESP disk image..."
+            local esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
+            dd if=/dev/zero of="$esp_img" bs=1M count=$esp_size status=none 2>/dev/null || true
+            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1 || true
+            local mnt=$(mktemp -d)
+            sudo mount -o loop "$esp_img" "$mnt"
+            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
+            sudo umount "$mnt"
+            rmdir "$mnt"
+        fi
+        qemu-system-x86_64 \
+            -enable-kvm \
+            -machine q35,accel=kvm \
+            -cpu host \
+            -bios "$ovmf_path" \
+            -smbios type=0,vendor=LENOVO,version=JBET71WW,date=03/01/2019 \
+            -smbios type=1,manufacturer=LENOVO,product="ThinkPad T450s",version=ThinkPad,serial=PC0XXXXX,uuid=12345678-1234-1234-1234-123456789abc \
+            -smbios type=2,manufacturer=LENOVO,product=20BWS0XX00 \
+            -smbios type=3,manufacturer=LENOVO \
+            -object iothread,id=iothread0 \
+            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
+            -device ich9-ahci,id=ahci0 \
+            -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
+            -device e1000,netdev=net0 \
+            -netdev user,id=net0 \
+            -smp 8 \
+            -m 12G \
+            -vga virtio \
+            -display gtk,gl=on \
+            -serial stdio
+    fi
+}
+
+cmd_thinkpad() {
+    print_banner
+    check_bootloader || die "Bootloader not built. Run: $0 build"
+    
+    log_info "ThinkPad T450s Hardware Test Mode"
+    log_info "Testing unified device layer with real hardware emulation"
+    printf "\n"
+    
+    do_launch_thinkpad
+}
+
 cmd_clean() {
     print_banner
     log_step "Cleaning"
@@ -551,7 +646,8 @@ usage() {
     printf "  ${C_CYAN}setup${C_RESET}              Install dependencies only\n"
     printf "  ${C_CYAN}build${C_RESET}              Build bootloader only\n"
     printf "  ${C_CYAN}disk${C_RESET} [target]      Create disk image (50g|info)\n"
-    printf "  ${C_CYAN}run${C_RESET}                Launch QEMU\n"
+    printf "  ${C_CYAN}run${C_RESET}                Launch QEMU (VirtIO devices)\n"
+    printf "  ${C_CYAN}thinkpad${C_RESET}           Launch QEMU with ThinkPad T450s hardware\n"
     printf "  ${C_CYAN}status${C_RESET}             Show environment status\n"
     printf "  ${C_CYAN}clean${C_RESET}              Remove artifacts\n"
     
@@ -564,6 +660,8 @@ usage() {
     printf "  %s --no-qemu\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Just rebuild${C_RESET}\n"
     printf "  %s build\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Test with ThinkPad T450s hardware (AHCI + Intel e1000)${C_RESET}\n"
+    printf "  %s thinkpad\n\n" "$(basename "$0")"
 }
 
 main() {
@@ -593,6 +691,7 @@ main() {
         build|compile)   cmd_build ;;
         disk|image)      cmd_disk "${args[@]:-}" ;;
         run|start|qemu)  cmd_run ;;
+        thinkpad|t450s)  cmd_thinkpad ;;
         status|info)     cmd_status ;;
         clean|purge)     cmd_clean ;;
         *)               die "Unknown command: $cmd" ;;
