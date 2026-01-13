@@ -36,13 +36,13 @@ pub use init::{post_ebs_init, InitError, InitResult, InitializedNicType, Timeout
 
 // Re-exports - Network probe
 pub use probe::{
-    probe_and_create_driver, create_intel_driver, create_virtio_driver, detect_nic_type,
+    create_intel_driver, create_virtio_driver, detect_nic_type, probe_and_create_driver,
     scan_for_nic, DetectedNic, NicType, ProbeError, ProbeResult,
 };
 
 // Re-exports - Block probe
 pub use block_probe::{
-    probe_and_create_block_driver, probe_unified_block_device, detect_block_device_type,
-    scan_for_block_device, find_ahci_controller, AhciInfo, BlockDmaConfig, BlockDeviceType,
+    detect_block_device_type, find_ahci_controller, probe_and_create_block_driver,
+    probe_unified_block_device, scan_for_block_device, AhciInfo, BlockDeviceType, BlockDmaConfig,
     BlockProbeError, BlockProbeResult, DetectedBlockDevice,
 };

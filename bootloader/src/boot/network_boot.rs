@@ -305,6 +305,27 @@ impl BlkProbeResult {
             device_cfg,
         }
     }
+
+    /// Create AHCI result.
+    /// For AHCI, mmio_base = ABAR (AHCI Base Address Register).
+    pub const fn ahci(abar: u64, bus: u8, device: u8, function: u8) -> Self {
+        Self {
+            mmio_base: abar, // ABAR for AHCI
+            pci_bus: bus,
+            pci_device: device,
+            pci_function: function,
+            device_type: 3,    // BLK_TYPE_AHCI
+            transport_type: 0, // Not used for AHCI
+            _pad: [0; 3],
+            sector_size: 512,
+            total_sectors: 0,
+            common_cfg: 0,
+            notify_cfg: 0,
+            notify_off_multiplier: 0,
+            isr_cfg: 0,
+            device_cfg: 0,
+        }
+    }
 }
 
 /// Prepare BootHandoff from UEFI boot services.
@@ -320,8 +341,8 @@ pub fn prepare_handoff(
     stack_top: u64,
     stack_size: u64,
 ) -> BootHandoff {
-    // Delegate to full version with no block device
-    prepare_handoff_with_blk(
+    // Delegate to full version with no block device and no framebuffer
+    prepare_handoff_full(
         nic,
         &BlkProbeResult::zeroed(),
         mac_address,
@@ -331,6 +352,11 @@ pub fn prepare_handoff(
         tsc_freq,
         stack_top,
         stack_size,
+        0,
+        0,
+        0,
+        0,
+        0, // No framebuffer
     )
 }
 
@@ -347,6 +373,45 @@ pub fn prepare_handoff_with_blk(
     tsc_freq: u64,
     stack_top: u64,
     stack_size: u64,
+) -> BootHandoff {
+    // Delegate to full version with no framebuffer
+    prepare_handoff_full(
+        nic,
+        blk,
+        mac_address,
+        dma_cpu_ptr,
+        dma_bus_addr,
+        dma_size,
+        tsc_freq,
+        stack_top,
+        stack_size,
+        0,
+        0,
+        0,
+        0,
+        0, // No framebuffer
+    )
+}
+
+/// Prepare BootHandoff with NIC, block device, and framebuffer info.
+///
+/// Call this BEFORE ExitBootServices to populate handoff structure.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_handoff_full(
+    nic: &NicProbeResult,
+    blk: &BlkProbeResult,
+    mac_address: [u8; 6],
+    dma_cpu_ptr: u64,
+    dma_bus_addr: u64,
+    dma_size: u64,
+    tsc_freq: u64,
+    stack_top: u64,
+    stack_size: u64,
+    fb_base: u64,
+    fb_width: u32,
+    fb_height: u32,
+    fb_stride: u32,
+    fb_format: u32,
 ) -> BootHandoff {
     use morpheus_network::boot::handoff::{HANDOFF_MAGIC, HANDOFF_VERSION};
 
@@ -380,11 +445,11 @@ pub fn prepare_handoff_with_blk(
         stack_top,
         stack_size,
 
-        framebuffer_base: 0,
-        framebuffer_width: 0,
-        framebuffer_height: 0,
-        framebuffer_stride: 0,
-        framebuffer_format: 0,
+        framebuffer_base: fb_base,
+        framebuffer_width: fb_width,
+        framebuffer_height: fb_height,
+        framebuffer_stride: fb_stride,
+        framebuffer_format: fb_format,
 
         memory_map_ptr: 0,
         memory_map_size: 0,

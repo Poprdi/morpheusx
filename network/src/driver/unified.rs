@@ -90,7 +90,7 @@ impl UnifiedNetworkDriver {
                             notify_off_multiplier: handoff.nic_notify_off_multiplier,
                             isr_cfg: handoff.nic_isr_cfg,
                             device_cfg: handoff.nic_device_cfg,
-                            pci_cfg: 0,  // Not used for network
+                            pci_cfg: 0, // Not used for network
                         })
                     }
                     TRANSPORT_MMIO | _ => {
@@ -108,8 +108,11 @@ impl UnifiedNetworkDriver {
                     dma_size: handoff.dma_size as usize,
                 };
 
-                let driver =
-                    VirtioNetDriver::new_with_transport(transport, virtio_config, handoff.tsc_freq)?;
+                let driver = VirtioNetDriver::new_with_transport(
+                    transport,
+                    virtio_config,
+                    handoff.tsc_freq,
+                )?;
                 Ok(UnifiedNetworkDriver::VirtIO(driver))
             }
 

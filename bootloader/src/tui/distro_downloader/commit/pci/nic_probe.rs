@@ -8,7 +8,9 @@ extern crate alloc;
 
 use super::config_space::{pci_read16, pci_read32, pci_read8, read_bar};
 use crate::boot::network_boot::{NicProbeResult, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO};
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGRAY, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW};
+use crate::tui::renderer::{
+    Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGRAY, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW,
+};
 
 /// VirtIO vendor and device IDs
 const VIRTIO_VENDOR: u16 = 0x1AF4;
@@ -56,7 +58,13 @@ const VIRTIO_PCI_CAP_DEVICE: u8 = 4;
 /// This is the main entry point for NIC detection, supporting both
 /// virtualized (VirtIO) and real hardware (Intel e1000e).
 pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeResult {
-    screen.put_str_at(7, *log_y, "Scanning PCI for network devices...", EFI_DARKGRAY, EFI_BLACK);
+    screen.put_str_at(
+        7,
+        *log_y,
+        "Scanning PCI for network devices...",
+        EFI_DARKGRAY,
+        EFI_BLACK,
+    );
     *log_y += 1;
 
     // Scan all PCI buses (not just bus 0 - real hardware may be elsewhere)
@@ -76,12 +84,22 @@ pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeR
                 let dev_id = ((id >> 16) & 0xFFFF) as u16;
 
                 // Check for VirtIO network device (highest priority)
-                if vendor == VIRTIO_VENDOR && (dev_id == VIRTIO_NET_LEGACY || dev_id == VIRTIO_NET_MODERN) {
+                if vendor == VIRTIO_VENDOR
+                    && (dev_id == VIRTIO_NET_LEGACY || dev_id == VIRTIO_NET_MODERN)
+                {
                     screen.put_str_at(
-                        9, *log_y,
-                        &alloc::format!("PCI {:02x}:{:02x}.{} - {:04x}:{:04x} VirtIO-net", 
-                            bus, device, function, vendor, dev_id),
-                        EFI_LIGHTGREEN, EFI_BLACK,
+                        9,
+                        *log_y,
+                        &alloc::format!(
+                            "PCI {:02x}:{:02x}.{} - {:04x}:{:04x} VirtIO-net",
+                            bus,
+                            device,
+                            function,
+                            vendor,
+                            dev_id
+                        ),
+                        EFI_LIGHTGREEN,
+                        EFI_BLACK,
                     );
                     *log_y += 1;
                     return probe_virtio_nic_device(screen, log_y, bus, device, function, dev_id);
@@ -90,10 +108,18 @@ pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeR
                 // Check for Intel e1000e
                 if vendor == INTEL_VENDOR && INTEL_E1000E_DEVICES.contains(&dev_id) {
                     screen.put_str_at(
-                        9, *log_y,
-                        &alloc::format!("PCI {:02x}:{:02x}.{} - {:04x}:{:04x} Intel e1000e", 
-                            bus, device, function, vendor, dev_id),
-                        EFI_LIGHTGREEN, EFI_BLACK,
+                        9,
+                        *log_y,
+                        &alloc::format!(
+                            "PCI {:02x}:{:02x}.{} - {:04x}:{:04x} Intel e1000e",
+                            bus,
+                            device,
+                            function,
+                            vendor,
+                            dev_id
+                        ),
+                        EFI_LIGHTGREEN,
+                        EFI_BLACK,
                     );
                     *log_y += 1;
                     return probe_intel_nic_device(screen, log_y, bus, device, function, dev_id);
@@ -118,7 +144,13 @@ pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeR
 
 /// Probe for VirtIO NIC on PCI bus with debug output (legacy function for backwards compat).
 pub fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeResult {
-    screen.put_str_at(7, *log_y, "Scanning PCI bus 0 for VirtIO...", EFI_DARKGRAY, EFI_BLACK);
+    screen.put_str_at(
+        7,
+        *log_y,
+        "Scanning PCI bus 0 for VirtIO...",
+        EFI_DARKGRAY,
+        EFI_BLACK,
+    );
     *log_y += 1;
 
     // Scan PCI bus 0 (QEMU puts virtio devices here)
@@ -138,7 +170,13 @@ pub fn probe_virtio_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> Ni
         }
     }
 
-    screen.put_str_at(7, *log_y, "No VirtIO-net device found on bus 0", EFI_RED, EFI_BLACK);
+    screen.put_str_at(
+        7,
+        *log_y,
+        "No VirtIO-net device found on bus 0",
+        EFI_RED,
+        EFI_BLACK,
+    );
     *log_y += 1;
 
     NicProbeResult::zeroed()
@@ -159,7 +197,11 @@ fn probe_virtio_nic_device(
         *log_y,
         &alloc::format!(
             "  VirtIO-net ({})",
-            if is_modern { "PCI Modern" } else { "PCI Legacy/Transitional" }
+            if is_modern {
+                "PCI Modern"
+            } else {
+                "PCI Legacy/Transitional"
+            }
         ),
         EFI_LIGHTGREEN,
         EFI_BLACK,
@@ -251,20 +293,40 @@ fn try_pci_modern_caps(
 
     // If all required caps found, build modern result
     if found_common && found_notify {
-        screen.put_str_at(9, *log_y, "  PCI Modern: All required caps found!", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(
+            9,
+            *log_y,
+            "  PCI Modern: All required caps found!",
+            EFI_LIGHTGREEN,
+            EFI_BLACK,
+        );
         *log_y += 1;
 
         let common_base = read_bar(bus, device, function, common_bar);
         let notify_base = read_bar(bus, device, function, notify_bar);
-        let isr_base = if found_isr { read_bar(bus, device, function, isr_bar) } else { 0 };
-        let device_base = if found_device { read_bar(bus, device, function, device_bar) } else { 0 };
+        let isr_base = if found_isr {
+            read_bar(bus, device, function, isr_bar)
+        } else {
+            0
+        };
+        let device_base = if found_device {
+            read_bar(bus, device, function, device_bar)
+        } else {
+            0
+        };
 
         let common_cfg_addr = common_base + common_offset as u64;
         let notify_cfg_addr = notify_base + notify_offset as u64;
         let isr_cfg_addr = isr_base + isr_offset as u64;
         let device_cfg_addr = device_base + device_offset as u64;
 
-        screen.put_str_at(9, *log_y, &alloc::format!("  common_cfg: {:#x}", common_cfg_addr), EFI_CYAN, EFI_BLACK);
+        screen.put_str_at(
+            9,
+            *log_y,
+            &alloc::format!("  common_cfg: {:#x}", common_cfg_addr),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
         *log_y += 1;
 
         return Some(NicProbeResult::pci_modern(
@@ -294,7 +356,13 @@ fn probe_virtio_legacy_bar(
     if bar0 & 1 == 1 {
         // I/O BAR - Legacy device
         let io_base = (bar0 & 0xFFFFFFFC) as u64;
-        screen.put_str_at(9, *log_y, &alloc::format!("  I/O base: {:#x} (Legacy)", io_base), EFI_CYAN, EFI_BLACK);
+        screen.put_str_at(
+            9,
+            *log_y,
+            &alloc::format!("  I/O base: {:#x} (Legacy)", io_base),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
         *log_y += 1;
         let mut result = NicProbeResult::virtio_mmio(io_base, bus, device, function);
         result.transport_type = 2; // TRANSPORT_PCI_LEGACY
@@ -309,7 +377,13 @@ fn probe_virtio_legacy_bar(
             mmio_base
         };
 
-        screen.put_str_at(9, *log_y, &alloc::format!("  MMIO base: {:#x}", final_base), EFI_CYAN, EFI_BLACK);
+        screen.put_str_at(
+            9,
+            *log_y,
+            &alloc::format!("  MMIO base: {:#x}", final_base),
+            EFI_CYAN,
+            EFI_BLACK,
+        );
         *log_y += 1;
         NicProbeResult::virtio_mmio(final_base, bus, device, function)
     }
@@ -341,9 +415,11 @@ fn probe_intel_nic_device(
     };
 
     screen.put_str_at(
-        9, *log_y,
+        9,
+        *log_y,
         &alloc::format!("  Intel {} (Device ID: {:#06x})", name, dev_id),
-        EFI_LIGHTGREEN, EFI_BLACK,
+        EFI_LIGHTGREEN,
+        EFI_BLACK,
     );
     *log_y += 1;
 
@@ -352,7 +428,13 @@ fn probe_intel_nic_device(
 
     if bar0 & 1 != 0 {
         // I/O BAR - not supported for e1000e
-        screen.put_str_at(9, *log_y, "  ERROR: I/O BAR not supported for Intel NIC", EFI_RED, EFI_BLACK);
+        screen.put_str_at(
+            9,
+            *log_y,
+            "  ERROR: I/O BAR not supported for Intel NIC",
+            EFI_RED,
+            EFI_BLACK,
+        );
         *log_y += 1;
         return NicProbeResult::zeroed();
     }
@@ -367,9 +449,11 @@ fn probe_intel_nic_device(
     };
 
     screen.put_str_at(
-        9, *log_y,
+        9,
+        *log_y,
         &alloc::format!("  MMIO base: {:#x}", mmio_base),
-        EFI_CYAN, EFI_BLACK,
+        EFI_CYAN,
+        EFI_BLACK,
     );
     *log_y += 1;
 
@@ -379,9 +463,11 @@ fn probe_intel_nic_device(
     pci_write16(bus, device, function, 0x04, new_cmd);
 
     screen.put_str_at(
-        9, *log_y,
+        9,
+        *log_y,
         &alloc::format!("  PCI Command: {:#06x} -> {:#06x}", cmd, new_cmd),
-        EFI_DARKGRAY, EFI_BLACK,
+        EFI_DARKGRAY,
+        EFI_BLACK,
     );
     *log_y += 1;
 
@@ -391,11 +477,11 @@ fn probe_intel_nic_device(
 /// Write to PCI configuration space (16-bit).
 fn pci_write16(bus: u8, device: u8, function: u8, offset: u8, value: u16) {
     use super::config_space::pci_write32;
-    
+
     // Read-modify-write for 16-bit access
     let addr_offset = offset & 0xFC;
     let shift = ((offset & 2) * 8) as u32;
-    
+
     let current = pci_read32(bus, device, function, addr_offset);
     let mask = !(0xFFFF_u32 << shift);
     let new_val = (current & mask) | ((value as u32) << shift);

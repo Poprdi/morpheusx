@@ -7,23 +7,23 @@
 pub struct AhciConfig {
     /// TSC frequency for timeouts
     pub tsc_freq: u64,
-    
+
     /// Command List: CPU pointer (1K aligned, 1KB)
     pub cmd_list_cpu: *mut u8,
     /// Command List: Physical/bus address
     pub cmd_list_phys: u64,
-    
+
     /// FIS Receive buffer: CPU pointer (256-byte aligned, 256 bytes)
     pub fis_cpu: *mut u8,
     /// FIS Receive buffer: Physical/bus address
     pub fis_phys: u64,
-    
+
     /// Command Tables: CPU pointer (128-byte aligned, 256 bytes per slot)
     /// Total size: 32 slots × 256 bytes = 8KB
     pub cmd_tables_cpu: *mut u8,
     /// Command Tables: Physical/bus address
     pub cmd_tables_phys: u64,
-    
+
     /// IDENTIFY buffer: CPU pointer (512 bytes for IDENTIFY data)
     pub identify_cpu: *mut u8,
     /// IDENTIFY buffer: Physical/bus address

@@ -207,6 +207,7 @@ dependencies = [
  "iso9660-rs",
  "linked_list_allocator",
  "morpheus-core",
+ "morpheus-display",
  "morpheus-network",
  "morpheus-persistent",
  "spin",
@@ -223,6 +224,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "morpheus-display"
+version = "0.1.0"
+
+[[package]]
 name = "morpheus-network"
 version = "1.0.1"
 dependencies = [
@@ -230,6 +235,7 @@ dependencies = [
  "gpt_disk_types",
  "linked_list_allocator",
  "morpheus-core",
+ "morpheus-display",
  "smoltcp",
  "spin",
 ]

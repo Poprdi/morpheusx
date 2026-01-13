@@ -58,10 +58,7 @@ pub enum InitializedNicType {
     /// VirtIO network device (state in InitResult.nic_config, rx_queue, tx_queue)
     VirtIO,
     /// Intel e1000e network device
-    Intel {
-        mmio_base: u64,
-        tsc_freq: u64,
-    },
+    Intel { mmio_base: u64, tsc_freq: u64 },
     /// No NIC
     None,
 }

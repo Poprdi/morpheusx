@@ -207,7 +207,7 @@ pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
         EFI_CYAN,
         EFI_BLACK,
     );
-     screen.put_str_at(
+    screen.put_str_at(
         43,
         msg_y + 9,
         "║  No its not stuck we just dont have a post EBS display stack yet ║",

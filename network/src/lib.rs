@@ -66,6 +66,11 @@ extern crate alloc;
 pub mod alloc_heap;
 
 // ═══════════════════════════════════════════════════════════════
+// DISPLAY OUTPUT (framebuffer for post-EBS visual feedback)
+// ═══════════════════════════════════════════════════════════════
+pub mod display;
+
+// ═══════════════════════════════════════════════════════════════
 // CORE MODULES
 // ═══════════════════════════════════════════════════════════════
 pub mod client;
@@ -110,13 +115,13 @@ pub use driver::ahci::{AhciConfig, AhciDriver, AhciInitError};
 pub use driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
 
 // BlockIo adapters (for filesystem compatibility)
-pub use driver::unified_block_io::{GenericBlockIo, UnifiedBlockIo, UnifiedBlockIoError};
 pub use driver::block_io_adapter::{BlockIoError, VirtioBlkBlockIo};
+pub use driver::unified_block_io::{GenericBlockIo, UnifiedBlockIo, UnifiedBlockIoError};
 
 // Block probe
 pub use boot::block_probe::{
-    BlockDmaConfig, BlockDeviceType, BlockProbeError, BlockProbeResult,
-    probe_and_create_block_driver, probe_unified_block_device, detect_block_device_type,
+    detect_block_device_type, probe_and_create_block_driver, probe_unified_block_device,
+    BlockDeviceType, BlockDmaConfig, BlockProbeError, BlockProbeResult,
 };
 
 // Client
@@ -181,6 +186,8 @@ pub fn serial_str(s: &str) {
     for b in s.bytes() {
         serial_byte(b);
     }
+    // Also write to framebuffer display if available
+    display::display_write(s);
 }
 
 /// Write a u32 as decimal to serial

@@ -699,26 +699,29 @@ impl DistroLauncher {
             .get(iso_idx)
             .map(|e| {
                 let name = e.manifest.name_str();
-                
+
                 // Get the first chunk's start LBA - this tells us where the ISO data begins
                 let iso_start_lba = if e.manifest.chunks.count > 0 {
                     e.manifest.chunks.chunks[0].start_lba
                 } else {
                     0
                 };
-                
+
                 // Find which partition contains this LBA by querying GPT
                 // We need to read the partition table and find the entry that contains iso_start_lba
-                let part_num = Self::find_partition_for_lba(boot_services, iso_start_lba)
-                    .unwrap_or(2); // Default to partition 2 if lookup fails
-                
+                let part_num =
+                    Self::find_partition_for_lba(boot_services, iso_start_lba).unwrap_or(2); // Default to partition 2 if lookup fails
+
                 morpheus_core::logger::log(
                     alloc::format!(
                         "ISO '{}' at LBA {} -> partition {}",
-                        name, iso_start_lba, part_num
-                    ).leak()
+                        name,
+                        iso_start_lba,
+                        part_num
+                    )
+                    .leak(),
                 );
-                
+
                 (name, part_num)
             })
             .unwrap_or(("", 2));
@@ -1066,12 +1069,12 @@ impl DistroLauncher {
 
         // First, get the raw disk (not partition) to read GPT
         let disk_block_io = Self::get_first_disk_block_io(boot_services)?;
-        
+
         // Allocate buffer for reading GPT (LBA 1 for header, then partition entries)
         let mut gpt_buffer: *mut u8 = core::ptr::null_mut();
         let buffer_size = 512 * 34; // GPT header + partition entries (typical)
         let alloc_status = (boot_services.allocate_pool)(2, buffer_size, &mut gpt_buffer);
-        
+
         if alloc_status != 0 || gpt_buffer.is_null() {
             return None;
         }
@@ -1080,7 +1083,7 @@ impl DistroLauncher {
             let block_io = &*disk_block_io;
             let media = &*block_io.media;
             let block_size = media.block_size as usize;
-            
+
             // Read LBA 1 (GPT header)
             let status = (block_io.read_blocks)(
                 disk_block_io,
@@ -1089,47 +1092,51 @@ impl DistroLauncher {
                 block_size,
                 gpt_buffer,
             );
-            
+
             if status != 0 {
                 (boot_services.free_pool)(gpt_buffer);
                 return None;
             }
-            
+
             // Parse GPT header
             let header = core::slice::from_raw_parts(gpt_buffer, block_size);
-            
+
             // Check GPT signature "EFI PART"
             if &header[0..8] != b"EFI PART" {
                 morpheus_core::logger::log("GPT signature not found");
                 (boot_services.free_pool)(gpt_buffer);
                 return None;
             }
-            
+
             // Get partition entry LBA and count
             let partition_entry_lba = u64::from_le_bytes(header[72..80].try_into().unwrap());
             let num_entries = u32::from_le_bytes(header[80..84].try_into().unwrap());
             let entry_size = u32::from_le_bytes(header[84..88].try_into().unwrap());
-            
+
             morpheus_core::logger::log(
                 alloc::format!(
                     "GPT: {} entries at LBA {}, {} bytes each",
-                    num_entries, partition_entry_lba, entry_size
-                ).leak()
+                    num_entries,
+                    partition_entry_lba,
+                    entry_size
+                )
+                .leak(),
             );
-            
+
             // Read partition entries (usually at LBA 2)
             let entries_to_read = num_entries.min(128) as usize; // Max 128 entries
             let entries_buffer_size = entries_to_read * entry_size as usize;
             let entries_sectors = (entries_buffer_size + block_size - 1) / block_size;
-            
+
             let mut entries_buffer: *mut u8 = core::ptr::null_mut();
-            let alloc_status = (boot_services.allocate_pool)(2, entries_buffer_size, &mut entries_buffer);
-            
+            let alloc_status =
+                (boot_services.allocate_pool)(2, entries_buffer_size, &mut entries_buffer);
+
             if alloc_status != 0 || entries_buffer.is_null() {
                 (boot_services.free_pool)(gpt_buffer);
                 return None;
             }
-            
+
             // Read partition entries
             let status = (block_io.read_blocks)(
                 disk_block_io,
@@ -1138,54 +1145,54 @@ impl DistroLauncher {
                 entries_sectors * block_size,
                 entries_buffer,
             );
-            
+
             if status != 0 {
                 (boot_services.free_pool)(entries_buffer);
                 (boot_services.free_pool)(gpt_buffer);
                 return None;
             }
-            
+
             // Search for partition with matching start LBA
             let entries = core::slice::from_raw_parts(entries_buffer, entries_buffer_size);
             let mut result = None;
-            
+
             for i in 0..entries_to_read {
                 let entry_offset = i * entry_size as usize;
                 let entry = &entries[entry_offset..entry_offset + entry_size as usize];
-                
+
                 // Check if entry is used (type GUID not zero)
                 let type_guid = &entry[0..16];
                 if type_guid.iter().all(|&b| b == 0) {
                     continue; // Empty entry
                 }
-                
+
                 // Get partition start LBA (offset 32-40 in GPT entry)
                 let part_start = u64::from_le_bytes(entry[32..40].try_into().unwrap());
                 let part_end = u64::from_le_bytes(entry[40..48].try_into().unwrap());
-                
+
                 // Partition numbers are 1-based
                 let partition_num = (i + 1) as u64;
-                
+
                 morpheus_core::logger::log(
-                    alloc::format!(
-                        "  Part {}: LBA {}-{}", 
-                        partition_num, part_start, part_end
-                    ).leak()
+                    alloc::format!("  Part {}: LBA {}-{}", partition_num, part_start, part_end)
+                        .leak(),
                 );
-                
+
                 // Check if this partition starts at our target LBA
                 if part_start == target_start_lba {
                     morpheus_core::logger::log(
                         alloc::format!(
                             "Found! ISO partition {} starts at LBA {}",
-                            partition_num, target_start_lba
-                        ).leak()
+                            partition_num,
+                            target_start_lba
+                        )
+                        .leak(),
                     );
                     result = Some(partition_num);
                     break;
                 }
             }
-            
+
             (boot_services.free_pool)(entries_buffer);
             (boot_services.free_pool)(gpt_buffer);
             result
