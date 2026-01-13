@@ -30,6 +30,30 @@ pub fn pci_read32(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
     }
 }
 
+/// Write 32-bit value to PCI config space.
+pub fn pci_write32(bus: u8, device: u8, func: u8, offset: u8, value: u32) {
+    let addr: u32 = (1 << 31) // Enable bit
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((func as u32) << 8)
+        | ((offset as u32) & 0xFC);
+
+    unsafe {
+        core::arch::asm!(
+            "out dx, eax",
+            in("dx") PCI_CONFIG_ADDR,
+            in("eax") addr,
+            options(nomem, nostack)
+        );
+        core::arch::asm!(
+            "out dx, eax",
+            in("dx") PCI_CONFIG_DATA,
+            in("eax") value,
+            options(nomem, nostack)
+        );
+    }
+}
+
 /// Read 16-bit value from PCI config space.
 pub fn pci_read16(bus: u8, device: u8, func: u8, offset: u8) -> u16 {
     let val32 = pci_read32(bus, device, func, offset & 0xFC);

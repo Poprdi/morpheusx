@@ -22,13 +22,14 @@ use super::display::{
     display_commit_countdown, display_download_start, display_error_and_halt, DebugLog, LOG_CYAN,
     LOG_GREEN, LOG_RED, LOG_YELLOW,
 };
-use super::pci::{probe_virtio_blk_with_debug, probe_virtio_nic_with_debug};
+use super::pci::{probe_nic_with_debug, probe_virtio_blk_with_debug};
 use super::resources::{
     allocate_dma_region, allocate_stack, prepare_boot_handoff, DMA_SIZE, STACK_SIZE,
 };
 use super::uefi::{
     calibrate_tsc_with_stall, exit_boot_services_with_retry, find_esp_lba, leak_string,
 };
+use crate::boot::network_boot::{NIC_TYPE_INTEL, NIC_TYPE_VIRTIO};
 
 use crate::tui::renderer::{EFI_BLACK, EFI_LIGHTGREEN, EFI_RED};
 
@@ -93,20 +94,25 @@ pub unsafe fn commit_to_download(
     let tsc_freq = calibrate_tsc_with_stall(bs);
     debug_log.add(&alloc::format!("  TSC: {} Hz", tsc_freq), LOG_CYAN);
 
-    // Phase 4: Probe VirtIO NIC
-    debug_log.add("Probing VirtIO network device...", LOG_YELLOW);
-    let nic_probe = probe_virtio_nic_with_debug(screen, &mut 0);
+    // Phase 4: Probe network device (VirtIO or Intel e1000e)
+    debug_log.add("Probing network device...", LOG_YELLOW);
+    let nic_probe = probe_nic_with_debug(screen, &mut 0);
     if nic_probe.mmio_base == 0 {
-        debug_log.add("  ERROR: No VirtIO NIC found!", LOG_RED);
+        debug_log.add("  ERROR: No supported NIC found!", LOG_RED);
         display_error_and_halt(
             screen,
             &debug_log,
-            "No VirtIO NIC found. Ensure QEMU has: -device virtio-net-pci",
+            "No supported NIC found. Need VirtIO-net or Intel e1000e",
             bs,
         );
     }
+    let nic_type_name = match nic_probe.nic_type {
+        NIC_TYPE_VIRTIO => "VirtIO-net",
+        NIC_TYPE_INTEL => "Intel e1000e",
+        _ => "Unknown",
+    };
     debug_log.add(
-        &alloc::format!("  NIC MMIO: {:#x}", nic_probe.mmio_base),
+        &alloc::format!("  NIC: {} @ {:#x}", nic_type_name, nic_probe.mmio_base),
         LOG_GREEN,
     );
 

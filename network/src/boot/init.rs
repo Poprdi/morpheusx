@@ -13,7 +13,7 @@
 //! # Reference
 //! NETWORK_IMPL_GUIDE.md §7.6
 
-use super::handoff::{BootHandoff, HandoffError, BLK_TYPE_VIRTIO, NIC_TYPE_VIRTIO};
+use super::handoff::{BootHandoff, HandoffError, BLK_TYPE_VIRTIO, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO};
 use crate::dma::DmaRegion;
 use crate::driver::virtio::VirtioConfig;
 use crate::types::VirtqueueState;
@@ -46,6 +46,27 @@ impl From<HandoffError> for InitError {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// INITIALIZED NIC ENUM
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Represents an initialized network device type.
+///
+/// The actual driver state is stored separately for VirtIO (in InitResult fields).
+/// For Intel, we store parameters needed for deferred initialization.
+#[derive(Debug, Clone, Copy)]
+pub enum InitializedNicType {
+    /// VirtIO network device (state in InitResult.nic_config, rx_queue, tx_queue)
+    VirtIO,
+    /// Intel e1000e network device
+    Intel {
+        mmio_base: u64,
+        tsc_freq: u64,
+    },
+    /// No NIC
+    None,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION RESULT
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -57,11 +78,13 @@ pub struct InitResult {
     pub handoff: &'static BootHandoff,
     /// DMA region layout
     pub dma: DmaRegion,
+    /// Initialized NIC type
+    pub nic_type: InitializedNicType,
     /// VirtIO NIC configuration (if NIC is VirtIO)
     pub nic_config: Option<VirtioConfig>,
-    /// RX queue state (initialized)
+    /// RX queue state (initialized) - VirtIO only
     pub rx_queue: Option<VirtqueueState>,
-    /// TX queue state (initialized)
+    /// TX queue state (initialized) - VirtIO only
     pub tx_queue: Option<VirtqueueState>,
     /// MAC address
     pub mac_address: [u8; 6],
@@ -189,8 +212,32 @@ pub unsafe fn post_ebs_init(handoff: &'static BootHandoff) -> Result<InitResult,
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 3: INITIALIZE NIC DRIVER
     // ═══════════════════════════════════════════════════════════════════════
-    let (nic_config, rx_queue, tx_queue, mac_address) = match handoff.nic_type {
-        NIC_TYPE_VIRTIO => init_virtio_nic(handoff, &dma)?,
+    let (nic_type, nic_config, rx_queue, tx_queue, mac_address) = match handoff.nic_type {
+        NIC_TYPE_VIRTIO => {
+            let (config, rx, tx, mac) = init_virtio_nic(handoff, &dma)?;
+            (
+                InitializedNicType::VirtIO,
+                Some(config),
+                Some(rx),
+                Some(tx),
+                mac,
+            )
+        }
+        NIC_TYPE_INTEL => {
+            // Intel NIC - just record parameters for deferred initialization
+            // The actual driver creation happens when creating the HTTP client
+            let mac = handoff.mac_address;
+            (
+                InitializedNicType::Intel {
+                    mmio_base: handoff.nic_mmio_base,
+                    tsc_freq: handoff.tsc_freq,
+                },
+                None,
+                None,
+                None,
+                mac,
+            )
+        }
         other => {
             return Err(InitError::UnsupportedNic(other));
         }
@@ -214,9 +261,10 @@ pub unsafe fn post_ebs_init(handoff: &'static BootHandoff) -> Result<InitResult,
     Ok(InitResult {
         handoff,
         dma,
-        nic_config: Some(nic_config),
-        rx_queue: Some(rx_queue),
-        tx_queue: Some(tx_queue),
+        nic_type,
+        nic_config,
+        rx_queue,
+        tx_queue,
         mac_address,
         blk_config,
     })

@@ -20,7 +20,7 @@ pub mod tx;
 
 // Re-exports
 pub use e1000e::{E1000eDriver, E1000eError};
-pub use init::E1000eConfig;
+pub use init::{E1000eConfig, E1000eInitError};
 
 /// Intel PCI Vendor ID.
 pub const INTEL_VENDOR_ID: u16 = 0x8086;

@@ -27,11 +27,12 @@ use smoltcp::wire::{
     DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr,
 };
 
-use crate::boot::handoff::{BootHandoff, BLK_TYPE_VIRTIO, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
+use crate::boot::handoff::{BootHandoff, BLK_TYPE_VIRTIO, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO, TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
 use crate::boot::init::TimeoutConfig;
 use crate::driver::block_io_adapter::VirtioBlkBlockIo;
 use crate::driver::block_traits::BlockDriver;
 use crate::driver::traits::NetworkDriver;
+use crate::driver::unified::{UnifiedDriverError, UnifiedNetworkDriver};
 use crate::driver::virtio::{PciModernConfig, TransportType, VirtioTransport};
 use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
@@ -1410,87 +1411,74 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     let loop_config = MainLoopConfig::new(handoff.tsc_freq);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STEP 2: INITIALIZE NETWORK DEVICE
+    // STEP 2: INITIALIZE NETWORK DEVICE (UNIFIED DRIVER)
     // ═══════════════════════════════════════════════════════════════════════
-    serial_println("[INIT] Creating VirtIO config...");
-
-    // Create VirtIO config from handoff data
-    let virtio_config = VirtioConfig {
-        dma_cpu_base: handoff.dma_cpu_ptr as *mut u8,
-        dma_bus_base: handoff.dma_cpu_ptr, // In identity-mapped post-EBS, bus=physical=virtual
-        dma_size: handoff.dma_size as usize,
-        queue_size: VirtioConfig::DEFAULT_QUEUE_SIZE,
-        buffer_size: VirtioConfig::DEFAULT_BUFFER_SIZE,
+    serial_print("[INIT] NIC type: ");
+    let nic_type_name = match handoff.nic_type {
+        NIC_TYPE_VIRTIO => "VirtIO-net",
+        NIC_TYPE_INTEL => "Intel e1000e",
+        _ => "Unknown",
     };
+    serial_println(nic_type_name);
 
-    // Determine transport type from handoff
-    serial_print("[INIT] Transport type: ");
-    let transport = match handoff.nic_transport_type {
-        TRANSPORT_PCI_MODERN => {
-            serial_println("PCI Modern");
-            serial_print("[INIT] Common cfg: ");
-            serial_print_hex(handoff.nic_common_cfg);
-            serial_println("");
-            serial_print("[INIT] Notify cfg: ");
-            serial_print_hex(handoff.nic_notify_cfg);
-            serial_println("");
-            serial_print("[INIT] Device cfg: ");
-            serial_print_hex(handoff.nic_device_cfg);
-            serial_println("");
-            serial_print("[INIT] Notify off multiplier: ");
-            serial_print_decimal(handoff.nic_notify_off_multiplier);
-            serial_println("");
+    serial_print("[INIT] NIC MMIO base: ");
+    serial_print_hex(handoff.nic_mmio_base);
+    serial_println("");
 
-            VirtioTransport::pci_modern(PciModernConfig {
-                common_cfg: handoff.nic_common_cfg,
-                notify_cfg: handoff.nic_notify_cfg,
-                notify_off_multiplier: handoff.nic_notify_off_multiplier,
-                isr_cfg: handoff.nic_isr_cfg,
-                device_cfg: handoff.nic_device_cfg,
-                pci_cfg: 0, // Not used for now
-            })
+    serial_println("[INIT] Initializing unified network driver...");
+
+    let mut driver = match UnifiedNetworkDriver::from_handoff(handoff) {
+        Ok(d) => {
+            serial_print("[OK] ");
+            serial_print(d.driver_name());
+            serial_println(" driver initialized");
+            d
         }
-        TRANSPORT_MMIO => {
-            serial_println("MMIO");
-            serial_print("[INIT] MMIO base: ");
-            serial_print_hex(handoff.nic_mmio_base);
-            serial_println("");
-            VirtioTransport::mmio(handoff.nic_mmio_base)
-        }
-        _ => {
-            serial_println("Unknown (defaulting to MMIO)");
-            serial_print("[INIT] NIC MMIO base: ");
-            serial_print_hex(handoff.nic_mmio_base);
-            serial_println("");
-            VirtioTransport::mmio(handoff.nic_mmio_base)
-        }
-    };
-
-    serial_println("[INIT] Initializing VirtIO-net driver...");
-
-    let mut driver =
-        match VirtioNetDriver::new_with_transport(transport, virtio_config, handoff.tsc_freq) {
-            Ok(d) => {
-                serial_println("[OK] VirtIO driver initialized");
-                d
-            }
-            Err(e) => {
-                serial_print("[FAIL] VirtIO init error: ");
-                match e {
-                    VirtioInitError::ResetTimeout => serial_println("reset timeout"),
-                    VirtioInitError::FeatureNegotiationFailed => {
-                        serial_println("feature negotiation failed")
-                    }
-                    VirtioInitError::FeaturesRejected => {
-                        serial_println("features rejected by device")
-                    }
-                    VirtioInitError::QueueSetupFailed => serial_println("queue setup failed"),
-                    VirtioInitError::RxPrefillFailed(_) => serial_println("RX prefill failed"),
-                    VirtioInitError::DeviceError => serial_println("device error"),
+        Err(e) => {
+            serial_print("[FAIL] Driver init error: ");
+            match e {
+                UnifiedDriverError::NoNicDetected => serial_println("no NIC detected"),
+                UnifiedDriverError::UnsupportedNicType(t) => {
+                    serial_print("unsupported NIC type: ");
+                    serial_print_decimal(t as u32);
+                    serial_println("");
                 }
-                return RunResult::InitFailed;
+                UnifiedDriverError::VirtioError(ve) => {
+                    serial_print("VirtIO error: ");
+                    match ve {
+                        VirtioInitError::ResetTimeout => serial_println("reset timeout"),
+                        VirtioInitError::FeatureNegotiationFailed => {
+                            serial_println("feature negotiation failed")
+                        }
+                        VirtioInitError::FeaturesRejected => {
+                            serial_println("features rejected by device")
+                        }
+                        VirtioInitError::QueueSetupFailed => serial_println("queue setup failed"),
+                        VirtioInitError::RxPrefillFailed(_) => serial_println("RX prefill failed"),
+                        VirtioInitError::DeviceError => serial_println("device error"),
+                    }
+                }
+                UnifiedDriverError::IntelError(ie) => {
+                    serial_print("Intel e1000e error: ");
+                    use crate::driver::intel::{E1000eError, E1000eInitError};
+                    match ie {
+                        E1000eError::InitFailed(init_err) => {
+                            match init_err {
+                                E1000eInitError::ResetTimeout => serial_println("reset timeout"),
+                                E1000eInitError::InvalidMac => serial_println("invalid MAC"),
+                                E1000eInitError::MmioError => serial_println("MMIO error"),
+                                E1000eInitError::LinkTimeout => serial_println("link timeout"),
+                            }
+                        }
+                        E1000eError::NotReady => serial_println("device not ready"),
+                        E1000eError::LinkDown => serial_println("link down"),
+                    }
+                }
+                UnifiedDriverError::InvalidHandoff => serial_println("invalid handoff data"),
             }
-        };
+            return RunResult::InitFailed;
+        }
+    };
 
     // Print real MAC address from driver
     serial_print("[INIT] MAC address: ");
