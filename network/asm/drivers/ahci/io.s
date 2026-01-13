@@ -67,14 +67,14 @@ asm_ahci_submit_read:
     mov     r15, r9             ; data_buf_phys
 
     ; Get stack parameters
-    ; 7 pushes + sub 48 + ret = 8*7 + 48 + 8 = 112
-    ; Original stack offset + 112
-    mov     ebx, [rsp + 112 + 40]   ; num_sectors
-    mov     esi, [rsp + 112 + 48]   ; cmd_slot
-    mov     rdi, [rsp + 112 + 56]   ; cmd_header_ptr
-    mov     rax, [rsp + 112 + 64]   ; cmd_table_ptr
+    ; 7 pushes × 8 = 56, + sub 48 = 104 total
+    ; Stack params at RSP+104+40, etc.
+    mov     ebx, [rsp + 104 + 40]   ; num_sectors
+    mov     esi, [rsp + 104 + 48]   ; cmd_slot
+    mov     rdi, [rsp + 104 + 56]   ; cmd_header_ptr
+    mov     rax, [rsp + 104 + 64]   ; cmd_table_ptr
     mov     [rsp], rax              ; save locally
-    mov     rax, [rsp + 112 + 72]   ; cmd_table_phys
+    mov     rax, [rsp + 104 + 72]   ; cmd_table_phys
     mov     [rsp + 8], rax          ; save locally
 
     ; ───────────────────────────────────────────────────────────────────
@@ -170,12 +170,13 @@ asm_ahci_submit_write:
     mov     r14, r8             ; lba
     mov     r15, r9             ; data_buf_phys
 
-    mov     ebx, [rsp + 112 + 40]   ; num_sectors
-    mov     esi, [rsp + 112 + 48]   ; cmd_slot
-    mov     rdi, [rsp + 112 + 56]   ; cmd_header_ptr
-    mov     rax, [rsp + 112 + 64]   ; cmd_table_ptr
+    ; 7 pushes × 8 = 56, + sub 48 = 104 total
+    mov     ebx, [rsp + 104 + 40]   ; num_sectors
+    mov     esi, [rsp + 104 + 48]   ; cmd_slot
+    mov     rdi, [rsp + 104 + 56]   ; cmd_header_ptr
+    mov     rax, [rsp + 104 + 64]   ; cmd_table_ptr
     mov     [rsp], rax
-    mov     rax, [rsp + 112 + 72]   ; cmd_table_phys
+    mov     rax, [rsp + 104 + 72]   ; cmd_table_phys
     mov     [rsp + 8], rax
 
     ; ───────────────────────────────────────────────────────────────────

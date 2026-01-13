@@ -80,11 +80,12 @@ asm_ahci_identify_device:
     mov     r15, r9             ; cmd_header_ptr
 
     ; Get stack parameters (accounting for pushes)
-    ; 7 pushes × 8 = 56, + sub rsp 64 = 120, + return addr = 128
-    ; Original RSP+40 -> now RSP+128+40 = RSP+168
-    mov     rsi, [rsp + 168]    ; cmd_table_ptr
-    mov     rdi, [rsp + 176]    ; cmd_table_phys
-    mov     rbx, [rsp + 184]    ; tsc_freq
+    ; 7 pushes × 8 = 56, + sub rsp 64 = 120 total
+    ; Stack params start at original RSP+40 (after shadow space)
+    ; Now at RSP+120+40 = RSP+160
+    mov     rsi, [rsp + 160]    ; cmd_table_ptr
+    mov     rdi, [rsp + 168]    ; cmd_table_phys
+    mov     rbx, [rsp + 176]    ; tsc_freq
 
     ; ───────────────────────────────────────────────────────────────────
     ; Build H2D FIS for IDENTIFY DEVICE (0xEC)

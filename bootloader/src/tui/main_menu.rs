@@ -1,27 +1,26 @@
 use crate::tui::debug::DebugOverlay;
 use crate::tui::input::{InputKey, Keyboard};
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 
+// Smaller header that fits in the box
 const HEADER_ART: &[&str] = &[
-    "  _____ _____ _____ _____ _   _ _____ _   _ _____ ",
-    " |     |     | __  |  _  |   | |   __| | | |   __|",
-    " | | | |  |  |    -|   __|     |   __| |_| |__   |",
-    " |_|_|_|_____|__|__|__|  |__|__|_____|\\___|_____|",
-    "      C O N T R O L   C E N T E R   v 1 . 2       ",
+    " __  __  ___  ____  ____  _   _ _____ _   _ ______  __",
+    "|  \\/  |/ _ \\|  _ \\|  _ \\| | | | ____| | | / ___\\ \\/ /",
+    "| |\\/| | | | | |_) | |_) | |_| |  _| | | | \\___ \\\\  / ",
+    "| |  | | |_| |  _ <|  __/|  _  | |___| |_| |___) /  \\ ",
+    "|_|  |_|\\___/|_| \\_\\_|   |_| |_|_____|\\___/|____/_/\\_\\",
 ];
 
-const SIDE_BORDER_LEFT: &str = "|";
-const SIDE_BORDER_RIGHT: &str = "|";
-const TOP_BORDER: &str =
-    "+===========================================================================+";
-const BOTTOM_BORDER: &str =
-    "+===========================================================================+";
-const DIVIDER: &str =
-    "+===========================================================================+";
+// Box width (inner content is 75 chars)
+const BOX_WIDTH: usize = 77;
+const EMPTY_LINE: &str = "|                                                                           |";
+const TOP_BORDER: &str = "+===========================================================================+";
+const BOTTOM_BORDER: &str = "+===========================================================================+";
+const DIVIDER: &str = "+---------------------------------------------------------------------------+";
 
 pub struct MainMenu {
     selected_index: usize,
-    menu_items: [MenuItem; 6],
+    menu_items: [MenuItem; 5],
     debug: DebugOverlay,
 }
 
@@ -36,7 +35,7 @@ impl MainMenu {
         Self {
             selected_index: 0,
             debug: DebugOverlay::new(),
-            menu_items: [
+            menu_items:[
                 MenuItem {
                     label: "Distro Launcher",
                     description: "Boot into ephemeral Linux distribution",
@@ -56,11 +55,6 @@ impl MainMenu {
                     label: "Installation",
                     description: "Persists the bootloader to disk",
                     icon: "[INS]",
-                },
-                MenuItem {
-                    label: "Admin Functions",
-                    description: "Advanced operations and diagnostics",
-                    icon: "[ADM]",
                 },
                 MenuItem {
                     label: "Exit to Firmware",
@@ -84,93 +78,125 @@ impl MainMenu {
     }
 
     pub fn render(&mut self, screen: &mut Screen) {
-        // Calculate centered X position based on border width (77 chars)
-        let border_width = 77;
-        let x = if screen.width() > border_width {
-            (screen.width() - border_width) / 2
-        } else {
-            0
-        };
-        let y = 0;
+        // Calculate total menu height
+        // Top border (1) + empty (1) + header art (5) + empty (1) + divider (1) + 
+        // empty (1) + instructions (1) + empty (1) + divider (1) +
+        // menu items (6 * 2 = 12) + empty lines between (5) + 
+        // divider (1) + empty (1) + status (1) + empty (1) + bottom border (1) = ~34
+        let total_height = 1 + 1 + HEADER_ART.len() + 1 + 1 + 1 + 1 + 1 + 1 + 
+                          (self.menu_items.len() * 2 - 1) + 1 + 1 + 1 + 1 + 1;
+        
+        // Center horizontally and vertically
+        let x = screen.center_x(BOX_WIDTH);
+        let y = screen.center_y(total_height);
+
+        let mut current_y = y;
 
         // Draw top border
-        screen.put_str_at(x, y, TOP_BORDER, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, current_y, TOP_BORDER, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Empty line after top border
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
         // Draw header ASCII art centered within border
-        for (i, line) in HEADER_ART.iter().enumerate() {
-            let art_y = y + 1 + i;
-            let padding = (76 - line.len()) / 2;
-
-            screen.put_str_at(x, art_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
-
-            // Center the art
+        for line in HEADER_ART.iter() {
+            // Draw left border
+            screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
+            
+            // Center the art within the box (75 inner width)
+            let padding = (75 - line.len()) / 2;
             let art_x = x + 1 + padding;
-            screen.put_str_at(art_x, art_y, line, EFI_LIGHTGREEN, EFI_BLACK);
-
-            screen.put_str_at(x + 75, art_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(art_x, current_y, line, EFI_DARKGREEN, EFI_BLACK);
+            
+            // Draw right border
+            screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
+            current_y += 1;
         }
+
+        // Empty line after header
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
         // Divider after header
-        let divider_y = y + 1 + HEADER_ART.len();
-        screen.put_str_at(x, divider_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
-        // Instructions
-        let instr_y = divider_y + 1;
-        screen.put_str_at(x, instr_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
-        let instr = "  [UP/DOWN] Navigate  |  [ENTER] Select  |  [ESC] Exit";
-        let instr_x = x + (76 - instr.len()) / 2;
-        screen.put_str_at(instr_x, instr_y, instr, EFI_DARKGREEN, EFI_BLACK);
-        screen.put_str_at(x + 75, instr_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
+        // Empty line before instructions
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
-        // Another divider
-        let menu_divider_y = instr_y + 1;
-        screen.put_str_at(x, menu_divider_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        // Instructions line
+        screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
+        let instr = "[UP/DOWN] Navigate  |  [ENTER] Select  |  [ESC] Exit";
+        let instr_padding = (75 - instr.len()) / 2;
+        screen.put_str_at(x + 1 + instr_padding, current_y, instr, EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
-        // Menu items - each takes 2 lines
-        let menu_start_y = menu_divider_y + 2;
+        // Empty line after instructions
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Divider before menu
+        screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Menu items
         for (i, item) in self.menu_items.iter().enumerate() {
-            let item_y = menu_start_y + i * 2;
+            // Draw item line with borders
+            screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
 
-            // Left border
-            screen.put_str_at(x, item_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
-
-            if i == self.selected_index {
-                // Selection bracket and icon
-                screen.put_str_at(x + 3, item_y, ">>", EFI_LIGHTGREEN, EFI_BLACK);
-                screen.put_str_at(x + 6, item_y, item.icon, EFI_LIGHTGREEN, EFI_BLACK);
-                screen.put_str_at(x + 12, item_y, item.label, EFI_LIGHTGREEN, EFI_BLACK);
-                screen.put_str_at(x + 32, item_y, "-", EFI_GREEN, EFI_BLACK);
-                screen.put_str_at(x + 34, item_y, item.description, EFI_GREEN, EFI_BLACK);
+            // Build the menu item string: ">> [ICN] Label" or "   [ICN] Label"
+            let item_text = if i == self.selected_index {
+                alloc::format!(">> {} {}", item.icon, item.label)
             } else {
-                // Unselected item
-                screen.put_str_at(x + 6, item_y, item.icon, EFI_DARKGREEN, EFI_BLACK);
-                screen.put_str_at(x + 12, item_y, item.label, EFI_GREEN, EFI_BLACK);
+                alloc::format!("   {} {}", item.icon, item.label)
+            };
+            
+            // Center the item text within the box (75 inner width)
+            let item_padding = (75 - item_text.len()) / 2;
+            let item_x = x + 1 + item_padding;
+            
+            if i == self.selected_index {
+                screen.put_str_at(item_x, current_y, &item_text, EFI_LIGHTGREEN, EFI_BLACK);
+            } else {
+                screen.put_str_at(item_x, current_y, &item_text, EFI_GREEN, EFI_BLACK);
             }
 
-            // Right border
-            screen.put_str_at(x + 75, item_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
+            current_y += 1;
+
+            // Empty line between menu items (except after last)
+            if i < self.menu_items.len() - 1 {
+                screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+                current_y += 1;
+            }
         }
 
-        // Bottom divider
-        let bottom_div_y = menu_start_y + (self.menu_items.len() * 2) + 1;
-        screen.put_str_at(x, bottom_div_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        // Divider after menu
+        screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Empty line before status
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
         // Status bar
-        let status_y = bottom_div_y + 1;
-        screen.put_str_at(x, status_y, SIDE_BORDER_LEFT, EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x + 3, status_y, "Status: READY", EFI_LIGHTGREEN, EFI_BLACK);
-        screen.put_str_at(x + 20, status_y, "|", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(
-            x + 22,
-            status_y,
-            "System: Operational",
-            EFI_GREEN,
-            EFI_BLACK,
-        );
-        screen.put_str_at(x + 75, status_y, SIDE_BORDER_RIGHT, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + 3, current_y, "Status: READY", EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(x + 20, current_y, "|", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + 22, current_y, "System: Operational", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Empty line after status
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
         // Bottom border
-        screen.put_str_at(x, status_y + 1, BOTTOM_BORDER, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x, current_y, BOTTOM_BORDER, EFI_GREEN, EFI_BLACK);
     }
 
     pub fn handle_input(&mut self, key: &InputKey) -> MenuAction {
