@@ -83,6 +83,21 @@ pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeR
                 let vendor = (id & 0xFFFF) as u16;
                 let dev_id = ((id >> 16) & 0xFFFF) as u16;
 
+                // DEBUG: Show ALL PCI devices (helps diagnose detection issues)
+                if bus < 2 || (vendor == INTEL_VENDOR && dev_id >= 0x1500 && dev_id <= 0x1600) {
+                    screen.put_str_at(
+                        7,
+                        *log_y,
+                        &alloc::format!(
+                            "  PCI {:02x}:{:02x}.{} = {:04x}:{:04x}",
+                            bus, device, function, vendor, dev_id
+                        ),
+                        EFI_DARKGRAY,
+                        EFI_BLACK,
+                    );
+                    *log_y += 1;
+                }
+
                 // Check for VirtIO network device (highest priority)
                 if vendor == VIRTIO_VENDOR
                     && (dev_id == VIRTIO_NET_LEGACY || dev_id == VIRTIO_NET_MODERN)

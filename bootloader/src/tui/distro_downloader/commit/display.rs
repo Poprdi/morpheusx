@@ -135,80 +135,99 @@ pub const LOG_CYAN: u8 = 4;
 pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
     screen.clear();
 
-    // Use the main MorpheusX logo
-    let start_y = 6;
+    // Calculate logo width for centering (find longest line)
+    let logo_width = LOGO_LINES_RAW.iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    
+    // Message box dimensions
+    let box_width = 70; // The box line character count
+    
+    // Calculate total content height (logo + spacing + box)
+    let logo_height = LOGO_LINES_RAW.len();
+    let box_height = 10; // Number of box lines
+    let spacing = 2;
+    let total_height = logo_height + spacing + box_height;
+    
+    // Center everything vertically
+    let start_y = screen.center_y(total_height);
+    
+    // Render centered logo
     for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
-        screen.put_str_at(43, start_y + i, line, EFI_LIGHTGREEN, EFI_BLACK);
+        let x = screen.center_x(line.chars().count());
+        screen.put_str_at(x, start_y + i, line, EFI_LIGHTGREEN, EFI_BLACK);
     }
 
     // Message box below logo
-    let msg_y = start_y + LOGO_LINES_RAW.len() + 2;
+    let msg_y = start_y + logo_height + spacing;
+    let box_x = screen.center_x(box_width);
 
     screen.put_str_at(
-        43,
+        box_x,
         msg_y,
         "╔══════════════════════════════════════════════════════════════════╗",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 1,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 2,
         "║                   DOWNLOAD STARTING NOW                          ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 3,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 4,
         "║              System will reboot when finished                    ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 5,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 6,
-        "║                     ⚠  DO NOT INTERRUPT  ⚠                         ║",
+        "║                     ⚠  DO NOT INTERRUPT  ⚠                       ║",
         EFI_RED,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 7,
         "║                                                                  ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 8,
         "║          Download may take a while depending on size!            ║",
         EFI_CYAN,
         EFI_BLACK,
     );
     screen.put_str_at(
-        43,
+        box_x,
         msg_y + 9,
         "╚══════════════════════════════════════════════════════════════════╝",
         EFI_CYAN,
