@@ -525,9 +525,8 @@ impl BlockDriver for AhciDriver {
             }
 
             let slot_mask = 1u32 << slot;
-            let status = unsafe {
-                asm_ahci_check_cmd_complete(self.abar, self.port_num, slot_mask)
-            };
+            let status =
+                unsafe { asm_ahci_check_cmd_complete(self.abar, self.port_num, slot_mask) };
 
             if status == 0 {
                 // Still pending
@@ -535,11 +534,10 @@ impl BlockDriver for AhciDriver {
             }
 
             let request_id = self.in_flight[slot].request_id;
-            
+
             // Read bytes transferred from command header
-            let bytes_transferred = unsafe {
-                asm_ahci_read_prdbc(self.cmd_header_ptr(slot as u32) as u64)
-            };
+            let bytes_transferred =
+                unsafe { asm_ahci_read_prdbc(self.cmd_header_ptr(slot as u32) as u64) };
 
             // Mark slot as free
             self.in_flight[slot].active = false;

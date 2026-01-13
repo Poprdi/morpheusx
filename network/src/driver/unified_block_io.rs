@@ -44,8 +44,8 @@
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::{BlockSize, Lba};
 
-use crate::device::UnifiedBlockDevice;
 use super::block_traits::{BlockDriver, BlockError};
+use crate::device::UnifiedBlockDevice;
 
 /// Error type for unified BlockIo operations.
 #[derive(Debug, Clone, Copy)]
@@ -327,7 +327,9 @@ impl<'a> BlockIo for UnifiedBlockIo<'a> {
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
-        self.device.flush().map_err(UnifiedBlockIoError::DriverError)
+        self.device
+            .flush()
+            .map_err(UnifiedBlockIoError::DriverError)
     }
 }
 
@@ -555,7 +557,9 @@ impl<'a, D: BlockDriver> BlockIo for GenericBlockIo<'a, D> {
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
-        self.driver.flush().map_err(UnifiedBlockIoError::DriverError)
+        self.driver
+            .flush()
+            .map_err(UnifiedBlockIoError::DriverError)
     }
 }
 

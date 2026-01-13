@@ -20,9 +20,11 @@
 //! ```
 
 use crate::device::{UnifiedBlockDevice, UnifiedBlockError};
-use crate::driver::ahci::{AhciConfig, AhciDriver, AhciInitError, AHCI_DEVICE_IDS, INTEL_VENDOR_ID};
+use crate::driver::ahci::{
+    AhciConfig, AhciDriver, AhciInitError, AHCI_DEVICE_IDS, INTEL_VENDOR_ID,
+};
 use crate::driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
-use crate::pci::config::{pci_cfg_read16, pci_cfg_read32, pci_cfg_write16, offset, PciAddr};
+use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_write16, PciAddr};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -77,10 +79,7 @@ impl From<AhciInitError> for BlockProbeError {
 #[derive(Debug, Clone, Copy)]
 pub enum DetectedBlockDevice {
     /// VirtIO-blk device
-    VirtIO {
-        pci_addr: PciAddr,
-        mmio_base: u64,
-    },
+    VirtIO { pci_addr: PciAddr, mmio_base: u64 },
     /// AHCI SATA controller
     Ahci(AhciInfo),
 }
@@ -120,7 +119,10 @@ pub fn scan_for_block_device() -> Option<DetectedBlockDevice> {
 
     // Fall back to VirtIO-blk (QEMU, VMs)
     if let Some((pci_addr, mmio_base)) = find_virtio_blk() {
-        return Some(DetectedBlockDevice::VirtIO { pci_addr, mmio_base });
+        return Some(DetectedBlockDevice::VirtIO {
+            pci_addr,
+            mmio_base,
+        });
     }
 
     None
@@ -345,7 +347,10 @@ pub unsafe fn probe_and_create_block_driver(
             Ok(BlockProbeResult::Ahci(driver))
         }
 
-        DetectedBlockDevice::VirtIO { pci_addr, mmio_base } => {
+        DetectedBlockDevice::VirtIO {
+            pci_addr,
+            mmio_base,
+        } => {
             // Enable device
             enable_pci_device(pci_addr);
 

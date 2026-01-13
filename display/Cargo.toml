@@ -1,0 +1,15 @@
+[package]
+name = "morpheus-display"
+version = "0.1.0"
+edition = "2021"
+description = "Framebuffer display driver for Morpheus - ASM-first design for post-EBS"
+license = "MIT OR Apache-2.0"
+build = "build.rs"
+
+[features]
+default = []
+std = []
+uefi-backend = []
+framebuffer-backend = []
+
+[dependencies]

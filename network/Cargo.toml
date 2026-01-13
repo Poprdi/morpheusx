@@ -8,9 +8,11 @@ default = ["fat32_manifest"]
 fat32_manifest = []  # Enable FAT32 file write for manifests (requires heap allocator)
 serial_debug = []    # Enable serial debug output for PCI capabilities
 post_ebs_allocator = []  # Enable linked_list_allocator as #[global_allocator] (for post-EBS standalone)
+display = ["morpheus-display"]  # Enable framebuffer display for post-EBS debug output
 
 [dependencies]
 morpheus-core = { workspace = true }
+morpheus-display = { path = "../display", features = ["framebuffer-backend"], optional = true }
 
 # GPT disk I/O trait for filesystem compatibility
 gpt_disk_io = { version = "0.16", default-features = false }

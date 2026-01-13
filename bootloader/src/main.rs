@@ -207,6 +207,90 @@ pub struct BootServices {
         data_size: usize,
         watchdog_data: *const u16,
     ) -> usize,
+    // Driver Support Services
+    _connect_controller: usize,
+    _disconnect_controller: usize,
+    // Open/Close Protocol Services
+    pub open_protocol: extern "efiapi" fn(
+        handle: *mut (),
+        protocol: *const [u8; 16],
+        interface: *mut *mut (),
+        agent_handle: *mut (),
+        controller_handle: *mut (),
+        attributes: u32,
+    ) -> usize,
+    _close_protocol: usize,
+    _open_protocol_information: usize,
+    // Library Services
+    _protocols_per_handle: usize,
+    _locate_handle_buffer: usize,
+    // Protocol Interface Services (continued)
+    pub locate_protocol: extern "efiapi" fn(
+        protocol: *const [u8; 16],
+        registration: *const (),
+        interface: *mut *mut (),
+    ) -> usize,
+    _install_multiple_protocol_interfaces: usize,
+    _uninstall_multiple_protocol_interfaces: usize,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GRAPHICS OUTPUT PROTOCOL (GOP)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// GOP Protocol GUID: 9042A9DE-23DC-4A38-96FB-7ADED080516A
+pub const EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID: [u8; 16] = [
+    0xDE, 0xA9, 0x42, 0x90, 0xDC, 0x23, 0x38, 0x4A, 0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A,
+];
+
+/// GOP Pixel Format
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GopPixelFormat {
+    /// Red-Green-Blue-Reserved 8-bits per color
+    Rgbx = 0,
+    /// Blue-Green-Red-Reserved 8-bits per color
+    Bgrx = 1,
+    /// Pixel format defined by pixel bitmask
+    BitMask = 2,
+    /// No direct framebuffer access
+    BltOnly = 3,
+}
+
+/// GOP Mode Information
+#[repr(C)]
+pub struct GopModeInfo {
+    pub version: u32,
+    pub horizontal_resolution: u32,
+    pub vertical_resolution: u32,
+    pub pixel_format: GopPixelFormat,
+    pub pixel_information: [u32; 4], // PixelBitmask (only for BitMask format)
+    pub pixels_per_scan_line: u32,
+}
+
+/// GOP Mode
+#[repr(C)]
+pub struct GopMode {
+    pub max_mode: u32,
+    pub mode: u32,
+    pub info: *const GopModeInfo,
+    pub size_of_info: usize,
+    pub frame_buffer_base: u64,
+    pub frame_buffer_size: usize,
+}
+
+/// Graphics Output Protocol
+#[repr(C)]
+pub struct GraphicsOutputProtocol {
+    pub query_mode: extern "efiapi" fn(
+        this: *mut GraphicsOutputProtocol,
+        mode_number: u32,
+        size_of_info: *mut usize,
+        info: *mut *const GopModeInfo,
+    ) -> usize,
+    pub set_mode: extern "efiapi" fn(this: *mut GraphicsOutputProtocol, mode_number: u32) -> usize,
+    pub blt: usize, // We don't use Blt
+    pub mode: *mut GopMode,
 }
 
 #[no_mangle]

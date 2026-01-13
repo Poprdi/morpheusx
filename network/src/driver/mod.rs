@@ -47,4 +47,3 @@ pub use ahci::{AhciConfig, AhciDriver, AhciInitError};
 // Re-exports - BlockIo adapters (for filesystem compatibility)
 pub use block_io_adapter::{BlockIoError, VirtioBlkBlockIo};
 pub use unified_block_io::{GenericBlockIo, UnifiedBlockIo, UnifiedBlockIoError};
-

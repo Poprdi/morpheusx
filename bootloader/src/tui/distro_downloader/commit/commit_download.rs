@@ -12,6 +12,7 @@
 
 extern crate alloc;
 
+use crate::boot::gop::query_gop;
 use crate::boot::network_boot::enter_network_boot_url;
 use crate::tui::renderer::Screen;
 
@@ -22,7 +23,7 @@ use super::display::{
     display_commit_countdown, display_download_start, display_error_and_halt, DebugLog, LOG_CYAN,
     LOG_GREEN, LOG_RED, LOG_YELLOW,
 };
-use super::pci::{probe_nic_with_debug, probe_virtio_blk_with_debug};
+use super::pci::{probe_ahci_with_debug, probe_nic_with_debug, probe_virtio_blk_with_debug};
 use super::resources::{
     allocate_dma_region, allocate_stack, prepare_boot_handoff, DMA_SIZE, STACK_SIZE,
 };
@@ -116,29 +117,54 @@ pub unsafe fn commit_to_download(
         LOG_GREEN,
     );
 
-    // Phase 5: Probe VirtIO block device
-    debug_log.add("Probing VirtIO block device...", LOG_YELLOW);
-    let blk_probe = probe_virtio_blk_with_debug(screen, &mut 0);
+    // Phase 5: Probe block device (VirtIO first, then AHCI)
+    debug_log.add("Probing block device...", LOG_YELLOW);
+    let mut blk_probe = probe_virtio_blk_with_debug(screen, &mut 0);
     if blk_probe.device_type != 0 {
         if blk_probe.transport_type == 1 {
             debug_log.add(
-                &alloc::format!("  BLK (PCI Modern) common_cfg: {:#x}", blk_probe.common_cfg),
+                &alloc::format!(
+                    "  BLK (VirtIO PCI Modern) common_cfg: {:#x}",
+                    blk_probe.common_cfg
+                ),
                 LOG_GREEN,
             );
         } else {
             debug_log.add(
-                &alloc::format!("  BLK MMIO: {:#x}", blk_probe.mmio_base),
+                &alloc::format!("  BLK (VirtIO) MMIO: {:#x}", blk_probe.mmio_base),
                 LOG_GREEN,
             );
         }
     } else {
-        debug_log.add("  No VirtIO-blk found (ISO won't persist)", LOG_YELLOW);
+        // Try AHCI for real hardware
+        debug_log.add("  No VirtIO-blk, probing AHCI...", LOG_YELLOW);
+        blk_probe = probe_ahci_with_debug(screen, &mut 0);
+        if blk_probe.device_type != 0 {
+            debug_log.add(
+                &alloc::format!("  BLK (AHCI) ABAR: {:#x}", blk_probe.mmio_base),
+                LOG_GREEN,
+            );
+        } else {
+            debug_log.add("  No block device found (ISO won't persist)", LOG_YELLOW);
+        }
     }
 
     // Phase 6: Find ESP partition
     debug_log.add("Locating ESP partition...", LOG_YELLOW);
     let esp_lba = find_esp_lba(bs, image_handle).unwrap_or(2048);
     debug_log.add(&alloc::format!("  ESP Start LBA: {}", esp_lba), LOG_GREEN);
+
+    // Phase 6.5: Query GOP for framebuffer info
+    debug_log.add("Querying GOP framebuffer...", LOG_YELLOW);
+    let gop_info = query_gop(bs);
+    if let Some(ref fb) = gop_info {
+        debug_log.add(
+            &alloc::format!("  FB: {}x{} @ {:#x}", fb.width, fb.height, fb.base),
+            LOG_GREEN,
+        );
+    } else {
+        debug_log.add("  No GOP framebuffer available", LOG_YELLOW);
+    }
 
     // Phase 7: Prepare boot handoff
     debug_log.add("Preparing boot handoff...", LOG_YELLOW);
@@ -151,6 +177,7 @@ pub unsafe fn commit_to_download(
         tsc_freq,
         stack_top,
         STACK_SIZE as u64,
+        gop_info.as_ref(),
         screen,
         &mut 0,
     ) {
