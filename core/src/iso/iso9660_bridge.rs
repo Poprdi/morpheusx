@@ -23,7 +23,6 @@
 
 extern crate alloc;
 use super::reader::IsoReadContext;
-use alloc::format;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
