@@ -6,6 +6,7 @@
 //! Intel 82579 Datasheet, NETWORK_IMPL_GUIDE.md §8
 
 use crate::driver::traits::{DriverInit, NetworkDriver, RxError, TxError};
+use crate::mainloop::bare_metal::serial_println;
 use crate::types::MacAddress;
 
 use super::init::{init_e1000e, E1000eConfig, E1000eInitError};
@@ -68,8 +69,13 @@ impl E1000eDriver {
     /// - `mmio_base` must be a valid, mapped MMIO address
     /// - DMA region must be properly allocated and mapped
     pub unsafe fn new(mmio_base: u64, config: E1000eConfig) -> Result<Self, E1000eError> {
+        serial_println("    [e1000e] E1000eDriver::new() entered");
+        serial_println("    [e1000e] About to call init_e1000e()...");
+        
         // Initialize device
         let result = init_e1000e(mmio_base, &config)?;
+
+        serial_println("    [e1000e] init_e1000e() returned");
 
         // Create PHY manager
         let phy = PhyManager::new(mmio_base, config.tsc_freq);

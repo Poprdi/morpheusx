@@ -12,6 +12,10 @@
 //! NETWORK_IMPL_GUIDE.md §8
 
 use crate::boot::handoff::{BootHandoff, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO};
+
+// Use the known-working serial functions from bare_metal
+use crate::mainloop::bare_metal::{serial_print, serial_println};
+
 use crate::driver::intel::{E1000eConfig, E1000eDriver, E1000eError};
 use crate::driver::traits::{NetworkDriver, RxError, TxError};
 use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver, VirtioTransport};
@@ -75,8 +79,13 @@ impl UnifiedNetworkDriver {
     /// - Handoff must be valid and properly initialized
     /// - DMA regions must be properly allocated
     pub unsafe fn from_handoff(handoff: &BootHandoff) -> Result<Self, UnifiedDriverError> {
+        // FIRST debug output - immediately at function entry
+        serial_println("  [unified] from_handoff() entered");
+        
         use crate::boot::handoff::{TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
         use crate::driver::virtio::PciModernConfig;
+
+        serial_println("  [unified] About to match nic_type");
 
         match handoff.nic_type {
             NIC_TYPE_VIRTIO => {
@@ -117,6 +126,9 @@ impl UnifiedNetworkDriver {
             }
 
             NIC_TYPE_INTEL => {
+                // Debug: Entering Intel driver creation
+                serial_println("  [unified] Intel branch entered");
+                
                 // Build e1000e config
                 let config = E1000eConfig::new(
                     handoff.dma_cpu_ptr as *mut u8,
@@ -124,7 +136,12 @@ impl UnifiedNetworkDriver {
                     handoff.tsc_freq,
                 );
 
+                serial_println("  [unified] Config created, calling E1000eDriver::new()");
+                
                 let driver = E1000eDriver::new(handoff.nic_mmio_base, config)?;
+                
+                serial_println("  [unified] E1000eDriver::new() returned successfully");
+                
                 Ok(UnifiedNetworkDriver::Intel(driver))
             }
 

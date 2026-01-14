@@ -41,6 +41,7 @@ const ASM_INTEL: &[&str] = &[
     "asm/drivers/intel/tx.s",
     "asm/drivers/intel/rx.s",
     "asm/drivers/intel/phy.s",
+    "asm/drivers/intel/ulp.s", // I218/PCH LPT ULP management (CRITICAL for real hardware)
 ];
 
 const ASM_AHCI: &[&str] = &[
