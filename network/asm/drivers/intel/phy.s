@@ -80,11 +80,31 @@ asm_intel_phy_read:
     push    r12
     push    r13
     push    r14
+    push    r15
     sub     rsp, 40
 
     mov     r12, rcx            ; r12 = mmio_base
     mov     r13d, edx           ; r13 = phy_reg
     mov     r14, r8             ; r14 = tsc_freq
+
+    ; ═══════════════════════════════════════════════════════════════════
+    ; Pre-access delay: 10us minimum between MDIO operations
+    ; Real hardware MDIO bus needs time between accesses.
+    ; QEMU doesn't need this, but real I218-LM does.
+    ; ═══════════════════════════════════════════════════════════════════
+    call    asm_tsc_read
+    mov     r15, rax            ; r15 = delay_start
+    mov     rax, r14
+    xor     rdx, rdx
+    mov     rcx, 100000         ; 10us = tsc_freq / 100000
+    div     rcx
+    mov     rcx, rax            ; rcx = delay_ticks (10us)
+.pre_delay:
+    pause
+    call    asm_tsc_read
+    sub     rax, r15
+    cmp     rax, rcx
+    jb      .pre_delay
 
     ; Build MDIC command: OP_READ | PHY_ADDR | REG | 0
     mov     eax, MDIC_OP_READ
@@ -100,6 +120,9 @@ asm_intel_phy_read:
     add     rcx, MDIC
     mov     edx, eax
     call    asm_mmio_write32
+    
+    ; Memory barrier after MMIO write
+    mfence
 
     ; Get start TSC for timeout
     call    asm_tsc_read
@@ -113,6 +136,12 @@ asm_intel_phy_read:
     mov     r14, rax            ; r14 = timeout_ticks
 
 .wait_ready:
+    ; Small delay between polls (helps real hardware)
+    pause
+    pause
+    pause
+    pause
+
     ; Read MDIC
     mov     rcx, r12
     add     rcx, MDIC
@@ -148,6 +177,7 @@ asm_intel_phy_read:
 
 .exit:
     add     rsp, 40
+    pop     r15
     pop     r14
     pop     r13
     pop     r12
@@ -171,12 +201,31 @@ asm_intel_phy_write:
     push    r13
     push    r14
     push    r15
+    push    rsi
     sub     rsp, 48
 
     mov     r12, rcx            ; r12 = mmio_base
     mov     r13d, edx           ; r13 = phy_reg
     mov     r14d, r8d           ; r14 = value
     mov     r15, r9             ; r15 = tsc_freq
+
+    ; ═══════════════════════════════════════════════════════════════════
+    ; Pre-access delay: 10us minimum between MDIO operations
+    ; Real hardware MDIO bus needs time between accesses.
+    ; ═══════════════════════════════════════════════════════════════════
+    call    asm_tsc_read
+    mov     rsi, rax            ; rsi = delay_start
+    mov     rax, r15
+    xor     rdx, rdx
+    mov     rcx, 100000         ; 10us = tsc_freq / 100000
+    div     rcx
+    mov     rcx, rax            ; rcx = delay_ticks (10us)
+.pre_delay:
+    pause
+    call    asm_tsc_read
+    sub     rax, rsi
+    cmp     rax, rcx
+    jb      .pre_delay
 
     ; Build MDIC command: OP_WRITE | PHY_ADDR | REG | DATA
     mov     eax, MDIC_OP_WRITE
@@ -193,6 +242,9 @@ asm_intel_phy_write:
     add     rcx, MDIC
     mov     edx, eax
     call    asm_mmio_write32
+    
+    ; Memory barrier after MMIO write
+    mfence
 
     ; Get start TSC for timeout
     call    asm_tsc_read
@@ -206,6 +258,12 @@ asm_intel_phy_write:
     mov     r15, rax            ; r15 = timeout_ticks
 
 .wait_ready:
+    ; Small delay between polls (helps real hardware)
+    pause
+    pause
+    pause
+    pause
+
     ; Read MDIC
     mov     rcx, r12
     add     rcx, MDIC
@@ -240,6 +298,7 @@ asm_intel_phy_write:
 
 .exit:
     add     rsp, 48
+    pop     rsi
     pop     r15
     pop     r14
     pop     r13
@@ -299,6 +358,13 @@ asm_intel_link_status:
 ; asm_intel_wait_link
 ; Wait for link up with timeout.
 ;
+; Checks BOTH:
+;   1. MAC STATUS.LU (bit 1) - fast path
+;   2. PHY BMSR.LSTATUS (bit 2) - authoritative source
+;
+; On real hardware, MAC STATUS.LU may not reflect PHY state during init.
+; We check PHY BMSR as authoritative source if MAC doesn't show link.
+;
 ; Input:  RCX = mmio_base
 ;         RDX = timeout_us (microseconds)
 ;         R8  = tsc_freq
@@ -310,6 +376,7 @@ asm_intel_wait_link:
     push    r12
     push    r13
     push    r14
+    push    r15
     sub     rsp, 40
 
     mov     r12, rcx            ; r12 = mmio_base
@@ -326,9 +393,16 @@ asm_intel_wait_link:
     ; Get start TSC
     call    asm_tsc_read
     mov     rbx, rax            ; rbx = start_tsc
+    xor     r15d, r15d          ; r15 = loop counter for PHY check interval
 
 .poll_loop:
-    ; Read STATUS
+    ; Small delay between polls
+    pause
+    pause
+
+    ; ═══════════════════════════════════════════════════════════════════
+    ; Check 1: MAC STATUS register (fast path)
+    ; ═══════════════════════════════════════════════════════════════════
     mov     rcx, r12
     add     rcx, STATUS
     call    asm_mmio_read32
@@ -337,6 +411,31 @@ asm_intel_wait_link:
     test    eax, STATUS_LU
     jnz     .link_up
 
+    ; ═══════════════════════════════════════════════════════════════════
+    ; Check 2: PHY BMSR register (authoritative, every 100 iterations)
+    ; Reading BMSR is slower (MDIO bus), so we don't do it every loop
+    ; ═══════════════════════════════════════════════════════════════════
+    inc     r15d
+    cmp     r15d, 100
+    jb      .skip_phy_check
+    xor     r15d, r15d          ; Reset counter
+
+    ; Read PHY BMSR (register 1) via MDIC
+    ; BMSR.LSTATUS is bit 2
+    mov     rcx, r12
+    mov     edx, 1              ; BMSR = register 1
+    mov     r8, r14             ; tsc_freq
+    call    asm_intel_phy_read
+
+    ; Check for read error
+    cmp     eax, 0xFFFFFFFF
+    je      .skip_phy_check
+
+    ; Check BMSR.LSTATUS (bit 2)
+    test    eax, 0x0004         ; BMSR_LSTATUS = 1 << 2
+    jnz     .link_up
+
+.skip_phy_check:
     ; Check timeout
     call    asm_tsc_read
     sub     rax, rbx
@@ -352,6 +451,7 @@ asm_intel_wait_link:
 
 .exit:
     add     rsp, 40
+    pop     r15
     pop     r14
     pop     r13
     pop     r12
