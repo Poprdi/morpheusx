@@ -30,6 +30,10 @@ rock-ridge = []
 joliet = []
 # Enable all extensions
 all-extensions = ["rock-ridge", "joliet"]
+# Debug features
+trace = []
+debug = []
+debug-mount = []
 
 [lib]
 name = "iso9660"

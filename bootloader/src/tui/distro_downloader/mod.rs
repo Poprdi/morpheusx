@@ -25,7 +25,6 @@
 pub mod catalog;
 pub mod commit; // Modular commit download infrastructure
 pub mod manifest_io;
-pub mod network_check; // Network connectivity verification (deprecated - see commit)
 pub mod renderer;
 pub mod state;
 pub mod ui; // Post-EBS download flow

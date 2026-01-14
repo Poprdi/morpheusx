@@ -4,8 +4,7 @@ use super::{mb_to_lba, GptError};
 use crate::disk::partition::PartitionType;
 use gpt_disk_io::{BlockIo, Disk};
 use gpt_disk_types::{
-    guid, BlockSize, GptHeader, GptPartitionEntry, GptPartitionEntryArray,
-    GptPartitionEntryArrayLayout, LbaLe, U32Le,
+    guid, BlockSize, GptHeader, GptPartitionEntry, GptPartitionEntryArray, LbaLe, U32Le,
 };
 
 /// Helper function to write both primary and secondary GPT headers and partition arrays.
