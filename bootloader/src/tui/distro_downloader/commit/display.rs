@@ -136,23 +136,24 @@ pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
     screen.clear();
 
     // Calculate logo width for centering (find longest line)
-    let logo_width = LOGO_LINES_RAW.iter()
+    let logo_width = LOGO_LINES_RAW
+        .iter()
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(0);
-    
+
     // Message box dimensions
     let box_width = 70; // The box line character count
-    
+
     // Calculate total content height (logo + spacing + box)
     let logo_height = LOGO_LINES_RAW.len();
     let box_height = 10; // Number of box lines
     let spacing = 2;
     let total_height = logo_height + spacing + box_height;
-    
+
     // Center everything vertically
     let start_y = screen.center_y(total_height);
-    
+
     // Render centered logo
     for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
         let x = screen.center_x(line.chars().count());

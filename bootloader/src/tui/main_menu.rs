@@ -13,10 +13,14 @@ const HEADER_ART: &[&str] = &[
 
 // Box width (inner content is 75 chars)
 const BOX_WIDTH: usize = 77;
-const EMPTY_LINE: &str = "|                                                                           |";
-const TOP_BORDER: &str = "+===========================================================================+";
-const BOTTOM_BORDER: &str = "+===========================================================================+";
-const DIVIDER: &str = "+---------------------------------------------------------------------------+";
+const EMPTY_LINE: &str =
+    "|                                                                           |";
+const TOP_BORDER: &str =
+    "+===========================================================================+";
+const BOTTOM_BORDER: &str =
+    "+===========================================================================+";
+const DIVIDER: &str =
+    "+---------------------------------------------------------------------------+";
 
 pub struct MainMenu {
     selected_index: usize,
@@ -35,7 +39,7 @@ impl MainMenu {
         Self {
             selected_index: 0,
             debug: DebugOverlay::new(),
-            menu_items:[
+            menu_items: [
                 MenuItem {
                     label: "Distro Launcher",
                     description: "Boot into ephemeral Linux distribution",
@@ -79,13 +83,26 @@ impl MainMenu {
 
     pub fn render(&mut self, screen: &mut Screen) {
         // Calculate total menu height
-        // Top border (1) + empty (1) + header art (5) + empty (1) + divider (1) + 
+        // Top border (1) + empty (1) + header art (5) + empty (1) + divider (1) +
         // empty (1) + instructions (1) + empty (1) + divider (1) +
-        // menu items (6 * 2 = 12) + empty lines between (5) + 
+        // menu items (6 * 2 = 12) + empty lines between (5) +
         // divider (1) + empty (1) + status (1) + empty (1) + bottom border (1) = ~34
-        let total_height = 1 + 1 + HEADER_ART.len() + 1 + 1 + 1 + 1 + 1 + 1 + 
-                          (self.menu_items.len() * 2 - 1) + 1 + 1 + 1 + 1 + 1;
-        
+        let total_height = 1
+            + 1
+            + HEADER_ART.len()
+            + 1
+            + 1
+            + 1
+            + 1
+            + 1
+            + 1
+            + (self.menu_items.len() * 2 - 1)
+            + 1
+            + 1
+            + 1
+            + 1
+            + 1;
+
         // Center horizontally and vertically
         let x = screen.center_x(BOX_WIDTH);
         let y = screen.center_y(total_height);
@@ -104,12 +121,12 @@ impl MainMenu {
         for line in HEADER_ART.iter() {
             // Draw left border
             screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
-            
+
             // Center the art within the box (75 inner width)
             let padding = (75 - line.len()) / 2;
             let art_x = x + 1 + padding;
             screen.put_str_at(art_x, current_y, line, EFI_DARKGREEN, EFI_BLACK);
-            
+
             // Draw right border
             screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
             current_y += 1;
@@ -131,7 +148,13 @@ impl MainMenu {
         screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
         let instr = "[UP/DOWN] Navigate  |  [ENTER] Select  |  [ESC] Exit";
         let instr_padding = (75 - instr.len()) / 2;
-        screen.put_str_at(x + 1 + instr_padding, current_y, instr, EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 1 + instr_padding,
+            current_y,
+            instr,
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
@@ -154,11 +177,11 @@ impl MainMenu {
             } else {
                 alloc::format!("   {} {}", item.icon, item.label)
             };
-            
+
             // Center the item text within the box (75 inner width)
             let item_padding = (75 - item_text.len()) / 2;
             let item_x = x + 1 + item_padding;
-            
+
             if i == self.selected_index {
                 screen.put_str_at(item_x, current_y, &item_text, EFI_LIGHTGREEN, EFI_BLACK);
             } else {
@@ -187,7 +210,13 @@ impl MainMenu {
         screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 3, current_y, "Status: READY", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(x + 20, current_y, "|", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x + 22, current_y, "System: Operational", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 22,
+            current_y,
+            "System: Operational",
+            EFI_GREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
