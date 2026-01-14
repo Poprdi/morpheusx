@@ -652,6 +652,10 @@ asm_intel_set_link_up:
     add     rcx, CTRL
     call    asm_mmio_write32
 
+    ; Memory barrier after CTRL write
+    ; Ensures the SLU bit is visible to hardware before we continue
+    mfence
+
     add     rsp, 32
     pop     rbx
     ret
