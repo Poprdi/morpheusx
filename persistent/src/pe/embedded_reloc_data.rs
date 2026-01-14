@@ -17,7 +17,7 @@ pub const RELOC_SIZE: u32 = 0x00000320;
 pub const ORIGINAL_IMAGE_BASE: u64 = 0x0000004001000000;
 
 /// Hardcoded .reloc section data (800 bytes)
-/// Extracted from morpheus-bootloader.efi at file offset 0x0004ee00
+/// Extracted from morpheus-bootloader.efi at file offset 0x0004f200
 #[allow(dead_code)]
 pub const RELOC_DATA: [u8; 800] = [
     0x00, 0xe0, 0x03, 0x00, 0x50, 0x00, 0x00, 0x00, 0xb8, 0xa5, 0xc8, 0xa5, 0xd8, 0xa5, 0xe8, 0xa5,
