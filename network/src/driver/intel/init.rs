@@ -211,8 +211,26 @@ pub unsafe fn init_e1000e(
     // ═══════════════════════════════════════════════════════════════════
     let mut mac: MacAddress = [0u8; 6];
     let mac_result = asm_intel_read_mac(mmio_base, &mut mac);
+    
+    // Debug: print raw MAC bytes
+    serial_print("  [e1000e] MAC read result=");
+    serial_print_decimal(mac_result);
+    serial_print(" bytes=[");
+    serial_print_decimal(mac[0] as u32);
+    serial_print(",");
+    serial_print_decimal(mac[1] as u32);
+    serial_print(",");
+    serial_print_decimal(mac[2] as u32);
+    serial_print(",");
+    serial_print_decimal(mac[3] as u32);
+    serial_print(",");
+    serial_print_decimal(mac[4] as u32);
+    serial_print(",");
+    serial_print_decimal(mac[5] as u32);
+    serial_println("]");
+    
     if mac_result != 0 {
-        serial_println("  [e1000e] FAIL: Invalid MAC");
+        serial_println("  [e1000e] FAIL: Invalid MAC (ASM returned error)");
         return Err(E1000eInitError::InvalidMac);
     }
 
@@ -303,9 +321,28 @@ pub unsafe fn init_e1000e(
     asm_intel_enable_tx(mmio_base);
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 14: SET LINK UP
+    // STEP 14: SET LINK UP AND RESTART AUTO-NEGOTIATION
+    //
+    // On I218, after all the init steps, we need to:
+    // 1. Set CTRL.SLU (Set Link Up)
+    // 2. Restart PHY auto-negotiation
+    // 3. Give time for link partner negotiation
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_set_link_up(mmio_base);
+    
+    // Restart auto-negotiation after setting SLU
+    serial_println("  [e1000e] Restarting auto-negotiation...");
+    if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, config.tsc_freq) {
+        let new_bmcr = bmcr | regs::BMCR_ANENABLE | regs::BMCR_ANRESTART;
+        let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, config.tsc_freq);
+    }
+    
+    // Give PHY time to start negotiation (100ms)
+    let delay_start = crate::asm::core::tsc::read_tsc();
+    let delay_ticks = config.tsc_freq / 10; // 100ms
+    while crate::asm::core::tsc::read_tsc().wrapping_sub(delay_start) < delay_ticks {
+        core::hint::spin_loop();
+    }
 
     serial_println("  [e1000e] Init complete!");
     

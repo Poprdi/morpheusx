@@ -8,6 +8,7 @@
 use crate::driver::traits::{DriverInit, NetworkDriver, RxError, TxError};
 use crate::mainloop::bare_metal::serial_println;
 use crate::types::MacAddress;
+use crate::asm::drivers::intel::{asm_intel_link_status, LinkStatusResult};
 
 use super::init::{init_e1000e, E1000eConfig, E1000eInitError};
 use super::phy::PhyManager;
@@ -183,9 +184,13 @@ impl NetworkDriver for E1000eDriver {
 
     /// Get link status.
     fn link_up(&self) -> bool {
-        // Use cached status to avoid MMIO on every call
-        // The phy.link_status() call updates the cache
-        self.phy.cached_link_status().link_up
+        // Directly read hardware STATUS register via ASM
+        // We need actual hardware state, not cached values
+        let mut result = LinkStatusResult::default();
+        unsafe {
+            asm_intel_link_status(self.mmio_base, &mut result);
+        }
+        result.link_up != 0
     }
 }
 
