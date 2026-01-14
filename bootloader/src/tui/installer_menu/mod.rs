@@ -11,6 +11,26 @@ use crate::BootServices;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+// Box constants for centered UI
+const BOX_WIDTH: usize = 77;
+const EMPTY_LINE: &str =
+    "|                                                                           |";
+const TOP_BORDER: &str =
+    "+===========================================================================+";
+const BOTTOM_BORDER: &str =
+    "+===========================================================================+";
+const DIVIDER: &str =
+    "+---------------------------------------------------------------------------+";
+
+// Header art
+const HEADER_ART: &[&str] = &[
+    " ___           _        _ _           ",
+    "|_ _|_ __  ___| |_ __ _| | | ___ _ __ ",
+    " | || '_ \\/ __| __/ _` | | |/ _ \\ '__|",
+    " | || | | \\__ \\ || (_| | | |  __/ |   ",
+    "|___|_| |_|___/\\__\\__,_|_|_|\\___|_|   ",
+];
+
 pub struct InstallerMenu {
     esp_list: Vec<EspInfo>,
     selected_esp: usize,
@@ -110,188 +130,177 @@ impl InstallerMenu {
     fn render(&mut self, screen: &mut Screen, bs: &BootServices) {
         screen.clear();
 
-        let border_width = 80;
-        let start_x = screen.center_x(border_width);
-        let start_y = 2;
+        // Calculate total height for centering
+        let esp_count = if self.scan_complete {
+            self.esp_list.len().max(1)
+        } else {
+            1
+        };
+        let total_height =
+            1 + 1 + HEADER_ART.len() + 1 + 1 + 1 + 1 + 1 + 1 + esp_count + 6 + 1 + 1 + 1;
 
-        // Title
-        screen.put_str_at(
-            start_x,
-            start_y,
-            "=== Persistance Installer ===",
-            EFI_LIGHTGREEN,
-            EFI_BLACK,
-        );
+        let x = screen.center_x(BOX_WIDTH);
+        let y = screen.center_y(total_height);
+
+        let mut current_y = y;
+
+        // Top border
+        screen.put_str_at(x, current_y, TOP_BORDER, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Empty line
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Header art
+        for line in HEADER_ART.iter() {
+            screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
+            let padding = (75 - line.len()) / 2;
+            screen.put_str_at(x + 1 + padding, current_y, line, EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
+            current_y += 1;
+        }
+
+        // Empty line
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Divider
+        screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Empty line
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
 
         // Scan for ESPs if not done yet
         if !self.scan_complete {
-            screen.put_str_at(
-                start_x,
-                start_y + 2,
-                "Scanning for EFI Partitions...",
-                EFI_GREEN,
-                EFI_BLACK,
-            );
+            screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
+            let msg = "Scanning for EFI Partitions...";
+            let padding = (75 - msg.len()) / 2;
+            screen.put_str_at(x + 1 + padding, current_y, msg, EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
+            current_y += 1;
+
             self.esp_list = esp_scan::scan_for_esps(bs);
             self.scan_complete = true;
         }
 
-        let mut y = start_y + 2;
-
         if self.esp_list.is_empty() {
-            self.render_no_esp(screen, start_x, y);
+            self.render_no_esp_centered(screen, x, &mut current_y);
         } else {
-            self.render_esp_list(screen, start_x, &mut y);
+            self.render_esp_list_centered(screen, x, &mut current_y);
         }
 
-        y += 2;
-        screen.put_str_at(
-            start_x,
-            y,
+        // Empty line
+        screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        current_y += 1;
+
+        // Bottom border
+        screen.put_str_at(x, current_y, BOTTOM_BORDER, EFI_GREEN, EFI_BLACK);
+    }
+
+    fn render_no_esp_centered(&self, screen: &mut Screen, x: usize, current_y: &mut usize) {
+        // No ESP message
+        screen.put_str_at(x, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        let msg = "No EFI Partition found";
+        let padding = (75 - msg.len()) / 2;
+        screen.put_str_at(x + 1 + padding, *current_y, msg, EFI_LIGHTGREEN, EFI_BLACK);
+        screen.put_str_at(x + 76, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
+
+        // Empty line
+        screen.put_str_at(x, *current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
+
+        // Options
+        let options = [
+            "[C] How to create new ESP partition",
+            "[R] Rescan for ESPs",
             "[ESC] Back to Main Menu",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
+        ];
+
+        for opt in options.iter() {
+            screen.put_str_at(x, *current_y, "|", EFI_GREEN, EFI_BLACK);
+            let padding = (75 - opt.len()) / 2;
+            screen.put_str_at(x + 1 + padding, *current_y, opt, EFI_DARKGREEN, EFI_BLACK);
+            screen.put_str_at(x + 76, *current_y, "|", EFI_GREEN, EFI_BLACK);
+            *current_y += 1;
+        }
     }
 
-    fn render_no_esp(&self, screen: &mut Screen, start_x: usize, mut y: usize) {
+    fn render_esp_list_centered(&self, screen: &mut Screen, x: usize, current_y: &mut usize) {
+        // Title
+        screen.put_str_at(x, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        let title = "Found EFI Partitions:";
+        let padding = (75 - title.len()) / 2;
         screen.put_str_at(
-            start_x,
-            y,
-            "No EFI Partition found",
+            x + 1 + padding,
+            *current_y,
+            title,
             EFI_LIGHTGREEN,
             EFI_BLACK,
         );
-        y += 2;
-        screen.put_str_at(start_x, y, "You can:", EFI_GREEN, EFI_BLACK);
-        y += 1;
-        screen.put_str_at(
-            start_x,
-            y,
-            "  [C] How to create new ESP partition",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
-        y += 1;
-        screen.put_str_at(
-            start_x,
-            y,
-            "  [R] Rescan for ESPs",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
-    }
+        screen.put_str_at(x + 76, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
 
-    fn render_esp_list(&self, screen: &mut Screen, start_x: usize, y: &mut usize) {
-        screen.put_str_at(
-            start_x,
-            *y,
-            "Found EFI Partitions:",
-            EFI_LIGHTGREEN,
-            EFI_BLACK,
-        );
-        *y += 2;
+        // Empty line
+        screen.put_str_at(x, *current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
 
         // Table header
-        screen.put_str_at(
-            start_x,
-            *y,
-            "   DISK    PART    SIZE (MB)    STATUS",
-            EFI_GREEN,
-            EFI_BLACK,
-        );
-        *y += 1;
-        screen.put_str_at(
-            start_x,
-            *y,
-            "========================================",
-            EFI_GREEN,
-            EFI_BLACK,
-        );
-        *y += 1;
+        screen.put_str_at(x, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        let header = "DISK    PART    SIZE (MB)    STATUS";
+        let padding = (75 - header.len()) / 2;
+        screen.put_str_at(x + 1 + padding, *current_y, header, EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + 76, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
 
         // ESP entries
         for (idx, esp) in self.esp_list.iter().enumerate() {
-            self.render_esp_entry(screen, start_x, y, idx, esp);
+            screen.put_str_at(x, *current_y, "|", EFI_GREEN, EFI_BLACK);
+
+            let marker = if idx == self.selected_esp {
+                ">> "
+            } else {
+                "   "
+            };
+            let entry = alloc::format!(
+                "{}{}       {}       {}         Ready",
+                marker,
+                esp.disk_index,
+                esp.partition_index,
+                esp.size_mb
+            );
+            let padding = (75 - entry.len()) / 2;
+            let color = if idx == self.selected_esp {
+                EFI_LIGHTGREEN
+            } else {
+                EFI_GREEN
+            };
+            screen.put_str_at(x + 1 + padding, *current_y, &entry, color, EFI_BLACK);
+            screen.put_str_at(x + 76, *current_y, "|", EFI_GREEN, EFI_BLACK);
+            *current_y += 1;
         }
 
-        *y += 1;
-        screen.put_str_at(start_x, *y, "Options:", EFI_GREEN, EFI_BLACK);
-        *y += 1;
-        screen.put_str_at(
-            start_x,
-            *y,
-            "  [UP/DOWN] Select ESP",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
-        *y += 1;
-        screen.put_str_at(
-            start_x,
-            *y,
-            "  [ENTER] Install to selected ESP",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
-        *y += 1;
-        screen.put_str_at(
-            start_x,
-            *y,
-            "  [C] How to create new ESP partition",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
-        *y += 1;
-        screen.put_str_at(
-            start_x,
-            *y,
-            "  [R] Rescan for ESPs",
-            EFI_DARKGREEN,
-            EFI_BLACK,
-        );
-    }
+        // Empty line
+        screen.put_str_at(x, *current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
 
-    fn render_esp_entry(
-        &self,
-        screen: &mut Screen,
-        start_x: usize,
-        y: &mut usize,
-        idx: usize,
-        esp: &EspInfo,
-    ) {
-        let marker = if idx == self.selected_esp { "> " } else { "  " };
+        // Divider
+        screen.put_str_at(x, *current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
 
-        let disk_str = esp.disk_index.to_string();
-        let part_str = esp.partition_index.to_string();
-        let size_str = esp.size_mb.to_string();
+        // Empty line
+        screen.put_str_at(x, *current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
 
-        let mut line = marker.to_string();
-        line.push_str(&disk_str);
-
-        // Pad to column 2 (PART)
-        while line.len() < 9 {
-            line.push(' ');
-        }
-        line.push_str(&part_str);
-
-        // Pad to column 3 (SIZE)
-        while line.len() < 17 {
-            line.push(' ');
-        }
-        line.push_str(&size_str);
-
-        // Pad to column 4 (STATUS)
-        while line.len() < 30 {
-            line.push(' ');
-        }
-        line.push_str("Ready");
-
-        let fg = if idx == self.selected_esp {
-            EFI_LIGHTGREEN
-        } else {
-            EFI_GREEN
-        };
-        screen.put_str_at(start_x, *y, &line, fg, EFI_BLACK);
-        *y += 1;
+        // Instructions
+        screen.put_str_at(x, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        let instr = "[UP/DOWN] Select  |  [ENTER] Install  |  [R] Rescan  |  [ESC] Back";
+        let padding = (75 - instr.len()) / 2;
+        screen.put_str_at(x + 1 + padding, *current_y, instr, EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(x + 76, *current_y, "|", EFI_GREEN, EFI_BLACK);
+        *current_y += 1;
     }
 }

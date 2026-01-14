@@ -18,14 +18,30 @@ impl StorageManager {
             Ok(ptr) => ptr,
             Err(_) => {
                 screen.clear();
+                let title = "=== CREATE PARTITION ===";
                 screen.put_str_at(
+                    screen.center_x(title.len()),
                     5,
-                    7,
-                    "ERROR: Failed to access disk",
+                    title,
                     EFI_LIGHTGREEN,
                     EFI_BLACK,
                 );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let err = "ERROR: Failed to access disk";
+                screen.put_str_at(
+                    screen.center_x(err.len()),
+                    8,
+                    err,
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
+                let cont = "Press any key...";
+                screen.put_str_at(
+                    screen.center_x(cont.len()),
+                    10,
+                    cont,
+                    EFI_DARKGREEN,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
                 return;
             }
@@ -39,14 +55,30 @@ impl StorageManager {
             Ok(a) => a,
             Err(_) => {
                 screen.clear();
+                let title = "=== CREATE PARTITION ===";
                 screen.put_str_at(
+                    screen.center_x(title.len()),
                     5,
-                    7,
-                    "ERROR: Unsupported block size",
+                    title,
                     EFI_LIGHTGREEN,
                     EFI_BLACK,
                 );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let err = "ERROR: Unsupported block size";
+                screen.put_str_at(
+                    screen.center_x(err.len()),
+                    8,
+                    err,
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
+                let cont = "Press any key...";
+                screen.put_str_at(
+                    screen.center_x(cont.len()),
+                    10,
+                    cont,
+                    EFI_DARKGREEN,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
                 return;
             }
@@ -57,14 +89,30 @@ impl StorageManager {
             Ok(regions) => regions,
             Err(_) => {
                 screen.clear();
+                let title = "=== CREATE PARTITION ===";
                 screen.put_str_at(
+                    screen.center_x(title.len()),
                     5,
-                    7,
-                    "ERROR: Failed to analyze disk",
+                    title,
                     EFI_LIGHTGREEN,
                     EFI_BLACK,
                 );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let err = "ERROR: Failed to analyze disk";
+                screen.put_str_at(
+                    screen.center_x(err.len()),
+                    8,
+                    err,
+                    EFI_LIGHTGREEN,
+                    EFI_BLACK,
+                );
+                let cont = "Press any key...";
+                screen.put_str_at(
+                    screen.center_x(cont.len()),
+                    10,
+                    cont,
+                    EFI_DARKGREEN,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
                 return;
             }
@@ -74,8 +122,24 @@ impl StorageManager {
 
         if region.is_none() {
             screen.clear();
-            screen.put_str_at(5, 7, "No free space available", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+            let title = "=== CREATE PARTITION ===";
+            screen.put_str_at(
+                screen.center_x(title.len()),
+                5,
+                title,
+                EFI_LIGHTGREEN,
+                EFI_BLACK,
+            );
+            let msg = "No free space available";
+            screen.put_str_at(screen.center_x(msg.len()), 8, msg, EFI_GREEN, EFI_BLACK);
+            let cont = "Press any key...";
+            screen.put_str_at(
+                screen.center_x(cont.len()),
+                10,
+                cont,
+                EFI_DARKGREEN,
+                EFI_BLACK,
+            );
             keyboard.wait_for_key();
             return;
         }
@@ -89,21 +153,32 @@ impl StorageManager {
 
         loop {
             screen.clear();
-            screen.put_str_at(5, 3, "=== CREATE PARTITION ===", EFI_LIGHTGREEN, EFI_BLACK);
-
-            screen.put_str_at(5, 5, "Available space: ", EFI_GREEN, EFI_BLACK);
-            let mut size_buf = [0u8; 16];
-            let size_len = Self::format_number(size_mb, &mut size_buf);
+            let title = "=== CREATE PARTITION ===";
             screen.put_str_at(
-                22,
-                5,
-                core::str::from_utf8(&size_buf[..size_len]).unwrap_or("?"),
+                screen.center_x(title.len()),
+                3,
+                title,
                 EFI_LIGHTGREEN,
                 EFI_BLACK,
             );
-            screen.put_str_at(22 + size_len, 5, " MB", EFI_GREEN, EFI_BLACK);
 
-            screen.put_str_at(5, 8, "Select partition type:", EFI_GREEN, EFI_BLACK);
+            let mut size_buf = [0u8; 16];
+            let size_len = Self::format_number(size_mb, &mut size_buf);
+            let size_str = core::str::from_utf8(&size_buf[..size_len]).unwrap_or("?");
+            let avail_line = "Available space:     MB";
+            let avail_x = screen.center_x(avail_line.len() + size_len);
+            screen.put_str_at(avail_x, 5, "Available space: ", EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(avail_x + 17, 5, size_str, EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(avail_x + 17 + size_len, 5, " MB", EFI_GREEN, EFI_BLACK);
+
+            let select_msg = "Select partition type:";
+            screen.put_str_at(
+                screen.center_x(select_msg.len()),
+                8,
+                select_msg,
+                EFI_GREEN,
+                EFI_BLACK,
+            );
 
             for i in 0..3 {
                 let y = 10 + i;
@@ -113,15 +188,18 @@ impl StorageManager {
                 } else {
                     EFI_GREEN
                 };
+                let type_line_len = 2 + type_names[i].len();
+                let type_x = screen.center_x(type_line_len);
 
-                screen.put_str_at(7, y, marker, color, EFI_BLACK);
-                screen.put_str_at(9, y, type_names[i], color, EFI_BLACK);
+                screen.put_str_at(type_x, y, marker, color, EFI_BLACK);
+                screen.put_str_at(type_x + 2, y, type_names[i], color, EFI_BLACK);
             }
 
+            let help = "[UP/DOWN] Navigate | [ENTER] Select | [ESC] Cancel";
             screen.put_str_at(
-                5,
+                screen.center_x(help.len()),
                 15,
-                "[UP/DOWN] Navigate | [ENTER] Select | [ESC] Cancel",
+                help,
                 EFI_DARKGREEN,
                 EFI_BLACK,
             );
@@ -146,43 +224,60 @@ impl StorageManager {
             _ => return,
         };
 
-        // Step 2: Enter size
-        let mut textbox = TextBox::new(22, 10, 12);
+        // Step 2: Enter size - calculate centered position for textbox
+        let content_width = 50;
+        let content_x = screen.center_x(content_width);
+        let mut textbox = TextBox::new(content_x + 12, 10, 12);
         textbox.selected = true;
 
         loop {
             screen.clear();
-            screen.put_str_at(5, 3, "=== PARTITION SIZE ===", EFI_LIGHTGREEN, EFI_BLACK);
+            let title = "=== PARTITION SIZE ===";
+            screen.put_str_at(
+                screen.center_x(title.len()),
+                3,
+                title,
+                EFI_LIGHTGREEN,
+                EFI_BLACK,
+            );
 
-            screen.put_str_at(5, 5, "Type: ", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(11, 5, type_names[selected_type], EFI_LIGHTGREEN, EFI_BLACK);
+            screen.put_str_at(content_x, 5, "Type: ", EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(
+                content_x + 6,
+                5,
+                type_names[selected_type],
+                EFI_LIGHTGREEN,
+                EFI_BLACK,
+            );
 
-            screen.put_str_at(5, 7, "Available space: ", EFI_GREEN, EFI_BLACK);
             let mut size_buf = [0u8; 16];
             let size_len = Self::format_number(size_mb, &mut size_buf);
+            screen.put_str_at(content_x, 7, "Available space: ", EFI_GREEN, EFI_BLACK);
             screen.put_str_at(
-                22,
+                content_x + 17,
                 7,
                 core::str::from_utf8(&size_buf[..size_len]).unwrap_or("?"),
                 EFI_LIGHTGREEN,
                 EFI_BLACK,
             );
-            screen.put_str_at(22 + size_len, 7, " MB", EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(content_x + 17 + size_len, 7, " MB", EFI_GREEN, EFI_BLACK);
 
-            screen.put_str_at(5, 10, "Size (MB):     ", EFI_GREEN, EFI_BLACK);
+            screen.put_str_at(content_x, 10, "Size (MB): ", EFI_GREEN, EFI_BLACK);
             textbox.render(screen);
 
+            let hint = "Enter size in MB or leave empty for all space";
             screen.put_str_at(
-                5,
+                screen.center_x(hint.len()),
                 13,
-                "Enter size in MB or leave empty for all space",
+                hint,
                 EFI_DARKGREEN,
                 EFI_BLACK,
             );
+            let help = "[ENTER] Create | [ESC] Cancel";
             screen.put_str_at(
-                5,
+                screen.center_x(help.len()),
                 15,
-                "[ENTER] Create | [ESC] Cancel",
+                help,
                 EFI_DARKGREEN,
                 EFI_BLACK,
             );
@@ -229,20 +324,35 @@ impl StorageManager {
 
         // Create partition
         screen.clear();
-        screen.put_str_at(5, 5, "Creating partition...", EFI_LIGHTGREEN, EFI_BLACK);
+        let creating = "Creating partition...";
+        screen.put_str_at(
+            screen.center_x(creating.len()),
+            5,
+            creating,
+            EFI_LIGHTGREEN,
+            EFI_BLACK,
+        );
 
         let block_io = unsafe { &mut *block_io_ptr };
         let adapter = match UefiBlockIoAdapter::new(block_io) {
             Ok(a) => a,
             Err(_) => {
+                let err = "ERROR: Failed to access disk";
                 screen.put_str_at(
-                    5,
+                    screen.center_x(err.len()),
                     7,
-                    "ERROR: Failed to access disk",
+                    err,
                     EFI_LIGHTGREEN,
                     EFI_BLACK,
                 );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let cont = "Press any key...";
+                screen.put_str_at(
+                    screen.center_x(cont.len()),
+                    9,
+                    cont,
+                    EFI_DARKGREEN,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
                 return;
             }
@@ -250,25 +360,41 @@ impl StorageManager {
 
         match gpt_ops::create_partition(adapter, partition_type, region.start_lba, end_lba) {
             Ok(()) => {
+                let success = "Partition created successfully!";
                 screen.put_str_at(
-                    5,
+                    screen.center_x(success.len()),
                     7,
-                    "Partition created successfully!",
+                    success,
                     EFI_GREEN,
                     EFI_BLACK,
                 );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let cont = "Press any key...";
+                screen.put_str_at(
+                    screen.center_x(cont.len()),
+                    9,
+                    cont,
+                    EFI_DARKGREEN,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
             }
             Err(_) => {
+                let err = "ERROR: Failed to create partition";
                 screen.put_str_at(
-                    5,
+                    screen.center_x(err.len()),
                     7,
-                    "ERROR: Failed to create partition",
+                    err,
                     EFI_LIGHTGREEN,
                     EFI_BLACK,
                 );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let cont = "Press any key...";
+                screen.put_str_at(
+                    screen.center_x(cont.len()),
+                    9,
+                    cont,
+                    EFI_DARKGREEN,
+                    EFI_BLACK,
+                );
                 keyboard.wait_for_key();
             }
         }

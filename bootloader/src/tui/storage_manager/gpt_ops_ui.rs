@@ -48,52 +48,36 @@ impl StorageManager {
         bs: &BootServices,
     ) {
         screen.clear();
-        screen.put_str_at(
-            5,
-            5,
-            "=== CREATE GPT PARTITION TABLE ===",
-            EFI_LIGHTGREEN,
-            EFI_BLACK,
-        );
-        screen.put_str_at(
-            5,
-            7,
-            "WARNING: This will erase all data on the disk!",
-            EFI_LIGHTGREEN,
-            EFI_BLACK,
-        );
-        screen.put_str_at(
-            5,
-            9,
-            "Press Y to confirm, any other key to cancel",
-            EFI_GREEN,
-            EFI_BLACK,
-        );
+        let title = "=== CREATE GPT PARTITION TABLE ===";
+        screen.put_str_at(screen.center_x(title.len()), 5, title, EFI_LIGHTGREEN, EFI_BLACK);
+        let warn = "WARNING: This will erase all data on the disk!";
+        screen.put_str_at(screen.center_x(warn.len()), 7, warn, EFI_LIGHTGREEN, EFI_BLACK);
+        let confirm = "Press Y to confirm, any other key to cancel";
+        screen.put_str_at(screen.center_x(confirm.len()), 9, confirm, EFI_GREEN, EFI_BLACK);
 
         let key = keyboard.wait_for_key();
         if key.unicode_char != b'y' as u16 && key.unicode_char != b'Y' as u16 {
             screen.clear();
-            screen.put_str_at(5, 5, "GPT creation cancelled", EFI_GREEN, EFI_BLACK);
-            screen.put_str_at(5, 7, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+            let cancelled = "GPT creation cancelled";
+            screen.put_str_at(screen.center_x(cancelled.len()), 5, cancelled, EFI_GREEN, EFI_BLACK);
+            let cont = "Press any key...";
+            screen.put_str_at(screen.center_x(cont.len()), 7, cont, EFI_DARKGREEN, EFI_BLACK);
             keyboard.wait_for_key();
             return;
         }
 
         screen.clear();
-        screen.put_str_at(5, 5, "Creating GPT table...", EFI_LIGHTGREEN, EFI_BLACK);
+        let creating = "Creating GPT table...";
+        screen.put_str_at(screen.center_x(creating.len()), 5, creating, EFI_LIGHTGREEN, EFI_BLACK);
 
         // Get the block IO protocol for current disk
         let block_io_ptr = match crate::uefi::disk::get_disk_protocol(bs, self.current_disk_index) {
             Ok(ptr) => ptr,
             Err(_) => {
-                screen.put_str_at(
-                    5,
-                    7,
-                    "ERROR: Failed to get BlockIO protocol",
-                    EFI_LIGHTGREEN,
-                    EFI_BLACK,
-                );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let err = "ERROR: Failed to get BlockIO protocol";
+                screen.put_str_at(screen.center_x(err.len()), 7, err, EFI_LIGHTGREEN, EFI_BLACK);
+                let cont = "Press any key...";
+                screen.put_str_at(screen.center_x(cont.len()), 9, cont, EFI_DARKGREEN, EFI_BLACK);
                 keyboard.wait_for_key();
                 return;
             }
@@ -106,14 +90,10 @@ impl StorageManager {
         let adapter = match UefiBlockIoAdapter::new(block_io) {
             Ok(a) => a,
             Err(_) => {
-                screen.put_str_at(
-                    5,
-                    7,
-                    "ERROR: Failed to create adapter",
-                    EFI_LIGHTGREEN,
-                    EFI_BLACK,
-                );
-                screen.put_str_at(5, 9, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let err = "ERROR: Failed to create adapter";
+                screen.put_str_at(screen.center_x(err.len()), 7, err, EFI_LIGHTGREEN, EFI_BLACK);
+                let cont = "Press any key...";
+                screen.put_str_at(screen.center_x(cont.len()), 9, cont, EFI_DARKGREEN, EFI_BLACK);
                 keyboard.wait_for_key();
                 return;
             }
@@ -125,20 +105,10 @@ impl StorageManager {
                 self.partition_table.clear();
                 self.partition_table.has_gpt = true;
 
-                screen.put_str_at(
-                    5,
-                    7,
-                    "GPT table created successfully!",
-                    EFI_GREEN,
-                    EFI_BLACK,
-                );
-                screen.put_str_at(
-                    5,
-                    9,
-                    "Press any key to continue...",
-                    EFI_DARKGREEN,
-                    EFI_BLACK,
-                );
+                let success = "GPT table created successfully!";
+                screen.put_str_at(screen.center_x(success.len()), 7, success, EFI_GREEN, EFI_BLACK);
+                let cont = "Press any key to continue...";
+                screen.put_str_at(screen.center_x(cont.len()), 9, cont, EFI_DARKGREEN, EFI_BLACK);
                 keyboard.wait_for_key();
             }
             Err(e) => {
@@ -147,15 +117,11 @@ impl StorageManager {
                     gpt_ops::GptError::InvalidHeader => "Invalid header generated",
                     _ => "Unknown error",
                 };
-                screen.put_str_at(
-                    5,
-                    7,
-                    "ERROR: Failed to create GPT",
-                    EFI_LIGHTGREEN,
-                    EFI_BLACK,
-                );
-                screen.put_str_at(5, 9, err_msg, EFI_GREEN, EFI_BLACK);
-                screen.put_str_at(5, 11, "Press any key...", EFI_DARKGREEN, EFI_BLACK);
+                let err = "ERROR: Failed to create GPT";
+                screen.put_str_at(screen.center_x(err.len()), 7, err, EFI_LIGHTGREEN, EFI_BLACK);
+                screen.put_str_at(screen.center_x(err_msg.len()), 9, err_msg, EFI_GREEN, EFI_BLACK);
+                let cont = "Press any key...";
+                screen.put_str_at(screen.center_x(cont.len()), 11, cont, EFI_DARKGREEN, EFI_BLACK);
                 keyboard.wait_for_key();
             }
         }

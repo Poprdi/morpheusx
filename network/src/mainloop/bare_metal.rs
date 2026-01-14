@@ -1414,6 +1414,10 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         serial_print_decimal(handoff.framebuffer_width);
         serial_print("x");
         serial_print_decimal(handoff.framebuffer_height);
+        serial_print(" format=");
+        serial_print_decimal(handoff.framebuffer_format);
+        serial_print(" (0=RGB, 1=BGR) stride=");
+        serial_print_decimal(handoff.framebuffer_stride);
         serial_println("");
     } else {
         serial_println("[INFO] No framebuffer available");
@@ -1715,6 +1719,43 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     } else {
         serial_println("[INFO] Disk writes disabled by config");
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STEP 2.75: WAIT FOR PHY LINK (CRITICAL FOR REAL HARDWARE)
+    // ═══════════════════════════════════════════════════════════════════════
+    serial_println("[NET] Waiting for PHY link...");
+
+    let link_start = get_tsc();
+    let link_timeout_ticks = handoff.tsc_freq * 10; // 10 second timeout for link
+
+    loop {
+        if driver.link_up() {
+            serial_println("[OK] PHY link established");
+            break;
+        }
+
+        let now_tsc = get_tsc();
+        if now_tsc.wrapping_sub(link_start) > link_timeout_ticks {
+            serial_println("[WARN] PHY link timeout - continuing anyway...");
+            break;
+        }
+
+        // Brief yield
+        for _ in 0..10000 {
+            core::hint::spin_loop();
+        }
+    }
+
+    // Give the link a moment to stabilize after coming up
+    serial_println("[NET] Link stabilization delay...");
+    let stabilize_start = get_tsc();
+    let stabilize_ticks = handoff.tsc_freq / 2; // 500ms
+    while get_tsc().wrapping_sub(stabilize_start) < stabilize_ticks {
+        for _ in 0..1000 {
+            core::hint::spin_loop();
+        }
+    }
+    serial_println("[OK] Link stable");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STEP 3: CREATE SMOLTCP INTERFACE

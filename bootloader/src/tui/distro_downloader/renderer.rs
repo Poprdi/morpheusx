@@ -13,6 +13,7 @@ const HEADER_ART: &[&str] = &[
     "|____/|_|___/\\__|_|  \\___/ |____/ \\___/ \\_/\\_/ |_| |_|_|\\___/ \\__,_|\\__,_|\\___|_|   ",
 ];
 
+const BOX_WIDTH: usize = 82;
 const BORDER_H: &str = "═";
 const BORDER_V: &str = "║";
 const CORNER_TL: &str = "╔";
@@ -25,16 +26,11 @@ const TEE_R: &str = "╣";
 pub struct DownloaderRenderer;
 
 impl DownloaderRenderer {
-    /// Render the header with title
+    /// Render the header with title (centered)
     pub fn render_header(screen: &mut Screen) {
         morpheus_core::logger::log("Renderer: render_header()");
-        let width = screen.width();
         let header_width = HEADER_ART[0].len();
-        let x = if width > header_width {
-            (width - header_width) / 2
-        } else {
-            0
-        };
+        let x = screen.center_x(header_width + 2);
 
         // Draw border top
         screen.put_str_at(x, 0, CORNER_TL, EFI_GREEN, EFI_BLACK);
@@ -60,7 +56,7 @@ impl DownloaderRenderer {
         screen.put_str_at(x + header_width + 1, sep_y, TEE_R, EFI_GREEN, EFI_BLACK);
     }
 
-    /// Render category tabs
+    /// Render category tabs (centered)
     pub fn render_categories(
         screen: &mut Screen,
         categories: &[DistroCategory],
@@ -68,10 +64,17 @@ impl DownloaderRenderer {
         y: usize,
     ) {
         morpheus_core::logger::log("Renderer: render_categories()");
-        let x = 2;
+
+        // Calculate total width of category tabs
+        let mut total_width = 12; // "Categories: "
+        for cat in categories.iter() {
+            total_width += cat.name().len() + 3; // [name] + space
+        }
+
+        let x = screen.center_x(total_width);
         let mut current_x = x;
 
-        screen.put_str_at(x, y, "Categories: ", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(current_x, y, "Categories: ", EFI_GREEN, EFI_BLACK);
         current_x += 12;
 
         for (i, cat) in categories.iter().enumerate() {
@@ -92,7 +95,7 @@ impl DownloaderRenderer {
         }
     }
 
-    /// Render the distro list
+    /// Render the distro list (centered)
     pub fn render_distro_list(
         screen: &mut Screen,
         distros: &[&DistroEntry],
@@ -102,7 +105,8 @@ impl DownloaderRenderer {
         max_items: usize,
     ) {
         morpheus_core::logger::log("Renderer: render_distro_list()");
-        let x = 2;
+        let table_width = 78;
+        let x = screen.center_x(table_width);
 
         // Column headers
         screen.put_str_at(x + 2, y_start, "Name", EFI_DARKGREEN, EFI_BLACK);
@@ -112,7 +116,7 @@ impl DownloaderRenderer {
 
         // Separator line
         let sep_y = y_start + 1;
-        for i in 0..76 {
+        for i in 0..table_width {
             screen.put_str_at(x + i, sep_y, "-", EFI_DARKGREEN, EFI_BLACK);
         }
 
@@ -174,24 +178,25 @@ impl DownloaderRenderer {
         }
     }
 
-    /// Render distro details panel
+    /// Render distro details panel (centered)
     pub fn render_details(screen: &mut Screen, distro: &DistroEntry, y: usize) {
         morpheus_core::logger::log("Renderer: render_details()");
-        let x = 2;
+        let box_width = 80;
+        let x = screen.center_x(box_width);
 
         // Box top
         screen.put_str_at(x, y, "┌─ Details ", EFI_GREEN, EFI_BLACK);
-        for i in 12..78 {
+        for i in 12..box_width - 1 {
             screen.put_str_at(x + i, y, "─", EFI_GREEN, EFI_BLACK);
         }
-        screen.put_str_at(x + 78, y, "┐", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, y, "┐", EFI_GREEN, EFI_BLACK);
 
         // Details content
         let content_y = y + 1;
         screen.put_str_at(x, content_y, "│", EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 2, content_y, "Name: ", EFI_DARKGREEN, EFI_BLACK);
         screen.put_str_at(x + 8, content_y, distro.name, EFI_LIGHTGREEN, EFI_BLACK);
-        screen.put_str_at(x + 78, content_y, "│", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, content_y, "│", EFI_GREEN, EFI_BLACK);
 
         let content_y = y + 2;
         screen.put_str_at(x, content_y, "│", EFI_GREEN, EFI_BLACK);
@@ -203,7 +208,7 @@ impl DownloaderRenderer {
             distro.url
         };
         screen.put_str_at(x + 7, content_y, url_display, EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x + 78, content_y, "│", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, content_y, "│", EFI_GREEN, EFI_BLACK);
 
         let content_y = y + 3;
         screen.put_str_at(x, content_y, "│", EFI_GREEN, EFI_BLACK);
@@ -217,18 +222,18 @@ impl DownloaderRenderer {
             EFI_GREEN,
             EFI_BLACK,
         );
-        screen.put_str_at(x + 78, content_y, "│", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, content_y, "│", EFI_GREEN, EFI_BLACK);
 
         // Box bottom
         let bottom_y = y + 4;
         screen.put_str_at(x, bottom_y, "└", EFI_GREEN, EFI_BLACK);
-        for i in 1..78 {
+        for i in 1..box_width - 1 {
             screen.put_str_at(x + i, bottom_y, "─", EFI_GREEN, EFI_BLACK);
         }
-        screen.put_str_at(x + 78, bottom_y, "┘", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, bottom_y, "┘", EFI_GREEN, EFI_BLACK);
     }
 
-    /// Render download progress
+    /// Render download progress (centered)
     pub fn render_progress(
         screen: &mut Screen,
         distro: &DistroEntry,
@@ -238,17 +243,13 @@ impl DownloaderRenderer {
         y: usize,
     ) {
         morpheus_core::logger::log("Renderer: render_progress()");
-        let x = 2;
+        let box_width = 80;
+        let x = screen.center_x(box_width);
 
         // Clear area
         for i in 0..6 {
-            screen.put_str_at(
-                x,
-                y + i,
-                &"                                                                                ",
-                EFI_BLACK,
-                EFI_BLACK,
-            );
+            let clear_str = " ".repeat(box_width);
+            screen.put_str_at(x, y + i, &clear_str, EFI_BLACK, EFI_BLACK);
         }
 
         // Status message
@@ -309,23 +310,26 @@ impl DownloaderRenderer {
         screen.put_str_at(x + 8, status_y, status, EFI_GREEN, EFI_BLACK);
     }
 
-    /// Render error message
+    /// Render error message (centered)
     pub fn render_error(screen: &mut Screen, message: &str, y: usize) {
         morpheus_core::logger::log("Renderer: render_error()");
-        let x = 2;
+        let full_msg_len = 7 + message.len(); // "ERROR: " + message
+        let x = screen.center_x(full_msg_len);
         screen.put_str_at(x, y, "ERROR: ", EFI_RED, EFI_BLACK);
         screen.put_str_at(x + 7, y, message, EFI_RED, EFI_BLACK);
     }
 
-    /// Render footer with keybindings
+    /// Render footer with keybindings (centered)
     pub fn render_footer(screen: &mut Screen, y: usize) {
         morpheus_core::logger::log("Renderer: render_footer()");
-        let x = 2;
+        let box_width = 80;
+        let x = screen.center_x(box_width);
+
         screen.put_str_at(x, y, "┌─ Controls ", EFI_GREEN, EFI_BLACK);
-        for i in 13..78 {
+        for i in 13..box_width - 1 {
             screen.put_str_at(x + i, y, "─", EFI_GREEN, EFI_BLACK);
         }
-        screen.put_str_at(x + 78, y, "┐", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, y, "┐", EFI_GREEN, EFI_BLACK);
 
         let y = y + 1;
         screen.put_str_at(x, y, "│", EFI_GREEN, EFI_BLACK);
@@ -333,20 +337,21 @@ impl DownloaderRenderer {
         screen.put_str_at(x + 22, y, "[LEFT/RIGHT] Category", EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 46, y, "[ENTER] Download", EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 66, y, "[ESC] Back", EFI_GREEN, EFI_BLACK);
-        screen.put_str_at(x + 78, y, "│", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, y, "│", EFI_GREEN, EFI_BLACK);
 
         let y = y + 1;
         screen.put_str_at(x, y, "└", EFI_GREEN, EFI_BLACK);
-        for i in 1..78 {
+        for i in 1..box_width - 1 {
             screen.put_str_at(x + i, y, "─", EFI_GREEN, EFI_BLACK);
         }
-        screen.put_str_at(x + 78, y, "┘", EFI_GREEN, EFI_BLACK);
+        screen.put_str_at(x + box_width - 1, y, "┘", EFI_GREEN, EFI_BLACK);
     }
 
-    /// Render success message
+    /// Render success message (centered)
     pub fn render_success(screen: &mut Screen, message: &str, y: usize) {
         morpheus_core::logger::log("Renderer: render_success()");
-        let x = 2;
+        let full_msg_len = 9 + message.len(); // "SUCCESS: " + message
+        let x = screen.center_x(full_msg_len);
         screen.put_str_at(x, y, "SUCCESS: ", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(x + 9, y, message, EFI_LIGHTGREEN, EFI_BLACK);
     }

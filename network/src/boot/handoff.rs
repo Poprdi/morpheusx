@@ -242,7 +242,7 @@ pub struct BootHandoff {
     /// Framebuffer stride (bytes per row)
     pub framebuffer_stride: u32,
 
-    /// Framebuffer pixel format: 0=BGR, 1=RGB
+    /// Framebuffer pixel format: 0=RGB (Rgbx), 1=BGR (Bgrx)
     pub framebuffer_format: u32,
 
     // ═══════════════════════════════════════════════════════════════════════
