@@ -309,10 +309,102 @@ asm_intel_read_mac:
     jmp     .exit
 
 .try_eeprom:
-    ; TODO: Read from EEPROM if RAL/RAH invalid
-    ; For now, return error
-    mov     eax, 1
+    ; Read MAC from EEPROM for I218/82579
+    ; EEPROM words 0, 1, 2 contain MAC address
+    ; Word 0 = bytes 0-1, Word 1 = bytes 2-3, Word 2 = bytes 4-5
+    
+    ; Read EEPROM word 0 (MAC bytes 0-1)
+    mov     rcx, r12
+    xor     edx, edx            ; Address 0
+    call    .read_eeprom_word
+    cmp     eax, 0xFFFFFFFF
+    je      .invalid            ; EEPROM read failed
+    mov     [r13], al           ; Byte 0
+    shr     eax, 8
+    mov     [r13+1], al         ; Byte 1
+    
+    ; Read EEPROM word 1 (MAC bytes 2-3)
+    mov     rcx, r12
+    mov     edx, 1              ; Address 1
+    call    .read_eeprom_word
+    cmp     eax, 0xFFFFFFFF
+    je      .invalid
+    mov     [r13+2], al         ; Byte 2
+    shr     eax, 8
+    mov     [r13+3], al         ; Byte 3
+    
+    ; Read EEPROM word 2 (MAC bytes 4-5)
+    mov     rcx, r12
+    mov     edx, 2              ; Address 2
+    call    .read_eeprom_word
+    cmp     eax, 0xFFFFFFFF
+    je      .invalid
+    mov     [r13+4], al         ; Byte 4
+    shr     eax, 8
+    mov     [r13+5], al         ; Byte 5
+    
+    ; Validate the MAC we read
+    mov     eax, [r13]
+    movzx   ecx, word [r13+4]
+    or      eax, ecx
+    jz      .invalid            ; All zeros
+    
+    xor     eax, eax            ; Success
     jmp     .exit
+
+; Helper: Read one EEPROM word
+; Input: RCX = mmio_base, EDX = address (0-2 for MAC)
+; Output: EAX = word value, or 0xFFFFFFFF on error
+.read_eeprom_word:
+    push    rbx
+    push    r14
+    push    r15
+    sub     rsp, 32
+    
+    mov     r14, rcx            ; mmio_base
+    mov     r15d, edx           ; address
+    
+    ; Write EERD: address in bits [15:8], start bit [0]
+    ; For 82579/I218: address is bits [15:2], start is bit 0
+    shl     r15d, 2             ; address << 2
+    or      r15d, 1             ; Set START bit
+    mov     edx, r15d
+    mov     rcx, r14
+    add     rcx, EERD
+    call    asm_mmio_write32
+    
+    ; Poll for DONE bit (bit 1) - timeout after ~10ms
+    mov     ebx, 10000          ; iteration count
+.eerd_poll:
+    mov     rcx, r14
+    add     rcx, EERD
+    call    asm_mmio_read32
+    test    eax, 2              ; DONE bit
+    jnz     .eerd_done
+    
+    ; Small delay
+    pause
+    pause
+    pause
+    
+    dec     ebx
+    jnz     .eerd_poll
+    
+    ; Timeout
+    mov     eax, 0xFFFFFFFF
+    jmp     .eerd_exit
+    
+.eerd_done:
+    ; Data is in bits [31:16]
+    shr     eax, 16
+    and     eax, 0xFFFF
+    
+.eerd_exit:
+    add     rsp, 32
+    pop     r15
+    pop     r14
+    pop     rbx
+    ret
 
 .invalid:
     mov     eax, 1

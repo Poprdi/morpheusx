@@ -89,6 +89,30 @@ unsafe fn serial_write_byte(byte: u8) {
 #[cfg(not(target_arch = "x86_64"))]
 unsafe fn serial_write_byte(_byte: u8) {}
 
+// Static counters for packet debugging
+static mut TX_PACKET_COUNT: u32 = 0;
+static mut RX_PACKET_COUNT: u32 = 0;
+
+/// Increment TX counter
+pub fn inc_tx_count() {
+    unsafe { TX_PACKET_COUNT += 1; }
+}
+
+/// Increment RX counter
+pub fn inc_rx_count() {
+    unsafe { RX_PACKET_COUNT += 1; }
+}
+
+/// Get TX count
+pub fn get_tx_count() -> u32 {
+    unsafe { TX_PACKET_COUNT }
+}
+
+/// Get RX count
+pub fn get_rx_count() -> u32 {
+    unsafe { RX_PACKET_COUNT }
+}
+
 /// Write string to serial port.
 pub fn serial_print(s: &str) {
     for byte in s.bytes() {
@@ -1109,6 +1133,10 @@ pub struct SmoltcpAdapter<'a, D: NetworkDriver> {
     rx_buffer: [u8; 2048],
     /// Length of data in rx_buffer (0 if no pending packet)
     rx_len: usize,
+    /// TX packet count (for debug)
+    tx_count: u32,
+    /// RX packet count (for debug)
+    rx_count: u32,
 }
 
 impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
@@ -1117,6 +1145,8 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
             driver,
             rx_buffer: [0u8; 2048],
             rx_len: 0,
+            tx_count: 0,
+            rx_count: 0,
         }
     }
 
@@ -1128,10 +1158,22 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
             match self.driver.receive(&mut self.rx_buffer) {
                 Ok(Some(len)) => {
                     self.rx_len = len;
+                    self.rx_count += 1;
+                    inc_rx_count(); // Global counter
                 }
                 _ => {}
             }
         }
+    }
+    
+    /// Get TX count for debug.
+    pub fn tx_count(&self) -> u32 {
+        self.tx_count
+    }
+    
+    /// Get RX count for debug.
+    pub fn rx_count(&self) -> u32 {
+        self.rx_count
     }
 
     /// Refill RX queue. Called in main loop Phase 1.
@@ -1186,7 +1228,9 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
         let result = f(&mut buffer[..actual_len]);
 
         // Fire-and-forget transmit - don't wait for completion
-        let _ = self.driver.transmit(&buffer[..actual_len]);
+        if self.driver.transmit(&buffer[..actual_len]).is_ok() {
+            inc_tx_count();
+        }
 
         result
     }
@@ -1732,16 +1776,27 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_println("[NET] Waiting for PHY link...");
 
     let link_start = get_tsc();
-    let link_timeout_ticks = handoff.tsc_freq * 10; // 10 second timeout for link
+    let link_timeout_ticks = handoff.tsc_freq * 15; // 15 second timeout for link (auto-neg can be slow)
+    let mut last_dot_tsc = link_start;
+    let dot_interval = handoff.tsc_freq; // 1 second
 
     loop {
         if driver.link_up() {
+            serial_println("");
             serial_println("[OK] PHY link established");
             break;
         }
 
         let now_tsc = get_tsc();
+        
+        // Print a dot every second to show progress
+        if now_tsc.wrapping_sub(last_dot_tsc) > dot_interval {
+            serial_print(".");
+            last_dot_tsc = now_tsc;
+        }
+        
         if now_tsc.wrapping_sub(link_start) > link_timeout_ticks {
+            serial_println("");
             serial_println("[WARN] PHY link timeout - continuing anyway...");
             break;
         }
@@ -1817,13 +1872,32 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     // DHCP polling loop
     serial_println("[NET] Sending DHCP DISCOVER...");
 
+    let mut last_status_tsc = dhcp_start;
+    let status_interval = handoff.tsc_freq * 2; // Print status every 2 seconds
+
     loop {
         let now_tsc = get_tsc();
 
         // Check timeout
         if now_tsc.wrapping_sub(dhcp_start) > dhcp_timeout_ticks {
-            serial_println("[FAIL] DHCP timeout");
+            serial_println("");
+            serial_print("[FAIL] DHCP timeout - TX:");
+            serial_print_decimal(get_tx_count());
+            serial_print(" RX:");
+            serial_print_decimal(get_rx_count());
+            serial_println("");
             return RunResult::DhcpTimeout;
+        }
+        
+        // Print status every 2 seconds
+        if now_tsc.wrapping_sub(last_status_tsc) > status_interval {
+            serial_print(".");
+            serial_print(" TX:");
+            serial_print_decimal(get_tx_count());
+            serial_print(" RX:");
+            serial_print_decimal(get_rx_count());
+            serial_println("");
+            last_status_tsc = now_tsc;
         }
 
         // Convert TSC to smoltcp Instant
