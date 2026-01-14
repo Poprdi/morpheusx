@@ -3,10 +3,14 @@ use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGH
 
 // Box constants
 const BOX_WIDTH: usize = 77;
-const EMPTY_LINE: &str = "|                                                                           |";
-const TOP_BORDER: &str = "+===========================================================================+";
-const BOTTOM_BORDER: &str = "+===========================================================================+";
-const DIVIDER: &str = "+---------------------------------------------------------------------------+";
+const EMPTY_LINE: &str =
+    "|                                                                           |";
+const TOP_BORDER: &str =
+    "+===========================================================================+";
+const BOTTOM_BORDER: &str =
+    "+===========================================================================+";
+const DIVIDER: &str =
+    "+---------------------------------------------------------------------------+";
 
 // Header art for distro launcher
 const HEADER_ART: &[&str] = &[
@@ -26,12 +30,12 @@ impl EntryRenderer {
 
     pub fn render_entries(screen: &mut Screen, entries: &[BootEntry], selected: usize) {
         // Full centered render
-        let total_height = 1 + 1 + HEADER_ART.len() + 1 + 1 + 1 + 1 + 1 + 1 + 
-                          entries.len() + 1 + 1 + 1 + 1;
-        
+        let total_height =
+            1 + 1 + HEADER_ART.len() + 1 + 1 + 1 + 1 + 1 + 1 + entries.len() + 1 + 1 + 1 + 1;
+
         let x = screen.center_x(BOX_WIDTH);
         let y = screen.center_y(total_height);
-        
+
         let mut current_y = y;
 
         // Top border
@@ -67,7 +71,13 @@ impl EntryRenderer {
         screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
         let instr = "[UP/DOWN] Navigate  |  [ENTER] Boot  |  [ESC] Back";
         let instr_padding = (75 - instr.len()) / 2;
-        screen.put_str_at(x + 1 + instr_padding, current_y, instr, EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 1 + instr_padding,
+            current_y,
+            instr,
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
@@ -84,19 +94,35 @@ impl EntryRenderer {
             screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
             let msg = "No bootable entries found";
             let msg_padding = (75 - msg.len()) / 2;
-            screen.put_str_at(x + 1 + msg_padding, current_y, msg, EFI_DARKGREEN, EFI_BLACK);
+            screen.put_str_at(
+                x + 1 + msg_padding,
+                current_y,
+                msg,
+                EFI_DARKGREEN,
+                EFI_BLACK,
+            );
             screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
             current_y += 1;
         } else {
             for (i, entry) in entries.iter().enumerate() {
                 screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
-                
+
                 let marker = if i == selected { ">> " } else { "   " };
                 let entry_text = alloc::format!("{}{}", marker, entry.name);
                 let entry_padding = (75 - entry_text.len()) / 2;
-                
-                let color = if i == selected { EFI_LIGHTGREEN } else { EFI_GREEN };
-                screen.put_str_at(x + 1 + entry_padding, current_y, &entry_text, color, EFI_BLACK);
+
+                let color = if i == selected {
+                    EFI_LIGHTGREEN
+                } else {
+                    EFI_GREEN
+                };
+                screen.put_str_at(
+                    x + 1 + entry_padding,
+                    current_y,
+                    &entry_text,
+                    color,
+                    EFI_BLACK,
+                );
                 screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
                 current_y += 1;
             }
@@ -114,7 +140,13 @@ impl EntryRenderer {
         screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
         let footer = "Entries auto-discovered from ESP partition";
         let footer_padding = (75 - footer.len()) / 2;
-        screen.put_str_at(x + 1 + footer_padding, current_y, footer, EFI_DARKGREEN, EFI_BLACK);
+        screen.put_str_at(
+            x + 1 + footer_padding,
+            current_y,
+            footer,
+            EFI_DARKGREEN,
+            EFI_BLACK,
+        );
         screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
         current_y += 1;
 

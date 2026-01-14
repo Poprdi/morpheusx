@@ -21,7 +21,7 @@ pub use super::display::DownloadCommitConfig;
 
 use super::display::{
     display_commit_countdown, display_download_start, display_error_and_halt, DebugLog, LOG_CYAN,
-    LOG_GREEN, LOG_RED, LOG_YELLOW,
+    LOG_DARKGRAY, LOG_GREEN, LOG_RED, LOG_YELLOW,
 };
 use super::pci::{probe_ahci_with_debug, probe_nic_with_debug, probe_virtio_blk_with_debug};
 use super::resources::{
@@ -97,6 +97,31 @@ pub unsafe fn commit_to_download(
 
     // Phase 4: Probe network device (VirtIO or Intel e1000e)
     debug_log.add("Probing network device...", LOG_YELLOW);
+
+    // First, dump PCI devices to debug log for diagnostics
+    debug_log.add("  PCI bus scan:", LOG_CYAN);
+    for bus in 0u8..16 {
+        for device in 0u8..32 {
+            let id = super::pci::config_space::pci_read32(bus, device, 0, 0);
+            if id != 0xFFFFFFFF && id != 0 {
+                let vendor = (id & 0xFFFF) as u16;
+                let dev_id = ((id >> 16) & 0xFFFF) as u16;
+                // Highlight Intel devices (vendor 0x8086) in cyan
+                let color = if vendor == 0x8086 { LOG_CYAN } else { LOG_DARKGRAY };
+                debug_log.add(
+                    &alloc::format!(
+                        "    {:02x}:{:02x}.0 = {:04x}:{:04x}",
+                        bus,
+                        device,
+                        vendor,
+                        dev_id
+                    ),
+                    color,
+                );
+            }
+        }
+    }
+
     let nic_probe = probe_nic_with_debug(screen, &mut 0);
     if nic_probe.mmio_base == 0 {
         debug_log.add("  ERROR: No supported NIC found!", LOG_RED);

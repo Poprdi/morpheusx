@@ -20,26 +20,79 @@ const VIRTIO_NET_MODERN: u16 = 0x1041;
 /// Intel vendor ID
 const INTEL_VENDOR: u16 = 0x8086;
 
-/// Intel e1000e device IDs (common NICs found in ThinkPads and QEMU)
+/// Intel e1000e device IDs (extensive list covering many ThinkPads and desktop NICs)
 const INTEL_E1000E_DEVICES: &[u16] = &[
+    // QEMU emulation
     0x100E, // 82540EM (QEMU e1000)
     0x10D3, // 82574L (QEMU e1000e)
-    0x1502, // I218-LM (ThinkPad T450s, T440s, X240)
-    0x1503, // I218-V
-    0x10EA, // 82577LM
-    0x10EB, // 82577LC
-    0x10EF, // 82578DM
-    0x10F0, // 82578DC
-    0x1533, // I210
-    0x1539, // I211
-    0x156F, // I219-LM (Skylake+)
-    0x1570, // I219-V (Skylake+)
+    // I217 series (Haswell)
+    0x153A, // I217-LM
+    0x153B, // I217-V
+    // I218 series (Broadwell ThinkPads - T450s, T440s, X240, etc.)
+    0x1559, // I218-LM
+    0x155A, // I218-V
+    0x15A0, // I218-LM (ThinkPad variant)
+    0x15A1, // I218-V (ThinkPad variant)
+    0x15A2, // I218-LM
+    0x15A3, // I218-V
+    0x1502, // I218-LM (older mapping)
+    0x1503, // I218-V (older mapping)
+    // I219 series (Skylake+)
+    0x156F, // I219-LM
+    0x1570, // I219-V
     0x15B7, // I219-LM (Kaby Lake)
     0x15B8, // I219-V (Kaby Lake)
+    0x15B9, // I219-LM
     0x15BB, // I219-LM (CNL)
     0x15BC, // I219-V (CNL)
     0x15BD, // I219-LM (CNL Corporate)
     0x15BE, // I219-V (CNL Corporate)
+    0x15D6, // I219-V (CNL)
+    0x15D7, // I219-LM
+    0x15D8, // I219-V
+    0x15E3, // I219-LM
+    0x15DF, // I219-LM
+    0x15E1, // I219-LM
+    0x15E2, // I219-LM
+    0x0D4E, // I219-LM (Comet Lake)
+    0x0D4F, // I219-V (Comet Lake)
+    0x0D4C, // I219-LM
+    0x0D4D, // I219-V
+    0x0D53, // I219-LM
+    0x0D55, // I219-V
+    // I210/I211 (Server/Desktop)
+    0x1533, // I210
+    0x1536, // I210-AS
+    0x1537, // I210-AT
+    0x1538, // I210-AT
+    0x1539, // I211
+    0x157B, // I210
+    0x157C, // I210
+    // 82577/82578/82579 (older ThinkPads)
+    0x10EA, // 82577LM
+    0x10EB, // 82577LC
+    0x10EF, // 82578DM
+    0x10F0, // 82578DC
+    0x1501, // 82567V-3
+    0x1049, // 82566MM
+    0x104A, // 82566DM
+    0x104B, // 82566DC
+    0x104C, // 82562V
+    0x104D, // 82566MC
+    0x10C4, // 82562GT
+    0x10C5, // 82562G
+    0x10BD, // 82566DM-2
+    0x10BF, // 82567LF
+    0x10CB, // 82567V
+    0x10CC, // 82567LM-2
+    0x10CD, // 82567LF-2
+    0x10CE, // 82567V-2
+    0x10DE, // 82567LM-3
+    0x10DF, // 82567LF-3
+    0x10E5, // 82567LM-4
+    0x10F5, // 82567LM
+    0x1502, // 82579LM
+    0x1503, // 82579V
 ];
 
 /// PCI capability constants
@@ -90,7 +143,11 @@ pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeR
                         *log_y,
                         &alloc::format!(
                             "  PCI {:02x}:{:02x}.{} = {:04x}:{:04x}",
-                            bus, device, function, vendor, dev_id
+                            bus,
+                            device,
+                            function,
+                            vendor,
+                            dev_id
                         ),
                         EFI_DARKGRAY,
                         EFI_BLACK,

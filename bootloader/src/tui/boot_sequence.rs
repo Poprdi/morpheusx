@@ -1,5 +1,6 @@
 use crate::tui::renderer::{
-    Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGRAY, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED, EFI_YELLOW, EFI_DARKGREEN
+    Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGRAY, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN, EFI_RED,
+    EFI_YELLOW,
 };
 use alloc::boxed::Box;
 use core::cell::RefCell;
@@ -77,16 +78,16 @@ impl BootSequence {
         let logs_to_show = 20;
         let logo_height = Self::LOGO.len();
         let spacing_after_logo = 2;
-        
+
         // Calculate total content height (logo + spacing + logs + completion message)
         let total_content_height = logo_height + spacing_after_logo + logs_to_show + 3;
-        
+
         // Center the entire content vertically
         let start_y = screen.center_y(total_content_height);
-        
+
         // Render logo at the top of centered content
         self.render_logo(screen, start_y);
-        
+
         // Calculate where logs should start
         let logs_start_y = start_y + logo_height + spacing_after_logo;
 
@@ -100,17 +101,23 @@ impl BootSequence {
                     // Calculate content width for centering
                     let status_prefix = "[  OK  ] ";
                     let full_line_len = status_prefix.chars().count() + log.chars().count();
-                    
+
                     // Center the log line
                     let centered_x = screen.center_x(full_line_len);
-                    
+
                     // Clear the entire line first
                     let clear_str = " ".repeat(screen.width());
                     screen.put_str_at(0, line_y, &clear_str, EFI_BLACK, EFI_BLACK);
-                    
+
                     // Render centered log line
                     screen.put_str_at(centered_x, line_y, status_prefix, EFI_GREEN, EFI_BLACK);
-                    screen.put_str_at(centered_x + status_prefix.chars().count(), line_y, log, EFI_LIGHTGREEN, EFI_BLACK);
+                    screen.put_str_at(
+                        centered_x + status_prefix.chars().count(),
+                        line_y,
+                        log,
+                        EFI_LIGHTGREEN,
+                        EFI_BLACK,
+                    );
                 }
                 line_idx += 1;
             }
@@ -146,5 +153,4 @@ impl BootSequence {
 
         self.last_rendered_count = total_count;
     }
-
-} 
+}

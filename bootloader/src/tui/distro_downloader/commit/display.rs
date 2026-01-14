@@ -23,47 +23,31 @@ pub fn display_commit_countdown(
 ) {
     screen.clear();
 
-    screen.put_str_at(
-        5,
-        2,
-        "=== Download Confirmation ===",
-        EFI_LIGHTGREEN,
-        EFI_BLACK,
-    );
+    let title = "=== Download Confirmation ===";
+    screen.put_str_at(screen.center_x(title.len()), 2, title, EFI_LIGHTGREEN, EFI_BLACK);
 
-    screen.put_str_at(5, 4, "About to download:", EFI_YELLOW, EFI_BLACK);
-    screen.put_str_at(7, 5, &config.distro_name, EFI_CYAN, EFI_BLACK);
-    screen.put_str_at(
-        7,
-        6,
-        &alloc::format!("Size: {} MB", config.iso_size / (1024 * 1024)),
-        EFI_CYAN,
-        EFI_BLACK,
-    );
+    let about = "About to download:";
+    screen.put_str_at(screen.center_x(about.len()), 4, about, EFI_YELLOW, EFI_BLACK);
+    screen.put_str_at(screen.center_x(config.distro_name.len()), 5, &config.distro_name, EFI_CYAN, EFI_BLACK);
+    let size_str = alloc::format!("Size: {} MB", config.iso_size / (1024 * 1024));
+    screen.put_str_at(screen.center_x(size_str.len()), 6, &size_str, EFI_CYAN, EFI_BLACK);
 
-    screen.put_str_at(
-        5,
-        8,
-        "WARNING: This will exit UEFI boot services!",
-        EFI_RED,
-        EFI_BLACK,
-    );
-    screen.put_str_at(
-        5,
-        9,
-        "The system cannot be interrupted during download.",
-        EFI_RED,
-        EFI_BLACK,
-    );
+    let warn1 = "WARNING: This will exit UEFI boot services!";
+    screen.put_str_at(screen.center_x(warn1.len()), 8, warn1, EFI_RED, EFI_BLACK);
+    let warn2 = "The system cannot be interrupted during download.";
+    screen.put_str_at(screen.center_x(warn2.len()), 9, warn2, EFI_RED, EFI_BLACK);
 
     // Countdown with UEFI Stall (1 second = 1,000,000 microseconds)
-    screen.put_str_at(5, 11, "Starting in 3...", EFI_YELLOW, EFI_BLACK);
+    let count3 = "Starting in 3...";
+    screen.put_str_at(screen.center_x(count3.len()), 11, count3, EFI_YELLOW, EFI_BLACK);
     let _ = (bs.stall)(1_000_000);
 
-    screen.put_str_at(5, 11, "Starting in 2...", EFI_YELLOW, EFI_BLACK);
+    let count2 = "Starting in 2...";
+    screen.put_str_at(screen.center_x(count2.len()), 11, count2, EFI_YELLOW, EFI_BLACK);
     let _ = (bs.stall)(1_000_000);
 
-    screen.put_str_at(5, 11, "Starting in 1...", EFI_YELLOW, EFI_BLACK);
+    let count1 = "Starting in 1...";
+    screen.put_str_at(screen.center_x(count1.len()), 11, count1, EFI_YELLOW, EFI_BLACK);
     let _ = (bs.stall)(1_000_000);
 }
 
@@ -96,13 +80,8 @@ impl DebugLog {
     /// Display the debug log on screen (only called on error).
     pub fn display(&self, screen: &mut Screen) {
         screen.clear();
-        screen.put_str_at(
-            5,
-            1,
-            "=== INITIALIZATION ERROR - DEBUG LOG ===",
-            EFI_RED,
-            EFI_BLACK,
-        );
+        let title = "=== INITIALIZATION ERROR - DEBUG LOG ===";
+        screen.put_str_at(screen.center_x(title.len()), 1, title, EFI_RED, EFI_BLACK);
 
         for i in 0..self.count {
             let line = &self.lines[i];
@@ -116,9 +95,10 @@ impl DebugLog {
                         2 => EFI_LIGHTGREEN,
                         3 => EFI_RED,
                         4 => EFI_CYAN,
+                        5 => 0x08, // EFI_DARKGRAY
                         _ => EFI_YELLOW,
                     };
-                    screen.put_str_at(5, 3 + i, s, color, EFI_BLACK);
+                    screen.put_str_at(screen.center_x(s.len()), 3 + i, s, color, EFI_BLACK);
                 }
             }
         }
@@ -130,29 +110,31 @@ pub const LOG_YELLOW: u8 = 1;
 pub const LOG_GREEN: u8 = 2;
 pub const LOG_RED: u8 = 3;
 pub const LOG_CYAN: u8 = 4;
+pub const LOG_DARKGRAY: u8 = 5;
 
 /// Display clean ASCII art and final message before download (success path).
 pub fn display_download_start(screen: &mut Screen, bs: &crate::BootServices) {
     screen.clear();
 
     // Calculate logo width for centering (find longest line)
-    let logo_width = LOGO_LINES_RAW.iter()
+    let logo_width = LOGO_LINES_RAW
+        .iter()
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(0);
-    
+
     // Message box dimensions
     let box_width = 70; // The box line character count
-    
+
     // Calculate total content height (logo + spacing + box)
     let logo_height = LOGO_LINES_RAW.len();
     let box_height = 10; // Number of box lines
     let spacing = 2;
     let total_height = logo_height + spacing + box_height;
-    
+
     // Center everything vertically
     let start_y = screen.center_y(total_height);
-    
+
     // Render centered logo
     for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
         let x = screen.center_x(line.chars().count());
@@ -248,15 +230,11 @@ pub fn display_error_and_halt(
     debug_log.display(screen);
 
     let error_y = 3 + debug_log.count + 2;
-    screen.put_str_at(5, error_y, "FATAL ERROR:", EFI_RED, EFI_BLACK);
-    screen.put_str_at(7, error_y + 1, error_msg, EFI_RED, EFI_BLACK);
-    screen.put_str_at(
-        5,
-        error_y + 3,
-        "System halted. Please reboot manually.",
-        EFI_YELLOW,
-        EFI_BLACK,
-    );
+    let fatal = "FATAL ERROR:";
+    screen.put_str_at(screen.center_x(fatal.len()), error_y, fatal, EFI_RED, EFI_BLACK);
+    screen.put_str_at(screen.center_x(error_msg.len()), error_y + 1, error_msg, EFI_RED, EFI_BLACK);
+    let halt = "System halted. Please reboot manually.";
+    screen.put_str_at(screen.center_x(halt.len()), error_y + 3, halt, EFI_YELLOW, EFI_BLACK);
 
     // Give time to read
     let _ = (bs.stall)(5_000_000);
