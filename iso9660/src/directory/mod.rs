@@ -22,6 +22,7 @@ fn trace(msg: &str) {
 }
 
 #[cfg(not(feature = "trace"))]
+#[allow(dead_code)]
 fn trace(_msg: &str) {}
 
 /// Find a file or directory by path
@@ -71,10 +72,10 @@ pub fn find_file<B: BlockIo>(
 
         // Search for matching entry (case-insensitive)
         let mut found = None;
-        let mut entry_count = 0u32;
+        let mut _entry_count = 0u32;
         for result in iter {
             let entry = result?;
-            entry_count += 1;
+            _entry_count += 1;
 
             // Case-insensitive comparison
             if entry.name.eq_ignore_ascii_case(component) {
