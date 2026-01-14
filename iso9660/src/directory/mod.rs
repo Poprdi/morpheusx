@@ -12,11 +12,13 @@ use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 
 #[cfg(feature = "trace")]
+#[allow(dead_code)]
 extern "C" {
     fn morpheus_log(msg: *const u8, len: usize);
 }
 
 #[cfg(feature = "trace")]
+#[allow(dead_code)]
 fn trace(msg: &str) {
     unsafe { morpheus_log(msg.as_ptr(), msg.len()) };
 }

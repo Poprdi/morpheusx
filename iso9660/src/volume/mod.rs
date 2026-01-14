@@ -49,8 +49,6 @@ pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeIn
         // DEBUG: Log what we're about to read
         #[cfg(feature = "debug")]
         {
-            extern crate alloc;
-            use alloc::format;
             // Print to serial if available
         }
 
