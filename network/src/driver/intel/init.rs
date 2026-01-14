@@ -269,13 +269,18 @@ pub fn generate_fallback_mac(seed: u64) -> MacAddress {
 // POWER MANAGEMENT HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Wake PHY from power-down mode.
+/// Wake PHY from power-down mode, reset it, and restart auto-negotiation.
 ///
-/// CRITICAL for post-ExitBootServices operation!
+/// CRITICAL for post-ExitBootServices operation on real hardware!
 ///
 /// BIOS may have enabled PHY power management (BMCR.PDOWN). In a normal
 /// OS environment, ACPI or SMM handlers would wake the PHY. Post-EBS,
-/// we are on our own - must explicitly check and clear PDOWN.
+/// we are on our own - must explicitly:
+/// 1. Clear PDOWN to wake PHY
+/// 2. Wait for PHY to stabilize (100ms - PLL and analog circuitry)
+/// 3. Issue PHY reset (BMCR.RESET)
+/// 4. Wait for reset to complete
+/// 5. Restart auto-negotiation
 ///
 /// # Arguments
 /// - `mmio_base`: Device MMIO base address
@@ -284,29 +289,90 @@ pub fn generate_fallback_mac(seed: u64) -> MacAddress {
 /// # Safety
 /// Called during init, MMIO must be valid.
 unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
-    // Read PHY BMCR register (Basic Mode Control Register)
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 1: Wake PHY from power-down mode
+    // ═══════════════════════════════════════════════════════════════════
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
-        // Check if PHY is in power-down mode
         if bmcr & regs::BMCR_PDOWN != 0 {
             // Clear PDOWN bit to wake PHY
             let new_bmcr = bmcr & !regs::BMCR_PDOWN;
             let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
-
-            // Wait for PHY to wake (~1ms)
-            // Use simple spin since we're in init
-            let start = crate::asm::core::tsc::read_tsc();
-            let delay_ticks = tsc_freq / 1000; // 1ms
-            while crate::asm::core::tsc::read_tsc().wrapping_sub(start) < delay_ticks {
-                core::hint::spin_loop();
-            }
         }
     }
 
-    // Also check/clear ISOLATE bit which can prevent operation
+    // Also clear ISOLATE bit which can prevent operation
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
         if bmcr & regs::BMCR_ISOLATE != 0 {
             let new_bmcr = bmcr & !regs::BMCR_ISOLATE;
             let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 2: Wait for PHY to wake (100ms)
+    //
+    // Intel datasheet specifies PHY needs 50-100ms after PDOWN clear
+    // for PLL lock and analog circuitry stabilization. QEMU doesn't
+    // need this, but real hardware absolutely does.
+    // ═══════════════════════════════════════════════════════════════════
+    let start = crate::asm::core::tsc::read_tsc();
+    let delay_ticks = tsc_freq / 10; // 100ms (not 1ms!)
+    while crate::asm::core::tsc::read_tsc().wrapping_sub(start) < delay_ticks {
+        core::hint::spin_loop();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 3: Issue PHY reset (BMCR.RESET)
+    //
+    // Real hardware may be in an inconsistent state after BIOS handoff.
+    // PHY reset establishes a clean baseline for operation.
+    // ═══════════════════════════════════════════════════════════════════
+    let _ = phy_write(mmio_base, regs::PHY_BMCR, regs::BMCR_RESET, tsc_freq);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 4: Wait for PHY reset to complete (poll BMCR.RESET bit)
+    //
+    // The PHY clears the RESET bit when reset is complete.
+    // Timeout after 500ms (generous for real hardware).
+    // ═══════════════════════════════════════════════════════════════════
+    let reset_start = crate::asm::core::tsc::read_tsc();
+    let reset_timeout = tsc_freq / 2; // 500ms timeout
+    loop {
+        if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
+            if bmcr & regs::BMCR_RESET == 0 {
+                // Reset complete
+                break;
+            }
+        }
+        if crate::asm::core::tsc::read_tsc().wrapping_sub(reset_start) >= reset_timeout {
+            // Timeout - continue anyway, some PHYs may not clear the bit
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    // Small delay after reset before continuing (10ms)
+    let post_reset_start = crate::asm::core::tsc::read_tsc();
+    let post_reset_delay = tsc_freq / 100; // 10ms
+    while crate::asm::core::tsc::read_tsc().wrapping_sub(post_reset_start) < post_reset_delay {
+        core::hint::spin_loop();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 5: Restart auto-negotiation
+    //
+    // After reset, the PHY needs to re-negotiate link parameters with
+    // the link partner. Without this, link may never come up.
+    // ═══════════════════════════════════════════════════════════════════
+    if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
+        let new_bmcr = bmcr | regs::BMCR_ANENABLE | regs::BMCR_ANRESTART;
+        let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
+    }
+
+    // Small delay after starting autoneg (10ms)
+    let autoneg_start = crate::asm::core::tsc::read_tsc();
+    let autoneg_delay = tsc_freq / 100; // 10ms
+    while crate::asm::core::tsc::read_tsc().wrapping_sub(autoneg_start) < autoneg_delay {
+        core::hint::spin_loop();
     }
 }

@@ -12,16 +12,19 @@ use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 
 #[cfg(feature = "trace")]
+#[allow(dead_code)]
 extern "C" {
     fn morpheus_log(msg: *const u8, len: usize);
 }
 
 #[cfg(feature = "trace")]
+#[allow(dead_code)]
 fn trace(msg: &str) {
     unsafe { morpheus_log(msg.as_ptr(), msg.len()) };
 }
 
 #[cfg(not(feature = "trace"))]
+#[allow(dead_code)]
 fn trace(_msg: &str) {}
 
 /// Find a file or directory by path
@@ -71,10 +74,10 @@ pub fn find_file<B: BlockIo>(
 
         // Search for matching entry (case-insensitive)
         let mut found = None;
-        let mut entry_count = 0u32;
+        let mut _entry_count = 0u32;
         for result in iter {
             let entry = result?;
-            entry_count += 1;
+            _entry_count += 1;
 
             // Case-insensitive comparison
             if entry.name.eq_ignore_ascii_case(component) {

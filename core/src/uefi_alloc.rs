@@ -111,8 +111,6 @@ impl UefiBuffer {
 
 impl Drop for UefiBuffer {
     fn drop(&mut self) {
-        unsafe {
-            let _ = (self.free_pages)(self.addr, self.pages);
-        }
+        let _ = (self.free_pages)(self.addr, self.pages);
     }
 }
