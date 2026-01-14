@@ -393,6 +393,117 @@ extern "win64" {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// I218/PCH LPT ULP (Ultra Low Power) Functions
+// These are CRITICAL for real I218 hardware (ThinkPad T450s, etc.)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(target_arch = "x86_64")]
+extern "win64" {
+    /// Disable Ultra Low Power (ULP) mode on I218 PHY.
+    ///
+    /// This is CRITICAL for I218-LM/V (ThinkPad T450s, etc.) - the PHY may be
+    /// in ULP mode after BIOS handoff and won't respond to MDIC until ULP is
+    /// disabled.
+    ///
+    /// # Arguments
+    /// - `mmio_base`: Device MMIO base address
+    /// - `tsc_freq`: TSC frequency for timeout
+    ///
+    /// # Returns
+    /// - 0: Success
+    /// - 1: Timeout or error
+    ///
+    /// # Reference
+    /// Linux kernel e1000_disable_ulp_lpt_lp() in ich8lan.c
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_disable_ulp(mmio_base: u64, tsc_freq: u64) -> u32;
+
+    /// Power cycle PHY via LANPHYPC control bits.
+    ///
+    /// Used when PHY is completely unresponsive. Toggles the LANPHYPC signal
+    /// to force a power cycle of the PHY hardware.
+    ///
+    /// # Arguments
+    /// - `mmio_base`: Device MMIO base address
+    /// - `tsc_freq`: TSC frequency for timeout
+    ///
+    /// # Returns
+    /// - 0: Success
+    /// - 1: Timeout
+    ///
+    /// # Reference
+    /// Linux kernel e1000_toggle_lanphypc_pch_lpt() in ich8lan.c
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_toggle_lanphypc(mmio_base: u64, tsc_freq: u64) -> u32;
+
+    /// Check if PHY responds to MDIC reads.
+    ///
+    /// Reads PHY_ID1 to verify PHY is accessible. Returns success if the
+    /// read returns a valid (non-0xFFFF) value.
+    ///
+    /// # Arguments
+    /// - `mmio_base`: Device MMIO base address
+    /// - `tsc_freq`: TSC frequency for timeout
+    ///
+    /// # Returns
+    /// - 1: PHY is accessible
+    /// - 0: PHY is not accessible
+    ///
+    /// # Reference
+    /// Linux kernel e1000_phy_is_accessible_pchlan() in ich8lan.c
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_phy_is_accessible(mmio_base: u64, tsc_freq: u64) -> u32;
+
+    /// Acquire hardware semaphore (EXTCNF_CTRL.SWFLAG).
+    ///
+    /// Must be called before PHY or NVM access on ICH8/ICH9/ICH10/PCH.
+    /// This prevents concurrent access from multiple software components.
+    ///
+    /// # Arguments
+    /// - `mmio_base`: Device MMIO base address
+    /// - `tsc_freq`: TSC frequency for timeout
+    ///
+    /// # Returns
+    /// - 0: Semaphore acquired successfully
+    /// - 1: Timeout (semaphore not acquired)
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_acquire_swflag(mmio_base: u64, tsc_freq: u64) -> u32;
+
+    /// Release hardware semaphore (EXTCNF_CTRL.SWFLAG).
+    ///
+    /// Must be called after completing PHY or NVM access.
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_release_swflag(mmio_base: u64);
+
+    /// Force SMBus mode for PHY access.
+    ///
+    /// Some I218 variants require SMBus mode for PHY access. Used as
+    /// a fallback if MDIC reads fail.
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_force_smbus_mode(mmio_base: u64);
+
+    /// Clear SMBus mode for PHY access.
+    ///
+    /// Restores normal MDIO mode after SMBus mode was forced.
+    ///
+    /// # Safety
+    /// `mmio_base` must be valid.
+    pub fn asm_intel_clear_smbus_mode(mmio_base: u64);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Safe Wrappers
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -484,4 +595,85 @@ pub fn phy_write(mmio_base: u64, reg: u32, value: u16, tsc_freq: u64) -> Result<
     } else {
         Err(())
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// I218/PCH LPT ULP Safe Wrappers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Disable Ultra Low Power (ULP) mode on I218 PHY.
+///
+/// CRITICAL for I218-LM/V on ThinkPad T450s, etc.
+///
+/// # Returns
+/// - `Ok(())`: ULP disabled successfully
+/// - `Err(())`: Timeout or error
+#[inline]
+pub fn disable_ulp(mmio_base: u64, tsc_freq: u64) -> Result<(), ()> {
+    let result = unsafe { asm_intel_disable_ulp(mmio_base, tsc_freq) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Power cycle PHY via LANPHYPC control bits.
+///
+/// Used when PHY is completely unresponsive.
+///
+/// # Returns
+/// - `Ok(())`: PHY power cycled successfully
+/// - `Err(())`: Timeout
+#[inline]
+pub fn toggle_lanphypc(mmio_base: u64, tsc_freq: u64) -> Result<(), ()> {
+    let result = unsafe { asm_intel_toggle_lanphypc(mmio_base, tsc_freq) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Check if PHY responds to MDIC reads.
+///
+/// # Returns
+/// `true` if PHY is accessible, `false` otherwise.
+#[inline]
+pub fn phy_is_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
+    let result = unsafe { asm_intel_phy_is_accessible(mmio_base, tsc_freq) };
+    result != 0
+}
+
+/// Acquire hardware semaphore for PHY/NVM access.
+///
+/// # Returns
+/// - `Ok(())`: Semaphore acquired
+/// - `Err(())`: Timeout
+#[inline]
+pub fn acquire_swflag(mmio_base: u64, tsc_freq: u64) -> Result<(), ()> {
+    let result = unsafe { asm_intel_acquire_swflag(mmio_base, tsc_freq) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+/// Release hardware semaphore.
+#[inline]
+pub fn release_swflag(mmio_base: u64) {
+    unsafe { asm_intel_release_swflag(mmio_base) };
+}
+
+/// Force SMBus mode for PHY access.
+#[inline]
+pub fn force_smbus_mode(mmio_base: u64) {
+    unsafe { asm_intel_force_smbus_mode(mmio_base) };
+}
+
+/// Clear SMBus mode for PHY access.
+#[inline]
+pub fn clear_smbus_mode(mmio_base: u64) {
+    unsafe { asm_intel_clear_smbus_mode(mmio_base) };
 }

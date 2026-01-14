@@ -406,3 +406,145 @@ pub const RXD_ERR_TCPE: u8 = 1 << 7;
 
 /// All fatal RX errors.
 pub const RXD_ERR_FATAL: u8 = RXD_ERR_CE | RXD_ERR_SE | RXD_ERR_SEQ | RXD_ERR_RXE;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// I218/PCH LPT SPECIFIC REGISTERS
+// These are critical for real hardware (ThinkPad T450s, etc.)
+// Reference: Linux kernel drivers/net/ethernet/intel/e1000e/ich8lan.c
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Firmware Status Monitor (FWSM) register.
+pub const FWSM: u32 = 0x5B54;
+/// Host-to-ME register for ULP control.
+pub const H2ME: u32 = 0x5B50;
+/// Extended Configuration Control register (hardware semaphore).
+pub const EXTCNF_CTRL: u32 = 0x0F00;
+/// PHY Configuration Count (for LANPHYPC timing).
+pub const FEXTNVM3: u32 = 0x003C;
+/// Flash Access register.
+pub const FEXTNVM4: u32 = 0x0024;
+/// Extended Function Control Register 6.
+pub const FEXTNVM6: u32 = 0x0010;
+/// PHY Control register (PCH specific).
+pub const PHPM: u32 = 0x0E14;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CTRL REGISTER BITS - I218 SPECIFIC
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// LANPHYPC Override - allows software control of PHY power.
+pub const CTRL_LANPHYPC_OVERRIDE: u32 = 1 << 16;
+/// LANPHYPC Value - PHY power control value (1=power on).
+pub const CTRL_LANPHYPC_VALUE: u32 = 1 << 17;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CTRL_EXT REGISTER BITS - I218 SPECIFIC
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Force SMBus mode for PHY access.
+pub const CTRL_EXT_FORCE_SMBUS: u32 = 1 << 11;
+/// Link Power Cycle Done - set by HW after LANPHYPC toggle.
+pub const CTRL_EXT_LPCD: u32 = 1 << 14;
+/// PHY Power Down Enable.
+pub const CTRL_EXT_PHYPDEN: u32 = 1 << 20;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FWSM REGISTER BITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Firmware Valid - indicates ME firmware is present.
+pub const FWSM_FW_VALID: u32 = 1 << 15;
+/// ULP Config Done - firmware completed ULP configuration.
+pub const FWSM_ULP_CFG_DONE: u32 = 1 << 18;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// H2ME REGISTER BITS (Host-to-ME)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// ULP Disable Request to firmware.
+pub const H2ME_ULP_DISABLE: u32 = 1 << 1;
+/// Start VME handshake.
+pub const H2ME_START_VME: u32 = 1 << 0;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTCNF_CTRL REGISTER BITS (Hardware Semaphore)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Software Flag - acquire before PHY/NVM access.
+pub const EXTCNF_CTRL_SWFLAG: u32 = 1 << 5;
+/// Gate PHY Configuration - prevents PHY config during access.
+pub const EXTCNF_CTRL_GATE_PHY_CFG: u32 = 1 << 7;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEXTNVM3 REGISTER BITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// PHY Config Counter mask (bits 12-13).
+pub const FEXTNVM3_PHY_CFG_COUNTER_MASK: u32 = 0x3 << 12;
+/// PHY Config Counter 50ms value.
+pub const FEXTNVM3_PHY_CFG_COUNTER_50MS: u32 = 0x1 << 12;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEXTNVM4 REGISTER BITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Beacon Duration mask.
+pub const FEXTNVM4_BEACON_DURATION_MASK: u32 = 0x7 << 3;
+/// Beacon Duration 16us.
+pub const FEXTNVM4_BEACON_DURATION_16US: u32 = 0x3 << 3;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEXTNVM6 REGISTER BITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Request PLL Clock while in K1 state.
+pub const FEXTNVM6_REQ_PLL_CLK: u32 = 1 << 6;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHPM REGISTER BITS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// SPD Enable (Speed).
+pub const PHPM_SPD_EN: u32 = 1 << 4;
+/// D0A Low Power State Enable.
+pub const PHPM_D0A_LPLU: u32 = 1 << 1;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHY REGISTERS - I218 SPECIFIC (HV/82577/82579 PHY)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// PHY ID Register 1 (expected: 0x0154 for I218).
+pub const PHY_ID1: u32 = 0x02;
+/// PHY ID Register 2 (expected: 0x15xx for I218).
+pub const PHY_ID2: u32 = 0x03;
+/// I217/I218 PHY Vendor ID high nibble.
+pub const I217_PHY_ID_MASK: u16 = 0x0150;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// I218 PHY PAGE/REGISTER ACCESS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// OEM Bits register (page 0).
+pub const HV_OEM_BITS: u32 = 0x1F;
+/// OEM Bits: Restart Autoneg.
+pub const HV_OEM_BITS_RESTART_AN: u16 = 1 << 0;
+/// OEM Bits: Low Power Link Up.
+pub const HV_OEM_BITS_LPLU: u16 = 1 << 2;
+
+/// KMRN Control register (for cable length).
+pub const HV_KMRN_MODE_CTRL: u32 = 0x1EA;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIMEOUTS (in microseconds)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// MDIC operation timeout (10ms, was 1ms - too short).
+pub const MDIC_TIMEOUT_US: u64 = 10_000;
+/// Hardware semaphore acquire timeout (1 second).
+pub const SWFLAG_TIMEOUT_US: u64 = 1_000_000;
+/// ULP disable timeout (2.5 seconds per Linux driver).
+pub const ULP_DISABLE_TIMEOUT_US: u64 = 2_500_000;
+/// LANPHYPC toggle timeout (50ms).
+pub const LANPHYPC_TIMEOUT_US: u64 = 50_000;
+/// PHY stabilization after power-on (30ms).
+pub const PHY_POWER_ON_DELAY_US: u64 = 30_000;

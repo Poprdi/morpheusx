@@ -128,10 +128,11 @@ asm_intel_phy_read:
     call    asm_tsc_read
     mov     rbx, rax            ; rbx = start_tsc
 
-    ; Timeout = tsc_freq / 1000 = 1ms
+    ; Timeout = tsc_freq / 100 = 10ms (was 1ms - too short for real I218)
+    ; Real hardware needs more time, especially after power-on or ULP exit.
     mov     rax, r14
     xor     rdx, rdx
-    mov     rcx, 1000
+    mov     rcx, 100
     div     rcx
     mov     r14, rax            ; r14 = timeout_ticks
 
@@ -250,14 +251,15 @@ asm_intel_phy_write:
     call    asm_tsc_read
     mov     rbx, rax            ; rbx = start_tsc
 
-    ; Timeout = tsc_freq / 1000 = 1ms
+    ; Timeout = tsc_freq / 100 = 10ms (was 1ms - too short for real I218)
+    ; Real hardware needs more time, especially after power-on or ULP exit.
     mov     rax, r15
     xor     rdx, rdx
-    mov     rcx, 1000
+    mov     rcx, 100
     div     rcx
     mov     r15, rax            ; r15 = timeout_ticks
 
-.wait_ready:
+.wait_ready_w:
     ; Small delay between polls (helps real hardware)
     pause
     pause
@@ -271,7 +273,7 @@ asm_intel_phy_write:
 
     ; Check if ready
     test    eax, MDIC_READY
-    jnz     .check_error
+    jnz     .check_error_w
 
     ; Check timeout
     push    rax
@@ -279,24 +281,24 @@ asm_intel_phy_write:
     sub     rax, rbx
     cmp     rax, r15
     pop     rax
-    jb      .wait_ready
+    jb      .wait_ready_w
 
     ; Timeout
     mov     eax, 1
-    jmp     .exit
+    jmp     .exit_w
 
-.check_error:
+.check_error_w:
     ; Check for error
     test    eax, MDIC_ERROR
-    jnz     .error
+    jnz     .error_w
 
     xor     eax, eax            ; Success
-    jmp     .exit
+    jmp     .exit_w
 
-.error:
+.error_w:
     mov     eax, 1
 
-.exit:
+.exit_w:
     add     rsp, 48
     pop     rsi
     pop     r15

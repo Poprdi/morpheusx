@@ -1443,15 +1443,18 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_println("");
 
     serial_println("[INIT] Initializing unified network driver...");
+    serial_println("  [DEBUG] About to call from_handoff...");
 
     let mut driver = match UnifiedNetworkDriver::from_handoff(handoff) {
         Ok(d) => {
+            serial_println("  [DEBUG] from_handoff returned Ok");
             serial_print("[OK] ");
             serial_print(d.driver_name());
             serial_println(" driver initialized");
             d
         }
         Err(e) => {
+            serial_println("  [DEBUG] from_handoff returned Err");
             serial_print("[FAIL] Driver init error: ");
             match e {
                 UnifiedDriverError::NoNicDetected => serial_println("no NIC detected"),
@@ -1484,6 +1487,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                             E1000eInitError::InvalidMac => serial_println("invalid MAC"),
                             E1000eInitError::MmioError => serial_println("MMIO error"),
                             E1000eInitError::LinkTimeout => serial_println("link timeout"),
+                            E1000eInitError::UlpDisableFailed => serial_println("ULP disable failed (I218)"),
+                            E1000eInitError::PhyNotAccessible => serial_println("PHY not accessible after recovery"),
+                            E1000eInitError::SemaphoreTimeout => serial_println("hardware semaphore timeout"),
                         },
                         E1000eError::NotReady => serial_println("device not ready"),
                         E1000eError::LinkDown => serial_println("link down"),
