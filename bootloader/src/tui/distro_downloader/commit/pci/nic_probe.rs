@@ -90,7 +90,11 @@ pub fn probe_nic_with_debug(screen: &mut Screen, log_y: &mut usize) -> NicProbeR
                         *log_y,
                         &alloc::format!(
                             "  PCI {:02x}:{:02x}.{} = {:04x}:{:04x}",
-                            bus, device, function, vendor, dev_id
+                            bus,
+                            device,
+                            function,
+                            vendor,
+                            dev_id
                         ),
                         EFI_DARKGRAY,
                         EFI_BLACK,
