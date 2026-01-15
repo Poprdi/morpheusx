@@ -32,7 +32,7 @@
 
 use crate::asm::drivers::intel::{
     asm_intel_clear_mta, asm_intel_disable_interrupts, asm_intel_enable_rx, asm_intel_enable_tx,
-    asm_intel_read_mac, asm_intel_reset, asm_intel_set_link_up, asm_intel_setup_rx_ring,
+    asm_intel_read_mac, asm_intel_write_mac, asm_intel_reset, asm_intel_set_link_up, asm_intel_setup_rx_ring,
     asm_intel_setup_tx_ring, phy_read, phy_write,
     // I218/PCH LPT specific functions
     disable_ulp, toggle_lanphypc, phy_is_accessible, acquire_swflag, release_swflag,
@@ -240,12 +240,28 @@ pub unsafe fn init_e1000e(
         return Err(E1000eInitError::InvalidMac);
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 8b: WRITE MAC TO RAL/RAH (CRITICAL FOR I218!)
+    //
+    // When MAC is read from EEPROM, RAL/RAH may not have Address Valid bit.
+    // We MUST write the MAC to RAL/RAH for hardware receive filtering!
+    // The hardware only accepts packets addressed to MACs in RAL/RAH.
+    //
+    // Reference: Linux kernel e1000e_rar_set() in netdev.c
+    // ═══════════════════════════════════════════════════════════════════
+    serial_println("  [e1000e] Step 8b: Write MAC to RAL/RAH");
+    asm_intel_write_mac(mmio_base, &mac);
+
     serial_println("  [e1000e] Step 9: Clear multicast table");
     
     // ═══════════════════════════════════════════════════════════════════
     // STEP 9: CLEAR MULTICAST TABLE
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_clear_mta(mmio_base);
+
+    // Fake debug MAC (display-only) to help diagnose display vs read issues.
+    // Clearly marked as FAKE — do NOT use this as the real MAC.
+    serial_println("  [FAKE-MAC] 52:54:00:12:34:56 (fake display)");
 
     serial_println("  [e1000e] Step 10: Setup RX ring");
     

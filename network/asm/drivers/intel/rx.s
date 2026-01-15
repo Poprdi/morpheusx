@@ -85,6 +85,16 @@ asm_intel_rx_init_desc:
 ; Output: RAX = 1 if packet received (DD set), 0 if not
 ;
 ; Result struct is only valid if RAX=1.
+;
+; CRITICAL: Memory barrier placement follows Linux kernel e1000e pattern:
+;   1. Read status byte (volatile read)
+;   2. Check DD bit
+;   3. If DD set: LFENCE (dma_rmb equivalent)
+;   4. Then read length and other descriptor fields
+;   5. Caller must LFENCE again before reading buffer data
+;
+; Reference: Linux kernel drivers/net/ethernet/intel/e1000e/netdev.c
+;            e1000_clean_rx_irq() - "dma_rmb()" after DD check
 ; ═══════════════════════════════════════════════════════════════════════════
 global asm_intel_rx_poll
 asm_intel_rx_poll:
@@ -96,18 +106,23 @@ asm_intel_rx_poll:
     mov     r12, rcx            ; r12 = descriptor
     mov     r13, rdx            ; r13 = result
 
-    ; Load fence before reading descriptor
-    call    asm_bar_lfence
-
-    ; Read status/length dwords
-    mov     eax, [r12+8]        ; length (16-bit) + checksum (16-bit)
+    ; Step 1: Read status byte FIRST (at offset 12, low byte)
+    ; This is a volatile read - compiler/CPU should not reorder
     mov     ebx, [r12+12]       ; status (8-bit) + errors (8-bit) + special (16-bit)
 
-    ; Check DD bit
+    ; Step 2: Check DD bit - if not set, return immediately
     test    bl, RX_STA_DD
     jz      .no_packet
 
-    ; Packet received - fill result struct
+    ; Step 3: DD is set - NOW do the memory barrier (dma_rmb equivalent)
+    ; This ensures all descriptor/buffer writes by the device are visible
+    ; BEFORE we read the length or copy buffer data
+    call    asm_bar_lfence
+
+    ; Step 4: Now safe to read length (device has finished writing)
+    mov     eax, [r12+8]        ; length (16-bit) + checksum (16-bit)
+
+    ; Fill result struct with validated data
     mov     [r13], ax           ; length (16-bit)
     mov     [r13+2], bl         ; status (8-bit)
     ; Extract errors byte (bits 8-15 of ebx) without using bh

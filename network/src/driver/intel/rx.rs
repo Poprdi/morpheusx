@@ -3,6 +3,7 @@
 //! Rust orchestration layer for receive operations.
 //! All hardware access is via ASM bindings.
 
+use crate::asm::core::barriers::lfence;
 use crate::asm::drivers::intel::{
     asm_intel_rx_clear_desc, asm_intel_rx_init_desc, asm_intel_rx_poll, asm_intel_rx_update_tail,
     RxPollResult,
@@ -168,6 +169,13 @@ impl RxRing {
                 provided: out_buffer.len(),
             });
         }
+
+        // CRITICAL: Memory barrier before reading buffer data
+        // The device has finished writing to the descriptor (DD bit set),
+        // but we need LFENCE to ensure buffer data writes are also visible.
+        // This matches Linux kernel's dma_rmb() placement in e1000_clean_rx_irq.
+        // Without this, we may read stale/partial buffer data on real hardware.
+        lfence();
 
         // Copy packet data from buffer
         let buffer_ptr = self.buffer_cpu_ptr(desc_idx);
