@@ -116,20 +116,18 @@ section .data
 
 section .text
 
-; External: Core primitives
-extern asm_tsc_read
-extern asm_bar_sfence
-extern asm_bar_lfence
-extern asm_bar_mfence
+; External: Core primitives (asm_mmio_read32, asm_mmio_write32, etc. defined in core/mmio.s)
 extern asm_mmio_read32
 extern asm_mmio_write32
+extern asm_bar_mfence
+extern asm_tsc_read
 
 ; ═══════════════════════════════════════════════════════════════════════════
 ; asm_intel_reset
-; Reset the device and wait for completion.
+; Perform a software reset on the device and wait for completion.
 ;
 ; Input:  RCX = mmio_base
-;         RDX = tsc_freq (ticks per second)
+;         RDX = tsc_freq
 ; Output: RAX = 0 on success, 1 on timeout
 ; ═══════════════════════════════════════════════════════════════════════════
 global asm_intel_reset
@@ -138,28 +136,22 @@ asm_intel_reset:
     push    r12
     push    r13
     push    r14
-    sub     rsp, 40             ; Shadow space + alignment
+    sub     rsp, 40
 
     mov     r12, rcx            ; r12 = mmio_base
     mov     r13, rdx            ; r13 = tsc_freq
-
-    ; Disable interrupts first
-    mov     rcx, r12
-    add     rcx, IMC
-    mov     edx, INT_ALL
-    call    asm_mmio_write32
 
     ; Read current CTRL
     mov     rcx, r12
     add     rcx, CTRL
     call    asm_mmio_read32
-    mov     r14d, eax           ; r14 = current CTRL
 
-    ; Set RST bit
-    or      r14d, CTRL_RST
+    ; Set RST bit (and clear LRST just in case)
+    or      eax, CTRL_RST
+    and     eax, ~CTRL_LRST
+    mov     edx, eax
     mov     rcx, r12
     add     rcx, CTRL
-    mov     edx, r14d
     call    asm_mmio_write32
 
     ; Memory barrier after write
@@ -316,7 +308,7 @@ asm_intel_read_mac:
     ; Read EEPROM word 0 (MAC bytes 0-1)
     mov     rcx, r12
     xor     edx, edx            ; Address 0
-    call    .read_eeprom_word
+    call    asm_intel_read_eeprom_word
     cmp     eax, 0xFFFFFFFF
     je      .invalid            ; EEPROM read failed
     mov     [r13], al           ; Byte 0
@@ -326,7 +318,7 @@ asm_intel_read_mac:
     ; Read EEPROM word 1 (MAC bytes 2-3)
     mov     rcx, r12
     mov     edx, 1              ; Address 1
-    call    .read_eeprom_word
+    call    asm_intel_read_eeprom_word
     cmp     eax, 0xFFFFFFFF
     je      .invalid
     mov     [r13+2], al         ; Byte 2
@@ -336,7 +328,7 @@ asm_intel_read_mac:
     ; Read EEPROM word 2 (MAC bytes 4-5)
     mov     rcx, r12
     mov     edx, 2              ; Address 2
-    call    .read_eeprom_word
+    call    asm_intel_read_eeprom_word
     cmp     eax, 0xFFFFFFFF
     je      .invalid
     mov     [r13+4], al         ; Byte 4
@@ -352,10 +344,25 @@ asm_intel_read_mac:
     xor     eax, eax            ; Success
     jmp     .exit
 
-; Helper: Read one EEPROM word
+.invalid:
+    mov     eax, 1
+
+.exit:
+    add     rsp, 32
+    pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+; ═══════════════════════════════════════════════════════════════════════════
+; asm_intel_read_eeprom_word
+; Read one word from EEPROM via EERD register.
+;
 ; Input: RCX = mmio_base, EDX = address (0-2 for MAC)
-; Output: EAX = word value, or 0xFFFFFFFF on error
-.read_eeprom_word:
+; Output: EAX = word value, or 0xFFFFFFFF on error/timeout
+; ═══════════════════════════════════════════════════════════════════════════
+global asm_intel_read_eeprom_word
+asm_intel_read_eeprom_word:
     push    rbx
     push    r14
     push    r15
@@ -364,7 +371,7 @@ asm_intel_read_mac:
     mov     r14, rcx            ; mmio_base
     mov     r15d, edx           ; address
     
-    ; Write EERD: address in bits [15:8], start bit [0]
+    ; Write EERD: address in bits [15:2], start bit [0]
     ; For 82579/I218: address is bits [15:2], start is bit 0
     shl     r15d, 2             ; address << 2
     or      r15d, 1             ; Set START bit
@@ -403,16 +410,6 @@ asm_intel_read_mac:
     add     rsp, 32
     pop     r15
     pop     r14
-    pop     rbx
-    ret
-
-.invalid:
-    mov     eax, 1
-
-.exit:
-    add     rsp, 32
-    pop     r13
-    pop     r12
     pop     rbx
     ret
 

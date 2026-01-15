@@ -130,6 +130,22 @@ pub fn serial_println(s: &str) {
     serial_print("\r\n");
 }
 
+/// Print a single byte as 2 hex digits (mirrored to display).
+pub fn serial_print_hex_byte(value: u8) {
+    let hi = value >> 4;
+    let lo = value & 0xF;
+    let hi_char = if hi < 10 { b'0' + hi } else { b'a' + hi - 10 };
+    let lo_char = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
+    let buf = [hi_char, lo_char];
+    unsafe {
+        serial_write_byte(hi_char);
+        serial_write_byte(lo_char);
+    }
+    if let Ok(s) = core::str::from_utf8(&buf) {
+        crate::display::display_write(s);
+    }
+}
+
 /// Print hex number.
 pub fn serial_print_hex(value: u64) {
     serial_print("0x");
@@ -1160,6 +1176,17 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
                     self.rx_len = len;
                     self.rx_count += 1;
                     inc_rx_count(); // Global counter
+                    
+                    // Minimal debug: show length and ethertype for diagnosis
+                    if len >= 14 {
+                        let ethertype = ((self.rx_buffer[12] as u16) << 8) | (self.rx_buffer[13] as u16);
+                        serial_print("[RX:");
+                        serial_print_decimal(len as u32);
+                        serial_print(" et=0x");
+                        serial_print_hex_byte((ethertype >> 8) as u8);
+                        serial_print_hex_byte((ethertype & 0xFF) as u8);
+                        serial_print("] ");
+                    }
                 }
                 _ => {}
             }
@@ -1199,6 +1226,7 @@ impl smoltcp::phy::RxToken for RxToken {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
+        // Debug disabled for performance
         f(&mut self.buffer[..self.len])
     }
 }
@@ -1545,19 +1573,14 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         }
     };
 
-    // Print real MAC address from driver
+    // Print real MAC address from driver (using serial_print_hex_byte for framebuffer)
     serial_print("[INIT] MAC address: ");
     let mac = driver.mac_address();
     for (i, byte) in mac.iter().enumerate() {
         if i > 0 {
             serial_print(":");
         }
-        let hi = byte >> 4;
-        let lo = byte & 0xF;
-        unsafe {
-            serial_write_byte(if hi < 10 { b'0' + hi } else { b'a' + hi - 10 });
-            serial_write_byte(if lo < 10 { b'0' + lo } else { b'a' + lo - 10 });
-        }
+        serial_print_hex_byte(*byte);
     }
     serial_println("");
 
@@ -1834,7 +1857,12 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     // Create the device adapter wrapping our VirtIO driver
     let mut adapter = SmoltcpAdapter::new(&mut driver);
 
-    // Create smoltcp interface
+    // CRITICAL: Capture the base TSC at interface creation time
+    // All smoltcp timestamps must be relative to this base, NOT absolute TSC
+    // Otherwise smoltcp thinks huge amounts of time have passed since boot
+    let smoltcp_base_tsc = get_tsc();
+
+    // Create smoltcp interface with timestamp 0 (matching our base)
     let mut iface = Interface::new(iface_config, &mut adapter, Instant::from_millis(0));
 
     // Set up initial IP config (DHCP will configure this later)
@@ -1900,8 +1928,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
             last_status_tsc = now_tsc;
         }
 
-        // Convert TSC to smoltcp Instant
-        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        // Convert TSC to smoltcp Instant - RELATIVE to interface creation time!
+        let relative_tsc = now_tsc.wrapping_sub(smoltcp_base_tsc);
+        let timestamp = tsc_to_instant(relative_tsc, handoff.tsc_freq);
 
         // Phase 1: Refill RX queue
         adapter.refill_rx();
@@ -1910,9 +1939,13 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         enter_poll(); // Reentrancy guard
         let poll_result = iface.poll(timestamp, &mut adapter, &mut sockets);
         exit_poll(); // Reentrancy guard
+        
+        // Debug disabled for performance
+        let _ = poll_result;
 
         // Check for DHCP events
         let dhcp_socket = sockets.get_mut::<Dhcpv4Socket>(dhcp_handle);
+        
         if let Some(event) = dhcp_socket.poll() {
             match event {
                 Dhcpv4Event::Configured(dhcp_config) => {
@@ -1955,7 +1988,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     break;
                 }
                 Dhcpv4Event::Deconfigured => {
-                    serial_println("[NET] DHCP deconfigured");
+                    serial_println("[NET] DHCP deconfigured - retrying...");
+                    // Don't treat deconfigured as fatal - DHCP will retry
                 }
             }
         }
@@ -2020,6 +2054,10 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_print("[HTTP] Port: ");
     serial_print_decimal(server_port as u32);
     serial_println("");
+
+    // Fake debug MAC (display-only) to test whether display shows MAC.
+    // Clearly marked as FAKE — this should NOT be used as the real MAC.
+    serial_println("[FAKE-MAC] 52:54:00:12:34:56 (fake display)");
     serial_print("[HTTP] Path: ");
     serial_println(path);
 
@@ -2074,7 +2112,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     return RunResult::DownloadFailed;
                 }
 
-                let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+                let relative_tsc = now_tsc.wrapping_sub(smoltcp_base_tsc);
+                let timestamp = tsc_to_instant(relative_tsc, handoff.tsc_freq);
                 adapter.refill_rx();
                 iface.poll(timestamp, &mut adapter, &mut sockets);
                 adapter.collect_tx();
@@ -2166,7 +2205,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
             return RunResult::DownloadFailed;
         }
 
-        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        let relative_tsc = now_tsc.wrapping_sub(smoltcp_base_tsc);
+        let timestamp = tsc_to_instant(relative_tsc, handoff.tsc_freq);
         adapter.refill_rx();
         iface.poll(timestamp, &mut adapter, &mut sockets);
         adapter.collect_tx();
@@ -2223,7 +2263,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
             return RunResult::DownloadFailed;
         }
 
-        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        let relative_tsc = now_tsc.wrapping_sub(smoltcp_base_tsc);
+        let timestamp = tsc_to_instant(relative_tsc, handoff.tsc_freq);
         adapter.refill_rx();
         iface.poll(timestamp, &mut adapter, &mut sockets);
         adapter.collect_tx();
@@ -2283,7 +2324,8 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
         // smoltcp is entirely poll-based: it won't process packets, send ACKs,
         // or advance TCP state without poll(). We must poll frequently to keep
         // ACKs flowing and prevent sender window stall.
-        let timestamp = tsc_to_instant(now_tsc, handoff.tsc_freq);
+        let relative_tsc = now_tsc.wrapping_sub(smoltcp_base_tsc);
+        let timestamp = tsc_to_instant(relative_tsc, handoff.tsc_freq);
 
         // Phase 1: Refill RX buffers so device can receive more packets
         adapter.refill_rx();
