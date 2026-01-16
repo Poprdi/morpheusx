@@ -3,22 +3,24 @@
 //! Provides a single driver type that abstracts over all supported NIC drivers:
 //! - VirtIO-net (QEMU, KVM)
 //! - Intel e1000e (ThinkPad T450s, X240, T440s, etc.)
-//! - Future: Realtek, Broadcom
 //!
-//! The unified driver is created via dynamic probing at boot time, allowing
-//! the network stack to work identically regardless of underlying hardware.
+//! # Usage
 //!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §8
+//! Drivers are created via `boot::probe::probe_and_create_driver()` or directly
+//! via their respective constructors. The unified driver provides trait
+//! dispatch for the `NetworkDriver` interface.
+//!
+//! ```ignore
+//! // Via probe (scans PCI bus)
+//! let driver = probe_and_create_driver(&dma, tsc_freq)?;
+//!
+//! // Or directly
+//! let driver = UnifiedNetworkDriver::Intel(E1000eDriver::new(mmio_base, config)?);
+//! ```
 
-use crate::boot::handoff::{BootHandoff, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO};
-
-// Serial output functions
-use crate::mainloop::serial::{serial_print, serial_println};
-
-use crate::driver::intel::{E1000eConfig, E1000eDriver, E1000eError};
+use crate::driver::intel::{E1000eDriver, E1000eError};
 use crate::driver::traits::{NetworkDriver, RxError, TxError};
-use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver, VirtioTransport};
+use crate::driver::virtio::{VirtioInitError, VirtioNetDriver};
 use crate::types::MacAddress;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -65,91 +67,9 @@ pub enum UnifiedNetworkDriver {
     VirtIO(VirtioNetDriver),
     /// Intel e1000e driver (real hardware).
     Intel(E1000eDriver),
-    // Future variants:
-    // Realtek(RealtekDriver),
-    // Broadcom(BroadcomDriver),
 }
 
 impl UnifiedNetworkDriver {
-    /// Create a unified driver from boot handoff.
-    ///
-    /// Automatically selects the correct driver based on `nic_type` in handoff.
-    ///
-    /// # Safety
-    /// - Handoff must be valid and properly initialized
-    /// - DMA regions must be properly allocated
-    pub unsafe fn from_handoff(handoff: &BootHandoff) -> Result<Self, UnifiedDriverError> {
-        // FIRST debug output - immediately at function entry
-        serial_println("  [unified] from_handoff() entered");
-        
-        use crate::boot::handoff::{TRANSPORT_MMIO, TRANSPORT_PCI_MODERN};
-        use crate::driver::virtio::PciModernConfig;
-
-        serial_println("  [unified] About to match nic_type");
-
-        match handoff.nic_type {
-            NIC_TYPE_VIRTIO => {
-                // Build VirtIO transport based on transport type
-                let transport = match handoff.nic_transport_type {
-                    TRANSPORT_PCI_MODERN => {
-                        // PCI Modern transport uses PciModernConfig
-                        VirtioTransport::pci_modern(PciModernConfig {
-                            common_cfg: handoff.nic_common_cfg,
-                            notify_cfg: handoff.nic_notify_cfg,
-                            notify_off_multiplier: handoff.nic_notify_off_multiplier,
-                            isr_cfg: handoff.nic_isr_cfg,
-                            device_cfg: handoff.nic_device_cfg,
-                            pci_cfg: 0, // Not used for network
-                        })
-                    }
-                    TRANSPORT_MMIO | _ => {
-                        // Legacy MMIO transport
-                        VirtioTransport::mmio(handoff.nic_mmio_base)
-                    }
-                };
-
-                // Build VirtIO config
-                let virtio_config = VirtioConfig {
-                    queue_size: VirtioConfig::DEFAULT_QUEUE_SIZE,
-                    buffer_size: VirtioConfig::DEFAULT_BUFFER_SIZE,
-                    dma_cpu_base: handoff.dma_cpu_ptr as *mut u8,
-                    dma_bus_base: handoff.dma_cpu_ptr, // Identity-mapped post-EBS
-                    dma_size: handoff.dma_size as usize,
-                };
-
-                let driver = VirtioNetDriver::new_with_transport(
-                    transport,
-                    virtio_config,
-                    handoff.tsc_freq,
-                )?;
-                Ok(UnifiedNetworkDriver::VirtIO(driver))
-            }
-
-            NIC_TYPE_INTEL => {
-                // Debug: Entering Intel driver creation
-                serial_println("  [unified] Intel branch entered");
-                
-                // Build e1000e config
-                let config = E1000eConfig::new(
-                    handoff.dma_cpu_ptr as *mut u8,
-                    handoff.dma_bus_addr,
-                    handoff.tsc_freq,
-                );
-
-                serial_println("  [unified] Config created, calling E1000eDriver::new()");
-                
-                let driver = E1000eDriver::new(handoff.nic_mmio_base, config)?;
-                
-                serial_println("  [unified] E1000eDriver::new() returned successfully");
-                
-                Ok(UnifiedNetworkDriver::Intel(driver))
-            }
-
-            0 => Err(UnifiedDriverError::NoNicDetected),
-            other => Err(UnifiedDriverError::UnsupportedNicType(other)),
-        }
-    }
-
     /// Get the driver type name for logging.
     pub fn driver_name(&self) -> &'static str {
         match self {

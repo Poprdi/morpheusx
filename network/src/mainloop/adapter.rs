@@ -65,6 +65,11 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
         self.rx_count
     }
 
+    /// Check if PHY link is up.
+    pub fn driver_link_up(&self) -> bool {
+        self.driver.link_up()
+    }
+
     /// Increment TX counter (called from TxToken).
     fn inc_tx(&mut self) {
         self.tx_count += 1;

@@ -1,55 +1,52 @@
 //! MorpheusX Network Stack
 //!
-//! ASM-first bare-metal HTTP client for bootloader environments.
-//! Designed for post-ExitBootServices execution with no firmware dependencies.
+//! Self-contained bare-metal HTTP client for post-ExitBootServices execution.
 //!
-//! # Architecture (ASM-First)
+//! # Entry Point
 //!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                    HTTP Client                              │
-//! │            NativeHttpClient (bare metal TCP/IP)             │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │              NetInterface (smoltcp TCP/IP stack)            │
-//! │  DHCP | TCP sockets | IP routing | ARP                      │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │              NetworkDevice trait                            │
-//! │  Abstraction over hardware: transmit, receive, mac_address │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │              VirtioNetDriver (ASM-backed)                   │
-//! │  Uses hand-written assembly for all hardware access         │
-//! │  - MMIO with explicit barriers                              │
-//! │  - Virtqueue descriptor ring management                     │
-//! │  - Fire-and-forget TX, poll-based RX                        │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │              ASM Layer (network/asm/)                       │
-//! │  Core: TSC, barriers, MMIO, PIO, cache                      │
-//! │  VirtIO: init, queue, TX, RX, notify                        │
-//! └─────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! # Usage (Post-ExitBootServices)
+//! **Primary API**: `mainloop::download_with_config()`
 //!
 //! ```ignore
-//! use morpheus_network::{VirtioNetDriver, VirtioConfig, NetworkDriver};
-//! use morpheus_network::boot::BootHandoff;
-//! use morpheus_network::mainloop::bare_metal_main;
+//! use morpheus_network::mainloop::{download_with_config, DownloadConfig, DownloadResult};
+//! use morpheus_network::driver::NetworkDriver;
 //!
-//! // After ExitBootServices, with BootHandoff from pre-EBS setup:
-//! let result = unsafe { bare_metal_main(handoff, config) };
+//! // Driver comes pre-initialized with brutal reset already done
+//! let config = DownloadConfig::full(url, sector, 0, esp_lba, uuid, iso_name);
+//! let result = download_with_config(&mut driver, config, Some(blk_dev), tsc_freq);
 //! ```
+//!
+//! # Preconditions
+//!
+//! Before calling any network functions:
+//! 1. **ExitBootServices completed** - No UEFI runtime available
+//! 2. **hwinit has normalized hardware** - Bus mastering, DMA policy, cache coherency
+//! 3. **Driver instantiated** - Via `boot::probe` or directly
+//!
+//! # State Machine Flow
+//!
+//! ```text
+//! Init → GptPrep → LinkWait → DHCP → DNS → Connect → HTTP → Manifest → Done
+//! ```
+//!
+//! # Module Organization
+//!
+//! - `mainloop` - State machine orchestration and entry point
+//! - `driver` - Network driver trait and implementations (VirtIO, Intel e1000e)
+//! - `boot` - Device probing and driver creation helpers
+//! - `asm` - Assembly bindings (MMIO, PIO, TSC, barriers)
+//! - `dma` - DMA buffer management
+//! - `time` - TSC-based timing utilities
+//!
+//! # Reset Contract
+//!
+//! All drivers perform **brutal reset** on init (see `driver/RESET_CONTRACT.md`):
+//! - Full device reset (FAIL on timeout)
+//! - All registers cleared to defaults
+//! - Loopback explicitly disabled
+//! - Interrupts masked
+//! - RX/TX queues rebuilt from scratch
+//!
+//! No assumptions about UEFI/firmware state.
 
 #![no_std]
 #![allow(dead_code)]

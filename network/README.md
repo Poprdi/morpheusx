@@ -1,101 +1,117 @@
 # MorpheusX Network Stack
 
-HTTP client for downloading ISOs and other files in the UEFI bootloader environment.
+Bare-metal HTTP client for post-ExitBootServices execution.
 
+## Architecture
 
-
-### Design Principles
-
-1. **Platform Abstraction**: `HttpClient` trait allows multiple implementations
-3. **No External Deps**: Everything built on primitives
-5. **Error Handling**: Comprehensive error types for network operations
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Entry Point                               │
+│  mainloop::download_with_config(&mut driver, config, ...)    │
+└──────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    State Machine                             │
+│  Init → GptPrep → LinkWait → DHCP → DNS → Connect → HTTP     │
+└──────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    NetworkDriver Trait                       │
+│  transmit(), receive(), mac_address(), link_up()             │
+└──────────────────────────────────────────────────────────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+┌─────────────────────────┐   ┌─────────────────────────┐
+│     VirtioNetDriver     │   │     E1000eDriver        │
+│     (QEMU, KVM)         │   │     (Real Hardware)     │
+└─────────────────────────┘   └─────────────────────────┘
+              │                             │
+              └──────────────┬──────────────┘
+                             ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    ASM Layer (network/asm/)                  │
+│  MMIO read/write, TSC, barriers, cache ops                   │
+└──────────────────────────────────────────────────────────────┘
+```
 
 ## Usage
 
-### Basic Download
-
 ```rust
-use morpheus_network::{UefiHttpClient, DownloadManager};
+use morpheus_network::mainloop::{download_with_config, DownloadConfig, DownloadResult};
+use morpheus_network::boot::probe::{probe_and_create_driver, ProbeResult};
 
-// Create UEFI HTTP client
-let mut client = UefiHttpClient::new(boot_services)?;
+// 1. Probe PCI and create driver (brutal reset happens during driver::new())
+let driver = match probe_and_create_driver(&dma, tsc_freq)? {
+    ProbeResult::Intel(d) => UnifiedNetworkDriver::Intel(d),
+    ProbeResult::VirtIO(d) => UnifiedNetworkDriver::VirtIO(d),
+};
 
-// Create download manager
-let mut downloader = DownloadManager::new(&mut client);
+// 2. Configure download
+let config = DownloadConfig::full(
+    "http://example.com/image.iso",
+    start_sector,
+    0,  // offset
+    esp_lba,
+    partition_uuid,
+    "image.iso",
+);
 
-// Download a file
-let data = downloader.download_to_memory("http://example.com/file.iso")?;
-```
+// 3. Execute download with optional disk write
+let result = download_with_config(&mut driver, config, Some(blk_device), tsc_freq);
 
-### Download with Progress
-
-```rust
-fn progress_callback(downloaded: usize, total: Option<usize>) {
-    if let Some(total) = total {
-        let percent = (downloaded * 100) / total;
-        println!("Progress: {}%", percent);
-    }
-}
-
-let data = downloader.download_with_progress(
-    "http://example.com/large-file.iso",
-    progress_callback
-)?;
-```
-
-### Check File Size
-
-```rust
-if let Some(size) = downloader.get_file_size("http://example.com/file.iso")? {
-    println!("File size: {} bytes", size);
+match result {
+    DownloadResult::Success { bytes_downloaded, bytes_written } => { /* done */ }
+    DownloadResult::Failed { reason } => { /* handle error */ }
 }
 ```
 
-## Implementation 
+## Preconditions
 
-### See /docs/
+Before calling network functions:
 
-## Error Handling
+1. **ExitBootServices completed** - No UEFI runtime
+2. **hwinit has run** - Platform normalized (bus mastering, DMA, cache coherency)
+3. **DMA region allocated** - Identity-mapped, cache-coherent
 
-All operations return `Result<T, NetworkError>`:
+## Driver Reset Contract
 
-```rust
-match downloader.download_to_memory(url) {
-    Ok(data) => { /* success */ },
-    Err(NetworkError::ProtocolNotAvailable) => {
-        // UEFI firmware doesn't support HTTP
-    },
-    Err(NetworkError::HttpError(404)) => {
-        // File not found
-    },
-    Err(e) => {
-        // Other error
-    }
-}
-```
+All drivers perform **brutal reset** on init:
 
-## Testing
+- Mask and clear all interrupts
+- Disable RX/TX with quiescence polling
+- Full device reset with timeout
+- Wait for EEPROM auto-read
+- Clear all descriptor pointers
+- Disable loopback explicitly
+- Rebuild queues from scratch
 
-Test in QEMU with OVMF UEFI firmware:
-```bash
-cd testing
-./run.sh
-```
+See `driver/RESET_CONTRACT.md` for details.
 
-Ensure QEMU has network configured:
-```bash
--netdev user,id=net0 \
--device e1000,netdev=net0
-```
+## Modules
 
-## Future: ARM Support
+| Module | Purpose |
+|--------|---------|
+| `mainloop` | State machine orchestration, entry point |
+| `driver` | NetworkDriver trait, VirtIO, Intel e1000e |
+| `boot` | Device probing, driver creation helpers |
+| `asm` | Assembly bindings (MMIO, PIO, TSC) |
+| `dma` | DMA buffer management |
+| `time` | TSC-based timing |
 
-When adding ARM64 support:
-- Same UEFI protocols work on ARM
-- No code changes needed in abstraction layer
-- May need arch-specific optimizations for large transfers
+## State Machine
 
-## References
-
-- UEFI Specification 2.10, Section 28.7 (EFI HTTP Protocol)
+| State | Description |
+|-------|-------------|
+| Init | Initialize smoltcp interface |
+| GptPrep | Prepare GPT if writing to disk |
+| LinkWait | Wait for link up |
+| DHCP | Obtain IP address |
+| DNS | Resolve hostname |
+| Connect | TCP connection |
+| HTTP | HTTP GET and streaming receive |
+| Manifest | Write manifest to disk |
+| Done | Reboot |
 - UEFI Specification 2.10, Section 11.1 (EFI Service Binding Protocol)

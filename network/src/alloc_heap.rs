@@ -22,8 +22,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! // In bare_metal_main, before any allocations:
-//! unsafe { crate::alloc::init_heap(); }
+//! // Early in post-EBS execution, before any allocations:
+//! unsafe { morpheus_network::alloc_heap::init_heap(); }
 //!
 //! // Now Vec, Box, String all work:
 //! let v = vec![1, 2, 3];

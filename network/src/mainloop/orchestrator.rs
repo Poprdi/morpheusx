@@ -1,7 +1,31 @@
-//! Orchestrator — clean entry point for state machine download.
+//! Network Download Orchestrator
 //!
-//! Self-contained. No handoff. Receives already-initialized driver.
-//! Flow: EBS → hwinit → network init → download
+//! # Entry Point Contract
+//!
+//! **SOLE ENTRY**: `download_with_config()` or convenience wrapper `download()`
+//!
+//! **PRECONDITIONS** (caller must ensure):
+//! 1. ExitBootServices has been called (no UEFI runtime)
+//! 2. hwinit has normalized platform (bus mastering, DMA policy, cache coherency)
+//! 3. Driver has been instantiated and brutally reset to pristine state
+//!
+//! **WHAT THIS MODULE RECEIVES**:
+//! - `&mut D` - Already-reset driver implementing `NetworkDriver`
+//! - `DownloadConfig` - URL + optional disk write parameters
+//! - `Option<UnifiedBlockDevice>` - Block device if writing
+//! - `tsc_freq` - TSC frequency in Hz
+//!
+//! **WHAT THIS MODULE DOES NOT DO**:
+//! - PCI enumeration (hwinit's job)
+//! - Bus mastering setup (hwinit's job)
+//! - DMA policy (hwinit's job)
+//! - Driver instantiation (caller's job)
+//! - Device reset (driver's job, done before entry)
+//!
+//! # State Machine Flow
+//! ```text
+//! Init → GptPrep → LinkWait → DHCP → DNS → Connect → HTTP → Manifest → Done
+//! ```
 
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet, SocketStorage};
 use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;

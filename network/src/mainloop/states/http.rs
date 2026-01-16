@@ -14,7 +14,7 @@ use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
 use crate::mainloop::disk_writer::DiskWriter;
 
-use super::{DoneState, FailedState};
+use super::{DoneState, FailedState, ManifestState};
 
 /// HTTP download phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,7 +290,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             serial::println("[HTTP] Download complete");
                             self.phase = HttpPhase::Complete;
                             ctx.bytes_downloaded = self.bytes_received;
-                            return (Box::new(DoneState::new()), StepResult::Transition);
+                            return (Box::new(ManifestState::from_context(ctx)), StepResult::Transition);
                         }
                     }
 
@@ -306,7 +306,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             }
                             serial::println("[HTTP] Download complete (connection closed)");
                             ctx.bytes_downloaded = self.bytes_received;
-                            return (Box::new(DoneState::new()), StepResult::Transition);
+                            return (Box::new(ManifestState::from_context(ctx)), StepResult::Transition);
                         }
                         serial::println("[HTTP] ERROR: Premature connection close");
                         return (Box::new(FailedState::new("premature close")), StepResult::Failed("close"));
@@ -360,12 +360,14 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         }
                         serial::println("[HTTP] Download complete");
                         ctx.bytes_downloaded = self.bytes_received;
-                        return (Box::new(DoneState::new()), StepResult::Transition);
+                        return (Box::new(ManifestState::from_context(ctx)), StepResult::Transition);
                     }
                 }
             }
 
             HttpPhase::Complete => {
+                // Already transitioned to ManifestState via completion paths above.
+                // If we somehow land here, just go to Done directly.
                 return (Box::new(DoneState::new()), StepResult::Transition);
             }
         }

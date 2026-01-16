@@ -1,33 +1,31 @@
 //! Intel e1000e initialization sequence.
 //!
-//! Rust orchestration layer for device initialization.
-//! All hardware access is via ASM bindings.
+//! # RESET CONTRACT (See RESET_CONTRACT.md)
 //!
-//! # Initialization Sequence (I218/PCH LPT compatible)
+//! This driver performs a BRUTAL reset on init:
+//! - Phase 1: Mask/clear all interrupts
+//! - Phase 2: Disable RX/TX, poll for quiescence
+//! - Phase 3: Disable bus mastering (GIO Master Disable)
+//! - Phase 4: Device reset (MANDATORY, FAIL on timeout)
+//! - Phase 5: Wait for EEPROM auto-read done
+//! - Phase 6: Post-reset cleanup (interrupts, descriptors, RAR, loopback, MTA)
+//! - Phase 7: I218/PCH workarounds (ULP, PHY access, PHY wake)
+//! - Phase 8: Read/validate MAC from EEPROM
+//! - Phase 9: Program descriptor rings
+//! - Phase 10: Re-enable bus mastering, enable RX/TX, link up
 //!
-//! The sequence below follows the Linux kernel e1000e driver (ich8lan.c)
-//! and is CRITICAL for real I218 hardware (ThinkPad T450s, etc.).
+//! Every MMIO write is flushed with a STATUS read.
+//! Every poll has a bounded timeout.
+//! Interrupts remain MASKED (polled I/O mode).
 //!
-//! 1. Disable interrupts
-//! 2. Global reset
-//! 3. Wait for reset completion
-//! 4. Disable interrupts again (reset re-enables)
-//! 5. **CRITICAL: Disable ULP (Ultra Low Power) mode**
-//!    - I218 may be in ULP after BIOS handoff
-//!    - PHY won't respond to MDIC until ULP disabled
-//! 6. **CRITICAL: Check PHY accessibility**
-//!    - If PHY doesn't respond, toggle LANPHYPC (power cycle)
-//! 7. Wake PHY from power down (BMCR.PDOWN)
-//! 8. Read MAC address
-//! 9. Clear multicast table
-//! 10. Setup RX descriptor ring
-//! 11. Setup TX descriptor ring
-//! 12. Enable RX
-//! 13. Enable TX
-//! 14. Set link up
+//! NO assumptions about UEFI or previous owner state.
+//!
+//! # Preconditions (hwinit guarantees)
+//! - MMIO BAR mapped
+//! - DMA legal (bus mastering will be re-enabled by driver)
 //!
 //! # Reference
-//! - Intel 82579 Datasheet, Section 14 (Initialization)
+//! - Intel 82579 Datasheet, Section 14
 //! - Linux kernel drivers/net/ethernet/intel/e1000e/ich8lan.c
 
 use crate::asm::drivers::intel::{
@@ -140,156 +138,198 @@ pub unsafe fn init_e1000e(
     mmio_base: u64,
     config: &E1000eConfig,
 ) -> Result<E1000eInitResult, E1000eInitError> {
-    serial_println("  [e1000e] Step 1: Disable interrupts");
+    use crate::asm::core::mmio::{read32, write32};
+    
+    serial_println("  [e1000e] === BRUTAL RESET INIT ===");
     
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 1: DISABLE INTERRUPTS
+    // PHASE 1: MASK AND CLEAR ALL INTERRUPTS
+    // Must be first - we don't want spurious interrupts during reset.
     // ═══════════════════════════════════════════════════════════════════
-    asm_intel_disable_interrupts(mmio_base);
-
-    serial_println("  [e1000e] Step 2-3: Skipping reset (UEFI already init)");
+    serial_println("  [e1000e] Phase 1: Mask/clear interrupts");
+    
+    // Mask all interrupts (write to IMC)
+    write32(mmio_base + regs::IMC as u64, regs::INT_MASK_ALL);
+    // Flush posted write
+    let _ = read32(mmio_base + regs::STATUS as u64);
+    
+    // Clear pending interrupts (read ICR clears it)
+    let _ = read32(mmio_base + regs::ICR as u64);
     
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 2-3: SKIP RESET
-    //
-    // On real I218 hardware, UEFI has already initialized the device.
-    // A software reset can hang because:
-    // 1. The RST bit may not self-clear on I218/PCH
-    // 2. The device needs ME (Management Engine) cooperation
-    // 3. UEFI may have locked certain registers
-    //
-    // Instead, we just reconfigure the device without a full reset.
-    // This works because UEFI leaves the device in a known good state.
+    // PHASE 2: DISABLE RX/TX AND WAIT FOR QUIESCENCE
+    // Can't just clear EN bits - must wait for hardware to confirm.
     // ═══════════════════════════════════════════════════════════════════
-    // let reset_result = asm_intel_reset(mmio_base, config.tsc_freq);
-    // if reset_result != 0 { ... }
+    serial_println("  [e1000e] Phase 2: Disable RX/TX, wait for quiescence");
     
-    serial_println("  [e1000e] Step 4: Disable interrupts again");
+    // Disable RX
+    let rctl = read32(mmio_base + regs::RCTL as u64);
+    write32(mmio_base + regs::RCTL as u64, rctl & !regs::RCTL_EN);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
+    
+    // Disable TX  
+    let tctl = read32(mmio_base + regs::TCTL as u64);
+    write32(mmio_base + regs::TCTL as u64, tctl & !regs::TCTL_EN);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
+    
+    // Wait for RX/TX to actually stop (poll RXDCTL/TXDCTL if queue was enabled)
+    // Timeout after 10ms
+    let quiesce_timeout = config.tsc_freq / 100; // 10ms
+    let quiesce_start = crate::asm::core::tsc::read_tsc();
+    loop {
+        let rxdctl = read32(mmio_base + regs::RXDCTL as u64);
+        let txdctl = read32(mmio_base + regs::TXDCTL as u64);
+        // If queue enable bits are clear, we're done
+        if (rxdctl & regs::XDCTL_QUEUE_ENABLE == 0) && (txdctl & regs::XDCTL_QUEUE_ENABLE == 0) {
+            break;
+        }
+        if crate::asm::core::tsc::read_tsc().wrapping_sub(quiesce_start) > quiesce_timeout {
+            serial_println("  [e1000e] WARN: RX/TX quiesce timeout (continuing)");
+            break;
+        }
+        core::hint::spin_loop();
+    }
     
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 4: DISABLE INTERRUPTS AGAIN (reset re-enables them)
+    // PHASE 3: DISABLE BUS MASTERING (GIO Master Disable)
+    // Prevent any DMA during reset.
     // ═══════════════════════════════════════════════════════════════════
-    asm_intel_disable_interrupts(mmio_base);
-
-    serial_println("  [e1000e] Step 5: Disable ULP mode (I218)");
+    serial_println("  [e1000e] Phase 3: Disable bus mastering");
+    
+    let ctrl = read32(mmio_base + regs::CTRL as u64);
+    write32(mmio_base + regs::CTRL as u64, ctrl | regs::CTRL_GIO_MASTER_DISABLE);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
+    
+    // Wait for GIO Master to disable (poll STATUS.GIO_MASTER_EN)
+    let gio_timeout = config.tsc_freq / 100; // 10ms  
+    let gio_start = crate::asm::core::tsc::read_tsc();
+    loop {
+        let status = read32(mmio_base + regs::STATUS as u64);
+        if status & regs::STATUS_GIO_MASTER_EN == 0 {
+            break;
+        }
+        if crate::asm::core::tsc::read_tsc().wrapping_sub(gio_start) > gio_timeout {
+            serial_println("  [e1000e] WARN: GIO master disable timeout");
+            break;
+        }
+        core::hint::spin_loop();
+    }
     
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 5: DISABLE ULP MODE (CRITICAL FOR I218)
-    //
-    // I218-LM/V (ThinkPad T450s, etc.) may be in Ultra Low Power mode
-    // after BIOS handoff. The PHY won't respond to MDIC until ULP is
-    // disabled. This is THE primary cause of the hang on real hardware!
-    //
-    // Reference: Linux kernel e1000_disable_ulp_lpt_lp() in ich8lan.c
+    // PHASE 4: DEVICE RESET
+    // This is MANDATORY. If reset fails, device is unusable.
     // ═══════════════════════════════════════════════════════════════════
+    serial_println("  [e1000e] Phase 4: Device reset (MANDATORY)");
+    
+    let reset_result = asm_intel_reset(mmio_base, config.tsc_freq);
+    if reset_result != 0 {
+        serial_println("  [e1000e] FATAL: Reset timeout");
+        return Err(E1000eInitError::ResetTimeout);
+    }
+    
+    serial_println("  [e1000e] Reset complete, waiting for EEPROM auto-read");
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // PHASE 5: WAIT FOR EEPROM AUTO-READ COMPLETE
+    // After reset, hardware loads config from EEPROM. Must wait.
+    // ═══════════════════════════════════════════════════════════════════
+    let eecd_timeout = config.tsc_freq / 2; // 500ms (generous)
+    let eecd_start = crate::asm::core::tsc::read_tsc();
+    loop {
+        let eecd = read32(mmio_base + regs::EECD as u64);
+        if eecd & regs::EECD_AUTO_RD != 0 {
+            break;
+        }
+        if crate::asm::core::tsc::read_tsc().wrapping_sub(eecd_start) > eecd_timeout {
+            serial_println("  [e1000e] WARN: EEPROM auto-read timeout");
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // PHASE 6: POST-RESET CLEANUP
+    // Reset may leave junk. Clean up explicitly.
+    // ═══════════════════════════════════════════════════════════════════
+    serial_println("  [e1000e] Phase 6: Post-reset cleanup");
+    
+    // Mask/clear interrupts again (reset may re-enable)
+    write32(mmio_base + regs::IMC as u64, regs::INT_MASK_ALL);
+    let _ = read32(mmio_base + regs::ICR as u64); // clear pending
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
+    
+    // Clear all descriptor ring pointers (no stale DMA addresses!)
+    write32(mmio_base + regs::RDBAL as u64, 0);
+    write32(mmio_base + regs::RDBAH as u64, 0);
+    write32(mmio_base + regs::RDLEN as u64, 0);
+    write32(mmio_base + regs::RDH as u64, 0);
+    write32(mmio_base + regs::RDT as u64, 0);
+    write32(mmio_base + regs::TDBAL as u64, 0);
+    write32(mmio_base + regs::TDBAH as u64, 0);
+    write32(mmio_base + regs::TDLEN as u64, 0);
+    write32(mmio_base + regs::TDH as u64, 0);
+    write32(mmio_base + regs::TDT as u64, 0);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
+    
+    // Clear RAR[0] - don't trust firmware MAC, will reprogram later
+    write32(mmio_base + regs::RAL0 as u64, 0);
+    write32(mmio_base + regs::RAH0 as u64, 0);
+    
+    // Clear loopback mode explicitly
+    let rctl = read32(mmio_base + regs::RCTL as u64);
+    write32(mmio_base + regs::RCTL as u64, rctl & !regs::RCTL_LBM_MASK);
+    
+    // Clear multicast table
+    asm_intel_clear_mta(mmio_base);
+    
+    let _ = read32(mmio_base + regs::STATUS as u64); // final flush
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // PHASE 7: I218/PCH WORKAROUNDS (gated on detection)
+    // Only run these on PCH parts - they can break non-PCH.
+    // ═══════════════════════════════════════════════════════════════════
+    serial_println("  [e1000e] Phase 7: I218/PCH workarounds");
+    
+    // TODO: Gate on device ID once we have it in config
+    // For now, run them - they're designed to no-op on non-PCH
     let _ulp_result = disable_ulp(mmio_base, config.tsc_freq);
-    // ULP disable may fail on non-I218 hardware, that's OK - continue
     
-    serial_println("  [e1000e] Step 6: Ensure PHY accessible");
-
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 6: ENSURE PHY IS ACCESSIBLE
-    //
-    // After ULP disable, check if PHY responds to MDIC. If not, we need
-    // to power cycle the PHY via LANPHYPC toggle.
-    //
-    // Reference: Linux kernel e1000_init_phy_workarounds_pchlan()
-    // ═══════════════════════════════════════════════════════════════════
     if !ensure_phy_accessible(mmio_base, config.tsc_freq) {
-        serial_println("  [e1000e] FAIL: PHY not accessible");
+        serial_println("  [e1000e] FATAL: PHY not accessible");
         return Err(E1000eInitError::PhyNotAccessible);
     }
-
-    serial_println("  [e1000e] Step 7: Wake PHY from power down");
     
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 7: WAKE PHY FROM POWER DOWN (BMCR.PDOWN)
-    //
-    // BIOS may have put PHY in power-down mode. We have no ACPI
-    // or SMM handler to wake it. Must be done explicitly.
-    // ═══════════════════════════════════════════════════════════════════
     wake_phy(mmio_base, config.tsc_freq);
 
-    serial_println("  [e1000e] Step 8: Read MAC address");
-    
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 8: READ MAC ADDRESS
+    // PHASE 8: READ/VALIDATE MAC
     // ═══════════════════════════════════════════════════════════════════
-    
-    // DEBUG: Read RAL/RAH directly to see what UEFI programmed
-    {
-        use crate::asm::core::mmio::{read32};
-        use crate::mainloop::serial::serial_print_hex;
-        let ral = read32(mmio_base + 0x5400);
-        let rah = read32(mmio_base + 0x5404);
-        serial_print("  [DEBUG] RAL0=0x");
-        serial_print_hex(ral as u64);
-        serial_print(" RAH0=0x");
-        serial_print_hex(rah as u64);
-        serial_print(" AV=");
-        serial_print_decimal(if rah & 0x80000000 != 0 { 1 } else { 0 });
-        serial_println("");
-    }
+    serial_println("  [e1000e] Phase 8: Read MAC address");
     
     let mut mac: MacAddress = [0u8; 6];
     let mac_result = asm_intel_read_mac(mmio_base, &mut mac);
     
-    // Debug: print raw MAC bytes
-    serial_print("  [e1000e] MAC read result=");
-    serial_print_decimal(mac_result);
-    serial_print(" bytes=[");
-    serial_print_decimal(mac[0] as u32);
-    serial_print(",");
-    serial_print_decimal(mac[1] as u32);
-    serial_print(",");
-    serial_print_decimal(mac[2] as u32);
-    serial_print(",");
-    serial_print_decimal(mac[3] as u32);
-    serial_print(",");
-    serial_print_decimal(mac[4] as u32);
-    serial_print(",");
-    serial_print_decimal(mac[5] as u32);
-    serial_println("]");
-    
     if mac_result != 0 {
-        serial_println("  [e1000e] FAIL: Invalid MAC (ASM returned error)");
+        serial_println("  [e1000e] FATAL: MAC read failed");
         return Err(E1000eInitError::InvalidMac);
     }
 
     // Validate MAC (not all zeros or all ones)
     if mac == [0, 0, 0, 0, 0, 0] || mac == [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] {
-        serial_println("  [e1000e] FAIL: MAC all 0s or FFs");
+        serial_println("  [e1000e] FATAL: MAC invalid (all 0s or FFs)");
         return Err(E1000eInitError::InvalidMac);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 8b: WRITE MAC TO RAL/RAH (CRITICAL FOR I218!)
-    //
-    // When MAC is read from EEPROM, RAL/RAH may not have Address Valid bit.
-    // We MUST write the MAC to RAL/RAH for hardware receive filtering!
-    // The hardware only accepts packets addressed to MACs in RAL/RAH.
-    //
-    // Reference: Linux kernel e1000e_rar_set() in netdev.c
-    // ═══════════════════════════════════════════════════════════════════
-    serial_println("  [e1000e] Step 8b: Write MAC to RAL/RAH");
+    // Write MAC to RAL/RAH with AV (Address Valid) bit
     asm_intel_write_mac(mmio_base, &mac);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
 
-    serial_println("  [e1000e] Step 9: Clear multicast table");
+    // ═══════════════════════════════════════════════════════════════════
+    // PHASE 9: REBUILD DESCRIPTOR RINGS FROM SCRATCH
+    // Interrupts still masked - safe to program rings.
+    // ═══════════════════════════════════════════════════════════════════
+    serial_println("  [e1000e] Phase 9: Setup descriptor rings");
     
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 9: CLEAR MULTICAST TABLE
-    // ═══════════════════════════════════════════════════════════════════
-    asm_intel_clear_mta(mmio_base);
-
-    // Fake debug MAC (display-only) to help diagnose display vs read issues.
-    // Clearly marked as FAKE — do NOT use this as the real MAC.
-    serial_println("  [FAKE-MAC] 52:54:00:12:34:56 (fake display)");
-
-    serial_println("  [e1000e] Step 10: Setup RX ring");
-    
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 10: SETUP RX DESCRIPTOR RING
-    // ═══════════════════════════════════════════════════════════════════
     let rx_desc_cpu = config.dma_cpu_base.add(DmaRegion::RX_DESC_OFFSET);
     let rx_desc_bus = config.dma_bus_base + DmaRegion::RX_DESC_OFFSET as u64;
     let rx_buffer_cpu = config.dma_cpu_base.add(DmaRegion::RX_BUFFERS_OFFSET);
@@ -314,9 +354,7 @@ pub unsafe fn init_e1000e(
     // Initialize all RX descriptors with buffer addresses
     rx_ring.init_descriptors();
 
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 11: SETUP TX DESCRIPTOR RING
-    // ═══════════════════════════════════════════════════════════════════
+    // TX ring
     let tx_desc_cpu = config.dma_cpu_base.add(DmaRegion::TX_DESC_OFFSET);
     let tx_desc_bus = config.dma_bus_base + DmaRegion::TX_DESC_OFFSET as u64;
     let tx_buffer_cpu = config.dma_cpu_base.add(DmaRegion::TX_BUFFERS_OFFSET);
@@ -324,8 +362,6 @@ pub unsafe fn init_e1000e(
 
     let tx_ring_len_bytes = (config.tx_queue_size as u32) * (regs::DESC_SIZE as u32);
 
-    serial_println("  [e1000e] Step 11: Setup TX ring");
-    
     // Configure hardware TX ring
     asm_intel_setup_tx_ring(mmio_base, tx_desc_bus, tx_ring_len_bytes);
 
@@ -342,49 +378,53 @@ pub unsafe fn init_e1000e(
 
     // Initialize all TX descriptors
     tx_ring.init_descriptors();
-
-    serial_println("  [e1000e] Step 12-14: Enable RX/TX, set link up");
     
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush after ring setup
+
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 12: ENABLE RX
+    // PHASE 10: ENABLE RX/TX AND BRING UP LINK
+    // Rings are programmed. Now enable data path.
     // ═══════════════════════════════════════════════════════════════════
+    serial_println("  [e1000e] Phase 10: Enable RX/TX, set link up");
+    
+    // Re-enable bus mastering (was disabled in Phase 3)
+    let ctrl = read32(mmio_base + regs::CTRL as u64);
+    write32(mmio_base + regs::CTRL as u64, ctrl & !regs::CTRL_GIO_MASTER_DISABLE);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
+    
+    // Enable RX (loopback already disabled in Phase 6)
     asm_intel_enable_rx(mmio_base);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
 
-    // Update RX tail to enable receiving
+    // Update RX tail to arm receive
     rx_ring.update_tail();
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
 
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 13: ENABLE TX
-    // ═══════════════════════════════════════════════════════════════════
+    // Enable TX
     asm_intel_enable_tx(mmio_base);
+    let _ = read32(mmio_base + regs::STATUS as u64); // flush
 
-    // ═══════════════════════════════════════════════════════════════════
-    // STEP 14: SET LINK UP AND RESTART AUTO-NEGOTIATION
-    //
-    // On I218, after all the init steps, we need to:
-    // 1. Set CTRL.SLU (Set Link Up)
-    // 2. Restart PHY auto-negotiation
-    // 3. Give time for link partner negotiation
-    // ═══════════════════════════════════════════════════════════════════
+    // Set link up and restart auto-negotiation
     asm_intel_set_link_up(mmio_base);
     
-    // Restart auto-negotiation after setting SLU
-    serial_println("  [e1000e] Restarting auto-negotiation...");
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, config.tsc_freq) {
         let new_bmcr = bmcr | regs::BMCR_ANENABLE | regs::BMCR_ANRESTART;
         let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, config.tsc_freq);
     }
     
-    // Give PHY time to start negotiation (100ms)
+    // Brief delay for PHY to start negotiation (100ms)
     let delay_start = crate::asm::core::tsc::read_tsc();
-    let delay_ticks = config.tsc_freq / 10; // 100ms
+    let delay_ticks = config.tsc_freq / 10;
     while crate::asm::core::tsc::read_tsc().wrapping_sub(delay_start) < delay_ticks {
         core::hint::spin_loop();
     }
 
-    serial_println("  [e1000e] Init complete!");
+    // NOTE: Interrupts remain MASKED (IMS = 0).
+    // We do polled I/O - no interrupt handler needed.
+    // If interrupts were needed, unmask ONLY after rings fully programmed.
     
-    // Return success
+    serial_println("  [e1000e] === INIT COMPLETE (interrupts masked, polled mode) ===");
+    
     Ok(E1000eInitResult {
         mac,
         rx_ring,

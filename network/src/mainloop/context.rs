@@ -132,6 +132,8 @@ pub struct Context<'a> {
     pub current_write_sector: u64,
     /// DNS servers from DHCP
     pub dns_servers: [Option<IpAddress>; 3],
+    /// Actual start sector (after GPT prep, may differ from config)
+    pub actual_start_sector: u64,
 }
 
 impl<'a> Context<'a> {
@@ -155,6 +157,7 @@ impl<'a> Context<'a> {
             bytes_written: 0,
             current_write_sector: start_sector,
             dns_servers: [None; 3],
+            actual_start_sector: start_sector,
         }
     }
 
