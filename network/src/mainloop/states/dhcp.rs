@@ -100,12 +100,16 @@ impl<D: NetworkDriver> State<D> for DhcpState {
                         iface.routes_mut().add_default_ipv4_route(router).ok();
                     }
 
+                    // Store DNS servers in context
                     for (i, dns) in config.dns_servers.iter().enumerate() {
                         serial::print("[DHCP] DNS ");
                         serial::print_u32(i as u32);
                         serial::print(": ");
                         serial::print_ipv4(&dns.0);
                         serial::println("");
+                        if i < 3 {
+                            ctx.dns_servers[i] = Some(smoltcp::wire::IpAddress::Ipv4(*dns));
+                        }
                     }
 
                     self.got_ip = true;
