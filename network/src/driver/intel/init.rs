@@ -38,7 +38,7 @@ use crate::asm::drivers::intel::{
     disable_ulp, toggle_lanphypc, phy_is_accessible, acquire_swflag, release_swflag,
 };
 use crate::dma::DmaRegion;
-use crate::mainloop::bare_metal::{serial_print, serial_println, serial_print_decimal};
+use crate::mainloop::serial::{serial_print, serial_println, serial_print_decimal};
 use crate::types::MacAddress;
 
 use super::regs;
@@ -219,7 +219,7 @@ pub unsafe fn init_e1000e(
     // DEBUG: Read RAL/RAH directly to see what UEFI programmed
     {
         use crate::asm::core::mmio::{read32};
-        use crate::mainloop::bare_metal::serial_print_hex;
+        use crate::mainloop::serial::serial_print_hex;
         let ral = read32(mmio_base + 0x5400);
         let rah = read32(mmio_base + 0x5404);
         serial_print("  [DEBUG] RAL0=0x");

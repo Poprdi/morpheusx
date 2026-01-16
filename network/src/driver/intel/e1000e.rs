@@ -6,7 +6,7 @@
 //! Intel 82579 Datasheet, NETWORK_IMPL_GUIDE.md §8
 
 use crate::driver::traits::{DriverInit, NetworkDriver, RxError, TxError};
-use crate::mainloop::bare_metal::serial_println;
+use crate::mainloop::serial::serial_println;
 use crate::types::MacAddress;
 use crate::asm::drivers::intel::{asm_intel_link_status, LinkStatusResult};
 

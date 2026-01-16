@@ -11,7 +11,7 @@ use smoltcp::wire::{EthernetAddress, HardwareAddress};
 
 use crate::driver::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
-use crate::mainloop::context::Context;
+use crate::mainloop::context::{Context, DownloadConfig};
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
 use crate::mainloop::states::InitState;
@@ -75,7 +75,8 @@ pub fn download<D: NetworkDriver>(
     let tcp_handle = sockets.add(tcp_socket);
 
     // Context
-    let mut ctx = Context::new(url, tsc_freq);
+    let config = DownloadConfig::download_only(url);
+    let mut ctx = Context::new(config, tsc_freq);
     ctx.dhcp_handle = Some(dhcp_handle);
     ctx.tcp_handle = Some(tcp_handle);
 
