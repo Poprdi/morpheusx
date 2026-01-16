@@ -96,7 +96,8 @@ impl<D: NetworkDriver> State<D> for FailedState {
             self.logged = true;
         }
 
-        (self, StepResult::Failed(self.reason))
+        let reason = self.reason;
+        (self, StepResult::Failed(reason))
     }
 
     fn name(&self) -> &'static str {

@@ -1,4 +1,4 @@
-//! Initialization state — validates handoff, parses URL.
+//! Initialization state — parses URL.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -25,18 +25,23 @@ impl InitState {
     }
 }
 
+impl Default for InitState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<D: NetworkDriver> State<D> for InitState {
     fn step(
         mut self: Box<Self>,
         ctx: &mut Context<'_>,
-        iface: &mut Interface,
-        sockets: &mut SocketSet<'_>,
-        adapter: &mut SmoltcpAdapter<'_, D>,
+        _iface: &mut Interface,
+        _sockets: &mut SocketSet<'_>,
+        _adapter: &mut SmoltcpAdapter<'_, D>,
         _now: Instant,
         _tsc: u64,
     ) -> (Box<dyn State<D>>, StepResult) {
         if self.validated {
-            // Already validated, transition to DHCP
             serial::println("[INIT] -> DHCP");
             return (Box::new(DhcpState::new()), StepResult::Transition);
         }
@@ -46,13 +51,11 @@ impl<D: NetworkDriver> State<D> for InitState {
         serial::println("=====================================");
         serial::println("");
 
-        // Parse URL
-        let url = ctx.config.url;
+        let url = ctx.url;
         serial::print("[INIT] URL: ");
         serial::println(url);
 
-        // Extract host and path from URL
-        // Format: http://host[:port]/path or https://host[:port]/path
+        // Parse URL: http://host[:port]/path
         let url_without_scheme = if url.starts_with("https://") {
             ctx.resolved_port = 443;
             &url[8..]
@@ -64,13 +67,11 @@ impl<D: NetworkDriver> State<D> for InitState {
             return (Box::new(super::FailedState::new("invalid URL scheme")), StepResult::Failed("invalid URL"));
         };
 
-        // Find path separator
         let (host_port, path) = match url_without_scheme.find('/') {
             Some(idx) => (&url_without_scheme[..idx], &url_without_scheme[idx..]),
             None => (url_without_scheme, "/"),
         };
 
-        // Check for port in host
         let host = match host_port.find(':') {
             Some(idx) => {
                 if let Some(port) = parse_port(&host_port[idx + 1..]) {
@@ -81,8 +82,10 @@ impl<D: NetworkDriver> State<D> for InitState {
             None => host_port,
         };
 
-        // Store parsed values (these are string slices into the config)
-        // For now just log them — real implementation would store differently
+        // Store parsed URL parts in context
+        ctx.url_host = host;
+        ctx.url_path = path;
+
         serial::print("[INIT] Host: ");
         serial::println(host);
         serial::print("[INIT] Port: ");
@@ -90,19 +93,11 @@ impl<D: NetworkDriver> State<D> for InitState {
         serial::println("");
         serial::print("[INIT] Path: ");
         serial::println(path);
-
-        // Validate TSC
         serial::print("[INIT] TSC freq: ");
-        serial::print_hex(ctx.tsc_freq);
-        serial::println(" Hz");
-
-        if ctx.tsc_freq < 1_000_000_000 {
-            serial::println("[INIT] WARNING: TSC freq seems low");
-        }
+        serial::print_u32((ctx.tsc_freq / 1_000_000) as u32);
+        serial::println(" MHz");
 
         self.validated = true;
-        
-        // Stay in this state, next step will transition
         (self, StepResult::Continue)
     }
 
@@ -111,11 +106,10 @@ impl<D: NetworkDriver> State<D> for InitState {
     }
 }
 
-/// Parse port number from string.
 fn parse_port(s: &str) -> Option<u16> {
     let mut result: u32 = 0;
     for c in s.bytes() {
-        if c < b'0' || c > b'9' {
+        if !c.is_ascii_digit() {
             break;
         }
         result = result * 10 + (c - b'0') as u32;
