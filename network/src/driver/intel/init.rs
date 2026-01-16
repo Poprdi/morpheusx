@@ -147,17 +147,23 @@ pub unsafe fn init_e1000e(
     // ═══════════════════════════════════════════════════════════════════
     asm_intel_disable_interrupts(mmio_base);
 
-    serial_println("  [e1000e] Step 2-3: Global reset");
+    serial_println("  [e1000e] Step 2-3: Skipping reset (UEFI already init)");
     
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 2-3: GLOBAL RESET + WAIT
+    // STEP 2-3: SKIP RESET
+    //
+    // On real I218 hardware, UEFI has already initialized the device.
+    // A software reset can hang because:
+    // 1. The RST bit may not self-clear on I218/PCH
+    // 2. The device needs ME (Management Engine) cooperation
+    // 3. UEFI may have locked certain registers
+    //
+    // Instead, we just reconfigure the device without a full reset.
+    // This works because UEFI leaves the device in a known good state.
     // ═══════════════════════════════════════════════════════════════════
-    let reset_result = asm_intel_reset(mmio_base, config.tsc_freq);
-    if reset_result != 0 {
-        serial_println("  [e1000e] FAIL: Reset timeout");
-        return Err(E1000eInitError::ResetTimeout);
-    }
-
+    // let reset_result = asm_intel_reset(mmio_base, config.tsc_freq);
+    // if reset_result != 0 { ... }
+    
     serial_println("  [e1000e] Step 4: Disable interrupts again");
     
     // ═══════════════════════════════════════════════════════════════════
@@ -209,6 +215,22 @@ pub unsafe fn init_e1000e(
     // ═══════════════════════════════════════════════════════════════════
     // STEP 8: READ MAC ADDRESS
     // ═══════════════════════════════════════════════════════════════════
+    
+    // DEBUG: Read RAL/RAH directly to see what UEFI programmed
+    {
+        use crate::asm::core::mmio::{read32};
+        use crate::mainloop::bare_metal::serial_print_hex;
+        let ral = read32(mmio_base + 0x5400);
+        let rah = read32(mmio_base + 0x5404);
+        serial_print("  [DEBUG] RAL0=0x");
+        serial_print_hex(ral as u64);
+        serial_print(" RAH0=0x");
+        serial_print_hex(rah as u64);
+        serial_print(" AV=");
+        serial_print_decimal(if rah & 0x80000000 != 0 { 1 } else { 0 });
+        serial_println("");
+    }
+    
     let mut mac: MacAddress = [0u8; 6];
     let mac_result = asm_intel_read_mac(mmio_base, &mut mac);
     

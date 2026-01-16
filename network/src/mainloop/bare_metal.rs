@@ -1177,15 +1177,52 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
                     self.rx_count += 1;
                     inc_rx_count(); // Global counter
                     
-                    // Minimal debug: show length and ethertype for diagnosis
+                    // Debug: show what we're receiving
                     if len >= 14 {
+                        // Show dest MAC (first 6 bytes) and src MAC (next 6)
+                        serial_print("[RX dst=");
+                        serial_print_hex_byte(self.rx_buffer[0]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[1]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[2]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[3]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[4]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[5]);
+                        
+                        serial_print(" src=");
+                        serial_print_hex_byte(self.rx_buffer[6]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[7]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[8]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[9]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[10]);
+                        serial_print(":");
+                        serial_print_hex_byte(self.rx_buffer[11]);
+                        
                         let ethertype = ((self.rx_buffer[12] as u16) << 8) | (self.rx_buffer[13] as u16);
-                        serial_print("[RX:");
-                        serial_print_decimal(len as u32);
                         serial_print(" et=0x");
                         serial_print_hex_byte((ethertype >> 8) as u8);
                         serial_print_hex_byte((ethertype & 0xFF) as u8);
-                        serial_print("] ");
+                        
+                        if ethertype == 0x0800 && len >= 42 { // IPv4 + UDP header
+                            let proto = self.rx_buffer[23];
+                            if proto == 17 { // UDP
+                                let src_port = ((self.rx_buffer[34] as u16) << 8) | (self.rx_buffer[35] as u16);
+                                let dst_port = ((self.rx_buffer[36] as u16) << 8) | (self.rx_buffer[37] as u16);
+                                serial_print(" udp ");
+                                serial_print_decimal(src_port as u32);
+                                serial_print("->");
+                                serial_print_decimal(dst_port as u32);
+                            }
+                        }
+                        serial_println("]");
                     }
                 }
                 _ => {}
@@ -1242,16 +1279,10 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
         F: FnOnce(&mut [u8]) -> R,
     {
         // Use stack-allocated buffer (NO HEAP!) - max Ethernet frame + some margin
-        // Max frame is 1514 bytes, but smoltcp may request up to ~1600 for headers
         const MAX_FRAME: usize = 2048;
         let mut buffer = [0u8; MAX_FRAME];
 
-        let actual_len = if len > MAX_FRAME {
-            serial_println("[ADAPTER-TX] ERROR: requested len exceeds buffer!");
-            MAX_FRAME
-        } else {
-            len
-        };
+        let actual_len = if len > MAX_FRAME { MAX_FRAME } else { len };
 
         let result = f(&mut buffer[..actual_len]);
 
@@ -1847,7 +1878,16 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     serial_println("[INIT] Creating smoltcp interface...");
 
     // Use the MAC address from the driver
-    let mac = EthernetAddress(driver.mac_address());
+    let mac_bytes = driver.mac_address();
+    serial_print("[DEBUG] driver.mac_address() = ");
+    for (i, b) in mac_bytes.iter().enumerate() {
+        if i > 0 {
+            serial_print(":");
+        }
+        serial_print_hex(*b as u64);
+    }
+    serial_println("");
+    let mac = EthernetAddress(mac_bytes);
     let hw_addr = HardwareAddress::Ethernet(mac);
 
     // Create smoltcp config
@@ -1888,6 +1928,9 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     let dhcp_start = get_tsc();
     let dhcp_timeout_ticks = timeouts.dhcp();
 
+    // Track number of DHCP events
+    let mut dhcp_event_count = 0u32;
+
     // Track if we got an IP
     #[allow(unused_assignments)]
     let mut got_ip = false;
@@ -1900,32 +1943,17 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
     // DHCP polling loop
     serial_println("[NET] Sending DHCP DISCOVER...");
 
-    let mut last_status_tsc = dhcp_start;
-    let status_interval = handoff.tsc_freq * 2; // Print status every 2 seconds
-
     loop {
         let now_tsc = get_tsc();
 
         // Check timeout
         if now_tsc.wrapping_sub(dhcp_start) > dhcp_timeout_ticks {
-            serial_println("");
-            serial_print("[FAIL] DHCP timeout - TX:");
+            serial_print("[FAIL] DHCP timeout TX:");
             serial_print_decimal(get_tx_count());
             serial_print(" RX:");
             serial_print_decimal(get_rx_count());
             serial_println("");
             return RunResult::DhcpTimeout;
-        }
-        
-        // Print status every 2 seconds
-        if now_tsc.wrapping_sub(last_status_tsc) > status_interval {
-            serial_print(".");
-            serial_print(" TX:");
-            serial_print_decimal(get_tx_count());
-            serial_print(" RX:");
-            serial_print_decimal(get_rx_count());
-            serial_println("");
-            last_status_tsc = now_tsc;
         }
 
         // Convert TSC to smoltcp Instant - RELATIVE to interface creation time!
@@ -1988,8 +2016,7 @@ pub unsafe fn bare_metal_main(handoff: &'static BootHandoff, config: BareMetalCo
                     break;
                 }
                 Dhcpv4Event::Deconfigured => {
-                    serial_println("[NET] DHCP deconfigured - retrying...");
-                    // Don't treat deconfigured as fatal - DHCP will retry
+                    // Normal at startup, DHCP will retry automatically
                 }
             }
         }
