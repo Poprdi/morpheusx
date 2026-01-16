@@ -96,9 +96,8 @@ impl<D: NetworkDriver> State<D> for ConnectState {
 
         if !self.connect_started {
             serial::print("[TCP] Connecting to ");
-            match endpoint.addr {
-                IpAddress::Ipv4(ip) => serial::print_ipv4(&ip.0),
-                _ => serial::print("(IPv6)"),
+            if let IpAddress::Ipv4(ip) = endpoint.addr {
+                serial::print_ipv4(&ip.0);
             }
             serial::print(":");
             serial::print_u32(endpoint.port as u32);
