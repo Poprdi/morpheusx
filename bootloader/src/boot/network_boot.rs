@@ -1,13 +1,23 @@
 //! Network boot integration for post-ExitBootServices ISO download.
 //!
-//! This module bridges the UEFI bootloader and the bare-metal network stack.
+//! # NEW ARCHITECTURE (hwinit split)
 //!
-//! # Flow
-//! 1. Bootloader runs pre-EBS: probes hardware, allocates DMA, calibrates TSC
-//! 2. Bootloader calls ExitBootServices
-//! 3. Bootloader calls `enter_network_boot()` with BootHandoff
-//! 4. Network stack downloads ISO and writes to disk
-//! 5. Control returns for OS boot from downloaded ISO
+//! ```text
+//! UEFI Phase (pre-EBS):
+//!   1. Allocate DMA region
+//!   2. Calibrate TSC  
+//!   3. Allocate stack
+//!   4. Query GOP framebuffer
+//!   5. Exit boot services
+//!
+//! Bare-metal Phase (post-EBS):
+//!   6. hwinit::platform_init() - PCI scan, bus mastering, BAR decode
+//!   7. Create driver from hwinit output
+//!   8. network::download_with_config() - state machine
+//! ```
+//!
+//! The old BootHandoff structure is DEPRECATED. Now hwinit handles
+//! device discovery and the network driver is constructed directly.
 
 #![allow(dead_code)]
 #![allow(unused_imports)]
@@ -16,95 +26,204 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::string::ToString;
 
+use morpheus_hwinit::{
+    platform_init, InitError, NetDeviceType, BlkDeviceType,
+    PlatformConfig, PlatformInit, PreparedNetDevice, PreparedBlkDevice,
+};
 use morpheus_network::boot::handoff::BootHandoff;
-use morpheus_network::mainloop::{bare_metal_main, BareMetalConfig, RunResult};
+use morpheus_network::driver::traits::NetworkDriver;
+use morpheus_network::driver::virtio::{VirtioConfig, VirtioNetDriver};
+use morpheus_network::driver::intel::{E1000eConfig, E1000eDriver};
+use morpheus_network::mainloop::{download_with_config, DownloadConfig, DownloadResult};
+use morpheus_network::device::UnifiedBlockDevice;
 
-/// Network boot entry point (post-EBS).
-///
-/// # Safety
-/// - Must be called after ExitBootServices()
-/// - `handoff` must point to valid, populated BootHandoff
-/// - Must be on pre-allocated stack
-pub unsafe fn enter_network_boot(handoff: &'static BootHandoff) -> RunResult {
-    // Default config: download from QEMU host HTTP server
-    let config = BareMetalConfig::default();
-
-    bare_metal_main(handoff, config)
+/// Network boot result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunResult {
+    /// Download completed successfully
+    Success,
+    /// Download failed
+    Failed,
+    /// Hardware init failed
+    HwInitFailed,
+    /// No network device found
+    NoDevice,
 }
 
-/// Network boot with custom URL.
-///
-/// # Safety
-/// - Must be called after ExitBootServices()
-/// - `handoff` must point to valid, populated BootHandoff
-/// - `iso_url` must be a 'static str (allocated before EBS, e.g., via Box::leak)
-pub unsafe fn enter_network_boot_url(
-    handoff: &'static BootHandoff,
-    iso_url: &'static str,
-    esp_lba: u64,
-) -> RunResult {
-    // Extract ISO filename from URL (e.g., "tails-amd64-7.3.1.iso" from full URL)
-    let iso_name = extract_iso_name_from_url(iso_url);
-
-    let config = BareMetalConfig {
-        iso_url,
-        iso_name,
-        esp_start_lba: esp_lba,
-        ..BareMetalConfig::default()
-    };
-
-    bare_metal_main(handoff, config)
+/// Configuration for bare-metal download (new architecture).
+pub struct BaremetalConfig {
+    /// URL to download
+    pub iso_url: &'static str,
+    /// ISO filename for manifest
+    pub iso_name: &'static str,
+    /// ESP start LBA for disk writes
+    pub esp_start_lba: u64,
+    /// Target start sector for ISO data
+    pub target_start_sector: u64,
 }
 
-/// Extract ISO filename from URL.
-/// Returns the last path component, or "download.iso" if none found.
-fn extract_iso_name_from_url(url: &str) -> &'static str {
-    // Find the last '/' in the URL
-    if let Some(pos) = url.rfind('/') {
-        let filename = &url[pos + 1..];
-        // Check if it looks like an ISO filename
-        if filename.len() > 4 && (filename.ends_with(".iso") || filename.ends_with(".ISO")) {
-            // Leak the extracted filename to make it 'static
-            // This is safe since we're in bare-metal mode and won't free memory
-            let leaked: &'static str = Box::leak(filename.to_string().into_boxed_str());
-            return leaked;
+impl Default for BaremetalConfig {
+    fn default() -> Self {
+        Self {
+            iso_url: "http://10.0.2.2:8000/test.iso",
+            iso_name: "test.iso",
+            esp_start_lba: 0,
+            target_start_sector: 0,
         }
     }
-    "download.iso"
 }
 
-/// NIC probe result with transport information.
+/// NEW: Bare-metal entry point using hwinit architecture.
+///
+/// Call this AFTER ExitBootServices with pre-allocated resources.
+///
+/// # Safety
+/// - Must be after ExitBootServices
+/// - DMA region must be identity-mapped
+/// - All resources must survive EBS
+pub unsafe fn enter_baremetal_download(
+    dma_base: *mut u8,
+    dma_bus: u64,
+    dma_size: usize,
+    tsc_freq: u64,
+    config: BaremetalConfig,
+) -> RunResult {
+    use morpheus_hwinit::serial::{puts, put_hex64, newline};
+    
+    puts("[BOOT] entering bare-metal download\n");
+    puts("[BOOT] dma_base=");
+    put_hex64(dma_base as u64);
+    puts(" tsc_freq=");
+    put_hex64(tsc_freq);
+    newline();
+
+    // Step 1: Run hwinit to scan PCI and enable bus mastering
+    let platform_config = PlatformConfig {
+        dma_base,
+        dma_bus,
+        dma_size,
+        tsc_freq,
+    };
+
+    let platform = match platform_init(platform_config) {
+        Ok(p) => p,
+        Err(e) => {
+            puts("[BOOT] hwinit failed: ");
+            match e {
+                InitError::InvalidDmaRegion => puts("invalid DMA region"),
+                InitError::NoDevicesFound => puts("no devices found"),
+                InitError::BarDecodeFailed => puts("BAR decode failed"),
+                InitError::TscCalibrationFailed => puts("TSC calibration failed"),
+                InitError::NoFreeMemory => puts("no free memory"),
+            }
+            newline();
+            return RunResult::HwInitFailed;
+        }
+    };
+
+    // Step 2: Find a network device
+    let net_dev = match platform.net_devices.iter().find_map(|d| *d) {
+        Some(d) => d,
+        None => {
+            puts("[BOOT] ERROR: no network device found\n");
+            return RunResult::NoDevice;
+        }
+    };
+
+    puts("[BOOT] using net device: ");
+    match net_dev.device_type {
+        NetDeviceType::VirtIO => puts("VirtIO"),
+        NetDeviceType::IntelE1000e => puts("Intel e1000e"),
+    }
+    puts(" @ ");
+    put_hex64(net_dev.mmio_base);
+    newline();
+
+    // Step 4: Create download config
+    let download_config = DownloadConfig {
+        url: config.iso_url,
+        write_to_disk: config.esp_start_lba > 0,
+        target_start_sector: config.target_start_sector,
+        manifest_sector: 0,
+        esp_start_lba: config.esp_start_lba,
+        partition_uuid: [0u8; 16],
+        iso_name: config.iso_name,
+        expected_size: 0,
+    };
+
+    // Step 5: Create driver (this does brutal reset) and run download
+    let result = match net_dev.device_type {
+        NetDeviceType::VirtIO => {
+            let virtio_cfg = VirtioConfig {
+                dma_cpu_base: dma_base,
+                dma_bus_base: dma_bus,
+                dma_size,
+                queue_size: VirtioConfig::DEFAULT_QUEUE_SIZE,
+                buffer_size: VirtioConfig::DEFAULT_BUFFER_SIZE,
+            };
+            match unsafe { VirtioNetDriver::new(net_dev.mmio_base, virtio_cfg) } {
+                Ok(mut driver) => {
+                    download_with_config(&mut driver, download_config, None, tsc_freq)
+                }
+                Err(_) => {
+                    puts("[BOOT] VirtIO driver init failed\n");
+                    return RunResult::Failed;
+                }
+            }
+        }
+        NetDeviceType::IntelE1000e => {
+            let intel_cfg = unsafe {
+                E1000eConfig::new(dma_base, dma_bus, tsc_freq)
+            };
+            match unsafe { E1000eDriver::new(net_dev.mmio_base, intel_cfg) } {
+                Ok(mut driver) => {
+                    download_with_config(&mut driver, download_config, None, tsc_freq)
+                }
+                Err(_) => {
+                    puts("[BOOT] Intel driver init failed\n");
+                    return RunResult::Failed;
+                }
+            }
+        }
+    };
+
+    match result {
+        DownloadResult::Success { .. } => {
+            puts("[BOOT] download complete!\n");
+            RunResult::Success
+        }
+        DownloadResult::Failed { reason } => {
+            puts("[BOOT] download failed: ");
+            puts(reason);
+            newline();
+            RunResult::Failed
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGACY COMPATIBILITY LAYER
+// These types exist for gradual migration. Will be removed.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// NIC probe result (LEGACY - use hwinit instead).
 #[derive(Debug, Clone, Copy)]
 pub struct NicProbeResult {
-    /// MMIO base address (for legacy, or device_cfg for PCI modern)
     pub mmio_base: u64,
-    /// PCI bus number
     pub pci_bus: u8,
-    /// PCI device number
     pub pci_device: u8,
-    /// PCI function number
     pub pci_function: u8,
-    /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub transport_type: u8,
-    /// NIC type: 0=None, 1=VirtIO, 2=Intel, 3=Realtek, 4=Broadcom
     pub nic_type: u8,
-    /// Padding
     pub _pad: [u8; 3],
-    /// Common cfg address (PCI Modern only)
     pub common_cfg: u64,
-    /// Notify cfg address (PCI Modern only)
     pub notify_cfg: u64,
-    /// ISR cfg address (PCI Modern only)
     pub isr_cfg: u64,
-    /// Device cfg address (PCI Modern only)
     pub device_cfg: u64,
-    /// Notify offset multiplier (PCI Modern only)
     pub notify_off_multiplier: u32,
-    /// Padding
     pub _pad2: u32,
 }
 
-/// NIC type constants
 pub const NIC_TYPE_NONE: u8 = 0;
 pub const NIC_TYPE_VIRTIO: u8 = 1;
 pub const NIC_TYPE_INTEL: u8 = 2;
@@ -112,7 +231,6 @@ pub const NIC_TYPE_REALTEK: u8 = 3;
 pub const NIC_TYPE_BROADCOM: u8 = 4;
 
 impl NicProbeResult {
-    /// Create a new zeroed probe result.
     pub const fn zeroed() -> Self {
         Self {
             mmio_base: 0,
@@ -131,14 +249,13 @@ impl NicProbeResult {
         }
     }
 
-    /// Create MMIO transport result for VirtIO.
     pub const fn virtio_mmio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
             mmio_base,
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            transport_type: 0, // TRANSPORT_MMIO
+            transport_type: 0,
             nic_type: NIC_TYPE_VIRTIO,
             _pad: [0; 3],
             common_cfg: 0,
@@ -150,12 +267,10 @@ impl NicProbeResult {
         }
     }
 
-    /// Create MMIO transport result (generic, for backwards compat).
     pub const fn mmio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self::virtio_mmio(mmio_base, bus, device, function)
     }
 
-    /// Create PCI Modern transport result for VirtIO.
     pub const fn pci_modern(
         common_cfg: u64,
         notify_cfg: u64,
@@ -167,11 +282,11 @@ impl NicProbeResult {
         function: u8,
     ) -> Self {
         Self {
-            mmio_base: common_cfg, // Use common_cfg as mmio_base for PCI Modern
+            mmio_base: common_cfg,
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            transport_type: 1, // TRANSPORT_PCI_MODERN
+            transport_type: 1,
             nic_type: NIC_TYPE_VIRTIO,
             _pad: [0; 3],
             common_cfg,
@@ -183,14 +298,13 @@ impl NicProbeResult {
         }
     }
 
-    /// Create result for Intel e1000e NIC.
     pub const fn intel(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
             mmio_base,
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            transport_type: 0, // Intel uses plain MMIO
+            transport_type: 0,
             nic_type: NIC_TYPE_INTEL,
             _pad: [0; 3],
             common_cfg: 0,
@@ -203,41 +317,26 @@ impl NicProbeResult {
     }
 }
 
-/// Block device probe result.
+/// Block device probe result (LEGACY - use hwinit instead).
 #[derive(Debug, Clone, Copy)]
 pub struct BlkProbeResult {
-    /// MMIO base address (legacy) or 0 for PCI Modern
     pub mmio_base: u64,
-    /// PCI bus number
     pub pci_bus: u8,
-    /// PCI device number
     pub pci_device: u8,
-    /// PCI function number
     pub pci_function: u8,
-    /// Device type: 0=None, 1=VirtIO-blk
     pub device_type: u8,
-    /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub transport_type: u8,
-    /// Padding
     pub _pad: [u8; 3],
-    /// Sector size (typically 512)
     pub sector_size: u32,
-    /// Total sectors
     pub total_sectors: u64,
-    /// PCI Modern: common_cfg address
     pub common_cfg: u64,
-    /// PCI Modern: notify_cfg address
     pub notify_cfg: u64,
-    /// PCI Modern: notify offset multiplier
     pub notify_off_multiplier: u32,
-    /// PCI Modern: isr_cfg address
     pub isr_cfg: u64,
-    /// PCI Modern: device_cfg address
     pub device_cfg: u64,
 }
 
 impl BlkProbeResult {
-    /// Create a new zeroed probe result (no device found).
     pub const fn zeroed() -> Self {
         Self {
             mmio_base: 0,
@@ -257,15 +356,15 @@ impl BlkProbeResult {
         }
     }
 
-    /// Create VirtIO-blk result (legacy MMIO).
-    pub const fn virtio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
+    /// Create AHCI result.
+    pub const fn ahci(abar: u64, bus: u8, device: u8, function: u8) -> Self {
         Self {
-            mmio_base,
+            mmio_base: abar,
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            device_type: 1,    // BLK_TYPE_VIRTIO
-            transport_type: 0, // MMIO
+            device_type: 3, // AHCI
+            transport_type: 0,
             _pad: [0; 3],
             sector_size: 512,
             total_sectors: 0,
@@ -277,7 +376,27 @@ impl BlkProbeResult {
         }
     }
 
-    /// Create VirtIO-blk result (PCI Modern).
+    /// Create VirtIO-blk result.
+    pub const fn virtio(mmio_base: u64, bus: u8, device: u8, function: u8) -> Self {
+        Self {
+            mmio_base,
+            pci_bus: bus,
+            pci_device: device,
+            pci_function: function,
+            device_type: 1, // VirtIO
+            transport_type: 0,
+            _pad: [0; 3],
+            sector_size: 512,
+            total_sectors: 0,
+            common_cfg: 0,
+            notify_cfg: 0,
+            notify_off_multiplier: 0,
+            isr_cfg: 0,
+            device_cfg: 0,
+        }
+    }
+
+    /// Create VirtIO-blk result for PCI Modern.
     pub const fn pci_modern(
         common_cfg: u64,
         notify_cfg: u64,
@@ -289,11 +408,11 @@ impl BlkProbeResult {
         function: u8,
     ) -> Self {
         Self {
-            mmio_base: 0, // No legacy MMIO for PCI Modern
+            mmio_base: 0,
             pci_bus: bus,
             pci_device: device,
             pci_function: function,
-            device_type: 1,    // BLK_TYPE_VIRTIO
+            device_type: 1, // VirtIO
             transport_type: 1, // PCI Modern
             _pad: [0; 3],
             sector_size: 512,
@@ -305,179 +424,70 @@ impl BlkProbeResult {
             device_cfg,
         }
     }
-
-    /// Create AHCI result.
-    /// For AHCI, mmio_base = ABAR (AHCI Base Address Register).
-    pub const fn ahci(abar: u64, bus: u8, device: u8, function: u8) -> Self {
-        Self {
-            mmio_base: abar, // ABAR for AHCI
-            pci_bus: bus,
-            pci_device: device,
-            pci_function: function,
-            device_type: 3,    // BLK_TYPE_AHCI
-            transport_type: 0, // Not used for AHCI
-            _pad: [0; 3],
-            sector_size: 512,
-            total_sectors: 0,
-            common_cfg: 0,
-            notify_cfg: 0,
-            notify_off_multiplier: 0,
-            isr_cfg: 0,
-            device_cfg: 0,
-        }
-    }
 }
 
-/// Prepare BootHandoff from UEFI boot services.
-///
-/// Call this BEFORE ExitBootServices to populate handoff structure.
+// LEGACY functions - will be removed once bootloader migrates
 pub fn prepare_handoff(
-    nic: &NicProbeResult,
-    mac_address: [u8; 6],
-    dma_cpu_ptr: u64,
-    dma_bus_addr: u64,
-    dma_size: u64,
-    tsc_freq: u64,
-    stack_top: u64,
-    stack_size: u64,
+    _nic: &NicProbeResult,
+    _mac_address: [u8; 6],
+    _dma_cpu_ptr: u64,
+    _dma_bus_addr: u64,
+    _dma_size: u64,
+    _tsc_freq: u64,
+    _stack_top: u64,
+    _stack_size: u64,
 ) -> BootHandoff {
-    // Delegate to full version with no block device and no framebuffer
-    prepare_handoff_full(
-        nic,
-        &BlkProbeResult::zeroed(),
-        mac_address,
-        dma_cpu_ptr,
-        dma_bus_addr,
-        dma_size,
-        tsc_freq,
-        stack_top,
-        stack_size,
-        0,
-        0,
-        0,
-        0,
-        0, // No framebuffer
-    )
+    // Stub - bootloader should migrate to enter_baremetal_download
+    panic!("Legacy prepare_handoff called - migrate to new architecture");
 }
 
-/// Prepare BootHandoff with both NIC and block device info.
-///
-/// Call this BEFORE ExitBootServices to populate handoff structure.
 pub fn prepare_handoff_with_blk(
-    nic: &NicProbeResult,
-    blk: &BlkProbeResult,
-    mac_address: [u8; 6],
-    dma_cpu_ptr: u64,
-    dma_bus_addr: u64,
-    dma_size: u64,
-    tsc_freq: u64,
-    stack_top: u64,
-    stack_size: u64,
+    _nic: &NicProbeResult,
+    _blk: &BlkProbeResult,
+    _mac_address: [u8; 6],
+    _dma_cpu_ptr: u64,
+    _dma_bus_addr: u64,
+    _dma_size: u64,
+    _tsc_freq: u64,
+    _stack_top: u64,
+    _stack_size: u64,
 ) -> BootHandoff {
-    // Delegate to full version with no framebuffer
-    prepare_handoff_full(
-        nic,
-        blk,
-        mac_address,
-        dma_cpu_ptr,
-        dma_bus_addr,
-        dma_size,
-        tsc_freq,
-        stack_top,
-        stack_size,
-        0,
-        0,
-        0,
-        0,
-        0, // No framebuffer
-    )
+    panic!("Legacy prepare_handoff_with_blk called - migrate to new architecture");
 }
 
-/// Prepare BootHandoff with NIC, block device, and framebuffer info.
-///
-/// Call this BEFORE ExitBootServices to populate handoff structure.
-#[allow(clippy::too_many_arguments)]
 pub fn prepare_handoff_full(
-    nic: &NicProbeResult,
-    blk: &BlkProbeResult,
-    mac_address: [u8; 6],
-    dma_cpu_ptr: u64,
-    dma_bus_addr: u64,
-    dma_size: u64,
-    tsc_freq: u64,
-    stack_top: u64,
-    stack_size: u64,
-    fb_base: u64,
-    fb_width: u32,
-    fb_height: u32,
-    fb_stride: u32,
-    fb_format: u32,
+    _nic: &NicProbeResult,
+    _blk: &BlkProbeResult,
+    _mac_address: [u8; 6],
+    _dma_cpu_ptr: u64,
+    _dma_bus_addr: u64,
+    _dma_size: u64,
+    _tsc_freq: u64,
+    _stack_top: u64,
+    _stack_size: u64,
+    _fb_base: u64,
+    _fb_width: u32,
+    _fb_height: u32,
+    _fb_stride: u32,
+    _fb_format: u32,
 ) -> BootHandoff {
-    use morpheus_network::boot::handoff::{HANDOFF_MAGIC, HANDOFF_VERSION};
-
-    BootHandoff {
-        magic: HANDOFF_MAGIC,
-        version: HANDOFF_VERSION,
-        size: core::mem::size_of::<BootHandoff>() as u32,
-
-        nic_mmio_base: nic.mmio_base,
-        nic_pci_bus: nic.pci_bus,
-        nic_pci_device: nic.pci_device,
-        nic_pci_function: nic.pci_function,
-        nic_type: nic.nic_type,
-        mac_address,
-        _nic_pad: [0; 2],
-
-        blk_mmio_base: blk.mmio_base,
-        blk_pci_bus: blk.pci_bus,
-        blk_pci_device: blk.pci_device,
-        blk_pci_function: blk.pci_function,
-        blk_type: blk.device_type,
-        blk_sector_size: blk.sector_size,
-        blk_total_sectors: blk.total_sectors,
-
-        dma_cpu_ptr,
-        dma_bus_addr,
-        dma_size,
-
-        tsc_freq,
-
-        stack_top,
-        stack_size,
-
-        framebuffer_base: fb_base,
-        framebuffer_width: fb_width,
-        framebuffer_height: fb_height,
-        framebuffer_stride: fb_stride,
-        framebuffer_format: fb_format,
-
-        memory_map_ptr: 0,
-        memory_map_size: 0,
-        memory_map_desc_size: 0,
-
-        // PCI Modern transport fields (NIC)
-        nic_transport_type: nic.transport_type,
-        _transport_pad: [0; 3],
-        nic_notify_off_multiplier: nic.notify_off_multiplier,
-        nic_common_cfg: nic.common_cfg,
-        nic_notify_cfg: nic.notify_cfg,
-        nic_isr_cfg: nic.isr_cfg,
-        nic_device_cfg: nic.device_cfg,
-
-        // PCI Modern transport fields (BLK)
-        blk_transport_type: blk.transport_type,
-        _blk_transport_pad: [0; 3],
-        blk_notify_off_multiplier: blk.notify_off_multiplier,
-        blk_common_cfg: blk.common_cfg,
-        blk_notify_cfg: blk.notify_cfg,
-        blk_isr_cfg: blk.isr_cfg,
-        blk_device_cfg: blk.device_cfg,
-
-        _reserved: [0; 8],
-    }
+    panic!("Legacy prepare_handoff_full called - migrate to new architecture");
 }
 
-/// Test if network boot handoff is valid.
-pub fn validate_handoff(handoff: &BootHandoff) -> bool {
-    handoff.validate().is_ok()
+pub fn validate_handoff(_handoff: &BootHandoff) -> bool {
+    false
+}
+
+/// LEGACY: Old entry point wrapper (routes to new implementation)
+pub unsafe fn enter_network_boot(_handoff: &'static BootHandoff) -> RunResult {
+    panic!("Legacy enter_network_boot called - use enter_baremetal_download");
+}
+
+/// LEGACY: Old entry point wrapper with URL
+pub unsafe fn enter_network_boot_url(
+    _handoff: &'static BootHandoff,
+    _iso_url: &'static str,
+    _esp_lba: u64,
+) -> RunResult {
+    panic!("Legacy enter_network_boot_url called - use enter_baremetal_download");
 }

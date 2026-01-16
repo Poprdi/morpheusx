@@ -1,0 +1,14 @@
+[package]
+name = "morpheus-hwinit"
+version.workspace = true
+edition.workspace = true
+description = "Hardware initialization layer for MorpheusX"
+
+[features]
+default = []
+
+[dependencies]
+# Heap allocator backing
+linked_list_allocator = "0.10"
+# Spinlock (we also have our own, but this is well-tested)
+spin = "0.9"
