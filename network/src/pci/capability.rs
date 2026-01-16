@@ -311,7 +311,7 @@ impl Iterator for WalkCaps {
 /// Dump all capabilities to serial (uses crate's serial_println if available).
 #[cfg(feature = "serial_debug")]
 pub fn dump_capabilities(addr: PciAddr) {
-    use crate::mainloop::bare_metal::{serial_print, serial_print_hex, serial_println};
+    use crate::mainloop::serial::{serial_print, serial_print_hex, serial_println};
 
     serial_print("PCI ");
     serial_print_hex(addr.bus as u64);

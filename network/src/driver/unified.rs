@@ -14,7 +14,7 @@
 use crate::boot::handoff::{BootHandoff, NIC_TYPE_INTEL, NIC_TYPE_VIRTIO};
 
 // Use the known-working serial functions from bare_metal
-use crate::mainloop::bare_metal::{serial_print, serial_println};
+use crate::mainloop::serial::{serial_print, serial_println};
 
 use crate::driver::intel::{E1000eConfig, E1000eDriver, E1000eError};
 use crate::driver::traits::{NetworkDriver, RxError, TxError};

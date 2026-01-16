@@ -51,48 +51,57 @@ impl<D: NetworkDriver> State<D> for InitState {
         serial::println("=====================================");
         serial::println("");
 
-        let url = ctx.url;
-        serial::print("[INIT] URL: ");
-        serial::println(url);
-
-        // Parse URL: http://host[:port]/path
-        let url_without_scheme = if url.starts_with("https://") {
-            ctx.resolved_port = 443;
-            &url[8..]
-        } else if url.starts_with("http://") {
-            ctx.resolved_port = 80;
-            &url[7..]
-        } else {
-            serial::println("[INIT] ERROR: URL must start with http:// or https://");
-            return (Box::new(super::FailedState::new("invalid URL scheme")), StepResult::Failed("invalid URL"));
-        };
-
-        let (host_port, path) = match url_without_scheme.find('/') {
-            Some(idx) => (&url_without_scheme[..idx], &url_without_scheme[idx..]),
-            None => (url_without_scheme, "/"),
-        };
-
-        let host = match host_port.find(':') {
-            Some(idx) => {
-                if let Some(port) = parse_port(&host_port[idx + 1..]) {
-                    ctx.resolved_port = port;
-                }
-                &host_port[..idx]
+        // Parse URL by computing indices first, avoiding borrow conflicts.
+        // URL format: scheme://host[:port]/path
+        let (scheme_end, default_port) = {
+            let url = ctx.config.url;
+            if url.starts_with("https://") {
+                (8usize, 443u16)
+            } else if url.starts_with("http://") {
+                (7usize, 80u16)
+            } else {
+                serial::println("[INIT] ERROR: URL must start with http:// or https://");
+                return (Box::new(super::FailedState::new("invalid URL scheme")), StepResult::Failed("invalid URL"));
             }
-            None => host_port,
         };
 
-        // Store parsed URL parts in context
-        ctx.url_host = host;
-        ctx.url_path = path;
+        // Compute indices for host and path
+        let url = ctx.config.url;
+        let rest = &url[scheme_end..];
+        
+        let (host_end, path_start) = match rest.find('/') {
+            Some(idx) => (scheme_end + idx, scheme_end + idx),
+            None => (url.len(), url.len()),
+        };
 
+        let host_port_slice = &url[scheme_end..host_end];
+        let (host_slice_end, port) = match host_port_slice.find(':') {
+            Some(colon_idx) => {
+                let port_str = &host_port_slice[colon_idx + 1..];
+                let port = parse_port(port_str).unwrap_or(default_port);
+                (scheme_end + colon_idx, port)
+            }
+            None => (host_end, default_port),
+        };
+
+        // Assign using direct indexing
+        ctx.resolved_port = port;
+        ctx.url_host = &ctx.config.url[scheme_end..host_slice_end];
+        ctx.url_path = if path_start < ctx.config.url.len() {
+            &ctx.config.url[path_start..]
+        } else {
+            "/"
+        };
+
+        serial::print("[INIT] URL: ");
+        serial::println(ctx.config.url);
         serial::print("[INIT] Host: ");
-        serial::println(host);
+        serial::println(ctx.url_host);
         serial::print("[INIT] Port: ");
         serial::print_u32(ctx.resolved_port as u32);
         serial::println("");
         serial::print("[INIT] Path: ");
-        serial::println(path);
+        serial::println(ctx.url_path);
         serial::print("[INIT] TSC freq: ");
         serial::print_u32((ctx.tsc_freq / 1_000_000) as u32);
         serial::println(" MHz");
