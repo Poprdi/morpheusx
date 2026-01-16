@@ -2,10 +2,16 @@
 //!
 //! This module coordinates the critical ExitBootServices transition:
 //! 1. User confirms download from catalog
-//! 2. Allocate resources (DMA, stack, handoff)
-//! 3. Calibrate timing
-//! 4. Call ExitBootServices (POINT OF NO RETURN)
-//! 5. Jump to bare_metal_main for actual download
+//! 2. Call ExitBootServices (POINT OF NO RETURN)
+//! 3. hwinit takes ownership of the machine
+//! 4. Download proceeds with drivers
+//!
+//! # NEW Architecture (Self-Contained)
+//!
+//! The new `commit_to_download_selfcontained` path is much simpler:
+//! - Only saves memory map during ExitBootServices
+//! - hwinit does ALL hardware init (GDT, IDT, PIC, heap, DMA, PCI)
+//! - Drivers just do driver work
 //!
 //! # Safety
 //! After ExitBootServices: no UEFI services, no heap, serial-only output.
@@ -13,7 +19,12 @@
 extern crate alloc;
 
 use crate::boot::gop::query_gop;
-use crate::boot::network_boot::enter_network_boot_url;
+use crate::boot::network_boot::{
+    // Legacy (old path)
+    enter_network_boot_url,
+    // New path - hwinit owns the world
+    enter_baremetal_world, BaremetalEntryConfig, DownloadRequest,
+};
 use crate::tui::renderer::Screen;
 
 // Re-export configuration
@@ -240,4 +251,161 @@ pub unsafe fn commit_to_download(
     loop {
         core::hint::spin_loop();
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SELF-CONTAINED ARCHITECTURE (RECOMMENDED)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Commit to download using self-contained hwinit architecture.
+///
+/// This is the RECOMMENDED path. Much simpler than legacy:
+/// - Allocates stack before EBS (only pre-EBS allocation needed)
+/// - hwinit handles everything else
+///
+/// # POINT OF NO RETURN
+/// Once ExitBootServices is called, there's no going back.
+///
+/// # Safety
+/// This function never returns.
+pub unsafe fn commit_to_download_selfcontained(
+    boot_services: *const crate::BootServices,
+    image_handle: *mut (),
+    screen: &mut Screen,
+    config: DownloadCommitConfig,
+) -> ! {
+    let bs = &*boot_services;
+
+    // Phase 0: Display countdown
+    display_commit_countdown(screen, &config, bs);
+
+    // Create debug log buffer (only displayed on error)
+    let mut debug_log = DebugLog::new();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CRITICAL: Allocate stack BEFORE ExitBootServices
+    // UEFI's stack may be in BootServicesData which becomes invalid after EBS
+    // ═══════════════════════════════════════════════════════════════════════
+    debug_log.add("Allocating bare-metal stack...", LOG_YELLOW);
+    let (stack_base, stack_top) = match super::resources::allocate_stack(bs, screen, &mut 0) {
+        Ok(result) => {
+            debug_log.add(&alloc::format!("  Stack: {:#x} - {:#x}", result.0, result.1), LOG_GREEN);
+            result
+        }
+        Err(_) => {
+            display_error_and_halt(screen, &debug_log, "Failed to allocate stack", bs);
+        }
+    };
+
+    // Phase 1: Find ESP partition (need this before EBS)
+    debug_log.add("Locating ESP partition...", LOG_YELLOW);
+    let esp_lba = super::uefi::find_esp_lba(bs, image_handle).unwrap_or(2048);
+    debug_log.add(&alloc::format!("  ESP Start LBA: {}", esp_lba), LOG_GREEN);
+
+    // Phase 2: Leak URL for bare-metal use (heap still available)
+    let url_copy = leak_string(&config.iso_url);
+    // Derive ISO name from distro name (or use a default)
+    let name_copy = leak_string(&config.distro_name);
+
+    debug_log.add("All systems ready!", LOG_GREEN);
+
+    // SUCCESS: Show clean ASCII art
+    display_download_start(screen, bs);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CRITICAL: Exit boot services and capture memory map
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Use static buffers for data that needs to survive the stack switch
+    // This is a one-shot operation, no concurrency concerns
+    static mut MMAP_BUF: [u8; 8192] = [0u8; 8192];
+    static mut MMAP_SIZE: usize = 0;
+    static mut DESC_SIZE: usize = 0;
+    static mut DESC_VERSION: u32 = 0;
+    static mut URL_PTR: *const u8 = core::ptr::null();
+    static mut URL_LEN: usize = 0;
+    static mut NAME_PTR: *const u8 = core::ptr::null();
+    static mut NAME_LEN: usize = 0;
+    static mut ESP_LBA: u64 = 0;
+    static mut NEW_STACK_TOP: u64 = 0;
+
+    // Store values in statics before EBS
+    URL_PTR = url_copy.as_ptr();
+    URL_LEN = url_copy.len();
+    NAME_PTR = name_copy.as_ptr();
+    NAME_LEN = name_copy.len();
+    ESP_LBA = esp_lba;
+    NEW_STACK_TOP = stack_top;
+
+    let mut map_key: usize = 0;
+    MMAP_SIZE = MMAP_BUF.len();
+
+    // Disable watchdog timer BEFORE GetMemoryMap
+    let _ = (bs.set_watchdog_timer)(0, 0, 0, core::ptr::null());
+
+    // Get memory map into static buffer
+    let status = (bs.get_memory_map)(
+        &mut MMAP_SIZE,
+        MMAP_BUF.as_mut_ptr(),
+        &mut map_key,
+        &mut DESC_SIZE,
+        &mut DESC_VERSION,
+    );
+
+    if status != 0 {
+        loop { core::hint::spin_loop(); }
+    }
+
+    // Exit boot services IMMEDIATELY (memory map is stale if we do anything else)
+    let status = (bs.exit_boot_services)(image_handle, map_key);
+    if status != 0 {
+        // Retry once with fresh map
+        MMAP_SIZE = MMAP_BUF.len();
+        let _ = (bs.get_memory_map)(
+            &mut MMAP_SIZE,
+            MMAP_BUF.as_mut_ptr(),
+            &mut map_key,
+            &mut DESC_SIZE,
+            &mut DESC_VERSION,
+        );
+        let status = (bs.exit_boot_services)(image_handle, map_key);
+        if status != 0 {
+            loop { core::hint::spin_loop(); }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // UEFI IS GONE. Switch to our stack and enter hwinit.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Switch to our allocated stack
+    core::arch::asm!(
+        "mov rsp, {new_stack}",
+        "and rsp, ~0xF",  // 16-byte align
+        new_stack = in(reg) NEW_STACK_TOP,
+        options(nostack)
+    );
+
+    // Now on new stack - read from statics and call hwinit
+    let entry_config = BaremetalEntryConfig {
+        memory_map_ptr: MMAP_BUF.as_ptr(),
+        memory_map_size: MMAP_SIZE,
+        descriptor_size: DESC_SIZE,
+        descriptor_version: DESC_VERSION,
+    };
+
+    let url_slice = core::str::from_utf8_unchecked(
+        core::slice::from_raw_parts(URL_PTR, URL_LEN)
+    );
+    let name_slice = core::str::from_utf8_unchecked(
+        core::slice::from_raw_parts(NAME_PTR, NAME_LEN)
+    );
+
+    let download_req = DownloadRequest {
+        url: url_slice,
+        name: name_slice,
+        esp_start_lba: ESP_LBA,
+    };
+
+    enter_baremetal_world(entry_config, download_req);
 }

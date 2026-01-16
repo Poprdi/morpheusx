@@ -14,5 +14,9 @@ pub mod resources;
 pub mod uefi;
 
 // Re-export main types and functions
-pub use commit_download::{commit_to_download, CommitResult};
+pub use commit_download::{
+    commit_to_download,
+    commit_to_download_selfcontained,  // New self-contained path (RECOMMENDED)
+    CommitResult,
+};
 pub use display::DownloadCommitConfig;

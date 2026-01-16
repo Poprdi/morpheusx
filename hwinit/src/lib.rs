@@ -171,11 +171,7 @@ pub use platform::{
     platform_init,
     PlatformConfig,
 
-    // Common types
+    // Common types (platform only - no device types)
     InitError,
-    NetDeviceType,
-    BlkDeviceType,
     PlatformInit,
-    PreparedNetDevice,
-    PreparedBlkDevice,
 };

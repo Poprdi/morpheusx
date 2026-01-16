@@ -299,8 +299,8 @@ fn handle_confirm_delete_input(
 /// Start downloading a distribution
 ///
 /// This triggers the commit flow that exits UEFI boot services and
-/// downloads in bare-metal mode. This function will NEVER RETURN
-/// on success - the system will reboot after download completes.
+/// enters bare-metal mode. hwinit takes ownership of the machine.
+/// This function will NEVER RETURN - we leave UEFI forever.
 fn start_download(ctx: &mut InputContext, distro: &'static DistroEntry, screen: &mut Screen) {
     ctx.ui_state.start_download();
     ctx.download_state.start_check(distro.filename);
@@ -315,15 +315,16 @@ fn start_download(ctx: &mut InputContext, distro: &'static DistroEntry, screen: 
         distro_name: String::from(distro.name),
     };
 
-    // COMMIT TO DOWNLOAD - THIS DOES NOT RETURN
-    // Exits UEFI boot services and downloads in bare-metal mode
+    // ═══════════════════════════════════════════════════════════════════════
+    // POINT OF NO RETURN - Exit UEFI, hwinit owns the world
+    // ═══════════════════════════════════════════════════════════════════════
     unsafe {
-        crate::tui::distro_downloader::commit::commit_to_download(
+        crate::tui::distro_downloader::commit::commit_to_download_selfcontained(
             ctx.boot_services,
             ctx.image_handle,
             screen,
             config,
         );
     }
-    // NOTE: We never reach here - commit_to_download is divergent (-> !)
+    // NOTE: We never reach here - UEFI is gone, hwinit owns the machine
 }
