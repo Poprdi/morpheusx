@@ -157,7 +157,7 @@ pub static DISTRO_CATALOG: &[DistroEntry] = &[
         "Tails",
         "Amnesic Incognito Live System - Privacy focused",
         "6.10",
-        "http://mirror.freedif.org/Tails/tails/stable/tails-amd64-7.3.1/tails-amd64-7.3.1.iso",
+        "http://mirror.freedif.org/Tails/tails/stable/tails-amd64-7.4/tails-amd64-7.4.iso",
         1_400_000_000,
         "tails-6.10.iso",
         DistroCategory::Privacy,

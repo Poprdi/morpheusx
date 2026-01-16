@@ -3,11 +3,12 @@
 //! Rust orchestration layer for receive operations.
 //! All hardware access is via ASM bindings.
 
-use crate::asm::core::barriers::lfence;
+use crate::asm::core::barriers::{lfence, sfence};
 use crate::asm::drivers::intel::{
     asm_intel_rx_clear_desc, asm_intel_rx_init_desc, asm_intel_rx_poll, asm_intel_rx_update_tail,
     RxPollResult,
 };
+use crate::mainloop::serial::{serial_print, serial_print_hex, serial_println};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -95,6 +96,22 @@ impl RxRing {
 
     /// Initialize all descriptors with buffer addresses.
     pub fn init_descriptors(&mut self) {
+        // Print critical DMA info for hardware debugging
+        serial_print("  [RX-INIT] desc_bus=0x");
+        serial_print_hex(self.desc_bus);
+        serial_print(" buffer_bus=0x");
+        serial_print_hex(self.buffer_bus);
+        serial_println("");
+        
+        // Check if addresses are in valid range for real hardware
+        // Real Intel NICs require addresses below 4GB (or proper 64-bit BAR config)
+        if self.desc_bus > 0xFFFF_FFFF {
+            serial_println("  [WARNING] RX desc_bus > 4GB!");
+        }
+        if self.buffer_bus > 0xFFFF_FFFF {
+            serial_println("  [WARNING] RX buffer_bus > 4GB!");
+        }
+        
         for i in 0..self.queue_size {
             let desc_ptr = self.desc_ptr(i);
             let buffer_bus = self.buffer_bus_addr(i);
@@ -103,6 +120,12 @@ impl RxRing {
                 asm_intel_rx_init_desc(desc_ptr, buffer_bus);
             }
         }
+        
+        // CRITICAL: SFENCE after writing all descriptors
+        // This ensures descriptors are visible to the NIC before we enable RX
+        // Real hardware WILL fail without this; QEMU ignores it
+        unsafe { sfence(); }
+        serial_println("  [RX-INIT] Descriptors initialized + sfence");
     }
 
     /// Update tail register to start receiving.
