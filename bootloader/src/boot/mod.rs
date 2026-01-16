@@ -24,6 +24,11 @@ pub use memory::{
     allocate_boot_params, allocate_cmdline, allocate_kernel_memory, load_kernel_image,
 };
 pub use network_boot::{
-    enter_network_boot, prepare_handoff, prepare_handoff_full, prepare_handoff_with_blk,
+    // New architecture entry point
+    enter_baremetal_download, BaremetalConfig, RunResult,
+    // Legacy compatibility (will panic with migration message)
+    enter_network_boot, enter_network_boot_url,
+    prepare_handoff, prepare_handoff_full, prepare_handoff_with_blk,
     validate_handoff, BlkProbeResult, NicProbeResult,
+    NIC_TYPE_NONE, NIC_TYPE_VIRTIO, NIC_TYPE_INTEL, NIC_TYPE_REALTEK, NIC_TYPE_BROADCOM,
 };
