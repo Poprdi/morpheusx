@@ -3,17 +3,18 @@
 //! # DEPRECATED
 //!
 //! This module is deprecated. Network initialization now happens **post-ExitBootServices**
-//! using the bare-metal network stack directly in `morpheus_network::mainloop::bare_metal_main`.
+//! using the modular state machine in `morpheus_network::mainloop::orchestrator`.
 //!
 //! The old flow (this module):
 //! 1. Initialize in UEFI environment
 //! 2. Use factory pattern to detect/create devices
 //!
 //! The new flow:
-//! 1. Bootstrap displays menu, user selects ISO
+//! 1. hwinit normalizes hardware (bus mastering, DMA policy, etc)
 //! 2. ExitBootServices is called
-//! 3. Bare-metal stack initializes VirtIO directly
-//! 4. HTTP download proceeds
+//! 3. Network crate initializes its own drivers
+//! 4. `download_with_config()` runs the state machine
+//! 5. State flow: Init → GptPrep → LinkWait → DHCP → DNS → Connect → HTTP → Manifest → Done
 //!
 //! This stub is kept for API compatibility with existing imports.
 
@@ -26,7 +27,7 @@ use super::status::NetworkStatus;
 ///
 /// This type is kept for API compatibility but `NetworkInit::initialize()`
 /// always returns an error directing callers to use post-EBS flow.
-#[deprecated(note = "Network init moved to post-EBS. Use bare_metal_main() instead.")]
+#[deprecated(note = "Network init moved to post-EBS. Use download_with_config() instead.")]
 pub struct NetworkInitResult {
     /// Network status with IP info.
     pub status: NetworkStatus,
@@ -35,8 +36,8 @@ pub struct NetworkInitResult {
 /// Network initialization orchestrator (DEPRECATED).
 ///
 /// Network initialization is now handled post-ExitBootServices by
-/// `morpheus_network::mainloop::bare_metal_main()`.
-#[deprecated(note = "Network init moved to post-EBS. Use bare_metal_main() instead.")]
+/// `morpheus_network::mainloop::orchestrator::download_with_config()`.
+#[deprecated(note = "Network init moved to post-EBS. Use download_with_config() instead.")]
 pub struct NetworkInit;
 
 #[allow(deprecated)]
@@ -44,8 +45,8 @@ impl NetworkInit {
     /// Perform complete network initialization (DEPRECATED).
     ///
     /// **Always returns error** - network init is now post-EBS.
-    /// Use `morpheus_network::mainloop::bare_metal_main()` after ExitBootServices.
-    #[deprecated(note = "Network init moved to post-EBS. Use bare_metal_main() instead.")]
+    /// Use `morpheus_network::mainloop::download_with_config()` after ExitBootServices.
+    #[deprecated(note = "Network init moved to post-EBS. Use download_with_config() instead.")]
     pub fn initialize(
         _config: &InitConfig,
         _get_time_ms: fn() -> u64,
@@ -57,7 +58,7 @@ impl NetworkInit {
     /// Initialize with display polling (DEPRECATED).
     ///
     /// **Always returns error** - network init is now post-EBS.
-    #[deprecated(note = "Network init moved to post-EBS. Use bare_metal_main() instead.")]
+    #[deprecated(note = "Network init moved to post-EBS. Use download_with_config() instead.")]
     pub fn initialize_with_poll<F>(
         _config: &InitConfig,
         _get_time_ms: fn() -> u64,

@@ -1,19 +1,30 @@
 //! VirtIO initialization sequence.
 //!
+//! # RESET CONTRACT (See ../RESET_CONTRACT.md)
+//!
+//! VirtIO init performs a proper spec-compliant reset:
+//! 1. Write 0 to status register
+//! 2. Wait for status to read back 0
+//! 3. Rebuild all state from scratch
+//!
+//! # Preconditions (hwinit guarantees)
+//! - Bus mastering enabled
+//! - MMIO BAR mapped  
+//! - DMA legal
+//!
 //! # Initialization Steps
-//! 1. Reset device
+//! 1. Reset device (mandatory, FAIL on timeout)
 //! 2. Set ACKNOWLEDGE
 //! 3. Set DRIVER
 //! 4. Feature negotiation
 //! 5. Set FEATURES_OK
 //! 6. Verify FEATURES_OK
-//! 7. Configure virtqueues
-//! 8. Pre-fill RX queue
-//! 9. Set DRIVER_OK
-//! 10. Read MAC address
+//! 7. Configure virtqueues from scratch
+//! 8. Set DRIVER_OK
+//! 9. Read MAC address
 //!
 //! # Reference
-//! NETWORK_IMPL_GUIDE.md §4.5
+//! VirtIO 1.1 spec, Section 3.1
 
 use super::config::{features, negotiate_features, status, VirtioConfig};
 use super::transport::{TransportType, VirtioTransport};

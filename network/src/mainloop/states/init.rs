@@ -12,7 +12,7 @@ use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
 
-use super::DhcpState;
+use super::GptPrepState;
 
 /// Initialization state.
 pub struct InitState {
@@ -42,8 +42,8 @@ impl<D: NetworkDriver> State<D> for InitState {
         _tsc: u64,
     ) -> (Box<dyn State<D>>, StepResult) {
         if self.validated {
-            serial::println("[INIT] -> DHCP");
-            return (Box::new(DhcpState::new()), StepResult::Transition);
+            serial::println("[INIT] -> GPT Prep");
+            return (Box::new(GptPrepState::new()), StepResult::Transition);
         }
 
         serial::println("=====================================");

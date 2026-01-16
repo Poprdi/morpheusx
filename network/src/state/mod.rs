@@ -37,7 +37,7 @@ pub mod download;
 pub mod http;
 pub mod tcp;
 
-use crate::boot::TimeoutConfig;
+use crate::time::TimeoutConfig;
 use core::fmt;
 
 // ═══════════════════════════════════════════════════════════════════════════
