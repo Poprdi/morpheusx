@@ -116,10 +116,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
     fn step(
         mut self: Box<Self>,
         ctx: &mut Context<'_>,
-        iface: &mut Interface,
+        _iface: &mut Interface,
         sockets: &mut SocketSet<'_>,
-        adapter: &mut SmoltcpAdapter<'_, D>,
-        now: Instant,
+        _adapter: &mut SmoltcpAdapter<'_, D>,
+        _now: Instant,
         tsc: u64,
     ) -> (Box<dyn State<D>>, StepResult) {
         // Initialize on first call
@@ -221,8 +221,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             }
 
                             // Check for chunked encoding
-                            self.chunked = header_str.to_ascii_lowercase()
-                                .contains("transfer-encoding: chunked");
+                            self.chunked = contains_ignore_case(header_str, "transfer-encoding: chunked");
 
                             // Move body data to start of buffer
                             let body_start = end + 4; // Skip \r\n\r\n
@@ -345,14 +344,27 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
     None
 }
 
-/// Parse Content-Length from headers.
+/// Parse Content-Length from headers (case-insensitive).
 fn parse_content_length(headers: &str) -> Option<u64> {
     for line in headers.lines() {
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("content-length:") {
+        // Case-insensitive check without allocation
+        if line.len() >= 15 && line[..15].eq_ignore_ascii_case("content-length:") {
             let value = line[15..].trim();
             return value.parse().ok();
         }
     }
     None
+}
+
+/// Case-insensitive substring search without allocation.
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    for i in 0..=(haystack.len() - needle.len()) {
+        if haystack[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            return true;
+        }
+    }
+    false
 }
