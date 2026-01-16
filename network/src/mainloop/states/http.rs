@@ -12,6 +12,7 @@ use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use crate::mainloop::disk_writer::DiskWriter;
 
 use super::{DoneState, FailedState};
 
@@ -50,6 +51,9 @@ pub struct HttpState {
     /// Header parsing buffer
     header_buf: [u8; 2048],
     header_len: usize,
+    
+    /// Disk writer for streaming to disk
+    disk_writer: Option<DiskWriter>,
 }
 
 impl HttpState {
@@ -69,6 +73,27 @@ impl HttpState {
             bytes_received: 0,
             header_buf: [0u8; 2048],
             header_len: 0,
+            disk_writer: None,
+        }
+    }
+
+    /// Create HTTP state for download with disk writing enabled.
+    pub fn with_disk_write(tcp_handle: SocketHandle, start_sector: u64) -> Self {
+        Self {
+            tcp_handle,
+            phase: HttpPhase::SendRequest,
+            start_tsc: 0,
+            last_activity_tsc: 0,
+            method: "GET",
+            path: None,
+            host: None,
+            headers_complete: false,
+            content_length: None,
+            chunked: false,
+            bytes_received: 0,
+            header_buf: [0u8; 2048],
+            header_len: 0,
+            disk_writer: Some(DiskWriter::new(start_sector)),
         }
     }
 
@@ -93,6 +118,7 @@ impl HttpState {
             bytes_received: 0,
             header_buf: [0u8; 2048],
             header_len: 0,
+            disk_writer: None,
         }
     }
 
@@ -230,7 +256,13 @@ impl<D: NetworkDriver> State<D> for HttpState {
                                 // Process initial body data
                                 self.bytes_received += body_len as u64;
                                 ctx.bytes_downloaded = self.bytes_received;
-                                // TODO: Write to disk if enabled
+                                
+                                // Write initial body data to disk if enabled
+                                if let (Some(ref mut writer), Some(ref mut blk)) = 
+                                    (&mut self.disk_writer, &mut ctx.blk_device) {
+                                    let written = writer.write(blk, &self.header_buf[body_start..self.header_len]);
+                                    ctx.bytes_written += written as u64;
+                                }
                             }
 
                             self.phase = HttpPhase::ReceiveBody;
@@ -246,6 +278,15 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     // Check if we're done
                     if let Some(expected) = self.content_length {
                         if self.bytes_received >= expected {
+                            // Flush disk buffer
+                            if let (Some(ref mut writer), Some(ref mut blk)) = 
+                                (&mut self.disk_writer, &mut ctx.blk_device) {
+                                if !writer.flush(blk) {
+                                    serial::println("[HTTP] ERROR: Disk flush failed");
+                                    return (Box::new(FailedState::new("disk flush")), StepResult::Failed("flush"));
+                                }
+                                ctx.bytes_written = writer.bytes_written();
+                            }
                             serial::println("[HTTP] Download complete");
                             self.phase = HttpPhase::Complete;
                             ctx.bytes_downloaded = self.bytes_received;
@@ -257,6 +298,12 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     if socket.state() != smoltcp::socket::tcp::State::Established {
                         if self.content_length.is_none() {
                             // No Content-Length, connection close = end
+                            // Flush disk buffer
+                            if let (Some(ref mut writer), Some(ref mut blk)) = 
+                                (&mut self.disk_writer, &mut ctx.blk_device) {
+                                writer.flush(blk);
+                                ctx.bytes_written = writer.bytes_written();
+                            }
                             serial::println("[HTTP] Download complete (connection closed)");
                             ctx.bytes_downloaded = self.bytes_received;
                             return (Box::new(DoneState::new()), StepResult::Transition);
@@ -289,10 +336,32 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             serial::println(" MB");
                         }
 
-                        // TODO: Write to disk if enabled
-                        // This would use ctx.blk_device
+                        // Write to disk if enabled
+                        if let (Some(ref mut writer), Some(ref mut blk)) = 
+                            (&mut self.disk_writer, &mut ctx.blk_device) {
+                            let written = writer.write(blk, &buf[..n]);
+                            ctx.bytes_written += written as u64;
+                        }
                     }
                     Err(_) => {}
+                }
+
+                // Check if download complete
+                if let Some(expected) = self.content_length {
+                    if self.bytes_received >= expected {
+                        // Flush remaining disk buffer
+                        if let (Some(ref mut writer), Some(ref mut blk)) = 
+                            (&mut self.disk_writer, &mut ctx.blk_device) {
+                            if !writer.flush(blk) {
+                                serial::println("[HTTP] ERROR: Final disk flush failed");
+                                return (Box::new(FailedState::new("disk flush")), StepResult::Failed("flush"));
+                            }
+                            ctx.bytes_written = writer.bytes_written();
+                        }
+                        serial::println("[HTTP] Download complete");
+                        ctx.bytes_downloaded = self.bytes_received;
+                        return (Box::new(DoneState::new()), StepResult::Transition);
+                    }
                 }
             }
 

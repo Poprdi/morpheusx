@@ -117,7 +117,13 @@ impl<D: NetworkDriver> State<D> for ConnectState {
             TcpState::Established => {
                 serial::println("[TCP] Connected!");
                 serial::println("[TCP] -> HTTP");
-                return (Box::new(HttpState::new(tcp_handle)), StepResult::Transition);
+                // Create HTTP state with disk writing if enabled
+                let http_state = if ctx.should_write_to_disk() {
+                    HttpState::with_disk_write(tcp_handle, ctx.config.target_start_sector)
+                } else {
+                    HttpState::new(tcp_handle)
+                };
+                return (Box::new(http_state), StepResult::Transition);
             }
             TcpState::SynSent | TcpState::SynReceived => {}
             TcpState::Closed | TcpState::TimeWait => {
