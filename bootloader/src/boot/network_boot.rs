@@ -27,10 +27,15 @@ use alloc::boxed::Box;
 use alloc::string::ToString;
 
 use morpheus_hwinit::{
-    platform_init, InitError, NetDeviceType, BlkDeviceType,
-    PlatformConfig, PlatformInit, PreparedNetDevice, PreparedBlkDevice,
+    // Legacy entry
+    platform_init, PlatformConfig,
+    // New self-contained entry (recommended)
+    platform_init_selfcontained, SelfContainedConfig,
+    // Common types (platform only - no device types)
+    InitError, PlatformInit,
 };
 use morpheus_network::boot::handoff::BootHandoff;
+use morpheus_network::boot::probe::{probe_network_device, scan_for_nic, DetectedNic, ProbeResult, ProbeError};
 use morpheus_network::driver::traits::NetworkDriver;
 use morpheus_network::driver::virtio::{VirtioConfig, VirtioNetDriver};
 use morpheus_network::driver::intel::{E1000eConfig, E1000eDriver};
@@ -115,6 +120,11 @@ pub unsafe fn enter_baremetal_download(
                 InitError::BarDecodeFailed => puts("BAR decode failed"),
                 InitError::TscCalibrationFailed => puts("TSC calibration failed"),
                 InitError::NoFreeMemory => puts("no free memory"),
+                InitError::MemoryRegistryFailed => puts("memory registry init failed"),
+                InitError::GdtInitFailed => puts("GDT init failed"),
+                InitError::IdtInitFailed => puts("IDT init failed"),
+                InitError::PicInitFailed => puts("PIC init failed"),
+                InitError::HeapInitFailed => puts("heap init failed"),
             }
             newline();
             return RunResult::HwInitFailed;
@@ -199,6 +209,299 @@ pub unsafe fn enter_baremetal_download(
             RunResult::Failed
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SELF-CONTAINED BARE-METAL ENTRY (RECOMMENDED)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Configuration for bare-metal entry after ExitBootServices.
+///
+/// Only needs the UEFI memory map - hwinit handles everything else.
+pub struct BaremetalEntryConfig {
+    /// Pointer to UEFI memory map (from ExitBootServices)
+    pub memory_map_ptr: *const u8,
+    /// Size of memory map in bytes
+    pub memory_map_size: usize,
+    /// Size of each descriptor entry
+    pub descriptor_size: usize,
+    /// Descriptor version (from UEFI)
+    pub descriptor_version: u32,
+}
+
+/// Download request for bare-metal mode.
+pub struct DownloadRequest {
+    /// URL to download
+    pub url: &'static str,
+    /// Name for manifest
+    pub name: &'static str,
+    /// ESP start LBA for disk writes (0 = don't persist)
+    pub esp_start_lba: u64,
+}
+
+/// Result of bare-metal operations.
+#[derive(Debug, Clone, Copy)]
+pub enum BaremetalResult {
+    /// Download completed successfully
+    DownloadComplete { bytes: u64 },
+    /// Download failed
+    DownloadFailed,
+    /// No network device found
+    NoNetworkDevice,
+    /// Platform init failed
+    PlatformInitFailed,
+}
+
+/// Bare-metal main entry point.
+///
+/// This is THE entry point after ExitBootServices. We never return to UEFI.
+///
+/// # Flow
+/// 1. hwinit takes ownership (GDT, IDT, PIC, heap, DMA, PCI)
+/// 2. Execute the requested download
+/// 3. Return to bare-metal main loop (for now: halt, later: menu)
+///
+/// # Safety
+/// - Must be called IMMEDIATELY after ExitBootServices
+/// - Memory map must be valid
+/// - NEVER returns to UEFI - we own the machine now
+pub unsafe fn enter_baremetal_world(
+    config: BaremetalEntryConfig,
+    download: DownloadRequest,
+) -> ! {
+    use morpheus_hwinit::serial::{puts, put_hex64, newline};
+
+    puts("\n");
+    puts("╔══════════════════════════════════════════════════════════════╗\n");
+    puts("║              MORPHEUS BARE-METAL MODE                        ║\n");
+    puts("║              UEFI is gone. We own the machine.               ║\n");
+    puts("╚══════════════════════════════════════════════════════════════╝\n");
+    puts("\n");
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 1: hwinit takes ownership
+    // ─────────────────────────────────────────────────────────────────────
+
+    let hwinit_config = SelfContainedConfig {
+        memory_map_ptr: config.memory_map_ptr,
+        memory_map_size: config.memory_map_size,
+        descriptor_size: config.descriptor_size,
+        descriptor_version: config.descriptor_version,
+    };
+
+    let platform = match platform_init_selfcontained(hwinit_config) {
+        Ok(p) => p,
+        Err(e) => {
+            puts("[BAREMETAL] FATAL: platform init failed: ");
+            match e {
+                InitError::InvalidDmaRegion => puts("invalid DMA region"),
+                InitError::NoDevicesFound => puts("no devices found"),
+                InitError::BarDecodeFailed => puts("BAR decode failed"),
+                InitError::TscCalibrationFailed => puts("TSC calibration failed"),
+                InitError::NoFreeMemory => puts("no free memory"),
+                InitError::MemoryRegistryFailed => puts("memory registry init failed"),
+                InitError::GdtInitFailed => puts("GDT init failed"),
+                InitError::IdtInitFailed => puts("IDT init failed"),
+                InitError::PicInitFailed => puts("PIC init failed"),
+                InitError::HeapInitFailed => puts("heap init failed"),
+            }
+            newline();
+            baremetal_halt("Platform initialization failed");
+        }
+    };
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 2: Execute download
+    // ─────────────────────────────────────────────────────────────────────
+
+    let result = execute_download(&platform, &download);
+
+    match result {
+        BaremetalResult::DownloadComplete { bytes } => {
+            puts("\n");
+            puts("╔══════════════════════════════════════════════════════════════╗\n");
+            puts("║                    DOWNLOAD COMPLETE                         ║\n");
+            puts("╚══════════════════════════════════════════════════════════════╝\n");
+            puts("[BAREMETAL] Bytes written: ");
+            put_hex64(bytes);
+            newline();
+        }
+        BaremetalResult::DownloadFailed => {
+            puts("[BAREMETAL] Download failed\n");
+        }
+        BaremetalResult::NoNetworkDevice => {
+            puts("[BAREMETAL] No network device found\n");
+        }
+        BaremetalResult::PlatformInitFailed => {
+            puts("[BAREMETAL] Platform init failed\n");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 3: Bare-metal main loop
+    // ─────────────────────────────────────────────────────────────────────
+    // TODO: This will become a proper menu once display is sorted
+    // For now, just report completion and wait
+
+    baremetal_main_loop(&platform);
+}
+
+/// Execute a download in bare-metal mode.
+unsafe fn execute_download(platform: &PlatformInit, download: &DownloadRequest) -> BaremetalResult {
+    use morpheus_hwinit::serial::{puts, put_hex64, newline};
+
+    // Find network device
+    let net_dev = match platform.net_devices.iter().find_map(|d| *d) {
+        Some(d) => d,
+        None => {
+            return BaremetalResult::NoNetworkDevice;
+        }
+    };
+
+    puts("[BAREMETAL] Network device: ");
+    match net_dev.device_type {
+        NetDeviceType::VirtIO => puts("VirtIO-net"),
+        NetDeviceType::IntelE1000e => puts("Intel e1000e"),
+    }
+    puts(" @ ");
+    put_hex64(net_dev.mmio_base);
+    newline();
+
+    // Build download config
+    let download_config = DownloadConfig {
+        url: download.url,
+        write_to_disk: download.esp_start_lba > 0,
+        target_start_sector: 0,
+        manifest_sector: 0,
+        esp_start_lba: download.esp_start_lba,
+        partition_uuid: [0u8; 16],
+        iso_name: download.name,
+        expected_size: 0,
+    };
+
+    let dma_cpu = platform.dma_region.cpu_base();
+    let dma_bus = platform.dma_region.bus_base();
+    let dma_size = platform.dma_region.size();
+    let tsc_freq = platform.tsc_freq;
+
+    // Create driver and execute download
+    let result = match net_dev.device_type {
+        NetDeviceType::VirtIO => {
+            let virtio_cfg = VirtioConfig {
+                dma_cpu_base: dma_cpu,
+                dma_bus_base: dma_bus,
+                dma_size,
+                queue_size: VirtioConfig::DEFAULT_QUEUE_SIZE,
+                buffer_size: VirtioConfig::DEFAULT_BUFFER_SIZE,
+            };
+            match VirtioNetDriver::new(net_dev.mmio_base, virtio_cfg) {
+                Ok(mut driver) => {
+                    download_with_config(&mut driver, download_config, None, tsc_freq)
+                }
+                Err(_) => {
+                    puts("[BAREMETAL] VirtIO driver init failed\n");
+                    return BaremetalResult::DownloadFailed;
+                }
+            }
+        }
+        NetDeviceType::IntelE1000e => {
+            let intel_cfg = E1000eConfig::new(dma_cpu, dma_bus, tsc_freq);
+            match E1000eDriver::new(net_dev.mmio_base, intel_cfg) {
+                Ok(mut driver) => {
+                    download_with_config(&mut driver, download_config, None, tsc_freq)
+                }
+                Err(_) => {
+                    puts("[BAREMETAL] Intel driver init failed\n");
+                    return BaremetalResult::DownloadFailed;
+                }
+            }
+        }
+    };
+
+    match result {
+        DownloadResult::Success { bytes_written, .. } => {
+            BaremetalResult::DownloadComplete { bytes: bytes_written as u64 }
+        }
+        DownloadResult::Failed { reason } => {
+            puts("[BAREMETAL] Download failed: ");
+            puts(reason);
+            newline();
+            BaremetalResult::DownloadFailed
+        }
+    }
+}
+
+/// Bare-metal main loop.
+///
+/// This is where we live after UEFI is gone. For now it's a placeholder
+/// that just waits. Eventually this will be a full menu system with
+/// our own display driver.
+fn baremetal_main_loop(_platform: &PlatformInit) -> ! {
+    use morpheus_hwinit::serial::puts;
+
+    puts("\n");
+    puts("╔══════════════════════════════════════════════════════════════╗\n");
+    puts("║              BARE-METAL MAIN LOOP                            ║\n");
+    puts("║                                                              ║\n");
+    puts("║  UEFI is gone. We own the machine.                           ║\n");
+    puts("║                                                              ║\n");
+    puts("║  TODO: Display driver, menu system, boot selection           ║\n");
+    puts("║                                                              ║\n");
+    puts("║  For now: System ready. Waiting for next command...          ║\n");
+    puts("╚══════════════════════════════════════════════════════════════╝\n");
+    puts("\n");
+
+    // TODO: Eventually this will be:
+    // 1. Display bare-metal menu (using our framebuffer driver)
+    // 2. Handle input (keyboard driver)
+    // 3. Boot Linux (kexec-style)
+    // 4. Or download another ISO
+    // 5. Or configure settings
+    //
+    // For now, just spin. The machine is ours.
+
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// Halt with message (for fatal errors).
+fn baremetal_halt(msg: &str) -> ! {
+    use morpheus_hwinit::serial::puts;
+    puts("[BAREMETAL] HALT: ");
+    puts(msg);
+    puts("\n");
+    loop { core::hint::spin_loop(); }
+}
+
+// Keep the old struct for backward compatibility during migration
+/// Configuration for self-contained bare-metal download.
+/// DEPRECATED: Use BaremetalEntryConfig + DownloadRequest instead.
+pub struct SelfContainedDownloadConfig {
+    pub memory_map_ptr: *const u8,
+    pub memory_map_size: usize,
+    pub descriptor_size: usize,
+    pub descriptor_version: u32,
+    pub iso_url: &'static str,
+    pub iso_name: &'static str,
+    pub esp_start_lba: u64,
+}
+
+/// DEPRECATED: Use enter_baremetal_world instead.
+pub unsafe fn enter_selfcontained_download(config: SelfContainedDownloadConfig) -> ! {
+    enter_baremetal_world(
+        BaremetalEntryConfig {
+            memory_map_ptr: config.memory_map_ptr,
+            memory_map_size: config.memory_map_size,
+            descriptor_size: config.descriptor_size,
+            descriptor_version: config.descriptor_version,
+        },
+        DownloadRequest {
+            url: config.iso_url,
+            name: config.iso_name,
+            esp_start_lba: config.esp_start_lba,
+        },
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -239,6 +239,8 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
         return;
     }
 
+    puts("[GDT] setting up TSS...\n");
+
     // Set up TSS
     TSS.rsp0 = kernel_stack;
     TSS.ist[0] = ist1_stack; // IST1 for critical exceptions
@@ -247,18 +249,31 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
     let tss_addr = &TSS as *const Tss as u64;
     GDT.tss_desc = TssDescriptor::new(tss_addr, size_of::<Tss>() as u16);
 
+    puts("[GDT] loading GDT...\n");
+
     // Load GDT
     let gdt_ptr = GdtPtr {
         limit: (size_of::<Gdt>() - 1) as u16,
         base: &GDT as *const Gdt as u64,
     };
 
+    // Print GDT info for debug
+    crate::serial::puts("[GDT] limit=0x");
+    crate::serial::put_hex32(gdt_ptr.limit as u32);
+    crate::serial::puts(" base=0x");
+    crate::serial::put_hex64(gdt_ptr.base);
+    crate::serial::puts("\n");
+
     load_gdt(&gdt_ptr);
+    puts("[GDT] lgdt done\n");
 
     // Reload segment registers
+    puts("[GDT] reloading segments (CS=0x08, DS=0x10)...\n");
     reload_segments();
+    puts("[GDT] segments reloaded\n");
 
     // Load TSS
+    puts("[GDT] loading TSS...\n");
     load_tss(TSS_SEL);
 
     GDT_INITIALIZED = true;
@@ -269,30 +284,38 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
 #[inline(always)]
 unsafe fn load_gdt(ptr: &GdtPtr) {
     core::arch::asm!(
-        "lgdt [{}]",
+        "lgdt [{0}]",
         in(reg) ptr,
         options(nostack, preserves_flags)
     );
 }
 
 /// Reload segment registers after GDT change
-#[inline(always)]
+#[inline(never)]
 unsafe fn reload_segments() {
+    // Far return to reload CS, then set data segments
+    // retfq pops: RIP from [RSP], then CS from [RSP+8]
+    // So we need: push CS first, then push RIP
+    let code_sel: u64 = KERNEL_CS as u64;
+    let data_sel: u64 = KERNEL_DS as u64;
+    
     core::arch::asm!(
-        // Reload CS via far return
-        "push {sel}",
+        // Push CS (will be at RSP+8 after next push)
+        "push {code}",
+        // Push return address (will be at RSP)
         "lea {tmp}, [rip + 2f]",
         "push {tmp}",
+        // Far return: pops RIP from RSP, CS from RSP+8
         "retfq",
         "2:",
-        // Reload data segments
-        "mov ds, {data_sel:x}",
-        "mov es, {data_sel:x}",
-        "mov fs, {data_sel:x}",
-        "mov gs, {data_sel:x}",
-        "mov ss, {data_sel:x}",
-        sel = const KERNEL_CS as u64,
-        data_sel = in(reg) KERNEL_DS as u64,
+        // Now reload data segments
+        "mov ds, {data:x}",
+        "mov es, {data:x}",
+        "mov fs, {data:x}",
+        "mov gs, {data:x}",
+        "mov ss, {data:x}",
+        code = in(reg) code_sel,
+        data = in(reg) data_sel,
         tmp = lateout(reg) _,
         options(preserves_flags)
     );

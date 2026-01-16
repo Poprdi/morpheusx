@@ -87,6 +87,7 @@ pub mod asm; // ASM bindings (TSC, MMIO, PIO, barriers)
 pub mod boot; // Boot handoff and initialization
 pub mod dma; // DMA buffer management with ownership tracking
 pub mod driver; // Driver abstraction and implementations
+pub mod entry; // Top-level entry point (run_download)
 pub mod mainloop; // 5-phase poll loop
 pub mod pci;
 pub mod state; // State machines (DHCP, TCP, HTTP, etc.)
@@ -102,6 +103,9 @@ pub use device::NetworkDevice;
 pub use device::UnifiedNetDevice;
 pub use error::{NetworkError, Result};
 pub use types::{HttpMethod, ProgressCallback};
+
+// Top-level entry point (THE entry point for bootloader)
+pub use entry::{run_download, RunConfig, RunResult};
 
 // Core types - Block (Unified Block Device)
 pub use device::UnifiedBlockDevice;

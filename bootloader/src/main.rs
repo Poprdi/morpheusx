@@ -1,6 +1,11 @@
-//! Morpheus UEFI Bootloader - Hello World
+//! Morpheus UEFI Bootloader - Bare-metal Platform Entry
 //!
-//! First UEFI application that displays "Morpheus" on screen.
+//! Minimal UEFI trampoline that immediately enters our bare-metal world.
+//! UEFI is only used to:
+//! 1. Get GOP framebuffer info
+//! 2. Call ExitBootServices
+//!
+//! Everything after that runs on our platform.
 
 #![no_std]
 #![no_main]
@@ -13,21 +18,17 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+mod baremetal;
 mod boot;
 mod installer;
 mod tui;
 mod uefi;
-mod uefi_allocator; // UEFI-backed global allocator
+mod uefi_allocator;
 
-use tui::boot_sequence::{BootSequence, NetworkBootResult};
-use tui::distro_launcher::DistroLauncher;
-use tui::input::Keyboard;
-use tui::installer_menu::InstallerMenu;
-use tui::logo::{LOGO_LINES_RAW, LOGO_WIDTH, TAGLINE, TAGLINE_WIDTH};
-use tui::main_menu::{MainMenu, MenuAction};
-use tui::rain::MatrixRain;
+// These modules still exist but will be ported to post-EBS framebuffer
+// For now they're dormant
+#[allow(unused_imports)]
 use tui::renderer::Screen;
-use tui::storage_manager::StorageManager;
 
 #[repr(C)]
 pub struct SimpleTextInputProtocol {
@@ -296,250 +297,66 @@ pub struct GraphicsOutputProtocol {
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) -> usize {
     unsafe {
-        let system_table = &*(system_table as *const SystemTable);
+        let st = &*(system_table as *const SystemTable);
+        let bs = &*st.boot_services;
 
-        // Set boot services for UEFI-backed global allocator
-        // This MUST happen before any heap allocations (Vec, String, Box, etc.)
-        uefi_allocator::set_boot_services(system_table.boot_services);
+        // Set boot services for UEFI-backed global allocator (briefly needed for setup)
+        uefi_allocator::set_boot_services(st.boot_services);
 
-        // Set global boot services pointer (for other UEFI operations)
-        BOOT_SERVICES_PTR = system_table.boot_services;
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 1: Get GOP framebuffer info
+        // ═══════════════════════════════════════════════════════════════════
+        let mut gop_ptr: *mut GraphicsOutputProtocol = core::ptr::null_mut();
+        let status = (bs.locate_protocol)(
+            &EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID,
+            core::ptr::null(),
+            &mut gop_ptr as *mut _ as *mut *mut (),
+        );
 
-        let mut screen = Screen::new(system_table.con_out);
-        let mut keyboard = Keyboard::new(system_table.con_in);
+        let framebuffer_info = if status == 0 && !gop_ptr.is_null() {
+            let gop = &*gop_ptr;
+            let mode = &*gop.mode;
+            let info = &*mode.info;
 
-        screen.clear();
-
-        // Calculate centered positions
-        let screen_width = screen.width();
-        let screen_height = screen.height();
-
-        // Center logo vertically - put in upper third
-        let logo_y = 2;
-
-        // Draw logo centered horizontally
-        let logo_x = screen.center_x(LOGO_WIDTH);
-
-        for (i, line) in LOGO_LINES_RAW.iter().enumerate() {
-            let y = logo_y + i;
-            if y < screen_height {
-                screen.put_str_at(
-                    logo_x,
-                    y,
-                    line,
-                    tui::renderer::EFI_GREEN,
-                    tui::renderer::EFI_BLACK,
-                );
+            baremetal::FramebufferInfo {
+                base: mode.frame_buffer_base,
+                size: mode.frame_buffer_size,
+                width: info.horizontal_resolution,
+                height: info.vertical_resolution,
+                stride: info.pixels_per_scan_line,
+                format: info.pixel_format as u32,
             }
-        }
-
-        // Draw tagline centered
-        let tagline_y = logo_y + LOGO_LINES_RAW.len() + 1;
-        let tagline_x = screen.center_x(TAGLINE_WIDTH);
-        if tagline_y < screen_height {
-            screen.put_str_at(
-                tagline_x,
-                tagline_y,
-                TAGLINE,
-                tui::renderer::EFI_GREEN,
-                tui::renderer::EFI_BLACK,
-            );
-        }
-
-        // Boot sequence - log real initialization steps
-        let boot_y = tagline_y + 3;
-        let boot_x = 5;
-        let mut boot_seq = BootSequence::new();
-
-        // Initialize matrix rain
-        let mut rain = MatrixRain::new(screen_width, screen_height);
-
-        // Perform actual initialization and log each step
-        morpheus_core::logger::log("MorpheusX initialized");
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        morpheus_core::logger::log("UEFI system table acquired");
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        morpheus_core::logger::log("Console output protocol ready");
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        morpheus_core::logger::log("Keyboard input protocol ready");
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        // Enumerate storage devices
-        let bs = &*system_table.boot_services;
-        let mut temp_disk_manager = morpheus_core::disk::manager::DiskManager::new();
-        match crate::uefi::disk::enumerate_disks(bs, &mut temp_disk_manager) {
-            Ok(()) => {
-                let disk_count = temp_disk_manager.disk_count();
-                if disk_count > 0 {
-                    morpheus_core::logger::log("Block I/O protocol initialized");
-                    boot_seq.render(&mut screen, boot_x, boot_y);
-
-                    morpheus_core::logger::log("Storage devices enumerated");
-                    boot_seq.render(&mut screen, boot_x, boot_y);
-                } else {
-                    morpheus_core::logger::log("No storage devices detected");
-                    boot_seq.render(&mut screen, boot_x, boot_y);
-                }
+        } else {
+            // No GOP - use zeroed info (will need serial-only output)
+            baremetal::FramebufferInfo {
+                base: 0,
+                size: 0,
+                width: 0,
+                height: 0,
+                stride: 0,
+                format: 0,
             }
-            Err(_) => {
-                morpheus_core::logger::log("Warning: Storage enumeration failed");
-                boot_seq.render(&mut screen, boot_x, boot_y);
-            }
-        }
+        };
 
-        morpheus_core::logger::log("TUI renderer initialized");
-        boot_seq.render(&mut screen, boot_x, boot_y);
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 2: Enter bare-metal world - NEVER RETURNS
+        // ═══════════════════════════════════════════════════════════════════
+        let config = baremetal::BaremetalEntryConfig {
+            image_handle,
+            system_table,
+            framebuffer: framebuffer_info,
+        };
 
-        morpheus_core::logger::log("Matrix rain effect loaded");
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        morpheus_core::logger::log("Main menu system ready");
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        // NOTE: Network is NOT initialized during bootstrap anymore.
-        // Network initialization happens post-ExitBootServices when user
-        // actually starts a download. This avoids conflicts between
-        // smoltcp (bare-metal TCP/IP) and UEFI's active timer interrupts.
-        //
-        // The download flow is:
-        // 1. User selects ISO in TUI (catalog is static, no network needed)
-        // 2. User confirms download → ExitBootServices called
-        // 3. Bare-metal network stack initializes (VirtIO + smoltcp)
-        // 4. Download completes, system reboots
-
-        boot_seq.mark_complete();
-        boot_seq.render(&mut screen, boot_x, boot_y);
-
-        // Emit boot token for CI/CD E2E test validation
-        // This token is detected by qemu-e2e.sh via serial output
-        #[cfg(target_arch = "x86_64")]
-        morpheus_network::serial_str("MORPHEUSX_BOOT_OK\n");
-
-        // Render rain one final time for visual effect before waiting
-        rain.render_frame(&mut screen);
-
-        // Wait for keypress
-        keyboard.wait_for_key();
-
-        // Main application loop
-        loop {
-            // Launch main menu
-            let mut main_menu = MainMenu::new(&screen);
-            let action = main_menu.run(&mut screen, &mut keyboard);
-
-            // Handle menu action
-            match action {
-                MenuAction::DistroLauncher => {
-                    let bs = &*system_table.boot_services;
-                    let st_ptr = system_table as *const SystemTable as *mut ();
-                    let mut launcher = DistroLauncher::new(bs, image_handle);
-                    launcher.run(&mut screen, &mut keyboard, bs, st_ptr, image_handle);
-                }
-                MenuAction::DistroDownloader => {
-                    let bs = &*system_table.boot_services;
-                    // Get disk info for ISO storage
-                    // ESP typically starts after GPT headers, disk size from first disk
-                    let (esp_lba, disk_lba) = {
-                        let mut dm = morpheus_core::disk::manager::DiskManager::new();
-                        if crate::uefi::disk::enumerate_disks(bs, &mut dm).is_ok()
-                            && dm.disk_count() > 0
-                        {
-                            if let Some(disk) = dm.get_disk(0) {
-                                // ESP usually at LBA 2048, use full disk size (last_block + 1)
-                                (2048, disk.last_block + 1)
-                            } else {
-                                (2048, 100_000_000) // ~50GB default
-                            }
-                        } else {
-                            (2048, 100_000_000)
-                        }
-                    };
-                    let mut downloader = tui::distro_downloader::DistroDownloader::new(
-                        bs,
-                        image_handle,
-                        esp_lba,
-                        disk_lba,
-                    );
-                    // Downloader manages ISOs (download/delete), boot happens via DistroLauncher
-                    downloader.run(&mut screen, &mut keyboard);
-                }
-                MenuAction::StorageManager => {
-                    let bs = &*system_table.boot_services;
-                    let mut storage_mgr = StorageManager::new(&screen);
-                    storage_mgr.run(&mut screen, &mut keyboard, bs);
-                    // Returns when user presses ESC, loop continues to main menu
-                }
-                MenuAction::SystemSettings => {
-                    let bs = &*system_table.boot_services;
-                    let mut installer_menu = InstallerMenu::new(image_handle);
-                    installer_menu.run(&mut screen, &mut keyboard, bs);
-                    // Returns when user presses ESC, loop continues to main menu
-                }
-                MenuAction::AdminFunctions => {
-                    screen.clear();
-                    screen.put_str_at(
-                        5,
-                        10,
-                        "Admin Functions - Coming soon...",
-                        tui::renderer::EFI_LIGHTGREEN,
-                        tui::renderer::EFI_BLACK,
-                    );
-                    keyboard.wait_for_key();
-                }
-                MenuAction::ExitToFirmware => {
-                    screen.clear();
-                    screen.put_str_at(
-                        5,
-                        10,
-                        "Exiting to firmware...",
-                        tui::renderer::EFI_LIGHTGREEN,
-                        tui::renderer::EFI_BLACK,
-                    );
-
-                    // Actually exit to firmware using UEFI ResetSystem
-                    unsafe {
-                        let runtime_services = &*system_table.runtime_services;
-                        // ResetType: 0 = EfiResetCold, 1 = EfiResetWarm, 2 = EfiResetShutdown
-                        // Use EfiResetWarm (1) to return to firmware setup
-                        (runtime_services.reset_system)(1, 0, 0, core::ptr::null());
-                    }
-                }
-                _ => {}
-            }
-        }
+        baremetal::enter_baremetal(config);
+        // NEVER REACHED
     }
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    // Try to display panic information on screen
-    // This is best-effort since we may be in a bad state
-    unsafe {
-        if !BOOT_SERVICES_PTR.is_null() {
-            // Try to get console output and display panic
-            // We can't use the Screen abstraction here since we might be in a bad state
-            // Just spin - at minimum don't silently hang
-        }
-    }
-
-    // Log the panic message if possible
-    if let Some(location) = info.location() {
-        // We can't allocate in panic handler, so just use static message
-        morpheus_core::logger::log("PANIC occurred!");
-    } else {
-        morpheus_core::logger::log("PANIC occurred (no location)!");
-    }
-
-    // Infinite loop - system is in bad state
-    // TODO: Could trigger UEFI reset after timeout
+    // In bare-metal mode, just halt
+    // TODO: Could output to serial if available
     loop {
-        // Prevent optimization from removing the loop
         core::hint::spin_loop();
     }
 }
-
-// Boot services pointer for UEFI operations (not allocator)
-static mut BOOT_SERVICES_PTR: *const BootServices = core::ptr::null();
