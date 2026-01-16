@@ -6,12 +6,13 @@
 //! - PCI Spec 3.0 §6.7 (Capability List)
 //! - VirtIO Spec 1.2 §4.1.4 (PCI Device Discovery)
 
-use super::config::{pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
+use super::config::{pci_cfg_read16, pci_cfg_read8, PciAddr};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ASM BINDINGS
 // ═══════════════════════════════════════════════════════════════════════════
 
+#[cfg(target_arch = "x86_64")]
 extern "win64" {
     /// Check if device has capability list.
     fn asm_pci_has_capabilities(bus: u8, device: u8, function: u8) -> u32;

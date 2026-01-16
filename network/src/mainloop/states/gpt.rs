@@ -181,7 +181,7 @@ impl GptPrepState {
                     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
                     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
                 ])
-            }ootloader → hwinit → [driver init] → orchestrator.download_with_confi
+            }
             Err(e) => {
                 serial::print("[GPT] ERROR: Failed to create partition: ");
                 serial::println(match e {

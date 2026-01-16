@@ -1,5 +1,32 @@
 # hwinit — Hardware Initialization Crate
 
+## Status: ACTIVE
+
+The `hwinit` crate is now wired into the bootloader. The new entry point is:
+
+```rust
+use morpheus_hwinit::{platform_init, PlatformConfig};
+
+// After ExitBootServices, with pre-allocated DMA region
+let config = PlatformConfig {
+    dma_base: dma_ptr,
+    dma_bus: dma_bus_addr,
+    dma_size: 2 * 1024 * 1024,
+    tsc_freq,
+};
+
+let platform = unsafe { platform_init(config)? };
+
+// Now use platform.net_devices and platform.blk_devices
+for dev in platform.net_devices.iter().flatten() {
+    // dev.mmio_base, dev.device_type, dev.pci_addr ready to use
+}
+```
+
+Serial debug output is enabled: look for `[HWINIT]` lines on COM1.
+
+---
+
 ## What This Crate Is
 
 `hwinit` is the foundational hardware initialization layer for MorpheusX. It runs **once**, **early**, and establishes the invariants that all device drivers depend on.

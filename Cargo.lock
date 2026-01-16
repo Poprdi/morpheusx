@@ -208,6 +208,7 @@ dependencies = [
  "linked_list_allocator",
  "morpheus-core",
  "morpheus-display",
+ "morpheus-hwinit",
  "morpheus-network",
  "morpheus-persistent",
  "spin",
@@ -226,6 +227,14 @@ dependencies = [
 [[package]]
 name = "morpheus-display"
 version = "0.1.0"
+
+[[package]]
+name = "morpheus-hwinit"
+version = "1.0.1"
+dependencies = [
+ "linked_list_allocator",
+ "spin",
+]
 
 [[package]]
 name = "morpheus-network"

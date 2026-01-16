@@ -2,9 +2,15 @@
 
 Bare-metal HTTP client for post-ExitBootServices execution.
 
-## Architecture
+## Architecture (with hwinit split)
 
 ```
+┌──────────────────────────────────────────────────────────────┐
+│                    Boot Sequence                             │
+│  UEFI → ExitBootServices → hwinit → [driver init] → network  │
+└──────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
 ┌──────────────────────────────────────────────────────────────┐
 │                    Entry Point                               │
 │  mainloop::download_with_config(&mut driver, config, ...)    │
@@ -37,35 +43,43 @@ Bare-metal HTTP client for post-ExitBootServices execution.
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Usage
+## Usage (NEW - with hwinit)
 
 ```rust
+use morpheus_hwinit::{platform_init, PlatformConfig, NetDeviceType};
+use morpheus_network::driver::virtio::{VirtioConfig, VirtioNetDriver};
+use morpheus_network::driver::intel::{E1000eConfig, E1000eDriver};
 use morpheus_network::mainloop::{download_with_config, DownloadConfig, DownloadResult};
-use morpheus_network::boot::probe::{probe_and_create_driver, ProbeResult};
 
-// 1. Probe PCI and create driver (brutal reset happens during driver::new())
-let driver = match probe_and_create_driver(&dma, tsc_freq)? {
-    ProbeResult::Intel(d) => UnifiedNetworkDriver::Intel(d),
-    ProbeResult::VirtIO(d) => UnifiedNetworkDriver::VirtIO(d),
+// 1. Run hwinit (after ExitBootServices)
+let platform_config = PlatformConfig {
+    dma_base,
+    dma_bus,
+    dma_size: 2 * 1024 * 1024,
+    tsc_freq,
+};
+let platform = unsafe { platform_init(platform_config)? };
+
+// 2. Find network device from hwinit result
+let net_dev = platform.net_devices.iter()
+    .find_map(|d| *d)
+    .ok_or("no network device")?;
+
+// 3. Create driver (brutal reset happens here)
+let mut driver = match net_dev.device_type {
+    NetDeviceType::VirtIO => {
+        let cfg = VirtioConfig { dma_cpu_base: dma_base, ... };
+        VirtioNetDriver::new(net_dev.mmio_base, cfg)?
+    }
+    NetDeviceType::IntelE1000e => {
+        let cfg = E1000eConfig::new(dma_base, dma_bus, tsc_freq);
+        E1000eDriver::new(net_dev.mmio_base, cfg)?
+    }
 };
 
-// 2. Configure download
-let config = DownloadConfig::full(
-    "http://example.com/image.iso",
-    start_sector,
-    0,  // offset
-    esp_lba,
-    partition_uuid,
-    "image.iso",
-);
-
-// 3. Execute download with optional disk write
-let result = download_with_config(&mut driver, config, Some(blk_device), tsc_freq);
-
-match result {
-    DownloadResult::Success { bytes_downloaded, bytes_written } => { /* done */ }
-    DownloadResult::Failed { reason } => { /* handle error */ }
-}
+// 4. Configure and execute download
+let config = DownloadConfig::download_only("http://example.com/image.iso");
+let result = download_with_config(&mut driver, config, None, tsc_freq);
 ```
 
 ## Preconditions
@@ -73,7 +87,7 @@ match result {
 Before calling network functions:
 
 1. **ExitBootServices completed** - No UEFI runtime
-2. **hwinit has run** - Platform normalized (bus mastering, DMA, cache coherency)
+2. **hwinit::platform_init() called** - PCI scanned, bus mastering enabled
 3. **DMA region allocated** - Identity-mapped, cache-coherent
 
 ## Driver Reset Contract
@@ -96,7 +110,7 @@ See `driver/RESET_CONTRACT.md` for details.
 |--------|---------|
 | `mainloop` | State machine orchestration, entry point |
 | `driver` | NetworkDriver trait, VirtIO, Intel e1000e |
-| `boot` | Device probing, driver creation helpers |
+| `boot` | Legacy handoff support (deprecated) |
 | `asm` | Assembly bindings (MMIO, PIO, TSC) |
 | `dma` | DMA buffer management |
 | `time` | TSC-based timing |
