@@ -9,6 +9,7 @@ use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer}
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress};
 
+use crate::device::UnifiedBlockDevice;
 use crate::driver::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::{Context, DownloadConfig};
@@ -20,9 +21,11 @@ extern crate alloc;
 use alloc::boxed::Box;
 
 /// Result of a download operation.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadResult {
-    Success { bytes_downloaded: u64 },
+    /// Download completed successfully.
+    Success { bytes_downloaded: u64, bytes_written: u64 },
+    /// Download failed.
     Failed { reason: &'static str },
 }
 
@@ -37,11 +40,28 @@ pub fn download<D: NetworkDriver>(
     url: &'static str,
     tsc_freq: u64,
 ) -> DownloadResult {
+    let config = DownloadConfig::download_only(url);
+    download_with_config(driver, config, None, tsc_freq)
+}
+
+/// Execute HTTP download with disk writing.
+///
+/// # Arguments
+/// * `driver` - Already-initialized network driver
+/// * `config` - Full download configuration
+/// * `blk_device` - Optional block device for disk writes
+/// * `tsc_freq` - TSC frequency (Hz)
+pub fn download_with_config<D: NetworkDriver>(
+    driver: &mut D,
+    config: DownloadConfig<'static>,
+    blk_device: Option<UnifiedBlockDevice>,
+    tsc_freq: u64,
+) -> DownloadResult {
     serial::println("=================================");
     serial::println("  MorpheusX Network Download     ");
     serial::println("=================================");
     serial::print("URL: ");
-    serial::println(url);
+    serial::println(config.url);
 
     let mac = driver.mac_address();
     let eth_addr = EthernetAddress(mac);
@@ -49,6 +69,14 @@ pub fn download<D: NetworkDriver>(
     serial::print("MAC: ");
     serial::print_mac(&mac);
     serial::println("");
+
+    if config.write_to_disk && blk_device.is_some() {
+        serial::print("Disk write: enabled (sector ");
+        serial::print_u32(config.target_start_sector as u32);
+        serial::println(")");
+    } else {
+        serial::println("Disk write: disabled");
+    }
 
     let mut adapter = SmoltcpAdapter::new(driver);
 
@@ -59,7 +87,7 @@ pub fn download<D: NetworkDriver>(
     let mut socket_storage: [SocketStorage; 4] = Default::default();
     let mut sockets = SocketSet::new(&mut socket_storage[..]);
 
-    // DHCP socket (smoltcp 0.11 API)
+    // DHCP socket
     let dhcp_socket = Dhcpv4Socket::new();
     let dhcp_handle = sockets.add(dhcp_socket);
 
@@ -75,10 +103,10 @@ pub fn download<D: NetworkDriver>(
     let tcp_handle = sockets.add(tcp_socket);
 
     // Context
-    let config = DownloadConfig::download_only(url);
     let mut ctx = Context::new(config, tsc_freq);
     ctx.dhcp_handle = Some(dhcp_handle);
     ctx.tcp_handle = Some(tcp_handle);
+    ctx.blk_device = blk_device;
 
     let mut current_state: Box<dyn State<D>> = Box::new(InitState::new());
 
@@ -115,12 +143,23 @@ pub fn download<D: NetworkDriver>(
             }
             StepResult::Done => {
                 serial::println("---------------------------------");
+                serial::print("Downloaded: ");
+                serial::print_u32((ctx.bytes_downloaded / 1024 / 1024) as u32);
+                serial::println(" MB");
+                if ctx.bytes_written > 0 {
+                    serial::print("Written: ");
+                    serial::print_u32((ctx.bytes_written / 1024 / 1024) as u32);
+                    serial::println(" MB");
+                }
                 return DownloadResult::Success {
                     bytes_downloaded: ctx.bytes_downloaded,
+                    bytes_written: ctx.bytes_written,
                 };
             }
             StepResult::Failed(reason) => {
                 serial::println("---------------------------------");
+                serial::print("FAILED: ");
+                serial::println(reason);
                 return DownloadResult::Failed { reason };
             }
         }
