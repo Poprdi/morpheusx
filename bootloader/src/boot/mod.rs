@@ -24,7 +24,11 @@ pub use memory::{
     allocate_boot_params, allocate_cmdline, allocate_kernel_memory, load_kernel_image,
 };
 pub use network_boot::{
-    // New architecture entry point
+    // NEW: Bare-metal world entry (hwinit is our ground truth)
+    enter_baremetal_world, BaremetalEntryConfig, DownloadRequest, BaremetalResult,
+    // Deprecated wrapper (calls enter_baremetal_world)
+    enter_selfcontained_download, SelfContainedDownloadConfig,
+    // Legacy architecture entry point
     enter_baremetal_download, BaremetalConfig, RunResult,
     // Legacy compatibility (will panic with migration message)
     enter_network_boot, enter_network_boot_url,

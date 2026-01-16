@@ -317,4 +317,5 @@ pub enum MenuAction {
     SystemSettings,
     AdminFunctions,
     ExitToFirmware,
+    EnterBaremetal,
 }
