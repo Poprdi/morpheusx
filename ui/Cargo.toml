@@ -1,0 +1,12 @@
+[package]
+name = "morpheus-ui"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone no_std bare-metal UI framework — TTY shell + windowed applications on raw framebuffers"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[features]
+default = []
+
+[dependencies]
