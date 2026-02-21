@@ -9,6 +9,7 @@ members = [
     "iso9660",
     "display",
     "hwinit",
+    "ui",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ morpheus-display = { path = "display", features = ["framebuffer-backend"] }
 morpheus-hwinit = { path = "hwinit" }
 # Keep dependency name `iso9660` for code imports, while the package is published as `iso9660-rs`
 iso9660 = { path = "iso9660", package = "iso9660-rs" }
+morpheus-ui = { path = "ui" }
 
 [profile.release]
 opt-level = "z"      # Optimize for size

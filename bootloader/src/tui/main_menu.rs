@@ -248,8 +248,7 @@ impl MainMenu {
                 1 => MenuAction::DistroDownloader,
                 2 => MenuAction::StorageManager,
                 3 => MenuAction::SystemSettings,
-                4 => MenuAction::AdminFunctions,
-                5 => MenuAction::ExitToFirmware,
+                4 => MenuAction::ExitToFirmware,
                 _ => MenuAction::Navigate,
             };
         }

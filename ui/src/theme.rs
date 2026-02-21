@@ -1,0 +1,43 @@
+use crate::color::Color;
+
+pub struct Theme {
+    pub bg: Color,
+    pub fg: Color,
+    pub accent: Color,
+    pub border: Color,
+    pub button_bg: Color,
+    pub button_fg: Color,
+    pub button_focus_bg: Color,
+    pub input_bg: Color,
+    pub input_fg: Color,
+    pub input_cursor: Color,
+    pub selection_bg: Color,
+    pub selection_fg: Color,
+    pub title_fg: Color,
+    pub title_bg: Color,
+    pub scrollbar_bg: Color,
+    pub scrollbar_fg: Color,
+    pub font_width: u32,
+    pub font_height: u32,
+}
+
+pub const THEME_DEFAULT: Theme = Theme {
+    bg: Color::BLACK,
+    fg: Color::LIGHT_GREEN,
+    accent: Color::GREEN,
+    border: Color::DARK_GREEN,
+    button_bg: Color::DARK_GREEN,
+    button_fg: Color::BLACK,
+    button_focus_bg: Color::LIGHT_GREEN,
+    input_bg: Color { r: 16, g: 16, b: 16, a: 255 },
+    input_fg: Color::LIGHT_GREEN,
+    input_cursor: Color::LIGHT_GREEN,
+    selection_bg: Color::GREEN,
+    selection_fg: Color::BLACK,
+    title_fg: Color::BLACK,
+    title_bg: Color::DARK_GREEN,
+    scrollbar_bg: Color { r: 24, g: 24, b: 24, a: 255 },
+    scrollbar_fg: Color::DARK_GREEN,
+    font_width: 8,
+    font_height: 16,
+};

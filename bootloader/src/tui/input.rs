@@ -1,4 +1,7 @@
-//! PS/2 Keyboard Driver — full ASCII, scan code set 1.
+//! PS/2 Keyboard Driver — full ASCII, scan code set 1, US/DE keymaps.
+//!
+//! Keyboard layout is a runtime value — switch with `keyboard.set_layout()`.
+//! Default: `KeyLayout::Us`. German (`KeyLayout::De`) fully supported.
 //!
 //! Architecture mirrors every other driver in this repo:
 //!   ASM primitives (bootloader/asm/keyboard/ps2.s)
@@ -8,7 +11,7 @@
 //! Port 0x60 = data, port 0x64 = status/command.
 //! Status bit 0 (OBF) = data ready. Bit 1 (IBF) = controller busy.
 //!
-//! We track shift, ctrl, alt, capslock as modifier state and produce
+//! We track shift, ctrl, alt, capslock, altgr as modifier state and produce
 //! InputKey { scan_code, unicode_char } — same struct the TUI consumes.
 //! scan_code uses EFI-compatible values so main_menu.rs needs zero changes.
 
@@ -77,13 +80,35 @@ pub const KEY_TAB: u16 = 0x09;
 pub const KEY_BACKSPACE: u16 = 0x08;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// KEYBOARD LAYOUT
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Active keyboard layout. Switchable at runtime via `keyboard.set_layout()`.
+///
+/// Affects:
+///   - unshifted table (base layer)
+///   - shifted table   (shift layer)
+///   - altgr table     (AltGr layer — DE only, produces äöüß{[]}|@€ etc.)
+///
+/// US is the default. Switch to DE at any point with `set_layout(KeyLayout::De)`.
+#[derive(Clone, Copy, PartialEq)]
+pub enum KeyLayout {
+    /// Standard US QWERTY (default)
+    Us,
+    /// German QWERTZ (de-DE)
+    De,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SCAN CODE SET 1 → ASCII TRANSLATION TABLES
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Unshifted ASCII for scan code set 1 make codes 0x00..0x58.
+// ── US QWERTY ──────────────────────────────────────────────────────────────
+
+/// Unshifted ASCII for scan code set 1 make codes 0x00..0x58, US QWERTY.
 /// 0 = no printable character (modifier or special key).
 #[rustfmt::skip]
-static UNSHIFTED: [u8; 89] = [
+static US_UNSHIFTED: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
     0,    0,    b'1', b'2', b'3', b'4', b'5', b'6',  // 0x00 Esc=special
 //  0x08  0x09  0x0A  0x0B  0x0C  0x0D  0x0E  0x0F
@@ -110,9 +135,9 @@ static UNSHIFTED: [u8; 89] = [
     0,                                                 // F12
 ];
 
-/// Shifted ASCII for scan code set 1 make codes 0x00..0x58.
+/// Shifted ASCII for scan code set 1 make codes 0x00..0x58, US QWERTY.
 #[rustfmt::skip]
-static SHIFTED: [u8; 89] = [
+static US_SHIFTED: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
     0,    0,    b'!', b'@', b'#', b'$', b'%', b'^',
 //  0x08  0x09  0x0A  0x0B  0x0C  0x0D  0x0E  0x0F
@@ -135,6 +160,107 @@ static SHIFTED: [u8; 89] = [
     b'8', b'9', b'-', b'4', b'5', b'6', b'+', b'1',
 //  0x50  0x51  0x52  0x53  0x54  0x55  0x56  0x57
     b'2', b'3', b'0', b'.', 0,    0,    0,    0,
+//  0x58
+    0,
+];
+
+// ── DE QWERTZ ─────────────────────────────────────────────────────────────
+//
+// Key divergences from US:
+//   0x15 (US y)  → z      0x2C (US z) → y
+//   0x0C (US -)  → ß      0x0D (US =) → ' (dead accent, emit as apostrophe)
+//   0x1A (US [)  → ü      0x1B (US ]) → +
+//   0x27 (US ;)  → ö      0x28 (US ') → ä
+//   0x29 (US `)  → ^ (dead caret, emit ^)   0x2B (US \) → #
+//   0x33 (US ,)  → ,      0x34 (US .) → .   0x35 (US /) → - (dash)
+//   0x56 (extra) → <   shifted → >   AltGr → |
+//
+// Non-ASCII: ß=0xDF ü=0xFC ö=0xF6 ä=0xE4 Ü=0xDC Ö=0xD6 Ä=0xC4 §=0xA7 µ=0xB5
+// These are their Latin-1 codepoints, all fit in u8.
+
+/// Unshifted layer for DE QWERTZ.
+#[rustfmt::skip]
+static DE_UNSHIFTED: [u8; 89] = [
+//  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
+    0,    0,    b'1', b'2', b'3', b'4', b'5', b'6',
+//  0x08  0x09  0x0A  0x0B  0x0C  0x0D  0x0E  0x0F
+    b'7', b'8', b'9', b'0', 0xDF, b'\'',0x08, 0x09,  // ß  dead-accent→'
+//  0x10  0x11  0x12  0x13  0x14  0x15  0x16  0x17
+    b'q', b'w', b'e', b'r', b't', b'z', b'u', b'i',  // y↔z
+//  0x18  0x19  0x1A  0x1B  0x1C  0x1D  0x1E  0x1F
+    b'o', b'p', 0xFC, b'+', 0x0D, 0,    b'a', b's',  // ü
+//  0x20  0x21  0x22  0x23  0x24  0x25  0x26  0x27
+    b'd', b'f', b'g', b'h', b'j', b'k', b'l', 0xF6,  // ö
+//  0x28  0x29  0x2A  0x2B  0x2C  0x2D  0x2E  0x2F
+    0xE4, b'^', 0,    b'#', b'y', b'x', b'c', b'v',  // ä  ^ dead  y↔z
+//  0x30  0x31  0x32  0x33  0x34  0x35  0x36  0x37
+    b'b', b'n', b'm', b',', b'.', b'-', 0,    b'*',
+//  0x38  0x39  0x3A  0x3B  0x3C  0x3D  0x3E  0x3F
+    0,    b' ', 0,    0,    0,    0,    0,    0,
+//  0x40  0x41  0x42  0x43  0x44  0x45  0x46  0x47
+    0,    0,    0,    0,    0,    0,    0,    b'7',
+//  0x48  0x49  0x4A  0x4B  0x4C  0x4D  0x4E  0x4F
+    b'8', b'9', b'-', b'4', b'5', b'6', b'+', b'1',
+//  0x50  0x51  0x52  0x53  0x54  0x55  0x56  0x57
+    b'2', b'3', b'0', b'.', 0,    0,    b'<', 0,     // 0x56 extra key
+//  0x58
+    0,
+];
+
+/// Shifted layer for DE QWERTZ.
+#[rustfmt::skip]
+static DE_SHIFTED: [u8; 89] = [
+//  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
+    0,    0,    b'!', b'"', 0xA7, b'$', b'%', b'&',  // §=0xA7
+//  0x08  0x09  0x0A  0x0B  0x0C  0x0D  0x0E  0x0F
+    b'/', b'(', b')', b'=', b'?', b'`', 0x08, 0x09,
+//  0x10  0x11  0x12  0x13  0x14  0x15  0x16  0x17
+    b'Q', b'W', b'E', b'R', b'T', b'Z', b'U', b'I',
+//  0x18  0x19  0x1A  0x1B  0x1C  0x1D  0x1E  0x1F
+    b'O', b'P', 0xDC, b'*', 0x0D, 0,    b'A', b'S',  // Ü=0xDC
+//  0x20  0x21  0x22  0x23  0x24  0x25  0x26  0x27
+    b'D', b'F', b'G', b'H', b'J', b'K', b'L', 0xD6,  // Ö=0xD6
+//  0x28  0x29  0x2A  0x2B  0x2C  0x2D  0x2E  0x2F
+    0xC4, b'`', 0,    b'\'',b'Y', b'X', b'C', b'V',  // Ä=0xC4
+//  0x30  0x31  0x32  0x33  0x34  0x35  0x36  0x37
+    b'B', b'N', b'M', b';', b':', b'_', 0,    b'*',
+//  0x38  0x39  0x3A  0x3B  0x3C  0x3D  0x3E  0x3F
+    0,    b' ', 0,    0,    0,    0,    0,    0,
+//  0x40  0x41  0x42  0x43  0x44  0x45  0x46  0x47
+    0,    0,    0,    0,    0,    0,    0,    b'7',
+//  0x48  0x49  0x4A  0x4B  0x4C  0x4D  0x4E  0x4F
+    b'8', b'9', b'-', b'4', b'5', b'6', b'+', b'1',
+//  0x50  0x51  0x52  0x53  0x54  0x55  0x56  0x57
+    b'2', b'3', b'0', b'.', 0,    0,    b'>', 0,     // 0x56 shifted >
+//  0x58
+    0,
+];
+
+/// AltGr (Right Alt) layer for DE QWERTZ. 0 = no mapping.
+#[rustfmt::skip]
+static DE_ALTGR: [u8; 89] = [
+//  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
+    0,    0,    0,    b'@', 0,    0,    0,    0,      // 2→@ (on some physical DE kbs)
+//  0x08  0x09  0x0A  0x0B  0x0C  0x0D  0x0E  0x0F
+    b'{', b'[', b']', b'}', b'\\',0,    0,    0,     // 7{ 8[ 9] 0} ß→\
+//  0x10  0x11  0x12  0x13  0x14  0x15  0x16  0x17
+    b'@', 0,    0,    0,    0,    0,    0,    0,      // q→@ (duplicate, belt+suspenders)
+//  0x18  0x19  0x1A  0x1B  0x1C  0x1D  0x1E  0x1F
+    0,    0,    0,    b'~', 0,    0,    0,    0,      // +=~
+//  0x20  0x21  0x22  0x23  0x24  0x25  0x26  0x27
+    0,    0,    0,    0,    0,    0,    0,    0,
+//  0x28  0x29  0x2A  0x2B  0x2C  0x2D  0x2E  0x2F
+    0,    0,    0,    0,    0,    0,    0,    0,
+//  0x30  0x31  0x32  0x33  0x34  0x35  0x36  0x37
+    0,    0,    0xB5, 0,    0,    0,    0,    0,      // m→µ=0xB5
+//  0x38  0x39  0x3A  0x3B  0x3C  0x3D  0x3E  0x3F
+    0,    0,    0,    0,    0,    0,    0,    0,
+//  0x40  0x41  0x42  0x43  0x44  0x45  0x46  0x47
+    0,    0,    0,    0,    0,    0,    0,    0,
+//  0x48  0x49  0x4A  0x4B  0x4C  0x4D  0x4E  0x4F
+    0,    0,    0,    0,    0,    0,    0,    0,
+//  0x50  0x51  0x52  0x53  0x54  0x55  0x56  0x57
+    0,    0,    0,    0,    0,    0,    b'|', 0,      // 0x56 extra key→|
 //  0x58
     0,
 ];
@@ -182,14 +308,18 @@ pub struct Keyboard {
     shift: bool,
     /// Ctrl held
     ctrl: bool,
-    /// Alt held
+    /// Alt held (left only — right alt = AltGr on DE)
     alt: bool,
+    /// AltGr held (right alt, or Ctrl+LAlt on some firmware)
+    altgr: bool,
     /// Caps lock toggled
     caps_lock: bool,
     /// Next byte is an extended (0xE0) scancode
     extended: bool,
     /// Controller initialized
     initialized: bool,
+    /// Active keymap
+    layout: KeyLayout,
 }
 
 impl Keyboard {
@@ -204,67 +334,93 @@ impl Keyboard {
     ///   6. Set scan code set 1 (explicit — don't trust BIOS/UEFI default)
     ///   7. Enable scanning
     ///   8. Flush again (init may have generated ACK/response bytes)
+    /// Initialize the PS/2 keyboard controller with the default US layout.
+    /// Call `set_layout(KeyLayout::De)` at any point to switch to German.
     pub fn new() -> Self {
         let mut kb = Self {
             shift: false,
             ctrl: false,
             alt: false,
+            altgr: false,
             caps_lock: false,
             extended: false,
             initialized: false,
+            layout: KeyLayout::Us,
         };
 
         unsafe { kb.init_controller() };
         kb
     }
 
+    /// Switch keyboard layout at runtime. Takes effect immediately.
+    pub fn set_layout(&mut self, layout: KeyLayout) {
+        self.layout = layout;
+    }
+
+    /// Return the currently active layout.
+    pub fn layout(&self) -> KeyLayout {
+        self.layout
+    }
+
+    pub fn is_shift(&self) -> bool { self.shift }
+    pub fn is_ctrl(&self) -> bool { self.ctrl }
+    pub fn is_alt(&self) -> bool { self.alt }
+
     unsafe fn init_controller(&mut self) {
         use morpheus_hwinit::serial::puts;
 
-        // 1. Flush any stale bytes
+        // OVMF has already configured the 8042 correctly — we must NOT send
+        // 0xAA (controller self-test) or 0xFF (keyboard reset) here.
+        //
+        // 0xAA resets the Configuration Byte, which clears bit 6 (Translation).
+        // Translation is what makes the 8042 convert scan-code-set-2 bytes
+        // (what the keyboard natively sends) into set-1 (what our tables
+        // decode). If translation is cleared and we then fail to set native
+        // set-1 on the keyboard, raw set-2 bytes arrive and decode completely
+        // wrong — every key produces garbage.
+        //
+        // Strategy: read-modify-write the config byte so we preserve OVMF's
+        // state, guarantee translation is on, and disable IRQs (we poll).
+        // Then enable scanning. That's it.
+
+        // 1. Flush stale bytes from OVMF
         asm_ps2_flush();
 
-        // 2. Disable first PS/2 port (no scancodes during init)
+        // 2. Disable port 1 scanning while we touch the config
         asm_ps2_write_cmd(0xAD);
         Self::io_delay();
-
-        // 3. Flush again after disable
         asm_ps2_flush();
 
-        // 4. Controller self-test (0xAA → expects 0x55 response)
-        asm_ps2_write_cmd(0xAA);
-        let response = Self::wait_response(50_000);
-        if response != Some(0x55) {
-            puts("[KBD] controller self-test failed, continuing anyway\n");
-        }
+        // 3. Read current Configuration Byte (cmd 0x20 → byte on data port)
+        asm_ps2_write_cmd(0x20);
+        let config = Self::wait_response(50_000).unwrap_or(0x45);
+        // Bit layout:
+        //   bit 0 — port-1 IRQ enabled   (we clear: polling only)
+        //   bit 1 — port-2 IRQ enabled   (we clear)
+        //   bit 4 — port-1 clock disable (leave as-is)
+        //   bit 5 — port-2 clock disable (leave as-is)
+        //   bit 6 — Translation enabled  (we SET: 8042 converts set-2 → set-1)
+        let new_config = (config | 0x40) & !0x03;
 
-        // 5. Enable first PS/2 port
+        // 4. Write modified config byte (cmd 0x60, then data byte)
+        asm_ps2_write_cmd(0x60);
+        asm_ps2_write_data(new_config);
+        Self::io_delay();
+
+        // 5. Re-enable port 1
         asm_ps2_write_cmd(0xAE);
         Self::io_delay();
 
-        // 6. Reset keyboard device (0xFF → expects 0xFA ACK, then 0xAA)
-        asm_ps2_write_data(0xFF);
-        let ack = Self::wait_response(100_000);
-        if ack == Some(0xFA) {
-            // Wait for self-test pass (0xAA) or fail (0xFC)
-            let _st = Self::wait_response(500_000);
-        }
-
-        // 7. Set scan code set 1: send 0xF0 (select set), then 0x01
-        asm_ps2_write_data(0xF0);
-        let _ = Self::wait_response(50_000); // ACK
-        asm_ps2_write_data(0x01);
-        let _ = Self::wait_response(50_000); // ACK
-
-        // 8. Enable scanning (0xF4)
+        // 6. Tell the keyboard to enable scanning (0xF4 → expects 0xFA ACK)
+        //    This is the ONLY command we send to the keyboard device itself.
         asm_ps2_write_data(0xF4);
-        let _ = Self::wait_response(50_000); // ACK
+        let _ = Self::wait_response(50_000);
 
-        // 9. Final flush — discard init noise
+        // 7. Final flush — discard any ACK noise
         asm_ps2_flush();
 
         self.initialized = true;
-        puts("[KBD] PS/2 keyboard ready (scan set 1, full ASCII)\n");
+        puts("[KBD] PS/2 keyboard ready (8042 translation, set-1 tables)\n");
     }
 
     /// Spin-wait for a response byte from port 0x60, with bounded timeout.
@@ -396,7 +552,7 @@ impl Keyboard {
         }
 
         // ASCII from translation table
-        if (make as usize) < UNSHIFTED.len() {
+        if (make as usize) < US_UNSHIFTED.len() {
             let ch = self.translate_ascii(make);
             if ch != 0 {
                 // Ctrl+letter produces control characters (0x01-0x1A)
@@ -419,8 +575,15 @@ impl Keyboard {
         // Extended modifier releases (right ctrl, right alt)
         if is_break {
             match make {
-                SC_LCTRL => self.ctrl = false,  // Right Ctrl shares make code
-                SC_LALT  => self.alt = false,   // Right Alt shares make code
+                SC_LCTRL => self.ctrl = false,   // Right Ctrl shares make code
+                SC_LALT  => {
+                    // Right Alt = AltGr on DE; plain Alt on US
+                    if self.layout == KeyLayout::De {
+                        self.altgr = false;
+                    } else {
+                        self.alt = false;
+                    }
+                }
                 _ => {}
             }
             return None;
@@ -429,7 +592,14 @@ impl Keyboard {
         // Extended modifier presses
         match make {
             SC_LCTRL => { self.ctrl = true; return None; }
-            SC_LALT  => { self.alt = true; return None; }
+            SC_LALT  => {
+                if self.layout == KeyLayout::De {
+                    self.altgr = true;
+                } else {
+                    self.alt = true;
+                }
+                return None;
+            }
             _ => {}
         }
 
@@ -451,25 +621,42 @@ impl Keyboard {
         Some(InputKey { scan_code: scan, unicode_char: 0 })
     }
 
-    /// Look up ASCII from scan code, applying shift and caps lock.
+    /// Look up a character for the given make code, applying the active
+    /// layout, shift, caps lock, and (for DE) AltGr.
     ///
-    /// Caps Lock only affects a-z / A-Z. Shift toggles everything.
-    /// When both caps lock and shift are active, they cancel for letters
-    /// (standard US keyboard behavior).
+    /// Returns 0 if the key has no character in the active layer.
     fn translate_ascii(&self, make: u8) -> u8 {
         let idx = make as usize;
-        let base = UNSHIFTED[idx];
+        if idx >= 89 { return 0; }
 
-        // Non-letter keys: shift selects table directly
-        let is_letter = base.is_ascii_lowercase();
-
-        if is_letter {
-            // Letters: shift XOR capslock determines case
-            let upper = self.shift ^ self.caps_lock;
-            if upper { SHIFTED[idx] } else { base }
-        } else {
-            // Everything else: shift only
-            if self.shift { SHIFTED[idx] } else { base }
+        match self.layout {
+            KeyLayout::Us => {
+                let base = US_UNSHIFTED[idx];
+                if base == 0 { return 0; }
+                let is_letter = base.is_ascii_lowercase();
+                if is_letter {
+                    if self.shift ^ self.caps_lock { US_SHIFTED[idx] } else { base }
+                } else {
+                    if self.shift { US_SHIFTED[idx] } else { base }
+                }
+            }
+            KeyLayout::De => {
+                // AltGr layer takes priority over everything else
+                if self.altgr {
+                    let ch = DE_ALTGR[idx];
+                    return ch; // 0 = no AltGr mapping for this key
+                }
+                let base = DE_UNSHIFTED[idx];
+                if base == 0 { return 0; }
+                // Letters are still ASCII a-z in DE table; umlauts are not letters
+                let is_ascii_lower = base.is_ascii_lowercase();
+                if is_ascii_lower {
+                    if self.shift ^ self.caps_lock { DE_SHIFTED[idx] } else { base }
+                } else {
+                    // Non-letter (punctuation, umlauts, symbols): shift only
+                    if self.shift { DE_SHIFTED[idx] } else { base }
+                }
+            }
         }
     }
 }

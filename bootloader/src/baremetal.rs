@@ -223,43 +223,6 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     morpheus_hwinit::serial::put_hex64(fb_info.base);
     puts("\n");
 
-    let mut screen = crate::tui::renderer::Screen::from_framebuffer(display_info);
-    let mut keyboard = crate::tui::input::Keyboard::new();
-
-    puts("[TUI] screen ready, launching main menu\n");
-
-    // ── Main TUI loop ──────────────────────────────────────────────────
-    // MainMenu is pure Screen+Keyboard — zero UEFI dependencies.
-    // Sub-menus (downloader, installer, storage) need their own bare-metal
-    // I/O drivers before they work. For now: main menu renders and loops.
-    use crate::tui::main_menu::{MainMenu, MenuAction};
-
-    let mut menu = MainMenu::new(&screen);
-
-    loop {
-        let action = menu.run(&mut screen, &mut keyboard);
-        match action {
-            MenuAction::ExitToFirmware => {
-                // No firmware to exit to. We ARE the firmware now.
-                screen.clear();
-                screen.put_str_at(
-                    screen.center_x(40), screen.center_y(1),
-                    "there is no firmware. only morpheus.",
-                    crate::tui::renderer::EFI_GREEN,
-                    crate::tui::renderer::EFI_BLACK,
-                );
-                // Re-render menu after a beat
-            }
-            _ => {
-                // Sub-menus need bare-metal I/O — not wired yet.
-                screen.clear();
-                screen.put_str_at(
-                    screen.center_x(30), screen.center_y(1),
-                    "not wired yet. patience.",
-                    crate::tui::renderer::EFI_YELLOW,
-                    crate::tui::renderer::EFI_BLACK,
-                );
-            }
-        }
-    }
+    puts("[BAREMETAL] launching desktop\n");
+    crate::tui::desktop::run_desktop(&display_info);
 }
