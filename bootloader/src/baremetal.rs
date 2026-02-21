@@ -64,6 +64,9 @@ pub fn get_framebuffer_info() -> Option<FramebufferInfo> {
 pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     use morpheus_hwinit::serial::puts;
 
+    // First serial output — if you see this, our binary loaded and ran.
+    puts("[MORPHEUSX] enter_baremetal\n");
+
     FRAMEBUFFER_INFO = config.framebuffer;
 
     // ── Allocate stack from UEFI (LoaderData survives EBS) ──────────────
@@ -97,17 +100,24 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         ) -> usize,
         _alloc_pool: usize,
         _free_pool: usize,
-        _padding: [usize; 18],
+        // slots 8..26 (create_event → unload_image) = 19 × 8 = 152 bytes
+        // puts exit_boot_services at offset 232, matching UEFI spec exactly.
+        _padding: [usize; 19],
         exit_boot_services: extern "efiapi" fn(*mut (), usize) -> usize,
     }
 
     let st = &*(config.system_table as *const MinSystemTable);
     let bs = &*st.boot_services;
 
+    puts("[EBS-PREP] allocating stack\n");
     let mut stack_base: u64 = 0;
     let status = (bs.allocate_pages)(0, 2, STACK_PAGES, &mut stack_base);
-    if status != 0 { loop { core::hint::spin_loop(); } }
+    if status != 0 {
+        puts("[FATAL] allocate_pages failed\n");
+        loop { core::hint::spin_loop(); }
+    }
     let stack_top = stack_base + STACK_SIZE as u64;
+    puts("[EBS-PREP] stack ready, getting memory map\n");
 
     // ── Memory map + ExitBootServices ───────────────────────────────────
     static mut MMAP_BUF: [u8; 32768] = [0u8; 32768];
@@ -129,14 +139,25 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     DESC_SIZE = desc_size;
     DESC_VER = desc_ver;
 
+    puts("[EBS-PREP] mmap done, calling ExitBootServices\n");
     let status = (bs.exit_boot_services)(config.image_handle, map_key);
-    if status != 0 { loop { core::hint::spin_loop(); } }
+    if status != 0 {
+        // EBS failed — either stale map key or wrong offset in MinBootServices.
+        // This message will appear on serial before we loop.
+        puts("[FATAL] ExitBootServices failed — status=");
+        morpheus_hwinit::serial::put_hex64(status as u64);
+        puts("\n");
+        loop { core::hint::spin_loop(); }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // UEFI IS DEAD. WE OWN THE MACHINE.
     // ═══════════════════════════════════════════════════════════════════════
 
     BAREMETAL_MODE.store(true, Ordering::SeqCst);
+
+    // Switch allocator to our own heap (UEFI pool is gone)
+    crate::uefi_allocator::switch_to_post_ebs();
 
     // ── Switch stack ────────────────────────────────────────────────────
     core::arch::asm!("mov rsp, {0}", in(reg) stack_top, options(nostack));

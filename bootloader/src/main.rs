@@ -128,6 +128,10 @@ struct Gop {
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) -> usize {
     unsafe {
+        // Raw COM1 write — needs zero init, works from first instruction.
+        // If you see this on serial, OVMF found and loaded our binary.
+        morpheus_hwinit::serial::puts("[MORPHEUSX] efi_main\n");
+
         let st = &*(system_table as *const SystemTable);
         let bs = &*st.boot_services;
 
