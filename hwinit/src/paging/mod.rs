@@ -58,6 +58,22 @@ pub unsafe fn init_kernel_page_table() {
     crate::serial::put_hex64(mgr.pml4_phys);
     puts("\n");
 
+    // UEFI / OVMF sets CR0.WP = 1 (Write Protect) and marks its own
+    // page-table pages as read-only.  With WP=1, even Ring 0 code faults
+    // when writing to a page whose PTE has R/W = 0.  Since we've adopted
+    // these page tables as our own and need to freely modify entries (add
+    // mappings, change caching flags, split huge pages), clear CR0.WP.
+    let cr0: u64;
+    core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+    if cr0 & (1u64 << 16) != 0 {
+        core::arch::asm!(
+            "mov cr0, {}",
+            in(reg) cr0 & !(1u64 << 16),
+            options(nomem, nostack),
+        );
+        puts("[PAGING] cleared CR0.WP — kernel owns page tables\n");
+    }
+
     KERNEL_PT = Some(mgr);
     PAGING_INITIALIZED = true;
 }
@@ -120,4 +136,35 @@ pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
 /// See [`PageTableManager::translate`].
 pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
     kernel_page_table().translate(virt)
+}
+
+/// Split any huge pages along the path to `virt` in the kernel page table
+/// so that a subsequent `kmap_4k()` call will succeed.
+///
+/// # Safety
+/// See [`PageTableManager::ensure_4k_mappable`].
+pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
+    kernel_page_table_mut().ensure_4k_mappable(virt)
+}
+
+/// Identity-map a physical MMIO region with UC flags in the kernel page table.
+///
+/// Handles all cases: existing huge pages (sets UC bits), existing 4K pages
+/// (sets UC bits), and unmapped regions (creates new identity-mapped entries).
+///
+/// # Safety
+/// See [`PageTableManager::map_mmio`].
+pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
+    kernel_page_table_mut().map_mmio(phys, size)
+}
+
+/// Mark the leaf page table entry covering `virt` as uncacheable (UC).
+///
+/// Works with 1 GiB, 2 MiB, or 4 KiB pages.  Ideal for PCI MMIO BAR
+/// regions that UEFI identity-mapped with Write-Back caching.
+///
+/// # Safety
+/// See [`PageTableManager::mark_uncacheable`].
+pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
+    kernel_page_table_mut().mark_uncacheable(virt)
 }

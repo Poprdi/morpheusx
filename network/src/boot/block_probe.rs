@@ -617,6 +617,21 @@ pub unsafe fn create_unified_from_detected(
             dbg_str("[BLK-PROBE] caps found_mask=0x"); dbg_hex8(caps.found_mask);
             dbg_str(" has_required="); dbg_str(if caps.has_required() { "yes" } else { "no" });
             dbg_str("\n");
+
+            // Raw PCI config space dump (BARs + Command register)
+            {
+                let cmd = pci_cfg_read16(pci_addr, 0x04);
+                dbg_str("[BLK-PROBE] PCI CMD="); dbg_hex32(cmd as u32);
+                dbg_str(" (MEM_EN="); dbg_str(if cmd & 0x02 != 0 { "Y" } else { "N" });
+                dbg_str(" BUS_MASTER="); dbg_str(if cmd & 0x04 != 0 { "Y" } else { "N" });
+                dbg_str(")\n");
+                for bar_i in 0..6u8 {
+                    let raw = pci_cfg_read32(pci_addr, 0x10 + bar_i * 4);
+                    dbg_str("[BLK-PROBE] raw BAR"); crate::serial_byte(b'0' + bar_i);
+                    dbg_str("="); dbg_hex32(raw); dbg_str("\n");
+                }
+            }
+
             if caps.common.is_some() {
                 dbg_str("[BLK-PROBE]   common_cfg="); dbg_hex64(caps.common_cfg_addr().unwrap_or(0)); dbg_str("\n");
             }
@@ -647,6 +662,46 @@ pub unsafe fn create_unified_from_detected(
                     pci_cfg: 0,
                 };
                 let transport = VirtioTransport::pci_modern(pci_cfg);
+
+                // ── Feature-read diagnostic (volatile MMIO) ──
+                {
+                    let base = pci_cfg.common_cfg as *mut u32;
+                    unsafe {
+                        // Write ACKNOWLEDGE (0x01) to device_status to test MMIO write path
+                        let status_ptr = (pci_cfg.common_cfg + 0x14) as *mut u8;
+                        core::ptr::write_volatile(status_ptr, 0x00u8); // reset
+                        core::arch::x86_64::_mm_mfence();
+                        let st0 = core::ptr::read_volatile(status_ptr);
+                        core::ptr::write_volatile(status_ptr, 0x01u8); // ACKNOWLEDGE
+                        core::arch::x86_64::_mm_mfence();
+                        let st1 = core::ptr::read_volatile(status_ptr);
+                        core::ptr::write_volatile(status_ptr, 0x00u8); // reset again
+                        core::arch::x86_64::_mm_mfence();
+                        dbg_str("[BLK-PROBE] MMIO status write test: reset=");
+                        dbg_hex8(st0);
+                        dbg_str(" ack=");
+                        dbg_hex8(st1);
+                        dbg_str("\n");
+
+                        // device_feature_select = 0, read device_feature (low 32)
+                        core::ptr::write_volatile(base.add(0), 0u32);  // offset 0x00
+                        core::arch::x86_64::_mm_mfence();
+                        let low = core::ptr::read_volatile(base.add(1)); // offset 0x04
+                        // device_feature_select = 1, read device_feature (high 32)
+                        core::ptr::write_volatile(base.add(0), 1u32);
+                        core::arch::x86_64::_mm_mfence();
+                        let high = core::ptr::read_volatile(base.add(1));
+                        let feats = ((high as u64) << 32) | (low as u64);
+                        dbg_str("[BLK-PROBE] MMIO device_features low=");
+                        dbg_hex32(low);
+                        dbg_str(" high=");
+                        dbg_hex32(high);
+                        dbg_str(" combined=");
+                        dbg_hex64(feats);
+                        dbg_str("\n");
+                    }
+                }
+
                 dbg_str("[BLK-PROBE] trying PCI Modern init...\n");
                 match VirtioBlkDriver::new_with_transport(transport, blk_config, config.tsc_freq) {
                     Ok(driver) => {
