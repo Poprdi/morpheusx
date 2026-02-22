@@ -1,0 +1,12 @@
+[package]
+name = "morpheus-helix"
+version.workspace = true
+edition.workspace = true
+description = "HelixFS — log-structured, time-travel filesystem for MorpheusX"
+
+[features]
+default = []
+
+[dependencies]
+gpt_disk_io = "0.16"
+gpt_disk_types = "0.16"

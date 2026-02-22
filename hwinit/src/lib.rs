@@ -201,6 +201,10 @@ pub use syscall::{
     init_syscall,
     SYS_EXIT, SYS_WRITE, SYS_READ, SYS_YIELD, SYS_ALLOC, SYS_FREE,
     SYS_GETPID, SYS_KILL, SYS_WAIT, SYS_SLEEP,
+    // HelixFS syscalls
+    SYS_OPEN, SYS_CLOSE, SYS_SEEK, SYS_STAT, SYS_READDIR,
+    SYS_MKDIR, SYS_UNLINK, SYS_RENAME, SYS_TRUNCATE,
+    SYS_SYNC, SYS_SNAPSHOT, SYS_VERSIONS,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
