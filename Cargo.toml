@@ -11,6 +11,7 @@ members = [
     "hwinit",
     "ui",
     "helix",
+    "libmorpheus",
 ]
 
 [workspace.package]

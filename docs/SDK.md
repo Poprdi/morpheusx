@@ -2,7 +2,8 @@
 
 > **Platform**: Bare-metal x86-64 exokernel, no OS underneath  
 > **Rust edition**: 2021 · `#![no_std]` · `extern crate alloc`  
-> **Target**: `x86_64-unknown-uefi` (PE/COFF, MS x64 ABI)  
+> **Kernel target**: `x86_64-unknown-uefi` (PE/COFF, MS x64 ABI)  
+> **User target**: `x86_64-morpheus.json` (ELF64, System V ABI, static)  
 > **Last updated**: 2026-02-22
 
 ---
@@ -10,7 +11,7 @@
 ## Table of Contents
 
 1. [Platform Overview](#1-platform-overview)
-2. [App Framework](#2-app-framework)
+2. [App Framework (Ring 0)](#2-app-framework-ring-0)
 3. [UI — Canvas & Color](#3-ui--canvas--color)
 4. [UI — Draw Primitives](#4-ui--draw-primitives)
 5. [UI — Widgets](#5-ui--widgets)
@@ -39,27 +40,46 @@
 28. [Network Stack](#28-network-stack)
 29. [Crate Map & Import Paths](#29-crate-map--import-paths)
 30. [Syscall Table (Quick Reference)](#30-syscall-table-quick-reference)
+31. [HelixFS — Log-Structured Filesystem](#31-helixfs--log-structured-filesystem)
+32. [VFS — Virtual Filesystem Layer](#32-vfs--virtual-filesystem-layer)
+33. [Ring 3 User Processes](#33-ring-3-user-processes)
+34. [ELF Loader](#34-elf-loader)
+35. [libmorpheus — Userspace SDK](#35-libmorpheus--userspace-sdk)
+36. [Building Userspace Binaries](#36-building-userspace-binaries)
+37. [stdin — Keyboard Input Buffer](#37-stdin--keyboard-input-buffer)
+38. [Platform Capability Matrix](#38-platform-capability-matrix)
 
 ---
 
 ## 1. Platform Overview
 
 MorpheusX is a bare-metal exokernel. After `ExitBootServices` the machine is
-fully owned by the kernel. All apps run in Ring 0 alongside the kernel — there
-is no system-call boundary cost for most operations. The architecture layers
-from bottom to top:
+fully owned by the kernel. The system supports two execution models:
+
+- **Ring 0 apps**: `App` trait implementations compiled into the kernel image.
+  They run alongside the kernel with direct access to all hardware primitives.
+  Used for system applications (storage manager, task manager).
+- **Ring 3 user processes**: Standalone ELF64 binaries loaded from the HelixFS
+  filesystem at runtime. Each process runs in its own address space with
+  hardware-enforced isolation via x86-64 page tables. Communication with the
+  kernel uses the `SYSCALL`/`SYSRET` mechanism (22 syscalls).
 
 ```
  ┌─────────────────────────────────────────────────────┐
- │   App  (bootloader/src/apps/<name>.rs)              │
- │   implements App trait, renders to OffscreenBuffer  │
+ │   User Process  (Ring 3, own address space)         │
+ │   linked against libmorpheus, uses SYSCALL ABI      │
+ ├─────────────────────────────────────────────────────┤
+ │   Ring 0 App  (bootloader/src/apps/<name>.rs)       │
+ │   implements App trait, renders to OffscreenBuffer   │
  ├─────────────────────────────────────────────────────┤
  │   morpheus-ui      (ui/)    Window, Shell, Widgets  │
  ├─────────────────────────────────────────────────────┤
- │   morpheus-core    (core/)  Disk, FS, ISO, Net-init │
+ │   morpheus-helix   (helix/) HelixFS + VFS layer     │
+ ├─────────────────────────────────────────────────────┤
+ │   morpheus-core    (core/)  Disk, FAT32, ISO, Net   │
  ├─────────────────────────────────────────────────────┤
  │   morpheus-hwinit  (hwinit/)  Memory, Paging,       │
- │                              Process, Syscall, PCI  │
+ │        Process, Scheduler, Syscall, ELF, PCI, DMA   │
  ├─────────────────────────────────────────────────────┤
  │   morpheus-display (display/) Framebuffer backend   │
  └─────────────────────────────────────────────────────┘
@@ -69,18 +89,44 @@ from bottom to top:
 - `#![no_std]` everywhere. Use `extern crate alloc` for `Vec`/`Box`/`String`.
 - No floating-point. `panic = "abort"`.
 - Single core. `spin::Mutex` used for future SMP support.
-- Identity-mapped memory (physical address == virtual address) until paging is
-  explicitly changed.
-- All code runs in Ring 0. Syscall mechanism exists for future Ring 3 use.
+- Kernel memory is identity-mapped (physical == virtual).
+- User processes get isolated page tables (user-half only; kernel-half shared).
+- Preemptive scheduler at ~100 Hz via PIT timer; round-robin.
+- 22 syscalls (process, I/O, filesystem, signals) via `SYSCALL`/`SYSRET`.
+- Per-process file descriptor tables (64 fds each) backed by HelixFS.
+- Keyboard input flows to both focused Ring 0 apps and a shared stdin ring
+  buffer for Ring 3 processes.
+
+### Boot sequence (abridged)
+
+```
+efi_main() → ExitBootServices → switch_to_post_ebs()
+  → platform_init_selfcontained()
+      Phase 1:  MemoryRegistry (1958 MB bump allocator)
+      Phase 2:  GDT + IDT (kernel, user, TSS segments)
+      Phase 3:  PIC (8259)
+      Phase 4:  Heap (4 MB from registry)
+      Phase 5:  TSC calibration (~3 GHz)
+      Phase 6:  DMA region (2 MB below 4 GiB)
+      Phase 7:  PCI bus mastering
+      Phase 8:  Kernel page table (identity-mapped)
+      Phase 9:  Scheduler (PID 0 = kernel)
+      Phase 10: SYSCALL/SYSRET MSRs
+      Phase 11: HelixFS root filesystem (16 MB RAM disk)
+  → run_desktop()
+```
 
 ---
 
-## 2. App Framework
+## 2. App Framework (Ring 0)
 
 **Crate**: `morpheus-ui`  **Path**: `ui/src/app.rs`
 
+Ring 0 apps run inside the kernel address space with full hardware access.
 Every app implements the `App` trait and registers itself in
 `bootloader/src/apps/mod.rs`. The shell command `open <name>` launches it.
+
+For Ring 3 user processes, see §33–§36.
 
 ### `App` trait
 
@@ -579,6 +625,7 @@ pub enum ShellAction {
     OpenApp(String),       // name to look up in AppRegistry
     CloseWindow(u32),
     ListWindows,
+    SpawnProcess(String),  // load ELF from /bin/<name> and spawn Ring 3 process
     Exit,
 }
 ```
@@ -588,11 +635,31 @@ pub enum ShellAction {
 | Command | Action |
 |---------|--------|
 | `help` | List commands |
-| `open <name>` | Open app by registry name |
+| `open <name>` | Open Ring 0 app by registry name |
+| `exec <name>` | Spawn Ring 3 user process from `/bin/<name>` |
+| `run <name>` | Alias for `exec` |
 | `close <id>` | Close window by ID |
-| `windows` | List open windows |
+| `list` / `windows` | List open windows |
 | `clear` | Clear output buffer |
 | `exit` | Shut down |
+
+### `exec` / `run` — spawning user processes
+
+The `exec` command loads an ELF64 binary from the HelixFS filesystem at
+`/bin/<name>`, parses its PT_LOAD segments, creates a fresh page table
+with the kernel mappings cloned, maps the segments + user stack, and adds
+the process to the scheduler as Ready. The process runs in Ring 3 with
+its own address space.
+
+```
+morpheus> exec hello
+Spawned 'hello' as PID 3
+```
+
+If the binary is not found, the shell reports:
+```
+Binary not found: hello. Place ELF in /bin/hello
+```
 
 ---
 
@@ -661,7 +728,18 @@ Text height in pixels: `FONT_HEIGHT`
 **Crate**: `morpheus-hwinit`  **Import**: `morpheus_hwinit::{...}`
 
 The scheduler runs preemptively at ~100 Hz (PIT IRQ 0). Context switching uses
-the full `CpuContext` saved on the kernel stack by the timer ISR.
+the full `CpuContext` saved on the kernel stack by the timer ISR. On each tick
+the ISR also performs a CR3 switch if the next process has a different address
+space.
+
+### Execution model
+
+- **PID 0**: The kernel itself (desktop event loop). Always present, never terminates.
+- **Kernel threads** (Ring 0): Spawned via `spawn_kernel_thread()`. Share the
+  kernel address space (same CR3). Have private kernel stacks.
+- **User processes** (Ring 3): Spawned via `spawn_user_process()`. Each has
+  its own page table (kernel-half cloned, user-half private). Transitions to
+  Ring 3 via `SYSRET` from the first context switch.
 
 ### Types
 
@@ -669,7 +747,7 @@ the full `CpuContext` saved on the kernel stack by the timer ISR.
 pub struct Process {
     pub pid:              u32,
     pub name:             [u8; 32],   // null-terminated UTF-8
-    pub parent_pid:       Option<u32>,
+    pub parent_pid:       u32,
     pub state:            ProcessState,
     pub exit_code:        Option<i32>,
     pub cr3:              u64,         // page table physical address
@@ -681,6 +759,7 @@ pub struct Process {
     pub priority:         u8,          // 0 = lowest, 255 = highest
     pub cpu_ticks:        u64,         // total ticks this process ran
     pub pending_signals:  SignalSet,
+    pub fd_table:         FdTable,     // 64 per-process file descriptors
 }
 
 pub enum ProcessState {
@@ -692,8 +771,8 @@ pub enum ProcessState {
 }
 
 pub enum BlockReason {
-    Sleep(u64),         // wake after this tick count
-    WaitChild(u32),     // waiting for child PID
+    Sleep(u64),         // wake after this TSC deadline
+    WaitChild(u32),     // waiting for child PID to exit
     Io,
 }
 
@@ -734,6 +813,9 @@ impl Scheduler {
     /// Total scheduler ticks since boot (~100 Hz).
     pub fn tick_count(&self) -> u32;
 
+    /// Per-process file descriptor table (for VFS operations).
+    pub unsafe fn current_fd_table_mut(&self) -> &'static mut FdTable;
+
     /// Deliver a signal to a process.
     /// SIGKILL / SIGSTOP take effect immediately.
     /// Other signals are queued in pending_signals.
@@ -756,26 +838,80 @@ pub struct ProcessInfo {
 /// Called once during platform init. Creates PID 0 (kernel thread).
 pub unsafe fn init_scheduler();
 
-/// Spawn a new kernel-mode thread.
-/// `entry_fn`: function pointer that will be called as the thread entry.
-/// Returns Err if the process table is full (MAX_PROCESSES = 64).
+/// Spawn a new kernel-mode thread (Ring 0, shared address space).
 pub unsafe fn spawn_kernel_thread(
     name: &str,
-    entry_fn: fn(),
+    entry_fn: u64,
     priority: u8,
+) -> Result<u32, &'static str>;
+
+/// Spawn a Ring 3 user process from an ELF64 binary.
+/// Creates a fresh page table, loads PT_LOAD segments, maps user stack.
+pub unsafe fn spawn_user_process(
+    name: &str,
+    elf_data: &[u8],
 ) -> Result<u32, &'static str>;
 
 /// Terminate the current process with exit code.
 /// Marks as Zombie until parent calls waitpid.
 pub unsafe fn exit_process(code: i32) -> !;
 
+/// Block the current process until a TSC deadline.
+/// Used by SYS_SLEEP. The timer ISR wakes the process once the
+/// deadline passes.
+pub unsafe fn block_sleep(deadline: u64) -> u64;
+
+/// Wait for a child process to exit and reap it.
+/// If already Zombie, reaps immediately. Otherwise blocks with
+/// BlockReason::WaitChild(pid).
+pub unsafe fn wait_for_child(child_pid: u32) -> u64;
+
+/// Store TSC frequency for sleep deadline computation.
+/// Called once from platform init Phase 5.
+pub unsafe fn set_tsc_frequency(freq: u64);
+
+/// Get the stored TSC frequency (Hz). Returns 0 if not calibrated.
+pub fn tsc_frequency() -> u64;
+
 /// Timer ISR callback (called from ASM at 100 Hz).
-/// Saves current context, picks next process, returns its context.
+/// Saves current context, wakes expired sleepers, picks next process,
+/// writes `next_cr3` for address space switch, returns next context.
 #[no_mangle]
 pub unsafe extern "C" fn scheduler_tick(
     current_ctx: &CpuContext,
 ) -> &'static CpuContext;
 ```
+
+### Context switch flow (timer ISR)
+
+```
+PIT IRQ 0 fires → irq_timer_isr (ASM)
+  ├── Push all GPRs onto stack → CpuContext
+  ├── Call scheduler_tick(current_ctx)
+  │     ├── Save context into PROCESS_TABLE[current_pid]
+  │     ├── Wake expired sleepers (TSC deadline comparison)
+  │     ├── Round-robin pick_next()
+  │     ├── Set kernel stack pointer for Ring 3→0 transitions
+  │     ├── Write next_cr3 (process page table address)
+  │     └── Return &next_process.context
+  ├── Load next_cr3 into CR3 (if changed)
+  ├── Restore all GPRs from returned context
+  └── iretq → resumes next process
+```
+
+### Process cleanup on exit
+
+When a process exits (via `SYS_EXIT` or `SIGKILL`):
+1. State → `Zombie`, exit code recorded
+2. Parent is woken if blocked on `WaitChild`
+3. `SIGCHLD` delivered to parent
+4. On reap (`SYS_WAIT` from parent):
+   - Kernel stack pages freed to MemoryRegistry
+   - User page tables walked (PML4→PDPT→PD→PT, indices 0–255 only)
+   - All user-half physical frames freed
+   - All intermediate page table pages freed
+   - PML4 page itself freed
+   - State → `Terminated`, slot available for reuse
 
 ---
 
@@ -832,11 +968,21 @@ The SYSCALL/SYSRET mechanism is configured on boot. Syscalls use the x86-64
 ABI: number in `RAX`, arguments in `RDI, RSI, RDX, R10, R8, R9`.  
 Return value in `RAX`. Errors returned as `u64::MAX - errno`.
 
-Since all current apps run in Ring 0, direct Rust function calls are generally
-preferred over the `syscall` instruction for performance. The syscall interface
-is provided for completeness and future Ring 3 support.
+### GDT segment layout (required for SYSRET)
 
-### From Ring 0 (preferred — direct function call)
+| Selector | Segment |
+|----------|---------|
+| 0x00 | Null |
+| 0x08 | Kernel Code (Ring 0, CS) |
+| 0x10 | Kernel Data (Ring 0, SS) |
+| 0x18 | User Data (Ring 3, SS = 0x1B) |
+| 0x20 | User Code (Ring 3, CS = 0x23) |
+| 0x28 | TSS |
+
+> `SYSRET` requires User Data at `STAR[63:48]` and User Code at `STAR[63:48]+16`.
+> The GDT order above satisfies this constraint.
+
+### From Ring 0 (direct function call — preferred for kernel apps)
 
 ```rust
 use morpheus_hwinit::process::scheduler::{exit_process, SCHEDULER};
@@ -844,28 +990,68 @@ exit_process(0);
 
 SCHEDULER.send_signal(pid, Signal::SIGKILL);
 
-// Allocate physical pages directly from registry
+// Allocate physical pages directly
 let registry = morpheus_hwinit::global_registry_mut();
-let phys_addr = registry.allocate_pages(AllocateType::AnyPages, MemoryType::Allocated, n_pages)?;
+let phys = registry.allocate_pages(AllocateType::AnyPages, MemoryType::Allocated, n)?;
 ```
 
 ### From Ring 3 (via `syscall` instruction)
 
 ```asm
-; SYS_WRITE — write string to serial
-mov rax, 1
-mov rdi, buf_ptr
-mov rsi, len
-syscall
+; SYS_WRITE — write string to serial (fd 1 = stdout)
+mov rax, 1        ; SYS_WRITE
+mov rdi, 1        ; fd = stdout
+mov rsi, buf_ptr  ; pointer to data
+mov rdx, len      ; byte count
+syscall           ; RAX = bytes written
+```
+
+### From Ring 3 (via libmorpheus)
+
+```rust
+use libmorpheus::io::println;
+use libmorpheus::fs;
+use libmorpheus::process;
+
+println("Hello from Ring 3!");
+let fd = fs::open("/hello.txt", fs::O_READ)?;
+let n = fs::read(fd, &mut buf)?;
+fs::close(fd)?;
+process::exit(0);
 ```
 
 ### Syscall dispatch — Rust side
 
 ```rust
+#[no_mangle]
 pub unsafe extern "C" fn syscall_dispatch(
     nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64,
 ) -> u64;
 ```
+
+### Error convention
+
+| Value | Meaning |
+|-------|---------|
+| `0`..`0xFFFF_FFFF_FFFF_FF00` | Success / data |
+| `u64::MAX` (0xFFFF...FFFF) | `-EINVAL` |
+| `u64::MAX - 2` | `-ENOENT` |
+| `u64::MAX - 3` | `-ESRCH` |
+| `u64::MAX - 5` | `-EIO` |
+| `u64::MAX - 9` | `-EBADF` |
+| `u64::MAX - 10` | `-ECHILD` |
+| `u64::MAX - 12` | `-ENOMEM` |
+| `u64::MAX - 13` | `-EACCES` |
+| `u64::MAX - 17` | `-EEXIST` |
+| `u64::MAX - 21` | `-EISDIR` |
+| `u64::MAX - 22` | `-EINVAL` (signal) |
+| `u64::MAX - 24` | `-EMFILE` |
+| `u64::MAX - 28` | `-ENOSPC` |
+| `u64::MAX - 30` | `-EROFS` |
+| `u64::MAX - 37` | `-ENOSYS` |
+| `u64::MAX - 39` | `-ENOTEMPTY` |
+
+Check with: `if ret > 0xFFFF_FFFF_FFFF_FF00 { /* error */ }`
 
 ---
 
@@ -1797,6 +1983,7 @@ pub enum InitStage {
 
 | What you need | Import |
 |---------------|--------|
+| **UI — App Framework** | |
 | App trait, AppResult | `morpheus_ui::app::{App, AppResult, AppEntry, AppRegistry}` |
 | Canvas trait | `morpheus_ui::canvas::Canvas` |
 | OffscreenBuffer | `morpheus_ui::buffer::OffscreenBuffer` |
@@ -1810,23 +1997,36 @@ pub enum InitStage {
 | Font constants | `morpheus_ui::font::{FONT_DATA, FONT_WIDTH, FONT_HEIGHT}` |
 | Shell | `morpheus_ui::shell::{Shell, ShellAction}` |
 | Window Manager | `morpheus_ui::wm::WindowManager` |
+| **Process & Signals** | |
 | Process, Scheduler | `morpheus_hwinit::{Process, ProcessState, BlockReason, SCHEDULER, ProcessInfo, MAX_PROCESSES}` |
-| spawn/exit | `morpheus_hwinit::{spawn_kernel_thread, exit_process}` |
+| spawn kernel thread | `morpheus_hwinit::process::scheduler::spawn_kernel_thread` |
+| spawn user process | `morpheus_hwinit::process::scheduler::spawn_user_process` |
+| exit | `morpheus_hwinit::process::scheduler::exit_process` |
+| sleep blocking | `morpheus_hwinit::process::scheduler::block_sleep` |
+| wait for child | `morpheus_hwinit::process::scheduler::wait_for_child` |
+| TSC freq get/set | `morpheus_hwinit::process::scheduler::{tsc_frequency, set_tsc_frequency}` |
 | Signals | `morpheus_hwinit::{Signal, SignalSet}` |
 | CpuContext | `morpheus_hwinit::CpuContext` |
-| Syscall constants | `morpheus_hwinit::syscall::{SYS_EXIT, SYS_WRITE, ...}` |
+| **Syscalls** | |
+| Syscall numbers | `morpheus_hwinit::syscall::{SYS_EXIT, SYS_WRITE, ..., SYS_VERSIONS}` |
+| Init | `morpheus_hwinit::syscall::init_syscall` |
+| **Memory & Paging** | |
 | Memory registry | `morpheus_hwinit::{global_registry_mut, is_registry_initialized, MemoryType, AllocateType, PAGE_SIZE}` |
 | Heap stats | `morpheus_hwinit::{is_heap_initialized, heap_stats}` |
 | Paging | `morpheus_hwinit::{kmap_4k, kmap_2m, kunmap_4k, kvirt_to_phys, PageFlags, PageTableManager}` |
+| ELF loader | `morpheus_hwinit::elf::{load_elf64, validate_elf64, ElfImage, ElfError}` |
+| **Sync & CPU** | |
 | Sync | `morpheus_hwinit::{SpinLock, Once, Lazy, without_interrupts, InterruptGuard}` |
 | Serial debug | `morpheus_hwinit::serial::{puts, put_hex32, put_hex64, putc, newline}` |
+| stdin buffer | `morpheus_hwinit::stdin::{push, read, available}` |
 | DMA | `morpheus_hwinit::dma::DmaRegion` |
 | PCI | `morpheus_hwinit::pci::{PciAddr, pci_cfg_read8, pci_cfg_read16, pci_cfg_read32, pci_cfg_write8, pci_cfg_write16, pci_cfg_write32}` |
 | Port I/O | `morpheus_hwinit::cpu::pio::{inb, outb, inw, outw, inl, outl, io_wait}` |
 | MMIO | `morpheus_hwinit::cpu::mmio::{mmio_read32, mmio_write32}` |
 | Barriers | `morpheus_hwinit::cpu::barriers::{sfence, lfence, mfence}` |
-| TSC | `morpheus_hwinit::cpu::tsc::{rdtsc, delay_us, calibrate_tsc_pit}` |
+| TSC | `morpheus_hwinit::cpu::tsc::{rdtsc, delay_us, calibrate_tsc_pit, read_tsc}` |
 | Interrupt control | `morpheus_hwinit::{enable_interrupts, disable_interrupts, interrupts_enabled}` |
+| **Disk & FAT32** | |
 | GPT structures | `morpheus_core::disk::gpt::{GptHeader, GptPartitionEntry, GptPartitionTable, GPT_SIGNATURE, GUID_EFI_SYSTEM, GUID_LINUX_FILESYSTEM}` |
 | GPT scan | `morpheus_core::disk::gpt_ops::scan::scan_partitions` |
 | GPT create/modify | `morpheus_core::disk::gpt_ops::create_modify::{create_gpt, create_partition, delete_partition}` |
@@ -1835,6 +2035,7 @@ pub enum InitStage {
 | FAT32 format | `morpheus_core::fs::fat32_format::format::format_fat32` |
 | FAT32 verify | `morpheus_core::fs::fat32_format::verify::verify_fat32` |
 | FAT32 file ops | `morpheus_core::fs::fat32_ops::{write_file, write_file_with_progress, read_file, file_exists, create_directory}` |
+| **ISO & Network** | |
 | ISO manifest | `morpheus_core::iso::{IsoManifest, ChunkInfo, MAX_CHUNKS}` |
 | ISO writer | `morpheus_core::iso::writer::ChunkWriter` |
 | ISO reader | `morpheus_core::iso::reader::{ChunkReader, IsoReadContext}` |
@@ -1842,25 +2043,869 @@ pub enum InitStage {
 | Network config | `morpheus_core::net::config::InitConfig` |
 | Network errors | `morpheus_core::net::error_log::{error_log_pop, drain_network_logs}` |
 | TCP/IP interface | `morpheus_network::stack::NetInterface` |
+| **Filesystem (HelixFS + VFS)** | |
+| VFS operations | `morpheus_helix::vfs::{vfs_open, vfs_read, vfs_write, vfs_close, vfs_seek, vfs_stat, vfs_readdir, vfs_mkdir, vfs_unlink, vfs_rename, vfs_sync}` |
+| VFS types | `morpheus_helix::vfs::{FdTable, MountTable, MountEntry, FsInstance}` |
+| Global FS | `morpheus_helix::vfs::global::{init_root_fs, fs_global, fs_global_mut}` |
+| On-disk types | `morpheus_helix::types::{HelixSuperblock, FileStat, DirEntry, IndexEntry, LogOp}` |
+| Open flags | `morpheus_helix::types::open_flags::{O_READ, O_WRITE, O_CREATE, O_TRUNC, O_APPEND, O_DIR, O_AT_LSN}` |
+| Errors | `morpheus_helix::error::HelixError` |
+| Block device | `morpheus_helix::device::MemBlockDevice` |
+| Ops layer | `morpheus_helix::ops::{read, write, dir}` |
+| **Userspace SDK (libmorpheus)** | |
+| Entry macro | `libmorpheus::entry` |
+| Raw syscalls | `libmorpheus::raw::{syscall0..syscall5, SYS_*}` |
+| File ops | `libmorpheus::fs::{open, read, write, close, seek, mkdir, unlink, rename, stat, sync}` |
+| Process ops | `libmorpheus::process::{exit, getpid, yield_cpu, kill, sleep}` |
+| Console I/O | `libmorpheus::io::{print, println}` |
+| Error check | `libmorpheus::is_error` |
 
 ---
 
 ## 30. Syscall Table (Quick Reference)
 
-| # | Name | Args | Return | Notes |
-|---|------|------|--------|-------|
-| 0 | `SYS_EXIT` | `(code: i32)` | `→ !` | Terminate current process |
-| 1 | `SYS_WRITE` | `(ptr: *u8, len: usize, _)` | bytes written | Writes to COM1 serial |
-| 2 | `SYS_READ` | `(fd, ptr, len)` | bytes read | Stub: returns 0 |
-| 3 | `SYS_YIELD` | `()` | `0` | Voluntary context switch |
-| 4 | `SYS_ALLOC` | `(pages: u64)` | phys base or `u64::MAX` | Allocate physical pages |
-| 5 | `SYS_FREE` | `(phys: u64, pages: u64)` | `0` | Free physical pages (stub) |
-| 6 | `SYS_GETPID` | `()` | current PID | |
-| 7 | `SYS_KILL` | `(pid: u32, sig: u8)` | `0` or `u64::MAX` | Send signal to process |
-| 8 | `SYS_WAIT` | `(pid: u32)` | exit code | Wait for child (stub) |
-| 9 | `SYS_SLEEP` | `(ticks: u64)` | `0` | Block for N scheduler ticks |
+### Core syscalls (0–9)
 
-**Error convention**: `u64::MAX` = generic error; `u64::MAX - 37` = ENOSYS (unknown syscall).
+| # | Name | Args | Return | Status |
+|---|------|------|--------|--------|
+| 0 | `SYS_EXIT` | `(code: i32)` | `→ !` | ✅ Implemented |
+| 1 | `SYS_WRITE` | `(fd, ptr: *u8, len)` | bytes written | ✅ fd 1/2 → serial, fd ≥ 3 → VFS |
+| 2 | `SYS_READ` | `(fd, ptr: *u8, len)` | bytes read | ✅ fd 0 → stdin, fd ≥ 3 → VFS |
+| 3 | `SYS_YIELD` | `()` | `0` | ✅ STI+HLT+CLI (atomic yield) |
+| 4 | `SYS_ALLOC` | `(pages: u64)` | phys base | ✅ Max 1024 pages per call |
+| 5 | `SYS_FREE` | `(phys: u64, pages)` | `0` | ⚠️ Stub (returns 0, no-op) |
+| 6 | `SYS_GETPID` | `()` | current PID | ✅ Implemented |
+| 7 | `SYS_KILL` | `(pid: u32, sig: u8)` | `0` or error | ✅ All signals supported |
+| 8 | `SYS_WAIT` | `(pid: u32)` | exit code | ✅ Blocks or reaps zombie |
+| 9 | `SYS_SLEEP` | `(millis: u64)` | `0` | ✅ TSC-deadline based |
+
+### HelixFS syscalls (10–21)
+
+| # | Name | Args | Return | Status |
+|---|------|------|--------|--------|
+| 10 | `SYS_OPEN` | `(path_ptr, path_len, flags)` | fd | ✅ O_READ, O_WRITE, O_CREATE, O_TRUNC, O_APPEND |
+| 11 | `SYS_CLOSE` | `(fd)` | `0` | ✅ Implemented |
+| 12 | `SYS_SEEK` | `(fd, offset: i64, whence)` | new offset | ✅ SEEK_SET/CUR/END |
+| 13 | `SYS_STAT` | `(path_ptr, path_len, buf_ptr)` | `0` | ✅ Writes FileStat to buf |
+| 14 | `SYS_READDIR` | `(path_ptr, path_len, buf_ptr)` | count | ✅ Writes DirEntry[] to buf |
+| 15 | `SYS_MKDIR` | `(path_ptr, path_len)` | `0` | ✅ Implemented |
+| 16 | `SYS_UNLINK` | `(path_ptr, path_len)` | `0` | ✅ Files and empty dirs |
+| 17 | `SYS_RENAME` | `(old_ptr, old_len, new_ptr, new_len)` | `0` | ✅ Implemented |
+| 18 | `SYS_TRUNCATE` | `(fd, new_size)` | `0` | ❌ Stub (ENOSYS) |
+| 19 | `SYS_SYNC` | `()` | `0` | ✅ Flushes log + superblock |
+| 20 | `SYS_SNAPSHOT` | `(name_ptr, name_len)` | snapshot_id | ❌ Stub (ENOSYS) |
+| 21 | `SYS_VERSIONS` | `(path_ptr, path_len, buf, max)` | count | ❌ Stub (ENOSYS) |
+
+### Open flags
+
+| Flag | Value | Description |
+|------|-------|-------------|
+| `O_READ` | 0x01 | Open for reading |
+| `O_WRITE` | 0x02 | Open for writing |
+| `O_CREATE` | 0x04 | Create if not exists |
+| `O_TRUNC` | 0x10 | Truncate to zero on open |
+| `O_APPEND` | 0x20 | Append mode |
+| `O_DIR` | 0x40 | Open as directory |
+| `O_AT_LSN` | 0x80 | Time-travel read at specific LSN |
+
+### Seek whence
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `SEEK_SET` | 0 | From beginning |
+| `SEEK_CUR` | 1 | From current offset |
+| `SEEK_END` | 2 | From end of file |
+
+---
+
+## 31. HelixFS — Log-Structured Filesystem
+
+**Crate**: `morpheus-helix`  **Path**: `helix/`
+
+HelixFS is a log-structured, copy-on-write filesystem designed for MorpheusX.
+All writes are appended to a circular log; the on-disk state is always
+consistent and never requires fsck. It supports time-travel reads at
+historical log sequence numbers (LSNs).
+
+### Architecture
+
+```
+ ┌──────────────────────────────────────────────────┐
+ │  Superblock (4 KiB, block 0)                     │
+ ├──────────────────────────────────────────────────┤
+ │  Block bitmap (tracks free/used blocks)           │
+ ├──────────────────────────────────────────────────┤
+ │  Log area (circular, append-only)                 │
+ │    ├── LogSegmentHeader (64B) per segment         │
+ │    └── LogRecordHeader (64B) + payload per op     │
+ ├──────────────────────────────────────────────────┤
+ │  Index area (namespace B-tree, per-file extents)  │
+ ├──────────────────────────────────────────────────┤
+ │  Data area (file content blocks)                  │
+ └──────────────────────────────────────────────────┘
+```
+
+### On-disk types  (`helix/src/types.rs`)
+
+```rust
+/// Superblock — always at block 0.
+#[repr(C)]
+pub struct HelixSuperblock {
+    pub magic:            [u8; 8],      // "HELIXFS\0"
+    pub version:          u32,
+    pub block_size:       u32,          // 4096
+    pub total_blocks:     u64,
+    pub free_blocks:      u64,
+    pub committed_lsn:    u64,          // Highest flushed LSN
+    pub log_head_segment: u64,
+    pub log_head_offset:  u64,
+    pub log_tail_segment: u64,
+    pub root_inode_key:   u64,
+    // ... additional fields ...
+}
+
+/// Stat result (returned by SYS_STAT via buf pointer).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FileStat {
+    pub size:        u64,
+    pub created_ns:  u64,
+    pub modified_ns: u64,
+    pub is_dir:      bool,
+    pub key:         u64,
+}
+
+/// Directory entry (returned by SYS_READDIR via buf pointer).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DirEntry {
+    pub name:   [u8; 256],
+    pub is_dir: bool,
+    pub size:   u64,
+    pub key:    u64,
+}
+```
+
+### Log operations
+
+Every mutation is represented as a `LogOp` appended to the write-ahead log:
+
+```rust
+pub enum LogOp {
+    CreateFile,
+    WriteExtent,
+    DeleteFile,
+    CreateDir,
+    Rename,
+    Snapshot,
+    MkDir,
+    Unlink,
+    // etc.
+}
+```
+
+### Block device abstraction
+
+HelixFS is generic over `BlockIo`. In production it uses a RAM-backed device:
+
+```rust
+/// RAM-backed block device for the root filesystem.
+pub struct MemBlockDevice {
+    base: *mut u8,
+    block_count: u64,
+    block_size: u32,
+}
+```
+
+Initialized during platform init Phase 11 with 16 MB from MemoryRegistry.
+
+### Key design properties
+
+- **No in-place overwrites**: All writes are log appends. The index is updated
+  in-memory and periodically checkpointed.
+- **Crash recovery**: Replay the log from the last committed LSN.
+- **Time-travel reads**: Open a file with `O_AT_LSN` flag to read historical
+  versions (when `SYS_VERSIONS` is fully implemented).
+- **No fragmentation overhead**: The log is circular; old segments are reclaimed
+  when the log wraps.
+
+---
+
+## 32. VFS — Virtual Filesystem Layer
+
+**Crate**: `morpheus-helix`  **Path**: `helix/src/vfs/`
+
+The VFS sits between the syscall handlers and the on-disk filesystem. It
+manages mount points, per-process file descriptor tables, and delegates to
+the appropriate filesystem instance.
+
+### Mount table
+
+```rust
+pub struct MountTable {
+    entries: [Option<MountEntry>; 8],
+}
+
+pub struct MountEntry {
+    pub mount_point: [u8; 256],
+    pub mount_point_len: u16,
+    pub fs: FsInstance,
+    pub read_only: bool,
+}
+
+impl MountTable {
+    /// Mount a filesystem at the given path.
+    pub fn mount(
+        &mut self, mount_point: &str, instance: FsInstance, read_only: bool,
+    ) -> Result<u8, HelixError>;
+
+    /// Resolve a path to the best matching mount.
+    pub fn resolve(&self, path: &str) -> Option<(u8, &MountEntry)>;
+}
+```
+
+### FsInstance
+
+An `FsInstance` bundles all the per-filesystem state:
+
+```rust
+pub struct FsInstance {
+    pub sb:    HelixSuperblock,
+    pub log:   LogEngine,
+    pub index: NamespaceIndex,
+    pub bitmap: BlockBitmap,
+}
+```
+
+### File descriptor table (per-process)
+
+```rust
+pub const MAX_FDS: usize = 64;
+
+pub struct FdTable {
+    pub fds: [FileDescriptor; MAX_FDS],
+}
+
+pub struct FileDescriptor {
+    pub flags:     u32,
+    pub offset:    u64,
+    pub mount_idx: u8,
+    pub key:       u64,     // HelixFS index key for the file
+    // ...
+}
+```
+
+Each process in the scheduler has its own `FdTable`. File descriptors 0–2 are
+reserved (stdin, stdout, stderr) and handled specially by the syscall handlers:
+
+| fd | Target |
+|----|--------|
+| 0 | stdin (keyboard ring buffer) |
+| 1 | stdout (COM1 serial) |
+| 2 | stderr (COM1 serial) |
+| 3–63 | VFS file descriptors |
+
+### VFS API
+
+All operations are called by the syscall handlers in `hwinit/src/syscall/handler.rs`:
+
+```rust
+// Open a file or directory, allocating an fd.
+pub fn vfs_open(block_io, mount_table, fd_table, path, flags, timestamp) -> Result<usize, HelixError>;
+
+// Read from an open fd into a buffer.
+pub fn vfs_read(block_io, mount_table, fd_table, fd, buf) -> Result<usize, HelixError>;
+
+// Write data to an open fd.
+pub fn vfs_write(block_io, mount_table, fd_table, fd, data, timestamp) -> Result<usize, HelixError>;
+
+// Seek within a file (SEEK_SET, SEEK_CUR, SEEK_END).
+pub fn vfs_seek(mount_table, fd_table, fd, offset, whence) -> Result<u64, HelixError>;
+
+// Close an fd.
+pub fn vfs_close(fd_table, fd) -> Result<(), HelixError>;
+
+// Stat a path (does not require an open fd).
+pub fn vfs_stat(mount_table, path) -> Result<FileStat, HelixError>;
+
+// List directory contents.
+pub fn vfs_readdir(mount_table, path) -> Result<Vec<DirEntry>, HelixError>;
+
+// Create a directory.
+pub fn vfs_mkdir(mount_table, path, timestamp) -> Result<(), HelixError>;
+
+// Delete a file or empty directory.
+pub fn vfs_unlink(mount_table, path, timestamp) -> Result<(), HelixError>;
+
+// Rename a file or directory.
+pub fn vfs_rename(mount_table, old_path, new_path, timestamp) -> Result<(), HelixError>;
+
+// Flush all pending log records and update superblock.
+pub fn vfs_sync(block_io, mount_table) -> Result<(), HelixError>;
+```
+
+### Global filesystem singleton
+
+```rust
+/// Initialize the root filesystem (called from platform init Phase 11).
+pub unsafe fn init_root_fs(device: MemBlockDevice, block_count: u64);
+
+/// Get a read-only reference to the global FS state.
+pub fn fs_global() -> Option<&'static FsGlobal>;
+
+/// Get a mutable reference to the global FS state.
+pub unsafe fn fs_global_mut() -> Option<&'static mut FsGlobal>;
+
+pub struct FsGlobal {
+    pub device:      MemBlockDevice,
+    pub mount_table: MountTable,
+}
+```
+
+### HelixError
+
+```rust
+pub enum HelixError {
+    NotFound,
+    AlreadyExists,
+    InvalidFd,
+    TooManyOpenFiles,
+    ReadOnly,
+    IsADirectory,
+    DirectoryNotEmpty,
+    NoSpace,
+    MountNotFound,
+    MountTableFull,
+    PermissionDenied,
+    InvalidOffset,
+    IoReadFailed,
+    IoWriteFailed,
+    IoFlushFailed,
+    // ...
+}
+```
+
+---
+
+## 33. Ring 3 User Processes
+
+**Crate**: `morpheus-hwinit`
+
+MorpheusX supports true Ring 3 user-mode execution with hardware-enforced
+memory isolation. Each user process has:
+
+1. **Own page table** — PML4 entries 0–255 (user-half, 128 TiB virtual)
+   are private per process. Entries 256–511 (kernel-half) are cloned from
+   the kernel page table so interrupts and syscalls work.
+2. **Private kernel stack** — For Ring 3 → Ring 0 transitions (interrupts,
+   syscalls). Set via TSS RSP0 and the `kernel_syscall_rsp` global.
+3. **Per-process fd table** — 64 file descriptors, independent from other
+   processes.
+
+### Address space layout (user process)
+
+```
+ Virtual Address                        Description
+ ─────────────────────────────────────────────────────
+ 0x0000_0000_0040_0000                  .text (ELF entry point)
+ ...                                     .rodata, .data, .bss
+ 0x0000_007F_FFFF_7000                  User stack bottom (32 KiB, 8 pages)
+ 0x0000_007F_FFFF_F000                  User stack top (RSP initial value)
+ ─────────────────────────────────────────────────────
+ 0xFFFF_8000_0000_0000+                 Kernel half (shared, no USER bit)
+```
+
+### SYSCALL/SYSRET mechanism
+
+The x86-64 `SYSCALL` instruction performs a fast Ring 3 → Ring 0 transition:
+
+1. User calls `syscall` with RAX=number, args in RDI/RSI/RDX/R10/R8/R9
+2. CPU atomically: saves RIP to RCX, saves RFLAGS to R11, loads kernel
+   CS/SS from `IA32_STAR`, jumps to `IA32_LSTAR` (our `syscall_entry`)
+3. ASM trampoline: swaps to kernel stack, saves user registers, calls
+   `syscall_dispatch()` in Rust
+4. Return via `SYSRET`: restores user CS/SS/RIP/RFLAGS
+
+### Segment selectors for SYSRET
+
+```
+IA32_STAR[47:32] = 0x08    (kernel CS base)
+IA32_STAR[63:48] = 0x18    (user CS base — SYSRET adds 16 for CS, 8 for SS)
+
+Result: kernel CS=0x08, SS=0x10, user CS=0x23 (0x20|3), SS=0x1B (0x18|3)
+```
+
+### Context switch with CR3
+
+The timer ISR in `context_switch.s` loads `next_cr3` (written by
+`scheduler_tick()`) into CR3 before restoring the next process's registers.
+If the next process has the same CR3, the load is skipped.
+
+```asm
+; In irq_timer_isr:
+mov rax, [next_cr3]    ; scheduler wrote this
+mov rcx, cr3
+cmp rax, rcx
+je .skip_cr3           ; same address space — skip TLB flush
+mov cr3, rax
+.skip_cr3:
+; ... restore GPRs, iretq
+```
+
+---
+
+## 34. ELF Loader
+
+**Crate**: `morpheus-hwinit`  **Path**: `hwinit/src/elf.rs`
+
+The ELF loader parses ELF64 binaries and loads them into a fresh address space.
+
+### API
+
+```rust
+/// Validate an ELF64 header (magic, class, endianness, arch, type).
+pub fn validate_elf64(data: &[u8]) -> Result<&Elf64Ehdr, ElfError>;
+
+/// Load an ELF64 binary into a new page table.
+/// Returns the loaded image metadata and the PageTableManager.
+pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), ElfError>;
+
+pub struct ElfImage {
+    pub entry:    u64,                // Entry point virtual address
+    pub segments: Vec<LoadedSegment>, // Loaded PT_LOAD segments
+}
+
+pub struct LoadedSegment {
+    pub vaddr: u64,      // Virtual address base (page-aligned)
+    pub phys:  u64,      // Physical address base
+    pub memsz: u64,      // Size in bytes (page-aligned)
+    pub flags: PageFlags, // Page flags (USER, WRITABLE, NO_EXECUTE)
+}
+```
+
+### Loading process
+
+1. Validate ELF64 header (magic, x86-64, executable/shared type)
+2. Allocate a new PML4 page and clone all 512 entries from kernel page table
+3. For each `PT_LOAD` segment:
+   - Allocate physical frames from MemoryRegistry
+   - Zero the region, then copy file data (`.text`, `.rodata`, `.data`)
+   - Map pages with USER bit through all 4 paging levels (PML4→PDPT→PD→PT)
+   - Intermediate entries get PRESENT | WRITABLE | USER
+4. Allocate and map user stack (8 pages = 32 KiB at `0x7FFFFFF7000..0x7FFFFFFFF000`)
+5. Return `(ElfImage, PageTableManager)` — the scheduler uses `pml4_phys` as CR3
+
+### ELF flags → page flags
+
+| ELF flag | Page flags |
+|----------|-----------|
+| `PF_R` only | PRESENT \| USER \| NO_EXECUTE |
+| `PF_R \| PF_W` | PRESENT \| USER \| WRITABLE \| NO_EXECUTE |
+| `PF_R \| PF_X` | PRESENT \| USER |
+| `PF_R \| PF_W \| PF_X` | PRESENT \| USER \| WRITABLE |
+
+### Constants
+
+```rust
+pub const USER_STACK_PAGES: u64 = 8;     // 32 KiB
+pub const USER_STACK_SIZE:  u64 = 32768; // 8 × 4096
+pub const USER_STACK_TOP:   u64 = 0x0000_007F_FFFF_F000;
+```
+
+---
+
+## 35. libmorpheus — Userspace SDK
+
+**Crate**: `libmorpheus`  **Path**: `libmorpheus/`  
+**Dependencies**: Zero. Pure inline ASM + thin wrappers.
+
+This is the userspace library that Ring 3 binaries link against. It provides:
+
+- `entry!(main)` macro for defining the ELF entry point
+- Raw syscall wrappers (`syscall0`..`syscall5`)
+- High-level file operations (`fs` module)
+- Process management (`process` module)
+- Console I/O (`io` module)
+
+### Entry point (`libmorpheus::entry`)
+
+```rust
+#![no_std]
+#![no_main]
+
+use libmorpheus::entry;
+
+entry!(main);
+
+fn main() -> i32 {
+    libmorpheus::io::println("Hello from Ring 3!");
+    0
+}
+```
+
+The `entry!` macro expands to:
+
+```rust
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    let code: i32 = main();
+    libmorpheus::process::exit(code);
+}
+```
+
+### Panic handler
+
+The crate provides a `#[panic_handler]` that writes "PANIC in user process\n"
+to stderr (fd 2) via `SYS_WRITE`, then calls `exit(101)`.
+
+### Raw syscalls (`libmorpheus::raw`)
+
+All syscall numbers are mirrored from `hwinit/src/syscall/mod.rs`:
+
+```rust
+pub const SYS_EXIT:     u64 = 0;
+pub const SYS_WRITE:    u64 = 1;
+// ... through SYS_VERSIONS = 21
+
+pub unsafe fn syscall0(nr: u64) -> u64;
+pub unsafe fn syscall1(nr: u64, a1: u64) -> u64;
+pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64;
+pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64;
+pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64;
+pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64;
+```
+
+### File operations (`libmorpheus::fs`)
+
+```rust
+pub const O_READ:   u32 = 0x01;
+pub const O_WRITE:  u32 = 0x02;
+pub const O_CREATE: u32 = 0x04;
+pub const O_TRUNC:  u32 = 0x10;
+pub const O_APPEND: u32 = 0x20;
+
+pub fn open(path: &str, flags: u32)           -> Result<usize, u64>;
+pub fn read(fd: usize, buf: &mut [u8])        -> Result<usize, u64>;
+pub fn write(fd: usize, data: &[u8])          -> Result<usize, u64>;
+pub fn close(fd: usize)                       -> Result<(), u64>;
+pub fn seek(fd: usize, offset: i64, whence: u64) -> Result<u64, u64>;
+pub fn mkdir(path: &str)                      -> Result<(), u64>;
+pub fn unlink(path: &str)                     -> Result<(), u64>;
+pub fn rename(old: &str, new: &str)           -> Result<(), u64>;
+pub fn stat(path: &str, buf: &mut [u8])       -> Result<(), u64>;
+pub fn sync()                                 -> Result<(), u64>;
+```
+
+### Process management (`libmorpheus::process`)
+
+```rust
+pub fn exit(code: i32) -> !;
+pub fn getpid() -> u32;
+pub fn yield_cpu();
+pub fn kill(pid: u32, signal: u8) -> Result<(), u64>;
+pub fn sleep(millis: u64);
+```
+
+> **Note**: `sleep()` takes **milliseconds**. The kernel computes a TSC
+> deadline internally.
+
+### Console I/O (`libmorpheus::io`)
+
+```rust
+pub fn print(s: &str);     // Write to stdout (fd 1 → serial)
+pub fn println(s: &str);   // print(s) + print("\n")
+```
+
+### Error checking
+
+```rust
+/// Returns true if a syscall return value represents an error.
+/// Errors are in the range (u64::MAX - 255)..=u64::MAX.
+pub fn is_error(ret: u64) -> bool;
+```
+
+### Complete example — file I/O from userspace
+
+```rust
+#![no_std]
+#![no_main]
+
+use libmorpheus::entry;
+use libmorpheus::fs;
+use libmorpheus::io;
+use libmorpheus::process;
+
+entry!(main);
+
+fn main() -> i32 {
+    io::println("Creating a file...");
+
+    // Create and write
+    let fd = match fs::open("/tmp/hello.txt", fs::O_WRITE | fs::O_CREATE) {
+        Ok(fd) => fd,
+        Err(_) => { io::println("open failed"); return 1; }
+    };
+    let _ = fs::write(fd, b"Hello from Ring 3!\n");
+    let _ = fs::close(fd);
+
+    // Read back
+    let fd = match fs::open("/tmp/hello.txt", fs::O_READ) {
+        Ok(fd) => fd,
+        Err(_) => { io::println("read open failed"); return 1; }
+    };
+    let mut buf = [0u8; 128];
+    match fs::read(fd, &mut buf) {
+        Ok(n) => {
+            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                io::print("Read: ");
+                io::println(s);
+            }
+        }
+        Err(_) => io::println("read failed"),
+    }
+    let _ = fs::close(fd);
+
+    io::println("Done!");
+    0
+}
+```
+
+---
+
+## 36. Building Userspace Binaries
+
+### Custom target: `x86_64-morpheus.json`
+
+User processes are ELF64 static binaries built with a custom target spec:
+
+```json
+{
+  "llvm-target": "x86_64-unknown-none",
+  "arch": "x86_64",
+  "os": "none",
+  "executables": true,
+  "linker-flavor": "ld.lld",
+  "linker": "rust-lld",
+  "panic-strategy": "abort",
+  "disable-redzone": true,
+  "features": "-mmx,-sse,-sse2,+soft-float",
+  "relocation-model": "static",
+  "code-model": "small",
+  "pre-link-args": {
+    "ld.lld": ["-Tlibmorpheus/linker.ld", "--gc-sections"]
+  },
+  "max-atomic-width": 64
+}
+```
+
+Key properties:
+- **No red zone** (required for interrupt safety)
+- **Soft-float** (kernel never initializes SSE/FPU state)
+- **Static linking** (no dynamic loader)
+- **Linker script** places `.text` at `0x400000`
+
+### Linker script: `libmorpheus/linker.ld`
+
+```ld
+OUTPUT_FORMAT("elf64-x86-64")
+OUTPUT_ARCH(i386:x86-64)
+ENTRY(_start)
+
+SECTIONS {
+    . = 0x400000;
+    .text   ALIGN(4K) : { *(.text._start) *(.text .text.*) }
+    .rodata ALIGN(4K) : { *(.rodata .rodata.*) }
+    .data   ALIGN(4K) : { *(.data .data.*) }
+    .bss    ALIGN(4K) : { __bss_start = .; *(.bss .bss.*) *(COMMON) __bss_end = .; }
+    /DISCARD/ : { *(.comment) *(.note.*) *(.eh_frame*) *(.debug_*) }
+}
+```
+
+### Build commands
+
+```bash
+# Build a userspace binary
+cargo build --release \
+  --target x86_64-morpheus.json \
+  -p my-user-app
+
+# The output is an ELF64 binary at:
+# target/x86_64-morpheus/release/my-user-app
+```
+
+### Deploying to the filesystem
+
+Place the compiled ELF binary in the HelixFS root at `/bin/<name>`:
+
+```rust
+// From a Ring 0 context (e.g., during platform init or a kernel app):
+let binary = include_bytes!("path/to/my-user-app");
+morpheus_helix::ops::write::write_file(
+    block_io, &mut fs.log, &mut fs.index, &fs.bitmap,
+    "/bin/hello", binary, timestamp,
+)?;
+```
+
+Then from the shell:
+
+```
+morpheus> exec hello
+Spawned 'hello' as PID 3
+```
+
+### Cargo.toml for a userspace crate
+
+```toml
+[package]
+name = "my-user-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libmorpheus = { path = "../libmorpheus" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"    # Optimize for size
+lto = true
+```
+
+### `src/main.rs`
+
+```rust
+#![no_std]
+#![no_main]
+
+use libmorpheus::entry;
+
+entry!(main);
+
+fn main() -> i32 {
+    libmorpheus::io::println("hello world");
+    0
+}
+```
+
+---
+
+## 37. stdin — Keyboard Input Buffer
+
+**Crate**: `morpheus-hwinit`  **Path**: `hwinit/src/stdin.rs`
+
+A lock-free SPSC (single-producer / single-consumer) ring buffer that connects
+the desktop keyboard handler to user processes reading from fd 0.
+
+### Architecture
+
+```
+ Keyboard ISR → desktop event loop → stdin::push(byte)
+                                          │
+                                          ▼
+                                    ┌──────────┐
+                                    │  256-byte │
+                                    │ ring buf  │
+                                    └──────────┘
+                                          │
+                                          ▼
+                     SYS_READ(fd=0) → stdin::read(buf) → user process
+```
+
+### API
+
+```rust
+/// Push a single ASCII byte into the stdin buffer.
+/// Called by the desktop event loop for each printable keypress.
+/// Returns false if the buffer is full (byte dropped).
+pub fn push(byte: u8) -> bool;
+
+/// Read up to buf.len() bytes from stdin.
+/// Returns immediately with 0 if the buffer is empty.
+pub fn read(buf: &mut [u8]) -> usize;
+
+/// Number of unread bytes available.
+pub fn available() -> usize;
+```
+
+### Buffer properties
+
+- **Size**: 256 bytes (power of two for efficient masking)
+- **Ordering**: Atomic `Acquire`/`Release` on head/tail indices
+- **Overflow**: Bytes are silently dropped when full
+- **Non-blocking**: `read()` returns 0 immediately if empty
+
+### How keyboard input flows
+
+1. `keyboard.poll_key_with_delay()` detects a keypress in the desktop event loop
+2. If `unicode_char > 0 && unicode_char < 128`, the byte is pushed to `stdin::push()`
+3. The same event is also translated and dispatched to the focused Ring 0 app/shell
+4. A Ring 3 process calls `SYS_READ(fd=0, buf, len)` → kernel calls `stdin::read(buf)`
+5. The kernel returns however many bytes were available (0 if none)
+
+---
+
+## 38. Platform Capability Matrix
+
+This section maps what can and cannot be built on MorpheusX today, based on the
+available kernel primitives, drivers, and syscall surface.
+
+### What you CAN build today
+
+| Application | Required primitives | Status |
+|------------|-------------------|--------|
+| **File manager** | VFS (open/read/write/close/readdir/stat/mkdir/unlink/rename), Canvas, Widgets (List, Panel, Button) | ✅ All present |
+| **Text editor** | VFS read/write, TextArea, TextInput, keyboard events | ✅ All present |
+| **Process monitor / Task manager** | SCHEDULER.snapshot_processes(), send_signal(), Canvas, List, ProgressBar | ✅ Already implemented (`open tasks`) |
+| **System info viewer** | MemoryRegistry stats, heap_stats(), PCI enumeration, TSC frequency | ✅ All present |
+| **Simple HTTP client** | NetInterface (internal), TCP connect/send/recv, DNS | ⚠️ Internal only; not exposed to apps via syscall |
+| **Serial terminal** | SYS_READ(0) for stdin, SYS_WRITE(1) for stdout | ✅ Ring 3 capable |
+| **CLI utilities** | libmorpheus (fs, process, io), stdin, stdout | ✅ Ring 3 capable |
+| **Games (text-mode)** | Canvas, draw primitives, keyboard events, timer ticks | ✅ Ring 0 apps |
+| **Calculator** | Canvas, TextInput, Button, Label | ✅ Ring 0 apps |
+| **Hex viewer / Binary inspector** | VFS read, TextArea, scroll | ✅ All present |
+
+### What CANNOT be built today (gaps)
+
+| Application | Missing primitive | Severity | Notes |
+|------------|------------------|----------|-------|
+| **Web browser** | TLS/HTTPS, HTML/CSS parser, image decoder, Unicode font engine, general TCP socket API | 🔴 CRITICAL | Multiple foundational gaps |
+| **HTTPS client** | TLS library (e.g., rustls or custom) | 🔴 CRITICAL | `HttpsNotSupported` error exists in codebase |
+| **Image viewer** | PNG/JPEG decoder, image→Canvas blit | 🟡 HIGH | Could implement with pure-Rust decoders |
+| **Rich text / Unicode** | Unicode line breaking, glyph shaping, TrueType/OpenType renderer | 🟡 HIGH | Current font is 8×16 CP437 bitmap only |
+| **Network app (user-space)** | SYS_SOCKET / SYS_CONNECT / SYS_SENDTO / SYS_RECVFROM | 🟡 HIGH | NetInterface exists but has no syscall exposure |
+| **Pipe-based shell** | SYS_PIPE, SYS_DUP, SYS_POLL/SELECT | 🟠 MEDIUM | No IPC beyond signals |
+| **Memory-mapped files** | SYS_MMAP | 🟠 MEDIUM | Only SYS_ALLOC (physical pages) |
+| **Clipboard / Copy-paste** | Shared memory or clipboard syscall | 🟢 LOW | Could be added easily |
+| **GPU-accelerated rendering** | GPU driver, DRM/KMS-like API | 🟢 LOW | Software rendering only |
+
+### Network stack inventory
+
+| Protocol | Layer | Implementation | Accessible to apps? |
+|----------|-------|---------------|-------------------|
+| Ethernet (VirtIO-net) | L2 | ✅ Full driver | No — kernel internal |
+| Ethernet (e1000e) | L2 | ✅ Full driver | No — kernel internal |
+| ARP | L2.5 | ✅ Cache + resolution | No — kernel internal |
+| IPv4 | L3 | ✅ Full | No — kernel internal |
+| TCP | L4 | ✅ Full (via smoltcp) | No — kernel internal |
+| UDP | L4 | ✅ Internal (DHCP/DNS) | No — kernel internal |
+| DHCP | App | ✅ Auto-configuration | No — kernel internal |
+| DNS | App | ✅ A record resolution | No — kernel internal |
+| HTTP/1.1 | App | ✅ GET with streaming | No — kernel internal |
+| TLS/HTTPS | App | ❌ Not implemented | N/A |
+| IPv6 | L3 | ❌ Not implemented | N/A |
+
+### Roadmap priorities for higher-level applications
+
+1. **Expose TCP sockets** via new syscalls (`SYS_SOCKET`, `SYS_CONNECT`,
+   `SYS_SEND`, `SYS_RECV`, `SYS_BIND`, `SYS_LISTEN`, `SYS_ACCEPT`)
+   — this unblocks all network-capable user applications.
+2. **TLS library** — port a `no_std` TLS implementation (e.g., `rustls` with
+   ring's crypto) to enable HTTPS. Requires step 1 first.
+3. **Image decoders** — port `png` and `jpeg-decoder` crates (`no_std` mode)
+   for image viewing.
+4. **Unicode font engine** — implement a TrueType rasterizer or integrate a
+   `no_std` bitmap Unicode font for international text support.
+5. **Pipe / IPC** — add `SYS_PIPE` and `SYS_POLL` for shell pipelines and
+   inter-process communication.
 
 ---
 

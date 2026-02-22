@@ -40,11 +40,10 @@ extern syscall_dispatch         ; Rust: unsafe extern "C" fn(nr, a1, a2, a3, a4,
 ; GDT selectors (must match hwinit/src/cpu/gdt.rs)
 %define KERNEL_CS    0x08
 %define KERNEL_DS    0x10
-; User code selector (CS for SYSRET = STAR[63:48] + 16)
-; User data selector (SS for SYSRET = STAR[63:48])
-; For now user selectors = 0 (no userspace yet); will be updated in Phase 3+.
-%define USER_DS      0x00
-%define USER_CS      0x00
+; SYSRET computes:  CS = STAR[63:48]+16,  SS = STAR[63:48]+8
+; With SYSRET_BASE = 0x10:  CS = 0x20 (user code),  SS = 0x18 (user data)
+; RPL is forced to 3 by the CPU.
+%define SYSRET_BASE  0x10
 
 ; ───────────────────────────────────────────────────────────────────────────
 ; syscall_init — Configure SYSCALL/SYSRET MSRs
@@ -71,7 +70,7 @@ syscall_init:
     ;   [31:0]  = reserved (zero)
     mov     ecx, IA32_STAR
     xor     eax, eax
-    mov     edx, (USER_DS << 16) | KERNEL_CS   ; [63:48]=USER_DS, [47:32]=KERNEL_CS
+    mov     edx, (SYSRET_BASE << 16) | KERNEL_CS  ; [63:48]=SYSRET_BASE, [47:32]=KERNEL_CS
     wrmsr
 
     ; IA32_LSTAR = address of our syscall entry point
@@ -97,70 +96,64 @@ syscall_init:
 ; At entry (set by hardware):
 ;   RCX  = user RIP to return to
 ;   R11  = user RFLAGS
-;   RSP  = still the USER stack (DANGEROUS — must switch immediately)
+;   RSP  = USER stack (must switch immediately)
 ;   RAX  = syscall number
 ;   RDI  = arg1, RSI = arg2, RDX = arg3, R10 = arg4, R8 = arg5, R9 = arg6
 ;   Interrupts are OFF (IF cleared by IA32_FMASK)
-;
-; Note: Until per-process kernel stacks are set up (Phase 3+), all kernel
-;       threads share the same RSP. For safety we use IA32_KERNEL_GS_BASE  
-;       (or a simple global) to find the kernel stack. For now, since all
-;       code is Ring 0 and SYSCALL is called kernel→kernel, we keep the
-;       current stack (it IS the kernel stack).
 ; ───────────────────────────────────────────────────────────────────────────
+
+; Scratch slot for user RSP (single-core, non-reentrant during CLI).
+section .data
+align 8
+global kernel_syscall_rsp
+kernel_syscall_rsp: dq 0
+_user_rsp_scratch:  dq 0
+
+section .text
 syscall_entry:
-    ; ── Save user registers we'll clobber ─────────────────────────────────
-    ; RCX = user RIP (saved by CPU), R11 = user RFLAGS (saved by CPU).
-    ; We need to preserve these for SYSRET.  Also save the user RSP.
-    push    rcx                 ; user RIP
-    push    r11                 ; user RFLAGS
+    ; ── Switch to kernel stack ────────────────────────────────────────────
+    mov     [rel _user_rsp_scratch], rsp
+    mov     rsp, [rel kernel_syscall_rsp]
+
+    ; ── Build a frame for SYSRET restoration ──────────────────────────────
+    push    qword [rel _user_rsp_scratch]   ; user RSP
+    push    rcx                             ; user RIP
+    push    r11                             ; user RFLAGS
+
+    ; ── Save callee-saved (MS x64 ABI for the Rust call) ─────────────────
     push    rbp
+    push    rbx
+    push    r12
+    push    r13
+    push    r14
+    push    r15
     mov     rbp, rsp
 
-    ; ── Align stack and set up shadow space for MS x64 call ───────────────
-    ; Save RAX (syscall nr) before it's clobbered.
-    push    rax                 ; syscall number (will go into RCX below)
-    push    rdi
-    push    rsi
-    push    rdx
-    push    r10
-    push    r8
-    push    r9
+    ; ── Translate user ABI → MS x64 and call syscall_dispatch ─────────────
+    ;   User:   RAX=nr, RDI=a1, RSI=a2, RDX=a3, R10=a4, R8=a5
+    ;   MS x64: RCX=nr, RDX=a1, R8=a2,  R9=a3,  [rsp+0x20]=a4, [rsp+0x28]=a5
+    sub     rsp, 48                 ; 32 shadow + 16 stack args
+    mov     [rsp + 0x28], r8        ; a5
+    mov     [rsp + 0x20], r10       ; a4
+    mov     r9, rdx                 ; a3
+    mov     r8, rsi                 ; a2
+    mov     rdx, rdi                ; a1
+    mov     rcx, rax                ; nr
 
-    ; Shadow space (32 bytes) for the Rust callee
-    sub     rsp, 32
+    call    syscall_dispatch        ; returns in RAX
 
-    ; ── Call syscall_dispatch(nr, a1, a2, a3, a4, a5) ────────────────────
-    ; MS x64: RCX, RDX, R8, R9 + stack (shadow)
-    ; Our layout: nr=rax, a1=rdi, a2=rsi, a3=rdx, a4=r10, a5=r8, a6=r9
-    ; Translate to MS x64: RCX=nr, RDX=a1, R8=a2, R9=a3; a4/a5 → stack
-
-    ; Retrieve saved args (above shadow space)
-    mov     rcx, [rsp + 32 + 7*8]  ; syscall nr (rax saved)
-    mov     rdx, [rsp + 32 + 6*8]  ; rdi (arg1)
-    mov     r8,  [rsp + 32 + 5*8]  ; rsi (arg2)
-    mov     r9,  [rsp + 32 + 4*8]  ; rdx (arg3)
-    ; arg4 (r10) and arg5 (r8) go on stack above shadow
-    mov     rax, [rsp + 32 + 3*8]  ; r10 (arg4)
-    mov     [rsp + 0x20], rax       ; arg4 @ rsp+32 (first stack arg)
-    mov     rax, [rsp + 32 + 2*8]  ; r8 (arg5)
-    mov     [rsp + 0x28], rax       ; arg5 @ rsp+40
-
-    call    syscall_dispatch        ; RAX = return value
-
-    ; ── Restore and return to caller ──────────────────────────────────────
-    add     rsp, 32                 ; remove shadow space
-    add     rsp, 7*8                ; remove saved args (nr, rdi, rsi, rdx, r10, r8, r9)
-    ; RAX = syscall return value (must be preserved through pops below)
-    push    rax                     ; save return value
-
-    pop     rax                     ; restore return value into temp
-    ; Restore rbp, user RFLAGS (r11), user RIP (rcx) for SYSRET
+    ; ── Tear down and restore ─────────────────────────────────────────────
     mov     rsp, rbp
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbx
     pop     rbp
+
     pop     r11                     ; user RFLAGS
     pop     rcx                     ; user RIP
+    ; RAX = return value (preserved across all the above)
+    mov     rsp, [rsp]              ; load user RSP (top of stack is user RSP)
 
-    ; Return value is in RAX.  SYSRET restores RCX→RIP, R11→RFLAGS.
-    ; For kernel-mode callers: just `ret` would also work (no SYSRET).
     sysretq

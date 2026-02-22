@@ -10,8 +10,8 @@
 //! | 0     | 0x00     | Null descriptor    |
 //! | 1     | 0x08     | Kernel code (64)   |
 //! | 2     | 0x10     | Kernel data (64)   |
-//! | 3     | 0x18     | User code (64)     |
-//! | 4     | 0x20     | User data (64)     |
+//! | 3     | 0x18     | User data (64)     |
+//! | 4     | 0x20     | User code (64)     |
 //! | 5     | 0x28     | TSS (16 bytes)     |
 
 use core::mem::size_of;
@@ -25,10 +25,10 @@ use crate::serial::puts;
 pub const KERNEL_CS: u16 = 0x08;
 /// Kernel data segment selector
 pub const KERNEL_DS: u16 = 0x10;
-/// User code segment selector (ring 3)
-pub const USER_CS: u16 = 0x18 | 3; // RPL=3
-/// User data segment selector (ring 3)
-pub const USER_DS: u16 = 0x20 | 3; // RPL=3
+/// User data segment selector (ring 3) — at 0x18 for SYSRET compatibility
+pub const USER_DS: u16 = 0x18 | 3; // RPL=3
+/// User code segment selector (ring 3) — at 0x20 for SYSRET compatibility
+pub const USER_CS: u16 = 0x20 | 3; // RPL=3
 /// TSS segment selector
 pub const TSS_SEL: u16 = 0x28;
 
@@ -208,8 +208,8 @@ static mut GDT: Gdt = Gdt {
         GdtEntry::null(),       // 0x00: Null
         GdtEntry::code64(0),    // 0x08: Kernel code
         GdtEntry::data64(0),    // 0x10: Kernel data
-        GdtEntry::code64(3),    // 0x18: User code
-        GdtEntry::data64(3),    // 0x20: User data
+        GdtEntry::data64(3),    // 0x18: User data  (SYSRET SS = STAR[63:48]+8)
+        GdtEntry::code64(3),    // 0x20: User code  (SYSRET CS = STAR[63:48]+16)
     ],
     tss_desc: TssDescriptor::empty(), // Placeholder, updated at init
 };

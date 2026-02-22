@@ -42,6 +42,10 @@ pub use scheduler::{
     spawn_kernel_thread,
     exit_process,
     scheduler_tick,
+    set_tsc_frequency,
+    tsc_frequency,
+    block_sleep,
+    wait_for_child,
 };
 pub use signals::{Signal, SignalSet};
 

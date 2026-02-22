@@ -45,6 +45,12 @@
 bits 64
 default rel
 
+; ── Data: CR3 of the next process (written by scheduler_tick in Rust) ─────
+section .data
+align 8
+global next_cr3
+next_cr3: dq 0
+
 section .text
 
 global irq_timer_isr
@@ -111,6 +117,17 @@ irq_timer_isr:
     add     rsp, 32                     ; remove shadow space
 
     ; RAX = *const CpuContext of next process (points into PROCESS_TABLE).
+
+    ; ── Switch CR3 if process address spaces differ ───────────────────────
+    ; next_cr3 is written by scheduler_tick() before returning.
+    mov     rbx, [rel next_cr3]
+    test    rbx, rbx
+    jz      .skip_cr3                   ; zero = unset, don't switch
+    mov     rcx, cr3
+    cmp     rbx, rcx
+    je      .skip_cr3                   ; same address space — avoid TLB flush
+    mov     cr3, rbx
+.skip_cr3:
 
     ; ── Patch iretq frame with next-process values ────────────────────────
     mov     rbx, [rax + 0x78]           ; next RIP

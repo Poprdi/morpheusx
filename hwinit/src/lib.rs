@@ -81,6 +81,7 @@
 
 pub mod cpu;
 pub mod dma;
+pub mod elf;
 pub mod heap;
 pub mod memory;
 pub mod paging;
@@ -88,6 +89,7 @@ pub mod pci;
 pub mod platform;
 pub mod process;
 pub mod serial;
+pub mod stdin;
 pub mod sync;
 pub mod syscall;
 
@@ -97,7 +99,7 @@ pub mod syscall;
 
 pub use cpu::{barriers, cache, mmio, pio, tsc};
 pub use cpu::tsc::calibrate_tsc_pit;
-pub use cpu::gdt::{init_gdt, KERNEL_CS, KERNEL_DS};
+pub use cpu::gdt::{init_gdt, KERNEL_CS, KERNEL_DS, USER_CS, USER_DS};
 pub use cpu::idt::{init_idt, enable_interrupts, disable_interrupts, interrupts_enabled};
 pub use cpu::pic::{init_pic, enable_irq, disable_irq, send_eoi, PIC1_VECTOR_OFFSET};
 
@@ -187,11 +189,19 @@ pub use process::{
     // Scheduler
     Scheduler, ProcessInfo, SCHEDULER,
     init_scheduler, spawn_kernel_thread, exit_process, scheduler_tick,
+    set_tsc_frequency, tsc_frequency,
+    block_sleep, wait_for_child,
     // Signals
     Signal, SignalSet,
     // CPU context
     CpuContext,
 };
+
+// ELF loader
+pub use elf::{validate_elf64, load_elf64, ElfImage, ElfError};
+
+// User process spawning
+pub use process::scheduler::spawn_user_process;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SYSCALL RE-EXPORTS

@@ -7,6 +7,8 @@
 //! - **File descriptor operations**: open / read / write / seek / close.
 //! - **`/sys/` virtual entries**: synthetic read-only nodes for system info.
 
+pub mod global;
+
 use crate::bitmap::BlockBitmap;
 use crate::error::HelixError;
 use crate::index::btree::NamespaceIndex;

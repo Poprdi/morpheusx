@@ -45,6 +45,7 @@ extern crate alloc;
 pub mod types;
 pub mod bitmap;
 pub mod crc;
+pub mod device;
 pub mod log;
 pub mod index;
 pub mod ops;

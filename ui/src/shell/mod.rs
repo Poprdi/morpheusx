@@ -25,6 +25,7 @@ pub enum ShellAction {
     OpenApp(String),
     CloseWindow(u32),
     ListWindows,
+    SpawnProcess(String),
     Exit,
 }
 
@@ -125,6 +126,7 @@ impl Shell {
                         CommandResult::OpenApp(name) => ShellAction::OpenApp(name),
                         CommandResult::CloseWindow(id) => ShellAction::CloseWindow(id),
                         CommandResult::ListWindows => ShellAction::ListWindows,
+                        CommandResult::SpawnProcess(name) => ShellAction::SpawnProcess(name),
                         CommandResult::Exit => ShellAction::Exit,
                         CommandResult::Unknown(cmd) => {
                             self.push_output(&format!("Unknown command: {}", cmd));
