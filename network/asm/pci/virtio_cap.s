@@ -379,9 +379,8 @@ asm_virtio_pci_probe_caps:
     
     ; Parse the capability
     push    rcx
-    mov     [rsp - 8], r10      ; 5th param on stack
     sub     rsp, 48             ; Shadow space + 5th param
-    mov     [rsp + 40], r10
+    mov     [rsp + 32], r10     ; 5th param at correct Win64 ABI offset
     mov     cl, r12b
     mov     dl, r13b
     mov     r8b, r14b

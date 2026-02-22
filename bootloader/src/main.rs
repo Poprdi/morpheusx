@@ -14,6 +14,7 @@ use core::panic::PanicInfo;
 
 mod apps;
 mod baremetal;
+mod storage;
 mod tui;
 mod uefi_allocator;
 
