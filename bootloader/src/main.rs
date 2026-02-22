@@ -12,6 +12,7 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+mod apps;
 mod baremetal;
 mod tui;
 mod uefi_allocator;
@@ -172,4 +173,35 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
     }
 }
 
-
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    // Emit as much as possible to serial. Never use alloc here (may be OOM).
+    morpheus_hwinit::serial::puts("\n[PANIC] ");
+    if let Some(loc) = info.location() {
+        morpheus_hwinit::serial::puts(loc.file());
+        morpheus_hwinit::serial::puts(":");
+        // Print line number as decimal digits (no alloc needed).
+        let line = loc.line();
+        let mut digits = [0u8; 10];
+        let mut n = line;
+        let mut len = 0usize;
+        if n == 0 {
+            digits[0] = b'0';
+            len = 1;
+        } else {
+            while n > 0 {
+                digits[len] = b'0' + (n % 10) as u8;
+                len += 1;
+                n /= 10;
+            }
+            digits[..len].reverse();
+        }
+        if let Ok(s) = core::str::from_utf8(&digits[..len]) {
+            morpheus_hwinit::serial::puts(s);
+        }
+    }
+    morpheus_hwinit::serial::puts(" — PANIC (spinning)\n");
+    loop {
+        core::hint::spin_loop();
+    }
+}
