@@ -28,9 +28,11 @@
 
 use morpheus_helix::device::RawBlockDevice;
 use morpheus_hwinit::dma::DmaRegion;
+use morpheus_hwinit::paging::is_paging_initialized;
 use morpheus_hwinit::serial::puts;
+use morpheus_hwinit::{pci_cfg_read16, pci_cfg_read32, kmap_mmio, PciAddr};
 use morpheus_network::{
-    BlockDmaConfig, BlockDriver, UnifiedBlockDevice, UnifiedBlockIo,
+    BlockDmaConfig, BlockDriver, DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
     create_unified_from_detected, scan_all_block_devices,
 };
 
@@ -56,6 +58,155 @@ const OFF_AHCI_IDENTIFY:  usize = 0x0_4800;
 // I/O transfer buffer — used by UnifiedBlockIo for synchronous read/write
 const OFF_IO_BUFFER:      usize = 0x1_0000;
 const IO_BUFFER_SIZE:     usize = 64 * 1024; // 64 KB = UnifiedBlockIo::MAX_TRANSFER_SIZE
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PCI BUS DUMP (diagnostic)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Dump all PCI devices with vendor/device IDs and BARs to serial.
+///
+/// This is invaluable for verifying that VirtIO-blk devices are present
+/// and that OVMF assigned BAR addresses we can actually map.
+unsafe fn dump_pci_devices() {
+    puts("[PCI-DUMP] scanning bus 0...\n");
+    for dev in 0..32u8 {
+        for func in 0..8u8 {
+            let addr = PciAddr::new(0, dev, func);
+            let vendor_id = pci_cfg_read16(addr, 0x00);
+            if vendor_id == 0xFFFF {
+                if func == 0 { break; }
+                continue;
+            }
+            let device_id = pci_cfg_read16(addr, 0x02);
+            let class_code = pci_cfg_read32(addr, 0x08); // rev + class
+            let cmd = pci_cfg_read16(addr, 0x04);
+
+            puts("[PCI-DUMP]   00:");
+            morpheus_hwinit::serial::put_hex8(dev);
+            puts(".");
+            morpheus_hwinit::serial::put_hex8(func);
+            puts("  ven=");
+            morpheus_hwinit::serial::put_hex32(vendor_id as u32);
+            puts(" dev=");
+            morpheus_hwinit::serial::put_hex32(device_id as u32);
+            puts(" class=");
+            morpheus_hwinit::serial::put_hex32(class_code >> 8); // class/subclass/progif
+            puts(" cmd=");
+            morpheus_hwinit::serial::put_hex32(cmd as u32);
+            puts("\n");
+
+            // Print BARs for VirtIO devices (vendor 0x1AF4)
+            if vendor_id == 0x1AF4 {
+                let mut bar_i = 0u8;
+                while bar_i < 6 {
+                    let raw = pci_cfg_read32(addr, 0x10 + bar_i * 4);
+                    if raw != 0 {
+                        let is_io = raw & 0x01 != 0;
+                        let is_64 = !is_io && (raw >> 1) & 0x03 == 0x02;
+                        puts("[PCI-DUMP]     BAR");
+                        morpheus_hwinit::serial::put_hex8(bar_i);
+                        puts(" raw=");
+                        morpheus_hwinit::serial::put_hex32(raw);
+                        if is_64 && bar_i < 5 {
+                            let high = pci_cfg_read32(addr, 0x10 + (bar_i + 1) * 4);
+                            puts(" BAR");
+                            morpheus_hwinit::serial::put_hex8(bar_i + 1);
+                            puts("=");
+                            morpheus_hwinit::serial::put_hex32(high);
+                            let full = ((high as u64) << 32) | ((raw & 0xFFFFFFF0) as u64);
+                            puts(" -> ");
+                            morpheus_hwinit::serial::put_hex64(full);
+                        }
+                        if is_io { puts(" (IO)"); }
+                        puts("\n");
+                        bar_i += if is_64 { 2 } else { 1 };
+                    } else {
+                        bar_i += 1;
+                    }
+                }
+            }
+
+            if func == 0 {
+                let header = pci_cfg_read16(addr, 0x0E) & 0x80;
+                if header == 0 { break; }
+            }
+        }
+    }
+    puts("[PCI-DUMP] done\n");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MMIO BAR MAPPING
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Identity-map PCI BAR MMIO regions for a VirtIO device with UC flags.
+///
+/// We do NOT rely on UEFI's page table mappings for MMIO space.
+/// Instead we use `map_mmio()` which handles every case:
+///   - Region inside an existing huge page → sets UC bits on it
+///   - Region already mapped as 4K pages → sets UC bits
+///   - Region not mapped at all → creates new identity-mapped UC entries
+///
+/// Each memory BAR gets a 16 KiB mapped region (4 × 4 KiB) — enough for
+/// VirtIO common, ISR, device and notify capability structures.
+///
+/// # Safety
+/// - Paging and MemoryRegistry must be initialized.
+unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
+    if !is_paging_initialized() {
+        puts("[STORAGE] WARNING: paging not initialized, cannot map BARs\n");
+        return;
+    }
+
+    let addr = PciAddr::new(bus, dev, func);
+    // 16 KiB covers all 4 VirtIO cap regions (each ~4 KiB, contiguous)
+    const MAP_SIZE: u64 = 16 * 1024;
+
+    // Walk BAR0..BAR5.  Skip 64-bit BAR high halves.
+    let mut bar_idx = 0u8;
+    while bar_idx < 6 {
+        let bar_offset = 0x10u8 + bar_idx * 4;
+        let bar_low = pci_cfg_read32(addr, bar_offset);
+
+        if bar_low == 0 || bar_low & 0x01 != 0 {
+            // Absent or I/O BAR — skip
+            bar_idx += 1;
+            continue;
+        }
+
+        // Memory BAR — check type (bits 2:1)
+        let bar_type = (bar_low >> 1) & 0x03;
+        let base_low = (bar_low & 0xFFFF_FFF0) as u64;
+
+        let (base_addr, is_64bit) = if bar_type == 0x02 && bar_idx < 5 {
+            let bar_high = pci_cfg_read32(addr, bar_offset + 4);
+            (((bar_high as u64) << 32) | base_low, true)
+        } else {
+            (base_low, false)
+        };
+
+        if base_addr != 0 {
+            puts("[STORAGE] BAR");
+            morpheus_hwinit::serial::put_hex32(bar_idx as u32);
+            puts(" @ ");
+            morpheus_hwinit::serial::put_hex64(base_addr);
+            puts(" (type=");
+            morpheus_hwinit::serial::put_hex32(bar_type);
+            puts(") mapping...\n");
+
+            match kmap_mmio(base_addr, MAP_SIZE) {
+                Ok(()) => puts("[STORAGE]   mapped UC OK\n"),
+                Err(e) => {
+                    puts("[STORAGE]   map_mmio FAILED: ");
+                    puts(e);
+                    puts("\n");
+                }
+            }
+        }
+
+        bar_idx += if is_64bit { 2 } else { 1 };
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STATIC STATE
@@ -90,11 +241,35 @@ static mut PERSISTENT_READY: bool = false;
 pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     puts("[STORAGE] probing for block device\n");
 
+    // Dump PCI bus to serial for device identification diagnostics
+    dump_pci_devices();
+
     STORAGE_DMA = Some(*dma);
     STORAGE_TSC_FREQ = tsc_freq;
 
-    // ── Build BlockDmaConfig from the DMA region ────────────────────────
+    // ── Zero the VirtIO queue structures ────────────────────────────────
+    // CRITICAL: The DMA region from hwinit's bump allocator is NOT zeroed.
+    // VirtIO devices inspect the avail/used rings at enable_queue time.
+    // Garbage avail->idx causes "bogus descriptor" and corrupts device state,
+    // making the driver's next_avail_idx out of sync with the device.
+    // The legacy download path worked because UEFI's allocate_pages returned
+    // zeroed memory (OVMF behavior), but hwinit's bump allocator does not.
+    //
+    // WARNING: The DMA region (0x7f9ff000, 2MB) overlaps with the UEFI PML4
+    // page table at ~DMA+0x2000 (0x7fa01000). We MUST NOT zero beyond 0x1FFF
+    // or we destroy the active page tables and triple-fault.
+    // TODO: Fix the DMA allocator to avoid the page table region entirely.
     let base_cpu = dma.cpu_base();
+    // Zero only VirtIO structures: desc(0x000) + avail(0x200) + used(0x400)
+    // + headers(0x1000) + status(0x1200).  All below offset 0x1300.
+    // PML4 is at offset 0x2000 — safe margin.
+    const VIRTIO_ZERO_SIZE: usize = 0x1300;
+    core::ptr::write_bytes(base_cpu, 0u8, VIRTIO_ZERO_SIZE);
+    puts("[STORAGE] zeroed VirtIO queue region (");
+    morpheus_hwinit::serial::put_hex32(VIRTIO_ZERO_SIZE as u32);
+    puts(" bytes)\n");
+
+    // ── Build BlockDmaConfig from the DMA region ────────────────────────
     let base_bus = dma.bus_base();
 
     let config = BlockDmaConfig {
@@ -149,6 +324,22 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         morpheus_hwinit::serial::put_hex32(i as u32);
         puts("...\n");
 
+        // Map high-address MMIO BARs before driver init touches them
+        if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
+            // Read CMD before driver enable for diagnostics
+            let haddr = PciAddr::new(pci_addr.bus, pci_addr.device, pci_addr.function);
+            let cmd_before = pci_cfg_read16(haddr, 0x04);
+            puts("[STORAGE]   CMD before enable: ");
+            morpheus_hwinit::serial::put_hex32(cmd_before as u32);
+            puts(" MEM=");
+            puts(if cmd_before & 0x02 != 0 { "Y" } else { "N" });
+            puts(" BM=");
+            puts(if cmd_before & 0x04 != 0 { "Y" } else { "N" });
+            puts("\n");
+
+            map_virtio_bars(pci_addr.bus, pci_addr.device, pci_addr.function);
+        }
+
         let device = match create_unified_from_detected(detected, &config) {
             Ok(dev) => dev,
             Err(_) => {
@@ -183,7 +374,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         found_data_disk = true;
 
         // ── Try to recover or format HelixFS ──────────────────────────
-        let raw_dev = make_raw_block_device();
+        let mut raw_dev = make_raw_block_device();
 
         let needs_format = {
             let mut probe_dev = make_raw_block_device();
@@ -194,17 +385,98 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
 
         if needs_format {
             puts("[STORAGE] no valid HelixFS — formatting\n");
+
+            // Test write + readback before formatting using raw callbacks
+            {
+                let mut wbuf = [0u8; 512];
+                wbuf[..8].copy_from_slice(b"MXTEST01");
+                let write_ok = raw_write(core::ptr::null_mut(), 0, wbuf.as_ptr(), 512);
+                puts("[STORAGE]   write test LBA0: ");
+                puts(if write_ok { "OK" } else { "FAIL" });
+                puts("\n");
+
+                if write_ok {
+                    let mut rbuf = [0u8; 512];
+                    let read_ok = raw_read(core::ptr::null_mut(), 0, rbuf.as_mut_ptr(), 512);
+                    puts("[STORAGE]   read test LBA0: ");
+                    puts(if read_ok { "OK" } else { "FAIL" });
+                    if read_ok {
+                        puts(" first8=");
+                        for i in 0..8 {
+                            morpheus_hwinit::serial::put_hex8(rbuf[i]);
+                            puts(" ");
+                        }
+                    }
+                    puts("\n");
+                }
+            }
+
+            let uuid = [0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+            match morpheus_helix::format::format_helix(
+                &mut raw_dev, 0, info.total_sectors, info.sector_size,
+                "root", uuid,
+            ) {
+                Ok(_sb) => {
+                    puts("[STORAGE] format_helix OK\n");
+                }
+                Err(e) => {
+                    puts("[STORAGE] format_helix FAILED: ");
+                    match e {
+                        morpheus_helix::error::HelixError::IoWriteFailed => puts("IoWriteFailed"),
+                        morpheus_helix::error::HelixError::IoFlushFailed => puts("IoFlushFailed"),
+                        morpheus_helix::error::HelixError::FormatTooSmall => puts("FormatTooSmall"),
+                        _ => puts("(other)"),
+                    }
+                    puts("\n");
+                    BLOCK_DEVICE = None;
+                    break;
+                }
+            }
+
+            // Re-read superblock after format to verify
+            match morpheus_helix::log::recovery::recover_superblock(
+                &mut raw_dev, 0, info.sector_size,
+            ) {
+                Ok(_sb) => puts("[STORAGE] superblock readback OK\n"),
+                Err(e) => {
+                    puts("[STORAGE] superblock readback FAILED: ");
+                    match e {
+                        morpheus_helix::error::HelixError::NoValidSuperblock => puts("NoValidSuperblock"),
+                        morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
+                        _ => puts("(other)"),
+                    }
+                    puts("\n");
+                }
+            }
         } else {
             puts("[STORAGE] valid HelixFS found — mounting\n");
         }
 
-        match morpheus_helix::vfs::global::replace_root_device(raw_dev, needs_format) {
+        // Now do the actual replace_root_device
+        // If we already formatted above, pass do_format=false to avoid double-format
+        let mount_dev = make_raw_block_device();
+        match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
             Ok(()) => {
                 PERSISTENT_READY = true;
                 puts("[STORAGE] persistent root FS mounted at /\n");
             }
-            Err(_) => {
-                puts("[STORAGE] ERROR: failed to mount persistent FS — keeping RAM-disk\n");
+            Err(e) => {
+                puts("[STORAGE] ERROR: failed to mount persistent FS: ");
+                match e {
+                    morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
+                    morpheus_helix::error::HelixError::IoWriteFailed => puts("IoWriteFailed"),
+                    morpheus_helix::error::HelixError::IoFlushFailed => puts("IoFlushFailed"),
+                    morpheus_helix::error::HelixError::NoValidSuperblock => puts("NoValidSuperblock"),
+                    morpheus_helix::error::HelixError::IncompatibleVersion => puts("IncompatibleVersion"),
+                    morpheus_helix::error::HelixError::FormatTooSmall => puts("FormatTooSmall"),
+                    morpheus_helix::error::HelixError::InvalidBlockSize => puts("InvalidBlockSize"),
+                    morpheus_helix::error::HelixError::LogFull => puts("LogFull"),
+                    morpheus_helix::error::HelixError::LogCrcMismatch => puts("LogCrcMismatch"),
+                    morpheus_helix::error::HelixError::LogSegmentCorrupt => puts("LogSegmentCorrupt"),
+                    _ => puts("(other)"),
+                }
+                puts("\n");
                 BLOCK_DEVICE = None;
             }
         }

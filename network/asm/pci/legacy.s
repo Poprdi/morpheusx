@@ -219,14 +219,12 @@ asm_pci_cfg_read16:
 ;
 ; Uses read-modify-write to preserve other 16 bits of dword
 ;
-; Parameters:
-;   CL  = bus number
-;   DL  = device number
-;   R8B = function number
-;   R9B = register offset (word aligned)
-;   R10W = value to write (passed in R10 since 5th param on stack is awkward)
-;
-; Note: Caller must put value in R10 before calling
+; Parameters (MS x64 ABI):
+;   CL  = bus number       (1st param)
+;   DL  = device number    (2nd param)
+;   R8B = function number  (3rd param)
+;   R9B = register offset  (4th param, word aligned)
+;   [RSP+40] = value       (5th param, on stack)
 ; Returns: None
 ; Clobbers: RAX, RDX
 ; ───────────────────────────────────────────────────────────────────────────
@@ -238,7 +236,8 @@ asm_pci_cfg_write16:
     push    r11
     
     ; Save value and byte offset
-    movzx   r11d, r10w          ; Value to write
+    ; 5th param: entry [RSP+40] → after 5 pushes (40 bytes): [RSP+80]
+    movzx   r11d, word [rsp + 80] ; Value to write (5th param from stack)
     movzx   ebx, r9b
     and     ebx, 2              ; Offset within dword (0 or 2)
     
@@ -334,12 +333,12 @@ asm_pci_cfg_read8:
 ; ───────────────────────────────────────────────────────────────────────────
 ; Write 8-bit value to PCI configuration space (read-modify-write)
 ;
-; Parameters:
-;   CL  = bus number
-;   DL  = device number
-;   R8B = function number
-;   R9B = register offset
-;   R10B = value to write
+; Parameters (MS x64 ABI):
+;   CL  = bus number       (1st param)
+;   DL  = device number    (2nd param)
+;   R8B = function number  (3rd param)
+;   R9B = register offset  (4th param)
+;   [RSP+40] = value       (5th param, on stack)
 ; Returns: None
 ; ───────────────────────────────────────────────────────────────────────────
 asm_pci_cfg_write8:
@@ -351,7 +350,8 @@ asm_pci_cfg_write8:
     push    r12
     
     ; Save value and byte offset
-    movzx   r11d, r10b          ; Value to write
+    ; 5th param: entry [RSP+40] → after 6 pushes (48 bytes): [RSP+88]
+    movzx   r11d, byte [rsp + 88] ; Value to write (5th param from stack)
     movzx   r12d, r9b
     and     r12d, 3             ; Byte offset within dword
     

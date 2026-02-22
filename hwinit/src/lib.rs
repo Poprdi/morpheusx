@@ -169,7 +169,7 @@ pub use paging::{
     PageTableManager, VirtAddr, MappedPageSize,
     init_kernel_page_table, is_paging_initialized,
     kernel_page_table, kernel_page_table_mut,
-    kmap_4k, kmap_2m, kunmap_4k, kvirt_to_phys,
+    kmap_4k, kmap_2m, kunmap_4k, kvirt_to_phys, kensure_4k, kmap_mmio, kmark_uncacheable,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
