@@ -21,6 +21,43 @@ struct AppInstance {
     app: Box<dyn App>,
 }
 
+/// Try to load an ELF binary from the root filesystem at `/bin/<name>`.
+///
+/// Returns the raw bytes if found, or `None`.
+fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
+    use alloc::string::String;
+
+    let mut path = String::from("/bin/");
+    path.push_str(name);
+
+    let fs = unsafe { morpheus_helix::vfs::global::fs_global_mut()? };
+    let mount = &fs.mount_table;
+
+    // Check if the file exists via stat.
+    let stat = morpheus_helix::vfs::vfs_stat(mount, &path).ok()?;
+    if stat.size == 0 {
+        return None;
+    }
+
+    // Open, read, close.
+    let mut fd_table = morpheus_helix::vfs::FdTable::new();
+    let ts = morpheus_hwinit::cpu::tsc::read_tsc();
+    let fd = morpheus_helix::vfs::vfs_open(
+        &mut fs.device, &mut fs.mount_table, &mut fd_table,
+        &path, 0, ts,
+    ).ok()?;
+
+    let mut buf = alloc::vec![0u8; stat.size as usize];
+    let n = morpheus_helix::vfs::vfs_read(
+        &mut fs.device, &fs.mount_table, &mut fd_table,
+        fd, &mut buf,
+    ).ok()?;
+    buf.truncate(n);
+
+    let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
+    Some(buf)
+}
+
 pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     puts("[DESKTOP] initializing window manager\n");
 
@@ -96,6 +133,12 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
             Some(e) => e,
             None => continue,
         };
+
+        // Feed printable ASCII characters to the kernel stdin buffer
+        // so that user-space processes can read them via SYS_READ(fd=0).
+        if input.unicode_char > 0 && input.unicode_char < 128 {
+            morpheus_hwinit::stdin::push(input.unicode_char as u8);
+        }
 
         let wm_result = wm.dispatch_event(&event);
 
@@ -174,6 +217,40 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                     wm.compose(&mut fb_canvas, &theme);
                     puts("[DESKTOP] halt requested\n");
                     loop { core::hint::spin_loop(); }
+                }
+                ShellAction::SpawnProcess(name) => {
+                    puts("[DESKTOP] SpawnProcess: ");
+                    puts(&name);
+                    puts("\n");
+
+                    // Try to load the ELF from the root filesystem.
+                    let elf_data = load_elf_from_fs(&name);
+
+                    match elf_data {
+                        Some(data) => {
+                            match unsafe {
+                                morpheus_hwinit::process::scheduler::spawn_user_process(
+                                    &name, &data,
+                                )
+                            } {
+                                Ok(pid) => {
+                                    shell.push_output(&format!(
+                                        "Spawned '{}' as PID {}", name, pid
+                                    ));
+                                }
+                                Err(e) => {
+                                    shell.push_output(&format!(
+                                        "Failed to spawn '{}': {}", name, e
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            shell.push_output(&format!(
+                                "Binary not found: {}. Place ELF in /bin/{}", name, name
+                            ));
+                        }
+                    }
                 }
             }
 

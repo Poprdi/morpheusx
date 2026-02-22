@@ -7,6 +7,7 @@ pub enum CommandResult {
     OpenApp(String),
     CloseWindow(u32),
     ListWindows,
+    SpawnProcess(String),
     Exit,
     Unknown(String),
 }
@@ -30,6 +31,13 @@ pub fn execute(input: &str, _window_ids: &[u32]) -> CommandResult {
                 CommandResult::Output(String::from("Usage: open <app-name>"))
             } else {
                 CommandResult::OpenApp(String::from(arg))
+            }
+        }
+        "exec" | "run" => {
+            if arg.is_empty() {
+                CommandResult::Output(String::from("Usage: exec <binary-name>"))
+            } else {
+                CommandResult::SpawnProcess(String::from(arg))
             }
         }
         "close" => {
@@ -61,6 +69,7 @@ fn help_text() -> String {
          \x20 help          - Show this help\n\
          \x20 clear         - Clear output\n\
          \x20 open <app>    - Open an application\n\
+         \x20 exec <name>   - Spawn a user process\n\
          \x20 close <id>    - Close window by ID\n\
          \x20 list          - List open windows\n\
          \x20 exit          - Return to firmware"

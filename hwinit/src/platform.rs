@@ -261,6 +261,9 @@ pub unsafe fn platform_init_selfcontained(
     put_hex32((tsc_freq / 1_000_000) as u32);
     puts(" MHz)\n");
 
+    // Store TSC frequency for scheduler sleep deadline computation.
+    crate::process::scheduler::set_tsc_frequency(tsc_freq);
+
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 6: DMA - Allocate identity-mapped region for device DMA
     // ─────────────────────────────────────────────────────────────────────
@@ -343,6 +346,51 @@ pub unsafe fn platform_init_selfcontained(
     use crate::cpu::idt::enable_interrupts;
     enable_interrupts();
     puts("[HWINIT]   interrupts enabled\n");
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 11: ROOT FILESYSTEM — HelixFS on memory-backed block device
+    // ─────────────────────────────────────────────────────────────────────
+    puts("[HWINIT] Phase 11: Root filesystem\n");
+
+    {
+        const ROOT_FS_SIZE: usize = 16 * 1024 * 1024; // 16 MB
+        let root_fs_pages = (ROOT_FS_SIZE / 4096) as u64;
+        let registry = global_registry_mut();
+        let root_fs_base = registry.allocate_pages(
+            AllocateType::AnyPages,
+            MemoryType::LoaderData,
+            root_fs_pages,
+        ).map_err(|_| InitError::NoFreeMemory)?;
+
+        // Zero the region.
+        core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
+
+        puts("[HWINIT]   FS region: ");
+        put_hex64(root_fs_base);
+        puts(" (");
+        put_hex32((ROOT_FS_SIZE / 1024) as u32);
+        puts(" KB)\n");
+
+        match morpheus_helix::vfs::global::init_root_fs(
+            root_fs_base as *mut u8,
+            ROOT_FS_SIZE,
+        ) {
+            Ok(()) => puts("[HWINIT]   HelixFS mounted at /\n"),
+            Err(_) => {
+                puts("[HWINIT]   WARNING: root FS init failed\n");
+                // Non-fatal — system continues without FS.
+            }
+        }
+    }
+
+    // Set initial kernel_syscall_rsp for PID 0.
+    {
+        extern "C" { static mut kernel_syscall_rsp: u64; }
+        kernel_syscall_rsp = kernel_stack_top;
+        puts("[HWINIT]   kernel_syscall_rsp = ");
+        put_hex64(kernel_stack_top);
+        puts("\n");
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // DONE - Machine is sane
