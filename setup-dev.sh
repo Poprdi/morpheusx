@@ -312,6 +312,13 @@ do_launch_qemu() {
     local disk="${TESTING_DIR}/test-disk-50g.img"
     [[ -f "$disk" ]] || disk="${ESP_DIR}"
     
+    # Create HelixFS data disk if it doesn't exist (256MB sparse — grows on write)
+    local data_disk="${TESTING_DIR}/helix-data.img"
+    if [[ ! -f "$data_disk" ]]; then
+        log_info "Creating HelixFS data disk (256MB sparse)..."
+        dd if=/dev/zero of="$data_disk" bs=1 count=0 seek=256M status=none 2>/dev/null || true
+    fi
+    
     log_info "Starting MorpheusX..."
     log_info "Press Ctrl+A X to exit QEMU"
     printf "\n"
@@ -325,6 +332,8 @@ do_launch_qemu() {
             -object iothread,id=iothread0 \
             -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
+            -drive file="$data_disk",format=raw,if=none,id=disk1,cache=writeback \
+            -device virtio-blk-pci,drive=disk1,disable-legacy=on \
             -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
@@ -354,6 +363,8 @@ do_launch_qemu() {
             -object iothread,id=iothread0 \
             -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
+            -drive file="$data_disk",format=raw,if=none,id=disk1,cache=writeback \
+            -device virtio-blk-pci,drive=disk1,disable-legacy=on \
             -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \

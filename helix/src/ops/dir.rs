@@ -141,7 +141,8 @@ pub fn unlink(
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    let entry = index.lookup(path).ok_or(HelixError::NotFound)?;
+    // Use flexible lookup: paths may or may not have trailing '/'.
+    let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
 
     if entry.flags & entry_flags::IS_DELETED != 0 {
         return Err(HelixError::NotFound);
@@ -163,9 +164,19 @@ pub fn unlink(
         }
     }
 
-    let hash = fnv1a_64(path.as_bytes());
+    // Delete using the actual stored path form.
+    let actual_path = if index.lookup(path).is_some() {
+        String::from(path)
+    } else if !path.ends_with('/') {
+        let mut s = String::from(path);
+        s.push('/');
+        s
+    } else {
+        String::from(&path[..path.len() - 1])
+    };
+    let hash = fnv1a_64(actual_path.as_bytes());
     let lsn = log.append(LogOp::Delete, hash, &[], timestamp_ns)?;
-    index.mark_deleted(path)?;
+    index.mark_deleted(&actual_path)?;
 
     Ok(lsn)
 }

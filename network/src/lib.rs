@@ -119,10 +119,16 @@ pub use driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitErro
 pub use driver::block_io_adapter::{BlockIoError, VirtioBlkBlockIo};
 pub use driver::unified_block_io::{GenericBlockIo, UnifiedBlockIo, UnifiedBlockIoError};
 
+// Re-export gpt_disk_io types so consumers don't need a direct dep
+pub use gpt_disk_io::BlockIo as GptBlockIo;
+pub use gpt_disk_types::{BlockSize as GptBlockSize, Lba as GptLba};
+
 // Block probe
 pub use boot::block_probe::{
     detect_block_device_type, probe_and_create_block_driver, probe_unified_block_device,
+    create_unified_from_detected, scan_all_block_devices,
     BlockDeviceType, BlockDmaConfig, BlockProbeError, BlockProbeResult,
+    DetectedBlockDevice,
 };
 
 // Client

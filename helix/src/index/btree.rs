@@ -13,6 +13,7 @@
 use crate::crc::fnv1a_64;
 use crate::error::HelixError;
 use crate::types::*;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Maximum entries before we should warn (not a hard limit).
@@ -60,7 +61,7 @@ impl NamespaceIndex {
         })
     }
 
-    /// Look up an entry by path string.
+    /// Look up an entry by exact path string.
     pub fn lookup(&self, path: &str) -> Option<&IndexEntry> {
         let key = fnv1a_64(path.as_bytes());
         let path_b = path.as_bytes();
@@ -77,7 +78,28 @@ impl NamespaceIndex {
         }
     }
 
-    /// Look up a mutable reference by path string.
+    /// Look up an entry by path, trying both with and without trailing `/`.
+    ///
+    /// Directories are stored with a trailing `/` (e.g. `/home/`), but user
+    /// paths often omit it (e.g. `/home`).  This method bridges the gap.
+    pub fn lookup_flex(&self, path: &str) -> Option<&IndexEntry> {
+        // Try exact match first.
+        if let Some(entry) = self.lookup(path) {
+            return Some(entry);
+        }
+        // Try the alternate form.
+        if !path.ends_with('/') {
+            let mut with_slash = String::from(path);
+            with_slash.push('/');
+            self.lookup(&with_slash)
+        } else if path.len() > 1 {
+            self.lookup(&path[..path.len() - 1])
+        } else {
+            None
+        }
+    }
+
+    /// Look up a mutable reference by exact path string.
     pub fn lookup_mut(&mut self, path: &str) -> Option<&mut IndexEntry> {
         let key = fnv1a_64(path.as_bytes());
         let path_b = path.as_bytes();
@@ -92,6 +114,28 @@ impl NamespaceIndex {
             }
             Err(_) => None,
         }
+    }
+
+    /// Mutable flexible lookup — tries both with and without trailing `/`.
+    pub fn lookup_flex_mut(&mut self, path: &str) -> Option<&mut IndexEntry> {
+        // Try exact match first.
+        if self.lookup(path).is_some() {
+            return self.lookup_mut(path);
+        }
+        // Try alternate form.
+        if !path.ends_with('/') {
+            let mut with_slash = String::from(path);
+            with_slash.push('/');
+            if self.lookup(&with_slash).is_some() {
+                return self.lookup_mut(&with_slash);
+            }
+        } else if path.len() > 1 {
+            let without = &path[..path.len() - 1];
+            if self.lookup(without).is_some() {
+                return self.lookup_mut(without);
+            }
+        }
+        None
     }
 
     /// Look up an entry by key (hash) alone.
@@ -130,15 +174,30 @@ impl NamespaceIndex {
 
     /// Mark an entry as deleted (tombstone).
     pub fn mark_deleted(&mut self, path: &str) -> Result<(), HelixError> {
-        let key = fnv1a_64(path.as_bytes());
-        let path_b = path.as_bytes();
-        match self.find_pos(key, path_b) {
-            Ok(idx) => {
-                self.entries[idx].flags |= entry_flags::IS_DELETED;
-                Ok(())
+        // Try exact path first, then alternate form (with/without trailing '/').
+        let idx = {
+            let key = fnv1a_64(path.as_bytes());
+            match self.find_pos(key, path.as_bytes()) {
+                Ok(i) => i,
+                Err(_) => {
+                    // Try alternate form.
+                    let alt = if !path.ends_with('/') {
+                        let mut s = String::from(path);
+                        s.push('/');
+                        s
+                    } else if path.len() > 1 {
+                        String::from(&path[..path.len() - 1])
+                    } else {
+                        return Err(HelixError::NotFound);
+                    };
+                    let alt_key = fnv1a_64(alt.as_bytes());
+                    self.find_pos(alt_key, alt.as_bytes())
+                        .map_err(|_| HelixError::NotFound)?
+                }
             }
-            Err(_) => Err(HelixError::NotFound),
-        }
+        };
+        self.entries[idx].flags |= entry_flags::IS_DELETED;
+        Ok(())
     }
 
     /// List direct children of a directory path.

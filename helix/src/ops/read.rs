@@ -198,7 +198,9 @@ pub fn list_versions<B: BlockIo>(
 
 /// Get file metadata from the index.
 pub fn stat_file(index: &NamespaceIndex, path: &str) -> Result<FileStat, HelixError> {
-    let entry = index.lookup(path).ok_or(HelixError::NotFound)?;
+    // Use flexible lookup: directories are stored with trailing '/' but
+    // user paths typically omit it.
+    let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
 
     if entry.flags & entry_flags::IS_DELETED != 0 {
         return Err(HelixError::NotFound);
