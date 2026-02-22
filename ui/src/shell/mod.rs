@@ -13,7 +13,7 @@ use crate::theme::Theme;
 use crate::widget::Widget;
 use crate::widget::text_input::TextInput;
 
-use self::commands::CommandResult;
+use self::commands::{CommandResult, FsOp};
 use self::ring_buffer::RingBuffer;
 
 const OUTPUT_CAPACITY: usize = 4096;
@@ -26,6 +26,7 @@ pub enum ShellAction {
     CloseWindow(u32),
     ListWindows,
     SpawnProcess(String),
+    FsCommand(FsOp),
     Exit,
 }
 
@@ -33,7 +34,8 @@ pub struct Shell {
     output: RingBuffer<String>,
     input: TextInput,
     scroll_top: usize,
-    prompt: &'static str,
+    cwd: String,
+    prompt: String,
 }
 
 impl Shell {
@@ -42,7 +44,8 @@ impl Shell {
             output: RingBuffer::new(OUTPUT_CAPACITY),
             input: TextInput::new(INPUT_MAX),
             scroll_top: 0,
-            prompt: PROMPT,
+            cwd: String::from("/"),
+            prompt: String::from("morpheus:/> "),
         };
         s.output.push(String::from("MorpheusX Shell v0.1"));
         s.output.push(String::from("Type 'help' for commands."));
@@ -56,6 +59,21 @@ impl Shell {
             self.output.push(String::from(line));
         }
         self.scroll_to_bottom_internal();
+    }
+
+    /// Current working directory.
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    /// Update the working directory.  Called by the desktop after VFS verification.
+    pub fn set_cwd(&mut self, path: &str) {
+        self.cwd.clear();
+        self.cwd.push_str(path);
+        self.prompt.clear();
+        self.prompt.push_str("morpheus:");
+        self.prompt.push_str(path);
+        self.prompt.push_str("> ");
     }
 
     pub fn render(&self, canvas: &mut dyn Canvas, theme: &Theme) {
@@ -89,7 +107,7 @@ impl Shell {
         rect_fill(canvas, 0, input_y, w, input_h, theme.input_bg);
 
         let prompt_w = self.prompt.len() as u32 * font::FONT_WIDTH;
-        draw_string(canvas, 0, input_y + 2, self.prompt, theme.accent, theme.input_bg, &FONT_DATA);
+        draw_string(canvas, 0, input_y + 2, &self.prompt, theme.accent, theme.input_bg, &FONT_DATA);
 
         let input_text = self.input.text();
         let display: &str = if input_text.len() > text_cols.saturating_sub(self.prompt.len()) {
@@ -111,7 +129,7 @@ impl Shell {
                     let text = self.input.take_text();
                     self.output.push(format!("{}{}", self.prompt, text));
 
-                    let result = commands::execute(&text, window_ids);
+                    let result = commands::execute(&text, window_ids, &self.cwd);
                     let action = match result {
                         CommandResult::Output(s) => {
                             if !s.is_empty() {
@@ -127,6 +145,7 @@ impl Shell {
                         CommandResult::CloseWindow(id) => ShellAction::CloseWindow(id),
                         CommandResult::ListWindows => ShellAction::ListWindows,
                         CommandResult::SpawnProcess(name) => ShellAction::SpawnProcess(name),
+                        CommandResult::FsCommand(op) => ShellAction::FsCommand(op),
                         CommandResult::Exit => ShellAction::Exit,
                         CommandResult::Unknown(cmd) => {
                             self.push_output(&format!("Unknown command: {}", cmd));
