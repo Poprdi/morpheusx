@@ -138,6 +138,10 @@ pub struct Process {
 
     // ── Signals ───────────────────────────────────────────────────────────
     pub pending_signals: signals::SignalSet,
+
+    // ── File descriptors ─────────────────────────────────────────────────
+    /// Per-process file descriptor table.
+    pub fd_table: morpheus_helix::vfs::FdTable,
 }
 
 impl Process {
@@ -157,6 +161,7 @@ impl Process {
             priority:         128,
             cpu_ticks:        0,
             pending_signals:  signals::SignalSet::empty(),
+            fd_table:         morpheus_helix::vfs::FdTable::new(),
         }
     }
 

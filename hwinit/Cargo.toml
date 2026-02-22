@@ -12,3 +12,5 @@ default = []
 linked_list_allocator = "0.10"
 # Spinlock (we also have our own, but this is well-tested)
 spin = "0.9"
+# HelixFS filesystem
+morpheus-helix = { path = "../helix" }

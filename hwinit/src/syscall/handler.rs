@@ -108,3 +108,82 @@ pub unsafe fn sys_sleep(_ticks: u64) -> u64 {
     // scheduler can unblock on TSC deadline.
     0
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HelixFS Syscall Stubs
+//
+// These will be wired to the VFS layer once a block device and mount
+// table are initialized at runtime.  Until then they return -ENOSYS.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ENOSYS: u64 = u64::MAX - 37;
+
+/// `SYS_OPEN(path_ptr, path_len, flags) → fd`
+pub unsafe fn sys_fs_open(_path_ptr: u64, _path_len: u64, _flags: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_CLOSE(fd) → 0`
+pub unsafe fn sys_fs_close(_fd: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_SEEK(fd, offset, whence) → new_offset`
+pub unsafe fn sys_fs_seek(_fd: u64, _offset: u64, _whence: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_STAT(path_ptr, path_len, stat_buf_ptr) → 0`
+pub unsafe fn sys_fs_stat(_path_ptr: u64, _path_len: u64, _stat_buf: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_READDIR(fd, entry_buf_ptr, max_entries) → count`
+pub unsafe fn sys_fs_readdir(_fd: u64, _buf: u64, _max: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_MKDIR(path_ptr, path_len) → 0`
+pub unsafe fn sys_fs_mkdir(_path_ptr: u64, _path_len: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_UNLINK(path_ptr, path_len) → 0`
+pub unsafe fn sys_fs_unlink(_path_ptr: u64, _path_len: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_RENAME(old_ptr, old_len, new_ptr, new_len) → 0`
+pub unsafe fn sys_fs_rename(
+    _old_ptr: u64,
+    _old_len: u64,
+    _new_ptr: u64,
+    _new_len: u64,
+) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_TRUNCATE(fd, new_size) → 0`
+pub unsafe fn sys_fs_truncate(_fd: u64, _new_size: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_SYNC() → 0`
+pub unsafe fn sys_fs_sync() -> u64 {
+    ENOSYS
+}
+
+/// `SYS_SNAPSHOT(name_ptr, name_len) → snapshot_id`
+pub unsafe fn sys_fs_snapshot(_name_ptr: u64, _name_len: u64) -> u64 {
+    ENOSYS
+}
+
+/// `SYS_VERSIONS(path_ptr, path_len, buf_ptr, max) → count`
+pub unsafe fn sys_fs_versions(
+    _path_ptr: u64,
+    _path_len: u64,
+    _buf: u64,
+    _max: u64,
+) -> u64 {
+    ENOSYS
+}
