@@ -199,6 +199,7 @@ asm_pci_find_cap:
     push    rcx
     push    rdx
     push    r8
+    push    rbx
     push    r10
     push    r11
     push    r12
@@ -256,6 +257,7 @@ asm_pci_find_cap:
     pop     r12
     pop     r11
     pop     r10
+    pop     rbx
     pop     r8
     pop     rdx
     pop     rcx
@@ -279,6 +281,7 @@ asm_pci_find_cap_next:
     push    rcx
     push    rdx
     push    r8
+    push    rbx
     push    r11
     push    r12
     push    r13
@@ -326,6 +329,7 @@ asm_pci_find_cap_next:
     pop     r13
     pop     r12
     pop     r11
+    pop     rbx
     pop     r8
     pop     rdx
     pop     rcx
