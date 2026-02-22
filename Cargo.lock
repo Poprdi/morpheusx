@@ -200,10 +200,19 @@ name = "morpheus-display"
 version = "0.1.0"
 
 [[package]]
+name = "morpheus-helix"
+version = "1.0.1"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+]
+
+[[package]]
 name = "morpheus-hwinit"
 version = "1.0.1"
 dependencies = [
  "linked_list_allocator",
+ "morpheus-helix",
  "spin",
 ]
 
