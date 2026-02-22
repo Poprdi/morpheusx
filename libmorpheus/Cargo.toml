@@ -1,0 +1,10 @@
+[package]
+name = "libmorpheus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Userspace library for MorpheusX — syscall wrappers, I/O, FS API"
+
+[dependencies]
+# Zero dependencies. Pure inline asm + thin wrappers.
