@@ -187,6 +187,7 @@ dependencies = [
  "morpheus-display",
  "morpheus-helix",
  "morpheus-hwinit",
+ "morpheus-network",
  "morpheus-ui",
  "spin",
 ]

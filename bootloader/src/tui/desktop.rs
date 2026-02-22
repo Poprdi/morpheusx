@@ -507,7 +507,13 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
                 None => { shell.push_output("sync: filesystem not initialized"); return; }
             };
             match morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table) {
-                Ok(()) => shell.push_output("filesystem synced"),
+                Ok(()) => {
+                    if crate::storage::is_persistent() {
+                        shell.push_output("filesystem synced (persistent)");
+                    } else {
+                        shell.push_output("filesystem synced (RAM-disk — changes lost on reboot)");
+                    }
+                }
                 Err(e) => shell.push_output(&format!("sync: {:?}", e)),
             }
         }

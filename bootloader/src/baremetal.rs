@@ -173,7 +173,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         descriptor_version: DESC_VER,
     };
 
-    let _platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {
+    let platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {
         Ok(p) => {
             puts("[HWINIT] platform ready\n");
             p
@@ -190,6 +190,12 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
             loop { core::hint::spin_loop(); }
         }
     };
+
+    // ── Persistent storage — try to mount a real block device ───────────
+    crate::storage::init_persistent_storage(platform.dma(), platform.tsc_freq());
+
+    // ── InitFS — ensure standard directory structure exists ─────────────
+    crate::storage::create_init_directories();
 
     // ── Framebuffer → Screen ────────────────────────────────────────────
     let fb_info = FRAMEBUFFER_INFO;

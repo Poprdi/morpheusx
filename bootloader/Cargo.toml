@@ -9,6 +9,7 @@ license.workspace = true
 morpheus-display = { workspace = true }
 morpheus-helix = { workspace = true }
 morpheus-hwinit = { workspace = true }
+morpheus-network = { workspace = true }
 morpheus-ui = { workspace = true }
 # Post-EBS heap
 linked_list_allocator = "0.10"

@@ -24,7 +24,25 @@ use crate::driver::ahci::{
     AhciConfig, AhciDriver, AhciInitError, AHCI_DEVICE_IDS, INTEL_VENDOR_ID,
 };
 use crate::driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
+use crate::driver::virtio::transport::{PciModernConfig, VirtioTransport};
+use crate::pci::capability::probe_virtio_caps;
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_write16, PciAddr};
+
+// ─── Inline serial helpers (network crate's serial_str + hex) ────────────
+fn dbg_str(s: &str) { crate::serial_str(s); }
+fn dbg_hex64(v: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    crate::serial_str("0x");
+    for i in (0..16).rev() {
+        crate::serial_byte(HEX[((v >> (i * 4)) & 0xF) as usize]);
+    }
+}
+fn dbg_hex32(v: u32) { dbg_hex64(v as u64); }
+fn dbg_hex8(v: u8) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    crate::serial_byte(HEX[(v >> 4) as usize]);
+    crate::serial_byte(HEX[(v & 0xF) as usize]);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -107,6 +125,9 @@ pub enum BlockProbeResult {
 // PCI SCANNING
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Maximum block devices we can discover in a single scan.
+const MAX_BLOCK_DEVICES: usize = 8;
+
 /// Scan PCI bus for supported block devices.
 ///
 /// Returns the first supported block device found, preferring AHCI over VirtIO
@@ -126,6 +147,100 @@ pub fn scan_for_block_device() -> Option<DetectedBlockDevice> {
     }
 
     None
+}
+
+/// Scan PCI bus for ALL supported block devices.
+///
+/// Returns all detected AHCI and VirtIO-blk devices (up to 8).
+/// AHCI devices are listed first, then VirtIO-blk.
+pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVICES], usize) {
+    let mut result: [Option<DetectedBlockDevice>; MAX_BLOCK_DEVICES] = [None; MAX_BLOCK_DEVICES];
+    let mut count = 0;
+
+    // Collect all AHCI controllers.
+    for bus in 0..=255u8 {
+        if count >= MAX_BLOCK_DEVICES { break; }
+        for device in 0..32u8 {
+            if count >= MAX_BLOCK_DEVICES { break; }
+            for function in 0..8u8 {
+                if count >= MAX_BLOCK_DEVICES { break; }
+                let addr = PciAddr::new(bus, device, function);
+                let vendor_id = pci_cfg_read16(addr, offset::VENDOR_ID);
+                if vendor_id == 0xFFFF {
+                    if function == 0 { break; }
+                    continue;
+                }
+                if vendor_id != INTEL_VENDOR_ID {
+                    if function == 0 {
+                        let header = pci_cfg_read16(addr, offset::HEADER_TYPE) & 0x80;
+                        if header == 0 { break; }
+                    }
+                    continue;
+                }
+                let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
+                let class = (class_code >> 8) & 0xFFFF;
+                if class != PCI_CLASS_SATA_AHCI { continue; }
+                let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
+                if !AHCI_DEVICE_IDS.contains(&device_id) { continue; }
+                let bar5 = pci_cfg_read32(addr, offset::BAR5);
+                if bar5 == 0 || (bar5 & 0x01) != 0 { continue; }
+                let is_64bit = (bar5 & 0x06) == 0x04;
+                let abar = if is_64bit {
+                    let bar5_high = pci_cfg_read32(addr, offset::BAR5 + 4);
+                    ((bar5_high as u64) << 32) | ((bar5 & 0xFFFFFFF0) as u64)
+                } else {
+                    (bar5 & 0xFFFFFFF0) as u64
+                };
+                result[count] = Some(DetectedBlockDevice::Ahci(AhciInfo {
+                    pci_addr: addr, abar, device_id,
+                }));
+                count += 1;
+            }
+        }
+    }
+
+    // Collect all VirtIO-blk devices.
+    for bus in 0..=255u8 {
+        if count >= MAX_BLOCK_DEVICES { break; }
+        for device in 0..32u8 {
+            if count >= MAX_BLOCK_DEVICES { break; }
+            for function in 0..8u8 {
+                if count >= MAX_BLOCK_DEVICES { break; }
+                let addr = PciAddr::new(bus, device, function);
+                let vendor_id = pci_cfg_read16(addr, offset::VENDOR_ID);
+                if vendor_id == 0xFFFF {
+                    if function == 0 { break; }
+                    continue;
+                }
+                if vendor_id != VIRTIO_VENDOR_ID {
+                    if function == 0 {
+                        let header = pci_cfg_read16(addr, offset::HEADER_TYPE) & 0x80;
+                        if header == 0 { break; }
+                    }
+                    continue;
+                }
+                let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
+                if device_id != VIRTIO_BLK_DEVICE_LEGACY && device_id != VIRTIO_BLK_DEVICE_MODERN {
+                    continue;
+                }
+                let bar0 = pci_cfg_read32(addr, offset::BAR0);
+                if bar0 & 0x01 != 0 { continue; }
+                let is_64bit = (bar0 & 0x06) == 0x04;
+                let mmio_base = if is_64bit {
+                    let bar1 = pci_cfg_read32(addr, offset::BAR1);
+                    ((bar1 as u64) << 32) | ((bar0 & 0xFFFFFFF0) as u64)
+                } else {
+                    (bar0 & 0xFFFFFFF0) as u64
+                };
+                result[count] = Some(DetectedBlockDevice::VirtIO {
+                    pci_addr: addr, mmio_base,
+                });
+                count += 1;
+            }
+        }
+    }
+
+    (result, count)
 }
 
 /// Scan for AHCI SATA controller.
@@ -354,8 +469,7 @@ pub unsafe fn probe_and_create_block_driver(
             // Enable device
             enable_pci_device(pci_addr);
 
-            // Create VirtIO-blk config
-            let virtio_config = VirtioBlkConfig {
+            let blk_config = VirtioBlkConfig {
                 queue_size: config.queue_size,
                 desc_phys: config.virtio_desc_phys,
                 avail_phys: config.virtio_avail_phys,
@@ -364,13 +478,31 @@ pub unsafe fn probe_and_create_block_driver(
                 status_phys: config.virtio_status_phys,
                 headers_cpu: config.virtio_headers_cpu as u64,
                 status_cpu: config.virtio_status_cpu as u64,
-                notify_addr: config.virtio_notify_addr,
-                transport_type: 0, // MMIO
+                notify_addr: 0,
+                transport_type: 0,
             };
 
-            // Create driver
-            let driver = VirtioBlkDriver::new(mmio_base, virtio_config)?;
-            Ok(BlockProbeResult::VirtIO(driver))
+            // Try PCI Modern transport first (required for disable-legacy=on)
+            let caps = probe_virtio_caps(pci_addr);
+            if caps.has_required() {
+                let pci_cfg = PciModernConfig {
+                    common_cfg: caps.common_cfg_addr().unwrap_or(0),
+                    notify_cfg: caps.notify_addr().unwrap_or(0),
+                    notify_off_multiplier: caps.notify_multiplier(),
+                    isr_cfg: caps.isr_addr().unwrap_or(0),
+                    device_cfg: caps.device_cfg_addr().unwrap_or(0),
+                    pci_cfg: 0,
+                };
+                let transport = VirtioTransport::pci_modern(pci_cfg);
+                let driver = VirtioBlkDriver::new_with_transport(transport, blk_config, config.tsc_freq)?;
+                Ok(BlockProbeResult::VirtIO(driver))
+            } else {
+                // Fallback to legacy MMIO transport
+                let mut legacy_config = blk_config;
+                legacy_config.notify_addr = config.virtio_notify_addr;
+                let driver = VirtioBlkDriver::new(mmio_base, legacy_config)?;
+                Ok(BlockProbeResult::VirtIO(driver))
+            }
         }
     }
 }
@@ -392,6 +524,124 @@ pub unsafe fn probe_unified_block_device(
         Err(BlockProbeError::VirtioInitFailed) => Err(UnifiedBlockError::NoDevice),
         Err(BlockProbeError::AhciInitFailed) => Err(UnifiedBlockError::NoDevice),
         Err(_) => Err(UnifiedBlockError::NoDevice),
+    }
+}
+
+/// Create a unified block device from a specific detected device.
+///
+/// Use with `scan_all_block_devices()` to iterate through devices
+/// and initialize the one you want.
+///
+/// # Safety
+/// Same as `probe_unified_block_device`.
+pub unsafe fn create_unified_from_detected(
+    detected: &DetectedBlockDevice,
+    config: &BlockDmaConfig,
+) -> Result<UnifiedBlockDevice, UnifiedBlockError> {
+    match *detected {
+        DetectedBlockDevice::Ahci(info) => {
+            enable_pci_device(info.pci_addr);
+            let ahci_config = AhciConfig {
+                tsc_freq: config.tsc_freq,
+                cmd_list_cpu: config.ahci_cmd_list_cpu,
+                cmd_list_phys: config.ahci_cmd_list_phys,
+                fis_cpu: config.ahci_fis_cpu,
+                fis_phys: config.ahci_fis_phys,
+                cmd_tables_cpu: config.ahci_cmd_tables_cpu,
+                cmd_tables_phys: config.ahci_cmd_tables_phys,
+                identify_cpu: config.ahci_identify_cpu,
+                identify_phys: config.ahci_identify_phys,
+            };
+            let driver = AhciDriver::new(info.abar, ahci_config)
+                .map_err(|_| UnifiedBlockError::NoDevice)?;
+            Ok(UnifiedBlockDevice::Ahci(driver))
+        }
+        DetectedBlockDevice::VirtIO { pci_addr, mmio_base } => {
+            enable_pci_device(pci_addr);
+            dbg_str("[BLK-PROBE] VirtIO pci=");
+            dbg_hex8(pci_addr.bus); dbg_str(":"); dbg_hex8(pci_addr.device);
+            dbg_str("."); dbg_hex8(pci_addr.function);
+            dbg_str("  bar0="); dbg_hex64(mmio_base); dbg_str("\n");
+
+            let blk_config = VirtioBlkConfig {
+                queue_size: config.queue_size,
+                desc_phys: config.virtio_desc_phys,
+                avail_phys: config.virtio_avail_phys,
+                used_phys: config.virtio_used_phys,
+                headers_phys: config.virtio_headers_phys,
+                status_phys: config.virtio_status_phys,
+                headers_cpu: config.virtio_headers_cpu as u64,
+                status_cpu: config.virtio_status_cpu as u64,
+                notify_addr: 0, // determined by transport
+                transport_type: 0,
+            };
+
+            // Try PCI Modern transport first (required for disable-legacy=on)
+            let caps = probe_virtio_caps(pci_addr);
+            dbg_str("[BLK-PROBE] caps found_mask=0x"); dbg_hex8(caps.found_mask);
+            dbg_str(" has_required="); dbg_str(if caps.has_required() { "yes" } else { "no" });
+            dbg_str("\n");
+            if caps.common.is_some() {
+                dbg_str("[BLK-PROBE]   common_cfg="); dbg_hex64(caps.common_cfg_addr().unwrap_or(0)); dbg_str("\n");
+            }
+            if caps.notify.is_some() {
+                dbg_str("[BLK-PROBE]   notify_cfg="); dbg_hex64(caps.notify_addr().unwrap_or(0));
+                dbg_str("  multiplier="); dbg_hex32(caps.notify_multiplier()); dbg_str("\n");
+            }
+            if caps.device.is_some() {
+                dbg_str("[BLK-PROBE]   device_cfg="); dbg_hex64(caps.device_cfg_addr().unwrap_or(0)); dbg_str("\n");
+            }
+            if caps.isr.is_some() {
+                dbg_str("[BLK-PROBE]   isr_cfg="); dbg_hex64(caps.isr_addr().unwrap_or(0)); dbg_str("\n");
+            }
+            for i in 0..6 {
+                if caps.bar_addrs[i] != 0 {
+                    dbg_str("[BLK-PROBE]   BAR"); crate::serial_byte(b'0' + i as u8);
+                    dbg_str("="); dbg_hex64(caps.bar_addrs[i]); dbg_str("\n");
+                }
+            }
+
+            if caps.has_required() {
+                let pci_cfg = PciModernConfig {
+                    common_cfg: caps.common_cfg_addr().unwrap_or(0),
+                    notify_cfg: caps.notify_addr().unwrap_or(0),
+                    notify_off_multiplier: caps.notify_multiplier(),
+                    isr_cfg: caps.isr_addr().unwrap_or(0),
+                    device_cfg: caps.device_cfg_addr().unwrap_or(0),
+                    pci_cfg: 0,
+                };
+                let transport = VirtioTransport::pci_modern(pci_cfg);
+                dbg_str("[BLK-PROBE] trying PCI Modern init...\n");
+                match VirtioBlkDriver::new_with_transport(transport, blk_config, config.tsc_freq) {
+                    Ok(driver) => {
+                        dbg_str("[BLK-PROBE] PCI Modern init OK!\n");
+                        Ok(UnifiedBlockDevice::VirtIO(driver))
+                    }
+                    Err(e) => {
+                        dbg_str("[BLK-PROBE] PCI Modern init FAILED: ");
+                        match e {
+                            VirtioBlkInitError::ResetFailed => dbg_str("ResetFailed"),
+                            VirtioBlkInitError::FeatureNegotiationFailed => dbg_str("FeatureNegotiationFailed"),
+                            VirtioBlkInitError::QueueSetupFailed => dbg_str("QueueSetupFailed"),
+                            VirtioBlkInitError::DeviceFailed => dbg_str("DeviceFailed"),
+                            VirtioBlkInitError::InvalidConfig => dbg_str("InvalidConfig"),
+                            VirtioBlkInitError::TransportError => dbg_str("TransportError"),
+                        }
+                        dbg_str("\n");
+                        Err(UnifiedBlockError::NoDevice)
+                    }
+                }
+            } else {
+                dbg_str("[BLK-PROBE] no PCI Modern caps, trying MMIO fallback...\n");
+                // Fallback to legacy MMIO transport
+                let mut legacy_config = blk_config;
+                legacy_config.notify_addr = config.virtio_notify_addr;
+                legacy_config.transport_type = 0;
+                let driver = VirtioBlkDriver::new(mmio_base, legacy_config)
+                    .map_err(|_| UnifiedBlockError::NoDevice)?;
+                Ok(UnifiedBlockDevice::VirtIO(driver))
+            }
+        }
     }
 }
 
