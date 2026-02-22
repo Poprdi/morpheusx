@@ -83,10 +83,13 @@ pub mod cpu;
 pub mod dma;
 pub mod heap;
 pub mod memory;
+pub mod paging;
 pub mod pci;
 pub mod platform;
+pub mod process;
 pub mod serial;
 pub mod sync;
+pub mod syscall;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CPU RE-EXPORTS
@@ -155,8 +158,50 @@ pub use dma::DmaRegion;
 // PCI RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PAGING RE-EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub use paging::{
+    PageFlags, PageTable, PageTableEntry,
+    PageTableManager, VirtAddr, MappedPageSize,
+    init_kernel_page_table, is_paging_initialized,
+    kernel_page_table, kernel_page_table_mut,
+    kmap_4k, kmap_2m, kunmap_4k, kvirt_to_phys,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PCI RE-EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════
+
 pub use pci::{PciAddr, pci_cfg_read8, pci_cfg_read16, pci_cfg_read32};
 pub use pci::{pci_cfg_write8, pci_cfg_write16, pci_cfg_write32};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROCESS RE-EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub use process::{
+    // Process descriptor
+    Process, ProcessState, BlockReason, MAX_PROCESSES,
+    // Scheduler
+    Scheduler, ProcessInfo, SCHEDULER,
+    init_scheduler, spawn_kernel_thread, exit_process, scheduler_tick,
+    // Signals
+    Signal, SignalSet,
+    // CPU context
+    CpuContext,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYSCALL RE-EXPORTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub use syscall::{
+    init_syscall,
+    SYS_EXIT, SYS_WRITE, SYS_READ, SYS_YIELD, SYS_ALLOC, SYS_FREE,
+    SYS_GETPID, SYS_KILL, SYS_WAIT, SYS_SLEEP,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM INIT RE-EXPORTS

@@ -59,9 +59,12 @@ use crate::memory::{
 };
 use crate::cpu::tsc::calibrate_tsc_pit;
 use crate::cpu::gdt::init_gdt;
-use crate::cpu::idt::init_idt;
+use crate::cpu::idt::{init_idt, set_interrupt_handler};
 use crate::cpu::pic::init_pic;
 use crate::heap::init_heap;
+use crate::paging::init_kernel_page_table;
+use crate::process::scheduler::init_scheduler;
+use crate::syscall::init_syscall;
 use crate::pci::{pci_cfg_read16, pci_cfg_write16, PciAddr, offset};
 use crate::serial::{puts, put_hex32, put_hex64, newline};
 
@@ -288,6 +291,58 @@ pub unsafe fn platform_init_selfcontained(
     puts("[HWINIT]   enabled ");
     put_hex32(devices_enabled as u32);
     puts(" devices\n");
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 8: PAGING - Adopt UEFI page tables; prepare for per-process maps
+    // ─────────────────────────────────────────────────────────────────────
+    puts("[HWINIT] Phase 8: Paging\n");
+
+    init_kernel_page_table();
+    puts("[HWINIT]   kernel page table adopted from CR3\n");
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 9: PROCESS SCHEDULER
+    // ─────────────────────────────────────────────────────────────────────
+    puts("[HWINIT] Phase 9: Process scheduler\n");
+
+    init_scheduler();
+    puts("[HWINIT]   scheduler ready (PID 0 = kernel)\n");
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 10: SYSCALL INTERFACE
+    // ─────────────────────────────────────────────────────────────────────
+    puts("[HWINIT] Phase 10: Syscall interface\n");
+
+    init_syscall();
+
+    // Program PIT channel 0 to fire at ~100 Hz.
+    //   PIT base frequency: 1,193,182 Hz
+    //   Divisor for 100 Hz: 11931 (0x2E9B)
+    //   Mode byte 0x36: channel 0 | LSB+MSB access | mode 3 (square wave)
+    {
+        use crate::cpu::pio::outb;
+        const PIT_DIVISOR: u32 = 11931; // ~100 Hz
+        outb(0x43, 0x36); // channel 0, lo/hi, mode 3
+        outb(0x40, (PIT_DIVISOR & 0xFF) as u8);
+        outb(0x40, ((PIT_DIVISOR >> 8) & 0xFF) as u8);
+        puts("[HWINIT]   PIT channel 0 programmed at ~100 Hz\n");
+    }
+
+    // Install timer ISR into IDT now that scheduler is ready.
+    // Vector 0x20 = PIC IRQ 0 (PIT timer, remapped from IRQ 0).
+    extern "C" { fn irq_timer_isr(); }
+    set_interrupt_handler(0x20, irq_timer_isr as u64, 0, 0);
+    puts("[HWINIT]   timer ISR installed (vector 0x20)\n");
+
+    // Enable IRQ 0 (PIT timer) via PIC.
+    use crate::cpu::pic::enable_irq;
+    enable_irq(0);
+    puts("[HWINIT]   IRQ 0 (PIT timer) unmasked\n");
+
+    // Enable interrupts globally.
+    use crate::cpu::idt::enable_interrupts;
+    enable_interrupts();
+    puts("[HWINIT]   interrupts enabled\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // DONE - Machine is sane
