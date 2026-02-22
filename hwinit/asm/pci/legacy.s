@@ -91,6 +91,7 @@ asm_pci_make_addr:
 asm_pci_cfg_read32:
     ; Save parameters before building address
     push    rcx
+    push    rdx
     push    r8
     push    r9
     
@@ -107,6 +108,7 @@ asm_pci_cfg_read32:
     
     pop     r9
     pop     r8
+    pop     rdx
     pop     rcx
     ret
 
@@ -176,6 +178,7 @@ asm_pci_cfg_write32:
 ; ───────────────────────────────────────────────────────────────────────────
 asm_pci_cfg_read16:
     push    rcx
+    push    rdx
     push    r8
     push    r9
     
@@ -205,6 +208,7 @@ asm_pci_cfg_read16:
     
     pop     r9
     pop     r8
+    pop     rdx
     pop     rcx
     ret
 
@@ -295,6 +299,7 @@ asm_pci_cfg_write16:
 ; ───────────────────────────────────────────────────────────────────────────
 asm_pci_cfg_read8:
     push    rcx
+    push    rdx
     push    r8
     push    r9
     
@@ -320,6 +325,7 @@ asm_pci_cfg_read8:
     
     pop     r9
     pop     r8
+    pop     rdx
     pop     rcx
     ret
 

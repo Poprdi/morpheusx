@@ -563,6 +563,42 @@ pub unsafe fn create_unified_from_detected(
             dbg_str("."); dbg_hex8(pci_addr.function);
             dbg_str("  bar0="); dbg_hex64(mmio_base); dbg_str("\n");
 
+            // ── Raw PCI config diagnostics (bypass cap walker ASM) ──
+            let status = pci_cfg_read16(pci_addr, 0x06);
+            dbg_str("[BLK-PROBE] status="); dbg_hex32(status as u32);
+            dbg_str(" cap_list_bit="); dbg_str(if status & 0x10 != 0 { "yes" } else { "no" });
+            dbg_str("\n");
+            if status & 0x10 != 0 {
+                let cap_ptr = pci_cfg_read16(pci_addr, 0x34) as u8 & 0xFC;
+                dbg_str("[BLK-PROBE] cap_ptr=0x"); dbg_hex8(cap_ptr); dbg_str("\n");
+                // Walk chain manually in Rust
+                let mut ptr = cap_ptr;
+                let mut walk = 0u32;
+                while ptr != 0 && walk < 48 {
+                    walk += 1;
+                    let hdr = pci_cfg_read16(pci_addr, ptr);
+                    let cap_id = (hdr & 0xFF) as u8;
+                    let next = ((hdr >> 8) & 0xFC) as u8;
+                    dbg_str("[BLK-PROBE]   cap@0x"); dbg_hex8(ptr);
+                    dbg_str(" id=0x"); dbg_hex8(cap_id);
+                    if cap_id == 0x09 {
+                        // VirtIO vendor-specific: read cfg_type at ptr+3
+                        let cfg_type = pci_cfg_read16(pci_addr, ptr + 2);
+                        let cfg_type_byte = ((cfg_type >> 8) & 0xFF) as u8;
+                        let bar_idx_raw = pci_cfg_read16(pci_addr, ptr + 4);
+                        let bar_idx = (bar_idx_raw & 0xFF) as u8;
+                        dbg_str(" VIRTIO cfg_type="); dbg_hex8(cfg_type_byte);
+                        dbg_str(" bar="); dbg_hex8(bar_idx);
+                        let bar_off = pci_cfg_read32(pci_addr, ptr + 8);
+                        dbg_str(" off="); dbg_hex32(bar_off);
+                        let bar_len = pci_cfg_read32(pci_addr, ptr + 12);
+                        dbg_str(" len="); dbg_hex32(bar_len);
+                    }
+                    dbg_str(" next=0x"); dbg_hex8(next); dbg_str("\n");
+                    ptr = next;
+                }
+            }
+
             let blk_config = VirtioBlkConfig {
                 queue_size: config.queue_size,
                 desc_phys: config.virtio_desc_phys,
