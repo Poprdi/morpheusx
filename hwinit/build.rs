@@ -14,6 +14,8 @@ const ASM_CPU: &[&str] = &[
     "asm/cpu/pio.s",
     "asm/cpu/cache.s",
     "asm/cpu/delay.s",
+    "asm/cpu/context_switch.s",
+    "asm/cpu/syscall.s",
 ];
 
 const ASM_PCI: &[&str] = &[
