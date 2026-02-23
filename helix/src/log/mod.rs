@@ -347,8 +347,53 @@ impl LogEngine {
         Ok((header, payload))
     }
 
-    /// Scan the log forward from `start_lsn` and call `visitor` for each
-    /// valid record.  Stops at the first CRC failure.
+    /// Reload the current head segment from disk into the write buffer.
+    ///
+    /// **Must** be called after constructing a `LogEngine` from a superblock
+    /// on an existing (non-freshly-formatted) volume.  Without this, the
+    /// write buffer is all zeros and the next `flush()` would clobber all
+    /// existing log records in the head segment.
+    pub fn reload_head_segment<B: BlockIo>(&mut self, block_io: &mut B) -> Result<(), HelixError> {
+        let seg_start = self.segment_to_block(self.head_segment);
+        let blocks_to_read = ((self.head_offset as u64) + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+        // Always read at least the first block (segment header).
+        let blocks_to_read = blocks_to_read.max(1).min(LOG_SEGMENT_BLOCKS);
+
+        for i in 0..blocks_to_read {
+            let off = (i * BLOCK_SIZE as u64) as usize;
+            let lba = self.abs_lba(seg_start + i);
+            block_io.read_blocks(
+                lba,
+                &mut self.write_buf[off..off + BLOCK_SIZE as usize],
+            ).map_err(|_| HelixError::IoReadFailed)?;
+        }
+
+        // Count existing records so record_count stays accurate.
+        let mut offset = core::mem::size_of::<LogSegmentHeader>() as u32;
+        let mut count = 0u32;
+        while offset < self.head_offset {
+            let hdr_size = core::mem::size_of::<LogRecordHeader>();
+            if (offset as usize) + hdr_size > self.write_buf.len() {
+                break;
+            }
+            let hdr: LogRecordHeader = unsafe {
+                core::ptr::read_unaligned(
+                    self.write_buf[offset as usize..].as_ptr() as *const LogRecordHeader,
+                )
+            };
+            if LogOp::from_u8(hdr.op).is_none() {
+                break;
+            }
+            count += 1;
+            offset += hdr.total_size() as u32;
+        }
+        self.record_count = count;
+
+        Ok(())
+    }
+
+    /// Scan the log forward from a starting segment/offset and call `visitor`
+    /// for each valid record.  Stops at the first CRC failure.
     ///
     /// Returns the highest valid LSN seen.
     pub fn scan_forward<B: BlockIo, F>(

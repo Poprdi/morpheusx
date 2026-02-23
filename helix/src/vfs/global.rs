@@ -1,7 +1,7 @@
 use crate::device::{MemBlockDevice, RawBlockDevice};
 use crate::error::HelixError;
 use crate::format;
-use crate::log::recovery::recover_superblock;
+use crate::log::recovery::{recover_superblock, replay_log};
 use crate::types::*;
 use crate::vfs::{HelixInstance, MountTable};
 use gpt_disk_io::BlockIo;
@@ -87,7 +87,20 @@ pub unsafe fn init_root_fs_raw(
     }
 
     let sb = recover_superblock(&mut device, 0, sector_size)?;
-    let instance = HelixInstance::new(sb, 0, sector_size);
+
+    // Version check: v2 includes paths in log payloads for replay.
+    // Older volumes must be reformatted.
+    if sb.version != HELIX_VERSION {
+        return Err(HelixError::IncompatibleVersion);
+    }
+
+    let mut instance = HelixInstance::new(sb, 0, sector_size);
+
+    // Reload the head segment so flush() won't clobber existing records.
+    instance.log.reload_head_segment(&mut device)?;
+
+    // Replay the log to rebuild the in-memory index.
+    replay_log(&mut device, &instance.log, &mut instance.index)?;
 
     let mut mount_table = MountTable::new();
     mount_table.mount("/", instance, false)?;
@@ -131,7 +144,19 @@ pub unsafe fn replace_root_device(
     }
 
     let sb = recover_superblock(&mut device, 0, sector_size)?;
-    let instance = HelixInstance::new(sb, 0, sector_size);
+
+    // Version check: v2 includes paths in log payloads for replay.
+    if sb.version != HELIX_VERSION {
+        return Err(HelixError::IncompatibleVersion);
+    }
+
+    let mut instance = HelixInstance::new(sb, 0, sector_size);
+
+    // Reload the head segment so flush() won't clobber existing records.
+    instance.log.reload_head_segment(&mut device)?;
+
+    // Replay the log to rebuild the in-memory index.
+    replay_log(&mut device, &instance.log, &mut instance.index)?;
 
     let mut mount_table = MountTable::new();
     mount_table.mount("/", instance, false)?;

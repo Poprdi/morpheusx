@@ -27,7 +27,10 @@ use core::fmt;
 pub const HELIX_MAGIC: [u8; 8] = *b"HELIXFS1";
 
 /// On-disk format version.  Increment on incompatible layout changes.
-pub const HELIX_VERSION: u32 = 1;
+///
+/// v1: path_hash only in log records (cannot replay).
+/// v2: full path encoded in every log record payload.
+pub const HELIX_VERSION: u32 = 2;
 
 /// Block size in bytes (must equal page size for future mmap).
 pub const BLOCK_SIZE: u32 = 4096;

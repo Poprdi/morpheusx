@@ -41,8 +41,14 @@ pub fn write_file<B: BlockIo>(
 
     // Check for inline storage.
     if data.len() <= INLINE_DATA_SIZE {
-        // Log the write with data as payload.
-        let lsn = log.append(LogOp::Write, path_hash, data, timestamp_ns)?;
+        // Log the write with path + data as payload.
+        // v2 format: [path_len: u16][path][data]
+        let path_b = path.as_bytes();
+        let mut payload = Vec::with_capacity(2 + path_b.len() + data.len());
+        payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
+        payload.extend_from_slice(path_b);
+        payload.extend_from_slice(data);
+        let lsn = log.append(LogOp::Write, path_hash, &payload, timestamp_ns)?;
 
         // Update index.
         let is_update = index.lookup(path).is_some();
@@ -112,8 +118,14 @@ pub fn write_file<B: BlockIo>(
     extent_payload[8..16].copy_from_slice(&data_start_relative.to_le_bytes());
     extent_payload[16..20].copy_from_slice(&(blocks_needed as u32).to_le_bytes());
 
-    // Log the write.
-    let lsn = log.append(LogOp::Write, path_hash, &extent_payload, timestamp_ns)?;
+    // Log the write with path prefix.
+    // v2 format: [path_len: u16][path][extent_metadata]
+    let path_b = path.as_bytes();
+    let mut full_payload = Vec::with_capacity(2 + path_b.len() + extent_payload.len());
+    full_payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
+    full_payload.extend_from_slice(path_b);
+    full_payload.extend_from_slice(&extent_payload);
+    let lsn = log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns)?;
 
     // Update index.
     let is_update = index.lookup(path).is_some();
@@ -182,7 +194,13 @@ fn write_file_fragmented<B: BlockIo>(
         extent_payload.extend_from_slice(&0u32.to_le_bytes()); // padding
     }
 
-    let lsn = log.append(LogOp::Write, path_hash, &extent_payload, timestamp_ns)?;
+    // v2 format: [path_len: u16][path][extent_metadata]
+    let path_b = path.as_bytes();
+    let mut full_payload = Vec::with_capacity(2 + path_b.len() + extent_payload.len());
+    full_payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
+    full_payload.extend_from_slice(path_b);
+    full_payload.extend_from_slice(&extent_payload);
+    let lsn = log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns)?;
 
     let first_block = extents.first().map(|e| e.1).unwrap_or(BLOCK_NULL);
 
@@ -231,7 +249,11 @@ fn ensure_parent_dirs(
         if index.lookup(&current).is_none() {
             // Create this directory.
             let hash = fnv1a_64(current.as_bytes());
-            let lsn = log.append(LogOp::MkDir, hash, &[], timestamp_ns)?;
+            let dir_bytes = current.as_bytes();
+            let mut dir_payload = Vec::with_capacity(2 + dir_bytes.len());
+            dir_payload.extend_from_slice(&(dir_bytes.len() as u16).to_le_bytes());
+            dir_payload.extend_from_slice(dir_bytes);
+            let lsn = log.append(LogOp::MkDir, hash, &dir_payload, timestamp_ns)?;
             let entry = NamespaceIndex::make_dir_entry(&current, lsn, timestamp_ns);
             index.upsert(entry);
         }
@@ -250,7 +272,11 @@ pub fn delete_file(
     let _entry = index.lookup(path).ok_or(HelixError::NotFound)?;
 
     let path_hash = fnv1a_64(path.as_bytes());
-    let lsn = log.append(LogOp::Delete, path_hash, &[], timestamp_ns)?;
+    let del_bytes = path.as_bytes();
+    let mut del_payload = Vec::with_capacity(2 + del_bytes.len());
+    del_payload.extend_from_slice(&(del_bytes.len() as u16).to_le_bytes());
+    del_payload.extend_from_slice(del_bytes);
+    let lsn = log.append(LogOp::Delete, path_hash, &del_payload, timestamp_ns)?;
 
     index.mark_deleted(path)?;
     Ok(lsn)
@@ -277,12 +303,19 @@ pub fn rename(
     new_entry.modified_ns = timestamp_ns;
 
     let old_hash = fnv1a_64(old_path.as_bytes());
+    let old_bytes = old_path.as_bytes();
+    let new_bytes = new_path.as_bytes();
+    let mut ren_payload = Vec::with_capacity(2 + old_bytes.len() + 2 + new_bytes.len());
+    ren_payload.extend_from_slice(&(old_bytes.len() as u16).to_le_bytes());
+    ren_payload.extend_from_slice(old_bytes);
+    ren_payload.extend_from_slice(&(new_bytes.len() as u16).to_le_bytes());
+    ren_payload.extend_from_slice(new_bytes);
     let lsn = log.append_full(
         LogOp::Rename,
         old_hash,
         new_key,
         0,
-        &[],
+        &ren_payload,
         timestamp_ns,
     )?;
 

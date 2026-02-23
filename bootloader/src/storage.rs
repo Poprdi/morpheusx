@@ -247,29 +247,12 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     STORAGE_DMA = Some(*dma);
     STORAGE_TSC_FREQ = tsc_freq;
 
-    // ── Zero the VirtIO queue structures ────────────────────────────────
-    // CRITICAL: The DMA region from hwinit's bump allocator is NOT zeroed.
-    // VirtIO devices inspect the avail/used rings at enable_queue time.
-    // Garbage avail->idx causes "bogus descriptor" and corrupts device state,
-    // making the driver's next_avail_idx out of sync with the device.
-    // The legacy download path worked because UEFI's allocate_pages returned
-    // zeroed memory (OVMF behavior), but hwinit's bump allocator does not.
-    //
-    // WARNING: The DMA region (0x7f9ff000, 2MB) overlaps with the UEFI PML4
-    // page table at ~DMA+0x2000 (0x7fa01000). We MUST NOT zero beyond 0x1FFF
-    // or we destroy the active page tables and triple-fault.
-    // TODO: Fix the DMA allocator to avoid the page table region entirely.
-    let base_cpu = dma.cpu_base();
-    // Zero only VirtIO structures: desc(0x000) + avail(0x200) + used(0x400)
-    // + headers(0x1000) + status(0x1200).  All below offset 0x1300.
-    // PML4 is at offset 0x2000 — safe margin.
-    const VIRTIO_ZERO_SIZE: usize = 0x1300;
-    core::ptr::write_bytes(base_cpu, 0u8, VIRTIO_ZERO_SIZE);
-    puts("[STORAGE] zeroed VirtIO queue region (");
-    morpheus_hwinit::serial::put_hex32(VIRTIO_ZERO_SIZE as u32);
-    puts(" bytes)\n");
+    // NOTE: The DMA region is fully zeroed by hwinit Phase 6 at allocation
+    // time, so VirtIO queue structures (desc, avail, used, headers, status)
+    // are already clean.  No additional zeroing needed here.
 
     // ── Build BlockDmaConfig from the DMA region ────────────────────────
+    let base_cpu = dma.cpu_base();
     let base_bus = dma.bus_base();
 
     let config = BlockDmaConfig {
@@ -378,9 +361,24 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
 
         let needs_format = {
             let mut probe_dev = make_raw_block_device();
-            morpheus_helix::log::recovery::recover_superblock(
+            match morpheus_helix::log::recovery::recover_superblock(
                 &mut probe_dev, 0, info.sector_size,
-            ).is_err()
+            ) {
+                Ok(sb) => {
+                    // Version mismatch: v2 changed the log payload format.
+                    if sb.version != morpheus_helix::types::HELIX_VERSION {
+                        puts("[STORAGE] HelixFS version mismatch (v");
+                        morpheus_hwinit::serial::put_hex32(sb.version);
+                        puts(" != v");
+                        morpheus_hwinit::serial::put_hex32(morpheus_helix::types::HELIX_VERSION);
+                        puts(") — reformat needed\n");
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Err(_) => true,
+            }
         };
 
         if needs_format {
