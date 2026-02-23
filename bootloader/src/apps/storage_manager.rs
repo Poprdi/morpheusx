@@ -2,7 +2,6 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use morpheus_hwinit::serial::puts;
 use morpheus_ui::app::{App, AppEntry, AppRegistry, AppResult};
 use morpheus_ui::canvas::Canvas;
 use morpheus_ui::color::Color;
@@ -90,7 +89,6 @@ pub struct StorageManager {
 
 impl StorageManager {
     pub fn new() -> Self {
-        puts("[STORAGE] new() start\n");
         let mut s = Self {
             active_tab: Tab::Overview,
             mem_stats: MemStats {
@@ -112,16 +110,12 @@ impl StorageManager {
             anim_bars: [0; 4],
             needs_refresh: true,
         };
-        puts("[STORAGE] new() struct built, calling refresh_data\n");
         s.refresh_data();
-        puts("[STORAGE] new() done\n");
         s
     }
 
     fn refresh_data(&mut self) {
-        puts("[STORAGE] refresh_data: checking registry\n");
         if morpheus_hwinit::is_registry_initialized() {
-            puts("[STORAGE] refresh_data: registry initialized, reading stats\n");
             let reg = unsafe { morpheus_hwinit::global_registry() };
             self.mem_stats.total_bytes = reg.total_memory();
             self.mem_stats.free_bytes = reg.free_memory();
@@ -130,7 +124,6 @@ impl StorageManager {
 
             let (_key, count) = reg.get_memory_map();
             self.mem_stats.region_count = count;
-            puts("[STORAGE] refresh_data: building region list\n");
 
             self.regions.clear();
             for i in 0..count {
@@ -153,21 +146,13 @@ impl StorageManager {
                     });
                 }
             }
-            puts("[STORAGE] refresh_data: region list done\n");
-        } else {
-            puts("[STORAGE] refresh_data: registry NOT initialized\n");
         }
 
-        puts("[STORAGE] refresh_data: reading heap stats\n");
         if let Some((total, used, free)) = morpheus_hwinit::heap_stats() {
             self.heap_stats = HeapStats { total, used, free };
-            puts("[STORAGE] refresh_data: heap stats ok\n");
-        } else {
-            puts("[STORAGE] refresh_data: heap stats unavailable\n");
         }
 
         self.needs_refresh = false;
-        puts("[STORAGE] refresh_data: done\n");
     }
 
     fn tick_animations(&mut self) {
@@ -997,33 +982,22 @@ impl App for StorageManager {
     }
 
     fn init(&mut self, _canvas: &mut dyn Canvas, _theme: &Theme) {
-        puts("[STORAGE] init() start\n");
         self.refresh_data();
-        puts("[STORAGE] init() done\n");
     }
 
     fn render(&self, canvas: &mut dyn Canvas, theme: &Theme) {
-        puts("[STORAGE] render() start\n");
         canvas.clear(theme.bg);
-        puts("[STORAGE] render() clear done, drawing tab bar\n");
         self.render_tab_bar(canvas, theme);
-        puts("[STORAGE] render() tab bar done\n");
 
         match self.active_tab {
             Tab::Overview => {
-                puts("[STORAGE] render() overview start\n");
                 self.render_overview(canvas, theme);
-                puts("[STORAGE] render() overview done\n");
             }
             Tab::MemoryMap => {
-                puts("[STORAGE] render() memory map start\n");
                 self.render_memory_map(canvas, theme);
-                puts("[STORAGE] render() memory map done\n");
             }
             Tab::Heap => {
-                puts("[STORAGE] render() heap tab start\n");
                 self.render_heap_tab(canvas, theme);
-                puts("[STORAGE] render() heap tab done\n");
             }
         }
 
@@ -1042,7 +1016,6 @@ impl App for StorageManager {
             theme.bg,
             &font::FONT_DATA,
         );
-        puts("[STORAGE] render() complete\n");
     }
 
     fn handle_event(&mut self, event: &Event) -> AppResult {

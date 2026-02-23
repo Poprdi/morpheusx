@@ -437,12 +437,6 @@ impl MemoryRegistry {
     ) {
         let entry_count = map_size / descriptor_size;
 
-        puts("[MEM] importing UEFI map: ");
-        put_hex32(entry_count as u32);
-        puts(" entries, desc_size=");
-        put_hex32(descriptor_size as u32);
-        puts("\n");
-
         // Parse UEFI descriptors into our format
         for i in 0..entry_count {
             if self.map_count >= MAX_REGIONS {
@@ -568,14 +562,6 @@ impl MemoryRegistry {
             self.bump_base = base;
             self.bump_current = base;
             self.bump_limit = base + best_size;
-
-            puts("[MEM] bump allocator: ");
-            put_hex64(base);
-            puts(" - ");
-            put_hex64(base + best_size);
-            puts(" (");
-            put_hex32((best_size / (1024 * 1024)) as u32);
-            puts(" MB)\n");
         }
     }
 

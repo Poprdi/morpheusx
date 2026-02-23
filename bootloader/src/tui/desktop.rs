@@ -31,23 +31,20 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     let mut path = String::from("/bin/");
     path.push_str(name);
 
-    puts("[LOAD-ELF] path=");
-    puts(&path);
-    puts("\n");
-
     let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
         Some(f) => f,
         None => {
-            puts("[LOAD-ELF] FAIL: fs_global_mut() returned None\n");
+            puts("[LOAD-ELF] FAIL: no filesystem\n");
             return None;
         }
     };
 
-    puts("[LOAD-ELF] fs OK, calling stat...\n");
     let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
         Ok(s) => s,
         Err(e) => {
-            puts("[LOAD-ELF] FAIL: vfs_stat error: ");
+            puts("[LOAD-ELF] FAIL: vfs_stat ");
+            puts(&path);
+            puts(": ");
             puts(match e {
                 morpheus_helix::error::HelixError::NotFound => "NotFound",
                 morpheus_helix::error::HelixError::MountNotFound => "MountNotFound",
@@ -57,11 +54,6 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
             return None;
         }
     };
-    puts("[LOAD-ELF] stat OK, size=");
-    morpheus_hwinit::serial::put_hex32(stat.size as u32);
-    puts(" is_dir=");
-    puts(if stat.is_dir { "true" } else { "false" });
-    puts("\n");
 
     if stat.size == 0 {
         puts("[LOAD-ELF] FAIL: size is 0\n");
@@ -71,7 +63,6 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     // Open, read, close.
     let mut fd_table = morpheus_helix::vfs::FdTable::new();
     let ts = morpheus_hwinit::cpu::tsc::read_tsc();
-    puts("[LOAD-ELF] calling vfs_open...\n");
     let fd = match morpheus_helix::vfs::vfs_open(
         &mut fs.device,
         &mut fs.mount_table,
@@ -82,18 +73,14 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     ) {
         Ok(f) => f,
         Err(e) => {
-            puts("[LOAD-ELF] FAIL: vfs_open error: ");
+            puts("[LOAD-ELF] FAIL: vfs_open: ");
             puts(&format!("{:?}", e));
             puts("\n");
             return None;
         }
     };
-    puts("[LOAD-ELF] open OK, fd=");
-    morpheus_hwinit::serial::put_hex32(fd as u32);
-    puts("\n");
 
     let mut buf = alloc::vec![0u8; stat.size as usize];
-    puts("[LOAD-ELF] calling vfs_read...\n");
     let n = match morpheus_helix::vfs::vfs_read(
         &mut fs.device,
         &fs.mount_table,
@@ -103,20 +90,21 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     ) {
         Ok(bytes) => bytes,
         Err(e) => {
-            puts("[LOAD-ELF] FAIL: vfs_read error: ");
+            puts("[LOAD-ELF] FAIL: vfs_read: ");
             puts(&format!("{:?}", e));
             puts("\n");
             return None;
         }
     };
 
-    puts("[LOAD-ELF] read OK, bytes=");
-    morpheus_hwinit::serial::put_hex32(n as u32);
-    puts("\n");
     buf.truncate(n);
-
     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
-    puts("[LOAD-ELF] SUCCESS\n");
+
+    puts("[LOAD-ELF] loaded ");
+    puts(&path);
+    puts(" (");
+    morpheus_hwinit::serial::put_hex32(n as u32);
+    puts(" bytes)\n");
     Some(buf)
 }
 
@@ -238,32 +226,25 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
             match action {
                 ShellAction::None => {}
                 ShellAction::OpenApp(name) => {
-                    puts("[DESKTOP] OpenApp: looking up entry\n");
                     if let Some(entry) = registry.find(&name) {
-                        puts("[DESKTOP] OpenApp: entry found, computing geometry\n");
                         let (def_w, def_h) = entry.default_size;
                         let app_w = def_w.min(screen_w.saturating_sub(40));
                         let app_h = def_h.min(screen_h.saturating_sub(60));
                         let app_x = ((screen_w - app_w) / 2) as i32;
                         let app_y = ((screen_h - app_h) / 2) as i32 + TITLE_BAR_HEIGHT as i32;
 
-                        puts("[DESKTOP] OpenApp: creating window\n");
                         let win_id = wm.create_window(entry.title, app_x, app_y, app_w, app_h);
-                        puts("[DESKTOP] OpenApp: window created, calling create()\n");
                         let mut app = (entry.create)();
-                        puts("[DESKTOP] OpenApp: app constructed, calling init()\n");
 
                         if let Some(win) = wm.window_mut(win_id) {
                             app.init(&mut win.buffer, &theme);
                         }
-                        puts("[DESKTOP] OpenApp: init() done, calling render_app()\n");
 
                         let mut inst = AppInstance {
                             window_id: win_id,
                             app,
                         };
                         render_app(&mut inst, &mut wm, &theme);
-                        puts("[DESKTOP] OpenApp: render_app() done\n");
                         app_instances.push(inst);
 
                         shell.push_output(&format!("Opened '{}' [window {}]", name, win_id));
@@ -313,17 +294,6 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
 
                     match elf_data {
                         Some(ref data) => {
-                            puts("[DESKTOP] ELF data loaded, size=");
-                            morpheus_hwinit::serial::put_hex32(data.len() as u32);
-                            puts("\n");
-                            if data.len() >= 4 {
-                                puts("[DESKTOP] ELF magic: ");
-                                for i in 0..4 {
-                                    morpheus_hwinit::serial::put_hex8(data[i]);
-                                    puts(" ");
-                                }
-                                puts("\n");
-                            }
                             match unsafe {
                                 morpheus_hwinit::process::scheduler::spawn_user_process(
                                     &name, data,

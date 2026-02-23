@@ -46,7 +46,7 @@ use core::ptr::{self, NonNull};
 use spin::Mutex;
 
 use crate::memory::{global_registry_mut, is_registry_initialized, MemoryType, PAGE_SIZE};
-use crate::serial::{put_hex32, put_hex64, puts};
+use crate::serial::puts;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HEAP STATE
@@ -188,12 +188,6 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
             state.heap.extend(grow_size);
             state.size += grow_size;
 
-            puts("[HEAP] grew by ");
-            put_hex32(grow_size as u32);
-            puts(" bytes, total ");
-            put_hex32(state.size as u32);
-            puts("\n");
-
             true
         }
         Err(_) => {
@@ -253,12 +247,6 @@ pub unsafe fn init_heap(initial_size: usize) -> Result<(), &'static str> {
 
     HEAP_INITIALIZED = true;
 
-    puts("[HEAP] initialized at ");
-    put_hex64(base);
-    puts(", size ");
-    put_hex32(size as u32);
-    puts(" bytes\n");
-
     Ok(())
 }
 
@@ -289,12 +277,6 @@ pub unsafe fn init_heap_with_buffer(buffer: *mut u8, size: usize) -> Result<(), 
     });
 
     HEAP_INITIALIZED = true;
-
-    puts("[HEAP] initialized with buffer at ");
-    put_hex64(buffer as u64);
-    puts(", size ");
-    put_hex32(size as u32);
-    puts(" bytes\n");
 
     Ok(())
 }

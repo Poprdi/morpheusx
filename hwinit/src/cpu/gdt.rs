@@ -239,8 +239,6 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
         return;
     }
 
-    puts("[GDT] setting up TSS...\n");
-
     // Set up TSS
     TSS.rsp0 = kernel_stack;
     TSS.ist[0] = ist1_stack; // IST1 for critical exceptions
@@ -249,31 +247,18 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
     let tss_addr = &TSS as *const Tss as u64;
     GDT.tss_desc = TssDescriptor::new(tss_addr, size_of::<Tss>() as u16);
 
-    puts("[GDT] loading GDT...\n");
-
     // Load GDT
     let gdt_ptr = GdtPtr {
         limit: (size_of::<Gdt>() - 1) as u16,
         base: &GDT as *const Gdt as u64,
     };
 
-    // Print GDT info for debug
-    crate::serial::puts("[GDT] limit=0x");
-    crate::serial::put_hex32(gdt_ptr.limit as u32);
-    crate::serial::puts(" base=0x");
-    crate::serial::put_hex64(gdt_ptr.base);
-    crate::serial::puts("\n");
-
     load_gdt(&gdt_ptr);
-    puts("[GDT] lgdt done\n");
 
     // Reload segment registers
-    puts("[GDT] reloading segments (CS=0x08, DS=0x10)...\n");
     reload_segments();
-    puts("[GDT] segments reloaded\n");
 
     // Load TSS
-    puts("[GDT] loading TSS...\n");
     load_tss(TSS_SEL);
 
     GDT_INITIALIZED = true;
