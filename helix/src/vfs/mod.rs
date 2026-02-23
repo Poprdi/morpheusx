@@ -81,6 +81,12 @@ pub struct MountTable {
     entries: [Option<MountEntry>; MAX_MOUNTS],
 }
 
+impl Default for MountTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MountTable {
     pub const fn new() -> Self {
         // Can't use array::map in const context, use this pattern instead.
@@ -159,6 +165,12 @@ impl MountTable {
 #[derive(Clone, Copy)]
 pub struct FdTable {
     pub fds: [FileDescriptor; MAX_FDS],
+}
+
+impl Default for FdTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FdTable {
@@ -554,8 +566,7 @@ pub fn vfs_sync<B: BlockIo>(
     block_io: &mut B,
     mount_table: &mut MountTable,
 ) -> Result<(), HelixError> {
-    for slot in mount_table.entries.iter_mut() {
-        if let Some(entry) = slot {
+    for entry in mount_table.entries.iter_mut().flatten() {
             // Flush the log.
             let committed_lsn = entry.fs.log.flush(block_io)?;
 
@@ -582,7 +593,6 @@ pub fn vfs_sync<B: BlockIo>(
             )?;
 
             block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
-        }
     }
     Ok(())
 }

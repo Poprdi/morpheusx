@@ -273,7 +273,7 @@ fn read_extent_data<B: BlockIo>(
         return Err(HelixError::ExtentCorrupt);
     }
 
-    let blocks_needed = (file_size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+    let blocks_needed = file_size.div_ceil(BLOCK_SIZE as u64);
     let mut result = Vec::with_capacity(file_size as usize);
 
     // Scale factor: how many device blocks per FS block.

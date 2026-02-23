@@ -1,7 +1,6 @@
 use crate::device::{MemBlockDevice, RawBlockDevice};
 use crate::error::HelixError;
 use crate::format;
-use crate::index::btree::NamespaceIndex;
 use crate::log::recovery::{recover_superblock, replay_log};
 use crate::types::*;
 use crate::vfs::{HelixInstance, MountTable};
@@ -30,7 +29,7 @@ fn rebuild_bitmap_from_index(instance: &mut HelixInstance) {
             continue;
         }
         // Contiguous extent starting at extent_root.
-        let blocks_needed = (entry.size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+        let blocks_needed = entry.size.div_ceil(BLOCK_SIZE as u64);
         if blocks_needed > 0 {
             instance.bitmap.mark_range_used(entry.extent_root, blocks_needed);
         }
@@ -65,6 +64,7 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
 
     // Store MemBlockDevice in static so RawBlockDevice pointers stay valid.
     MEM_DEVICE = Some(MemBlockDevice::new(base, size, sector_size));
+    #[allow(static_mut_refs)]
     let mem_dev = MEM_DEVICE.as_mut().unwrap();
 
     let total_sectors = size as u64 / sector_size as u64;
@@ -207,6 +207,7 @@ pub unsafe fn replace_root_device(
 ///
 /// # Safety
 /// Must be called after `init_root_fs()`. Single-threaded access only.
+#[allow(static_mut_refs)]
 pub unsafe fn fs_global() -> Option<&'static FsGlobal> {
     FS_GLOBAL.as_ref()
 }
@@ -215,6 +216,7 @@ pub unsafe fn fs_global() -> Option<&'static FsGlobal> {
 ///
 /// # Safety
 /// Must be called after `init_root_fs()`. Caller must ensure no aliasing.
+#[allow(static_mut_refs)]
 pub unsafe fn fs_global_mut() -> Option<&'static mut FsGlobal> {
     FS_GLOBAL.as_mut()
 }
