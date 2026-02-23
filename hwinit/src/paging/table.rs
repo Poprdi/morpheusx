@@ -22,7 +22,9 @@
 //! - Mappings do not alias kernel code/data in destructive ways.
 
 use super::entry::{PageFlags, PageTable, PageTableEntry};
-use crate::memory::{global_registry_mut, is_registry_initialized, AllocateType, MemoryType, PAGE_SIZE};
+use crate::memory::{
+    global_registry_mut, is_registry_initialized, AllocateType, MemoryType, PAGE_SIZE,
+};
 use crate::serial::puts;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -40,11 +42,11 @@ use crate::serial::puts;
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct VirtAddr {
-    pub pml4_idx:  usize,   // bits 47..39
-    pub pdpt_idx:  usize,   // bits 38..30
-    pub pd_idx:    usize,   // bits 29..21
-    pub pt_idx:    usize,   // bits 20..12
-    pub page_off:  usize,   // bits 11..0
+    pub pml4_idx: usize, // bits 47..39
+    pub pdpt_idx: usize, // bits 38..30
+    pub pd_idx: usize,   // bits 29..21
+    pub pt_idx: usize,   // bits 20..12
+    pub page_off: usize, // bits 11..0
 }
 
 impl VirtAddr {
@@ -52,8 +54,8 @@ impl VirtAddr {
         Self {
             pml4_idx: ((virt >> 39) & 0x1FF) as usize,
             pdpt_idx: ((virt >> 30) & 0x1FF) as usize,
-            pd_idx:   ((virt >> 21) & 0x1FF) as usize,
-            pt_idx:   ((virt >> 12) & 0x1FF) as usize,
+            pd_idx: ((virt >> 21) & 0x1FF) as usize,
+            pt_idx: ((virt >> 12) & 0x1FF) as usize,
             page_off: (virt & 0xFFF) as usize,
         }
     }
@@ -207,9 +209,7 @@ impl PageTableManager {
         let e = (*pd).entry_mut(va.pd_idx);
         *e = PageTableEntry::new(
             phys,
-            flags
-                .with(PageFlags::PRESENT)
-                .with(PageFlags::HUGE_PAGE),
+            flags.with(PageFlags::PRESENT).with(PageFlags::HUGE_PAGE),
         );
 
         Self::flush_tlb_page(virt);
@@ -230,15 +230,21 @@ impl PageTableManager {
 
         let pml4 = self.pml4_phys as *mut PageTable;
         let pml4_e = (*pml4).entry(va.pml4_idx);
-        if !pml4_e.is_present() { return Ok(()); }
+        if !pml4_e.is_present() {
+            return Ok(());
+        }
 
         let pdpt = pml4_e.phys_addr() as *mut PageTable;
         let pdpt_e = (*pdpt).entry(va.pdpt_idx);
-        if !pdpt_e.is_present() { return Ok(()); }
+        if !pdpt_e.is_present() {
+            return Ok(());
+        }
 
         let pd = pdpt_e.phys_addr() as *mut PageTable;
         let pd_e = (*pd).entry(va.pd_idx);
-        if !pd_e.is_present() { return Ok(()); }
+        if !pd_e.is_present() {
+            return Ok(());
+        }
         if pd_e.is_huge() {
             return Err("unmap_4k: PD entry is a 2 MiB huge page; use unmap_2m");
         }
@@ -259,11 +265,15 @@ impl PageTableManager {
 
         let pml4 = self.pml4_phys as *mut PageTable;
         let pml4_e = (*pml4).entry(va.pml4_idx);
-        if !pml4_e.is_present() { return Ok(()); }
+        if !pml4_e.is_present() {
+            return Ok(());
+        }
 
         let pdpt = pml4_e.phys_addr() as *mut PageTable;
         let pdpt_e = (*pdpt).entry(va.pdpt_idx);
-        if !pdpt_e.is_present() { return Ok(()); }
+        if !pdpt_e.is_present() {
+            return Ok(());
+        }
 
         let pd = pdpt_e.phys_addr() as *mut PageTable;
         let e = (*pd).entry_mut(va.pd_idx);
@@ -286,31 +296,39 @@ impl PageTableManager {
 
         let pml4 = self.pml4_phys as *const PageTable;
         let pml4_e = (*pml4).entry(va.pml4_idx);
-        if !pml4_e.is_present() { return None; }
+        if !pml4_e.is_present() {
+            return None;
+        }
 
         let pdpt = pml4_e.phys_addr() as *const PageTable;
         let pdpt_e = (*pdpt).entry(va.pdpt_idx);
-        if !pdpt_e.is_present() { return None; }
+        if !pdpt_e.is_present() {
+            return None;
+        }
         // 1 GiB huge page
         if pdpt_e.is_huge() {
             let base = pdpt_e.phys_addr();
-            let off  = virt & 0x3FFF_FFFF;
+            let off = virt & 0x3FFF_FFFF;
             return Some(base | off);
         }
 
         let pd = pdpt_e.phys_addr() as *const PageTable;
         let pd_e = (*pd).entry(va.pd_idx);
-        if !pd_e.is_present() { return None; }
+        if !pd_e.is_present() {
+            return None;
+        }
         // 2 MiB huge page
         if pd_e.is_huge() {
             let base = pd_e.phys_addr();
-            let off  = virt & 0x1F_FFFF;
+            let off = virt & 0x1F_FFFF;
             return Some(base | off);
         }
 
         let pt = pd_e.phys_addr() as *const PageTable;
         let pt_e = (*pt).entry(va.pt_idx);
-        if !pt_e.is_present() { return None; }
+        if !pt_e.is_present() {
+            return None;
+        }
 
         Some(pt_e.phys_addr() | va.page_off as u64)
     }
@@ -364,11 +382,7 @@ impl PageTableManager {
     /// # Safety
     /// See module-level safety note.  MemoryRegistry must be initialized
     /// so that intermediate page tables can be allocated when needed.
-    pub unsafe fn map_mmio(
-        &mut self,
-        phys: u64,
-        size: u64,
-    ) -> Result<(), &'static str> {
+    pub unsafe fn map_mmio(&mut self, phys: u64, size: u64) -> Result<(), &'static str> {
         // Disable interrupts for the entire page table modification.
         // The PIT timer ISR (100 Hz) does context save/restore through the
         // same page tables we're editing — interleaving is unsafe.
@@ -387,11 +401,7 @@ impl PageTableManager {
 
     /// Inner implementation of `map_mmio` — caller must have disabled
     /// interrupts before calling.
-    unsafe fn map_mmio_inner(
-        &mut self,
-        phys: u64,
-        size: u64,
-    ) -> Result<(), &'static str> {
+    unsafe fn map_mmio_inner(&mut self, phys: u64, size: u64) -> Result<(), &'static str> {
         let uc_bits = PageFlags::CACHE_DISABLE.0 | PageFlags::WRITE_THROUGH.0;
         let new_flags = PageFlags::PRESENT
             .with(PageFlags::WRITABLE)
@@ -400,7 +410,7 @@ impl PageTableManager {
             .with(PageFlags::NO_EXECUTE);
 
         let start = phys & !0xFFF;
-        let end   = (phys + size + 0xFFF) & !0xFFF;
+        let end = (phys + size + 0xFFF) & !0xFFF;
         let mut cur = start;
 
         puts("[MMIO] map_mmio_inner: ");
@@ -418,10 +428,7 @@ impl PageTableManager {
             if !pml4_e.is_present() {
                 puts("[MMIO]   PML4 not present, alloc...\n");
                 let child = alloc_table()?;
-                *pml4_e = PageTableEntry::new(
-                    child,
-                    PageFlags::PRESENT.with(PageFlags::WRITABLE),
-                );
+                *pml4_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
 
             // ── PDPT ──
@@ -438,10 +445,7 @@ impl PageTableManager {
             if !pdpt_e.is_present() {
                 puts("[MMIO]   PDPT not present, alloc...\n");
                 let child = alloc_table()?;
-                *pdpt_e = PageTableEntry::new(
-                    child,
-                    PageFlags::PRESENT.with(PageFlags::WRITABLE),
-                );
+                *pdpt_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
             if pdpt_e.is_huge() {
                 puts("[MMIO]   1GiB huge -> UC\n");
@@ -465,10 +469,7 @@ impl PageTableManager {
             if !pd_e.is_present() {
                 puts("[MMIO]   PD not present, alloc...\n");
                 let child = alloc_table()?;
-                *pd_e = PageTableEntry::new(
-                    child,
-                    PageFlags::PRESENT.with(PageFlags::WRITABLE),
-                );
+                *pd_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
             if pd_e.is_huge() {
                 puts("[MMIO]   2MiB huge -> UC\n");
@@ -588,16 +589,16 @@ impl PageTableManager {
             puts("\n");
             let raw = pdpt_e.raw();
             // Propagate: P, W, U, PWT, PCD, A, G, XD (NOT PS — we set it per-entry)
-            let leaf_flags = PageFlags(raw & (
-                PageFlags::PRESENT.0 |
-                PageFlags::WRITABLE.0 |
-                PageFlags::USER.0 |
-                PageFlags::WRITE_THROUGH.0 |
-                PageFlags::CACHE_DISABLE.0 |
-                PageFlags::ACCESSED.0 |
-                PageFlags::GLOBAL.0 |
-                PageFlags::NO_EXECUTE.0
-            ));
+            let leaf_flags = PageFlags(
+                raw & (PageFlags::PRESENT.0
+                    | PageFlags::WRITABLE.0
+                    | PageFlags::USER.0
+                    | PageFlags::WRITE_THROUGH.0
+                    | PageFlags::CACHE_DISABLE.0
+                    | PageFlags::ACCESSED.0
+                    | PageFlags::GLOBAL.0
+                    | PageFlags::NO_EXECUTE.0),
+            );
 
             puts("[PGSPLIT]   allocating PD...\n");
             let new_pd_phys = alloc_table()?;
@@ -608,10 +609,8 @@ impl PageTableManager {
             let two_mb: u64 = 2 * 1024 * 1024;
             for i in 0..512usize {
                 let page_phys = huge_base + (i as u64) * two_mb;
-                *(*new_pd).entry_mut(i) = PageTableEntry::new(
-                    page_phys,
-                    leaf_flags.with(PageFlags::HUGE_PAGE),
-                );
+                *(*new_pd).entry_mut(i) =
+                    PageTableEntry::new(page_phys, leaf_flags.with(PageFlags::HUGE_PAGE));
             }
             puts("[PGSPLIT]   512 PD entries filled\n");
 
@@ -657,16 +656,16 @@ impl PageTableManager {
             crate::serial::put_hex64(huge_base);
             puts("\n");
             let raw = pd_e.raw();
-            let leaf_flags = PageFlags(raw & (
-                PageFlags::PRESENT.0 |
-                PageFlags::WRITABLE.0 |
-                PageFlags::USER.0 |
-                PageFlags::WRITE_THROUGH.0 |
-                PageFlags::CACHE_DISABLE.0 |
-                PageFlags::ACCESSED.0 |
-                PageFlags::GLOBAL.0 |
-                PageFlags::NO_EXECUTE.0
-            ));
+            let leaf_flags = PageFlags(
+                raw & (PageFlags::PRESENT.0
+                    | PageFlags::WRITABLE.0
+                    | PageFlags::USER.0
+                    | PageFlags::WRITE_THROUGH.0
+                    | PageFlags::CACHE_DISABLE.0
+                    | PageFlags::ACCESSED.0
+                    | PageFlags::GLOBAL.0
+                    | PageFlags::NO_EXECUTE.0),
+            );
 
             puts("[PGSPLIT]   allocating PT...\n");
             let new_pt_phys = alloc_table()?;
@@ -711,16 +710,11 @@ unsafe fn alloc_table() -> Result<u64, &'static str> {
     }
     let registry = global_registry_mut();
     registry
-        .allocate_pages(
-            AllocateType::AnyPages,
-            MemoryType::AllocatedPageTable,
-            1,
-        )
-        .map(|phys| {
+        .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedPageTable, 1)
+        .inspect(|&phys| {
             // Zero the freshly allocated page.
             let p = phys as *mut PageTable;
             (*p).zero();
-            phys
         })
         .map_err(|_| "page table allocation failed")
 }
@@ -738,9 +732,6 @@ unsafe fn ensure_table(e: &mut PageTableEntry) -> Result<u64, &'static str> {
 
     // Allocate and fill.
     let child_phys = alloc_table()?;
-    *e = PageTableEntry::new(
-        child_phys,
-        PageFlags::PRESENT.with(PageFlags::WRITABLE),
-    );
+    *e = PageTableEntry::new(child_phys, PageFlags::PRESENT.with(PageFlags::WRITABLE));
     Ok(child_phys)
 }

@@ -78,6 +78,11 @@
 
 #![no_std]
 #![allow(dead_code)]
+#![allow(static_mut_refs)]
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::fn_to_numeric_cast)]
+#![allow(clippy::result_unit_err)]
+#![allow(clippy::new_without_default)]
 
 pub mod cpu;
 pub mod dma;
@@ -97,58 +102,60 @@ pub mod syscall;
 // CPU RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub use cpu::{barriers, cache, mmio, pio, tsc};
-pub use cpu::tsc::calibrate_tsc_pit;
 pub use cpu::gdt::{init_gdt, KERNEL_CS, KERNEL_DS, USER_CS, USER_DS};
-pub use cpu::idt::{init_idt, enable_interrupts, disable_interrupts, interrupts_enabled};
-pub use cpu::pic::{init_pic, enable_irq, disable_irq, send_eoi, PIC1_VECTOR_OFFSET};
+pub use cpu::idt::{disable_interrupts, enable_interrupts, init_idt, interrupts_enabled};
+pub use cpu::pic::{disable_irq, enable_irq, init_pic, send_eoi, PIC1_VECTOR_OFFSET};
+pub use cpu::tsc::calibrate_tsc_pit;
+pub use cpu::{barriers, cache, mmio, pio, tsc};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MEMORY RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub use memory::{
-    // The registry
-    MemoryRegistry,
-    init_global_registry,
+    fallback_allocator,
     global_registry,
     global_registry_mut,
+    init_global_registry,
     is_registry_initialized,
 
-    // Types
-    MemoryType,
-    MemoryDescriptor,
-    MemoryAttribute,
+    parse_uefi_memory_map,
     AllocateType,
-    MemoryError,
+    E820Entry,
 
     // E820
     E820Type,
-    E820Entry,
+    MemoryAttribute,
+    MemoryDescriptor,
+    MemoryError,
 
-    // Constants
-    PAGE_SIZE,
-    PAGE_SHIFT,
-
+    MemoryRegion,
+    // The registry
+    MemoryRegistry,
+    // Types
+    MemoryType,
     // Legacy compatibility
     PhysicalAllocator,
     PhysicalMemoryMap,
-    MemoryRegion,
-    parse_uefi_memory_map,
-    fallback_allocator,
+    PAGE_SHIFT,
+
+    // Constants
+    PAGE_SIZE,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HEAP RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub use heap::{HeapAllocator, init_heap, init_heap_with_buffer, is_heap_initialized, heap_stats};
+pub use heap::{heap_stats, init_heap, init_heap_with_buffer, is_heap_initialized, HeapAllocator};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SYNC RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub use sync::{SpinLock, SpinLockGuard, RawSpinLock, Once, Lazy, InterruptGuard, without_interrupts};
+pub use sync::{
+    without_interrupts, InterruptGuard, Lazy, Once, RawSpinLock, SpinLock, SpinLockGuard,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DMA RE-EXPORTS
@@ -165,40 +172,50 @@ pub use dma::DmaRegion;
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub use paging::{
-    PageFlags, PageTable, PageTableEntry,
-    PageTableManager, VirtAddr, MappedPageSize,
-    init_kernel_page_table, is_paging_initialized,
-    kernel_page_table, kernel_page_table_mut,
-    kmap_4k, kmap_2m, kunmap_4k, kvirt_to_phys, kensure_4k, kmap_mmio, kmark_uncacheable,
+    init_kernel_page_table, is_paging_initialized, kensure_4k, kernel_page_table,
+    kernel_page_table_mut, kmap_2m, kmap_4k, kmap_mmio, kmark_uncacheable, kunmap_4k,
+    kvirt_to_phys, MappedPageSize, PageFlags, PageTable, PageTableEntry, PageTableManager,
+    VirtAddr,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PCI RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub use pci::{PciAddr, pci_cfg_read8, pci_cfg_read16, pci_cfg_read32};
-pub use pci::{pci_cfg_write8, pci_cfg_write16, pci_cfg_write32};
+pub use pci::{pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
+pub use pci::{pci_cfg_write16, pci_cfg_write32, pci_cfg_write8};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROCESS RE-EXPORTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub use process::{
-    // Process descriptor
-    Process, ProcessState, BlockReason, MAX_PROCESSES,
-    // Scheduler
-    Scheduler, ProcessInfo, SCHEDULER,
-    init_scheduler, spawn_kernel_thread, exit_process, scheduler_tick,
-    set_tsc_frequency, tsc_frequency,
-    block_sleep, wait_for_child,
-    // Signals
-    Signal, SignalSet,
+    block_sleep,
+    exit_process,
+    init_scheduler,
+    scheduler_tick,
+    set_tsc_frequency,
+    spawn_kernel_thread,
+    tsc_frequency,
+    wait_for_child,
+    BlockReason,
     // CPU context
     CpuContext,
+    // Process descriptor
+    Process,
+    ProcessInfo,
+    ProcessState,
+    // Scheduler
+    Scheduler,
+    // Signals
+    Signal,
+    SignalSet,
+    MAX_PROCESSES,
+    SCHEDULER,
 };
 
 // ELF loader
-pub use elf::{validate_elf64, load_elf64, ElfImage, ElfError};
+pub use elf::{load_elf64, validate_elf64, ElfError, ElfImage};
 
 // User process spawning
 pub use process::scheduler::spawn_user_process;
@@ -209,12 +226,29 @@ pub use process::scheduler::spawn_user_process;
 
 pub use syscall::{
     init_syscall,
-    SYS_EXIT, SYS_WRITE, SYS_READ, SYS_YIELD, SYS_ALLOC, SYS_FREE,
-    SYS_GETPID, SYS_KILL, SYS_WAIT, SYS_SLEEP,
+    SYS_ALLOC,
+    SYS_CLOSE,
+    SYS_EXIT,
+    SYS_FREE,
+    SYS_GETPID,
+    SYS_KILL,
+    SYS_MKDIR,
     // HelixFS syscalls
-    SYS_OPEN, SYS_CLOSE, SYS_SEEK, SYS_STAT, SYS_READDIR,
-    SYS_MKDIR, SYS_UNLINK, SYS_RENAME, SYS_TRUNCATE,
-    SYS_SYNC, SYS_SNAPSHOT, SYS_VERSIONS,
+    SYS_OPEN,
+    SYS_READ,
+    SYS_READDIR,
+    SYS_RENAME,
+    SYS_SEEK,
+    SYS_SLEEP,
+    SYS_SNAPSHOT,
+    SYS_STAT,
+    SYS_SYNC,
+    SYS_TRUNCATE,
+    SYS_UNLINK,
+    SYS_VERSIONS,
+    SYS_WAIT,
+    SYS_WRITE,
+    SYS_YIELD,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -222,15 +256,14 @@ pub use syscall::{
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub use platform::{
-    // Self-contained entry (recommended)
-    platform_init_selfcontained,
-    SelfContainedConfig,
-
     // Legacy entry (external DMA/TSC)
     platform_init,
-    PlatformConfig,
-
+    // Self-contained entry (recommended)
+    platform_init_selfcontained,
     // Common types (platform only - no device types)
     InitError,
+    PlatformConfig,
+
     PlatformInit,
+    SelfContainedConfig,
 };

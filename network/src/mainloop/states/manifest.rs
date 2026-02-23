@@ -129,7 +129,9 @@ impl ManifestConfig {
             start_sector,
             end_sector,
             partition_uuid,
-            ManifestMode::RawSector { sector: manifest_sector },
+            ManifestMode::RawSector {
+                sector: manifest_sector,
+            },
         )
     }
 
@@ -169,13 +171,17 @@ impl ManifestState {
         let iso_size = ctx.bytes_downloaded;
         // Use actual_start_sector (set by GPT prep) rather than config
         let start_sector = ctx.actual_start_sector;
-        let num_sectors = (iso_size + 511) / 512;
+        let num_sectors = iso_size.div_ceil(512);
         let end_sector = start_sector + num_sectors;
 
         let mode = if ctx.config.esp_start_lba > 0 {
-            ManifestMode::Fat32 { esp_start_lba: ctx.config.esp_start_lba }
+            ManifestMode::Fat32 {
+                esp_start_lba: ctx.config.esp_start_lba,
+            }
         } else if ctx.config.manifest_sector > 0 {
-            ManifestMode::RawSector { sector: ctx.config.manifest_sector }
+            ManifestMode::RawSector {
+                sector: ctx.config.manifest_sector,
+            }
         } else {
             ManifestMode::Skip
         };
@@ -194,11 +200,14 @@ impl ManifestState {
     fn build_manifest(&self) -> Option<IsoManifest> {
         let mut manifest = IsoManifest::new(self.config.iso_name(), self.config.iso_size);
 
-        if manifest.add_chunk(
-            self.config.partition_uuid,
-            self.config.start_sector,
-            self.config.end_sector,
-        ).is_err() {
+        if manifest
+            .add_chunk(
+                self.config.partition_uuid,
+                self.config.start_sector,
+                self.config.end_sector,
+            )
+            .is_err()
+        {
             serial::println("[MANIFEST] ERROR: Failed to add chunk");
             return None;
         }
@@ -254,7 +263,8 @@ impl ManifestState {
         };
         let timeout_ticks = 500_000_000u64; // ~500ms
 
-        let mut adapter = match UnifiedBlockIo::new(blk, dma_buffer, dma_buffer_phys, timeout_ticks) {
+        let mut adapter = match UnifiedBlockIo::new(blk, dma_buffer, dma_buffer_phys, timeout_ticks)
+        {
             Ok(a) => {
                 serial::println("[MANIFEST] BlockIo adapter created");
                 a
@@ -266,7 +276,8 @@ impl ManifestState {
         };
 
         // Generate 8.3 compatible manifest filename
-        let manifest_filename = morpheus_core::fs::generate_8_3_manifest_name(self.config.iso_name());
+        let manifest_filename =
+            morpheus_core::fs::generate_8_3_manifest_name(self.config.iso_name());
         let manifest_path = format!("/.iso/{}", manifest_filename);
 
         serial::print("[MANIFEST] Writing to: ");
@@ -347,7 +358,7 @@ impl<D: NetworkDriver> State<D> for ManifestState {
 
         if !self.started {
             self.started = true;
-            
+
             match self.config.mode {
                 ManifestMode::Skip => {
                     serial::println("[MANIFEST] Skipping (not configured)");
@@ -376,7 +387,10 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                         Some(b) => b,
                         None => {
                             serial::println("[MANIFEST] ERROR: No block device");
-                            return (Box::new(FailedState::new("no block device")), StepResult::Failed("no blk"));
+                            return (
+                                Box::new(FailedState::new("no block device")),
+                                StepResult::Failed("no blk"),
+                            );
                         }
                     };
 
@@ -384,7 +398,10 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                         serial::println("[MANIFEST] Write successful");
                         self.completed = true;
                     } else {
-                        return (Box::new(FailedState::new("manifest write failed")), StepResult::Failed("write"));
+                        return (
+                            Box::new(FailedState::new("manifest write failed")),
+                            StepResult::Failed("write"),
+                        );
                     }
                 }
                 ManifestMode::RawSector { sector } => {
@@ -401,7 +418,10 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                         Some(b) => b,
                         None => {
                             serial::println("[MANIFEST] ERROR: No block device");
-                            return (Box::new(FailedState::new("no block device")), StepResult::Failed("no blk"));
+                            return (
+                                Box::new(FailedState::new("no block device")),
+                                StepResult::Failed("no blk"),
+                            );
                         }
                     };
 
@@ -409,7 +429,10 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                         serial::println("[MANIFEST] Write successful");
                         self.completed = true;
                     } else {
-                        return (Box::new(FailedState::new("manifest write failed")), StepResult::Failed("write"));
+                        return (
+                            Box::new(FailedState::new("manifest write failed")),
+                            StepResult::Failed("write"),
+                        );
                     }
                 }
             }
@@ -446,7 +469,10 @@ unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -
     }
 
     let request_id = 0xFFFF_0001u32;
-    if blk.submit_write(sector, buffer_phys, 1, request_id).is_err() {
+    if blk
+        .submit_write(sector, buffer_phys, 1, request_id)
+        .is_err()
+    {
         serial::println("[MANIFEST] ERROR: Submit failed");
         return false;
     }
@@ -503,10 +529,7 @@ fn read_tsc() -> u64 {
 ///
 /// # Returns
 /// `true` if manifest was written successfully
-pub fn write_manifest_standalone(
-    blk: &mut UnifiedBlockDevice,
-    config: &ManifestConfig,
-) -> bool {
+pub fn write_manifest_standalone(blk: &mut UnifiedBlockDevice, config: &ManifestConfig) -> bool {
     let state = ManifestState::new(config.clone());
 
     match config.mode {
@@ -514,12 +537,8 @@ pub fn write_manifest_standalone(
             serial::println("[MANIFEST] Skipping (not configured)");
             true
         }
-        ManifestMode::Fat32 { esp_start_lba } => {
-            state.write_fat32(blk, esp_start_lba)
-        }
-        ManifestMode::RawSector { sector } => {
-            state.write_raw_sector(blk, sector)
-        }
+        ManifestMode::Fat32 { esp_start_lba } => state.write_fat32(blk, esp_start_lba),
+        ManifestMode::RawSector { sector } => state.write_raw_sector(blk, sector),
     }
 }
 
@@ -569,7 +588,9 @@ pub fn regenerate_manifest(
         serial::print("[MANIFEST] Mode: Raw sector ");
         serial::print_hex(manifest_sector);
         serial::println("");
-        ManifestMode::RawSector { sector: manifest_sector }
+        ManifestMode::RawSector {
+            sector: manifest_sector,
+        }
     } else {
         serial::println("[MANIFEST] ERROR: No write mode specified");
         return false;

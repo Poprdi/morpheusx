@@ -105,7 +105,8 @@ pub fn read_file_at_lsn<B: BlockIo>(
                                     // v2 format: [path_len: u16][path][data...]
                                     // Skip the path prefix to get actual file data.
                                     let data = if payload.len() >= 2 {
-                                        let plen = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+                                        let plen =
+                                            u16::from_le_bytes([payload[0], payload[1]]) as usize;
                                         let start = 2 + plen;
                                         if start <= payload.len() {
                                             &payload[start..]
@@ -208,8 +209,12 @@ pub fn list_versions<B: BlockIo>(
                     if header.path_hash == path_hash {
                         if let Some(op) = LogOp::from_u8(header.op) {
                             match op {
-                                LogOp::Write | LogOp::Append | LogOp::Delete
-                                | LogOp::Rename | LogOp::Truncate | LogOp::SetMeta => {
+                                LogOp::Write
+                                | LogOp::Append
+                                | LogOp::Delete
+                                | LogOp::Rename
+                                | LogOp::Truncate
+                                | LogOp::SetMeta => {
                                     versions.push((header.lsn, header.timestamp_ns, op));
                                 }
                                 _ => {}

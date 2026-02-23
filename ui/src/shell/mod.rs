@@ -1,8 +1,6 @@
 pub mod commands;
 pub mod ring_buffer;
 
-use alloc::string::String;
-use alloc::format;
 use crate::canvas::Canvas;
 use crate::draw::glyph::draw_string;
 use crate::draw::shapes::{hline, rect_fill};
@@ -10,8 +8,10 @@ use crate::event::{Event, Key, KeyEvent};
 use crate::font;
 use crate::font::FONT_DATA;
 use crate::theme::Theme;
-use crate::widget::Widget;
 use crate::widget::text_input::TextInput;
+use crate::widget::Widget;
+use alloc::format;
+use alloc::string::String;
 
 use self::commands::{CommandResult, FsOp};
 use self::ring_buffer::RingBuffer;
@@ -107,7 +107,15 @@ impl Shell {
         rect_fill(canvas, 0, input_y, w, input_h, theme.input_bg);
 
         let prompt_w = self.prompt.len() as u32 * font::FONT_WIDTH;
-        draw_string(canvas, 0, input_y + 2, &self.prompt, theme.accent, theme.input_bg, &FONT_DATA);
+        draw_string(
+            canvas,
+            0,
+            input_y + 2,
+            &self.prompt,
+            theme.accent,
+            theme.input_bg,
+            &FONT_DATA,
+        );
 
         let input_text = self.input.text();
         let display: &str = if input_text.len() > text_cols.saturating_sub(self.prompt.len()) {
@@ -116,10 +124,24 @@ impl Shell {
         } else {
             input_text
         };
-        draw_string(canvas, prompt_w, input_y + 2, display, theme.input_fg, theme.input_bg, &FONT_DATA);
+        draw_string(
+            canvas,
+            prompt_w,
+            input_y + 2,
+            display,
+            theme.input_fg,
+            theme.input_bg,
+            &FONT_DATA,
+        );
 
         let cursor_x = prompt_w + display.len() as u32 * font::FONT_WIDTH;
-        canvas.fill_rect(cursor_x, input_y + 2, 1, font::FONT_HEIGHT, theme.input_cursor);
+        canvas.fill_rect(
+            cursor_x,
+            input_y + 2,
+            1,
+            font::FONT_HEIGHT,
+            theme.input_cursor,
+        );
     }
 
     pub fn handle_event(&mut self, event: &Event, window_ids: &[u32]) -> ShellAction {

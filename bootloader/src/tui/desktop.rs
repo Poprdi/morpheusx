@@ -5,13 +5,13 @@ use alloc::vec::Vec;
 use morpheus_display::types::FramebufferInfo;
 use morpheus_hwinit::serial::puts;
 use morpheus_ui::app::{App, AppRegistry, AppResult};
-use morpheus_ui::Canvas;
-use morpheus_ui::EventResult;
 use morpheus_ui::shell::commands::{self, FsOp};
 use morpheus_ui::shell::{Shell, ShellAction};
 use morpheus_ui::theme::THEME_DEFAULT;
 use morpheus_ui::window::{BORDER_WIDTH, TITLE_BAR_HEIGHT};
 use morpheus_ui::wm::WindowManager;
+use morpheus_ui::Canvas;
+use morpheus_ui::EventResult;
 
 use super::event_adapter::translate_key;
 use super::fb_canvas::FbCanvas;
@@ -44,15 +44,19 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     let mut fd_table = morpheus_helix::vfs::FdTable::new();
     let ts = morpheus_hwinit::cpu::tsc::read_tsc();
     let fd = morpheus_helix::vfs::vfs_open(
-        &mut fs.device, &mut fs.mount_table, &mut fd_table,
-        &path, morpheus_helix::types::open_flags::O_READ, ts,
-    ).ok()?;
+        &mut fs.device,
+        &mut fs.mount_table,
+        &mut fd_table,
+        &path,
+        morpheus_helix::types::open_flags::O_READ,
+        ts,
+    )
+    .ok()?;
 
     let mut buf = alloc::vec![0u8; stat.size as usize];
-    let n = morpheus_helix::vfs::vfs_read(
-        &mut fs.device, &fs.mount_table, &mut fd_table,
-        fd, &mut buf,
-    ).ok()?;
+    let n =
+        morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, &mut fd_table, fd, &mut buf)
+            .ok()?;
     buf.truncate(n);
 
     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
@@ -67,11 +71,7 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     let screen_w = fb_canvas.width();
     let screen_h = fb_canvas.height();
 
-    let mut wm = WindowManager::new(
-        screen_w, screen_h,
-        fb_canvas.pixel_format(),
-        &theme,
-    );
+    let mut wm = WindowManager::new(screen_w, screen_h, fb_canvas.pixel_format(), &theme);
 
     // App registry
     let mut registry = AppRegistry::new();
@@ -83,9 +83,7 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     let shell_w = screen_w.saturating_sub(BORDER_WIDTH * 2);
     let shell_h = screen_h.saturating_sub(TITLE_BAR_HEIGHT + BORDER_WIDTH * 2);
 
-    let shell_id = wm.create_window(
-        "MorpheusX Shell", shell_x, shell_y, shell_w, shell_h,
-    );
+    let shell_id = wm.create_window("MorpheusX Shell", shell_x, shell_y, shell_w, shell_h);
     let mut shell = Shell::new();
     let mut app_instances: Vec<AppInstance> = Vec::new();
 
@@ -94,7 +92,9 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     if !names.is_empty() {
         let mut list = alloc::string::String::from("Apps: ");
         for (i, name) in names.iter().enumerate() {
-            if i > 0 { list.push_str(", "); }
+            if i > 0 {
+                list.push_str(", ");
+            }
             list.push_str(name);
         }
         shell.push_output(&list);
@@ -183,7 +183,10 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                         }
                         puts("[DESKTOP] OpenApp: init() done, calling render_app()\n");
 
-                        let mut inst = AppInstance { window_id: win_id, app };
+                        let mut inst = AppInstance {
+                            window_id: win_id,
+                            app,
+                        };
                         render_app(&mut inst, &mut wm, &theme);
                         puts("[DESKTOP] OpenApp: render_app() done\n");
                         app_instances.push(inst);
@@ -194,7 +197,11 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                         if names.is_empty() {
                             shell.push_output(&format!("Unknown app: {}", name));
                         } else {
-                            shell.push_output(&format!("Unknown app: {}. Available: {}", name, names.join(", ")));
+                            shell.push_output(&format!(
+                                "Unknown app: {}. Available: {}",
+                                name,
+                                names.join(", ")
+                            ));
                         }
                     }
                 }
@@ -217,7 +224,9 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                     render_shell(&mut shell, &mut wm, shell_id, &theme);
                     wm.compose(&mut fb_canvas, &theme);
                     puts("[DESKTOP] halt requested\n");
-                    loop { core::hint::spin_loop(); }
+                    loop {
+                        core::hint::spin_loop();
+                    }
                 }
                 ShellAction::SpawnProcess(name) => {
                     puts("[DESKTOP] SpawnProcess: ");
@@ -235,20 +244,19 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                                 )
                             } {
                                 Ok(pid) => {
-                                    shell.push_output(&format!(
-                                        "Spawned '{}' as PID {}", name, pid
-                                    ));
+                                    shell
+                                        .push_output(&format!("Spawned '{}' as PID {}", name, pid));
                                 }
                                 Err(e) => {
-                                    shell.push_output(&format!(
-                                        "Failed to spawn '{}': {}", name, e
-                                    ));
+                                    shell
+                                        .push_output(&format!("Failed to spawn '{}': {}", name, e));
                                 }
                             }
                         }
                         None => {
                             shell.push_output(&format!(
-                                "Binary not found: {}. Place ELF in /bin/{}", name, name
+                                "Binary not found: {}. Place ELF in /bin/{}",
+                                name, name
                             ));
                         }
                     }
@@ -264,7 +272,9 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
             let mut close_app = false;
             if let Some(inst) = app_instances.iter_mut().find(|i| i.window_id == focused) {
                 match inst.app.handle_event(&event) {
-                    AppResult::Close => { close_app = true; }
+                    AppResult::Close => {
+                        close_app = true;
+                    }
                     AppResult::Redraw | AppResult::Continue => {
                         render_app(inst, &mut wm, &theme);
                     }
@@ -293,11 +303,7 @@ fn render_shell(
     }
 }
 
-fn render_app(
-    inst: &mut AppInstance,
-    wm: &mut WindowManager,
-    theme: &morpheus_ui::Theme,
-) {
+fn render_app(inst: &mut AppInstance, wm: &mut WindowManager, theme: &morpheus_ui::Theme) {
     if let Some(win) = wm.window_mut(inst.window_id) {
         inst.app.render(&mut win.buffer, theme);
         win.dirty = true;
@@ -313,11 +319,16 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Ls { path, long } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global() } {
                 Some(fs) => fs,
-                None => { shell.push_output("ls: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("ls: filesystem not initialized");
+                    return;
+                }
             };
             match morpheus_helix::vfs::vfs_readdir(&fs.mount_table, &path) {
                 Ok(entries) => {
-                    if entries.is_empty() { return; }
+                    if entries.is_empty() {
+                        return;
+                    }
                     let out = if long {
                         format_ls_long(&entries)
                     } else {
@@ -337,7 +348,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
             }
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global() } {
                 Some(fs) => fs,
-                None => { shell.push_output("cd: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("cd: filesystem not initialized");
+                    return;
+                }
             };
             match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
                 Ok(stat) if stat.is_dir => shell.set_cwd(&path),
@@ -349,7 +363,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Mkdir { path } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("mkdir: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("mkdir: filesystem not initialized");
+                    return;
+                }
             };
             let ts = morpheus_hwinit::cpu::tsc::read_tsc();
             match morpheus_helix::vfs::vfs_mkdir(&mut fs.mount_table, &path, ts) {
@@ -361,7 +378,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Touch { path } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("touch: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("touch: filesystem not initialized");
+                    return;
+                }
             };
             // No-op if already exists.
             if morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path).is_ok() {
@@ -370,12 +390,18 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
             let mut fd_table = morpheus_helix::vfs::FdTable::new();
             let ts = morpheus_hwinit::cpu::tsc::read_tsc();
             let flags = morpheus_helix::types::open_flags::O_WRITE
-                      | morpheus_helix::types::open_flags::O_CREATE;
+                | morpheus_helix::types::open_flags::O_CREATE;
             match morpheus_helix::vfs::vfs_open(
-                &mut fs.device, &mut fs.mount_table, &mut fd_table,
-                &path, flags, ts,
+                &mut fs.device,
+                &mut fs.mount_table,
+                &mut fd_table,
+                &path,
+                flags,
+                ts,
             ) {
-                Ok(fd) => { let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd); }
+                Ok(fd) => {
+                    let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
+                }
                 Err(e) => shell.push_output(&format!("touch: '{}': {:?}", path, e)),
             }
         }
@@ -383,30 +409,49 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Cat { path } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("cat: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("cat: filesystem not initialized");
+                    return;
+                }
             };
             let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
                 Ok(s) => s,
-                Err(_) => { shell.push_output(&format!("cat: {}: not found", path)); return; }
+                Err(_) => {
+                    shell.push_output(&format!("cat: {}: not found", path));
+                    return;
+                }
             };
             if stat.is_dir {
                 shell.push_output(&format!("cat: {}: is a directory", path));
                 return;
             }
-            if stat.size == 0 { return; }
+            if stat.size == 0 {
+                return;
+            }
 
             let mut fd_table = morpheus_helix::vfs::FdTable::new();
             let ts = morpheus_hwinit::cpu::tsc::read_tsc();
             let fd = match morpheus_helix::vfs::vfs_open(
-                &mut fs.device, &mut fs.mount_table, &mut fd_table,
-                &path, morpheus_helix::types::open_flags::O_READ, ts,
+                &mut fs.device,
+                &mut fs.mount_table,
+                &mut fd_table,
+                &path,
+                morpheus_helix::types::open_flags::O_READ,
+                ts,
             ) {
                 Ok(fd) => fd,
-                Err(_) => { shell.push_output(&format!("cat: {}: cannot open", path)); return; }
+                Err(_) => {
+                    shell.push_output(&format!("cat: {}: cannot open", path));
+                    return;
+                }
             };
             let mut buf = alloc::vec![0u8; stat.size as usize];
             let n = match morpheus_helix::vfs::vfs_read(
-                &mut fs.device, &fs.mount_table, &mut fd_table, fd, &mut buf,
+                &mut fs.device,
+                &fs.mount_table,
+                &mut fd_table,
+                fd,
+                &mut buf,
             ) {
                 Ok(n) => n,
                 Err(_) => {
@@ -426,7 +471,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Rm { path } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("rm: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("rm: filesystem not initialized");
+                    return;
+                }
             };
             let ts = morpheus_hwinit::cpu::tsc::read_tsc();
             match morpheus_helix::vfs::vfs_unlink(&mut fs.mount_table, &path, ts) {
@@ -438,7 +486,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Mv { src, dst } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("mv: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("mv: filesystem not initialized");
+                    return;
+                }
             };
             let ts = morpheus_hwinit::cpu::tsc::read_tsc();
             match morpheus_helix::vfs::vfs_rename(&mut fs.mount_table, &src, &dst, ts) {
@@ -450,16 +501,23 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Write { path, content } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("write: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("write: filesystem not initialized");
+                    return;
+                }
             };
             let mut fd_table = morpheus_helix::vfs::FdTable::new();
             let ts = morpheus_hwinit::cpu::tsc::read_tsc();
             let flags = morpheus_helix::types::open_flags::O_WRITE
-                      | morpheus_helix::types::open_flags::O_CREATE
-                      | morpheus_helix::types::open_flags::O_TRUNC;
+                | morpheus_helix::types::open_flags::O_CREATE
+                | morpheus_helix::types::open_flags::O_TRUNC;
             let fd = match morpheus_helix::vfs::vfs_open(
-                &mut fs.device, &mut fs.mount_table, &mut fd_table,
-                &path, flags, ts,
+                &mut fs.device,
+                &mut fs.mount_table,
+                &mut fd_table,
+                &path,
+                flags,
+                ts,
             ) {
                 Ok(fd) => fd,
                 Err(e) => {
@@ -468,8 +526,12 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
                 }
             };
             match morpheus_helix::vfs::vfs_write(
-                &mut fs.device, &mut fs.mount_table, &mut fd_table,
-                fd, content.as_bytes(), ts,
+                &mut fs.device,
+                &mut fs.mount_table,
+                &mut fd_table,
+                fd,
+                content.as_bytes(),
+                ts,
             ) {
                 Ok(n) => {
                     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
@@ -485,7 +547,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Stat { path } => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global() } {
                 Some(fs) => fs,
-                None => { shell.push_output("stat: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("stat: filesystem not initialized");
+                    return;
+                }
             };
             match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
                 Ok(stat) => {
@@ -504,7 +569,10 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
         FsOp::Sync => {
             let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
                 Some(fs) => fs,
-                None => { shell.push_output("sync: filesystem not initialized"); return; }
+                None => {
+                    shell.push_output("sync: filesystem not initialized");
+                    return;
+                }
             };
             match morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table) {
                 Ok(()) => {
@@ -525,11 +593,14 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
 fn format_ls_short(entries: &[morpheus_helix::types::DirEntry]) -> String {
     let mut out = String::new();
     for entry in entries {
-        let name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
-            .unwrap_or("?");
-        if !out.is_empty() { out.push_str("  "); }
+        let name = core::str::from_utf8(&entry.name[..entry.name_len as usize]).unwrap_or("?");
+        if !out.is_empty() {
+            out.push_str("  ");
+        }
         out.push_str(name);
-        if entry.is_dir { out.push('/'); }
+        if entry.is_dir {
+            out.push('/');
+        }
     }
     out
 }
@@ -537,8 +608,7 @@ fn format_ls_short(entries: &[morpheus_helix::types::DirEntry]) -> String {
 fn format_ls_long(entries: &[morpheus_helix::types::DirEntry]) -> String {
     let mut out = String::new();
     for entry in entries {
-        let name = core::str::from_utf8(&entry.name[..entry.name_len as usize])
-            .unwrap_or("?");
+        let name = core::str::from_utf8(&entry.name[..entry.name_len as usize]).unwrap_or("?");
         let type_char = if entry.is_dir { 'd' } else { '-' };
         let size_str = if entry.is_dir {
             String::from("-")
@@ -556,7 +626,9 @@ fn format_ls_long(entries: &[morpheus_helix::types::DirEntry]) -> String {
             if entry.is_dir { "/" } else { "" },
         ));
     }
-    if out.ends_with('\n') { out.pop(); }
+    if out.ends_with('\n') {
+        out.pop();
+    }
     out
 }
 
@@ -568,11 +640,19 @@ fn format_size(bytes: u64) -> String {
     } else if bytes < 1024 * 1024 {
         let kb = bytes / 1024;
         let frac = (bytes % 1024) * 10 / 1024;
-        if frac > 0 { format!("{}.{}K", kb, frac) } else { format!("{}K", kb) }
+        if frac > 0 {
+            format!("{}.{}K", kb, frac)
+        } else {
+            format!("{}K", kb)
+        }
     } else if bytes < 1024 * 1024 * 1024 {
         let mb = bytes / (1024 * 1024);
         let frac = (bytes % (1024 * 1024)) * 10 / (1024 * 1024);
-        if frac > 0 { format!("{}.{}M", mb, frac) } else { format!("{}M", mb) }
+        if frac > 0 {
+            format!("{}.{}M", mb, frac)
+        } else {
+            format!("{}M", mb)
+        }
     } else {
         let gb = bytes / (1024 * 1024 * 1024);
         format!("{}G", gb)

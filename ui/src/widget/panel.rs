@@ -1,9 +1,9 @@
+use super::Widget;
 use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::draw::shapes::{rect_fill, rect_outline};
 use crate::event::{Event, EventResult};
 use crate::theme::Theme;
-use super::Widget;
 
 pub struct Panel {
     bg: Option<Color>,

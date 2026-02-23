@@ -10,9 +10,9 @@ use alloc::boxed::Box;
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::time::Instant;
 
-use crate::driver::traits::NetworkDriver;
 use super::adapter::SmoltcpAdapter;
 use super::context::Context;
+use crate::driver::traits::NetworkDriver;
 
 /// Result of a single state machine step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

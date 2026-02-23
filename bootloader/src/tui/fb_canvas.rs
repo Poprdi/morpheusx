@@ -62,7 +62,9 @@ impl Canvas for FbCanvas {
         }
         let packed = color.to_packed(self.format);
         let addr = self.pixel_addr(x, y);
-        unsafe { asm_fb::write32(addr, packed); }
+        unsafe {
+            asm_fb::write32(addr, packed);
+        }
     }
 
     #[inline]
@@ -85,7 +87,9 @@ impl Canvas for FbCanvas {
 
         for row in clip.y..clip.bottom() {
             let addr = self.pixel_addr(clip.x, row);
-            unsafe { asm_fb::memset32(addr, packed, clip.w as u64); }
+            unsafe {
+                asm_fb::memset32(addr, packed, clip.w as u64);
+            }
         }
     }
 
@@ -108,7 +112,9 @@ impl Canvas for FbCanvas {
             let dst_addr = self.pixel_addr(clip.x, clip.y + row);
             let src_ptr = src[src_start..src_end].as_ptr() as u64;
             let byte_count = (clip.w as u64) * 4;
-            unsafe { asm_fb::memcpy(dst_addr, src_ptr, byte_count); }
+            unsafe {
+                asm_fb::memcpy(dst_addr, src_ptr, byte_count);
+            }
         }
     }
 

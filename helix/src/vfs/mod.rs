@@ -41,11 +41,7 @@ pub struct HelixInstance {
 
 impl HelixInstance {
     /// Create an instance from a superblock.
-    pub fn new(
-        sb: HelixSuperblock,
-        partition_lba_start: u64,
-        device_block_size: u32,
-    ) -> Self {
+    pub fn new(sb: HelixSuperblock, partition_lba_start: u64, device_block_size: u32) -> Self {
         let log = LogEngine::new(&sb, partition_lba_start, device_block_size);
         let index = NamespaceIndex::new();
         let bitmap = BlockBitmap::new(sb.data_block_count);
@@ -92,8 +88,8 @@ impl MountTable {
         // Can't use array::map in const context, use this pattern instead.
         Self {
             entries: [
-                None, None, None, None, None, None, None, None,
-                None, None, None, None, None, None, None, None,
+                None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None,
             ],
         }
     }
@@ -240,9 +236,7 @@ pub fn vfs_open<B: BlockIo>(
     timestamp_ns: u64,
 ) -> Result<usize, HelixError> {
     // Resolve mount.
-    let (mount_idx, _entry) = mount_table
-        .resolve(path)
-        .ok_or(HelixError::MountNotFound)?;
+    let (mount_idx, _entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     let entry = mount_table.get_mut(mount_idx).unwrap();
 
@@ -333,7 +327,9 @@ pub fn vfs_read<B: BlockIo>(
     let fd_path = crate::index::btree::path_str(&desc.path);
     let offset = desc.offset;
 
-    let entry = mount_table.get(mount_idx).ok_or(HelixError::MountNotFound)?;
+    let entry = mount_table
+        .get(mount_idx)
+        .ok_or(HelixError::MountNotFound)?;
 
     // Look up by full path to avoid hash-collision ambiguity.
     let idx_entry = entry.fs.index.lookup(fd_path).ok_or(HelixError::NotFound)?;
@@ -391,7 +387,9 @@ pub fn vfs_write<B: BlockIo>(
     let mount_idx = desc.mount_idx;
     let fd_path = String::from(crate::index::btree::path_str(&desc.path));
 
-    let entry = mount_table.get_mut(mount_idx).ok_or(HelixError::MountNotFound)?;
+    let entry = mount_table
+        .get_mut(mount_idx)
+        .ok_or(HelixError::MountNotFound)?;
 
     if entry.read_only {
         return Err(HelixError::ReadOnly);
@@ -430,7 +428,9 @@ pub fn vfs_seek(
     let mount_idx = desc.mount_idx;
     let fd_path = crate::index::btree::path_str(&desc.path);
 
-    let entry = mount_table.get(mount_idx).ok_or(HelixError::MountNotFound)?;
+    let entry = mount_table
+        .get(mount_idx)
+        .ok_or(HelixError::MountNotFound)?;
     let idx_entry = entry.fs.index.lookup(fd_path).ok_or(HelixError::NotFound)?;
     let file_size = idx_entry.size;
 
@@ -471,25 +471,15 @@ pub fn vfs_close(fd_table: &mut FdTable, fd: usize) -> Result<(), HelixError> {
 }
 
 /// Stat a path.
-pub fn vfs_stat(
-    mount_table: &MountTable,
-    path: &str,
-) -> Result<FileStat, HelixError> {
-    let (_mount_idx, entry) = mount_table
-        .resolve(path)
-        .ok_or(HelixError::MountNotFound)?;
+pub fn vfs_stat(mount_table: &MountTable, path: &str) -> Result<FileStat, HelixError> {
+    let (_mount_idx, entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     ops::read::stat_file(&entry.fs.index, path)
 }
 
 /// Read directory contents.
-pub fn vfs_readdir(
-    mount_table: &MountTable,
-    path: &str,
-) -> Result<Vec<DirEntry>, HelixError> {
-    let (_mount_idx, entry) = mount_table
-        .resolve(path)
-        .ok_or(HelixError::MountNotFound)?;
+pub fn vfs_readdir(mount_table: &MountTable, path: &str) -> Result<Vec<DirEntry>, HelixError> {
+    let (_mount_idx, entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     ops::dir::readdir(&entry.fs.index, path)
 }
@@ -500,9 +490,7 @@ pub fn vfs_mkdir(
     path: &str,
     timestamp_ns: u64,
 ) -> Result<(), HelixError> {
-    let (mount_idx, _entry) = mount_table
-        .resolve(path)
-        .ok_or(HelixError::MountNotFound)?;
+    let (mount_idx, _entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     let entry = mount_table.get_mut(mount_idx).unwrap();
 
@@ -520,9 +508,7 @@ pub fn vfs_unlink(
     path: &str,
     timestamp_ns: u64,
 ) -> Result<(), HelixError> {
-    let (mount_idx, _entry) = mount_table
-        .resolve(path)
-        .ok_or(HelixError::MountNotFound)?;
+    let (mount_idx, _entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     let entry = mount_table.get_mut(mount_idx).unwrap();
 
@@ -567,32 +553,32 @@ pub fn vfs_sync<B: BlockIo>(
     mount_table: &mut MountTable,
 ) -> Result<(), HelixError> {
     for entry in mount_table.entries.iter_mut().flatten() {
-            // Flush the log.
-            let committed_lsn = entry.fs.log.flush(block_io)?;
+        // Flush the log.
+        let committed_lsn = entry.fs.log.flush(block_io)?;
 
-            // Update superblock fields (write_superblock calls update_crc).
-            entry.fs.sb.committed_lsn = committed_lsn;
-            entry.fs.sb.log_head_segment = entry.fs.log.head_segment();
-            entry.fs.sb.log_head_offset = entry.fs.log.head_offset();
-            entry.fs.sb.log_tail_segment = entry.fs.log.tail_segment();
+        // Update superblock fields (write_superblock calls update_crc).
+        entry.fs.sb.committed_lsn = committed_lsn;
+        entry.fs.sb.log_head_segment = entry.fs.log.head_segment();
+        entry.fs.sb.log_head_offset = entry.fs.log.head_offset();
+        entry.fs.sb.log_tail_segment = entry.fs.log.tail_segment();
 
-            // Write both superblock slots.
-            crate::log::recovery::write_superblock(
-                block_io,
-                entry.fs.partition_lba_start,
-                entry.fs.device_block_size,
-                &mut entry.fs.sb,
-                0,
-            )?;
-            crate::log::recovery::write_superblock(
-                block_io,
-                entry.fs.partition_lba_start,
-                entry.fs.device_block_size,
-                &mut entry.fs.sb,
-                1,
-            )?;
+        // Write both superblock slots.
+        crate::log::recovery::write_superblock(
+            block_io,
+            entry.fs.partition_lba_start,
+            entry.fs.device_block_size,
+            &mut entry.fs.sb,
+            0,
+        )?;
+        crate::log::recovery::write_superblock(
+            block_io,
+            entry.fs.partition_lba_start,
+            entry.fs.device_block_size,
+            &mut entry.fs.sb,
+            1,
+        )?;
 
-            block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
+        block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
     }
     Ok(())
 }

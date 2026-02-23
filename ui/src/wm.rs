@@ -1,10 +1,10 @@
-use alloc::vec::Vec;
 use crate::canvas::Canvas;
 use crate::color::PixelFormat;
 use crate::compositor::Compositor;
 use crate::event::{Event, EventResult, Key, KeyEvent};
 use crate::theme::Theme;
 use crate::window::Window;
+use alloc::vec::Vec;
 
 pub struct WindowManager {
     windows: Vec<Window>,
@@ -29,14 +29,7 @@ impl WindowManager {
         }
     }
 
-    pub fn create_window(
-        &mut self,
-        title: &str,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-    ) -> u32 {
+    pub fn create_window(&mut self, title: &str, x: i32, y: i32, width: u32, height: u32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -126,7 +119,11 @@ impl WindowManager {
     }
 
     pub fn dispatch_event(&mut self, event: &Event) -> EventResult {
-        if let Event::KeyPress(KeyEvent { key: Key::Tab, modifiers }) = event {
+        if let Event::KeyPress(KeyEvent {
+            key: Key::Tab,
+            modifiers,
+        }) = event
+        {
             if modifiers.alt {
                 self.cycle_focus();
                 return EventResult::Consumed;
@@ -141,7 +138,8 @@ impl WindowManager {
             return;
         }
 
-        let current_pos = self.focused_id
+        let current_pos = self
+            .focused_id
             .and_then(|id| self.windows.iter().position(|w| w.id == id));
 
         if let Some(pos) = current_pos {

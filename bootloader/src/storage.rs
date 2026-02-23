@@ -30,10 +30,10 @@ use morpheus_helix::device::RawBlockDevice;
 use morpheus_hwinit::dma::DmaRegion;
 use morpheus_hwinit::paging::is_paging_initialized;
 use morpheus_hwinit::serial::puts;
-use morpheus_hwinit::{pci_cfg_read16, pci_cfg_read32, kmap_mmio, PciAddr};
+use morpheus_hwinit::{kmap_mmio, pci_cfg_read16, pci_cfg_read32, PciAddr};
 use morpheus_network::{
-    BlockDmaConfig, BlockDriver, DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
-    create_unified_from_detected, scan_all_block_devices,
+    create_unified_from_detected, scan_all_block_devices, BlockDmaConfig, BlockDriver,
+    DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -43,21 +43,21 @@ use morpheus_network::{
 const VIRTIO_QUEUE_SIZE: u16 = 32;
 
 // VirtIO virtqueue structures
-const OFF_VIRTIO_DESC:    usize = 0x0_0000;
-const OFF_VIRTIO_AVAIL:   usize = 0x0_0200;
-const OFF_VIRTIO_USED:    usize = 0x0_0400;
+const OFF_VIRTIO_DESC: usize = 0x0_0000;
+const OFF_VIRTIO_AVAIL: usize = 0x0_0200;
+const OFF_VIRTIO_USED: usize = 0x0_0400;
 const OFF_VIRTIO_HEADERS: usize = 0x0_1000; // page-aligned
-const OFF_VIRTIO_STATUS:  usize = 0x0_1200;
+const OFF_VIRTIO_STATUS: usize = 0x0_1200;
 
 // AHCI structures
-const OFF_AHCI_CMD_LIST:  usize = 0x0_2000; // 1 KB-aligned
-const OFF_AHCI_FIS:       usize = 0x0_2400; // 256-byte aligned
-const OFF_AHCI_CMD_TABLES:usize = 0x0_2800; // 128-byte aligned
-const OFF_AHCI_IDENTIFY:  usize = 0x0_4800;
+const OFF_AHCI_CMD_LIST: usize = 0x0_2000; // 1 KB-aligned
+const OFF_AHCI_FIS: usize = 0x0_2400; // 256-byte aligned
+const OFF_AHCI_CMD_TABLES: usize = 0x0_2800; // 128-byte aligned
+const OFF_AHCI_IDENTIFY: usize = 0x0_4800;
 
 // I/O transfer buffer — used by UnifiedBlockIo for synchronous read/write
-const OFF_IO_BUFFER:      usize = 0x1_0000;
-const IO_BUFFER_SIZE:     usize = 64 * 1024; // 64 KB = UnifiedBlockIo::MAX_TRANSFER_SIZE
+const OFF_IO_BUFFER: usize = 0x1_0000;
+const IO_BUFFER_SIZE: usize = 64 * 1024; // 64 KB = UnifiedBlockIo::MAX_TRANSFER_SIZE
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PCI BUS DUMP (diagnostic)
@@ -74,7 +74,9 @@ unsafe fn dump_pci_devices() {
             let addr = PciAddr::new(0, dev, func);
             let vendor_id = pci_cfg_read16(addr, 0x00);
             if vendor_id == 0xFFFF {
-                if func == 0 { break; }
+                if func == 0 {
+                    break;
+                }
                 continue;
             }
             let device_id = pci_cfg_read16(addr, 0x02);
@@ -117,7 +119,9 @@ unsafe fn dump_pci_devices() {
                             puts(" -> ");
                             morpheus_hwinit::serial::put_hex64(full);
                         }
-                        if is_io { puts(" (IO)"); }
+                        if is_io {
+                            puts(" (IO)");
+                        }
                         puts("\n");
                         bar_i += if is_64 { 2 } else { 1 };
                     } else {
@@ -128,7 +132,9 @@ unsafe fn dump_pci_devices() {
 
             if func == 0 {
                 let header = pci_cfg_read16(addr, 0x0E) & 0x80;
-                if header == 0 { break; }
+                if header == 0 {
+                    break;
+                }
             }
         }
     }
@@ -259,28 +265,28 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         tsc_freq,
 
         // VirtIO-blk
-        virtio_desc_cpu:     base_cpu.add(OFF_VIRTIO_DESC),
-        virtio_desc_phys:    base_bus + OFF_VIRTIO_DESC as u64,
-        virtio_avail_cpu:    base_cpu.add(OFF_VIRTIO_AVAIL),
-        virtio_avail_phys:   base_bus + OFF_VIRTIO_AVAIL as u64,
-        virtio_used_cpu:     base_cpu.add(OFF_VIRTIO_USED),
-        virtio_used_phys:    base_bus + OFF_VIRTIO_USED as u64,
-        virtio_headers_cpu:  base_cpu.add(OFF_VIRTIO_HEADERS),
+        virtio_desc_cpu: base_cpu.add(OFF_VIRTIO_DESC),
+        virtio_desc_phys: base_bus + OFF_VIRTIO_DESC as u64,
+        virtio_avail_cpu: base_cpu.add(OFF_VIRTIO_AVAIL),
+        virtio_avail_phys: base_bus + OFF_VIRTIO_AVAIL as u64,
+        virtio_used_cpu: base_cpu.add(OFF_VIRTIO_USED),
+        virtio_used_phys: base_bus + OFF_VIRTIO_USED as u64,
+        virtio_headers_cpu: base_cpu.add(OFF_VIRTIO_HEADERS),
         virtio_headers_phys: base_bus + OFF_VIRTIO_HEADERS as u64,
-        virtio_status_cpu:   base_cpu.add(OFF_VIRTIO_STATUS),
-        virtio_status_phys:  base_bus + OFF_VIRTIO_STATUS as u64,
-        virtio_notify_addr:  0, // Filled by driver from PCI caps
-        queue_size:          VIRTIO_QUEUE_SIZE,
+        virtio_status_cpu: base_cpu.add(OFF_VIRTIO_STATUS),
+        virtio_status_phys: base_bus + OFF_VIRTIO_STATUS as u64,
+        virtio_notify_addr: 0, // Filled by driver from PCI caps
+        queue_size: VIRTIO_QUEUE_SIZE,
 
         // AHCI
-        ahci_cmd_list_cpu:   base_cpu.add(OFF_AHCI_CMD_LIST),
-        ahci_cmd_list_phys:  base_bus + OFF_AHCI_CMD_LIST as u64,
-        ahci_fis_cpu:        base_cpu.add(OFF_AHCI_FIS),
-        ahci_fis_phys:       base_bus + OFF_AHCI_FIS as u64,
+        ahci_cmd_list_cpu: base_cpu.add(OFF_AHCI_CMD_LIST),
+        ahci_cmd_list_phys: base_bus + OFF_AHCI_CMD_LIST as u64,
+        ahci_fis_cpu: base_cpu.add(OFF_AHCI_FIS),
+        ahci_fis_phys: base_bus + OFF_AHCI_FIS as u64,
         ahci_cmd_tables_cpu: base_cpu.add(OFF_AHCI_CMD_TABLES),
-        ahci_cmd_tables_phys:base_bus + OFF_AHCI_CMD_TABLES as u64,
-        ahci_identify_cpu:   base_cpu.add(OFF_AHCI_IDENTIFY),
-        ahci_identify_phys:  base_bus + OFF_AHCI_IDENTIFY as u64,
+        ahci_cmd_tables_phys: base_bus + OFF_AHCI_CMD_TABLES as u64,
+        ahci_identify_cpu: base_cpu.add(OFF_AHCI_IDENTIFY),
+        ahci_identify_phys: base_bus + OFF_AHCI_IDENTIFY as u64,
     };
 
     // ── Scan all block devices on PCI bus ─────────────────────────────
@@ -362,7 +368,9 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         let needs_format = {
             let mut probe_dev = make_raw_block_device();
             match morpheus_helix::log::recovery::recover_superblock(
-                &mut probe_dev, 0, info.sector_size,
+                &mut probe_dev,
+                0,
+                info.sector_size,
             ) {
                 Ok(sb) => {
                     // Version mismatch: v2 changed the log payload format.
@@ -409,11 +417,17 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                 }
             }
 
-            let uuid = [0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00,
-                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+            let uuid = [
+                0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x01,
+            ];
             match morpheus_helix::format::format_helix(
-                &mut raw_dev, 0, info.total_sectors, info.sector_size,
-                "root", uuid,
+                &mut raw_dev,
+                0,
+                info.total_sectors,
+                info.sector_size,
+                "root",
+                uuid,
             ) {
                 Ok(_sb) => {
                     puts("[STORAGE] format_helix OK\n");
@@ -434,13 +448,17 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
 
             // Re-read superblock after format to verify
             match morpheus_helix::log::recovery::recover_superblock(
-                &mut raw_dev, 0, info.sector_size,
+                &mut raw_dev,
+                0,
+                info.sector_size,
             ) {
                 Ok(_sb) => puts("[STORAGE] superblock readback OK\n"),
                 Err(e) => {
                     puts("[STORAGE] superblock readback FAILED: ");
                     match e {
-                        morpheus_helix::error::HelixError::NoValidSuperblock => puts("NoValidSuperblock"),
+                        morpheus_helix::error::HelixError::NoValidSuperblock => {
+                            puts("NoValidSuperblock")
+                        }
                         morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
                         _ => puts("(other)"),
                     }
@@ -465,13 +483,19 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                     morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
                     morpheus_helix::error::HelixError::IoWriteFailed => puts("IoWriteFailed"),
                     morpheus_helix::error::HelixError::IoFlushFailed => puts("IoFlushFailed"),
-                    morpheus_helix::error::HelixError::NoValidSuperblock => puts("NoValidSuperblock"),
-                    morpheus_helix::error::HelixError::IncompatibleVersion => puts("IncompatibleVersion"),
+                    morpheus_helix::error::HelixError::NoValidSuperblock => {
+                        puts("NoValidSuperblock")
+                    }
+                    morpheus_helix::error::HelixError::IncompatibleVersion => {
+                        puts("IncompatibleVersion")
+                    }
                     morpheus_helix::error::HelixError::FormatTooSmall => puts("FormatTooSmall"),
                     morpheus_helix::error::HelixError::InvalidBlockSize => puts("InvalidBlockSize"),
                     morpheus_helix::error::HelixError::LogFull => puts("LogFull"),
                     morpheus_helix::error::HelixError::LogCrcMismatch => puts("LogCrcMismatch"),
-                    morpheus_helix::error::HelixError::LogSegmentCorrupt => puts("LogSegmentCorrupt"),
+                    morpheus_helix::error::HelixError::LogSegmentCorrupt => {
+                        puts("LogSegmentCorrupt")
+                    }
                     _ => puts("(other)"),
                 }
                 puts("\n");
@@ -544,11 +568,9 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
 
     // Check GPT header at LBA 1
     let gpt_offset = sector_size as usize;
-    if buf.len() >= gpt_offset + 8 {
-        if &buf[gpt_offset..gpt_offset + 8] == b"EFI PART" {
-            puts("[STORAGE] detected GPT header at LBA 1\n");
-            return true;
-        }
+    if buf.len() >= gpt_offset + 8 && &buf[gpt_offset..gpt_offset + 8] == b"EFI PART" {
+        puts("[STORAGE] detected GPT header at LBA 1\n");
+        return true;
     }
 
     false
@@ -574,11 +596,7 @@ pub fn create_init_directories() {
     };
 
     for dir in &dirs {
-        match morpheus_helix::vfs::vfs_mkdir(
-            &mut fs.mount_table,
-            dir,
-            ts,
-        ) {
+        match morpheus_helix::vfs::vfs_mkdir(&mut fs.mount_table, dir, ts) {
             Ok(_) => {}
             Err(morpheus_helix::error::HelixError::AlreadyExists) => {}
             Err(_) => {
@@ -647,7 +665,7 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
 
     use morpheus_network::GptBlockIo;
     use morpheus_network::GptLba;
-    bio.read_blocks(GptLba(lba), &mut dst_slice).is_ok()
+    bio.read_blocks(GptLba(lba), dst_slice).is_ok()
 }
 
 /// Write callback for `RawBlockDevice`.

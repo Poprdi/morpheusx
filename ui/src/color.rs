@@ -90,7 +90,7 @@ impl Color {
             r: ((self.r as u32 * sa + dst.r as u32 * inv_sa + 128) >> 8) as u8,
             g: ((self.g as u32 * sa + dst.g as u32 * inv_sa + 128) >> 8) as u8,
             b: ((self.b as u32 * sa + dst.b as u32 * inv_sa + 128) >> 8) as u8,
-            a: ((sa + (dst.a as u32 * inv_sa + 128) >> 8).min(255)) as u8,
+            a: (((sa + (dst.a as u32 * inv_sa + 128)) >> 8).min(255)) as u8,
         }
     }
 

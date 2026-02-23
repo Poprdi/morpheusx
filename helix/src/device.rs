@@ -69,7 +69,14 @@ impl RawBlockDevice {
         write_fn: unsafe fn(*mut u8, u64, *const u8, usize) -> bool,
         flush_fn: unsafe fn(*mut u8) -> bool,
     ) -> Self {
-        Self { ctx, sectors, sector_size, read_fn, write_fn, flush_fn }
+        Self {
+            ctx,
+            sectors,
+            sector_size,
+            read_fn,
+            write_fn,
+            flush_fn,
+        }
     }
 
     /// Total bytes on the device.
@@ -91,17 +98,29 @@ impl BlockIo for RawBlockDevice {
 
     fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<(), Self::Error> {
         let ok = unsafe { (self.read_fn)(self.ctx, start_lba.0, dst.as_mut_ptr(), dst.len()) };
-        if ok { Ok(()) } else { Err(RawIoError) }
+        if ok {
+            Ok(())
+        } else {
+            Err(RawIoError)
+        }
     }
 
     fn write_blocks(&mut self, start_lba: Lba, src: &[u8]) -> Result<(), Self::Error> {
         let ok = unsafe { (self.write_fn)(self.ctx, start_lba.0, src.as_ptr(), src.len()) };
-        if ok { Ok(()) } else { Err(RawIoError) }
+        if ok {
+            Ok(())
+        } else {
+            Err(RawIoError)
+        }
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
         let ok = unsafe { (self.flush_fn)(self.ctx) };
-        if ok { Ok(()) } else { Err(RawIoError) }
+        if ok {
+            Ok(())
+        } else {
+            Err(RawIoError)
+        }
     }
 }
 
@@ -132,8 +151,12 @@ impl MemBlockDevice {
         }
     }
 
-    pub fn base(&self) -> *mut u8 { self.base }
-    pub fn total_bytes(&self) -> u64 { self.sectors * self.sector_size as u64 }
+    pub fn base(&self) -> *mut u8 {
+        self.base
+    }
+    pub fn total_bytes(&self) -> u64 {
+        self.sectors * self.sector_size as u64
+    }
 
     /// Convert to a `RawBlockDevice` (function-pointer vtable).
     ///
@@ -152,7 +175,9 @@ impl MemBlockDevice {
             core::ptr::copy_nonoverlapping(src, dev.base.add(offset as usize), len);
             true
         }
-        unsafe fn mem_flush(_ctx: *mut u8) -> bool { true }
+        unsafe fn mem_flush(_ctx: *mut u8) -> bool {
+            true
+        }
 
         unsafe {
             RawBlockDevice::new(
@@ -193,11 +218,7 @@ impl BlockIo for MemBlockDevice {
     fn write_blocks(&mut self, start_lba: Lba, src: &[u8]) -> Result<(), Self::Error> {
         let offset = start_lba.0 * self.sector_size as u64;
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                src.as_ptr(),
-                self.base.add(offset as usize),
-                src.len(),
-            );
+            core::ptr::copy_nonoverlapping(src.as_ptr(), self.base.add(offset as usize), src.len());
         }
         Ok(())
     }

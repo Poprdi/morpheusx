@@ -51,6 +51,11 @@
 #![no_std]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![allow(static_mut_refs)]
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::fn_to_numeric_cast)]
+#![allow(clippy::result_unit_err)]
+#![allow(clippy::new_without_default)]
 // Allow never_loop - our poll-based state machines intentionally return
 // from loops early (single-threaded cooperative polling pattern)
 #![allow(clippy::never_loop)]
@@ -125,10 +130,9 @@ pub use gpt_disk_types::{BlockSize as GptBlockSize, Lba as GptLba};
 
 // Block probe
 pub use boot::block_probe::{
-    detect_block_device_type, probe_and_create_block_driver, probe_unified_block_device,
-    create_unified_from_detected, scan_all_block_devices,
-    BlockDeviceType, BlockDmaConfig, BlockProbeError, BlockProbeResult,
-    DetectedBlockDevice,
+    create_unified_from_detected, detect_block_device_type, probe_and_create_block_driver,
+    probe_unified_block_device, scan_all_block_devices, BlockDeviceType, BlockDmaConfig,
+    BlockProbeError, BlockProbeResult, DetectedBlockDevice,
 };
 
 // Client

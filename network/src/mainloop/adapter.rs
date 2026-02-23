@@ -6,8 +6,8 @@
 use smoltcp::phy::{Device, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
 
-use crate::driver::traits::NetworkDriver;
 use super::serial;
+use crate::driver::traits::NetworkDriver;
 
 /// Adapter bridging NetworkDriver to smoltcp Device trait.
 pub struct SmoltcpAdapter<'a, D: NetworkDriver> {
@@ -104,19 +104,25 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
         const MAX_FRAME: usize = 2048;
         let mut buffer = [0u8; MAX_FRAME];
         let actual_len = len.min(MAX_FRAME);
-        
+
         let result = f(&mut buffer[..actual_len]);
-        
+
         // Fire-and-forget transmit
         let _ = self.driver.transmit(&buffer[..actual_len]);
-        
+
         result
     }
 }
 
 impl<'a, D: NetworkDriver> Device for SmoltcpAdapter<'a, D> {
-    type RxToken<'b> = RxToken where Self: 'b;
-    type TxToken<'b> = TxToken<'b, D> where Self: 'b;
+    type RxToken<'b>
+        = RxToken
+    where
+        Self: 'b;
+    type TxToken<'b>
+        = TxToken<'b, D>
+    where
+        Self: 'b;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.poll_receive();
@@ -129,8 +135,13 @@ impl<'a, D: NetworkDriver> Device for SmoltcpAdapter<'a, D> {
             self.rx_len = 0;
 
             Some((
-                RxToken { buffer: rx_buf, len: rx_len },
-                TxToken { driver: self.driver },
+                RxToken {
+                    buffer: rx_buf,
+                    len: rx_len,
+                },
+                TxToken {
+                    driver: self.driver,
+                },
             ))
         } else {
             None
@@ -139,7 +150,9 @@ impl<'a, D: NetworkDriver> Device for SmoltcpAdapter<'a, D> {
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         if self.driver.can_transmit() {
-            Some(TxToken { driver: self.driver })
+            Some(TxToken {
+                driver: self.driver,
+            })
         } else {
             None
         }

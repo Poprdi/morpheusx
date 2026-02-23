@@ -7,7 +7,7 @@ pub const FONT_HEIGHT: u32 = 16;
 
 pub fn get_glyph(c: char) -> Option<&'static [u8; 16]> {
     let idx = c as usize;
-    if idx >= 0x20 && idx <= 0x7E {
+    if (0x20..=0x7E).contains(&idx) {
         Some(&FONT_DATA[idx - 0x20])
     } else {
         None

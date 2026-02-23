@@ -1,4 +1,3 @@
-use alloc::string::String;
 use crate::buffer::OffscreenBuffer;
 use crate::canvas::Canvas;
 use crate::color::PixelFormat;
@@ -7,6 +6,7 @@ use crate::draw::shapes::{hline, rect_fill};
 use crate::font;
 use crate::rect::Rect;
 use crate::theme::Theme;
+use alloc::string::String;
 
 pub const TITLE_BAR_HEIGHT: u32 = 20;
 pub const BORDER_WIDTH: u32 = 1;
@@ -88,9 +88,21 @@ impl Window {
             return;
         }
 
-        let border_color = if self.focused { theme.accent } else { theme.border };
-        let title_bg = if self.focused { theme.title_bg } else { theme.bg };
-        let title_fg = if self.focused { theme.title_fg } else { theme.fg };
+        let border_color = if self.focused {
+            theme.accent
+        } else {
+            theme.border
+        };
+        let title_bg = if self.focused {
+            theme.title_bg
+        } else {
+            theme.bg
+        };
+        let title_fg = if self.focused {
+            theme.title_fg
+        } else {
+            theme.fg
+        };
 
         let ox = outer.x;
         let oy = outer.y;
@@ -102,33 +114,64 @@ impl Window {
 
         // Title text (left-aligned with padding)
         let text_y = oy + (tb_h.saturating_sub(font::FONT_HEIGHT)) / 2;
-        draw_string(canvas, ox + 4, text_y, &self.title, title_fg, title_bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            ox + 4,
+            text_y,
+            &self.title,
+            title_fg,
+            title_bg,
+            &font::FONT_DATA,
+        );
 
         // Close button [X] right-aligned
         let close_x = ox + ow.saturating_sub(4 * font::FONT_WIDTH + 2);
-        draw_string(canvas, close_x, text_y, "[X]", title_fg, title_bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            close_x,
+            text_y,
+            "[X]",
+            title_fg,
+            title_bg,
+            &font::FONT_DATA,
+        );
 
         // Bottom border of title bar
         hline(canvas, ox, oy + tb_h.saturating_sub(1), ow, border_color);
 
         // Left border
         let content_bottom = oy + tb_h + self.height + BORDER_WIDTH;
-        canvas.fill_rect(ox, oy + tb_h, BORDER_WIDTH, self.height + BORDER_WIDTH, border_color);
+        canvas.fill_rect(
+            ox,
+            oy + tb_h,
+            BORDER_WIDTH,
+            self.height + BORDER_WIDTH,
+            border_color,
+        );
 
         // Right border
         let right_x = ox + ow.saturating_sub(BORDER_WIDTH);
-        canvas.fill_rect(right_x, oy + tb_h, BORDER_WIDTH, self.height + BORDER_WIDTH, border_color);
+        canvas.fill_rect(
+            right_x,
+            oy + tb_h,
+            BORDER_WIDTH,
+            self.height + BORDER_WIDTH,
+            border_color,
+        );
 
         // Bottom border
-        hline(canvas, ox, content_bottom.saturating_sub(1), ow, border_color);
+        hline(
+            canvas,
+            ox,
+            content_bottom.saturating_sub(1),
+            ow,
+            border_color,
+        );
     }
 
     pub fn content_origin(&self) -> (u32, u32) {
         if self.decorations {
-            (
-                (self.x.max(0) as u32),
-                (self.y.max(0) as u32),
-            )
+            ((self.x.max(0) as u32), (self.y.max(0) as u32))
         } else {
             (self.x.max(0) as u32, self.y.max(0) as u32)
         }

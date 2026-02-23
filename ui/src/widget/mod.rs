@@ -1,22 +1,22 @@
-pub mod label;
 pub mod button;
-pub mod text_input;
-pub mod text_area;
+pub mod checkbox;
+pub mod divider;
+pub mod label;
 pub mod list;
 pub mod panel;
 pub mod progress;
-pub mod divider;
-pub mod checkbox;
+pub mod text_area;
+pub mod text_input;
 
-pub use label::Label;
 pub use button::Button;
-pub use text_input::TextInput;
-pub use text_area::TextArea;
+pub use checkbox::Checkbox;
+pub use divider::Divider;
+pub use label::Label;
 pub use list::List;
 pub use panel::Panel;
 pub use progress::ProgressBar;
-pub use divider::Divider;
-pub use checkbox::Checkbox;
+pub use text_area::TextArea;
+pub use text_input::TextInput;
 
 use crate::canvas::Canvas;
 use crate::event::{Event, EventResult};
