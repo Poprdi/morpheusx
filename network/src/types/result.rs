@@ -5,8 +5,7 @@
 
 /// Result from ASM function calls.
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AsmResult {
     /// Success.
     #[default]
@@ -56,4 +55,3 @@ impl From<u32> for AsmResult {
         Self::from_u32(val)
     }
 }
-

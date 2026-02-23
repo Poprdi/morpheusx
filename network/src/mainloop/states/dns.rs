@@ -149,6 +149,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
             Ok(addrs) => {
                 // Find first IPv4 address
                 for addr in addrs {
+                    #[allow(irrefutable_let_patterns)]
                     if let IpAddress::Ipv4(ip) = addr {
                         serial::print("[DNS] Resolved: ");
                         serial::print_ipv4(&ip.0);

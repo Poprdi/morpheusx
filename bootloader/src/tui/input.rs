@@ -334,6 +334,7 @@ impl Keyboard {
     ///   6. Set scan code set 1 (explicit — don't trust BIOS/UEFI default)
     ///   7. Enable scanning
     ///   8. Flush again (init may have generated ACK/response bytes)
+    ///
     /// Initialize the PS/2 keyboard controller with the default US layout.
     /// Call `set_layout(KeyLayout::De)` at any point to switch to German.
     pub fn new() -> Self {
@@ -586,9 +587,9 @@ impl Keyboard {
             let ch = self.translate_ascii(make);
             if ch != 0 {
                 // Ctrl+letter produces control characters (0x01-0x1A)
-                let unicode = if self.ctrl && (b'a'..=b'z').contains(&ch) {
+                let unicode = if self.ctrl && ch.is_ascii_lowercase() {
                     (ch - b'a' + 1) as u16
-                } else if self.ctrl && (b'A'..=b'Z').contains(&ch) {
+                } else if self.ctrl && ch.is_ascii_uppercase() {
                     (ch - b'A' + 1) as u16
                 } else {
                     ch as u16

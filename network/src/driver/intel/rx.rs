@@ -124,9 +124,7 @@ impl RxRing {
         // CRITICAL: SFENCE after writing all descriptors
         // This ensures descriptors are visible to the NIC before we enable RX
         // Real hardware WILL fail without this; QEMU ignores it
-        unsafe {
-            sfence();
-        }
+        sfence();
         serial_println("  [RX-INIT] Descriptors initialized + sfence");
     }
 

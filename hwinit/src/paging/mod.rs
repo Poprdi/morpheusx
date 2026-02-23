@@ -294,8 +294,7 @@ pub unsafe fn reserve_page_table_pages() -> usize {
     let registry = global_registry_mut();
     let mut reserved = 0usize;
 
-    for i in 0..pt_count {
-        let phys = pt_pages[i];
+    for &phys in pt_pages.iter().take(pt_count) {
         match registry.allocate_pages(
             AllocateType::Address(phys),
             MemoryType::AllocatedPageTable,

@@ -303,6 +303,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
 
     // Try each device: skip boot disks (GPT/MBR), use the first blank or HelixFS one.
     let mut found_data_disk = false;
+    #[allow(clippy::needless_range_loop)]
     for i in 0..dev_count {
         let detected = match &devices[i] {
             Some(d) => d,
@@ -408,8 +409,8 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                     puts(if read_ok { "OK" } else { "FAIL" });
                     if read_ok {
                         puts(" first8=");
-                        for i in 0..8 {
-                            morpheus_hwinit::serial::put_hex8(rbuf[i]);
+                        for byte in rbuf.iter().take(8) {
+                            morpheus_hwinit::serial::put_hex8(*byte);
                             puts(" ");
                         }
                     }
@@ -661,7 +662,7 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
         Err(_) => return false,
     };
 
-    let mut dst_slice = core::slice::from_raw_parts_mut(dst, len);
+    let dst_slice = core::slice::from_raw_parts_mut(dst, len);
 
     use morpheus_network::GptBlockIo;
     use morpheus_network::GptLba;
