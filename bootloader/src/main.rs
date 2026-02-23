@@ -16,6 +16,7 @@ use core::panic::PanicInfo;
 
 mod apps;
 mod baremetal;
+mod bsod;
 mod storage;
 mod tui;
 mod uefi_allocator;
@@ -206,6 +207,18 @@ fn panic(info: &PanicInfo) -> ! {
         }
     }
     morpheus_hwinit::serial::puts(" — PANIC (spinning)\n");
+
+    // Show BSoD panic screen on the framebuffer.
+    if let Some(loc) = info.location() {
+        unsafe {
+            bsod::show_panic_screen(loc.file(), loc.line(), loc.column());
+        }
+    } else {
+        unsafe {
+            bsod::show_panic_screen("<unknown>", 0, 0);
+        }
+    }
+
     loop {
         core::hint::spin_loop();
     }

@@ -79,7 +79,7 @@ pub type Lsn = u64;
 pub type BlockAddr = u64;
 
 /// Sentinel for "no block" / null pointer.
-pub const BLOCK_NULL: BlockAddr = 0;
+pub const BLOCK_NULL: BlockAddr = u64::MAX;
 
 /// Root directory — always inode / index entry #1.
 pub const ROOT_DIR_KEY: u64 = 1;

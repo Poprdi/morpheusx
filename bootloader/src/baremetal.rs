@@ -108,6 +108,18 @@ pub fn get_framebuffer_info() -> Option<FramebufferInfo> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// BSoD CRASH HOOK — called by exception handlers in hwinit
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Callback invoked by hwinit exception handlers to display the crash screen.
+///
+/// # Safety
+/// Called from exception context — no heap, no locks, framebuffer only.
+unsafe fn bsod_crash_hook(info: &morpheus_hwinit::CrashInfo) {
+    crate::bsod::show_crash_screen(info);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // THE ENTRY POINT — NEVER RETURNS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -241,6 +253,13 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {
         Ok(p) => {
             puts("[HWINIT] platform ready\n");
+
+            // Register BSoD crash hook now that framebuffer info is available
+            unsafe {
+                morpheus_hwinit::set_crash_hook(bsod_crash_hook);
+            }
+            puts("[HWINIT] crash hook registered\n");
+
             p
         }
         Err(e) => {

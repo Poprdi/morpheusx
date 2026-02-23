@@ -464,6 +464,15 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
                 static mut kernel_syscall_rsp: u64;
             }
             kernel_syscall_rsp = next.kernel_stack_top;
+            puts("[SCHED] ksp=");
+            crate::serial::put_hex64(next.kernel_stack_top);
+            puts(" pid=");
+            put_hex32(next_pid as u32);
+            puts("\n");
+        } else {
+            puts("[SCHED] ksp=0 (skipped) pid=");
+            put_hex32(next_pid as u32);
+            puts("\n");
         }
 
         // Tell the ISR ASM which CR3 to load before iretq.
@@ -499,7 +508,24 @@ pub unsafe fn spawn_user_process(name: &str, elf_data: &[u8]) -> Result<u32, &'s
         return Err("scheduler not initialized");
     }
 
-    let (image, page_table) = load_elf64(elf_data).map_err(|_| "ELF load failed")?;
+    let (image, page_table) = load_elf64(elf_data).map_err(|e| {
+        use crate::elf::ElfError;
+        use crate::serial::puts;
+        puts("[SCHED] ELF load error: ");
+        match e {
+            ElfError::TooSmall       => puts("too small\n"),
+            ElfError::BadMagic       => puts("bad magic\n"),
+            ElfError::Not64Bit       => puts("not 64-bit\n"),
+            ElfError::NotLittleEndian=> puts("not little-endian\n"),
+            ElfError::NotX86_64      => puts("not x86-64\n"),
+            ElfError::NotExecutable  => puts("not executable (e_type)\n"),
+            ElfError::BadPhdr        => puts("bad program header\n"),
+            ElfError::NoLoadSegments => puts("no PT_LOAD segments\n"),
+            ElfError::MapFailed      => puts("page mapping failed\n"),
+            ElfError::AllocFailed    => puts("physical page alloc failed\n"),
+        }
+        "ELF load failed"
+    })?;
 
     let slot_idx = (1..MAX_PROCESSES)
         .find(|&i| {

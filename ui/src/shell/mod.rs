@@ -36,6 +36,9 @@ pub struct Shell {
     scroll_top: usize,
     cwd: String,
     prompt: String,
+    /// Optional hook called for every line of output (e.g. serial echo).
+    /// The UI crate has no deps, so the bootloader sets this to a serial puts fn.
+    echo_hook: Option<fn(&str)>,
 }
 
 impl Shell {
@@ -46,6 +49,7 @@ impl Shell {
             scroll_top: 0,
             cwd: String::from("/"),
             prompt: String::from("morpheus:/> "),
+            echo_hook: None,
         };
         s.output.push(String::from("MorpheusX Shell v0.1"));
         s.output.push(String::from("Type 'help' for commands."));
@@ -56,9 +60,19 @@ impl Shell {
 
     pub fn push_output(&mut self, text: &str) {
         for line in text.split('\n') {
+            if let Some(echo) = self.echo_hook {
+                echo(line);
+                echo("\n");
+            }
             self.output.push(String::from(line));
         }
         self.scroll_to_bottom_internal();
+    }
+
+    /// Register a hook that receives every line of shell output.
+    /// Intended for serial console mirroring.
+    pub fn set_echo_hook(&mut self, hook: fn(&str)) {
+        self.echo_hook = Some(hook);
     }
 
     /// Current working directory.
@@ -149,7 +163,12 @@ impl Shell {
             match key {
                 Key::Enter => {
                     let text = self.input.take_text();
-                    self.output.push(format!("{}{}", self.prompt, text));
+                    let cmd_line = format!("{}{}", self.prompt, text);
+                    if let Some(echo) = self.echo_hook {
+                        echo(&cmd_line);
+                        echo("\n");
+                    }
+                    self.output.push(cmd_line);
 
                     let result = commands::execute(&text, window_ids, &self.cwd);
                     let action = match result {

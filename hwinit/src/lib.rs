@@ -104,7 +104,10 @@ pub mod syscall;
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub use cpu::gdt::{init_gdt, KERNEL_CS, KERNEL_DS, USER_CS, USER_DS};
-pub use cpu::idt::{disable_interrupts, enable_interrupts, init_idt, interrupts_enabled};
+pub use cpu::idt::{
+    disable_interrupts, enable_interrupts, init_idt, interrupts_enabled, set_crash_hook,
+    CrashHookFn, CrashInfo,
+};
 pub use cpu::pic::{disable_irq, enable_irq, init_pic, send_eoi, PIC1_VECTOR_OFFSET};
 pub use cpu::tsc::calibrate_tsc_pit;
 pub use cpu::{barriers, cache, mmio, pio, tsc};
