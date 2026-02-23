@@ -219,6 +219,7 @@ version = "1.0.1"
 dependencies = [
  "linked_list_allocator",
  "morpheus-helix",
+ "morpheus-persistent",
  "spin",
 ]
 
