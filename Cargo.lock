@@ -193,6 +193,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "morpheus-cli"
+version = "1.0.1"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+ "morpheus-helix",
+]
+
+[[package]]
 name = "morpheus-core"
 version = "1.0.1"
 dependencies = [
@@ -341,6 +350,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "syscall-e2e"
+version = "0.1.0"
+dependencies = [
+ "libmorpheus",
 ]
 
 [[package]]

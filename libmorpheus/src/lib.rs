@@ -26,6 +26,7 @@
 
 pub mod entry;
 pub mod fs;
+pub mod hw;
 pub mod io;
 pub mod mem;
 pub mod net;
@@ -33,6 +34,7 @@ pub mod process;
 pub mod raw;
 pub mod sys;
 pub mod time;
+pub mod persist;
 
 /// Error values returned by the kernel (high bits of u64).
 pub const ENOSYS: u64 = u64::MAX - 37;

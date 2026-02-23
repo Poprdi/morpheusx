@@ -78,6 +78,26 @@ pub struct ProcessInfo {
     pub priority: u8,
 }
 
+impl ProcessInfo {
+    /// Create a zeroed ProcessInfo (used to pre-fill arrays).
+    pub const fn zeroed() -> Self {
+        Self {
+            pid: 0,
+            name: [0u8; 32],
+            state: ProcessState::Ready,
+            cpu_ticks: 0,
+            pages_alloc: 0,
+            priority: 0,
+        }
+    }
+
+    /// Get the process name as a byte slice (up to first NUL).
+    pub fn name_bytes(&self) -> &[u8] {
+        let end = self.name.iter().position(|&b| b == 0).unwrap_or(32);
+        &self.name[..end]
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SCHEDULER HANDLE (zero-size, all methods are statics)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -211,6 +231,31 @@ impl Scheduler {
             }
         }
         Ok(())
+    }
+
+    /// Set the scheduling priority of a process.
+    pub unsafe fn set_priority(&self, pid: u32, priority: u8) -> Result<(), &'static str> {
+        let slot = PROCESS_TABLE
+            .get_mut(pid as usize)
+            .and_then(|s| s.as_mut())
+            .ok_or("set_priority: PID not found")?;
+        if slot.is_free() {
+            return Err("set_priority: process terminated");
+        }
+        slot.priority = priority;
+        Ok(())
+    }
+
+    /// Get the scheduling priority of a process.
+    pub unsafe fn get_priority(&self, pid: u32) -> Result<u8, &'static str> {
+        let slot = PROCESS_TABLE
+            .get(pid as usize)
+            .and_then(|s| s.as_ref())
+            .ok_or("get_priority: PID not found")?;
+        if slot.is_free() {
+            return Err("get_priority: process terminated");
+        }
+        Ok(slot.priority)
     }
 }
 

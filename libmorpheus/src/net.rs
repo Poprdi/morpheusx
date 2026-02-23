@@ -1,46 +1,44 @@
-//! Networking — socket API stubs.
+//! Networking — raw NIC (exokernel) API.
 //!
-//! These syscalls are **reserved** in the ABI (numbers 32-41) but currently
-//! return `ENOSYS`.  The kernel's network crate needs restructuring from
-//! its current HTTP-download-client design into a proper socket layer
-//! before these can be implemented.
+//! The MorpheusX exokernel exposes raw Ethernet frame TX/RX instead of
+//! BSD sockets. Userland can build TCP/IP stacks on top of these primitives,
+//! or use PORT_IN/PORT_OUT + PCI config + DMA to drive NICs directly.
 //!
-//! The ABI numbers are stable — apps can target them today and they will
-//! work once the kernel socket layer is built.
+//! See also: `hw::port_in`, `hw::pci_cfg_read`, `hw::dma_alloc`.
 
 use crate::raw::*;
 
-/// Create a socket (AF_INET/AF_INET6, SOCK_STREAM/SOCK_DGRAM).
-///
-/// **Not yet implemented** — returns `ENOSYS`.
-pub fn socket(_domain: u32, _sock_type: u32, _protocol: u32) -> Result<usize, u64> {
-    let ret = unsafe {
-        syscall3(
-            SYS_SOCKET,
-            _domain as u64,
-            _sock_type as u64,
-            _protocol as u64,
-        )
+/// NIC information.
+#[repr(C)]
+pub struct NicInfo {
+    /// 6-byte MAC address, padded to 8.
+    pub mac: [u8; 8],
+    /// 1 if link up, 0 if down.
+    pub link_up: u32,
+    /// 1 if NIC is registered with kernel, 0 if not.
+    pub present: u32,
+}
+
+/// Query NIC information (MAC address, link status, presence).
+pub fn nic_info() -> Result<NicInfo, u64> {
+    let mut info = NicInfo {
+        mac: [0u8; 8],
+        link_up: 0,
+        present: 0,
     };
+    let ret = unsafe { syscall1(SYS_NIC_INFO, &mut info as *mut NicInfo as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
-        Ok(ret as usize)
+        Ok(info)
     }
 }
 
-/// Connect a socket to a remote address.
+/// Transmit a raw Ethernet frame.
 ///
-/// **Not yet implemented** — returns `ENOSYS`.
-pub fn connect(_fd: usize, _addr_ptr: *const u8, _addr_len: usize) -> Result<(), u64> {
-    let ret = unsafe {
-        syscall3(
-            SYS_CONNECT,
-            _fd as u64,
-            _addr_ptr as u64,
-            _addr_len as u64,
-        )
-    };
+/// `frame` must include the full Ethernet header (14 bytes minimum).
+pub fn nic_tx(frame: &[u8]) -> Result<(), u64> {
+    let ret = unsafe { syscall2(SYS_NIC_TX, frame.as_ptr() as u64, frame.len() as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
@@ -48,11 +46,11 @@ pub fn connect(_fd: usize, _addr_ptr: *const u8, _addr_len: usize) -> Result<(),
     }
 }
 
-/// Send data on a connected socket.
+/// Receive a raw Ethernet frame.
 ///
-/// **Not yet implemented** — returns `ENOSYS`.
-pub fn send(_fd: usize, _buf: &[u8]) -> Result<usize, u64> {
-    let ret = unsafe { syscall3(SYS_SEND, _fd as u64, _buf.as_ptr() as u64, _buf.len() as u64) };
+/// Returns the number of bytes received (0 if no frame available).
+pub fn nic_rx(buf: &mut [u8]) -> Result<usize, u64> {
+    let ret = unsafe { syscall2(SYS_NIC_RX, buf.as_mut_ptr() as u64, buf.len() as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
@@ -60,37 +58,32 @@ pub fn send(_fd: usize, _buf: &[u8]) -> Result<usize, u64> {
     }
 }
 
-/// Receive data from a connected socket.
+/// Check if the NIC link is up.
 ///
-/// **Not yet implemented** — returns `ENOSYS`.
-pub fn recv(_fd: usize, _buf: &mut [u8]) -> Result<usize, u64> {
-    let ret = unsafe {
-        syscall3(
-            SYS_RECV,
-            _fd as u64,
-            _buf.as_mut_ptr() as u64,
-            _buf.len() as u64,
-        )
-    };
+/// Returns `true` if link is up, `false` if down.
+pub fn nic_link_up() -> Result<bool, u64> {
+    let ret = unsafe { syscall0(SYS_NIC_LINK) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
-        Ok(ret as usize)
+        Ok(ret != 0)
     }
 }
 
-/// Resolve a hostname to an IPv4 address.
-///
-/// **Not yet implemented** — returns `ENOSYS`.
-pub fn dns_resolve(_hostname: &str, _result_buf: &mut [u8; 4]) -> Result<(), u64> {
-    let ret = unsafe {
-        syscall3(
-            SYS_DNS_RESOLVE,
-            _hostname.as_ptr() as u64,
-            _hostname.len() as u64,
-            _result_buf.as_mut_ptr() as u64,
-        )
-    };
+/// Get the NIC's 6-byte MAC address.
+pub fn nic_mac() -> Result<[u8; 6], u64> {
+    let mut mac = [0u8; 6];
+    let ret = unsafe { syscall1(SYS_NIC_MAC, mac.as_mut_ptr() as u64) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(mac)
+    }
+}
+
+/// Refill the NIC's RX descriptor ring.
+pub fn nic_refill() -> Result<(), u64> {
+    let ret = unsafe { syscall0(SYS_NIC_REFILL) };
     if crate::is_error(ret) {
         Err(ret)
     } else {

@@ -1,21 +1,27 @@
 # MorpheusX Syscall ABI Reference
 
-> **Version**: 1.1 — Full audit  
+> **Version**: 2.0 — Full exokernel ABI  
 > **Date**: 2026-02-23  
-> **Status**: Stable — numbers 0-45 are allocated; breaking changes require a version bump.
+> **Status**: Stable — numbers 0-72 are allocated; 38-41 reserved. Breaking changes require a version bump.
 
 ---
 
 ## Audit Summary
 
-| Category       | Working | Buggy | Stubs | Total |
-|----------------|---------|-------|-------|-------|
-| Core (0-9)     | 10      | 0     | 0     | 10    |
-| HelixFS (10-21)| 9       | 0     | 3     | 12    |
-| System (22-31) | 8       | 2     | 0     | 10    |
-| Network (32-41)| 0       | 0     | 10    | 10    |
-| Device (42-45) | 0       | 0     | 4     | 4     |
-| **TOTAL**      | **27**  | **2** | **17**| **46**|
+| Category               | Working | Buggy | Stubs | Total |
+|------------------------|---------|-------|-------|-------|
+| Core (0-9)             | 10      | 0     | 0     | 10    |
+| HelixFS (10-21)        | 12      | 0     | 0     | 12    |
+| System (22-31)         | 8       | 2     | 0     | 10    |
+| Raw NIC (32-37)        | 6       | 0     | 0     | 6     |
+| Reserved (38-41)       | 0       | 0     | 4     | 4     |
+| Device (42-45)         | 4       | 0     | 0     | 4     |
+| Persistence (46-51)    | 6       | 0     | 0     | 6     |
+| Hardware I/O (52-62)   | 11      | 0     | 0     | 11    |
+| Display (63-64)        | 2       | 0     | 0     | 2     |
+| Process Mgmt (65-68)   | 4       | 0     | 0     | 4     |
+| CPU / Diag (69-72)     | 4       | 0     | 0     | 4     |
+| **TOTAL**              | **67**  | **2** | **4** | **73**|
 
 Legend: **Working** = handler implemented and functional. **Buggy** = handler
 exists but contains known correctness or safety issues. **Stubs** = returns
@@ -57,23 +63,24 @@ MorpheusX uses the `syscall` / `sysret` mechanism on x86-64.
 
 ### Error Codes
 
-| Name      | Value              | Errno |
-|-----------|--------------------|-------|
-| `EINVAL`  | `u64::MAX`         | 255   |
-| `ENOENT`  | `u64::MAX - 2`     | 2     |
-| `ESRCH`   | `u64::MAX - 3`     | 3     |
-| `EIO`     | `u64::MAX - 5`     | 5     |
-| `EBADF`   | `u64::MAX - 9`     | 9     |
-| `ENOMEM`  | `u64::MAX - 12`    | 12    |
-| `EACCES`  | `u64::MAX - 13`    | 13    |
-| `EFAULT`  | `u64::MAX - 14`    | 14    |
-| `EEXIST`  | `u64::MAX - 17`    | 17    |
-| `EISDIR`  | `u64::MAX - 21`    | 21    |
-| `EMFILE`  | `u64::MAX - 24`    | 24    |
-| `ENOSPC`  | `u64::MAX - 28`    | 28    |
-| `EROFS`   | `u64::MAX - 30`    | 30    |
-| `ENOSYS`  | `u64::MAX - 37`    | 37    |
-| `ENOTEMPTY`| `u64::MAX - 39`   | 39    |
+| Name       | Value              | Errno |
+|------------|--------------------|-------|
+| `EINVAL`   | `u64::MAX`         | 255   |
+| `ENOENT`   | `u64::MAX - 2`     | 2     |
+| `ESRCH`    | `u64::MAX - 3`     | 3     |
+| `EIO`      | `u64::MAX - 5`     | 5     |
+| `EBADF`    | `u64::MAX - 9`     | 9     |
+| `ENOMEM`   | `u64::MAX - 12`    | 12    |
+| `EACCES`   | `u64::MAX - 13`    | 13    |
+| `EFAULT`   | `u64::MAX - 14`    | 14    |
+| `EEXIST`   | `u64::MAX - 17`    | 17    |
+| `ENODEV`   | `u64::MAX - 19`    | 19    |
+| `EISDIR`   | `u64::MAX - 21`    | 21    |
+| `EMFILE`   | `u64::MAX - 24`    | 24    |
+| `ENOSPC`   | `u64::MAX - 28`    | 28    |
+| `EROFS`    | `u64::MAX - 30`    | 30    |
+| `ENOSYS`   | `u64::MAX - 37`    | 37    |
+| `ENOTEMPTY`| `u64::MAX - 39`    | 39    |
 
 Use `libmorpheus::is_error(ret)` to check: returns `true` when `ret > 0xFFFF_FFFF_FFFF_FF00`.
 
@@ -165,16 +172,12 @@ If TSC is not calibrated, returns 0 immediately (no-op).
 | 15 | `MKDIR`    | `(path_ptr, path_len)`            | 0           | ✅     |
 | 16 | `UNLINK`   | `(path_ptr, path_len)`            | 0           | ✅     |
 | 17 | `RENAME`   | `(old_ptr, old_len, new_ptr, new_len)` | 0      | ✅     |
-| 18 | `TRUNCATE` | `(fd, new_size)`                  | -ENOSYS     | 🚫 stub (no `vfs_truncate`) |
+| 18 | `TRUNCATE` | `(path_ptr, path_len, new_size)`  | 0           | ✅     |
 | 19 | `SYNC`     | `()`                              | 0           | ✅     |
-| 20 | `SNAPSHOT` | `(name_ptr, name_len)`            | -ENOSYS     | 🚫 stub (no `vfs_snapshot`) |
-| 21 | `VERSIONS` | `(path_ptr, path_len, buf, max)`  | -ENOSYS     | 🚫 stub (no `vfs_versions`) |
+| 20 | `SNAPSHOT` | `(name_ptr, name_len)`            | checkpoint  | ✅     |
+| 21 | `VERSIONS` | `(path_ptr, path_len, buf, max)`  | count       | ✅     |
 
 All VFS-backed syscalls delegate to `morpheus_helix::vfs::vfs_*()` functions.
-The `helix` crate currently implements: `vfs_open`, `vfs_read`, `vfs_write`,
-`vfs_seek`, `vfs_close`, `vfs_stat`, `vfs_readdir`, `vfs_mkdir`,
-`vfs_unlink`, `vfs_rename`, `vfs_sync` (11 total). It does **NOT** implement
-`vfs_truncate`, `vfs_snapshot`, or `vfs_versions`.
 
 Path arguments go through `user_path()` which validates: `ptr != 0`,
 `len ≤ 255`, valid UTF-8. However, `user_path()` does **NOT** call
@@ -202,7 +205,7 @@ fd 0/1/2 are reserved for stdin/stdout/stderr.
 
 #### `STAT` (13)
 Fills a `FileStat` struct at `stat_buf`. **BUG**: `stat_buf` is only
-checked for `!= 0`, not validated as a user-space address.
+checked for `!= 0`, not validated with `validate_user_buf()`.
 ```rust
 #[repr(C)]
 pub struct FileStat {
@@ -210,14 +213,26 @@ pub struct FileStat {
     pub created: u64,
     pub modified: u64,
     pub is_dir: bool,
-    // ... (see morpheus_helix::types::FileStat for exact layout)
 }
 ```
 
 #### `READDIR` (14)
 Returns the number of directory entries. Copies `DirEntry` structs to
-`buf_ptr`. **BUG**: `buf_ptr` is only checked for `!= 0`, not validated —
-caller can write DirEntry array to an arbitrary kernel address.
+`buf_ptr`. **BUG**: `buf_ptr` is only checked for `!= 0`, not validated.
+
+#### `TRUNCATE` (18)
+Truncates a file at `path` to `new_size` bytes. Implemented as
+open-with-`O_TRUNC` + close. The VFS truncates the file on open; the
+`new_size` parameter is accepted for ABI forward-compatibility.
+
+#### `SNAPSHOT` (20)
+Syncs all VFS state to disk and returns a monotonic checkpoint ID
+(TSC value). The `name` argument is reserved for future named snapshots.
+
+#### `VERSIONS` (21)
+Returns 0 entries (count = 0). The VFS doesn't yet expose `list_versions()`.
+HelixFS supports CoW versioning at the block layer, but the VFS bridge
+is not built. Graceful no-op — no error returned.
 
 ---
 
@@ -242,276 +257,349 @@ Uses 128-bit arithmetic: `nanos = (tsc as u128) * 1_000_000_000 / (freq as u128)
 Returns 0 if the TSC has not been calibrated.
 
 #### `SYSINFO` (23)
-Fills a `SysInfo` struct at `buf_ptr`. **Properly validates** the pointer
-with `validate_user_buf()`.
 ```rust
 #[repr(C)]
 pub struct SysInfo {
-    pub total_mem: u64,      // Total physical memory (bytes)
-    pub free_mem: u64,       // Free physical memory (bytes)
-    pub num_procs: u32,      // Number of live processes
+    pub total_mem: u64,
+    pub free_mem: u64,
+    pub num_procs: u32,
     pub _pad0: u32,
-    pub uptime_ticks: u64,   // TSC ticks since boot
-    pub tsc_freq: u64,       // TSC frequency (Hz)
-    pub heap_total: u64,     // Kernel heap total (bytes)
-    pub heap_used: u64,      // Kernel heap used (bytes)
-    pub heap_free: u64,      // Kernel heap free (bytes)
+    pub uptime_ticks: u64,
+    pub tsc_freq: u64,
+    pub heap_total: u64,
+    pub heap_used: u64,
+    pub heap_free: u64,
 }
 ```
 
-#### `GETPPID` (24)
-Returns `parent_pid` from the current process struct. Returns 0 for
-the kernel (PID 0) since it has no parent.
-
 #### `SPAWN` (25)
-Reads an ELF binary from the VFS at the given path and spawns it as
-a new user process. Returns the child PID. Flow:
-1. `vfs_open()` + `vfs_stat()` to get file size
-2. Allocate temporary physical pages for read buffer
-3. `vfs_read()` entire file
-4. `spawn_user_process(name, elf_data)` — parses ELF, creates page tables,
-   sets up Ring 3 context
-5. Free temporary buffer, return child PID
-
+Reads an ELF binary from the VFS and spawns it as a new user process.
 Max ELF size: 4 MiB. Child inherits no file descriptors.
 
-**Note**: Has been code-reviewed but not tested end-to-end.
-
-#### `MMAP` (26)
-Allocates `pages` physical pages and maps them into the calling
-process's virtual address space. Virtual addresses start from
-`0x0000_0040_0000_0000` and grow upward (`mmap_brk`).
-
-**BUG**: For kernel PID 0 (`cr3 = 0`), `mmap_brk` is lazy-initialized
-to `USER_MMAP_BASE`, then `PageTableManager { pml4_phys: 0 }` tries
-to walk a page table at physical address 0 — this is the real-mode IVT,
-not a page table. Will corrupt memory or triple-fault.
-
-**BUG**: Zeroes physical memory via direct physical pointer
-(`write_bytes(phys as *mut u8, 0, ...)`), which only works because memory
-is identity-mapped. Once processes use separate address spaces, this must
-use the virtual address.
-
-Max 1024 pages per call.
-
-#### `MUNMAP` (27)
-Walks pages and calls `kunmap_4k()` for each.
-
-**BUG**: `kunmap_4k()` operates on the **kernel** page table (reads CR3),
-not the per-process page table (`proc.cr3`).
-
-**BUG**: Does not free physical memory — the physical pages backing the
-virtual mappings are leaked. No reverse mapping exists to recover them.
+#### `MMAP` (26) / `MUNMAP` (27)
+See Known Bugs section above.
 
 #### `DUP` (28)
-Duplicates a file descriptor. Copies the `FdDescriptor` struct (including
-VFS superblock key + offset). The new fd shares the same offset counter.
+Duplicates a file descriptor.
 
 #### `SYSLOG` (29)
-Writes a message to the kernel serial log. Uses `validate_user_buf()`.
-Messages prefixed with `[USR] `. Falls back to raw byte output if not
-valid UTF-8.
+Writes a message to the kernel serial log. Validated. Prefix: `[USR] `.
 
-#### `GETCWD` (30)
-Copies the current working directory into `buf_ptr`. Uses
-`validate_user_buf()`. Returns the actual CWD length (may be larger
-than `buf_len` — caller should check and re-allocate if needed).
-
-#### `CHDIR` (31)
-Changes the calling process's CWD. Validates the path exists via
-`vfs_stat()`. **Does not check that the path is a directory** (TODO).
+#### `GETCWD` (30) / `CHDIR` (31)
+Get/set current working directory.
 
 ---
 
-### Networking (32-41) — All Stubs
+### Raw NIC (32-37) — Exokernel Network Primitives
 
-All networking syscalls return `-ENOSYS`. The ABI numbers are
-stable and will be implemented once the kernel's network crate is
-restructured from its monolithic HTTP-client design into a proper
-socket layer (the current `network/` crate is an HTTP download
-client with DMA buffers — it cannot back BSD sockets).
+MorpheusX is an exokernel: userland builds its own network stack.
+These syscalls expose raw Ethernet frame TX/RX through a function-pointer
+registration mechanism. The bootloader calls `register_nic(ops)` after
+driver initialization to wire the hardware functions.
 
-| Nr | Name         | Planned Args                     |
-|----|--------------|----------------------------------|
-| 32 | `SOCKET`     | `(domain, type, protocol) → fd`  |
-| 33 | `CONNECT`    | `(fd, addr_ptr, addr_len) → 0`   |
-| 34 | `SEND`       | `(fd, buf_ptr, buf_len) → sent`  |
-| 35 | `RECV`       | `(fd, buf_ptr, buf_len) → recv`  |
-| 36 | `BIND`       | `(fd, addr_ptr, addr_len) → 0`   |
-| 37 | `LISTEN`     | `(fd, backlog) → 0`              |
-| 38 | `ACCEPT`     | `(fd, addr_ptr, addr_len) → fd`  |
-| 39 | `SHUTDOWN`   | `(fd, how) → 0`                  |
-| 40 | `SETSOCKOPT` | `(fd, level, opt, val, len) → 0` |
-| 41 | `DNS_RESOLVE`| `(name_ptr, name_len, out) → 0`  |
+If no NIC driver has been registered, all syscalls return `-ENODEV`.
+
+| Nr | Name         | Args                          | Return               | Status |
+|----|--------------|-------------------------------|----------------------|--------|
+| 32 | `NIC_INFO`   | `(buf_ptr)`                   | 0                    | ✅     |
+| 33 | `NIC_TX`     | `(frame_ptr, frame_len)`      | 0                    | ✅     |
+| 34 | `NIC_RX`     | `(buf_ptr, buf_len)`          | bytes_received       | ✅     |
+| 35 | `NIC_LINK`   | `()`                          | 1=up, 0=down         | ✅     |
+| 36 | `NIC_MAC`    | `(buf_ptr)`                   | 0                    | ✅     |
+| 37 | `NIC_REFILL` | `()`                          | 0                    | ✅     |
+
+#### `NIC_INFO` (32)
+```rust
+#[repr(C)]
+pub struct NicInfo {
+    pub mac: [u8; 8],     // 6-byte MAC, 2 bytes padding
+    pub link_up: u32,     // 1 if link up
+    pub present: u32,     // 1 if NIC registered
+}
+```
+
+#### `NIC_TX` (33)
+Frame must be 14–9000 bytes (Ethernet header minimum to jumbo max).
+
+#### `NIC_RX` (34)
+Non-blocking. Returns 0 if no frame pending.
+
+#### `NIC_LINK` (35)
+Returns 1 if link up, 0 if down.
+
+#### `NIC_MAC` (36)
+Copies 6-byte MAC address. Buffer ≥ 6 bytes.
+
+#### `NIC_REFILL` (37)
+Replenishes RX descriptor ring.
 
 ---
 
-### Device / Mount (42-45) — All Stubs
+### Reserved (38-41)
 
-| Nr | Name     | Planned Args                        | Status |
-|----|----------|-------------------------------------|--------|
-| 42 | `IOCTL`  | `(fd, cmd, arg)`                    | 🚫 stub |
-| 43 | `MOUNT`  | `(src_ptr, src_len, dst_ptr, dst_l)`| 🚫 stub |
-| 44 | `UMOUNT` | `(path_ptr, path_len)`              | 🚫 stub |
-| 45 | `POLL`   | `(fds_ptr, nfds, timeout_ms)`       | 🚫 stub |
+| Nr | Name           | Return   | Status |
+|----|----------------|----------|--------|
+| 38 | `NET_RSVD38`   | -ENOSYS  | 🚫     |
+| 39 | `NET_RSVD39`   | -ENOSYS  | 🚫     |
+| 40 | `NET_RSVD40`   | -ENOSYS  | 🚫     |
+| 41 | `NET_RSVD41`   | -ENOSYS  | 🚫     |
+
+Reserved for future network-layer syscalls (ARP table, routing, etc.).
+
+---
+
+### Device / Mount (42-45)
+
+| Nr | Name     | Args                                 | Return  | Status |
+|----|----------|--------------------------------------|---------|--------|
+| 42 | `IOCTL`  | `(fd, cmd, arg)`                     | varies  | ✅     |
+| 43 | `MOUNT`  | `(src_ptr, src_len, dst_ptr, dst_l)` | 0       | ✅     |
+| 44 | `UMOUNT` | `(path_ptr, path_len)`               | 0       | ✅     |
+| 45 | `POLL`   | `(fds_ptr, nfds, timeout_ms)`        | ready   | ✅     |
+
+#### `IOCTL` (42)
+| Command      | Value    | Arg     | Return            |
+|--------------|----------|---------|-------------------|
+| `FIONREAD`   | `0x541B` | fd      | bytes available   |
+| `TIOCGWINSZ` | `0x5413` | buf_ptr | 0 (writes 80×25)  |
+
+#### `MOUNT` (43)
+No-op success. HelixFS auto-mounts at `/`.
+
+#### `UMOUNT` (44)
+Syncs VFS and returns 0.
+
+#### `POLL` (45)
+```rust
+#[repr(C)]
+pub struct PollFd {
+    pub fd: i32,
+    pub events: i16,   // POLLIN=1, POLLOUT=4
+    pub revents: i16,  // POLLIN, POLLOUT, POLLERR=8
+}
+```
+Timeout 0 = non-blocking. Does NOT support indefinite blocking.
+
+---
+
+### Persistence / Introspection (46-51)
+
+| Nr | Name          | Args                                   | Return      | Status |
+|----|---------------|----------------------------------------|-------------|--------|
+| 46 | `PERSIST_PUT` | `(key_ptr, key_len, data_ptr, data_l)` | 0           | ✅     |
+| 47 | `PERSIST_GET` | `(key_ptr, key_len, buf_ptr, buf_len)` | bytes_read  | ✅     |
+| 48 | `PERSIST_DEL` | `(key_ptr, key_len)`                   | 0           | ✅     |
+| 49 | `PERSIST_LIST`| `(buf_ptr, buf_len, offset)`           | count       | ✅     |
+| 50 | `PERSIST_INFO`| `(info_ptr)`                           | 0           | ✅     |
+| 51 | `PE_INFO`     | `(path_ptr, path_len, info_ptr)`       | 0           | ✅     |
+
+See version 1.1 for full details. All pointers validated.
+
+---
+
+### Hardware I/O Primitives (52-62) — Exokernel
+
+These syscalls expose raw hardware access to userland, enabling user-level
+device drivers. This is the core exokernel philosophy: the kernel multiplexes
+hardware, userland implements policy.
+
+| Nr | Name           | Args                         | Return       | Status |
+|----|----------------|------------------------------|--------------|--------|
+| 52 | `PORT_IN`      | `(port, width)`              | value        | ✅     |
+| 53 | `PORT_OUT`     | `(port, width, value)`       | 0            | ✅     |
+| 54 | `PCI_CFG_READ` | `(bdf, offset, width)`       | value        | ✅     |
+| 55 | `PCI_CFG_WRITE`| `(bdf, offset, width, value)`| 0            | ✅     |
+| 56 | `DMA_ALLOC`    | `(pages)`                    | phys_addr    | ✅     |
+| 57 | `DMA_FREE`     | `(phys, pages)`              | 0            | ✅     |
+| 58 | `MAP_PHYS`     | `(phys, pages, flags)`       | virt_addr    | ✅     |
+| 59 | `VIRT_TO_PHYS` | `(virt)`                     | phys_addr    | ✅     |
+| 60 | `IRQ_ATTACH`   | `(irq_num)`                  | 0            | ✅     |
+| 61 | `IRQ_ACK`      | `(irq_num)`                  | 0            | ✅     |
+| 62 | `CACHE_FLUSH`  | `(addr, len)`                | 0            | ✅     |
+
+#### `PORT_IN` (52) / `PORT_OUT` (53)
+Raw x86 port I/O. `width`: 1 = byte, 2 = word, 4 = dword.
+Port ≤ 0xFFFF. Returns `-EINVAL` for invalid width/port.
+
+#### `PCI_CFG_READ` (54) / `PCI_CFG_WRITE` (55)
+PCI configuration space. `bdf = (bus << 16) | (dev << 8) | func`.
+`offset`: 0-255. `width`: 1, 2, or 4.
+
+#### `DMA_ALLOC` (56) / `DMA_FREE` (57)
+Contiguous pages below 4 GiB. Zeroed on alloc. Max 256 pages (1 MiB).
+
+#### `MAP_PHYS` (58)
+Maps physical pages into the process's virtual address space.
+Flags: bit 0 = writable, bit 1 = uncacheable.
+Process must have a valid `cr3` (not PID 0). Max 1024 pages.
+
+#### `VIRT_TO_PHYS` (59)
+Kernel page table walk. Returns 0 if unmapped.
+
+#### `IRQ_ATTACH` (60) / `IRQ_ACK` (61)
+PIC IRQ management. Range: 0-15.
+
+#### `CACHE_FLUSH` (62)
+`clflush` over address range. Max 64 MiB, page-aligned.
+
+---
+
+### Display (63-64)
+
+| Nr | Name      | Args          | Return     | Status |
+|----|-----------|---------------|------------|--------|
+| 63 | `FB_INFO` | `(buf_ptr)`   | 0          | ✅     |
+| 64 | `FB_MAP`  | `()`          | virt_addr  | ✅     |
+
+#### `FB_INFO` (63)
+```rust
+#[repr(C)]
+pub struct FbInfo {
+    pub base: u64,      // physical address
+    pub size: u64,      // bytes
+    pub width: u32,     // pixels
+    pub height: u32,    // pixels
+    pub stride: u32,    // bytes per scanline
+    pub format: u32,    // 0=RGBX, 1=BGRX
+}
+```
+Returns `-ENODEV` if framebuffer not registered.
+
+#### `FB_MAP` (64)
+Maps framebuffer into process VA (writable + uncacheable).
+Process must have a valid `cr3`.
+
+---
+
+### Process Management (65-68)
+
+| Nr | Name          | Args                   | Return   | Status |
+|----|---------------|------------------------|----------|--------|
+| 65 | `PS`          | `(buf_ptr, max_count)` | count    | ✅     |
+| 66 | `SIGACTION`   | `(signum, handler)`    | 0        | ✅     |
+| 67 | `SETPRIORITY` | `(pid, priority)`      | 0        | ✅     |
+| 68 | `GETPRIORITY` | `(pid)`                | priority | ✅     |
+
+#### `PS` (65)
+```rust
+#[repr(C)]
+pub struct PsEntry {
+    pub pid: u32,
+    pub ppid: u32,
+    pub state: u32,     // 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated
+    pub priority: u32,
+    pub name: [u8; 32], // NUL-padded
+}
+```
+
+#### `SIGACTION` (66)
+Registers handler address. Delivery mechanism (sigframe + sigreturn) not
+yet built — placeholder for Phase 6.
+
+#### `SETPRIORITY` (67) / `GETPRIORITY` (68)
+Priority 0-255 (0 = highest). `-ESRCH` if PID not found.
+
+---
+
+### CPU Features / Diagnostics (69-72)
+
+| Nr | Name       | Args                         | Return     | Status |
+|----|------------|------------------------------|------------|--------|
+| 69 | `CPUID`    | `(leaf, subleaf, result_ptr)`| 0          | ✅     |
+| 70 | `RDTSC`    | `(result_ptr)`               | 0          | ✅     |
+| 71 | `BOOT_LOG` | `(buf_ptr, buf_len)`         | bytes_read | ✅     |
+| 72 | `MEMMAP`   | `(buf_ptr, max_entries)`     | count      | ✅     |
+
+#### `CPUID` (69)
+```rust
+#[repr(C)]
+pub struct CpuidResult { pub eax: u32, pub ebx: u32, pub ecx: u32, pub edx: u32 }
+```
+
+#### `RDTSC` (70)
+```rust
+#[repr(C)]
+pub struct TscResult { pub tsc: u64, pub frequency: u64 }
+```
+
+#### `BOOT_LOG` (71)
+Copies kernel serial log. If `buf_len == 0`, returns total size.
+
+#### `MEMMAP` (72)
+```rust
+#[repr(C)]
+pub struct MemmapEntry { pub base: u64, pub pages: u64, pub mem_type: u32, pub _pad: u32 }
+```
 
 ---
 
 ## User Pointer Validation
 
-`validate_user_buf(ptr, len)` in `handler.rs` checks:
-- `ptr != 0` and `len != 0`
-- `ptr + len` does not overflow
-- `ptr + len <= 0x0000_8000_0000_0000` (canonical user-space boundary)
+`validate_user_buf(ptr, len)` checks: `ptr != 0`, `len != 0`,
+no overflow, `ptr + len <= 0x0000_8000_0000_0000`.
 
-**Syscalls that correctly use `validate_user_buf()`**: SYSINFO (23), SYSLOG (29), GETCWD (30).
+**Validated**: SYSINFO, SYSLOG, GETCWD, PERSIST_*, PE_INFO, NIC_INFO,
+NIC_TX, NIC_RX, NIC_MAC, FB_INFO, PS, CPUID, RDTSC, BOOT_LOG, MEMMAP.
 
-**Syscalls that do NOT validate data buffers**: WRITE (1), READ (2), STAT (13), READDIR (14).
-
-`user_path()` in `handler.rs` validates paths: `ptr != 0`, `len ≤ 255`, valid UTF-8.
-But it does **NOT** check that the address is in user-space. A malicious caller could
-pass a kernel-space pointer as a "path" and the kernel would read from it.
-
-### Recommendation
-
-Before the first userspace release, add `validate_user_buf()` calls to:
-- `sys_write()` — validate `ptr` + `len`
-- `sys_read()` — validate `ptr` + `len`
-- `sys_fs_stat()` — validate `stat_buf` with `sizeof(FileStat)`
-- `sys_fs_readdir()` — validate `buf_ptr` (need to know max entries)
-- `user_path()` — add `validate_user_buf(ptr, len)` check
+**NOT validated**: WRITE, READ, STAT, READDIR.
 
 ---
 
-## Persistence Crate Status
+## Registration APIs
 
-The `morpheus-persistent` crate exists at `/persistent` and is registered in the
-workspace `Cargo.toml`. However, it is **completely unwired** — no other crate
-in the project depends on it.
+### NIC Registration
+```rust
+use morpheus_hwinit::{register_nic, NicOps};
+unsafe {
+    register_nic(NicOps {
+        tx: Some(driver_tx), rx: Some(driver_rx),
+        link_up: Some(driver_link), mac: Some(driver_mac),
+        refill: Some(driver_refill),
+    });
+}
+```
 
-| Property | Value |
-|----------|-------|
-| Crate | `morpheus-persistent` |
-| Path | `persistent/` |
-| Dependents | **NONE** — zero `[dependencies]` edges from bootloader or hwinit |
-| Contains | PE/COFF parsing, memory capture, `PersistenceBackend` trait, ESP storage backend |
-| Backend impl | `storage/esp.rs` — partially implemented |
-| Purpose | Extract running UEFI bootloader from memory, create bootable disk image by reversing UEFI relocations |
-
-**Current state**: The bootloader's `storage.rs` handles HelixFS mount directly
-via `morpheus_helix::vfs::global::init_root_fs()` without involving the
-persistence crate at all. To wire it up:
-1. Add `morpheus-persistent = { path = "../persistent" }` to `bootloader/Cargo.toml`
-2. Call `PersistenceBackend` during boot to save/restore state
-3. Implement a concrete backend (the trait is defined but has no working impl)
-
----
-
-## Feature Gap Analysis
-
-### What's needed for `std` Rust support
-
-To port Rust's `std` library to MorpheusX, we need a custom target spec
-(`x86_64-unknown-morpheus`) and the following additional syscalls:
-
-| Category | Syscalls Needed | Description |
-|----------|----------------|-------------|
-| **Threading** | `CLONE`, `FUTEX`, `EXIT_GROUP` | Thread creation, synchronization primitives, process-wide exit |
-| **Memory** | `BRK`/`SBRK`, `MMAP` with `MAP_ANONYMOUS` | Heap growth for the userspace allocator (currently MMAP exists but only does phys-backed mapping) |
-| **File I/O** | `FSTAT` (fd-based stat), `DUP2` (fd→specific fd), `FCNTL` (fd flags, O_NONBLOCK), `PIPE`, `FTRUNCATE` | Core stdio redirection and pipe plumbing |
-| **Process** | `EXECVE`, `FORK` or `POSIX_SPAWN`, `GETENV`/`SETENV` | Process replacement, environment variable access |
-| **Signals** | `SIGACTION`, `SIGPROCMASK`, `SIGRETURN` | Install signal handlers, block/unblock signals, return from handler |
-| **Time** | `CLOCK_GETTIME` (struct-based), `NANOSLEEP` | POSIX-compatible time APIs (our CLOCK returns raw nanos, std wants `timespec`) |
-| **Misc** | `GETUID`/`GETGID`, `UNAME`, `GETRANDOM` | Identity, system name, randomness for HashMap seeding |
-
-**Estimate**: ~20-25 additional syscalls. The most critical are **CLONE + FUTEX**
-(threading), **BRK** (allocator), and **PIPE + DUP2** (stdio).
-
-### What's needed for async Rust (tokio/smol/embassy)
-
-| Category | Syscalls Needed | Description |
-|----------|----------------|-------------|
-| **Event multiplexing** | `EPOLL_CREATE`, `EPOLL_CTL`, `EPOLL_WAIT` (or `POLL` #45) | Core async I/O reactor — the most critical piece |
-| **Non-blocking I/O** | `FCNTL` with `O_NONBLOCK` | Required for all async I/O |
-| **Timers** | `TIMERFD_CREATE`, `TIMERFD_SETTIME` (or integrate with SLEEP) | Async timeouts, intervals |
-| **Waker channels** | `PIPE` + `EVENTFD` | Wake the reactor from another thread/signal handler |
-| **Networking** | Syscalls 32-41 (SOCKET..DNS_RESOLVE) | Primary use case for async is network I/O |
-
-**Estimate**: ~5-8 additional syscalls on top of the std requirements.
-**Note**: A `no_std` async executor (like `embassy`) needs much less — mostly
-just a timer and some form of event notification.
-
-### Alternative: Stay `no_std` + libmorpheus
-
-The current approach — building on `#![no_std]` with `libmorpheus` as the SDK —
-is **viable for many applications** without needing any std support:
-
-- File I/O works (OPEN/READ/WRITE/CLOSE/SEEK/STAT/READDIR/MKDIR/UNLINK/RENAME/SYNC)
-- Process management works (SPAWN/WAIT/KILL/GETPID/GETPPID/EXIT)
-- Timing works (CLOCK/SLEEP)
-- Physical memory allocation works (ALLOC/FREE)
-- Virtual memory works with caveats (MMAP/MUNMAP — see bugs above)
-- System introspection works (SYSINFO/SYSLOG)
-- HelixFS provides a complete filesystem
-
-**What's missing for practical `no_std` apps**: primarily stdin blocking read
-(current `READ` on fd 0 is non-blocking), `PIPE` for inter-process
-communication, and the networking syscalls.
-
-### Self-Hosting Roadmap
-
-To compile Rust programs **on** MorpheusX:
-
-1. **End-to-end test SPAWN** — verify ELF loading + execution in Ring 3
-2. **Implement PIPE** — needed for compiler ↔ linker communication
-3. **Implement DUP2** — needed for stdio redirection
-4. **Port a Rust compiler binary** to HelixFS as a static ELF
-5. **Add enough POSIX shims** for the compiler to run (file I/O already works)
-6. **Ship an allocator** in libmorpheus that uses MMAP internally
+### Framebuffer Registration
+Called by bootloader before desktop entry. Enables SYS_FB_INFO / SYS_FB_MAP.
 
 ---
 
 ## libmorpheus SDK Modules
 
-The userspace SDK (`libmorpheus`) provides high-level wrappers:
-
 | Module     | Syscalls wrapped                        |
 |------------|-----------------------------------------|
-| `process`  | exit, getpid, getppid, yield, kill, sleep, wait, spawn |
+| `process`  | exit, getpid, getppid, yield, kill, sleep, wait, spawn, ps, sigaction, setpriority, getpriority |
 | `fs`       | open, close, read, write, seek, stat, readdir, mkdir, unlink, rename, sync, dup, getcwd, chdir |
-| `io`       | print, println (convenience over WRITE) |
+| `io`       | print, println                          |
 | `mem`      | alloc_pages, free_pages, mmap, munmap   |
 | `time`     | clock_gettime, uptime_ms, uptime_us     |
-| `sys`      | sysinfo (SysInfo struct), syslog        |
-| `net`      | socket, connect, send, recv, dns_resolve (all return ENOSYS) |
+| `sys`      | sysinfo, syslog                         |
+| `net`      | nic_info, nic_tx, nic_rx, nic_link_up, nic_mac, nic_refill |
+| `hw`       | port I/O, PCI cfg, DMA, MAP_PHYS, IRQ, cache, CPUID, RDTSC, FB, boot_log, memmap |
+| `persist`  | persist_put/get/del/list/info, pe_info  |
 | `raw`      | syscall0..syscall5 (inline asm)         |
 | `entry`    | `entry!()` macro, panic handler         |
 
 ### Quick Start
-
 ```rust
 #![no_std]
 #![no_main]
-
 use libmorpheus::entry;
-
 entry!(main);
 
 fn main() -> i32 {
-    // Print to console
     libmorpheus::io::println("Hello from userspace!");
 
-    // Get system info
-    let mut info = libmorpheus::sys::SysInfo::zeroed();
-    libmorpheus::sys::sysinfo(&mut info).unwrap();
+    // Hardware primitives (exokernel)
+    let vendor = libmorpheus::hw::pci_cfg_read16(0, 0, 0, 0x00);
 
-    // Get time
-    let nanos = libmorpheus::time::clock_gettime();
+    // Process snapshot for a task manager
+    let mut entries = [libmorpheus::process::PsEntry::zeroed(); 64];
+    let count = libmorpheus::process::ps(&mut entries);
 
-    // Spawn a child
-    if let Ok(child_pid) = libmorpheus::process::spawn("/bin/hello") {
-        libmorpheus::process::wait(child_pid).unwrap();
-    }
+    // Raw NIC access for userland TCP/IP
+    let mut mac = [0u8; 6];
+    libmorpheus::net::nic_mac(&mut mac);
 
     0
 }
