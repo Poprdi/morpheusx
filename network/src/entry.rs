@@ -1,4 +1,9 @@
-//! Top-level network stack entry point.
+//! DEPRICATED: This module is now just a thin wrapper around the mainloop download orchestrator.
+//! durign bringup 
+//! 
+//! TODO: Properly use network ;)
+//! 
+//! //! Top-level network stack entry point.
 //!
 //! This is THE entry point for the network stack. The bootloader calls this
 //! ONCE after hwinit has set up the platform. We do everything:

@@ -146,11 +146,39 @@ fn elf_flags_to_page_flags(p_flags: u32) -> PageFlags {
 /// # Safety
 /// MemoryRegistry and paging must be initialized.
 pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), ElfError> {
+    use crate::serial::{puts, put_hex64, put_hex32};
+
+    puts("[ELF] load_elf64: data len=");
+    put_hex32(data.len() as u32);
+    puts("\n");
+
+    // Print first 4 bytes to verify ELF magic.
+    if data.len() >= 4 {
+        puts("[ELF] first 4 bytes: ");
+        for i in 0..4 {
+            crate::serial::put_hex8(data[i]);
+            puts(" ");
+        }
+        puts("\n");
+    }
+
     let ehdr = validate_elf64(data)?;
+    puts("[ELF] validated OK, entry=");
+    put_hex64(ehdr.e_entry);
+    puts(" phnum=");
+    put_hex32(ehdr.e_phnum as u32);
+    puts("\n");
+
     let phdrs = program_headers(data, ehdr)?;
+    puts("[ELF] program headers OK\n");
 
     let mut pt = PageTableManager::new_empty().map_err(|_| ElfError::AllocFailed)?;
+    puts("[ELF] new PML4 at ");
+    put_hex64(pt.pml4_phys);
+    puts("\n");
+
     clone_kernel_mappings(&mut pt)?;
+    puts("[ELF] kernel mappings cloned\n");
 
     let mut segments = Vec::new();
     let mut has_load = false;
@@ -166,9 +194,23 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         let vaddr_end = (ph.p_vaddr + ph.p_memsz + 0xFFF) & !0xFFF;
         let num_pages = (vaddr_end - vaddr_base) / PAGE_SIZE;
 
+        puts("[ELF] PT_LOAD vaddr=");
+        put_hex64(vaddr_base);
+        puts(" memsz=");
+        put_hex64(ph.p_memsz);
+        puts(" filesz=");
+        put_hex64(ph.p_filesz);
+        puts(" pages=");
+        put_hex32(num_pages as u32);
+        puts("\n");
+
         let phys_base = global_registry_mut()
             .allocate_pages(AllocateType::AnyPages, MemoryType::LoaderData, num_pages)
             .map_err(|_| ElfError::AllocFailed)?;
+
+        puts("[ELF]   phys_base=");
+        put_hex64(phys_base);
+        puts("\n");
 
         // Zero the region, then copy file data.
         core::ptr::write_bytes(phys_base as *mut u8, 0, (num_pages * PAGE_SIZE) as usize);
@@ -190,8 +232,18 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         for i in 0..num_pages {
             let virt = vaddr_base + i * PAGE_SIZE;
             let phys = phys_base + i * PAGE_SIZE;
+            if i == 0 {
+                puts("[ELF]   mapping first page virt=");
+                put_hex64(virt);
+                puts(" -> phys=");
+                put_hex64(phys);
+                puts("\n");
+            }
             map_user_page(&mut pt, virt, phys, page_flags)?;
         }
+        puts("[ELF]   mapped all ");
+        put_hex32(num_pages as u32);
+        puts(" pages OK\n");
 
         segments.push(LoadedSegment {
             vaddr: vaddr_base,
@@ -204,6 +256,8 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
     if !has_load {
         return Err(ElfError::NoLoadSegments);
     }
+
+    puts("[ELF] mapping user stack\n");
 
     // Allocate and map user stack.
     let stack_phys = global_registry_mut()
@@ -233,6 +287,9 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         entry: ehdr.e_entry,
         segments,
     };
+    puts("[ELF] load_elf64 SUCCESS, entry=");
+    put_hex64(ehdr.e_entry);
+    puts("\n");
     Ok((image, pt))
 }
 
@@ -287,18 +344,87 @@ pub(crate) unsafe fn map_user_page(
 
 /// Like `ensure_table` but upgrades existing entries with the USER bit
 /// so intermediate levels are accessible from Ring 3.
+///
+/// **Copy-on-write for kernel pages**: When the entry was cloned from the
+/// kernel (no USER bit), we deep-copy the referenced page table page into
+/// a fresh allocation before modifying anything.  This prevents the user
+/// page-table setup from corrupting the kernel's live page tables.
+///
+/// When a 2 MiB huge page is encountered at the PD level, it is **split**
+/// into 512 individual 4 KiB page-table entries so the walk can continue.
+/// This handles the common case where UEFI leaves 2 MiB identity-map pages
+/// covering the low memory range where user code is loaded (e.g. 0x400000).
 unsafe fn ensure_user_table(
     e: &mut crate::paging::entry::PageTableEntry,
     flags: PageFlags,
 ) -> Result<u64, ElfError> {
-    use crate::memory::{global_registry_mut, AllocateType, MemoryType};
+    use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
     use crate::paging::entry::PageTableEntry;
 
     if e.is_present() {
         if e.is_huge() {
-            return Err(ElfError::MapFailed);
+            // ── Split a huge page (2 MiB or 1 GiB) into sub-pages ──────
+            // At this point, the entry `e` resides in a page we OWN (either
+            // the user PML4 or a deep-copied intermediate table), so it is
+            // safe to overwrite it.
+            const GIB_1: u64 = 1 << 30;
+            const MIB_2: u64 = 1 << 21;
+
+            let raw_phys = e.phys_addr();
+            let new_table_phys = global_registry_mut()
+                .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedPageTable, 1)
+                .map_err(|_| ElfError::AllocFailed)?;
+
+            let new_table = new_table_phys as *mut crate::paging::entry::PageTable;
+            (*new_table).zero();
+
+            let sub_flags = PageFlags::PRESENT.with(PageFlags::WRITABLE);
+
+            if raw_phys & (GIB_1 - 1) == 0 {
+                // 1 GiB huge page (PDPT level) → split into 512 × 2 MiB PD entries.
+                let base = raw_phys & !(GIB_1 - 1);
+                for i in 0u64..512 {
+                    let sub_phys = base + i * MIB_2;
+                    *(*new_table).entry_mut(i as usize) =
+                        PageTableEntry::new(sub_phys, sub_flags.with(PageFlags::HUGE_PAGE));
+                }
+            } else {
+                // 2 MiB huge page (PD level) → split into 512 × 4 KiB PT entries.
+                // For 2 MiB entries, physical base is bits [51:21]; mask off bits [20:12].
+                let base = raw_phys & !(MIB_2 - 1);
+                for i in 0u64..512 {
+                    let sub_phys = base + i * 4096;
+                    *(*new_table).entry_mut(i as usize) =
+                        PageTableEntry::new(sub_phys, sub_flags);
+                }
+            }
+
+            // Replace the huge-page entry with a pointer to the new table.
+            *e = PageTableEntry::new(new_table_phys, flags);
+            return Ok(new_table_phys);
         }
-        // Upgrade: ensure USER + WRITABLE are set on the intermediate entry.
+
+        // ── Copy-on-write: kernel-shared table page ─────────────────────
+        // Entries cloned from the kernel don't have the USER bit.  If we see
+        // such an entry, the page it points to is shared with the kernel's
+        // active page tables.  Deep-copy it so modifications happen on our
+        // private copy and the kernel's mappings remain untouched.
+        if !e.flags().contains(PageFlags::USER) {
+            let old_phys = e.phys_addr();
+            let new_phys = global_registry_mut()
+                .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedPageTable, 1)
+                .map_err(|_| ElfError::AllocFailed)?;
+            core::ptr::copy_nonoverlapping(
+                old_phys as *const u8,
+                new_phys as *mut u8,
+                PAGE_SIZE as usize,
+            );
+            *e = PageTableEntry::new(new_phys, flags);
+            return Ok(new_phys);
+        }
+
+        // Already has USER — this is our own private table page.
+        // Upgrade flags if needed (e.g. WRITABLE).
         let raw = e.raw();
         let needed = flags.0;
         if raw & needed != needed {
@@ -307,7 +433,7 @@ unsafe fn ensure_user_table(
         return Ok(e.phys_addr());
     }
 
-    // Allocate a fresh zeroed page table.
+    // Entry not present — allocate a fresh zeroed page table.
     let phys = global_registry_mut()
         .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedPageTable, 1)
         .map_err(|_| ElfError::AllocFailed)?;
