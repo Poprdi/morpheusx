@@ -56,9 +56,9 @@ static mut SCHEDULER_READY: bool = false;
 /// Used to convert millisecond sleep durations to TSC deadlines.
 static mut TSC_FREQUENCY: u64 = 0;
 
-/// CR3 of the next process to run.
-/// Written by `scheduler_tick()`, read by `irq_timer_isr` in ASM for address
-/// space switch.  Defined in `context_switch.s`.
+// CR3 of the next process to run.
+// Written by `scheduler_tick()`, read by `irq_timer_isr` in ASM for address
+// space switch.  Defined in `context_switch.s`.
 extern "C" {
     static mut next_cr3: u64;
 }

@@ -171,10 +171,9 @@ unsafe fn buffer_write(blk: &mut UnifiedBlockDevice, data: &[u8]) -> usize {
         consumed += to_copy;
         remaining = &remaining[to_copy..];
 
-        if BUFFER_FILL >= BUFFER_SIZE
-            && flush_buffer(blk) == 0 {
-                break;
-            }
+        if BUFFER_FILL >= BUFFER_SIZE && flush_buffer(blk) == 0 {
+            break;
+        }
     }
 
     consumed
@@ -187,8 +186,8 @@ unsafe fn flush_remaining(blk: &mut UnifiedBlockDevice) -> bool {
     }
 
     // Zero-pad to sector boundary
-    for i in BUFFER_FILL..BUFFER_SIZE {
-        WRITE_BUFFER[i] = 0;
+    for item in WRITE_BUFFER.iter_mut().skip(BUFFER_FILL) {
+        *item = 0;
     }
 
     flush_buffer(blk) > 0

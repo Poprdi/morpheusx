@@ -18,7 +18,6 @@ pub enum PixelFormat {
     BltOnly = 3,
 }
 
-
 /// Information about the framebuffer obtained from GOP.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]

@@ -15,8 +15,7 @@
 /// Ownership state of a DMA buffer.
 ///
 /// Tracks who owns each buffer to prevent use-after-submit bugs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BufferOwnership {
     /// Buffer is not allocated, available for use.
     #[default]
@@ -43,4 +42,3 @@ impl BufferOwnership {
         matches!(self, BufferOwnership::DeviceOwned)
     }
 }
-

@@ -69,8 +69,7 @@ impl From<BlockError> for DiskWriterError {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Pending write request.
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct PendingWrite {
     /// Request ID (unique per write).
     request_id: u32,
@@ -83,7 +82,6 @@ struct PendingWrite {
     /// Whether this request is active.
     active: bool,
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // WRITER CONFIGURATION
@@ -289,7 +287,10 @@ impl DiskWriterState {
         // Check disk capacity if total size known
         if self.config.total_bytes > 0 {
             let info = driver.info();
-            let required_sectors = self.config.total_bytes.div_ceil(self.config.sector_size as u64);
+            let required_sectors = self
+                .config
+                .total_bytes
+                .div_ceil(self.config.sector_size as u64);
             let available_sectors = info.total_sectors.saturating_sub(self.config.start_sector);
 
             if required_sectors > available_sectors {

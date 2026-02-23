@@ -191,8 +191,7 @@ impl From<super::virtio::init::VirtioInitError> for VirtioBlkInitError {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Track in-flight request.
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct InFlightRequest {
     /// Caller's request ID
     request_id: u32,
@@ -201,7 +200,6 @@ struct InFlightRequest {
     /// Is this slot in use?
     active: bool,
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DRIVER

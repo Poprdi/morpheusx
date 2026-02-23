@@ -79,6 +79,7 @@
 #![no_std]
 #![allow(dead_code)]
 #![allow(static_mut_refs)]
+#![allow(unexpected_cfgs)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::fn_to_numeric_cast)]
 #![allow(clippy::result_unit_err)]

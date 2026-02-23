@@ -105,6 +105,7 @@ impl<D: NetworkDriver> State<D> for ConnectState {
 
         if !self.connect_started {
             serial::print("[TCP] Connecting to ");
+            #[allow(irrefutable_let_patterns)]
             if let IpAddress::Ipv4(ip) = endpoint.addr {
                 serial::print_ipv4(&ip.0);
             }

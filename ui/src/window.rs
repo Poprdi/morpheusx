@@ -170,11 +170,7 @@ impl Window {
     }
 
     pub fn content_origin(&self) -> (u32, u32) {
-        if self.decorations {
-            ((self.x.max(0) as u32), (self.y.max(0) as u32))
-        } else {
-            (self.x.max(0) as u32, self.y.max(0) as u32)
-        }
+        (self.x.max(0) as u32, self.y.max(0) as u32)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

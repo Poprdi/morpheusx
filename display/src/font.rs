@@ -14,7 +14,7 @@ pub const FONT_HEIGHT: usize = 16;
 /// Returns 16 bytes (one per row), or None if character is unsupported.
 pub fn get_glyph(c: char) -> Option<&'static [u8; FONT_HEIGHT]> {
     let index = c as usize;
-    if index >= 0x20 && index <= 0x7E {
+    if (0x20..=0x7E).contains(&index) {
         Some(&FONT_DATA[index - 0x20])
     } else {
         None

@@ -56,6 +56,8 @@
 #![allow(clippy::fn_to_numeric_cast)]
 #![allow(clippy::result_unit_err)]
 #![allow(clippy::new_without_default)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::large_enum_variant)]
 // Allow never_loop - our poll-based state machines intentionally return
 // from loops early (single-threaded cooperative polling pattern)
 #![allow(clippy::never_loop)]

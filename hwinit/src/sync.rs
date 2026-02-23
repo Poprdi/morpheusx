@@ -94,6 +94,7 @@ impl<T> SpinLock<T> {
     ///
     /// # Safety
     /// Caller must ensure exclusive access.
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_unchecked(&self) -> &mut T {
         &mut *self.data.get()
     }

@@ -65,14 +65,13 @@ impl Widget for Checkbox {
     }
 
     fn handle_event(&mut self, event: &Event) -> EventResult {
-        if let Event::KeyPress(KeyEvent { key, .. }) = event {
-            match key {
-                Key::Enter | Key::Char(' ') => {
-                    self.toggle();
-                    return EventResult::Consumed;
-                }
-                _ => {}
-            }
+        if let Event::KeyPress(KeyEvent {
+            key: Key::Enter | Key::Char(' '),
+            ..
+        }) = event
+        {
+            self.toggle();
+            return EventResult::Consumed;
         }
         EventResult::Ignored
     }

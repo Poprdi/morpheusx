@@ -145,7 +145,7 @@ impl TaskManager {
     }
 
     fn refresh(&mut self) {
-        self.proc_count = unsafe { SCHEDULER.snapshot_processes(&mut self.procs) };
+        self.proc_count = SCHEDULER.snapshot_processes(&mut self.procs);
         self.sched_ticks = SCHEDULER.tick_count();
         self.live_count = SCHEDULER.live_count();
         if self.proc_count > 0 && self.selected >= self.proc_count {

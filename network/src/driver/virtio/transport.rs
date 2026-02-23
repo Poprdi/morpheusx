@@ -40,7 +40,6 @@ pub struct PciModernConfig {
     pub pci_cfg: u64,
 }
 
-
 /// Unified VirtIO transport handle
 #[derive(Debug, Clone, Copy)]
 pub struct VirtioTransport {
@@ -250,7 +249,7 @@ impl VirtioTransport {
                 unsafe {
                     pci_modern::select_queue(self.base, queue_idx);
                     let queue_notify_off = pci_modern::get_queue_notify_off(self.base);
-                    
+
                     self.pci_modern.notify_cfg
                         + (queue_notify_off as u64 * self.pci_modern.notify_off_multiplier as u64)
                 }

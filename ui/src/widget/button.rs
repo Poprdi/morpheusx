@@ -63,15 +63,14 @@ impl Widget for Button {
     }
 
     fn handle_event(&mut self, event: &Event) -> EventResult {
-        if let Event::KeyPress(KeyEvent { key, .. }) = event {
-            match key {
-                Key::Enter | Key::Char(' ') => {
-                    self.on_press = true;
-                    self.pressed = true;
-                    return EventResult::Consumed;
-                }
-                _ => {}
-            }
+        if let Event::KeyPress(KeyEvent {
+            key: Key::Enter | Key::Char(' '),
+            ..
+        }) = event
+        {
+            self.on_press = true;
+            self.pressed = true;
+            return EventResult::Consumed;
         }
         EventResult::Ignored
     }

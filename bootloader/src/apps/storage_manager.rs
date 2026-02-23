@@ -656,6 +656,7 @@ impl StorageManager {
         y + font::FONT_HEIGHT + 3
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_stat_line(
         &self,
         canvas: &mut dyn Canvas,
@@ -689,6 +690,7 @@ impl StorageManager {
         y + font::FONT_HEIGHT
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_labeled_bar(
         &self,
         canvas: &mut dyn Canvas,
@@ -739,6 +741,7 @@ impl StorageManager {
         bar_y + BAR_HEIGHT + 2
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_gradient_bar(
         &self,
         canvas: &mut dyn Canvas,
@@ -851,6 +854,7 @@ impl StorageManager {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_big_stat(
         &self,
         canvas: &mut dyn Canvas,

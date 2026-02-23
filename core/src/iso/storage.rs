@@ -136,7 +136,8 @@ impl IsoStorageManager {
 
     /// Find ISO by name
     pub fn find_by_name(&self, name: &str) -> Option<usize> {
-        (0..self.entry_count).find(|&i| self.entries[i].valid && self.entries[i].manifest.name_str() == name)
+        (0..self.entry_count)
+            .find(|&i| self.entries[i].valid && self.entries[i].manifest.name_str() == name)
     }
 
     /// Calculate chunks needed for an ISO

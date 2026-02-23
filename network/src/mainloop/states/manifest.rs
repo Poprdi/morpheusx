@@ -454,8 +454,8 @@ unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -
     static mut SECTOR_BUF: [u8; 512] = [0u8; 512];
     let copy_len = data.len().min(512);
     SECTOR_BUF[..copy_len].copy_from_slice(&data[..copy_len]);
-    for i in copy_len..512 {
-        SECTOR_BUF[i] = 0;
+    for item in SECTOR_BUF.iter_mut().skip(copy_len) {
+        *item = 0;
     }
 
     let buffer_phys = (&raw const SECTOR_BUF).cast::<u8>() as u64;

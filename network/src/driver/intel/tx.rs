@@ -126,9 +126,7 @@ impl TxRing {
         }
 
         // CRITICAL: SFENCE after writing all descriptors
-        unsafe {
-            sfence();
-        }
+        sfence();
         serial_println("  [TX-INIT] Descriptors initialized + sfence");
     }
 
