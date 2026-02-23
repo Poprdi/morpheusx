@@ -126,11 +126,15 @@ pub fn write_file<B: BlockIo>(
     extent_payload[16..20].copy_from_slice(&(blocks_needed as u32).to_le_bytes());
 
     // Log the write with path prefix.
-    // v2 format: [path_len: u16][path][extent_metadata]
+    // v3 extent format: [path_len: u16][path][IS_EXTENT: u8 = 0xFF][file_size: u64 LE][extent_metadata]
+    // The 0xFF marker distinguishes extent records from inline records during replay.
     let path_b = path.as_bytes();
-    let mut full_payload = Vec::with_capacity(2 + path_b.len() + extent_payload.len());
+    let file_size_bytes = (data.len() as u64).to_le_bytes();
+    let mut full_payload = Vec::with_capacity(2 + path_b.len() + 1 + 8 + extent_payload.len());
     full_payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
     full_payload.extend_from_slice(path_b);
+    full_payload.push(0xFF); // IS_EXTENT marker
+    full_payload.extend_from_slice(&file_size_bytes);
     full_payload.extend_from_slice(&extent_payload);
     let lsn = log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns)?;
 
@@ -221,11 +225,14 @@ fn write_file_fragmented<B: BlockIo>(
         extent_payload.extend_from_slice(&0u32.to_le_bytes()); // padding
     }
 
-    // v2 format: [path_len: u16][path][extent_metadata]
+    // v3 extent format: [path_len: u16][path][IS_EXTENT: u8 = 0xFF][file_size: u64 LE][extent_metadata]
     let path_b = path.as_bytes();
-    let mut full_payload = Vec::with_capacity(2 + path_b.len() + extent_payload.len());
+    let file_size_bytes = (data.len() as u64).to_le_bytes();
+    let mut full_payload = Vec::with_capacity(2 + path_b.len() + 1 + 8 + extent_payload.len());
     full_payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
     full_payload.extend_from_slice(path_b);
+    full_payload.push(0xFF); // IS_EXTENT marker
+    full_payload.extend_from_slice(&file_size_bytes);
     full_payload.extend_from_slice(&extent_payload);
     let lsn = log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns)?;
 
