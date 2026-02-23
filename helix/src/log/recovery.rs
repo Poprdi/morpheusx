@@ -162,8 +162,26 @@ pub fn replay_log<B: BlockIo>(
 
                 LogOp::Write => {
                     if let Some((path, data)) = decode_path_payload(payload) {
-                        if data.len() <= INLINE_DATA_SIZE {
-                            // Inline file
+                        // v3 format: extent records start with 0xFF marker.
+                        // Inline records have raw data (≤ INLINE_DATA_SIZE bytes, no 0xFF prefix).
+                        if !data.is_empty() && data[0] == 0xFF && data.len() >= 1 + 8 + 24 {
+                            // Extent-based file — v3 format:
+                            // [0xFF][file_size: u64 LE][logical: u64][physical: u64][count: u32][pad: u32]
+                            let file_size = u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
+                            let phys = u64::from_le_bytes(data[9 + 8..9 + 16].try_into().unwrap_or([0u8; 8]));
+                            let crc = crate::crc::crc64(&data[1..]);
+                            let entry = NamespaceIndex::make_file_entry(
+                                path,
+                                hdr.lsn,
+                                file_size,
+                                hdr.timestamp_ns,
+                                None,
+                                phys,
+                                crc,
+                            );
+                            index.upsert(entry);
+                        } else if data.len() <= INLINE_DATA_SIZE {
+                            // Inline file — raw data bytes
                             let crc = if data.is_empty() {
                                 0
                             } else {
@@ -176,26 +194,6 @@ pub fn replay_log<B: BlockIo>(
                                 hdr.timestamp_ns,
                                 Some(data),
                                 BLOCK_NULL,
-                                crc,
-                            );
-                            index.upsert(entry);
-                        } else if data.len() >= 24 {
-                            // Extent-based file — decode first extent for root
-                            let mut phys_bytes = [0u8; 8];
-                            phys_bytes.copy_from_slice(&data[8..16]);
-                            let phys = u64::from_le_bytes(phys_bytes);
-                            let mut count_bytes = [0u8; 4];
-                            count_bytes.copy_from_slice(&data[16..20]);
-                            let count = u32::from_le_bytes(count_bytes) as u64;
-                            let file_size = count * BLOCK_SIZE as u64;
-                            let crc = crate::crc::crc64(data);
-                            let entry = NamespaceIndex::make_file_entry(
-                                path,
-                                hdr.lsn,
-                                file_size,
-                                hdr.timestamp_ns,
-                                None,
-                                phys,
                                 crc,
                             );
                             index.upsert(entry);
