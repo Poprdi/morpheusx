@@ -168,3 +168,140 @@ pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
 pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
     kernel_page_table_mut().mark_uncacheable(virt)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PAGE TABLE RESERVATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Maximum number of page-table pages we expect to encounter.
+///
+/// UEFI/OVMF identity-maps up to ~12 GB of RAM.  With 2 MiB huge pages the
+/// page table tree is shallow:
+///   - 1 PML4    (always)
+///   - up to ~6  PDPT pages (one per 512 GiB)
+///   - up to ~24 PD pages   (one per 1 GiB)
+///   - PT pages only if 4 KiB region exists (firmware code, MMIO, etc.)
+///
+/// 512 entries is vastly more than needed but fits comfortably on the stack.
+const MAX_PT_PAGES: usize = 512;
+
+/// Walk the active CR3 page table hierarchy and collect the physical
+/// addresses of **every** page that is itself a page table page (PML4,
+/// PDPT, PD, PT).
+///
+/// This is used very early — before `init_kernel_page_table()` — so it
+/// does NOT depend on any `PageTableManager` state.  It reads CR3 directly
+/// and interprets identity-mapped pointers.
+///
+/// Returns `(pages_array, count)`.
+///
+/// # Safety
+/// - Must run in 64-bit long mode with paging active.
+/// - Physical == virtual (identity-mapped).
+pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
+    let pml4_phys = cr3 & !0xFFFu64;
+
+    let mut pages = [0u64; MAX_PT_PAGES];
+    let mut count = 0usize;
+
+    // Helper closure (inlined) to add a page if not already seen.
+    macro_rules! add_page {
+        ($phys:expr) => {
+            let p = $phys;
+            let mut seen = false;
+            for j in 0..count {
+                if pages[j] == p { seen = true; break; }
+            }
+            if !seen && count < MAX_PT_PAGES {
+                pages[count] = p;
+                count += 1;
+            }
+        };
+    }
+
+    // PML4 itself
+    add_page!(pml4_phys);
+
+    let pml4 = pml4_phys as *const u64;
+    for i in 0..512usize {
+        let e1 = *pml4.add(i);
+        if e1 & 1 == 0 { continue; }           // not present
+        let pdpt_phys = e1 & 0x000F_FFFF_FFFF_F000;
+        add_page!(pdpt_phys);
+
+        let pdpt = pdpt_phys as *const u64;
+        for j in 0..512usize {
+            let e2 = *pdpt.add(j);
+            if e2 & 1 == 0 { continue; }       // not present
+            if e2 & (1 << 7) != 0 { continue; } // 1 GiB huge page — no sub-table
+            let pd_phys = e2 & 0x000F_FFFF_FFFF_F000;
+            add_page!(pd_phys);
+
+            let pd = pd_phys as *const u64;
+            for k in 0..512usize {
+                let e3 = *pd.add(k);
+                if e3 & 1 == 0 { continue; }   // not present
+                if e3 & (1 << 7) != 0 { continue; } // 2 MiB huge page
+                let pt_phys = e3 & 0x000F_FFFF_FFFF_F000;
+                add_page!(pt_phys);
+            }
+        }
+    }
+
+    (pages, count)
+}
+
+/// Reserve every page that the currently-active CR3 page table hierarchy
+/// uses, so that the memory registry never hands them out.
+///
+/// Must be called after `init_global_registry()` but **before** any
+/// `allocate_pages()` calls that use `MaxAddress` or `AnyPages` with
+/// the free-list path — otherwise the allocator might return a page that
+/// is actively part of the live page table tree.
+///
+/// # Safety
+/// - Identity-mapped, long-mode, paging active.
+/// - Memory registry must be initialized.
+pub unsafe fn reserve_page_table_pages() -> usize {
+    use crate::memory::{global_registry_mut, AllocateType, MemoryType};
+    use crate::serial::{put_hex64, put_hex32};
+
+    let (pt_pages, pt_count) = collect_page_table_pages();
+
+    puts("[PAGING] reserving ");
+    put_hex32(pt_count as u32);
+    puts(" page-table pages from allocator\n");
+
+    let registry = global_registry_mut();
+    let mut reserved = 0usize;
+
+    for i in 0..pt_count {
+        let phys = pt_pages[i];
+        match registry.allocate_pages(
+            AllocateType::Address(phys),
+            MemoryType::AllocatedPageTable,
+            1,
+        ) {
+            Ok(_) => {
+                reserved += 1;
+            }
+            Err(_) => {
+                // Page might already be in a non-free region (e.g. RuntimeServices).
+                // That's fine — it just means the allocator can't hand it out anyway.
+                puts("[PAGING]   page ");
+                put_hex64(phys);
+                puts(" not in free list (already reserved)\n");
+            }
+        }
+    }
+
+    puts("[PAGING] reserved ");
+    put_hex32(reserved as u32);
+    puts(" / ");
+    put_hex32(pt_count as u32);
+    puts(" page-table pages\n");
+
+    reserved
+}

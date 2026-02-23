@@ -49,7 +49,11 @@ pub fn mkdir(
 
     // Create the directory.
     let hash = fnv1a_64(normalized.as_bytes());
-    let lsn = log.append(LogOp::MkDir, hash, &[], timestamp_ns)?;
+    let norm_bytes = normalized.as_bytes();
+    let mut payload = Vec::with_capacity(2 + norm_bytes.len());
+    payload.extend_from_slice(&(norm_bytes.len() as u16).to_le_bytes());
+    payload.extend_from_slice(norm_bytes);
+    let lsn = log.append(LogOp::MkDir, hash, &payload, timestamp_ns)?;
     let entry = NamespaceIndex::make_dir_entry(&normalized, lsn, timestamp_ns);
     index.upsert(entry);
 
@@ -175,7 +179,11 @@ pub fn unlink(
         String::from(&path[..path.len() - 1])
     };
     let hash = fnv1a_64(actual_path.as_bytes());
-    let lsn = log.append(LogOp::Delete, hash, &[], timestamp_ns)?;
+    let del_bytes = actual_path.as_bytes();
+    let mut payload = Vec::with_capacity(2 + del_bytes.len());
+    payload.extend_from_slice(&(del_bytes.len() as u16).to_le_bytes());
+    payload.extend_from_slice(del_bytes);
+    let lsn = log.append(LogOp::Delete, hash, &payload, timestamp_ns)?;
     index.mark_deleted(&actual_path)?;
 
     Ok(lsn)
@@ -201,7 +209,11 @@ fn ensure_parent_dirs(
 
         if index.lookup(&current).is_none() {
             let hash = fnv1a_64(current.as_bytes());
-            let lsn = log.append(LogOp::MkDir, hash, &[], timestamp_ns)?;
+            let dir_bytes = current.as_bytes();
+            let mut dir_payload = Vec::with_capacity(2 + dir_bytes.len());
+            dir_payload.extend_from_slice(&(dir_bytes.len() as u16).to_le_bytes());
+            dir_payload.extend_from_slice(dir_bytes);
+            let lsn = log.append(LogOp::MkDir, hash, &dir_payload, timestamp_ns)?;
             let entry = NamespaceIndex::make_dir_entry(&current, lsn, timestamp_ns);
             index.upsert(entry);
         }

@@ -765,19 +765,41 @@ impl MemoryRegistry {
 
         // Find containing free block
         for i in 0..self.free_count {
-            let block = &mut self.free_list[i];
+            let block_base = self.free_list[i].base;
+            let block_end = self.free_list[i].end();
 
-            if addr >= block.base && end <= block.end() {
-                // Split block if necessary
-                // For simplicity, we just shrink it
-                // TODO: proper splitting
-
-                if addr == block.base {
-                    block.base = end;
-                    block.pages -= pages;
+            if addr >= block_base && end <= block_end {
+                if addr == block_base && end == block_end {
+                    // Exact match: remove the block entirely
+                    self.free_list[i] = FreeBlock::empty();
+                    // Compact: move last block into this slot
+                    if i < self.free_count - 1 {
+                        self.free_list[i] = self.free_list[self.free_count - 1];
+                        self.free_list[self.free_count - 1] = FreeBlock::empty();
+                    }
+                    self.free_count -= 1;
+                } else if addr == block_base {
+                    // Allocating from start: shrink block
+                    self.free_list[i].base = end;
+                    self.free_list[i].pages -= pages;
+                } else if end == block_end {
+                    // Allocating from end: shrink block
+                    self.free_list[i].pages = (addr - block_base) / PAGE_SIZE;
                 } else {
-                    // Just mark as smaller (lose some space)
-                    block.pages = (addr - block.base) / PAGE_SIZE;
+                    // Middle: split into two blocks
+                    // Shrink existing block to [block_base, addr)
+                    self.free_list[i].pages = (addr - block_base) / PAGE_SIZE;
+
+                    // Add new block for [end, block_end)
+                    if self.free_count < MAX_FREE_LIST {
+                        self.free_list[self.free_count] = FreeBlock {
+                            base: end,
+                            pages: (block_end - end) / PAGE_SIZE,
+                        };
+                        self.free_count += 1;
+                    } else {
+                        puts("[MEM] WARNING: free list full, lost tail of split block\n");
+                    }
                 }
 
                 return Ok(());

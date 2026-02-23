@@ -169,6 +169,15 @@ pub unsafe fn platform_init_selfcontained(
     
     puts("[HWINIT]   memory registry initialized\n");
 
+    // ── Reserve active page-table pages ──────────────────────────────────
+    // UEFI leaves page tables in memory regions marked as BootServicesData
+    // (reclaimable).  Our registry imports those as "free".  If we allocate
+    // from that range — especially with MaxAddress(4GB) — we can hand out
+    // a page that IS the live PML4/PDPT/PD/PT, corrupting the address
+    // space.  Walk CR3 and punch holes in the free list NOW, before any
+    // allocation can overlap.
+    crate::paging::reserve_page_table_pages();
+
     let registry = global_registry_mut();
     let total_mb = registry.total_memory() / (1024 * 1024);
     let free_mb = registry.free_memory() / (1024 * 1024);
@@ -271,16 +280,21 @@ pub unsafe fn platform_init_selfcontained(
 
     let dma_pages = ((DMA_SIZE + 4095) / 4096) as u64;
     let dma_phys = registry.allocate_pages(
-        AllocateType::MaxAddress(0x100000000), // Under 4GB for 32-bit DMA
-        MemoryType::LoaderData,
+        AllocateType::AnyPages, // Bump allocator range is entirely under 2GB — DMA safe
+        MemoryType::AllocatedDma,
         dma_pages,
     ).map_err(|_| InitError::NoFreeMemory)?;
+
+    // Zero the ENTIRE DMA region.  The bump allocator does NOT zero memory.
+    // VirtIO inspects avail/used ring indices at enable_queue() time; garbage
+    // avail->idx causes "bogus descriptor" and permanently desyncs the driver.
+    core::ptr::write_bytes(dma_phys as *mut u8, 0u8, DMA_SIZE);
 
     puts("[HWINIT]   DMA: ");
     put_hex64(dma_phys);
     puts(" (");
     put_hex32((DMA_SIZE / 1024) as u32);
-    puts(" KB)\n");
+    puts(" KB) — zeroed\n");
 
     // Identity-mapped: CPU address = bus address = physical address
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);

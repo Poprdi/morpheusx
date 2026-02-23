@@ -92,20 +92,32 @@ pub fn read_file_at_lsn<B: BlockIo>(
                         if let Some(op) = LogOp::from_u8(header.op) {
                             match op {
                                 LogOp::Write => {
-                                    // Check if inline (small payload = actual data)
-                                    // or extent-based (payload = extent metadata).
-                                    if payload.len() <= INLINE_DATA_SIZE {
-                                        last_write_data = Some(payload);
+                                    // v2 format: [path_len: u16][path][data...]
+                                    // Skip the path prefix to get actual file data.
+                                    let data = if payload.len() >= 2 {
+                                        let plen = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+                                        let start = 2 + plen;
+                                        if start <= payload.len() {
+                                            &payload[start..]
+                                        } else {
+                                            &payload[..] // fallback: treat entire payload as data
+                                        }
+                                    } else {
+                                        &payload[..]
+                                    };
+
+                                    if data.len() <= INLINE_DATA_SIZE {
+                                        last_write_data = Some(data.to_vec());
                                         last_extent_root = None;
                                         last_file_size = None;
-                                    } else if payload.len() >= 24 {
+                                    } else if data.len() >= 24 {
                                         // Extent metadata.
                                         last_write_data = None;
                                         let mut phys_bytes = [0u8; 8];
-                                        phys_bytes.copy_from_slice(&payload[8..16]);
+                                        phys_bytes.copy_from_slice(&data[8..16]);
                                         last_extent_root = Some(u64::from_le_bytes(phys_bytes));
                                         let mut count_bytes = [0u8; 4];
-                                        count_bytes.copy_from_slice(&payload[16..20]);
+                                        count_bytes.copy_from_slice(&data[16..20]);
                                         let block_count = u32::from_le_bytes(count_bytes) as u64;
                                         last_file_size = Some(block_count * BLOCK_SIZE as u64);
                                     }
