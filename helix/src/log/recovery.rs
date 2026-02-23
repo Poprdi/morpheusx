@@ -18,7 +18,6 @@ use crate::log::LogEngine;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 use alloc::vec;
-use alloc::string::String;
 
 /// Read and validate both superblocks, returning the best one.
 pub fn recover_superblock<B: BlockIo>(
@@ -220,9 +219,44 @@ pub fn replay_log<B: BlockIo>(
                 }
 
                 // Transaction markers, snapshots, checkpoints — skip during replay
-                LogOp::Append | LogOp::SetMeta | LogOp::DedupRef |
+                LogOp::SetMeta | LogOp::DedupRef |
                 LogOp::TxBegin | LogOp::TxCommit | LogOp::TxAbort |
                 LogOp::Snapshot | LogOp::Checkpoint | LogOp::Truncate => {}
+
+                LogOp::Append => {
+                    // Append: extend an existing file's data.
+                    // v2 payload: [path_len: u16][path][appended_data]
+                    if let Some((path, appended)) = decode_path_payload(payload) {
+                        if let Some(existing) = index.lookup_mut(path) {
+                            let old_size = existing.size as usize;
+                            let new_size = old_size + appended.len();
+
+                            if existing.flags & entry_flags::IS_INLINE != 0 {
+                                // Inline file — extend inline_data if it still fits.
+                                if new_size <= INLINE_DATA_SIZE {
+                                    existing.inline_data[old_size..new_size]
+                                        .copy_from_slice(appended);
+                                    existing.size = new_size as u64;
+                                } else {
+                                    // Overflow: data was promoted to an extent by the
+                                    // write path. The extent metadata should appear
+                                    // as a separate Write record; just update size.
+                                    existing.flags &= !entry_flags::IS_INLINE;
+                                    existing.size = new_size as u64;
+                                }
+                            } else {
+                                // Extent-based file — data blocks were already
+                                // written by the original append operation.
+                                // Just update the size.
+                                existing.size = new_size as u64;
+                            }
+                            existing.lsn = hdr.lsn;
+                            existing.modified_ns = hdr.timestamp_ns;
+                            existing.version_count += 1;
+                        }
+                        // If the entry doesn't exist yet, skip (orphaned append).
+                    }
+                }
             }
 
             Ok(())
