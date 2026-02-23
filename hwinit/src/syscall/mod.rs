@@ -2,18 +2,45 @@
 //!
 //! # Syscall numbers
 //!
-//! | Number | Name        | Args                              | Return      |
-//! |--------|-------------|-----------------------------------|-------------|
-//! |  0     | SYS_EXIT    | (code: i32)                       | never       |
-//! |  1     | SYS_WRITE   | (ptr: *u8, len: usize)            | bytes_written|
-//! |  2     | SYS_READ    | (fd, ptr, len)                    | bytes_read  |
-//! |  3     | SYS_YIELD   | ()                                | 0           |
-//! |  4     | SYS_ALLOC   | (pages: u64)                      | phys_base   |
-//! |  5     | SYS_FREE    | (phys_base, pages)                | 0           |
-//! |  6     | SYS_GETPID  | ()                                | pid         |
-//! |  7     | SYS_KILL    | (pid, signal)                     | 0           |
-//! |  8     | SYS_WAIT    | (pid)                             | exit_code   |
-//! |  9     | SYS_SLEEP   | (ticks)                           | 0           |
+//! | Number | Name            | Args                              | Return        |
+//! |--------|-----------------|-----------------------------------|---------------|
+//! |  0     | SYS_EXIT        | (code: i32)                       | never         |
+//! |  1     | SYS_WRITE       | (fd, ptr, len)                    | bytes_written |
+//! |  2     | SYS_READ        | (fd, ptr, len)                    | bytes_read    |
+//! |  3     | SYS_YIELD       | ()                                | 0             |
+//! |  4     | SYS_ALLOC       | (pages: u64)                      | phys_base     |
+//! |  5     | SYS_FREE        | (phys_base, pages)                | 0             |
+//! |  6     | SYS_GETPID      | ()                                | pid           |
+//! |  7     | SYS_KILL        | (pid, signal)                     | 0             |
+//! |  8     | SYS_WAIT        | (pid)                             | exit_code     |
+//! |  9     | SYS_SLEEP       | (millis)                          | 0             |
+//! | 10     | SYS_OPEN        | (path_ptr, path_len, flags)       | fd            |
+//! | 11     | SYS_CLOSE       | (fd)                              | 0             |
+//! | 12     | SYS_SEEK        | (fd, offset, whence)              | new_offset    |
+//! | 13     | SYS_STAT        | (path_ptr, path_len, stat_buf)    | 0             |
+//! | 14     | SYS_READDIR     | (path_ptr, path_len, buf_ptr)     | count         |
+//! | 15     | SYS_MKDIR       | (path_ptr, path_len)              | 0             |
+//! | 16     | SYS_UNLINK      | (path_ptr, path_len)              | 0             |
+//! | 17     | SYS_RENAME      | (old_ptr, old_len, new_ptr,new_l) | 0             |
+//! | 18     | SYS_TRUNCATE    | (fd, new_size) [stub]             | -ENOSYS       |
+//! | 19     | SYS_SYNC        | ()                                | 0             |
+//! | 20     | SYS_SNAPSHOT    | (name_ptr, name_len) [stub]       | -ENOSYS       |
+//! | 21     | SYS_VERSIONS    | (path_ptr, path_len, buf, max)[s] | -ENOSYS       |
+//! | 22     | SYS_CLOCK       | ()                                | nanos         |
+//! | 23     | SYS_SYSINFO     | (buf_ptr)                         | 0             |
+//! | 24     | SYS_GETPPID     | ()                                | parent_pid    |
+//! | 25     | SYS_SPAWN       | (path_ptr, path_len)              | child_pid     |
+//! | 26     | SYS_MMAP        | (pages)                           | virt_addr     |
+//! | 27     | SYS_MUNMAP      | (vaddr, pages)                    | 0             |
+//! | 28     | SYS_DUP         | (old_fd)                          | new_fd        |
+//! | 29     | SYS_SYSLOG      | (ptr, len)                        | len           |
+//! | 30     | SYS_GETCWD      | (buf_ptr, buf_len)                | cwd_len       |
+//! | 31     | SYS_CHDIR       | (path_ptr, path_len)              | 0             |
+//! | 32-41  | SYS_SOCKET..    | (reserved for networking)         | -ENOSYS       |
+//! | 42     | SYS_IOCTL       | (fd, cmd, arg) [stub]             | -ENOSYS       |
+//! | 43     | SYS_MOUNT       | (src_ptr,src_len,dst_ptr,dst_len) | -ENOSYS       |
+//! | 44     | SYS_UMOUNT      | (path_ptr, path_len) [stub]       | -ENOSYS       |
+//! | 45     | SYS_POLL        | (fds_ptr, nfds, timeout) [stub]   | -ENOSYS       |
 
 pub mod handler;
 
@@ -21,7 +48,7 @@ use crate::serial::puts;
 use handler::*;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SYSCALL NUMBERS
+// SYSCALL NUMBERS — core (0-9)
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub const SYS_EXIT: u64 = 0;
@@ -35,7 +62,7 @@ pub const SYS_KILL: u64 = 7;
 pub const SYS_WAIT: u64 = 8;
 pub const SYS_SLEEP: u64 = 9;
 
-// ── HelixFS file system syscalls ─────────────────────────────────────
+// ── HelixFS file system syscalls (10-21) ─────────────────────────────
 pub const SYS_OPEN: u64 = 10;
 pub const SYS_CLOSE: u64 = 11;
 pub const SYS_SEEK: u64 = 12;
@@ -48,6 +75,36 @@ pub const SYS_TRUNCATE: u64 = 18;
 pub const SYS_SYNC: u64 = 19;
 pub const SYS_SNAPSHOT: u64 = 20;
 pub const SYS_VERSIONS: u64 = 21;
+
+// ── System / process / memory (22-31) ────────────────────────────────
+pub const SYS_CLOCK: u64 = 22;
+pub const SYS_SYSINFO: u64 = 23;
+pub const SYS_GETPPID: u64 = 24;
+pub const SYS_SPAWN: u64 = 25;
+pub const SYS_MMAP: u64 = 26;
+pub const SYS_MUNMAP: u64 = 27;
+pub const SYS_DUP: u64 = 28;
+pub const SYS_SYSLOG: u64 = 29;
+pub const SYS_GETCWD: u64 = 30;
+pub const SYS_CHDIR: u64 = 31;
+
+// ── Networking (32-41) — reserved, all return ENOSYS ─────────────────
+pub const SYS_SOCKET: u64 = 32;
+pub const SYS_CONNECT: u64 = 33;
+pub const SYS_SEND: u64 = 34;
+pub const SYS_RECV: u64 = 35;
+pub const SYS_BIND: u64 = 36;
+pub const SYS_LISTEN: u64 = 37;
+pub const SYS_ACCEPT: u64 = 38;
+pub const SYS_SHUTDOWN: u64 = 39;
+pub const SYS_SETSOCKOPT: u64 = 40;
+pub const SYS_DNS_RESOLVE: u64 = 41;
+
+// ── Device / mount (42-45) — reserved stubs ──────────────────────────
+pub const SYS_IOCTL: u64 = 42;
+pub const SYS_MOUNT: u64 = 43;
+pub const SYS_UMOUNT: u64 = 44;
+pub const SYS_POLL: u64 = 45;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EXTERN ASM FUNCTIONS

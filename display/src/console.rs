@@ -128,6 +128,13 @@ impl TextConsole {
         match c {
             '\n' => self.newline(),
             '\r' => self.cursor_col = 0,
+            '\x08' => {
+                // Backspace: move cursor left, erase the cell
+                if self.cursor_col > 0 {
+                    self.cursor_col -= 1;
+                }
+                self.render_char(' ');
+            }
             '\t' => {
                 // Tab to next 8-column boundary
                 let next_tab = (self.cursor_col + 8) & !7;
