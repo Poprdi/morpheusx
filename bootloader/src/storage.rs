@@ -192,18 +192,12 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
         };
 
         if base_addr != 0 {
-            puts("[STORAGE] BAR");
-            morpheus_hwinit::serial::put_hex32(bar_idx as u32);
-            puts(" @ ");
-            morpheus_hwinit::serial::put_hex64(base_addr);
-            puts(" (type=");
-            morpheus_hwinit::serial::put_hex32(bar_type);
-            puts(") mapping...\n");
-
             match kmap_mmio(base_addr, MAP_SIZE) {
-                Ok(()) => puts("[STORAGE]   mapped UC OK\n"),
+                Ok(()) => {}
                 Err(e) => {
-                    puts("[STORAGE]   map_mmio FAILED: ");
+                    puts("[STORAGE] map_mmio BAR");
+                    morpheus_hwinit::serial::put_hex32(bar_idx as u32);
+                    puts(" FAILED: ");
                     puts(e);
                     puts("\n");
                 }
@@ -307,7 +301,8 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     puts("[STORAGE] probing for block device\n");
 
     // Dump PCI bus to serial for device identification diagnostics
-    dump_pci_devices();
+    // (Commenting out PCI dump — enable if debugging PCI device discovery)
+    // dump_pci_devices();
 
     STORAGE_DMA = Some(*dma);
     STORAGE_TSC_FREQ = tsc_freq;
@@ -369,23 +364,8 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             None => continue,
         };
 
-        puts("[STORAGE] trying device ");
-        morpheus_hwinit::serial::put_hex32(i as u32);
-        puts("...\n");
-
         // Map high-address MMIO BARs before driver init touches them
         if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
-            // Read CMD before driver enable for diagnostics
-            let haddr = PciAddr::new(pci_addr.bus, pci_addr.device, pci_addr.function);
-            let cmd_before = pci_cfg_read16(haddr, 0x04);
-            puts("[STORAGE]   CMD before enable: ");
-            morpheus_hwinit::serial::put_hex32(cmd_before as u32);
-            puts(" MEM=");
-            puts(if cmd_before & 0x02 != 0 { "Y" } else { "N" });
-            puts(" BM=");
-            puts(if cmd_before & 0x04 != 0 { "Y" } else { "N" });
-            puts("\n");
-
             map_virtio_bars(pci_addr.bus, pci_addr.device, pci_addr.function);
         }
 
@@ -452,31 +432,6 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         if needs_format {
             puts("[STORAGE] no valid HelixFS — formatting\n");
 
-            // Test write + readback before formatting using raw callbacks
-            {
-                let mut wbuf = [0u8; 512];
-                wbuf[..8].copy_from_slice(b"MXTEST01");
-                let write_ok = raw_write(core::ptr::null_mut(), 0, wbuf.as_ptr(), 512);
-                puts("[STORAGE]   write test LBA0: ");
-                puts(if write_ok { "OK" } else { "FAIL" });
-                puts("\n");
-
-                if write_ok {
-                    let mut rbuf = [0u8; 512];
-                    let read_ok = raw_read(core::ptr::null_mut(), 0, rbuf.as_mut_ptr(), 512);
-                    puts("[STORAGE]   read test LBA0: ");
-                    puts(if read_ok { "OK" } else { "FAIL" });
-                    if read_ok {
-                        puts(" first8=");
-                        for byte in rbuf.iter().take(8) {
-                            morpheus_hwinit::serial::put_hex8(*byte);
-                            puts(" ");
-                        }
-                    }
-                    puts("\n");
-                }
-            }
-
             let uuid = [
                 0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x01,
@@ -509,13 +464,13 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                 }
             }
 
-            // Re-read superblock after format to verify
+            // Verify format succeeded
             match morpheus_helix::log::recovery::recover_superblock(
                 &mut raw_dev,
                 0,
                 info.sector_size,
             ) {
-                Ok(_sb) => puts("[STORAGE] superblock readback OK\n"),
+                Ok(_sb) => {}
                 Err(e) => {
                     puts("[STORAGE] superblock readback FAILED: ");
                     match e {
@@ -628,14 +583,12 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
 
     // Check MBR signature at offset 510-511
     if buf.len() >= 512 && buf[510] == 0x55 && buf[511] == 0xAA {
-        puts("[STORAGE] detected MBR signature at LBA 0\n");
         return true;
     }
 
     // Check GPT header at LBA 1
     let gpt_offset = sector_size as usize;
     if buf.len() >= gpt_offset + 8 && &buf[gpt_offset..gpt_offset + 8] == b"EFI PART" {
-        puts("[STORAGE] detected GPT header at LBA 1\n");
         return true;
     }
 

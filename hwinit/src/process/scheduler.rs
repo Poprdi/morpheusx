@@ -464,15 +464,6 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
                 static mut kernel_syscall_rsp: u64;
             }
             kernel_syscall_rsp = next.kernel_stack_top;
-            puts("[SCHED] ksp=");
-            crate::serial::put_hex64(next.kernel_stack_top);
-            puts(" pid=");
-            put_hex32(next_pid as u32);
-            puts("\n");
-        } else {
-            puts("[SCHED] ksp=0 (skipped) pid=");
-            put_hex32(next_pid as u32);
-            puts("\n");
         }
 
         // Tell the ISR ASM which CR3 to load before iretq.
