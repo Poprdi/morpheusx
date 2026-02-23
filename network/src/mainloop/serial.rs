@@ -67,7 +67,7 @@ pub fn print_hex_byte(value: u8) {
     let lo_char = if lo < 10 { b'0' + lo } else { b'a' + lo - 10 };
     write_byte(hi_char);
     write_byte(lo_char);
-    
+
     let buf = [hi_char, lo_char];
     if let Ok(s) = core::str::from_utf8(&buf) {
         crate::display::display_write(s);
@@ -80,7 +80,11 @@ pub fn print_hex(value: u64) {
     let mut buf = [0u8; 16];
     for i in 0..16 {
         let nibble = ((value >> ((15 - i) * 4)) & 0xF) as u8;
-        let c = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+        let c = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        };
         buf[i] = c;
         write_byte(c);
     }
@@ -96,7 +100,7 @@ pub fn print_u32(value: u32) {
         crate::display::display_write("0");
         return;
     }
-    
+
     let mut buf = [0u8; 10];
     let mut i = 0;
     let mut val = value;
@@ -105,18 +109,18 @@ pub fn print_u32(value: u32) {
         val /= 10;
         i += 1;
     }
-    
+
     let mut display_buf = [0u8; 10];
     let num_digits = i;
     for j in 0..num_digits {
         display_buf[j] = buf[num_digits - 1 - j];
     }
-    
+
     while i > 0 {
         i -= 1;
         write_byte(buf[i]);
     }
-    
+
     if let Ok(s) = core::str::from_utf8(&display_buf[..num_digits]) {
         crate::display::display_write(s);
     }
@@ -144,7 +148,7 @@ pub fn print_ipv4(octets: &[u8; 4]) {
 
 // Legacy aliases for compatibility during transition
 pub use print as serial_print;
-pub use println as serial_println;
 pub use print_hex as serial_print_hex;
 pub use print_hex_byte as serial_print_hex_byte;
 pub use print_u32 as serial_print_decimal;
+pub use println as serial_println;

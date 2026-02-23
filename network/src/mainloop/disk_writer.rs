@@ -98,7 +98,7 @@ unsafe fn flush_buffer(blk: &mut UnifiedBlockDevice) -> usize {
     }
 
     let bytes_to_write = BUFFER_FILL;
-    let num_sectors = ((bytes_to_write + 511) / 512) as u32;
+    let num_sectors = bytes_to_write.div_ceil(512) as u32;
 
     // Identity mapped post-EBS, so virtual == physical
     let buffer_phys = (&raw const WRITE_BUFFER).cast::<u8>() as u64;
@@ -107,14 +107,17 @@ unsafe fn flush_buffer(blk: &mut UnifiedBlockDevice) -> usize {
     NEXT_REQUEST_ID = NEXT_REQUEST_ID.wrapping_add(1);
 
     // Drain pending completions
-    while let Some(_) = blk.poll_completion() {}
+    while blk.poll_completion().is_some() {}
 
     if !blk.can_submit() {
         serial::println("[DISK] ERROR: Queue full");
         return 0;
     }
 
-    if blk.submit_write(NEXT_SECTOR, buffer_phys, num_sectors, request_id).is_err() {
+    if blk
+        .submit_write(NEXT_SECTOR, buffer_phys, num_sectors, request_id)
+        .is_err()
+    {
         serial::print("[DISK] ERROR: Submit failed at sector ");
         serial::print_hex(NEXT_SECTOR);
         serial::println("");
@@ -168,11 +171,10 @@ unsafe fn buffer_write(blk: &mut UnifiedBlockDevice, data: &[u8]) -> usize {
         consumed += to_copy;
         remaining = &remaining[to_copy..];
 
-        if BUFFER_FILL >= BUFFER_SIZE {
-            if flush_buffer(blk) == 0 {
+        if BUFFER_FILL >= BUFFER_SIZE
+            && flush_buffer(blk) == 0 {
                 break;
             }
-        }
     }
 
     consumed

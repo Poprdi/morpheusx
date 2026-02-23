@@ -16,8 +16,10 @@
 ///
 /// Tracks who owns each buffer to prevent use-after-submit bugs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum BufferOwnership {
     /// Buffer is not allocated, available for use.
+    #[default]
     Free,
     /// Buffer is owned by the driver (CPU may access).
     DriverOwned,
@@ -42,8 +44,3 @@ impl BufferOwnership {
     }
 }
 
-impl Default for BufferOwnership {
-    fn default() -> Self {
-        BufferOwnership::Free
-    }
-}

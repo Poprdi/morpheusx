@@ -26,7 +26,7 @@
 #[repr(u8)]
 pub enum Signal {
     /// Keyboard interrupt (Ctrl-C).
-    SIGINT  = 2,
+    SIGINT = 2,
     /// Kill (cannot be caught or ignored).
     SIGKILL = 9,
     /// Segmentation fault.
@@ -56,7 +56,7 @@ impl Signal {
     /// Default action when the process has no handler registered.
     pub const fn default_action(self) -> SignalAction {
         match self {
-            Signal::SIGINT  => SignalAction::Terminate,
+            Signal::SIGINT => SignalAction::Terminate,
             Signal::SIGKILL => SignalAction::Terminate,
             Signal::SIGSEGV => SignalAction::Terminate,
             Signal::SIGTERM => SignalAction::Terminate,
@@ -69,14 +69,14 @@ impl Signal {
     /// Construct from a raw number.  Returns None if unknown.
     pub const fn from_u8(n: u8) -> Option<Self> {
         match n {
-            2  => Some(Signal::SIGINT),
-            9  => Some(Signal::SIGKILL),
+            2 => Some(Signal::SIGINT),
+            9 => Some(Signal::SIGKILL),
             11 => Some(Signal::SIGSEGV),
             15 => Some(Signal::SIGTERM),
             17 => Some(Signal::SIGCHLD),
             18 => Some(Signal::SIGCONT),
             19 => Some(Signal::SIGSTOP),
-            _  => None,
+            _ => None,
         }
     }
 }

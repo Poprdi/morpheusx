@@ -35,7 +35,13 @@ pub fn rect_outline(
     if h > t * 2 {
         canvas.fill_rect(x, y + t, t, h - t * 2, color);
         // Right edge
-        canvas.fill_rect(x.saturating_add(w).saturating_sub(t), y + t, t, h - t * 2, color);
+        canvas.fill_rect(
+            x.saturating_add(w).saturating_sub(t),
+            y + t,
+            t,
+            h - t * 2,
+            color,
+        );
     }
 }
 

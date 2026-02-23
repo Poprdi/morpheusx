@@ -1,9 +1,9 @@
-use alloc::vec::Vec;
 use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::rect::Rect;
 use crate::theme::Theme;
 use crate::window::Window;
+use alloc::vec::Vec;
 
 const MAX_DAMAGE_RECTS: usize = 16;
 
@@ -40,12 +40,7 @@ impl Compositor {
         !self.damage.is_empty()
     }
 
-    pub fn compose(
-        &mut self,
-        canvas: &mut dyn Canvas,
-        windows: &[Window],
-        _theme: &Theme,
-    ) {
+    pub fn compose(&mut self, canvas: &mut dyn Canvas, windows: &[Window], _theme: &Theme) {
         if self.damage.is_empty() {
             return;
         }
@@ -80,12 +75,7 @@ impl Compositor {
         self.damage.clear();
     }
 
-    fn blit_window_to_canvas(
-        &self,
-        canvas: &mut dyn Canvas,
-        win: &Window,
-        damage: &Rect,
-    ) {
+    fn blit_window_to_canvas(&self, canvas: &mut dyn Canvas, win: &Window, damage: &Rect) {
         let content_x = win.x.max(0) as u32;
         let content_y = win.y.max(0) as u32;
         let content_rect = Rect::new(content_x, content_y, win.width, win.height);
@@ -110,13 +100,7 @@ impl Compositor {
                 if src_end > src.len() {
                     break;
                 }
-                canvas.blit(
-                    isect.x,
-                    isect.y + row,
-                    &src[src_start..src_end],
-                    isect.w,
-                    1,
-                );
+                canvas.blit(isect.x, isect.y + row, &src[src_start..src_end], isect.w, 1);
             }
         } else {
             for row in 0..isect.h {
@@ -176,10 +160,7 @@ mod tests {
 
     #[test]
     fn merge_overlapping() {
-        let rects = [
-            Rect::new(0, 0, 10, 10),
-            Rect::new(5, 5, 10, 10),
-        ];
+        let rects = [Rect::new(0, 0, 10, 10), Rect::new(5, 5, 10, 10)];
         let merged = merge_rects(&rects);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0], Rect::new(0, 0, 15, 15));
@@ -187,10 +168,7 @@ mod tests {
 
     #[test]
     fn merge_disjoint() {
-        let rects = [
-            Rect::new(0, 0, 5, 5),
-            Rect::new(20, 20, 5, 5),
-        ];
+        let rects = [Rect::new(0, 0, 5, 5), Rect::new(20, 20, 5, 5)];
         let merged = merge_rects(&rects);
         assert_eq!(merged.len(), 2);
     }

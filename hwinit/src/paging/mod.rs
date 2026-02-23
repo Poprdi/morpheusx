@@ -88,7 +88,9 @@ pub fn is_paging_initialized() -> bool {
 /// # Safety
 /// Must only be called after `init_kernel_page_table()`.
 pub unsafe fn kernel_page_table() -> &'static PageTableManager {
-    KERNEL_PT.as_ref().expect("kernel page table not initialized")
+    KERNEL_PT
+        .as_ref()
+        .expect("kernel page table not initialized")
 }
 
 /// Borrow the kernel `PageTableManager` (mutable).
@@ -97,7 +99,9 @@ pub unsafe fn kernel_page_table() -> &'static PageTableManager {
 /// Must only be called after `init_kernel_page_table()`.  Caller is
 /// responsible for serializing access (single-threaded kernel is fine).
 pub unsafe fn kernel_page_table_mut() -> &'static mut PageTableManager {
-    KERNEL_PT.as_mut().expect("kernel page table not initialized")
+    KERNEL_PT
+        .as_mut()
+        .expect("kernel page table not initialized")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -212,7 +216,10 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
             let p = $phys;
             let mut seen = false;
             for j in 0..count {
-                if pages[j] == p { seen = true; break; }
+                if pages[j] == p {
+                    seen = true;
+                    break;
+                }
             }
             if !seen && count < MAX_PT_PAGES {
                 pages[count] = p;
@@ -227,23 +234,33 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
     let pml4 = pml4_phys as *const u64;
     for i in 0..512usize {
         let e1 = *pml4.add(i);
-        if e1 & 1 == 0 { continue; }           // not present
+        if e1 & 1 == 0 {
+            continue;
+        } // not present
         let pdpt_phys = e1 & 0x000F_FFFF_FFFF_F000;
         add_page!(pdpt_phys);
 
         let pdpt = pdpt_phys as *const u64;
         for j in 0..512usize {
             let e2 = *pdpt.add(j);
-            if e2 & 1 == 0 { continue; }       // not present
-            if e2 & (1 << 7) != 0 { continue; } // 1 GiB huge page — no sub-table
+            if e2 & 1 == 0 {
+                continue;
+            } // not present
+            if e2 & (1 << 7) != 0 {
+                continue;
+            } // 1 GiB huge page — no sub-table
             let pd_phys = e2 & 0x000F_FFFF_FFFF_F000;
             add_page!(pd_phys);
 
             let pd = pd_phys as *const u64;
             for k in 0..512usize {
                 let e3 = *pd.add(k);
-                if e3 & 1 == 0 { continue; }   // not present
-                if e3 & (1 << 7) != 0 { continue; } // 2 MiB huge page
+                if e3 & 1 == 0 {
+                    continue;
+                } // not present
+                if e3 & (1 << 7) != 0 {
+                    continue;
+                } // 2 MiB huge page
                 let pt_phys = e3 & 0x000F_FFFF_FFFF_F000;
                 add_page!(pt_phys);
             }
@@ -266,7 +283,7 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
 /// - Memory registry must be initialized.
 pub unsafe fn reserve_page_table_pages() -> usize {
     use crate::memory::{global_registry_mut, AllocateType, MemoryType};
-    use crate::serial::{put_hex64, put_hex32};
+    use crate::serial::{put_hex32, put_hex64};
 
     let (pt_pages, pt_count) = collect_page_table_pages();
 

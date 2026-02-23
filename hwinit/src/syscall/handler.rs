@@ -44,7 +44,9 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 len
             } else {
                 // Write raw bytes to serial one at a time.
-                for &b in bytes { crate::serial::putc(b); }
+                for &b in bytes {
+                    crate::serial::putc(b);
+                }
                 len
             }
         }
@@ -57,8 +59,12 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
             let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
             let ts = crate::cpu::tsc::read_tsc();
             match morpheus_helix::vfs::vfs_write(
-                &mut fs.device, &mut fs.mount_table, fd_table,
-                fd as usize, data, ts,
+                &mut fs.device,
+                &mut fs.mount_table,
+                fd_table,
+                fd as usize,
+                data,
+                ts,
             ) {
                 Ok(n) => n as u64,
                 Err(e) => helix_err_to_errno(e),
@@ -94,8 +100,11 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
             let fd_table = SCHEDULER.current_fd_table_mut();
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
             match morpheus_helix::vfs::vfs_read(
-                &mut fs.device, &fs.mount_table, fd_table,
-                fd as usize, buf,
+                &mut fs.device,
+                &fs.mount_table,
+                fd_table,
+                fd as usize,
+                buf,
             ) {
                 Ok(n) => n as u64,
                 Err(e) => helix_err_to_errno(e),
@@ -176,8 +185,7 @@ pub unsafe fn sys_sleep(millis: u64) -> u64 {
         return 0;
     }
     let ticks_per_ms = tsc_freq / 1000;
-    let deadline = crate::cpu::tsc::read_tsc()
-        .saturating_add(millis.saturating_mul(ticks_per_ms));
+    let deadline = crate::cpu::tsc::read_tsc().saturating_add(millis.saturating_mul(ticks_per_ms));
     crate::process::scheduler::block_sleep(deadline)
 }
 
@@ -188,12 +196,14 @@ pub unsafe fn sys_sleep(millis: u64) -> u64 {
 const ENOSYS: u64 = u64::MAX - 37;
 const EINVAL: u64 = u64::MAX;
 const ENOENT: u64 = u64::MAX - 2;
-const EIO:    u64 = u64::MAX - 5;
-const EBADF:  u64 = u64::MAX - 9;
+const EIO: u64 = u64::MAX - 5;
+const EBADF: u64 = u64::MAX - 9;
 
 /// Extract a path `&str` from a user pointer+length, with validation.
 unsafe fn user_path(ptr: u64, len: u64) -> Option<&'static str> {
-    if ptr == 0 || len == 0 || len > 255 { return None; }
+    if ptr == 0 || len == 0 || len > 255 {
+        return None;
+    }
     let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
     core::str::from_utf8(bytes).ok()
 }
@@ -201,19 +211,19 @@ unsafe fn user_path(ptr: u64, len: u64) -> Option<&'static str> {
 fn helix_err_to_errno(_e: morpheus_helix::error::HelixError) -> u64 {
     use morpheus_helix::error::HelixError::*;
     match _e {
-        NotFound          => ENOENT,
-        AlreadyExists     => u64::MAX - 17,   // EEXIST
-        InvalidFd         => EBADF,
-        TooManyOpenFiles  => u64::MAX - 24,   // EMFILE
-        ReadOnly          => u64::MAX - 30,   // EROFS
-        IsADirectory      => u64::MAX - 21,   // EISDIR
-        DirectoryNotEmpty => u64::MAX - 39,   // ENOTEMPTY
-        NoSpace           => u64::MAX - 28,   // ENOSPC
-        MountNotFound     => ENOENT,
-        PermissionDenied  => u64::MAX - 13,   // EACCES
-        InvalidOffset     => EINVAL,
+        NotFound => ENOENT,
+        AlreadyExists => u64::MAX - 17, // EEXIST
+        InvalidFd => EBADF,
+        TooManyOpenFiles => u64::MAX - 24,  // EMFILE
+        ReadOnly => u64::MAX - 30,          // EROFS
+        IsADirectory => u64::MAX - 21,      // EISDIR
+        DirectoryNotEmpty => u64::MAX - 39, // ENOTEMPTY
+        NoSpace => u64::MAX - 28,           // ENOSPC
+        MountNotFound => ENOENT,
+        PermissionDenied => u64::MAX - 13, // EACCES
+        InvalidOffset => EINVAL,
         IoReadFailed | IoWriteFailed | IoFlushFailed => EIO,
-        _                 => EINVAL,
+        _ => EINVAL,
     }
 }
 
@@ -231,8 +241,12 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
     let ts = crate::cpu::tsc::read_tsc();
 
     match morpheus_helix::vfs::vfs_open(
-        &mut fs.device, &mut fs.mount_table, fd_table,
-        path, flags as u32, ts,
+        &mut fs.device,
+        &mut fs.mount_table,
+        fd_table,
+        path,
+        flags as u32,
+        ts,
     ) {
         Ok(fd) => fd as u64,
         Err(e) => helix_err_to_errno(e),
@@ -255,7 +269,13 @@ pub unsafe fn sys_fs_seek(fd: u64, offset: u64, whence: u64) -> u64 {
         None => return ENOSYS,
     };
     let fd_table = SCHEDULER.current_fd_table_mut();
-    match morpheus_helix::vfs::vfs_seek(&fs.mount_table, fd_table, fd as usize, offset as i64, whence) {
+    match morpheus_helix::vfs::vfs_seek(
+        &fs.mount_table,
+        fd_table,
+        fd as usize,
+        offset as i64,
+        whence,
+    ) {
         Ok(pos) => pos,
         Err(e) => helix_err_to_errno(e),
     }

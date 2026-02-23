@@ -46,10 +46,10 @@
 pub mod adapter;
 pub mod context;
 pub mod disk_writer;
+pub mod orchestrator;
 pub mod serial;
 pub mod state;
 pub mod states;
-pub mod orchestrator;
 
 // Support modules
 pub mod phases;
@@ -59,10 +59,10 @@ pub mod runner;
 pub use adapter::SmoltcpAdapter;
 pub use context::{Context, DownloadConfig, Timeouts};
 pub use disk_writer::DiskWriter;
-pub use serial::{print, println, print_hex, print_u32, print_mac, print_ipv4};
-pub use state::{State, StepResult};
-pub use states::{InitState, DhcpState, DnsState, ConnectState, HttpState, DoneState, FailedState};
-pub use states::{GptPrepState, LinkWaitState, ManifestState, ManifestConfig, ManifestMode};
 pub use orchestrator::{download, download_with_config, DownloadResult};
 pub use phases::{phase1_rx_refill, phase5_tx_completions, TX_BUDGET};
-pub use runner::{run_iteration, IterationResult, MainLoopConfig, get_tsc};
+pub use runner::{get_tsc, run_iteration, IterationResult, MainLoopConfig};
+pub use serial::{print, print_hex, print_ipv4, print_mac, print_u32, println};
+pub use state::{State, StepResult};
+pub use states::{ConnectState, DhcpState, DnsState, DoneState, FailedState, HttpState, InitState};
+pub use states::{GptPrepState, LinkWaitState, ManifestConfig, ManifestMode, ManifestState};

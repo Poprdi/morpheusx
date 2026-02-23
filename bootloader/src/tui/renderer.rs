@@ -1,11 +1,11 @@
 //! Screen — framebuffer text console with the same API as the old UEFI version.
 //! Under the hood: display crate's TextConsole rendering 8x16 glyphs via ASM.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use morpheus_display::console::TextConsole;
 use morpheus_display::framebuffer::Framebuffer;
 use morpheus_display::types::FramebufferInfo;
-use alloc::vec;
-use alloc::vec::Vec;
 
 // VGA/EFI text color indices — same values the display crate expects
 pub const EFI_BLACK: usize = 0x00;
@@ -46,18 +46,35 @@ impl Screen {
             mask.push(vec![false; width]);
         }
 
-        Self { console, width, height, mask }
+        Self {
+            console,
+            width,
+            height,
+            mask,
+        }
     }
 
-    pub fn width(&self) -> usize { self.width }
-    pub fn height(&self) -> usize { self.height }
+    pub fn width(&self) -> usize {
+        self.width
+    }
+    pub fn height(&self) -> usize {
+        self.height
+    }
 
     pub fn center_x(&self, content_width: usize) -> usize {
-        if self.width > content_width { (self.width - content_width) / 2 } else { 0 }
+        if self.width > content_width {
+            (self.width - content_width) / 2
+        } else {
+            0
+        }
     }
 
     pub fn center_y(&self, content_height: usize) -> usize {
-        if self.height > content_height { (self.height - content_height) / 2 } else { 0 }
+        if self.height > content_height {
+            (self.height - content_height) / 2
+        } else {
+            0
+        }
     }
 
     pub fn center_xy(&self, content_width: usize, content_height: usize) -> (usize, usize) {
@@ -67,7 +84,9 @@ impl Screen {
     pub fn clear(&mut self) {
         self.console.clear();
         for row in &mut self.mask {
-            for cell in row { *cell = false; }
+            for cell in row {
+                *cell = false;
+            }
         }
     }
 
@@ -102,7 +121,9 @@ impl Screen {
         if y < self.height {
             for (i, _) in s.chars().enumerate() {
                 let pos = x + i;
-                if pos < self.width { self.mask[y][pos] = true; }
+                if pos < self.width {
+                    self.mask[y][pos] = true;
+                }
             }
         }
     }
@@ -121,9 +142,18 @@ impl Screen {
     }
 
     pub fn draw_centered_block(
-        &mut self, lines: &[&str], width: usize, start_y: usize, fg: usize, bg: usize,
+        &mut self,
+        lines: &[&str],
+        width: usize,
+        start_y: usize,
+        fg: usize,
+        bg: usize,
     ) {
-        let x_offset = if self.width > width { (self.width - width) / 2 } else { 0 };
+        let x_offset = if self.width > width {
+            (self.width - width) / 2
+        } else {
+            0
+        };
         for (i, line) in lines.iter().enumerate() {
             let y = start_y + i;
             if y < self.height {
@@ -133,9 +163,15 @@ impl Screen {
     }
 
     #[inline]
-    pub fn set_colors(&mut self, fg: usize, bg: usize) { self.set_color(fg, bg); }
+    pub fn set_colors(&mut self, fg: usize, bg: usize) {
+        self.set_color(fg, bg);
+    }
     #[inline]
-    pub fn print(&mut self, s: &str) { self.put_str(s); }
+    pub fn print(&mut self, s: &str) {
+        self.put_str(s);
+    }
     #[inline]
-    pub fn print_char(&mut self, ch: char) { self.put_char(ch); }
+    pub fn print_char(&mut self, ch: char) {
+        self.put_char(ch);
+    }
 }

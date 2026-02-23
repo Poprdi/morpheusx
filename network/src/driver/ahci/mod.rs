@@ -252,7 +252,7 @@ impl AhciDriver {
         // ═══════════════════════════════════════════════════════════════════
         // STEP 2: Read capabilities
         // ═══════════════════════════════════════════════════════════════════
-        let cap = asm_ahci_read_cap(abar);
+        let _cap = asm_ahci_read_cap(abar);
         let num_slots = asm_ahci_get_num_cmd_slots(abar);
         let ports_impl = asm_ahci_read_pi(abar);
 

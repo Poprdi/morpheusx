@@ -239,8 +239,8 @@ impl GptOps {
         let my_lba = u64::from_le_bytes(primary_header[24..32].try_into().unwrap()); // Should be 1
         let alternate_lba = u64::from_le_bytes(primary_header[32..40].try_into().unwrap()); // Backup header LBA
         let entry_lba = u64::from_le_bytes(primary_header[72..80].try_into().unwrap());
-        let num_entries = u32::from_le_bytes(primary_header[80..84].try_into().unwrap());
-        let entry_size = u32::from_le_bytes(primary_header[84..88].try_into().unwrap());
+        let _num_entries = u32::from_le_bytes(primary_header[80..84].try_into().unwrap());
+        let _entry_size = u32::from_le_bytes(primary_header[84..88].try_into().unwrap());
 
         // Read partition entries (primary)
         let mut entry_buf = [0u8; SECTOR_SIZE * 32];
@@ -256,7 +256,7 @@ impl GptOps {
         for i in 0..MAX_PARTITION_ENTRIES {
             let offset = i * PARTITION_ENTRY_SIZE;
             let type_bytes = &entry_buf[offset..offset + 16];
-            if type_bytes == &[0u8; 16] {
+            if type_bytes == [0u8; 16] {
                 slot_index = Some(i);
                 break;
             }

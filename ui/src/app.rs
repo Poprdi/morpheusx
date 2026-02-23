@@ -1,8 +1,8 @@
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 use crate::canvas::Canvas;
 use crate::event::Event;
 use crate::theme::Theme;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 pub enum AppResult {
     Continue,

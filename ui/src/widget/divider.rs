@@ -1,8 +1,8 @@
+use super::Widget;
 use crate::canvas::Canvas;
 use crate::draw::shapes::{hline, vline};
 use crate::event::{Event, EventResult};
 use crate::theme::Theme;
-use super::Widget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {

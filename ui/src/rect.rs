@@ -14,7 +14,12 @@ impl Rect {
 
     #[inline]
     pub const fn zero() -> Self {
-        Self { x: 0, y: 0, w: 0, h: 0 }
+        Self {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        }
     }
 
     #[inline]

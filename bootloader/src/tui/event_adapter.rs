@@ -1,7 +1,6 @@
 use crate::tui::input::{
-    InputKey, SCAN_UP, SCAN_DOWN, SCAN_LEFT, SCAN_RIGHT, SCAN_HOME, SCAN_END,
-    SCAN_PGUP, SCAN_PGDN, SCAN_DELETE, SCAN_ESC, SCAN_F1, SCAN_F12,
-    KEY_ENTER, KEY_BACKSPACE, KEY_TAB,
+    InputKey, KEY_BACKSPACE, KEY_ENTER, KEY_TAB, SCAN_DELETE, SCAN_DOWN, SCAN_END, SCAN_ESC,
+    SCAN_F1, SCAN_F12, SCAN_HOME, SCAN_LEFT, SCAN_PGDN, SCAN_PGUP, SCAN_RIGHT, SCAN_UP,
 };
 use morpheus_ui::event::{Event, Key, KeyEvent, Modifiers};
 
@@ -24,9 +23,7 @@ pub fn translate_key(input: &InputKey, kb: &crate::tui::input::Keyboard) -> Opti
             SCAN_PGDN => Key::PageDown,
             SCAN_DELETE => Key::Delete,
             SCAN_ESC => Key::Escape,
-            sc if sc >= SCAN_F1 && sc <= SCAN_F12 => {
-                Key::F((sc - SCAN_F1 + 1) as u8)
-            }
+            sc if (SCAN_F1..=SCAN_F12).contains(&sc) => Key::F((sc - SCAN_F1 + 1) as u8),
             _ => return None,
         }
     } else if input.unicode_char != 0 {

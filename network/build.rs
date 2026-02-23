@@ -193,8 +193,7 @@ fn assemble_file_checked(
 
     // Create unique object name to avoid collisions
     let obj_name = asm_path
-        .replace('/', "_")
-        .replace('\\', "_")
+        .replace(['/', '\\'], "_")
         .replace(".s", ".o")
         .replace(".S", ".o");
 

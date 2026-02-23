@@ -24,7 +24,11 @@ impl DmaRegion {
     /// - `bus_addr` must be the corresponding device-visible address
     /// - Memory must be identity-mapped or IOMMU configured
     pub const unsafe fn new(cpu_ptr: *mut u8, bus_addr: u64, size: usize) -> Self {
-        Self { cpu_ptr, bus_addr, size }
+        Self {
+            cpu_ptr,
+            bus_addr,
+            size,
+        }
     }
 
     /// CPU base pointer.

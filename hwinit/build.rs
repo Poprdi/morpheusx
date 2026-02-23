@@ -33,7 +33,10 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     if !target.contains("x86_64") {
-        println!("cargo:warning=Skipping ASM for non-x86_64 target: {}", target);
+        println!(
+            "cargo:warning=Skipping ASM for non-x86_64 target: {}",
+            target
+        );
         return;
     }
 
@@ -48,7 +51,10 @@ fn main() {
         "elf64"
     };
 
-    println!("cargo:warning=Building hwinit ASM for: {} ({})", target, obj_format);
+    println!(
+        "cargo:warning=Building hwinit ASM for: {} ({})",
+        target, obj_format
+    );
 
     let mut objects = Vec::new();
 

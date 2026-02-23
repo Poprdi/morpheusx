@@ -39,7 +39,7 @@
 //! | FreePool              | free_pool()                   |
 //! | SetMemoryAttributes   | (not needed post-EBS)         |
 
-use crate::serial::{puts, put_hex64, put_hex32};
+use crate::serial::{put_hex32, put_hex64, puts};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -132,12 +132,13 @@ impl MemoryType {
 
     /// Is this memory type free for general use?
     pub fn is_free(&self) -> bool {
-        matches!(self,
-            MemoryType::Conventional |
-            MemoryType::LoaderCode |
-            MemoryType::LoaderData |
-            MemoryType::BootServicesCode |
-            MemoryType::BootServicesData
+        matches!(
+            self,
+            MemoryType::Conventional
+                | MemoryType::LoaderCode
+                | MemoryType::LoaderData
+                | MemoryType::BootServicesCode
+                | MemoryType::BootServicesData
         )
     }
 
@@ -148,31 +149,32 @@ impl MemoryType {
 
     /// Must this memory be preserved?
     pub fn must_preserve(&self) -> bool {
-        matches!(self,
-            MemoryType::Reserved |
-            MemoryType::RuntimeServicesCode |
-            MemoryType::RuntimeServicesData |
-            MemoryType::AcpiNvs |
-            MemoryType::Mmio |
-            MemoryType::MmioPortSpace |
-            MemoryType::PalCode |
-            MemoryType::Unusable
+        matches!(
+            self,
+            MemoryType::Reserved
+                | MemoryType::RuntimeServicesCode
+                | MemoryType::RuntimeServicesData
+                | MemoryType::AcpiNvs
+                | MemoryType::Mmio
+                | MemoryType::MmioPortSpace
+                | MemoryType::PalCode
+                | MemoryType::Unusable
         )
     }
 
     /// Convert to E820 type for Linux handoff.
     pub fn to_e820(&self) -> E820Type {
         match self {
-            MemoryType::Conventional |
-            MemoryType::LoaderCode |
-            MemoryType::LoaderData |
-            MemoryType::BootServicesCode |
-            MemoryType::BootServicesData |
-            MemoryType::Allocated |
-            MemoryType::AllocatedDma |
-            MemoryType::AllocatedStack |
-            MemoryType::AllocatedPageTable |
-            MemoryType::AllocatedHeap => E820Type::Ram,
+            MemoryType::Conventional
+            | MemoryType::LoaderCode
+            | MemoryType::LoaderData
+            | MemoryType::BootServicesCode
+            | MemoryType::BootServicesData
+            | MemoryType::Allocated
+            | MemoryType::AllocatedDma
+            | MemoryType::AllocatedStack
+            | MemoryType::AllocatedPageTable
+            | MemoryType::AllocatedHeap => E820Type::Ram,
 
             MemoryType::AcpiReclaim => E820Type::Acpi,
             MemoryType::AcpiNvs => E820Type::Nvs,
@@ -194,22 +196,22 @@ pub struct MemoryAttribute(pub u64);
 
 impl MemoryAttribute {
     // Cache attributes (mutually exclusive)
-    pub const UC: Self = Self(0x0000_0000_0000_0001);  // Uncacheable
-    pub const WC: Self = Self(0x0000_0000_0000_0002);  // Write-combining
-    pub const WT: Self = Self(0x0000_0000_0000_0004);  // Write-through
-    pub const WB: Self = Self(0x0000_0000_0000_0008);  // Write-back
+    pub const UC: Self = Self(0x0000_0000_0000_0001); // Uncacheable
+    pub const WC: Self = Self(0x0000_0000_0000_0002); // Write-combining
+    pub const WT: Self = Self(0x0000_0000_0000_0004); // Write-through
+    pub const WB: Self = Self(0x0000_0000_0000_0008); // Write-back
     pub const UCE: Self = Self(0x0000_0000_0000_0010); // Uncacheable, exported
 
     // Physical memory protection
-    pub const WP: Self = Self(0x0000_0000_0000_1000);  // Write-protected
-    pub const RP: Self = Self(0x0000_0000_0000_2000);  // Read-protected
-    pub const XP: Self = Self(0x0000_0000_0000_4000);  // Execute-protected
-    pub const NV: Self = Self(0x0000_0000_0000_8000);  // Non-volatile
+    pub const WP: Self = Self(0x0000_0000_0000_1000); // Write-protected
+    pub const RP: Self = Self(0x0000_0000_0000_2000); // Read-protected
+    pub const XP: Self = Self(0x0000_0000_0000_4000); // Execute-protected
+    pub const NV: Self = Self(0x0000_0000_0000_8000); // Non-volatile
 
     // UEFI 2.5+
     pub const MORE_RELIABLE: Self = Self(0x0000_0000_0001_0000);
-    pub const RO: Self = Self(0x0000_0000_0002_0000);  // Read-only
-    pub const SP: Self = Self(0x0000_0000_0004_0000);  // Specific-purpose
+    pub const RO: Self = Self(0x0000_0000_0002_0000); // Read-only
+    pub const SP: Self = Self(0x0000_0000_0004_0000); // Specific-purpose
 
     // Runtime
     pub const RUNTIME: Self = Self(0x8000_0000_0000_0000); // Needs runtime mapping
@@ -518,9 +520,7 @@ impl MemoryRegistry {
         for i in 0..self.free_count {
             for j in 0..(self.free_count - 1 - i) {
                 if self.free_list[j].base > self.free_list[j + 1].base {
-                    let tmp = self.free_list[j];
-                    self.free_list[j] = self.free_list[j + 1];
-                    self.free_list[j + 1] = tmp;
+                    self.free_list.swap(j, j + 1);
                 }
             }
         }
@@ -871,7 +871,11 @@ impl MemoryRegistry {
             let usable_end = block.end().min(0x1_0000_0000);
 
             // Skip first 1MB (legacy area)
-            let start = if block.base < 0x10_0000 { 0x10_0000 } else { block.base };
+            let start = if block.base < 0x10_0000 {
+                0x10_0000
+            } else {
+                block.base
+            };
             let adjusted_size = usable_end.saturating_sub(start);
 
             if adjusted_size > best_size {
@@ -953,17 +957,13 @@ impl MemoryRegistry {
         }
 
         // For larger, allocate full pages
-        let pages = (size as u64 + PAGE_SIZE - 1) / PAGE_SIZE;
+        let pages = (size as u64).div_ceil(PAGE_SIZE);
         self.alloc_dma_pages(pages)
     }
 
     /// Allocate stack pages.
     pub fn alloc_stack(&mut self, pages: u64) -> Result<u64, MemoryError> {
-        self.allocate_pages(
-            AllocateType::AnyPages,
-            MemoryType::AllocatedStack,
-            pages,
-        )
+        self.allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedStack, pages)
     }
 }
 

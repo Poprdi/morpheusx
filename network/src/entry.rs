@@ -37,12 +37,12 @@
 //! });
 //! ```
 
-use crate::dma::DmaRegion;
 use crate::boot::probe::{scan_for_nic, DetectedNic, ProbeError};
-use crate::driver::virtio::{VirtioConfig, VirtioNetDriver};
+use crate::dma::DmaRegion;
 use crate::driver::intel::{E1000eConfig, E1000eDriver};
+use crate::driver::virtio::{VirtioConfig, VirtioNetDriver};
+use crate::mainloop::serial::{print, print_hex, println};
 use crate::mainloop::{download_with_config, DownloadConfig, DownloadResult};
-use crate::mainloop::serial::{print, println, print_hex};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -200,9 +200,11 @@ fn run_download_with_driver<D: crate::driver::traits::NetworkDriver>(
     match result {
         DownloadResult::Success { bytes_written, .. } => {
             print("[NET] Download complete: ");
-            print_hex(bytes_written as u64);
+            print_hex(bytes_written);
             println(" bytes");
-            RunResult::Success { bytes: bytes_written as u64 }
+            RunResult::Success {
+                bytes: bytes_written,
+            }
         }
         DownloadResult::Failed { reason } => {
             print("[NET] Download failed: ");

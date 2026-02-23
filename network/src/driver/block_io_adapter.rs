@@ -230,7 +230,7 @@ impl<'a> BlockIo for VirtioBlkBlockIo<'a> {
         let info = self.driver.info();
         let sector_size = info.sector_size as usize;
 
-        if dst.len() % sector_size != 0 {
+        if !dst.len().is_multiple_of(sector_size) {
             return Err(BlockIoError::BufferAlignment);
         }
 
@@ -263,7 +263,7 @@ impl<'a> BlockIo for VirtioBlkBlockIo<'a> {
         let info = self.driver.info();
         let sector_size = info.sector_size as usize;
 
-        if src.len() % sector_size != 0 {
+        if !src.len().is_multiple_of(sector_size) {
             return Err(BlockIoError::BufferAlignment);
         }
 

@@ -24,6 +24,7 @@ pub enum TransportType {
 /// Configuration for VirtIO PCI Modern transport
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
+#[derive(Default)]
 pub struct PciModernConfig {
     /// Base address of common_cfg (BAR + cap_offset)
     pub common_cfg: u64,
@@ -39,18 +40,6 @@ pub struct PciModernConfig {
     pub pci_cfg: u64,
 }
 
-impl Default for PciModernConfig {
-    fn default() -> Self {
-        Self {
-            common_cfg: 0,
-            notify_cfg: 0,
-            notify_off_multiplier: 0,
-            isr_cfg: 0,
-            device_cfg: 0,
-            pci_cfg: 0,
-        }
-    }
-}
 
 /// Unified VirtIO transport handle
 #[derive(Debug, Clone, Copy)]
@@ -261,9 +250,9 @@ impl VirtioTransport {
                 unsafe {
                     pci_modern::select_queue(self.base, queue_idx);
                     let queue_notify_off = pci_modern::get_queue_notify_off(self.base);
-                    let notify_addr = self.pci_modern.notify_cfg
-                        + (queue_notify_off as u64 * self.pci_modern.notify_off_multiplier as u64);
-                    notify_addr
+                    
+                    self.pci_modern.notify_cfg
+                        + (queue_notify_off as u64 * self.pci_modern.notify_off_multiplier as u64)
                 }
             }
             TransportType::PciLegacy => 0,

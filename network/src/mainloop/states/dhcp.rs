@@ -56,7 +56,10 @@ impl<D: NetworkDriver> State<D> for DhcpState {
         let timeout_ticks = ctx.timeouts.dhcp();
         if elapsed_ticks > timeout_ticks {
             serial::println("[DHCP] ERROR: Timeout");
-            return (Box::new(FailedState::new("DHCP timeout")), StepResult::Failed("DHCP timeout"));
+            return (
+                Box::new(FailedState::new("DHCP timeout")),
+                StepResult::Failed("DHCP timeout"),
+            );
         }
 
         if self.got_ip {
@@ -69,7 +72,10 @@ impl<D: NetworkDriver> State<D> for DhcpState {
             Some(h) => h,
             None => {
                 serial::println("[DHCP] ERROR: No DHCP socket");
-                return (Box::new(FailedState::new("no DHCP socket")), StepResult::Failed("no socket"));
+                return (
+                    Box::new(FailedState::new("no DHCP socket")),
+                    StepResult::Failed("no socket"),
+                );
             }
         };
 

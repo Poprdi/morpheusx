@@ -45,7 +45,11 @@ pub fn put_hex32(val: u32) {
     puts("0x");
     for i in (0..8).rev() {
         let nibble = ((val >> (i * 4)) & 0xF) as u8;
-        let c = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+        let c = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        };
         putc(c);
     }
 }
@@ -55,7 +59,11 @@ pub fn put_hex64(val: u64) {
     puts("0x");
     for i in (0..16).rev() {
         let nibble = ((val >> (i * 4)) & 0xF) as u8;
-        let c = if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 };
+        let c = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        };
         putc(c);
     }
 }

@@ -181,7 +181,8 @@ unsafe fn post_ebs_alloc(layout: Layout) -> *mut u8 {
 
     // ── 4. Overflow OOM — try to grow it ────────────────────────────────
     if try_grow_overflow(state, layout.size()) {
-        state.heap
+        state
+            .heap
             .allocate_first_fit(layout)
             .map(|nn| nn.as_ptr())
             .unwrap_or(ptr::null_mut())
@@ -230,19 +231,16 @@ unsafe fn post_ebs_dealloc(ptr: *mut u8, layout: Layout) {
 /// Returns None if registry is not yet ready or allocation fails.
 unsafe fn try_init_overflow() -> Option<OverflowState> {
     if !morpheus_hwinit::is_registry_initialized() {
-        morpheus_hwinit::serial::puts(
-            "[ALLOC] Primary OOM — registry not ready, cannot grow\n"
-        );
+        morpheus_hwinit::serial::puts("[ALLOC] Primary OOM — registry not ready, cannot grow\n");
         return None;
     }
 
     morpheus_hwinit::serial::puts(
-        "[ALLOC] Primary heap OOM — allocating 16 MB overflow from registry\n"
+        "[ALLOC] Primary heap OOM — allocating 16 MB overflow from registry\n",
     );
 
     let registry = morpheus_hwinit::global_registry_mut();
-    let pages = (OVERFLOW_GROW_CHUNK as u64 + morpheus_hwinit::PAGE_SIZE - 1)
-        / morpheus_hwinit::PAGE_SIZE;
+    let pages = (OVERFLOW_GROW_CHUNK as u64).div_ceil(morpheus_hwinit::PAGE_SIZE);
 
     match registry.allocate_pages(
         morpheus_hwinit::AllocateType::AnyPages,
@@ -268,7 +266,7 @@ unsafe fn try_init_overflow() -> Option<OverflowState> {
         }
         Err(_) => {
             morpheus_hwinit::serial::puts(
-                "[ALLOC] ERROR: MemoryRegistry refused overflow allocation!\n"
+                "[ALLOC] ERROR: MemoryRegistry refused overflow allocation!\n",
             );
             None
         }
@@ -288,7 +286,7 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
     }
 
     let grow = OVERFLOW_GROW_CHUNK.min(OVERFLOW_MAX_SIZE - state.size);
-    let pages = (grow as u64 + morpheus_hwinit::PAGE_SIZE - 1) / morpheus_hwinit::PAGE_SIZE;
+    let pages = (grow as u64).div_ceil(morpheus_hwinit::PAGE_SIZE);
 
     // We need the new pages to be contiguous with the current heap end so
     // linked_list_allocator::Heap::extend() can merge them into the free list.
@@ -314,7 +312,7 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
             // Memory at that exact address is taken — can't extend without
             // a second disjoint heap region (not supported here).
             morpheus_hwinit::serial::puts(
-                "[ALLOC] Overflow grow failed: address not free in registry\n"
+                "[ALLOC] Overflow grow failed: address not free in registry\n",
             );
             false
         }
@@ -338,7 +336,11 @@ unsafe fn alloc_uefi(layout: Layout) -> *mut u8 {
     if align <= 8 {
         let mut buffer: *mut u8 = ptr::null_mut();
         let status = (bs.allocate_pool)(EFI_LOADER_DATA, size, &mut buffer);
-        if status == 0 { buffer } else { ptr::null_mut() }
+        if status == 0 {
+            buffer
+        } else {
+            ptr::null_mut()
+        }
     } else {
         // Over-allocate and store original pointer just before aligned addr.
         let total_size = size + align + core::mem::size_of::<usize>();
@@ -349,8 +351,7 @@ unsafe fn alloc_uefi(layout: Layout) -> *mut u8 {
         }
 
         let raw_addr = buffer as usize;
-        let aligned_addr =
-            (raw_addr + core::mem::size_of::<usize>() + align - 1) & !(align - 1);
+        let aligned_addr = (raw_addr + core::mem::size_of::<usize>() + align - 1) & !(align - 1);
         let header = (aligned_addr - core::mem::size_of::<usize>()) as *mut usize;
         *header = raw_addr;
         aligned_addr as *mut u8
@@ -380,5 +381,3 @@ unsafe fn dealloc_uefi(ptr: *mut u8, layout: Layout) {
 
 #[global_allocator]
 static ALLOCATOR: HybridAllocator = HybridAllocator;
-
-

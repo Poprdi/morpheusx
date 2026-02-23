@@ -14,8 +14,8 @@
 //! | 4     | 0x20     | User code (64)     |
 //! | 5     | 0x28     | TSS (16 bytes)     |
 
-use core::mem::size_of;
 use crate::serial::puts;
+use core::mem::size_of;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SEGMENT SELECTORS
@@ -205,11 +205,11 @@ pub struct GdtPtr {
 /// Our GDT (static, page-aligned for safety)
 static mut GDT: Gdt = Gdt {
     entries: [
-        GdtEntry::null(),       // 0x00: Null
-        GdtEntry::code64(0),    // 0x08: Kernel code
-        GdtEntry::data64(0),    // 0x10: Kernel data
-        GdtEntry::data64(3),    // 0x18: User data  (SYSRET SS = STAR[63:48]+8)
-        GdtEntry::code64(3),    // 0x20: User code  (SYSRET CS = STAR[63:48]+16)
+        GdtEntry::null(),    // 0x00: Null
+        GdtEntry::code64(0), // 0x08: Kernel code
+        GdtEntry::data64(0), // 0x10: Kernel data
+        GdtEntry::data64(3), // 0x18: User data  (SYSRET SS = STAR[63:48]+8)
+        GdtEntry::code64(3), // 0x20: User code  (SYSRET CS = STAR[63:48]+16)
     ],
     tss_desc: TssDescriptor::empty(), // Placeholder, updated at init
 };
@@ -298,7 +298,7 @@ unsafe fn reload_segments() {
     // So we need: push CS first, then push RIP
     let code_sel: u64 = KERNEL_CS as u64;
     let data_sel: u64 = KERNEL_DS as u64;
-    
+
     core::arch::asm!(
         // Push CS (will be at RSP+8 after next push)
         "push {code}",

@@ -1,10 +1,10 @@
+use super::Widget;
 use crate::canvas::Canvas;
 use crate::draw::glyph::draw_string;
 use crate::draw::shapes::rect_fill;
 use crate::event::{Event, EventResult};
 use crate::font;
 use crate::theme::Theme;
-use super::Widget;
 
 pub struct ProgressBar {
     value: u32,
@@ -41,7 +41,9 @@ impl ProgressBar {
     }
 
     pub fn fraction(&self) -> u32 {
-        if self.max == 0 { return 0; }
+        if self.max == 0 {
+            return 0;
+        }
         (self.value * 100) / self.max
     }
 }
@@ -97,7 +99,7 @@ impl Widget for ProgressBar {
     }
 }
 
-fn format_pct<'a>(pct: u32, buf: &'a mut [u8; 8]) -> &'a str {
+fn format_pct(pct: u32, buf: &mut [u8; 8]) -> &str {
     let mut n = pct;
     let mut pos = 7;
     buf[pos] = b'%';

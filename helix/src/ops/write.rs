@@ -86,9 +86,18 @@ pub fn write_file<B: BlockIo>(
         Err(HelixError::NoSpace) => {
             // Fall back to fragmented allocation.
             return write_file_fragmented(
-                block_io, log, index, bitmap,
-                partition_lba_start, device_block_size, data_start_block,
-                path, data, timestamp_ns, path_hash, content_crc,
+                block_io,
+                log,
+                index,
+                bitmap,
+                partition_lba_start,
+                device_block_size,
+                data_start_block,
+                path,
+                data,
+                timestamp_ns,
+                path_hash,
+                content_crc,
             );
         }
         Err(e) => return Err(e),
@@ -105,7 +114,9 @@ pub fn write_file<B: BlockIo>(
 
         let abs_block = data_start_block + data_start_relative + i;
         let lba = Lba(partition_lba_start + abs_block * scale);
-        block_io.write_blocks(lba, &block_buf).map_err(|_| HelixError::IoWriteFailed)?;
+        block_io
+            .write_blocks(lba, &block_buf)
+            .map_err(|_| HelixError::IoWriteFailed)?;
     }
 
     // Encode extent as payload: [logical_block: u64, physical_block: u64, count: u32, _pad: u32]
@@ -195,7 +206,9 @@ fn write_file_fragmented<B: BlockIo>(
 
             let abs_block = data_start_block + physical + j;
             let lba = Lba(partition_lba_start + abs_block * scale);
-            block_io.write_blocks(lba, &block_buf).map_err(|_| HelixError::IoWriteFailed)?;
+            block_io
+                .write_blocks(lba, &block_buf)
+                .map_err(|_| HelixError::IoWriteFailed)?;
         }
     }
 

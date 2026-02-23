@@ -1,11 +1,11 @@
-use alloc::string::String;
-use alloc::vec::Vec;
+use super::Widget;
 use crate::canvas::Canvas;
 use crate::draw::glyph::draw_string;
 use crate::event::{Event, EventResult, Key, KeyEvent};
 use crate::font;
 use crate::theme::Theme;
-use super::Widget;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 pub struct TextArea {
     lines: Vec<String>,
@@ -81,7 +81,13 @@ impl TextArea {
         let track_h = h;
         let thumb_h = ((vis as u64 * track_h as u64) / total as u64).max(4) as u32;
         let thumb_y = ((self.scroll_top as u64 * track_h as u64) / total as u64) as u32;
-        canvas.fill_rect(bar_x, thumb_y, 2, thumb_h.min(track_h.saturating_sub(thumb_y)), theme.scrollbar_fg);
+        canvas.fill_rect(
+            bar_x,
+            thumb_y,
+            2,
+            thumb_h.min(track_h.saturating_sub(thumb_y)),
+            theme.scrollbar_fg,
+        );
     }
 }
 

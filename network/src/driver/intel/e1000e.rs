@@ -5,10 +5,10 @@
 //! # Reference
 //! Intel 82579 Datasheet, NETWORK_IMPL_GUIDE.md §8
 
+use crate::asm::drivers::intel::{asm_intel_link_status, LinkStatusResult};
 use crate::driver::traits::{DriverInit, NetworkDriver, RxError, TxError};
 use crate::mainloop::serial::serial_println;
 use crate::types::MacAddress;
-use crate::asm::drivers::intel::{asm_intel_link_status, LinkStatusResult};
 
 use super::init::{init_e1000e, E1000eConfig, E1000eInitError};
 use super::phy::PhyManager;
@@ -72,7 +72,7 @@ impl E1000eDriver {
     pub unsafe fn new(mmio_base: u64, config: E1000eConfig) -> Result<Self, E1000eError> {
         serial_println("    [e1000e] E1000eDriver::new() entered");
         serial_println("    [e1000e] About to call init_e1000e()...");
-        
+
         // Initialize device
         let result = init_e1000e(mmio_base, &config)?;
 

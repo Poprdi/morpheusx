@@ -9,9 +9,7 @@ pub struct ClipCanvas<'a, C: Canvas> {
 
 impl<'a, C: Canvas> ClipCanvas<'a, C> {
     pub fn new(inner: &'a mut C, clip: Rect) -> Self {
-        let bounded = clip
-            .intersect(inner.bounds())
-            .unwrap_or(Rect::zero());
+        let bounded = clip.intersect(inner.bounds()).unwrap_or(Rect::zero());
         Self {
             inner,
             clip: bounded,
@@ -128,7 +126,8 @@ impl<'a, C: Canvas> Canvas for ClipCanvas<'a, C> {
                     self.inner.put_pixel(dx, dy, src_color);
                 } else {
                     let dst_color = self.inner.get_pixel(dx, dy);
-                    self.inner.put_pixel(dx, dy, src_color.blend_over(dst_color));
+                    self.inner
+                        .put_pixel(dx, dy, src_color.blend_over(dst_color));
                 }
             }
         }

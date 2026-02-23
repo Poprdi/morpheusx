@@ -42,13 +42,13 @@
 
 extern crate alloc;
 
-pub mod types;
 pub mod bitmap;
 pub mod crc;
 pub mod device;
-pub mod log;
-pub mod index;
-pub mod ops;
-pub mod format;
-pub mod vfs;
 pub mod error;
+pub mod format;
+pub mod index;
+pub mod log;
+pub mod ops;
+pub mod types;
+pub mod vfs;

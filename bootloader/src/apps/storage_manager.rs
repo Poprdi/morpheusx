@@ -100,7 +100,11 @@ impl StorageManager {
                 bump_remaining: 0,
                 region_count: 0,
             },
-            heap_stats: HeapStats { total: 0, used: 0, free: 0 },
+            heap_stats: HeapStats {
+                total: 0,
+                used: 0,
+                free: 0,
+            },
             regions: Vec::new(),
             map_scroll: 0,
             map_selected: 0,
@@ -138,12 +142,13 @@ impl StorageManager {
                         pages: desc.number_of_pages,
                         size_kb: desc.size() / 1024,
                         is_free: desc.mem_type.is_free(),
-                        is_allocated: matches!(desc.mem_type,
-                            morpheus_hwinit::MemoryType::Allocated |
-                            morpheus_hwinit::MemoryType::AllocatedDma |
-                            morpheus_hwinit::MemoryType::AllocatedStack |
-                            morpheus_hwinit::MemoryType::AllocatedPageTable |
-                            morpheus_hwinit::MemoryType::AllocatedHeap
+                        is_allocated: matches!(
+                            desc.mem_type,
+                            morpheus_hwinit::MemoryType::Allocated
+                                | morpheus_hwinit::MemoryType::AllocatedDma
+                                | morpheus_hwinit::MemoryType::AllocatedStack
+                                | morpheus_hwinit::MemoryType::AllocatedPageTable
+                                | morpheus_hwinit::MemoryType::AllocatedHeap
                         ),
                     });
                 }
@@ -185,7 +190,9 @@ impl StorageManager {
     }
 
     fn bar_fraction(&self, value: u64, total: u64) -> u32 {
-        if total == 0 { return 0; }
+        if total == 0 {
+            return 0;
+        }
         ((value * 100) / total).min(100) as u32
     }
 
@@ -226,24 +233,83 @@ impl StorageManager {
         y = self.render_section_header(canvas, left_x, y, col_w, "Physical Memory", theme);
         y += 4;
 
-        y = self.render_stat_line(canvas, left_x, y, col_w, "Total:", &format_size(self.mem_stats.total_bytes), theme.fg, theme);
-        y = self.render_stat_line(canvas, left_x, y, col_w, "Free:", &format_size(self.mem_stats.free_bytes), COLOR_FREE, theme);
-        y = self.render_stat_line(canvas, left_x, y, col_w, "Allocated:", &format_size(self.mem_stats.allocated_bytes), COLOR_ALLOC, theme);
-        y = self.render_stat_line(canvas, left_x, y, col_w, "Bump Avail:", &format_size(self.mem_stats.bump_remaining), theme.fg, theme);
+        y = self.render_stat_line(
+            canvas,
+            left_x,
+            y,
+            col_w,
+            "Total:",
+            &format_size(self.mem_stats.total_bytes),
+            theme.fg,
+            theme,
+        );
+        y = self.render_stat_line(
+            canvas,
+            left_x,
+            y,
+            col_w,
+            "Free:",
+            &format_size(self.mem_stats.free_bytes),
+            COLOR_FREE,
+            theme,
+        );
+        y = self.render_stat_line(
+            canvas,
+            left_x,
+            y,
+            col_w,
+            "Allocated:",
+            &format_size(self.mem_stats.allocated_bytes),
+            COLOR_ALLOC,
+            theme,
+        );
+        y = self.render_stat_line(
+            canvas,
+            left_x,
+            y,
+            col_w,
+            "Bump Avail:",
+            &format_size(self.mem_stats.bump_remaining),
+            theme.fg,
+            theme,
+        );
         y += 6;
 
         // Animated memory usage bar
-        y = self.render_labeled_bar(canvas, left_x + 4, y, col_w.saturating_sub(8),
-            "Memory Used", self.anim_bars[0], COLOR_ALLOC, theme);
+        y = self.render_labeled_bar(
+            canvas,
+            left_x + 4,
+            y,
+            col_w.saturating_sub(8),
+            "Memory Used",
+            self.anim_bars[0],
+            COLOR_ALLOC,
+            theme,
+        );
         y += 4;
-        y = self.render_labeled_bar(canvas, left_x + 4, y, col_w.saturating_sub(8),
-            "Memory Free", self.anim_bars[1], COLOR_FREE, theme);
+        y = self.render_labeled_bar(
+            canvas,
+            left_x + 4,
+            y,
+            col_w.saturating_sub(8),
+            "Memory Free",
+            self.anim_bars[1],
+            COLOR_FREE,
+            theme,
+        );
         y += SECTION_PAD;
 
         // Memory composition chart (stacked bar)
         y = self.render_section_header(canvas, left_x, y, col_w, "Composition", theme);
         y += 4;
-        self.render_stacked_bar(canvas, left_x + 4, y, col_w.saturating_sub(8), BAR_HEIGHT + 4, theme);
+        self.render_stacked_bar(
+            canvas,
+            left_x + 4,
+            y,
+            col_w.saturating_sub(8),
+            BAR_HEIGHT + 4,
+            theme,
+        );
 
         // Right column: System Info
         let mut y = content_y + SECTION_PAD;
@@ -251,30 +317,93 @@ impl StorageManager {
         y = self.render_section_header(canvas, right_x, y, col_w, "System Info", theme);
         y += 4;
 
-        y = self.render_stat_line(canvas, right_x, y, col_w, "Regions:", &format_u64(self.mem_stats.region_count as u64), theme.fg, theme);
-        y = self.render_stat_line(canvas, right_x, y, col_w, "Pages:", &format_u64(self.mem_stats.total_bytes / 4096), theme.fg, theme);
+        y = self.render_stat_line(
+            canvas,
+            right_x,
+            y,
+            col_w,
+            "Regions:",
+            &format_u64(self.mem_stats.region_count as u64),
+            theme.fg,
+            theme,
+        );
+        y = self.render_stat_line(
+            canvas,
+            right_x,
+            y,
+            col_w,
+            "Pages:",
+            &format_u64(self.mem_stats.total_bytes / 4096),
+            theme.fg,
+            theme,
+        );
         y += SECTION_PAD;
 
         // Heap section
         y = self.render_section_header(canvas, right_x, y, col_w, "Heap Allocator", theme);
         y += 4;
 
-        y = self.render_stat_line(canvas, right_x, y, col_w, "Total:", &format_size(self.heap_stats.total as u64), theme.fg, theme);
-        y = self.render_stat_line(canvas, right_x, y, col_w, "Used:", &format_size(self.heap_stats.used as u64), COLOR_ALLOC, theme);
-        y = self.render_stat_line(canvas, right_x, y, col_w, "Free:", &format_size(self.heap_stats.free as u64), COLOR_FREE, theme);
+        y = self.render_stat_line(
+            canvas,
+            right_x,
+            y,
+            col_w,
+            "Total:",
+            &format_size(self.heap_stats.total as u64),
+            theme.fg,
+            theme,
+        );
+        y = self.render_stat_line(
+            canvas,
+            right_x,
+            y,
+            col_w,
+            "Used:",
+            &format_size(self.heap_stats.used as u64),
+            COLOR_ALLOC,
+            theme,
+        );
+        y = self.render_stat_line(
+            canvas,
+            right_x,
+            y,
+            col_w,
+            "Free:",
+            &format_size(self.heap_stats.free as u64),
+            COLOR_FREE,
+            theme,
+        );
         y += 6;
 
-        y = self.render_labeled_bar(canvas, right_x + 4, y, col_w.saturating_sub(8),
-            "Heap Usage", self.anim_bars[2], COLOR_HEAP, theme);
+        y = self.render_labeled_bar(
+            canvas,
+            right_x + 4,
+            y,
+            col_w.saturating_sub(8),
+            "Heap Usage",
+            self.anim_bars[2],
+            COLOR_HEAP,
+            theme,
+        );
         y += SECTION_PAD;
 
         // Activity indicator
         y = self.render_section_header(canvas, right_x, y, col_w, "Activity", theme);
         y += 4;
         self.render_spinner(canvas, right_x + 4, y, theme);
-        draw_string(canvas, right_x + 24, y,
-            if self.needs_refresh { "Refreshing..." } else { "Live" },
-            theme.accent, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            right_x + 24,
+            y,
+            if self.needs_refresh {
+                "Refreshing..."
+            } else {
+                "Live"
+            },
+            theme.accent,
+            theme.bg,
+            &font::FONT_DATA,
+        );
     }
 
     fn render_memory_map(&self, canvas: &mut dyn Canvas, theme: &Theme) {
@@ -286,8 +415,23 @@ impl StorageManager {
 
         // Header
         let hdr = "  #   Type                   Address          Pages     Size";
-        rect_fill(canvas, SECTION_PAD, y, usable_w, font::FONT_HEIGHT, theme.title_bg);
-        draw_string(canvas, SECTION_PAD + 2, y, hdr, theme.title_fg, theme.title_bg, &font::FONT_DATA);
+        rect_fill(
+            canvas,
+            SECTION_PAD,
+            y,
+            usable_w,
+            font::FONT_HEIGHT,
+            theme.title_bg,
+        );
+        draw_string(
+            canvas,
+            SECTION_PAD + 2,
+            y,
+            hdr,
+            theme.title_fg,
+            theme.title_bg,
+            &font::FONT_DATA,
+        );
         y += font::FONT_HEIGHT;
 
         hline(canvas, SECTION_PAD, y, usable_w, theme.border);
@@ -338,9 +482,18 @@ impl StorageManager {
         hline(canvas, SECTION_PAD, footer_y, usable_w, theme.border);
         let status = format!(
             " {}/{} regions  |  Up/Down: navigate  PgUp/PgDn: scroll  R: refresh",
-            self.map_selected + 1, self.regions.len()
+            self.map_selected + 1,
+            self.regions.len()
         );
-        draw_string(canvas, SECTION_PAD + 2, footer_y + 2, &status, theme.fg, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            SECTION_PAD + 2,
+            footer_y + 2,
+            &status,
+            theme.fg,
+            theme.bg,
+            &font::FONT_DATA,
+        );
 
         // Scrollbar
         if self.regions.len() > vis_rows as usize {
@@ -350,10 +503,12 @@ impl StorageManager {
 
             rect_fill(canvas, sb_x, sb_top, 4, sb_h, theme.scrollbar_bg);
 
-            let thumb_h = ((vis_rows as u64 * sb_h as u64) / self.regions.len().max(1) as u64)
-                .max(8) as u32;
-            let thumb_y = sb_top + ((self.map_scroll as u64 * sb_h.saturating_sub(thumb_h) as u64)
-                / self.regions.len().saturating_sub(vis_rows as usize).max(1) as u64) as u32;
+            let thumb_h =
+                ((vis_rows as u64 * sb_h as u64) / self.regions.len().max(1) as u64).max(8) as u32;
+            let thumb_y = sb_top
+                + ((self.map_scroll as u64 * sb_h.saturating_sub(thumb_h) as u64)
+                    / self.regions.len().saturating_sub(vis_rows as usize).max(1) as u64)
+                    as u32;
 
             rounded_rect_fill(canvas, sb_x, thumb_y, 4, thumb_h, 2, theme.scrollbar_fg);
         }
@@ -367,7 +522,14 @@ impl StorageManager {
         let mut y = content_y + SECTION_PAD;
 
         // Big heap stats
-        y = self.render_section_header(canvas, SECTION_PAD, y, usable_w, "Heap Allocator Details", theme);
+        y = self.render_section_header(
+            canvas,
+            SECTION_PAD,
+            y,
+            usable_w,
+            "Heap Allocator Details",
+            theme,
+        );
         y += SECTION_PAD;
 
         // Big numbers display
@@ -378,9 +540,36 @@ impl StorageManager {
         let big_y = y;
         let third_w = usable_w / 3;
 
-        self.render_big_stat(canvas, SECTION_PAD, big_y, third_w, "TOTAL", &total_str, theme.fg, theme);
-        self.render_big_stat(canvas, SECTION_PAD + third_w, big_y, third_w, "USED", &used_str, COLOR_ALLOC, theme);
-        self.render_big_stat(canvas, SECTION_PAD + third_w * 2, big_y, third_w, "FREE", &free_str, COLOR_FREE, theme);
+        self.render_big_stat(
+            canvas,
+            SECTION_PAD,
+            big_y,
+            third_w,
+            "TOTAL",
+            &total_str,
+            theme.fg,
+            theme,
+        );
+        self.render_big_stat(
+            canvas,
+            SECTION_PAD + third_w,
+            big_y,
+            third_w,
+            "USED",
+            &used_str,
+            COLOR_ALLOC,
+            theme,
+        );
+        self.render_big_stat(
+            canvas,
+            SECTION_PAD + third_w * 2,
+            big_y,
+            third_w,
+            "FREE",
+            &free_str,
+            COLOR_FREE,
+            theme,
+        );
 
         y = big_y + font::FONT_HEIGHT * 3 + SECTION_PAD;
 
@@ -388,14 +577,36 @@ impl StorageManager {
         y = self.render_section_header(canvas, SECTION_PAD, y, usable_w, "Usage", theme);
         y += 4;
         let bar_w = usable_w.saturating_sub(8);
-        self.render_gradient_bar(canvas, SECTION_PAD + 4, y, bar_w, BAR_HEIGHT + 8, self.anim_bars[2], theme);
+        self.render_gradient_bar(
+            canvas,
+            SECTION_PAD + 4,
+            y,
+            bar_w,
+            BAR_HEIGHT + 8,
+            self.anim_bars[2],
+            theme,
+        );
 
         y += BAR_HEIGHT + 8 + SECTION_PAD;
 
         // Fragmentation visualization
-        y = self.render_section_header(canvas, SECTION_PAD, y, usable_w, "Heap Visualization", theme);
+        y = self.render_section_header(
+            canvas,
+            SECTION_PAD,
+            y,
+            usable_w,
+            "Heap Visualization",
+            theme,
+        );
         y += 4;
-        self.render_heap_blocks(canvas, SECTION_PAD + 4, y, bar_w, font::FONT_HEIGHT * 3, theme);
+        self.render_heap_blocks(
+            canvas,
+            SECTION_PAD + 4,
+            y,
+            bar_w,
+            font::FONT_HEIGHT * 3,
+            theme,
+        );
 
         y += font::FONT_HEIGHT * 3 + SECTION_PAD;
 
@@ -409,57 +620,153 @@ impl StorageManager {
         y = self.render_section_header(canvas, SECTION_PAD, y, usable_w, "Efficiency", theme);
         y += 4;
         let eff_text = format!("  Utilization: {}%  |  Fragmentation: estimated", pct);
-        draw_string(canvas, SECTION_PAD + 4, y, &eff_text, theme.fg, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            SECTION_PAD + 4,
+            y,
+            &eff_text,
+            theme.fg,
+            theme.bg,
+            &font::FONT_DATA,
+        );
     }
 
     // ── Drawing helpers ─────────────────────────────────────────────────
 
-    fn render_section_header(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, title: &str, theme: &Theme) -> u32 {
+    fn render_section_header(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        title: &str,
+        theme: &Theme,
+    ) -> u32 {
         rect_fill(canvas, x, y, w, font::FONT_HEIGHT + 2, theme.title_bg);
-        draw_string(canvas, x + 4, y + 1, title, theme.title_fg, theme.title_bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            x + 4,
+            y + 1,
+            title,
+            theme.title_fg,
+            theme.title_bg,
+            &font::FONT_DATA,
+        );
         hline(canvas, x, y + font::FONT_HEIGHT + 2, w, theme.accent);
         y + font::FONT_HEIGHT + 3
     }
 
-    fn render_stat_line(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, label: &str, value: &str, value_color: Color, theme: &Theme) -> u32 {
-        draw_string(canvas, x + 4, y, label, theme.fg, theme.bg, &font::FONT_DATA);
+    fn render_stat_line(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        label: &str,
+        value: &str,
+        value_color: Color,
+        theme: &Theme,
+    ) -> u32 {
+        draw_string(
+            canvas,
+            x + 4,
+            y,
+            label,
+            theme.fg,
+            theme.bg,
+            &font::FONT_DATA,
+        );
         let vx = x + w.saturating_sub((value.len() as u32 + 1) * font::FONT_WIDTH);
-        draw_string(canvas, vx, y, value, value_color, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            vx,
+            y,
+            value,
+            value_color,
+            theme.bg,
+            &font::FONT_DATA,
+        );
         y + font::FONT_HEIGHT
     }
 
-    fn render_labeled_bar(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, label: &str, pct: u32, fill_color: Color, theme: &Theme) -> u32 {
+    fn render_labeled_bar(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        label: &str,
+        pct: u32,
+        fill_color: Color,
+        theme: &Theme,
+    ) -> u32 {
         draw_string(canvas, x, y, label, theme.fg, theme.bg, &font::FONT_DATA);
         let pct_str = format_pct(pct);
         let px = x + w.saturating_sub((pct_str.len() as u32) * font::FONT_WIDTH);
-        draw_string(canvas, px, y, &pct_str, fill_color, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            px,
+            y,
+            &pct_str,
+            fill_color,
+            theme.bg,
+            &font::FONT_DATA,
+        );
         let bar_y = y + font::FONT_HEIGHT;
 
         rect_outline(canvas, x, bar_y, w, BAR_HEIGHT, 1, theme.border);
-        rect_fill(canvas, x + 1, bar_y + 1, w.saturating_sub(2), BAR_HEIGHT.saturating_sub(2), theme.input_bg);
+        rect_fill(
+            canvas,
+            x + 1,
+            bar_y + 1,
+            w.saturating_sub(2),
+            BAR_HEIGHT.saturating_sub(2),
+            theme.input_bg,
+        );
 
         let fill_w = ((w.saturating_sub(2)) as u64 * pct as u64 / 100) as u32;
         if fill_w > 0 {
-            rect_fill(canvas, x + 1, bar_y + 1, fill_w, BAR_HEIGHT.saturating_sub(2), fill_color);
+            rect_fill(
+                canvas,
+                x + 1,
+                bar_y + 1,
+                fill_w,
+                BAR_HEIGHT.saturating_sub(2),
+                fill_color,
+            );
         }
 
         bar_y + BAR_HEIGHT + 2
     }
 
-    fn render_gradient_bar(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, h: u32, pct: u32, theme: &Theme) {
+    fn render_gradient_bar(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        pct: u32,
+        theme: &Theme,
+    ) {
         rect_outline(canvas, x, y, w, h, 1, theme.border);
-        rect_fill(canvas, x + 1, y + 1, w.saturating_sub(2), h.saturating_sub(2), theme.input_bg);
+        rect_fill(
+            canvas,
+            x + 1,
+            y + 1,
+            w.saturating_sub(2),
+            h.saturating_sub(2),
+            theme.input_bg,
+        );
 
         let fill_w = ((w.saturating_sub(2)) as u64 * pct as u64 / 100) as u32;
-        if fill_w == 0 { return; }
+        if fill_w == 0 {
+            return;
+        }
 
         for col in 0..fill_w {
             let ratio = (col * 255 / fill_w.max(1)) as u8;
-            let color = Color::rgb(
-                ratio,
-                (255u16).saturating_sub(ratio as u16) as u8,
-                0,
-            );
+            let color = Color::rgb(ratio, (255u16).saturating_sub(ratio as u16) as u8, 0);
             vline(canvas, x + 1 + col, y + 1, h.saturating_sub(2), color);
         }
 
@@ -468,17 +775,35 @@ impl StorageManager {
         let tw = text.len() as u32 * font::FONT_WIDTH;
         let tx = x + 1 + fill_w.saturating_sub(tw) / 2;
         let ty = y + (h.saturating_sub(font::FONT_HEIGHT)) / 2;
-        draw_string(canvas, tx, ty, &text, Color::WHITE, Color::rgba(0, 0, 0, 0), &font::FONT_DATA);
+        draw_string(
+            canvas,
+            tx,
+            ty,
+            &text,
+            Color::WHITE,
+            Color::rgba(0, 0, 0, 0),
+            &font::FONT_DATA,
+        );
     }
 
-    fn render_stacked_bar(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, h: u32, theme: &Theme) {
+    fn render_stacked_bar(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        theme: &Theme,
+    ) {
         rect_outline(canvas, x, y, w, h, 1, theme.border);
         let inner_w = w.saturating_sub(2);
         let inner_h = h.saturating_sub(2);
         rect_fill(canvas, x + 1, y + 1, inner_w, inner_h, theme.input_bg);
 
         let total = self.mem_stats.total_bytes;
-        if total == 0 { return; }
+        if total == 0 {
+            return;
+        }
 
         let alloc_w = ((inner_w as u64 * self.mem_stats.allocated_bytes) / total) as u32;
         let free_w = ((inner_w as u64 * self.mem_stats.free_bytes) / total) as u32;
@@ -504,32 +829,100 @@ impl StorageManager {
         self.render_legend_item(canvas, x + 200, ly, "Free", COLOR_FREE, theme);
     }
 
-    fn render_legend_item(&self, canvas: &mut dyn Canvas, x: u32, y: u32, label: &str, color: Color, theme: &Theme) {
+    fn render_legend_item(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        label: &str,
+        color: Color,
+        theme: &Theme,
+    ) {
         rect_fill(canvas, x, y + 3, 8, 8, color);
         rect_outline(canvas, x, y + 3, 8, 8, 1, theme.border);
-        draw_string(canvas, x + 12, y, label, theme.fg, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            x + 12,
+            y,
+            label,
+            theme.fg,
+            theme.bg,
+            &font::FONT_DATA,
+        );
     }
 
-    fn render_big_stat(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, label: &str, value: &str, color: Color, theme: &Theme) {
-        rect_outline(canvas, x + 2, y, w.saturating_sub(4), font::FONT_HEIGHT * 3, 1, theme.border);
-        rect_fill(canvas, x + 3, y + 1, w.saturating_sub(6), font::FONT_HEIGHT * 3 - 2, theme.input_bg);
+    fn render_big_stat(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        label: &str,
+        value: &str,
+        color: Color,
+        theme: &Theme,
+    ) {
+        rect_outline(
+            canvas,
+            x + 2,
+            y,
+            w.saturating_sub(4),
+            font::FONT_HEIGHT * 3,
+            1,
+            theme.border,
+        );
+        rect_fill(
+            canvas,
+            x + 3,
+            y + 1,
+            w.saturating_sub(6),
+            font::FONT_HEIGHT * 3 - 2,
+            theme.input_bg,
+        );
 
         let lx = x + (w.saturating_sub(label.len() as u32 * font::FONT_WIDTH)) / 2;
-        draw_string(canvas, lx, y + 4, label, theme.fg, theme.input_bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            lx,
+            y + 4,
+            label,
+            theme.fg,
+            theme.input_bg,
+            &font::FONT_DATA,
+        );
 
         let vx = x + (w.saturating_sub(value.len() as u32 * font::FONT_WIDTH)) / 2;
-        draw_string(canvas, vx, y + font::FONT_HEIGHT + 8, value, color, theme.input_bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            vx,
+            y + font::FONT_HEIGHT + 8,
+            value,
+            color,
+            theme.input_bg,
+            &font::FONT_DATA,
+        );
     }
 
-    fn render_heap_blocks(&self, canvas: &mut dyn Canvas, x: u32, y: u32, w: u32, h: u32, theme: &Theme) {
+    fn render_heap_blocks(
+        &self,
+        canvas: &mut dyn Canvas,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        theme: &Theme,
+    ) {
         rect_outline(canvas, x, y, w, h, 1, theme.border);
         let inner_w = w.saturating_sub(2);
         let inner_h = h.saturating_sub(2);
         rect_fill(canvas, x + 1, y + 1, inner_w, inner_h, COLOR_FREE);
 
-        if self.heap_stats.total == 0 { return; }
+        if self.heap_stats.total == 0 {
+            return;
+        }
 
-        let used_w = ((inner_w as u64 * self.heap_stats.used as u64) / self.heap_stats.total as u64) as u32;
+        let used_w =
+            ((inner_w as u64 * self.heap_stats.used as u64) / self.heap_stats.total as u64) as u32;
 
         // Simulated fragmentation pattern using tick-based determinism
         let block_w = 6u32;
@@ -544,7 +937,14 @@ impl StorageManager {
             } else {
                 COLOR_FREE
             };
-            rect_fill(canvas, x + 1 + cx, y + 1, block_w.saturating_sub(1), inner_h, color);
+            rect_fill(
+                canvas,
+                x + 1 + cx,
+                y + 1,
+                block_w.saturating_sub(1),
+                inner_h,
+                color,
+            );
             cx += block_w;
             block_i += 1;
         }
@@ -553,7 +953,15 @@ impl StorageManager {
     fn render_spinner(&self, canvas: &mut dyn Canvas, x: u32, y: u32, theme: &Theme) {
         let frames = ["|", "/", "-", "\\"];
         let frame = (self.anim_tick / 4) as usize % frames.len();
-        draw_string(canvas, x, y, frames[frame], theme.accent, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            x,
+            y,
+            frames[frame],
+            theme.accent,
+            theme.bg,
+            &font::FONT_DATA,
+        );
     }
 
     fn visible_map_rows(&self, canvas_h: u32) -> usize {
@@ -564,7 +972,9 @@ impl StorageManager {
     }
 
     fn ensure_map_visible(&mut self, vis: usize) {
-        if vis == 0 { return; }
+        if vis == 0 {
+            return;
+        }
         if self.map_selected < self.map_scroll {
             self.map_scroll = self.map_selected;
         } else if self.map_selected >= self.map_scroll + vis {
@@ -619,7 +1029,15 @@ impl App for StorageManager {
         let status_y = h.saturating_sub(font::FONT_HEIGHT + 2);
         hline(canvas, 0, status_y, w, theme.border);
         let hint = "Tab/Shift+Tab: switch  |  R: refresh  |  Esc: close";
-        draw_string(canvas, 4, status_y + 1, hint, theme.fg, theme.bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            4,
+            status_y + 1,
+            hint,
+            theme.fg,
+            theme.bg,
+            &font::FONT_DATA,
+        );
         puts("[STORAGE] render() complete\n");
     }
 
@@ -634,7 +1052,11 @@ impl App for StorageManager {
             Key::Tab => {
                 let idx = self.active_tab.index();
                 let next = if modifiers.shift {
-                    if idx == 0 { TAB_COUNT - 1 } else { idx - 1 }
+                    if idx == 0 {
+                        TAB_COUNT - 1
+                    } else {
+                        idx - 1
+                    }
                 } else {
                     (idx + 1) % TAB_COUNT
                 };
@@ -648,9 +1070,18 @@ impl App for StorageManager {
                 return AppResult::Redraw;
             }
 
-            Key::Char('1') => { self.active_tab = Tab::Overview; return AppResult::Redraw; }
-            Key::Char('2') => { self.active_tab = Tab::MemoryMap; return AppResult::Redraw; }
-            Key::Char('3') => { self.active_tab = Tab::Heap; return AppResult::Redraw; }
+            Key::Char('1') => {
+                self.active_tab = Tab::Overview;
+                return AppResult::Redraw;
+            }
+            Key::Char('2') => {
+                self.active_tab = Tab::MemoryMap;
+                return AppResult::Redraw;
+            }
+            Key::Char('3') => {
+                self.active_tab = Tab::Heap;
+                return AppResult::Redraw;
+            }
 
             _ => {}
         }
@@ -677,7 +1108,8 @@ impl App for StorageManager {
                     return AppResult::Redraw;
                 }
                 Key::PageDown => {
-                    self.map_selected = (self.map_selected + 20).min(self.regions.len().saturating_sub(1));
+                    self.map_selected =
+                        (self.map_selected + 20).min(self.regions.len().saturating_sub(1));
                     self.ensure_map_visible(20);
                     return AppResult::Redraw;
                 }
@@ -744,12 +1176,9 @@ fn format_pct(pct: u32) -> String {
 }
 
 fn format_region_line(r: &MemRegion) -> String {
-    format!("{:>3}  {:<22} {:>16X}  {:>8}  {:>8} KB",
-        r.index,
-        r.type_name,
-        r.start,
-        r.pages,
-        r.size_kb,
+    format!(
+        "{:>3}  {:<22} {:>16X}  {:>8}  {:>8} KB",
+        r.index, r.type_name, r.start, r.pages, r.size_kb,
     )
 }
 

@@ -1,11 +1,11 @@
-use alloc::string::String;
+use super::Widget;
 use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::draw::glyph::draw_string;
 use crate::event::{Event, EventResult};
 use crate::font;
 use crate::theme::Theme;
-use super::Widget;
+use alloc::string::String;
 
 pub struct Label {
     text: String,

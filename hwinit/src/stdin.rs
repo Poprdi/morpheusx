@@ -38,7 +38,9 @@ pub fn push(byte: u8) -> bool {
         return false; // full
     }
 
-    unsafe { BUF[head] = byte; }
+    unsafe {
+        BUF[head] = byte;
+    }
     HEAD.store(next, Ordering::Release);
     true
 }

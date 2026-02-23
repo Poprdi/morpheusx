@@ -10,14 +10,14 @@
 //! 4. Stop at the first record with an invalid CRC (crash boundary).
 //! 5. Update `committed_lsn` to the highest valid LSN seen.
 
-use crate::error::HelixError;
-use crate::types::*;
 use crate::crc::fnv1a_64;
+use crate::error::HelixError;
 use crate::index::btree::NamespaceIndex;
 use crate::log::LogEngine;
+use crate::types::*;
+use alloc::vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
-use alloc::vec;
 
 /// Read and validate both superblocks, returning the best one.
 pub fn recover_superblock<B: BlockIo>(
@@ -31,18 +31,20 @@ pub fn recover_superblock<B: BlockIo>(
 
     // Read superblock A (block 0).
     let lba_a = Lba(partition_lba_start + SUPERBLOCK_A_BLOCK * blocks_per_sector);
-    block_io.read_blocks(lba_a, &mut buf).map_err(|_| HelixError::IoReadFailed)?;
-    let sb_a: HelixSuperblock = unsafe {
-        core::ptr::read_unaligned(buf.as_ptr() as *const HelixSuperblock)
-    };
+    block_io
+        .read_blocks(lba_a, &mut buf)
+        .map_err(|_| HelixError::IoReadFailed)?;
+    let sb_a: HelixSuperblock =
+        unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const HelixSuperblock) };
     let a_valid = sb_a.is_valid();
 
     // Read superblock B (block 1).
     let lba_b = Lba(partition_lba_start + SUPERBLOCK_B_BLOCK * blocks_per_sector);
-    block_io.read_blocks(lba_b, &mut buf).map_err(|_| HelixError::IoReadFailed)?;
-    let sb_b: HelixSuperblock = unsafe {
-        core::ptr::read_unaligned(buf.as_ptr() as *const HelixSuperblock)
-    };
+    block_io
+        .read_blocks(lba_b, &mut buf)
+        .map_err(|_| HelixError::IoReadFailed)?;
+    let sb_b: HelixSuperblock =
+        unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const HelixSuperblock) };
     let b_valid = sb_b.is_valid();
 
     match (a_valid, b_valid) {
@@ -78,10 +80,11 @@ pub fn write_superblock<B: BlockIo>(
     };
     let lba = Lba(partition_lba_start + block * blocks_per_sector);
 
-    let bytes = unsafe {
-        core::slice::from_raw_parts(sb as *const _ as *const u8, BLOCK_SIZE as usize)
-    };
-    block_io.write_blocks(lba, bytes).map_err(|_| HelixError::IoWriteFailed)?;
+    let bytes =
+        unsafe { core::slice::from_raw_parts(sb as *const _ as *const u8, BLOCK_SIZE as usize) };
+    block_io
+        .write_blocks(lba, bytes)
+        .map_err(|_| HelixError::IoWriteFailed)?;
     block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
 
     Ok(())
@@ -161,10 +164,19 @@ pub fn replay_log<B: BlockIo>(
                     if let Some((path, data)) = decode_path_payload(payload) {
                         if data.len() <= INLINE_DATA_SIZE {
                             // Inline file
-                            let crc = if data.is_empty() { 0 } else { crate::crc::crc64(data) };
+                            let crc = if data.is_empty() {
+                                0
+                            } else {
+                                crate::crc::crc64(data)
+                            };
                             let entry = NamespaceIndex::make_file_entry(
-                                path, hdr.lsn, data.len() as u64,
-                                hdr.timestamp_ns, Some(data), BLOCK_NULL, crc,
+                                path,
+                                hdr.lsn,
+                                data.len() as u64,
+                                hdr.timestamp_ns,
+                                Some(data),
+                                BLOCK_NULL,
+                                crc,
                             );
                             index.upsert(entry);
                         } else if data.len() >= 24 {
@@ -178,8 +190,13 @@ pub fn replay_log<B: BlockIo>(
                             let file_size = count * BLOCK_SIZE as u64;
                             let crc = crate::crc::crc64(data);
                             let entry = NamespaceIndex::make_file_entry(
-                                path, hdr.lsn, file_size,
-                                hdr.timestamp_ns, None, phys, crc,
+                                path,
+                                hdr.lsn,
+                                file_size,
+                                hdr.timestamp_ns,
+                                None,
+                                phys,
+                                crc,
                             );
                             index.upsert(entry);
                         }
@@ -219,9 +236,14 @@ pub fn replay_log<B: BlockIo>(
                 }
 
                 // Transaction markers, snapshots, checkpoints — skip during replay
-                LogOp::SetMeta | LogOp::DedupRef |
-                LogOp::TxBegin | LogOp::TxCommit | LogOp::TxAbort |
-                LogOp::Snapshot | LogOp::Checkpoint | LogOp::Truncate => {}
+                LogOp::SetMeta
+                | LogOp::DedupRef
+                | LogOp::TxBegin
+                | LogOp::TxCommit
+                | LogOp::TxAbort
+                | LogOp::Snapshot
+                | LogOp::Checkpoint
+                | LogOp::Truncate => {}
 
                 LogOp::Append => {
                     // Append: extend an existing file's data.

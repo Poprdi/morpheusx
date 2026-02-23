@@ -52,21 +52,21 @@
 //! // Driver layer can now scan PCI and claim devices.
 //! ```
 
-use crate::dma::DmaRegion;
-use crate::memory::{
-    PhysicalAllocator, fallback_allocator,
-    init_global_registry, global_registry_mut, MemoryType, AllocateType,
-};
-use crate::cpu::tsc::calibrate_tsc_pit;
 use crate::cpu::gdt::init_gdt;
 use crate::cpu::idt::{init_idt, set_interrupt_handler};
 use crate::cpu::pic::init_pic;
+use crate::cpu::tsc::calibrate_tsc_pit;
+use crate::dma::DmaRegion;
 use crate::heap::init_heap;
+use crate::memory::{
+    fallback_allocator, global_registry_mut, init_global_registry, AllocateType, MemoryType,
+    PhysicalAllocator,
+};
 use crate::paging::init_kernel_page_table;
+use crate::pci::{offset, pci_cfg_read16, pci_cfg_write16, PciAddr};
 use crate::process::scheduler::init_scheduler;
+use crate::serial::{newline, put_hex32, put_hex64, puts};
 use crate::syscall::init_syscall;
-use crate::pci::{pci_cfg_read16, pci_cfg_write16, PciAddr, offset};
-use crate::serial::{puts, put_hex32, put_hex64, newline};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -77,10 +77,10 @@ const CMD_MEM_SPACE: u16 = 1 << 1;
 const CMD_BUS_MASTER: u16 = 1 << 2;
 
 /// Stack sizes for CPU state
-const KERNEL_STACK_SIZE: usize = 64 * 1024;  // 64KB kernel stack
-const IST1_STACK_SIZE: usize = 16 * 1024;    // 16KB IST1 for critical exceptions
-const HEAP_SIZE: usize = 4 * 1024 * 1024;    // 4MB initial heap
-const DMA_SIZE: usize = 2 * 1024 * 1024;     // 2MB DMA region
+const KERNEL_STACK_SIZE: usize = 64 * 1024; // 64KB kernel stack
+const IST1_STACK_SIZE: usize = 16 * 1024; // 16KB IST1 for critical exceptions
+const HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB initial heap
+const DMA_SIZE: usize = 2 * 1024 * 1024; // 2MB DMA region
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -149,7 +149,7 @@ pub enum InitError {
 /// - Memory map must be valid
 /// - Must be called exactly once
 pub unsafe fn platform_init_selfcontained(
-    config: SelfContainedConfig
+    config: SelfContainedConfig,
 ) -> Result<PlatformInit, InitError> {
     puts("[HWINIT] ═══════════════════════════════════════════════\n");
     puts("[HWINIT] FULL PLATFORM INIT - TAKING OWNERSHIP\n");
@@ -166,7 +166,7 @@ pub unsafe fn platform_init_selfcontained(
         config.descriptor_size,
         config.descriptor_version,
     );
-    
+
     puts("[HWINIT]   memory registry initialized\n");
 
     // ── Reserve active page-table pages ──────────────────────────────────
@@ -193,21 +193,25 @@ pub unsafe fn platform_init_selfcontained(
     puts("[HWINIT] Phase 2: CPU state\n");
 
     // Allocate kernel stack
-    let kernel_stack_pages = ((KERNEL_STACK_SIZE + 4095) / 4096) as u64;
-    let kernel_stack_base = registry.allocate_pages(
-        AllocateType::AnyPages,
-        MemoryType::LoaderData,
-        kernel_stack_pages,
-    ).map_err(|_| InitError::NoFreeMemory)?;
+    let kernel_stack_pages = KERNEL_STACK_SIZE.div_ceil(4096) as u64;
+    let kernel_stack_base = registry
+        .allocate_pages(
+            AllocateType::AnyPages,
+            MemoryType::LoaderData,
+            kernel_stack_pages,
+        )
+        .map_err(|_| InitError::NoFreeMemory)?;
     let kernel_stack_top = kernel_stack_base + KERNEL_STACK_SIZE as u64;
 
     // Allocate IST1 stack (for NMI, double fault, machine check)
-    let ist1_stack_pages = ((IST1_STACK_SIZE + 4095) / 4096) as u64;
-    let ist1_stack_base = registry.allocate_pages(
-        AllocateType::AnyPages,
-        MemoryType::LoaderData,
-        ist1_stack_pages,
-    ).map_err(|_| InitError::NoFreeMemory)?;
+    let ist1_stack_pages = IST1_STACK_SIZE.div_ceil(4096) as u64;
+    let ist1_stack_base = registry
+        .allocate_pages(
+            AllocateType::AnyPages,
+            MemoryType::LoaderData,
+            ist1_stack_pages,
+        )
+        .map_err(|_| InitError::NoFreeMemory)?;
     let ist1_stack_top = ist1_stack_base + IST1_STACK_SIZE as u64;
 
     puts("[HWINIT]   kernel stack: ");
@@ -278,12 +282,14 @@ pub unsafe fn platform_init_selfcontained(
     // ─────────────────────────────────────────────────────────────────────
     puts("[HWINIT] Phase 6: DMA region\n");
 
-    let dma_pages = ((DMA_SIZE + 4095) / 4096) as u64;
-    let dma_phys = registry.allocate_pages(
-        AllocateType::AnyPages, // Bump allocator range is entirely under 2GB — DMA safe
-        MemoryType::AllocatedDma,
-        dma_pages,
-    ).map_err(|_| InitError::NoFreeMemory)?;
+    let dma_pages = DMA_SIZE.div_ceil(4096) as u64;
+    let dma_phys = registry
+        .allocate_pages(
+            AllocateType::AnyPages, // Bump allocator range is entirely under 2GB — DMA safe
+            MemoryType::AllocatedDma,
+            dma_pages,
+        )
+        .map_err(|_| InitError::NoFreeMemory)?;
 
     // Zero the ENTIRE DMA region.  The bump allocator does NOT zero memory.
     // VirtIO inspects avail/used ring indices at enable_queue() time; garbage
@@ -347,7 +353,9 @@ pub unsafe fn platform_init_selfcontained(
 
     // Install timer ISR into IDT now that scheduler is ready.
     // Vector 0x20 = PIC IRQ 0 (PIT timer, remapped from IRQ 0).
-    extern "C" { fn irq_timer_isr(); }
+    extern "C" {
+        fn irq_timer_isr();
+    }
     set_interrupt_handler(0x20, irq_timer_isr as u64, 0, 0);
     puts("[HWINIT]   timer ISR installed (vector 0x20)\n");
 
@@ -370,11 +378,13 @@ pub unsafe fn platform_init_selfcontained(
         const ROOT_FS_SIZE: usize = 16 * 1024 * 1024; // 16 MB
         let root_fs_pages = (ROOT_FS_SIZE / 4096) as u64;
         let registry = global_registry_mut();
-        let root_fs_base = registry.allocate_pages(
-            AllocateType::AnyPages,
-            MemoryType::LoaderData,
-            root_fs_pages,
-        ).map_err(|_| InitError::NoFreeMemory)?;
+        let root_fs_base = registry
+            .allocate_pages(
+                AllocateType::AnyPages,
+                MemoryType::LoaderData,
+                root_fs_pages,
+            )
+            .map_err(|_| InitError::NoFreeMemory)?;
 
         // Zero the region.
         core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
@@ -385,10 +395,7 @@ pub unsafe fn platform_init_selfcontained(
         put_hex32((ROOT_FS_SIZE / 1024) as u32);
         puts(" KB)\n");
 
-        match morpheus_helix::vfs::global::init_root_fs(
-            root_fs_base as *mut u8,
-            ROOT_FS_SIZE,
-        ) {
+        match morpheus_helix::vfs::global::init_root_fs(root_fs_base as *mut u8, ROOT_FS_SIZE) {
             Ok(()) => puts("[HWINIT]   HelixFS mounted at /\n"),
             Err(_) => {
                 puts("[HWINIT]   WARNING: root FS init failed\n");
@@ -399,7 +406,9 @@ pub unsafe fn platform_init_selfcontained(
 
     // Set initial kernel_syscall_rsp for PID 0.
     {
-        extern "C" { static mut kernel_syscall_rsp: u64; }
+        extern "C" {
+            static mut kernel_syscall_rsp: u64;
+        }
         kernel_syscall_rsp = kernel_stack_top;
         puts("[HWINIT]   kernel_syscall_rsp = ");
         put_hex64(kernel_stack_top);
@@ -481,7 +490,7 @@ unsafe fn enable_all_pci_devices() -> usize {
         for device in 0..32u8 {
             let addr = PciAddr::new(bus, device, 0);
             let vendor = pci_cfg_read16(addr, offset::VENDOR_ID);
-            
+
             if vendor == 0xFFFF || vendor == 0x0000 {
                 continue;
             }

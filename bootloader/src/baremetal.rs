@@ -44,7 +44,12 @@ pub struct BaremetalEntryConfig {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static mut FRAMEBUFFER_INFO: FramebufferInfo = FramebufferInfo {
-    base: 0, size: 0, width: 0, height: 0, stride: 0, format: 0,
+    base: 0,
+    size: 0,
+    width: 0,
+    height: 0,
+    stride: 0,
+    format: 0,
 };
 
 static BAREMETAL_MODE: AtomicBool = AtomicBool::new(false);
@@ -54,7 +59,11 @@ pub fn is_baremetal() -> bool {
 }
 
 pub fn get_framebuffer_info() -> Option<FramebufferInfo> {
-    if is_baremetal() { Some(unsafe { FRAMEBUFFER_INFO }) } else { None }
+    if is_baremetal() {
+        Some(unsafe { FRAMEBUFFER_INFO })
+    } else {
+        None
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -71,7 +80,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
 
     // ── Allocate stack from UEFI (LoaderData survives EBS) ──────────────
     const STACK_SIZE: usize = 256 * 1024;
-    const STACK_PAGES: usize = (STACK_SIZE + 4095) / 4096;
+    const STACK_PAGES: usize = STACK_SIZE.div_ceil(4096);
 
     #[repr(C)]
     struct MinSystemTable {
@@ -95,9 +104,8 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         _restore_tpl: usize,
         allocate_pages: extern "efiapi" fn(u32, u32, usize, *mut u64) -> usize,
         _free_pages: usize,
-        get_memory_map: extern "efiapi" fn(
-            *mut usize, *mut u8, *mut usize, *mut usize, *mut u32,
-        ) -> usize,
+        get_memory_map:
+            extern "efiapi" fn(*mut usize, *mut u8, *mut usize, *mut usize, *mut u32) -> usize,
         _alloc_pool: usize,
         _free_pool: usize,
         // slots 8..26 (create_event → unload_image) = 19 × 8 = 152 bytes
@@ -114,7 +122,9 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let status = (bs.allocate_pages)(0, 2, STACK_PAGES, &mut stack_base);
     if status != 0 {
         puts("[FATAL] allocate_pages failed\n");
-        loop { core::hint::spin_loop(); }
+        loop {
+            core::hint::spin_loop();
+        }
     }
     let stack_top = stack_base + STACK_SIZE as u64;
     puts("[EBS-PREP] stack ready, getting memory map\n");
@@ -131,9 +141,17 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let mut desc_ver: u32 = 0;
 
     let status = (bs.get_memory_map)(
-        &mut map_size, MMAP_BUF.as_mut_ptr(), &mut map_key, &mut desc_size, &mut desc_ver,
+        &mut map_size,
+        MMAP_BUF.as_mut_ptr(),
+        &mut map_key,
+        &mut desc_size,
+        &mut desc_ver,
     );
-    if status != 0 { loop { core::hint::spin_loop(); } }
+    if status != 0 {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
 
     MMAP_SIZE = map_size;
     DESC_SIZE = desc_size;
@@ -147,7 +165,9 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         puts("[FATAL] ExitBootServices failed — status=");
         morpheus_hwinit::serial::put_hex64(status as u64);
         puts("\n");
-        loop { core::hint::spin_loop(); }
+        loop {
+            core::hint::spin_loop();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -187,7 +207,9 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
                 morpheus_hwinit::InitError::MemoryRegistryFailed => puts("mmap broke"),
             }
             puts("\n");
-            loop { core::hint::spin_loop(); }
+            loop {
+                core::hint::spin_loop();
+            }
         }
     };
 
@@ -201,7 +223,9 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let fb_info = FRAMEBUFFER_INFO;
     if fb_info.base == 0 || fb_info.width == 0 {
         puts("[FATAL] no framebuffer\n");
-        loop { core::hint::spin_loop(); }
+        loop {
+            core::hint::spin_loop();
+        }
     }
 
     // GOP gives pixels_per_scan_line, display crate wants bytes.

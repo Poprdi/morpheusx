@@ -17,35 +17,35 @@
 
 pub mod handler;
 
-use handler::*;
 use crate::serial::puts;
+use handler::*;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SYSCALL NUMBERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub const SYS_EXIT:   u64 = 0;
-pub const SYS_WRITE:  u64 = 1;
-pub const SYS_READ:   u64 = 2;
-pub const SYS_YIELD:  u64 = 3;
-pub const SYS_ALLOC:  u64 = 4;
-pub const SYS_FREE:   u64 = 5;
+pub const SYS_EXIT: u64 = 0;
+pub const SYS_WRITE: u64 = 1;
+pub const SYS_READ: u64 = 2;
+pub const SYS_YIELD: u64 = 3;
+pub const SYS_ALLOC: u64 = 4;
+pub const SYS_FREE: u64 = 5;
 pub const SYS_GETPID: u64 = 6;
-pub const SYS_KILL:   u64 = 7;
-pub const SYS_WAIT:   u64 = 8;
-pub const SYS_SLEEP:  u64 = 9;
+pub const SYS_KILL: u64 = 7;
+pub const SYS_WAIT: u64 = 8;
+pub const SYS_SLEEP: u64 = 9;
 
 // ── HelixFS file system syscalls ─────────────────────────────────────
-pub const SYS_OPEN:     u64 = 10;
-pub const SYS_CLOSE:    u64 = 11;
-pub const SYS_SEEK:     u64 = 12;
-pub const SYS_STAT:     u64 = 13;
-pub const SYS_READDIR:  u64 = 14;
-pub const SYS_MKDIR:    u64 = 15;
-pub const SYS_UNLINK:   u64 = 16;
-pub const SYS_RENAME:   u64 = 17;
+pub const SYS_OPEN: u64 = 10;
+pub const SYS_CLOSE: u64 = 11;
+pub const SYS_SEEK: u64 = 12;
+pub const SYS_STAT: u64 = 13;
+pub const SYS_READDIR: u64 = 14;
+pub const SYS_MKDIR: u64 = 15;
+pub const SYS_UNLINK: u64 = 16;
+pub const SYS_RENAME: u64 = 17;
 pub const SYS_TRUNCATE: u64 = 18;
-pub const SYS_SYNC:     u64 = 19;
+pub const SYS_SYNC: u64 = 19;
 pub const SYS_SNAPSHOT: u64 = 20;
 pub const SYS_VERSIONS: u64 = 21;
 
@@ -75,30 +75,30 @@ pub unsafe extern "C" fn syscall_dispatch(
     a2: u64,
     a3: u64,
     a4: u64,
-    a5: u64,
+    _a5: u64,
 ) -> u64 {
     match nr {
-        SYS_EXIT   => sys_exit(a1),
-        SYS_WRITE  => sys_write(a1, a2, a3),
-        SYS_READ   => sys_read(a1, a2, a3),
-        SYS_YIELD  => sys_yield(),
-        SYS_ALLOC  => sys_alloc(a1),
-        SYS_FREE   => sys_free(a1, a2),
+        SYS_EXIT => sys_exit(a1),
+        SYS_WRITE => sys_write(a1, a2, a3),
+        SYS_READ => sys_read(a1, a2, a3),
+        SYS_YIELD => sys_yield(),
+        SYS_ALLOC => sys_alloc(a1),
+        SYS_FREE => sys_free(a1, a2),
         SYS_GETPID => sys_getpid(),
-        SYS_KILL   => sys_kill(a1, a2),
-        SYS_WAIT   => sys_wait(a1),
-        SYS_SLEEP  => sys_sleep(a1),
+        SYS_KILL => sys_kill(a1, a2),
+        SYS_WAIT => sys_wait(a1),
+        SYS_SLEEP => sys_sleep(a1),
         // ── HelixFS syscalls ──────────────────────────────────────
-        SYS_OPEN     => sys_fs_open(a1, a2, a3),
-        SYS_CLOSE    => sys_fs_close(a1),
-        SYS_SEEK     => sys_fs_seek(a1, a2, a3),
-        SYS_STAT     => sys_fs_stat(a1, a2, a3),
-        SYS_READDIR  => sys_fs_readdir(a1, a2, a3),
-        SYS_MKDIR    => sys_fs_mkdir(a1, a2),
-        SYS_UNLINK   => sys_fs_unlink(a1, a2),
-        SYS_RENAME   => sys_fs_rename(a1, a2, a3, a4),
+        SYS_OPEN => sys_fs_open(a1, a2, a3),
+        SYS_CLOSE => sys_fs_close(a1),
+        SYS_SEEK => sys_fs_seek(a1, a2, a3),
+        SYS_STAT => sys_fs_stat(a1, a2, a3),
+        SYS_READDIR => sys_fs_readdir(a1, a2, a3),
+        SYS_MKDIR => sys_fs_mkdir(a1, a2),
+        SYS_UNLINK => sys_fs_unlink(a1, a2),
+        SYS_RENAME => sys_fs_rename(a1, a2, a3, a4),
         SYS_TRUNCATE => sys_fs_truncate(a1, a2),
-        SYS_SYNC     => sys_fs_sync(),
+        SYS_SYNC => sys_fs_sync(),
         SYS_SNAPSHOT => sys_fs_snapshot(a1, a2),
         SYS_VERSIONS => sys_fs_versions(a1, a2, a3, a4),
         unknown => {

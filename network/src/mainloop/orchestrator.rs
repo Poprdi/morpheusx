@@ -48,7 +48,10 @@ use alloc::boxed::Box;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadResult {
     /// Download completed successfully.
-    Success { bytes_downloaded: u64, bytes_written: u64 },
+    Success {
+        bytes_downloaded: u64,
+        bytes_written: u64,
+    },
     /// Download failed.
     Failed { reason: &'static str },
 }
@@ -149,14 +152,8 @@ pub fn download_with_config<D: NetworkDriver>(
 
         let _ = iface.poll(now, &mut adapter, &mut sockets);
 
-        let (next_state, result) = current_state.step(
-            &mut ctx,
-            &mut iface,
-            &mut sockets,
-            &mut adapter,
-            now,
-            tsc,
-        );
+        let (next_state, result) =
+            current_state.step(&mut ctx, &mut iface, &mut sockets, &mut adapter, now, tsc);
         current_state = next_state;
 
         match result {

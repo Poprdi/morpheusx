@@ -31,7 +31,9 @@ fn rebuild_bitmap_from_index(instance: &mut HelixInstance) {
         // Contiguous extent starting at extent_root.
         let blocks_needed = entry.size.div_ceil(BLOCK_SIZE as u64);
         if blocks_needed > 0 {
-            instance.bitmap.mark_range_used(entry.extent_root, blocks_needed);
+            instance
+                .bitmap
+                .mark_range_used(entry.extent_root, blocks_needed);
         }
     }
 }
@@ -68,8 +70,10 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
     let mem_dev = MEM_DEVICE.as_mut().unwrap();
 
     let total_sectors = size as u64 / sector_size as u64;
-    let uuid = [0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]; // "MXROOT"
+    let uuid = [
+        0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01,
+    ]; // "MXROOT"
 
     format::format_helix(mem_dev, 0, total_sectors, sector_size, "root", uuid)?;
 
@@ -81,7 +85,10 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
 
     let raw_device = MemBlockDevice::into_raw(mem_dev);
 
-    FS_GLOBAL = Some(FsGlobal { mount_table, device: raw_device });
+    FS_GLOBAL = Some(FsGlobal {
+        mount_table,
+        device: raw_device,
+    });
     FS_INITIALIZED = true;
     Ok(())
 }
@@ -105,15 +112,21 @@ pub unsafe fn init_root_fs_raw(
         let bs = device.block_size();
         // BlockSize wraps NonZeroU32; we extract via Display → parse.
         // Simpler: match known sizes.
-        if bs == gpt_disk_types::BlockSize::BS_512 { 512u32 }
-        else if bs == gpt_disk_types::BlockSize::BS_4096 { 4096u32 }
-        else { return Err(HelixError::InvalidBlockSize); }
+        if bs == gpt_disk_types::BlockSize::BS_512 {
+            512u32
+        } else if bs == gpt_disk_types::BlockSize::BS_4096 {
+            4096u32
+        } else {
+            return Err(HelixError::InvalidBlockSize);
+        }
     };
     let total_sectors = device.num_blocks().map_err(|_| HelixError::IoReadFailed)?;
 
     if do_format {
-        let uuid = [0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let uuid = [
+            0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01,
+        ];
         format::format_helix(&mut device, 0, total_sectors, sector_size, "root", uuid)?;
     }
 
@@ -139,7 +152,10 @@ pub unsafe fn init_root_fs_raw(
     let mut mount_table = MountTable::new();
     mount_table.mount("/", instance, false)?;
 
-    FS_GLOBAL = Some(FsGlobal { mount_table, device });
+    FS_GLOBAL = Some(FsGlobal {
+        mount_table,
+        device,
+    });
     FS_INITIALIZED = true;
     Ok(())
 }
@@ -165,15 +181,21 @@ pub unsafe fn replace_root_device(
 ) -> Result<(), HelixError> {
     let sector_size = {
         let bs = device.block_size();
-        if bs == gpt_disk_types::BlockSize::BS_512 { 512u32 }
-        else if bs == gpt_disk_types::BlockSize::BS_4096 { 4096u32 }
-        else { return Err(HelixError::InvalidBlockSize); }
+        if bs == gpt_disk_types::BlockSize::BS_512 {
+            512u32
+        } else if bs == gpt_disk_types::BlockSize::BS_4096 {
+            4096u32
+        } else {
+            return Err(HelixError::InvalidBlockSize);
+        }
     };
     let total_sectors = device.num_blocks().map_err(|_| HelixError::IoReadFailed)?;
 
     if do_format {
-        let uuid = [0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let uuid = [
+            0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01,
+        ];
         format::format_helix(&mut device, 0, total_sectors, sector_size, "root", uuid)?;
     }
 
@@ -198,7 +220,10 @@ pub unsafe fn replace_root_device(
     let mut mount_table = MountTable::new();
     mount_table.mount("/", instance, false)?;
 
-    FS_GLOBAL = Some(FsGlobal { mount_table, device });
+    FS_GLOBAL = Some(FsGlobal {
+        mount_table,
+        device,
+    });
     FS_INITIALIZED = true;
     Ok(())
 }

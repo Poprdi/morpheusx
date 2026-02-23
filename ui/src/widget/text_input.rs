@@ -1,11 +1,11 @@
-use alloc::string::String;
+use super::Widget;
 use crate::canvas::Canvas;
 use crate::draw::glyph::draw_string;
 use crate::draw::shapes::rect_outline;
 use crate::event::{Event, EventResult, Key, KeyEvent};
 use crate::font;
 use crate::theme::Theme;
-use super::Widget;
+use alloc::string::String;
 
 pub struct TextInput {
     text: String,
@@ -75,7 +75,19 @@ impl Widget for TextInput {
         let h = canvas.height();
 
         canvas.clear(theme.input_bg);
-        rect_outline(canvas, 0, 0, w, h, 1, if self.focused { theme.accent } else { theme.border });
+        rect_outline(
+            canvas,
+            0,
+            0,
+            w,
+            h,
+            1,
+            if self.focused {
+                theme.accent
+            } else {
+                theme.border
+            },
+        );
 
         let vis_cols = self.visible_cols(w);
         let visible_text: &str = if self.text.len() > self.scroll_offset {
@@ -85,10 +97,19 @@ impl Widget for TextInput {
             ""
         };
 
-        draw_string(canvas, 2, 2, visible_text, theme.input_fg, theme.input_bg, &font::FONT_DATA);
+        draw_string(
+            canvas,
+            2,
+            2,
+            visible_text,
+            theme.input_fg,
+            theme.input_bg,
+            &font::FONT_DATA,
+        );
 
         if self.focused {
-            let cursor_x = (self.cursor.saturating_sub(self.scroll_offset)) as u32 * font::FONT_WIDTH + 2;
+            let cursor_x =
+                (self.cursor.saturating_sub(self.scroll_offset)) as u32 * font::FONT_WIDTH + 2;
             let cursor_y = 2u32;
             if cursor_x < w.saturating_sub(2) {
                 canvas.fill_rect(cursor_x, cursor_y, 1, font::FONT_HEIGHT, theme.input_cursor);

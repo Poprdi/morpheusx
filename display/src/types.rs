@@ -5,10 +5,12 @@
 /// Pixel format in the framebuffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum PixelFormat {
     /// Red-Green-Blue-Reserved (RGBX), 8 bits each
     Rgbx = 0,
     /// Blue-Green-Red-Reserved (BGRX), 8 bits each - most common
+    #[default]
     Bgrx = 1,
     /// Pixel defined by bitmask (not supported)
     BitMask = 2,
@@ -16,11 +18,6 @@ pub enum PixelFormat {
     BltOnly = 3,
 }
 
-impl Default for PixelFormat {
-    fn default() -> Self {
-        PixelFormat::Bgrx
-    }
-}
 
 /// Information about the framebuffer obtained from GOP.
 #[derive(Debug, Clone, Copy)]

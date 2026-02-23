@@ -64,7 +64,7 @@ pub fn draw_char(
     font_data: &[[u8; 16]],
 ) {
     let idx = c as usize;
-    let glyph = if idx >= 0x20 && idx <= 0x7E {
+    let glyph = if (0x20..=0x7E).contains(&idx) {
         &font_data[idx - 0x20]
     } else {
         &font_data[0] // space fallback

@@ -55,10 +55,7 @@ impl<T> RingBuffer<T> {
     }
 
     pub fn iter(&self) -> RingIter<'_, T> {
-        RingIter {
-            ring: self,
-            pos: 0,
-        }
+        RingIter { ring: self, pos: 0 }
     }
 }
 

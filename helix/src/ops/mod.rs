@@ -2,6 +2,6 @@
 //!
 //! These functions operate on a mounted Helix instance (log + index + bitmap).
 
-pub mod write;
-pub mod read;
 pub mod dir;
+pub mod read;
+pub mod write;

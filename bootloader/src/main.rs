@@ -7,6 +7,8 @@
 #![no_std]
 #![no_main]
 #![allow(dead_code)]
+#![allow(static_mut_refs)]
+#![allow(clippy::missing_safety_doc)]
 
 extern crate alloc;
 
@@ -81,9 +83,7 @@ pub struct BootServices {
     _open_protocol_information: usize,
     _protocols_per_handle: usize,
     _locate_handle_buffer: usize,
-    pub locate_protocol: extern "efiapi" fn(
-        *const [u8; 16], *const (), *mut *mut (),
-    ) -> usize,
+    pub locate_protocol: extern "efiapi" fn(*const [u8; 16], *const (), *mut *mut ()) -> usize,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,8 +91,7 @@ pub struct BootServices {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const GOP_GUID: [u8; 16] = [
-    0xDE, 0xA9, 0x42, 0x90, 0xDC, 0x23, 0x38, 0x4A,
-    0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A,
+    0xDE, 0xA9, 0x42, 0x90, 0xDC, 0x23, 0x38, 0x4A, 0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A,
 ];
 
 #[repr(C)]
@@ -161,7 +160,12 @@ pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) 
             }
         } else {
             baremetal::FramebufferInfo {
-                base: 0, size: 0, width: 0, height: 0, stride: 0, format: 0,
+                base: 0,
+                size: 0,
+                width: 0,
+                height: 0,
+                stride: 0,
+                format: 0,
             }
         };
 

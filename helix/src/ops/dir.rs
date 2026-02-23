@@ -64,10 +64,7 @@ pub fn mkdir(
 ///
 /// Returns a vector of `DirEntry` structs.  Each entry includes
 /// the filename (not full path), size, and directory flag.
-pub fn readdir(
-    index: &NamespaceIndex,
-    dir_path: &str,
-) -> Result<Vec<DirEntry>, HelixError> {
+pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, HelixError> {
     // Normalize path.
     let normalized = if dir_path == "/" {
         String::from("/")
