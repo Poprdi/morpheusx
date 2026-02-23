@@ -1,10 +1,41 @@
 use crate::device::{MemBlockDevice, RawBlockDevice};
 use crate::error::HelixError;
 use crate::format;
+use crate::index::btree::NamespaceIndex;
 use crate::log::recovery::{recover_superblock, replay_log};
 use crate::types::*;
 use crate::vfs::{HelixInstance, MountTable};
 use gpt_disk_io::BlockIo;
+
+/// Rebuild the in-memory bitmap from the namespace index after log replay.
+///
+/// After `replay_log()` populates the index, the bitmap is still all-free
+/// (`BlockBitmap::new` zeros every bit).  This function scans all live
+/// index entries and marks blocks used by extent-based files.  Without
+/// this step, newly allocated blocks could overlap existing file data —
+/// silent data corruption.
+fn rebuild_bitmap_from_index(instance: &mut HelixInstance) {
+    for entry in instance.index.all_entries() {
+        // Skip deleted, directories, and inline files.
+        if entry.flags & entry_flags::IS_DELETED != 0 {
+            continue;
+        }
+        if entry.flags & entry_flags::IS_DIR != 0 {
+            continue;
+        }
+        if entry.flags & entry_flags::IS_INLINE != 0 {
+            continue;
+        }
+        if entry.extent_root == BLOCK_NULL {
+            continue;
+        }
+        // Contiguous extent starting at extent_root.
+        let blocks_needed = (entry.size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+        if blocks_needed > 0 {
+            instance.bitmap.mark_range_used(entry.extent_root, blocks_needed);
+        }
+    }
+}
 
 pub struct FsGlobal {
     pub mount_table: MountTable,
@@ -102,6 +133,9 @@ pub unsafe fn init_root_fs_raw(
     // Replay the log to rebuild the in-memory index.
     replay_log(&mut device, &instance.log, &mut instance.index)?;
 
+    // Rebuild the bitmap so allocated blocks aren't re-used.
+    rebuild_bitmap_from_index(&mut instance);
+
     let mut mount_table = MountTable::new();
     mount_table.mount("/", instance, false)?;
 
@@ -157,6 +191,9 @@ pub unsafe fn replace_root_device(
 
     // Replay the log to rebuild the in-memory index.
     replay_log(&mut device, &instance.log, &mut instance.index)?;
+
+    // Rebuild the bitmap so allocated blocks aren't re-used.
+    rebuild_bitmap_from_index(&mut instance);
 
     let mut mount_table = MountTable::new();
     mount_table.mount("/", instance, false)?;

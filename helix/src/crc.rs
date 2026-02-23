@@ -36,6 +36,22 @@ pub fn crc32c(data: &[u8]) -> u32 {
     crc ^ 0xFFFF_FFFF
 }
 
+/// Compute CRC32C over two contiguous byte arrays without allocating.
+///
+/// Equivalent to `crc32c(&[a, b].concat())` but avoids the heap allocation.
+pub fn crc32c_two(a: &[u8], b: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &byte in a {
+        let idx = ((crc ^ byte as u32) & 0xFF) as usize;
+        crc = (crc >> 8) ^ CRC32C_TABLE[idx];
+    }
+    for &byte in b {
+        let idx = ((crc ^ byte as u32) & 0xFF) as usize;
+        crc = (crc >> 8) ^ CRC32C_TABLE[idx];
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
 /// ECMA-182 CRC64 polynomial (used for content dedup).
 const CRC64_TABLE: [u64; 256] = {
     let poly: u64 = 0xC96C_5795_D787_0F42;

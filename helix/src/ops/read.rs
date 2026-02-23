@@ -74,13 +74,23 @@ pub fn read_file_at_lsn<B: BlockIo>(
     let mut last_extent_root: Option<u64> = None;
     let mut last_file_size: Option<u64> = None;
 
-    // Walk all log segments.
+    // Walk only live log segments: tail → head (circular).
     let segment_count = log.segment_count();
-    for seg_idx in 0..segment_count {
+    let tail = log.tail_segment();
+    let head = log.head_segment();
+    let head_offset = log.head_offset();
+
+    let mut seg = tail;
+    loop {
         let mut offset = core::mem::size_of::<LogSegmentHeader>() as u32;
 
         loop {
-            match log.read_record(block_io, seg_idx, offset) {
+            // If we're in the head segment, stop at the head write offset.
+            if seg == head && offset >= head_offset {
+                break;
+            }
+
+            match log.read_record(block_io, seg, offset) {
                 Ok((header, payload)) => {
                     // Stop once we pass the target LSN.
                     if header.lsn > target_lsn {
@@ -132,14 +142,18 @@ pub fn read_file_at_lsn<B: BlockIo>(
                         }
                     }
 
-                    offset += core::mem::size_of::<LogRecordHeader>() as u32
-                        + header.payload_len;
-                    // Align to 8 bytes.
-                    offset = (offset + 7) & !7;
+                    // Advance by total_size() which is already 8-byte aligned.
+                    offset += header.total_size() as u32;
                 }
                 Err(_) => break,
             }
         }
+
+        // Done if we've processed the head segment.
+        if seg == head {
+            break;
+        }
+        seg = (seg + 1) % segment_count;
     }
 
     // Return the reconstructed state.
@@ -173,12 +187,23 @@ pub fn list_versions<B: BlockIo>(
     let path_hash = fnv1a_64(path.as_bytes());
     let mut versions = Vec::new();
 
+    // Walk only live log segments: tail → head (circular).
     let segment_count = log.segment_count();
-    for seg_idx in 0..segment_count {
+    let tail = log.tail_segment();
+    let head = log.head_segment();
+    let head_offset = log.head_offset();
+
+    let mut seg = tail;
+    loop {
         let mut offset = core::mem::size_of::<LogSegmentHeader>() as u32;
 
         loop {
-            match log.read_record(block_io, seg_idx, offset) {
+            // Stop at head write offset in the head segment.
+            if seg == head && offset >= head_offset {
+                break;
+            }
+
+            match log.read_record(block_io, seg, offset) {
                 Ok((header, _payload)) => {
                     if header.path_hash == path_hash {
                         if let Some(op) = LogOp::from_u8(header.op) {
@@ -192,13 +217,17 @@ pub fn list_versions<B: BlockIo>(
                         }
                     }
 
-                    offset += core::mem::size_of::<LogRecordHeader>() as u32
-                        + header.payload_len;
-                    offset = (offset + 7) & !7;
+                    // Advance by total_size() which is already 8-byte aligned.
+                    offset += header.total_size() as u32;
                 }
                 Err(_) => break,
             }
         }
+
+        if seg == head {
+            break;
+        }
+        seg = (seg + 1) % segment_count;
     }
 
     if versions.is_empty() {

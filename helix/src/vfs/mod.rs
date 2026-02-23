@@ -253,6 +253,7 @@ pub fn vfs_open<B: BlockIo>(
             &mut entry.fs.bitmap,
             entry.fs.partition_lba_start,
             entry.fs.device_block_size,
+            entry.fs.sb.data_start_block,
             path,
             &[],
             timestamp_ns,
@@ -268,8 +269,14 @@ pub fn vfs_open<B: BlockIo>(
     // Allocate fd.
     let fd_idx = fd_table.alloc()?;
 
+    let mut fd_path = [0u8; 256];
+    let path_bytes = path.as_bytes();
+    let copy_len = path_bytes.len().min(255);
+    fd_path[..copy_len].copy_from_slice(&path_bytes[..copy_len]);
+
     fd_table.fds[fd_idx] = FileDescriptor {
         key,
+        path: fd_path,
         flags,
         offset: 0,
         mount_idx,
@@ -287,6 +294,7 @@ pub fn vfs_open<B: BlockIo>(
             &mut entry.fs.bitmap,
             entry.fs.partition_lba_start,
             entry.fs.device_block_size,
+            entry.fs.sb.data_start_block,
             path,
             &[],
             timestamp_ns,
@@ -310,13 +318,13 @@ pub fn vfs_read<B: BlockIo>(
     }
 
     let mount_idx = desc.mount_idx;
-    let key = desc.key;
+    let fd_path = crate::index::btree::path_str(&desc.path);
     let offset = desc.offset;
 
     let entry = mount_table.get(mount_idx).ok_or(HelixError::MountNotFound)?;
 
-    // Find the path from key in the index.
-    let idx_entry = entry.fs.index.lookup_by_key(key).ok_or(HelixError::NotFound)?;
+    // Look up by full path to avoid hash-collision ambiguity.
+    let idx_entry = entry.fs.index.lookup(fd_path).ok_or(HelixError::NotFound)?;
 
     // Read file data.
     let data = if idx_entry.flags & entry_flags::IS_INLINE != 0 {
@@ -369,16 +377,13 @@ pub fn vfs_write<B: BlockIo>(
     }
 
     let mount_idx = desc.mount_idx;
-    let key = desc.key;
+    let fd_path = String::from(crate::index::btree::path_str(&desc.path));
 
     let entry = mount_table.get_mut(mount_idx).ok_or(HelixError::MountNotFound)?;
 
     if entry.read_only {
         return Err(HelixError::ReadOnly);
     }
-
-    let idx_entry = entry.fs.index.lookup_by_key(key).ok_or(HelixError::NotFound)?;
-    let path = String::from(crate::index::btree::path_str(&idx_entry.path));
 
     // Write (overwrite) the file.
     ops::write::write_file(
@@ -388,7 +393,8 @@ pub fn vfs_write<B: BlockIo>(
         &mut entry.fs.bitmap,
         entry.fs.partition_lba_start,
         entry.fs.device_block_size,
-        &path,
+        entry.fs.sb.data_start_block,
+        &fd_path,
         data,
         timestamp_ns,
     )?;
@@ -410,10 +416,10 @@ pub fn vfs_seek(
 ) -> Result<u64, HelixError> {
     let desc = fd_table.get(fd)?;
     let mount_idx = desc.mount_idx;
-    let key = desc.key;
+    let fd_path = crate::index::btree::path_str(&desc.path);
 
     let entry = mount_table.get(mount_idx).ok_or(HelixError::MountNotFound)?;
-    let idx_entry = entry.fs.index.lookup_by_key(key).ok_or(HelixError::NotFound)?;
+    let idx_entry = entry.fs.index.lookup(fd_path).ok_or(HelixError::NotFound)?;
     let file_size = idx_entry.size;
 
     let new_offset = match whence {
@@ -553,12 +559,11 @@ pub fn vfs_sync<B: BlockIo>(
             // Flush the log.
             let committed_lsn = entry.fs.log.flush(block_io)?;
 
-            // Update superblock.
+            // Update superblock fields (write_superblock calls update_crc).
             entry.fs.sb.committed_lsn = committed_lsn;
             entry.fs.sb.log_head_segment = entry.fs.log.head_segment();
             entry.fs.sb.log_head_offset = entry.fs.log.head_offset();
             entry.fs.sb.log_tail_segment = entry.fs.log.tail_segment();
-            entry.fs.sb.update_crc();
 
             // Write both superblock slots.
             crate::log::recovery::write_superblock(
