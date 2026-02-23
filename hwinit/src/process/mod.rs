@@ -139,10 +139,23 @@ pub struct Process {
     // ── File descriptors ─────────────────────────────────────────────────
     /// Per-process file descriptor table.
     pub fd_table: morpheus_helix::vfs::FdTable,
+
+    // ── Virtual memory ────────────────────────────────────────────────────
+    /// Next free virtual address for SYS_MMAP (user-space heap bump).
+    /// Starts at 0x0000_0040_0000_0000 for user processes, 0 for kernel.
+    pub mmap_brk: u64,
+
+    // ── Working directory ─────────────────────────────────────────────────
+    /// Per-process current working directory (null-terminated, max 255 chars).
+    pub cwd: [u8; 256],
+    pub cwd_len: u16,
 }
 
 impl Process {
     pub const fn empty() -> Self {
+        // Build cwd = "/" inline (const context, can't call set_cwd).
+        let mut cwd = [0u8; 256];
+        cwd[0] = b'/';
         Self {
             pid: 0,
             name: [0u8; 32],
@@ -159,6 +172,9 @@ impl Process {
             cpu_ticks: 0,
             pending_signals: signals::SignalSet::empty(),
             fd_table: morpheus_helix::vfs::FdTable::new(),
+            mmap_brk: 0,
+            cwd,
+            cwd_len: 1,
         }
     }
 
@@ -168,6 +184,21 @@ impl Process {
         let len = bytes.len().min(31);
         self.name[..len].copy_from_slice(&bytes[..len]);
         self.name[len] = 0;
+    }
+
+    /// Set the process CWD.
+    pub fn set_cwd(&mut self, path: &str) {
+        let bytes = path.as_bytes();
+        let len = bytes.len().min(255);
+        self.cwd[..len].copy_from_slice(&bytes[..len]);
+        self.cwd[len] = 0;
+        self.cwd_len = len as u16;
+    }
+
+    /// Return the CWD as a `&str`.
+    pub fn cwd_str(&self) -> &str {
+        let len = self.cwd_len as usize;
+        core::str::from_utf8(&self.cwd[..len]).unwrap_or("/")
     }
 
     /// Return the process name as a `&str` (trimmed at the first NUL).

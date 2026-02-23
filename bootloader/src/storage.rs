@@ -230,6 +230,65 @@ static mut STORAGE_TSC_FREQ: u64 = 0;
 /// Whether persistent storage was successfully initialized.
 static mut PERSISTENT_READY: bool = false;
 
+// ── Spinner ──────────────────────────────────────────────────────────────────
+
+static mut SPIN_ACTIVE: bool = false;
+static mut SPIN_FRAME: usize = 0;
+static mut SPIN_LAST_TSC: u64 = 0;
+
+const SPIN_FRAMES: [u8; 4] = [b'|', b'/', b'-', b'\\'];
+
+/// Start a spinner on both serial and the framebuffer. The initial frame
+/// appears on the same line after the last log message.
+fn spinner_start() {
+    unsafe {
+        SPIN_ACTIVE = true;
+        SPIN_FRAME = 0;
+        SPIN_LAST_TSC = morpheus_hwinit::tsc::read_tsc();
+        // Serial: write the opening frame (no newline — we'll overwrite in place)
+        morpheus_hwinit::serial::serial_puts("   ");
+        morpheus_hwinit::serial::serial_putc(SPIN_FRAMES[0]);
+        // Framebuffer: same
+        morpheus_hwinit::serial::fb_puts("   ");
+        morpheus_hwinit::serial::fb_putc(SPIN_FRAMES[0]);
+    }
+}
+
+/// Advance the spinner frame if ~100 ms have passed.
+/// Called at the top of every raw_read / raw_write so it fires naturally
+/// during helix I/O without needing a separate timer or thread.
+fn spinner_tick() {
+    unsafe {
+        if !SPIN_ACTIVE || STORAGE_TSC_FREQ == 0 {
+            return;
+        }
+        let now = morpheus_hwinit::tsc::read_tsc();
+        let interval = STORAGE_TSC_FREQ / 10; // 100 ms
+        if now.wrapping_sub(SPIN_LAST_TSC) < interval {
+            return;
+        }
+        SPIN_LAST_TSC = now;
+        SPIN_FRAME = (SPIN_FRAME + 1) % SPIN_FRAMES.len();
+        let frame = SPIN_FRAMES[SPIN_FRAME];
+        // Serial: backspace over previous frame, write new one
+        morpheus_hwinit::serial::serial_putc(b'\x08');
+        morpheus_hwinit::serial::serial_putc(frame);
+        // Framebuffer: same
+        morpheus_hwinit::serial::fb_putc(b'\x08');
+        morpheus_hwinit::serial::fb_putc(frame);
+    }
+}
+
+/// Stop the spinner. \r returns cursor to col 0 on both serial and framebuffer
+/// so the next `puts()` call overwrites the spinner line with the result.
+fn spinner_done() {
+    unsafe {
+        SPIN_ACTIVE = false;
+    }
+    morpheus_hwinit::serial::serial_putc(b'\r');
+    morpheus_hwinit::serial::fb_puts("\r");
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC API
 // ═══════════════════════════════════════════════════════════════════════════
@@ -422,6 +481,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                 0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x01,
             ];
+            spinner_start();
             match morpheus_helix::format::format_helix(
                 &mut raw_dev,
                 0,
@@ -431,9 +491,11 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                 uuid,
             ) {
                 Ok(_sb) => {
+                    spinner_done();
                     puts("[STORAGE] format_helix OK\n");
                 }
                 Err(e) => {
+                    spinner_done();
                     puts("[STORAGE] format_helix FAILED: ");
                     match e {
                         morpheus_helix::error::HelixError::IoWriteFailed => puts("IoWriteFailed"),
@@ -473,12 +535,15 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         // Now do the actual replace_root_device
         // If we already formatted above, pass do_format=false to avoid double-format
         let mount_dev = make_raw_block_device();
+        spinner_start();
         match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
             Ok(()) => {
+                spinner_done();
                 PERSISTENT_READY = true;
                 puts("[STORAGE] persistent root FS mounted at /\n");
             }
             Err(e) => {
+                spinner_done();
                 puts("[STORAGE] ERROR: failed to mount persistent FS: ");
                 match e {
                     morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
@@ -643,6 +708,7 @@ unsafe fn make_raw_block_device() -> RawBlockDevice {
 /// Creates a temporary `UnifiedBlockIo` from the static device + DMA
 /// region, then delegates to the existing chunked read_blocks() impl.
 unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
+    spinner_tick();
     let dev = match BLOCK_DEVICE.as_mut() {
         Some(d) => d,
         None => return false,
@@ -671,6 +737,7 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
 
 /// Write callback for `RawBlockDevice`.
 unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool {
+    spinner_tick();
     let dev = match BLOCK_DEVICE.as_mut() {
         Some(d) => d,
         None => return false,
