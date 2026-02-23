@@ -102,7 +102,7 @@ impl RxRing {
         serial_print(" buffer_bus=0x");
         serial_print_hex(self.buffer_bus);
         serial_println("");
-        
+
         // Check if addresses are in valid range for real hardware
         // Real Intel NICs require addresses below 4GB (or proper 64-bit BAR config)
         if self.desc_bus > 0xFFFF_FFFF {
@@ -111,7 +111,7 @@ impl RxRing {
         if self.buffer_bus > 0xFFFF_FFFF {
             serial_println("  [WARNING] RX buffer_bus > 4GB!");
         }
-        
+
         for i in 0..self.queue_size {
             let desc_ptr = self.desc_ptr(i);
             let buffer_bus = self.buffer_bus_addr(i);
@@ -120,11 +120,13 @@ impl RxRing {
                 asm_intel_rx_init_desc(desc_ptr, buffer_bus);
             }
         }
-        
+
         // CRITICAL: SFENCE after writing all descriptors
         // This ensures descriptors are visible to the NIC before we enable RX
         // Real hardware WILL fail without this; QEMU ignores it
-        unsafe { sfence(); }
+        unsafe {
+            sfence();
+        }
         serial_println("  [RX-INIT] Descriptors initialized + sfence");
     }
 

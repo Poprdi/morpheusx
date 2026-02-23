@@ -249,8 +249,8 @@ impl NamespaceIndex {
             // Direct child: no '/' in remainder, or remainder ends with '/'
             // and has no other '/'.
             let slash_count = remainder.iter().filter(|&&b| b == b'/').count();
-            let is_direct_child = slash_count == 0
-                || (slash_count == 1 && remainder.last() == Some(&b'/'));
+            let is_direct_child =
+                slash_count == 0 || (slash_count == 1 && remainder.last() == Some(&b'/'));
 
             if is_direct_child {
                 results.push(entry);
@@ -318,11 +318,7 @@ impl NamespaceIndex {
     }
 
     /// Build a new IndexEntry for a directory.
-    pub fn make_dir_entry(
-        path: &str,
-        lsn: Lsn,
-        timestamp_ns: u64,
-    ) -> IndexEntry {
+    pub fn make_dir_entry(path: &str, lsn: Lsn, timestamp_ns: u64) -> IndexEntry {
         let mut entry: IndexEntry = unsafe { core::mem::zeroed() };
         entry.key = fnv1a_64(path.as_bytes());
         set_path(&mut entry.path, path.as_bytes());

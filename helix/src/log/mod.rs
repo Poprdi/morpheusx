@@ -13,8 +13,8 @@
 //! 3. Recovery: scan forward from `checkpoint_lsn`, validate each record
 //!    CRC, and stop at the first failure.
 
-pub mod segment;
 pub mod recovery;
+pub mod segment;
 
 use crate::crc::{crc32c, crc32c_two, crc64};
 use crate::error::HelixError;
@@ -110,7 +110,8 @@ impl LogEngine {
             // Block size < 512 shouldn't happen, but be safe.
             Lba(self.partition_lba_start + partition_block * (BLOCK_SIZE as u64 / 512))
         } else {
-            Lba(self.partition_lba_start + partition_block * (BLOCK_SIZE as u64 / self.device_block_size as u64))
+            Lba(self.partition_lba_start
+                + partition_block * (BLOCK_SIZE as u64 / self.device_block_size as u64))
         }
     }
 
@@ -140,7 +141,11 @@ impl LogEngine {
     ) -> Result<Lsn, HelixError> {
         let lsn = self.next_lsn;
 
-        let payload_crc = if payload.is_empty() { 0 } else { crc64(payload) };
+        let payload_crc = if payload.is_empty() {
+            0
+        } else {
+            crc64(payload)
+        };
 
         let mut header = LogRecordHeader {
             lsn,
@@ -211,19 +216,14 @@ impl LogEngine {
         // Write header to buffer.
         let off = self.head_offset as usize;
         let hdr_size = core::mem::size_of::<LogRecordHeader>();
-        let hdr_bytes_final = unsafe {
-            core::slice::from_raw_parts(
-                &header as *const _ as *const u8,
-                hdr_size,
-            )
-        };
+        let hdr_bytes_final =
+            unsafe { core::slice::from_raw_parts(&header as *const _ as *const u8, hdr_size) };
         self.write_buf[off..off + hdr_size].copy_from_slice(hdr_bytes_final);
 
         // Write payload.
         if !payload.is_empty() {
             let payload_off = off + hdr_size;
-            self.write_buf[payload_off..payload_off + payload.len()]
-                .copy_from_slice(payload);
+            self.write_buf[payload_off..payload_off + payload.len()].copy_from_slice(payload);
         }
 
         self.head_offset += total_size;
@@ -244,8 +244,7 @@ impl LogEngine {
             self.write_buf[count_off..count_off + 4]
                 .copy_from_slice(&self.record_count.to_le_bytes());
             let used = self.head_offset - seg_hdr_size as u32;
-            self.write_buf[bytes_off..bytes_off + 4]
-                .copy_from_slice(&used.to_le_bytes());
+            self.write_buf[bytes_off..bytes_off + 4].copy_from_slice(&used.to_le_bytes());
 
             // Recompute segment header CRC.
             // Zero the crc32c field (offset 40) before computing.
@@ -263,7 +262,9 @@ impl LogEngine {
             let block_end = block_off + BLOCK_SIZE as usize;
             let data = &self.write_buf[block_off..block_end];
             let lba = self.abs_lba(seg_start + i);
-            block_io.write_blocks(lba, data).map_err(|_| HelixError::IoWriteFailed)?;
+            block_io
+                .write_blocks(lba, data)
+                .map_err(|_| HelixError::IoWriteFailed)?;
         }
 
         block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
@@ -286,7 +287,9 @@ impl LogEngine {
         // Read the block containing the header.
         let mut buf = vec![0u8; BLOCK_SIZE as usize];
         let lba = self.abs_lba(seg_block + block_idx);
-        block_io.read_blocks(lba, &mut buf).map_err(|_| HelixError::IoReadFailed)?;
+        block_io
+            .read_blocks(lba, &mut buf)
+            .map_err(|_| HelixError::IoReadFailed)?;
 
         // Parse header.
         let hdr_size = core::mem::size_of::<LogRecordHeader>();
@@ -320,8 +323,11 @@ impl LogEngine {
 
                 let mut blk_buf = vec![0u8; BLOCK_SIZE as usize];
                 let lba = self.abs_lba(seg_block + blk as u64);
-                block_io.read_blocks(lba, &mut blk_buf).map_err(|_| HelixError::IoReadFailed)?;
-                payload[read..read + chunk].copy_from_slice(&blk_buf[off_in_blk..off_in_blk + chunk]);
+                block_io
+                    .read_blocks(lba, &mut blk_buf)
+                    .map_err(|_| HelixError::IoReadFailed)?;
+                payload[read..read + chunk]
+                    .copy_from_slice(&blk_buf[off_in_blk..off_in_blk + chunk]);
                 read += chunk;
             }
         }
@@ -330,12 +336,8 @@ impl LogEngine {
         let mut crc_buf = Vec::with_capacity(hdr_size + payload_len);
         let mut hdr_copy = header;
         hdr_copy.record_crc32c = 0;
-        let hdr_bytes = unsafe {
-            core::slice::from_raw_parts(
-                &hdr_copy as *const _ as *const u8,
-                hdr_size,
-            )
-        };
+        let hdr_bytes =
+            unsafe { core::slice::from_raw_parts(&hdr_copy as *const _ as *const u8, hdr_size) };
         crc_buf.extend_from_slice(hdr_bytes);
         crc_buf.extend_from_slice(&payload);
         let computed_crc = crc32c(&crc_buf);
@@ -361,10 +363,9 @@ impl LogEngine {
         for i in 0..blocks_to_read {
             let off = (i * BLOCK_SIZE as u64) as usize;
             let lba = self.abs_lba(seg_start + i);
-            block_io.read_blocks(
-                lba,
-                &mut self.write_buf[off..off + BLOCK_SIZE as usize],
-            ).map_err(|_| HelixError::IoReadFailed)?;
+            block_io
+                .read_blocks(lba, &mut self.write_buf[off..off + BLOCK_SIZE as usize])
+                .map_err(|_| HelixError::IoReadFailed)?;
         }
 
         // Count existing records so record_count stays accurate.
@@ -377,7 +378,7 @@ impl LogEngine {
             }
             let hdr: LogRecordHeader = unsafe {
                 core::ptr::read_unaligned(
-                    self.write_buf[offset as usize..].as_ptr() as *const LogRecordHeader,
+                    self.write_buf[offset as usize..].as_ptr() as *const LogRecordHeader
                 )
             };
             if LogOp::from_u8(hdr.op).is_none() {
@@ -420,12 +421,22 @@ impl LogEngine {
 
         loop {
             let is_head = seg == self.head_segment;
-            let limit = if is_head { self.head_offset } else { LOG_SEGMENT_BYTES as u32 };
-            let first_offset = if seg == start_segment { start_offset } else { seg_hdr_size };
+            let limit = if is_head {
+                self.head_offset
+            } else {
+                LOG_SEGMENT_BYTES as u32
+            };
+            let first_offset = if seg == start_segment {
+                start_offset
+            } else {
+                seg_hdr_size
+            };
 
             if first_offset >= limit {
                 // Nothing to scan in this segment.
-                if is_head { break; }
+                if is_head {
+                    break;
+                }
                 seg = (seg + 1) % self.segment_count;
                 continue;
             }
@@ -442,7 +453,8 @@ impl LogEngine {
                 for i in 0..blocks {
                     let off = (i * BLOCK_SIZE as u64) as usize;
                     let lba = self.abs_lba(seg_start + i);
-                    block_io.read_blocks(lba, &mut b[off..off + BLOCK_SIZE as usize])
+                    block_io
+                        .read_blocks(lba, &mut b[off..off + BLOCK_SIZE as usize])
                         .map_err(|_| HelixError::IoReadFailed)?;
                 }
                 b
@@ -481,10 +493,7 @@ impl LogEngine {
                 let mut hdr_copy = header;
                 hdr_copy.record_crc32c = 0;
                 let hdr_bytes = unsafe {
-                    core::slice::from_raw_parts(
-                        &hdr_copy as *const _ as *const u8,
-                        hdr_size,
-                    )
+                    core::slice::from_raw_parts(&hdr_copy as *const _ as *const u8, hdr_size)
                 };
                 let computed = crc32c_two(hdr_bytes, payload);
                 if computed != header.record_crc32c {

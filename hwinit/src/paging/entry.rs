@@ -25,48 +25,38 @@ pub struct PageFlags(pub u64);
 
 impl PageFlags {
     // ── Core flags ───────────────────────────────────────────────────────
-    pub const PRESENT:       Self = Self(1 << 0);
-    pub const WRITABLE:      Self = Self(1 << 1);
-    pub const USER:          Self = Self(1 << 2);
+    pub const PRESENT: Self = Self(1 << 0);
+    pub const WRITABLE: Self = Self(1 << 1);
+    pub const USER: Self = Self(1 << 2);
     pub const WRITE_THROUGH: Self = Self(1 << 3);
     pub const CACHE_DISABLE: Self = Self(1 << 4);
-    pub const ACCESSED:      Self = Self(1 << 5);
-    pub const DIRTY:         Self = Self(1 << 6);
-    pub const HUGE_PAGE:     Self = Self(1 << 7);   // PS bit
-    pub const GLOBAL:        Self = Self(1 << 8);
-    pub const NO_EXECUTE:    Self = Self(1 << 63);  // XD bit (EFER.NXE must be set)
+    pub const ACCESSED: Self = Self(1 << 5);
+    pub const DIRTY: Self = Self(1 << 6);
+    pub const HUGE_PAGE: Self = Self(1 << 7); // PS bit
+    pub const GLOBAL: Self = Self(1 << 8);
+    pub const NO_EXECUTE: Self = Self(1 << 63); // XD bit (EFER.NXE must be set)
 
     // ── Convenience presets ──────────────────────────────────────────────
 
     /// Kernel read-only page (present + global, NX).
-    pub const KERNEL_RO: Self = Self(
-        Self::PRESENT.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0
-    );
+    pub const KERNEL_RO: Self = Self(Self::PRESENT.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0);
 
     /// Kernel read-write page (present + writable + global, NX).
-    pub const KERNEL_RW: Self = Self(
-        Self::PRESENT.0 | Self::WRITABLE.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0
-    );
+    pub const KERNEL_RW: Self =
+        Self(Self::PRESENT.0 | Self::WRITABLE.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0);
 
     /// Kernel executable page (present + global, no NX).
-    pub const KERNEL_CODE: Self = Self(
-        Self::PRESENT.0 | Self::GLOBAL.0
-    );
+    pub const KERNEL_CODE: Self = Self(Self::PRESENT.0 | Self::GLOBAL.0);
 
     /// User read-only page.
-    pub const USER_RO: Self = Self(
-        Self::PRESENT.0 | Self::USER.0 | Self::NO_EXECUTE.0
-    );
+    pub const USER_RO: Self = Self(Self::PRESENT.0 | Self::USER.0 | Self::NO_EXECUTE.0);
 
     /// User read-write page.
-    pub const USER_RW: Self = Self(
-        Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0 | Self::NO_EXECUTE.0
-    );
+    pub const USER_RW: Self =
+        Self(Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0 | Self::NO_EXECUTE.0);
 
     /// User executable page.
-    pub const USER_CODE: Self = Self(
-        Self::PRESENT.0 | Self::USER.0
-    );
+    pub const USER_CODE: Self = Self(Self::PRESENT.0 | Self::USER.0);
 
     /// Empty (not present).
     pub const EMPTY: Self = Self(0);
@@ -94,20 +84,22 @@ impl core::fmt::Debug for PageFlags {
         let mut sep = false;
         let mut flag = |name: &'static str, bit: PageFlags| {
             if self.contains(bit) {
-                if sep { let _ = f.write_str("|"); }
+                if sep {
+                    let _ = f.write_str("|");
+                }
                 let _ = f.write_str(name);
                 sep = true;
             }
         };
-        flag("P",  PageFlags::PRESENT);
-        flag("W",  PageFlags::WRITABLE);
-        flag("U",  PageFlags::USER);
+        flag("P", PageFlags::PRESENT);
+        flag("W", PageFlags::WRITABLE);
+        flag("U", PageFlags::USER);
         flag("WT", PageFlags::WRITE_THROUGH);
         flag("CD", PageFlags::CACHE_DISABLE);
-        flag("A",  PageFlags::ACCESSED);
-        flag("D",  PageFlags::DIRTY);
+        flag("A", PageFlags::ACCESSED);
+        flag("D", PageFlags::DIRTY);
         flag("PS", PageFlags::HUGE_PAGE);
-        flag("G",  PageFlags::GLOBAL);
+        flag("G", PageFlags::GLOBAL);
         flag("XD", PageFlags::NO_EXECUTE);
         Ok(())
     }
@@ -185,7 +177,12 @@ impl PageTableEntry {
 
 impl core::fmt::Debug for PageTableEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PTE(phys={:#x}, flags={:?})", self.phys_addr(), self.flags())
+        write!(
+            f,
+            "PTE(phys={:#x}, flags={:?})",
+            self.phys_addr(),
+            self.flags()
+        )
     }
 }
 

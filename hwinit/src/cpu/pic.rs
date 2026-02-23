@@ -17,7 +17,7 @@
 //!   PIC2 (slave):  IRQ 8-15 → vectors 0x28-0x2F
 //! ```
 
-use crate::cpu::pio::{outb, inb};
+use crate::cpu::pio::{inb, outb};
 use crate::serial::puts;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -49,7 +49,7 @@ pub const PIC2_VECTOR_OFFSET: u8 = 0x28;
 pub mod irq {
     pub const TIMER: u8 = 0;
     pub const KEYBOARD: u8 = 1;
-    pub const CASCADE: u8 = 2;  // Slave PIC cascade
+    pub const CASCADE: u8 = 2; // Slave PIC cascade
     pub const COM2: u8 = 3;
     pub const COM1: u8 = 4;
     pub const LPT2: u8 = 5;
@@ -174,9 +174,9 @@ pub unsafe fn send_eoi(irq: u8) {
 
 /// Get IRQ number from interrupt vector.
 pub fn vector_to_irq(vector: u8) -> Option<u8> {
-    if vector >= PIC1_VECTOR_OFFSET && vector < PIC1_VECTOR_OFFSET + 8 {
+    if (PIC1_VECTOR_OFFSET..PIC1_VECTOR_OFFSET + 8).contains(&vector) {
         Some(vector - PIC1_VECTOR_OFFSET)
-    } else if vector >= PIC2_VECTOR_OFFSET && vector < PIC2_VECTOR_OFFSET + 8 {
+    } else if (PIC2_VECTOR_OFFSET..PIC2_VECTOR_OFFSET + 8).contains(&vector) {
         Some(vector - PIC2_VECTOR_OFFSET + 8)
     } else {
         None

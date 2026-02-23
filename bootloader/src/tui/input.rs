@@ -270,31 +270,31 @@ static DE_ALTGR: [u8; 89] = [
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Make codes (key press)
-const SC_ESC: u8         = 0x01;
-const SC_LCTRL: u8       = 0x1D;
-const SC_LSHIFT: u8      = 0x2A;
-const SC_RSHIFT: u8      = 0x36;
-const SC_LALT: u8        = 0x38;
-const SC_CAPSLOCK: u8    = 0x3A;
-const SC_F1: u8          = 0x3B;
-const SC_F10: u8         = 0x44;
-const SC_F11: u8         = 0x57;
-const SC_F12: u8         = 0x58;
+const SC_ESC: u8 = 0x01;
+const SC_LCTRL: u8 = 0x1D;
+const SC_LSHIFT: u8 = 0x2A;
+const SC_RSHIFT: u8 = 0x36;
+const SC_LALT: u8 = 0x38;
+const SC_CAPSLOCK: u8 = 0x3A;
+const SC_F1: u8 = 0x3B;
+const SC_F10: u8 = 0x44;
+const SC_F11: u8 = 0x57;
+const SC_F12: u8 = 0x58;
 
 // Extended (0xE0 prefix) make codes
-const SC_EXT_UP: u8      = 0x48;
-const SC_EXT_DOWN: u8    = 0x50;
-const SC_EXT_LEFT: u8    = 0x4B;
-const SC_EXT_RIGHT: u8   = 0x4D;
-const SC_EXT_HOME: u8    = 0x47;
-const SC_EXT_END: u8     = 0x4F;
-const SC_EXT_PGUP: u8    = 0x49;
-const SC_EXT_PGDN: u8    = 0x51;
-const SC_EXT_INSERT: u8  = 0x52;
-const SC_EXT_DELETE: u8  = 0x53;
+const SC_EXT_UP: u8 = 0x48;
+const SC_EXT_DOWN: u8 = 0x50;
+const SC_EXT_LEFT: u8 = 0x4B;
+const SC_EXT_RIGHT: u8 = 0x4D;
+const SC_EXT_HOME: u8 = 0x47;
+const SC_EXT_END: u8 = 0x4F;
+const SC_EXT_PGUP: u8 = 0x49;
+const SC_EXT_PGDN: u8 = 0x51;
+const SC_EXT_INSERT: u8 = 0x52;
+const SC_EXT_DELETE: u8 = 0x53;
 
 // Break code flag
-const BREAK_FLAG: u8     = 0x80;
+const BREAK_FLAG: u8 = 0x80;
 
 // Extended prefix byte
 const EXTENDED_PREFIX: u8 = 0xE0;
@@ -362,9 +362,15 @@ impl Keyboard {
         self.layout
     }
 
-    pub fn is_shift(&self) -> bool { self.shift }
-    pub fn is_ctrl(&self) -> bool { self.ctrl }
-    pub fn is_alt(&self) -> bool { self.alt }
+    pub fn is_shift(&self) -> bool {
+        self.shift
+    }
+    pub fn is_ctrl(&self) -> bool {
+        self.ctrl
+    }
+    pub fn is_alt(&self) -> bool {
+        self.alt
+    }
 
     unsafe fn init_controller(&mut self) {
         use morpheus_hwinit::serial::puts;
@@ -514,9 +520,9 @@ impl Keyboard {
         if is_break {
             match make {
                 SC_LSHIFT | SC_RSHIFT => self.shift = false,
-                SC_LCTRL              => self.ctrl = false,
-                SC_LALT               => self.alt = false,
-                _                     => {} // ignore other releases
+                SC_LCTRL => self.ctrl = false,
+                SC_LALT => self.alt = false,
+                _ => {} // ignore other releases
             }
             return None;
         }
@@ -525,30 +531,54 @@ impl Keyboard {
 
         // Modifiers
         match make {
-            SC_LSHIFT | SC_RSHIFT => { self.shift = true; return None; }
-            SC_LCTRL              => { self.ctrl = true; return None; }
-            SC_LALT               => { self.alt = true; return None; }
-            SC_CAPSLOCK           => { self.caps_lock = !self.caps_lock; return None; }
+            SC_LSHIFT | SC_RSHIFT => {
+                self.shift = true;
+                return None;
+            }
+            SC_LCTRL => {
+                self.ctrl = true;
+                return None;
+            }
+            SC_LALT => {
+                self.alt = true;
+                return None;
+            }
+            SC_CAPSLOCK => {
+                self.caps_lock = !self.caps_lock;
+                return None;
+            }
             _ => {}
         }
 
         // Escape
         if make == SC_ESC {
-            return Some(InputKey { scan_code: SCAN_ESC, unicode_char: 0 });
+            return Some(InputKey {
+                scan_code: SCAN_ESC,
+                unicode_char: 0,
+            });
         }
 
         // Function keys F1-F10
-        if make >= SC_F1 && make <= SC_F10 {
+        if (SC_F1..=SC_F10).contains(&make) {
             let fkey = SCAN_F1 + (make - SC_F1) as u16;
-            return Some(InputKey { scan_code: fkey, unicode_char: 0 });
+            return Some(InputKey {
+                scan_code: fkey,
+                unicode_char: 0,
+            });
         }
 
         // F11, F12
         if make == SC_F11 {
-            return Some(InputKey { scan_code: SCAN_F11, unicode_char: 0 });
+            return Some(InputKey {
+                scan_code: SCAN_F11,
+                unicode_char: 0,
+            });
         }
         if make == SC_F12 {
-            return Some(InputKey { scan_code: SCAN_F12, unicode_char: 0 });
+            return Some(InputKey {
+                scan_code: SCAN_F12,
+                unicode_char: 0,
+            });
         }
 
         // ASCII from translation table
@@ -556,14 +586,17 @@ impl Keyboard {
             let ch = self.translate_ascii(make);
             if ch != 0 {
                 // Ctrl+letter produces control characters (0x01-0x1A)
-                let unicode = if self.ctrl && ch >= b'a' && ch <= b'z' {
+                let unicode = if self.ctrl && (b'a'..=b'z').contains(&ch) {
                     (ch - b'a' + 1) as u16
-                } else if self.ctrl && ch >= b'A' && ch <= b'Z' {
+                } else if self.ctrl && (b'A'..=b'Z').contains(&ch) {
                     (ch - b'A' + 1) as u16
                 } else {
                     ch as u16
                 };
-                return Some(InputKey { scan_code: SCAN_NULL, unicode_char: unicode });
+                return Some(InputKey {
+                    scan_code: SCAN_NULL,
+                    unicode_char: unicode,
+                });
             }
         }
 
@@ -575,8 +608,8 @@ impl Keyboard {
         // Extended modifier releases (right ctrl, right alt)
         if is_break {
             match make {
-                SC_LCTRL => self.ctrl = false,   // Right Ctrl shares make code
-                SC_LALT  => {
+                SC_LCTRL => self.ctrl = false, // Right Ctrl shares make code
+                SC_LALT => {
                     // Right Alt = AltGr on DE; plain Alt on US
                     if self.layout == KeyLayout::De {
                         self.altgr = false;
@@ -591,8 +624,11 @@ impl Keyboard {
 
         // Extended modifier presses
         match make {
-            SC_LCTRL => { self.ctrl = true; return None; }
-            SC_LALT  => {
+            SC_LCTRL => {
+                self.ctrl = true;
+                return None;
+            }
+            SC_LALT => {
                 if self.layout == KeyLayout::De {
                     self.altgr = true;
                 } else {
@@ -605,20 +641,23 @@ impl Keyboard {
 
         // Navigation keys → EFI scan codes
         let scan = match make {
-            SC_EXT_UP     => SCAN_UP,
-            SC_EXT_DOWN   => SCAN_DOWN,
-            SC_EXT_LEFT   => SCAN_LEFT,
-            SC_EXT_RIGHT  => SCAN_RIGHT,
-            SC_EXT_HOME   => SCAN_HOME,
-            SC_EXT_END    => SCAN_END,
-            SC_EXT_PGUP   => SCAN_PGUP,
-            SC_EXT_PGDN   => SCAN_PGDN,
+            SC_EXT_UP => SCAN_UP,
+            SC_EXT_DOWN => SCAN_DOWN,
+            SC_EXT_LEFT => SCAN_LEFT,
+            SC_EXT_RIGHT => SCAN_RIGHT,
+            SC_EXT_HOME => SCAN_HOME,
+            SC_EXT_END => SCAN_END,
+            SC_EXT_PGUP => SCAN_PGUP,
+            SC_EXT_PGDN => SCAN_PGDN,
             SC_EXT_INSERT => SCAN_INSERT,
             SC_EXT_DELETE => SCAN_DELETE,
             _ => return None,
         };
 
-        Some(InputKey { scan_code: scan, unicode_char: 0 })
+        Some(InputKey {
+            scan_code: scan,
+            unicode_char: 0,
+        })
     }
 
     /// Look up a character for the given make code, applying the active
@@ -627,17 +666,27 @@ impl Keyboard {
     /// Returns 0 if the key has no character in the active layer.
     fn translate_ascii(&self, make: u8) -> u8 {
         let idx = make as usize;
-        if idx >= 89 { return 0; }
+        if idx >= 89 {
+            return 0;
+        }
 
         match self.layout {
             KeyLayout::Us => {
                 let base = US_UNSHIFTED[idx];
-                if base == 0 { return 0; }
+                if base == 0 {
+                    return 0;
+                }
                 let is_letter = base.is_ascii_lowercase();
                 if is_letter {
-                    if self.shift ^ self.caps_lock { US_SHIFTED[idx] } else { base }
+                    if self.shift ^ self.caps_lock {
+                        US_SHIFTED[idx]
+                    } else {
+                        base
+                    }
+                } else if self.shift {
+                    US_SHIFTED[idx]
                 } else {
-                    if self.shift { US_SHIFTED[idx] } else { base }
+                    base
                 }
             }
             KeyLayout::De => {
@@ -647,14 +696,24 @@ impl Keyboard {
                     return ch; // 0 = no AltGr mapping for this key
                 }
                 let base = DE_UNSHIFTED[idx];
-                if base == 0 { return 0; }
+                if base == 0 {
+                    return 0;
+                }
                 // Letters are still ASCII a-z in DE table; umlauts are not letters
                 let is_ascii_lower = base.is_ascii_lowercase();
                 if is_ascii_lower {
-                    if self.shift ^ self.caps_lock { DE_SHIFTED[idx] } else { base }
+                    if self.shift ^ self.caps_lock {
+                        DE_SHIFTED[idx]
+                    } else {
+                        base
+                    }
                 } else {
                     // Non-letter (punctuation, umlauts, symbols): shift only
-                    if self.shift { DE_SHIFTED[idx] } else { base }
+                    if self.shift {
+                        DE_SHIFTED[idx]
+                    } else {
+                        base
+                    }
                 }
             }
         }

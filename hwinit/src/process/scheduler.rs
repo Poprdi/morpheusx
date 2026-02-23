@@ -21,14 +21,12 @@
 //! Context switches must not allocate.  The `PROCESS_TABLE` is a static array;
 //! the only heap usage is at process creation time (for the kernel stack).
 
-use super::{
-    Process, ProcessState, BlockReason, MAX_PROCESSES, PROCESS_KERNEL_STACK_SIZE,
-};
-use super::signals::Signal;
 use super::context::CpuContext;
+use super::signals::Signal;
+use super::{BlockReason, Process, ProcessState, MAX_PROCESSES, PROCESS_KERNEL_STACK_SIZE};
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
-use crate::memory::{PAGE_SIZE, global_registry_mut, is_registry_initialized};
-use crate::serial::{puts, put_hex32, put_hex64};
+use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
+use crate::serial::{put_hex32, put_hex64, puts};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -72,12 +70,12 @@ extern "C" {
 /// A cheap, copyable snapshot of one process's status for display.
 #[derive(Clone, Copy, Debug)]
 pub struct ProcessInfo {
-    pub pid:         u32,
-    pub name:        [u8; 32],
-    pub state:       ProcessState,
-    pub cpu_ticks:   u64,
+    pub pid: u32,
+    pub name: [u8; 32],
+    pub state: ProcessState,
+    pub cpu_ticks: u64,
     pub pages_alloc: u64,
-    pub priority:    u8,
+    pub priority: u8,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -118,16 +116,18 @@ impl Scheduler {
         let mut n = 0;
         unsafe {
             for slot in PROCESS_TABLE.iter() {
-                if n >= out.len() { break; }
+                if n >= out.len() {
+                    break;
+                }
                 if let Some(p) = slot {
                     if !p.is_free() {
                         out[n] = ProcessInfo {
-                            pid:         p.pid,
-                            name:        p.name,
-                            state:       p.state,
-                            cpu_ticks:   p.cpu_ticks,
+                            pid: p.pid,
+                            name: p.name,
+                            state: p.state,
+                            cpu_ticks: p.cpu_ticks,
                             pages_alloc: p.pages_allocated,
-                            priority:    p.priority,
+                            priority: p.priority,
                         };
                         n += 1;
                     }
@@ -164,7 +164,8 @@ impl Scheduler {
     /// Send a signal to a process by PID.
     /// Returns `Err` if the PID is not found or not alive.
     pub unsafe fn send_signal(&self, pid: u32, sig: Signal) -> Result<(), &'static str> {
-        let slot = PROCESS_TABLE.get_mut(pid as usize)
+        let slot = PROCESS_TABLE
+            .get_mut(pid as usize)
             .and_then(|s| s.as_mut())
             .ok_or("send_signal: PID not found")?;
 
@@ -214,7 +215,7 @@ pub unsafe fn init_scheduler() {
 
     // Create PID 0 — the kernel itself.
     let mut kernel_proc = Process::empty();
-    kernel_proc.pid   = 0;
+    kernel_proc.pid = 0;
     kernel_proc.set_name("kernel");
     kernel_proc.state = ProcessState::Running;
     kernel_proc.priority = 0; // highest priority
@@ -257,17 +258,22 @@ pub unsafe fn spawn_kernel_thread(
 
     // Find a free slot.
     let slot_idx = (1..MAX_PROCESSES)
-        .find(|&i| PROCESS_TABLE[i].as_ref().map(|p| p.is_free()).unwrap_or(true))
+        .find(|&i| {
+            PROCESS_TABLE[i]
+                .as_ref()
+                .map(|p| p.is_free())
+                .unwrap_or(true)
+        })
         .ok_or("process table full")?;
 
     let pid = slot_idx as u32;
 
     let mut proc = Process::empty();
-    proc.pid      = pid;
+    proc.pid = pid;
     proc.set_name(name);
     proc.parent_pid = CURRENT_PID.load(Ordering::Relaxed);
     proc.priority = priority;
-    proc.state    = ProcessState::Ready;
+    proc.state = ProcessState::Ready;
 
     // Inherit kernel CR3 (kernel threads share the address space).
     let cr3: u64;
@@ -317,7 +323,9 @@ pub unsafe fn exit_process(code: i32) -> ! {
     }
     // Yield — the scheduler will pick a different process.
     // We never return since our state is Zombie.
-    loop { core::hint::spin_loop(); }
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 /// Inner helper: mark process as Zombie with the given exit code.
@@ -326,7 +334,7 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
     let child_pid = proc.pid;
     let parent_pid = proc.parent_pid;
 
-    proc.state     = ProcessState::Zombie;
+    proc.state = ProcessState::Zombie;
     proc.exit_code = Some(code);
     LIVE_COUNT.fetch_sub(1, Ordering::Relaxed);
 
@@ -390,7 +398,9 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         // Update kernel stack pointers for Ring 3 → Ring 0 transitions.
         if next.kernel_stack_top != 0 {
             crate::cpu::gdt::set_kernel_stack(next.kernel_stack_top);
-            extern "C" { static mut kernel_syscall_rsp: u64; }
+            extern "C" {
+                static mut kernel_syscall_rsp: u64;
+            }
             kernel_syscall_rsp = next.kernel_stack_top;
         }
 
@@ -419,12 +429,9 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 ///
 /// # Safety
 /// Scheduler, paging, and MemoryRegistry must all be initialized.
-pub unsafe fn spawn_user_process(
-    name: &str,
-    elf_data: &[u8],
-) -> Result<u32, &'static str> {
-    use crate::elf::{load_elf64, USER_STACK_TOP, USER_STACK_SIZE};
+pub unsafe fn spawn_user_process(name: &str, elf_data: &[u8]) -> Result<u32, &'static str> {
     use crate::cpu::gdt::{USER_CS, USER_DS};
+    use crate::elf::{load_elf64, USER_STACK_TOP};
 
     if !SCHEDULER_READY {
         return Err("scheduler not initialized");
@@ -433,7 +440,12 @@ pub unsafe fn spawn_user_process(
     let (image, page_table) = load_elf64(elf_data).map_err(|_| "ELF load failed")?;
 
     let slot_idx = (1..MAX_PROCESSES)
-        .find(|&i| PROCESS_TABLE[i].as_ref().map(|p| p.is_free()).unwrap_or(true))
+        .find(|&i| {
+            PROCESS_TABLE[i]
+                .as_ref()
+                .map(|p| p.is_free())
+                .unwrap_or(true)
+        })
         .ok_or("process table full")?;
 
     let pid = slot_idx as u32;
@@ -451,11 +463,11 @@ pub unsafe fn spawn_user_process(
 
     // Set up Ring 3 entry context.
     proc.context = CpuContext {
-        rip:    image.entry,
-        rsp:    USER_STACK_TOP,
-        rflags: 0x202,              // IF=1
-        cs:     USER_CS as u64,
-        ss:     USER_DS as u64,
+        rip: image.entry,
+        rsp: USER_STACK_TOP,
+        rflags: 0x202, // IF=1
+        cs: USER_CS as u64,
+        ss: USER_DS as u64,
         ..CpuContext::empty()
     };
 
@@ -520,17 +532,17 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
         .and_then(|s| s.as_ref())
     {
         Some(p) => (p.parent_pid, p.state),
-        None => return u64::MAX - 3,           // ESRCH
+        None => return u64::MAX - 3, // ESRCH
     };
 
     // Validate: is it actually our child?
     if child_parent != current {
-        return u64::MAX - 3;                   // ESRCH
+        return u64::MAX - 3; // ESRCH
     }
 
     // Already reaped?
     if matches!(child_state, ProcessState::Terminated) {
-        return u64::MAX - 10;                  // ECHILD
+        return u64::MAX - 10; // ECHILD
     }
 
     // Already zombie? Reap now.
@@ -577,11 +589,11 @@ unsafe fn reap_child(pid: u32) -> u64 {
 unsafe fn free_process_resources(proc: &mut Process) {
     // ── Free kernel stack ────────────────────────────────────────────────
     if proc.kernel_stack_base != 0 && is_registry_initialized() {
-        let pages = ((PROCESS_KERNEL_STACK_SIZE as u64) + PAGE_SIZE - 1) / PAGE_SIZE;
+        let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);
         let registry = global_registry_mut();
         let _ = registry.free_pages(proc.kernel_stack_base, pages);
         proc.kernel_stack_base = 0;
-        proc.kernel_stack_top  = 0;
+        proc.kernel_stack_top = 0;
     }
 
     // ── Free user page tables (if this isn't the kernel process) ─────────
@@ -604,7 +616,9 @@ unsafe fn free_process_resources(proc: &mut Process) {
 /// of the PML4), which is the user region.  The upper half (256..511) belongs
 /// to the kernel and is shared across all processes — we must not free those.
 unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
-    if !is_registry_initialized() { return; }
+    if !is_registry_initialized() {
+        return;
+    }
     let registry = global_registry_mut();
 
     let pml4 = pml4_phys as *const u64;
@@ -612,13 +626,17 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
     // Walk PML4 entries 0..256 (user half).
     for pml4_idx in 0..256usize {
         let pml4e = *pml4.add(pml4_idx);
-        if pml4e & 1 == 0 { continue; }              // not present
+        if pml4e & 1 == 0 {
+            continue;
+        } // not present
         let pdpt_phys = pml4e & 0x000F_FFFF_FFFF_F000;
         let pdpt = pdpt_phys as *const u64;
 
         for pdpt_idx in 0..512usize {
             let pdpte = *pdpt.add(pdpt_idx);
-            if pdpte & 1 == 0 { continue; }
+            if pdpte & 1 == 0 {
+                continue;
+            }
             if pdpte & (1 << 7) != 0 {
                 // 1 GiB huge page — free the physical frame.
                 let frame = pdpte & 0x000F_FFFF_FFFF_F000;
@@ -630,7 +648,9 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
 
             for pd_idx in 0..512usize {
                 let pde = *pd.add(pd_idx);
-                if pde & 1 == 0 { continue; }
+                if pde & 1 == 0 {
+                    continue;
+                }
                 if pde & (1 << 7) != 0 {
                     // 2 MiB huge page.
                     let frame = pde & 0x000F_FFFF_FFFF_F000;
@@ -642,7 +662,9 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
 
                 for pt_idx in 0..512usize {
                     let pte = *pt.add(pt_idx);
-                    if pte & 1 == 0 { continue; }
+                    if pte & 1 == 0 {
+                        continue;
+                    }
                     // 4 KiB page.
                     let frame = pte & 0x000F_FFFF_FFFF_F000;
                     let _ = registry.free_pages(frame, 1);
@@ -669,12 +691,10 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
 /// Called from `scheduler_tick` on every timer interrupt — must be fast.
 unsafe fn wake_expired_sleepers() {
     let now = crate::cpu::tsc::read_tsc();
-    for slot in PROCESS_TABLE.iter_mut() {
-        if let Some(proc) = slot {
-            if let ProcessState::Blocked(BlockReason::Sleep(deadline)) = proc.state {
-                if now >= deadline {
-                    proc.state = ProcessState::Ready;
-                }
+    for proc in PROCESS_TABLE.iter_mut().flatten() {
+        if let ProcessState::Blocked(BlockReason::Sleep(deadline)) = proc.state {
+            if now >= deadline {
+                proc.state = ProcessState::Ready;
             }
         }
     }

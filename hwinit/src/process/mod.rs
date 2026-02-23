@@ -36,21 +36,14 @@ pub mod signals;
 
 pub use context::CpuContext;
 pub use scheduler::{
-    Scheduler, ProcessInfo,
-    SCHEDULER,
-    init_scheduler,
-    spawn_kernel_thread,
-    exit_process,
-    scheduler_tick,
-    set_tsc_frequency,
-    tsc_frequency,
-    block_sleep,
-    wait_for_child,
+    block_sleep, exit_process, init_scheduler, scheduler_tick, set_tsc_frequency,
+    spawn_kernel_thread, tsc_frequency, wait_for_child, ProcessInfo, Scheduler, SCHEDULER,
 };
 pub use signals::{Signal, SignalSet};
 
-use crate::memory::{AllocateType, MemoryType, PAGE_SIZE, global_registry_mut, is_registry_initialized};
-use crate::serial::puts;
+use crate::memory::{
+    global_registry_mut, is_registry_initialized, AllocateType, MemoryType, PAGE_SIZE,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -108,25 +101,25 @@ impl ProcessState {
 /// itself.  The kernel stack is allocated from MemoryRegistry.
 pub struct Process {
     // ── Identity ─────────────────────────────────────────────────────────
-    pub pid:        u32,
+    pub pid: u32,
     /// Process name — UTF-8, NUL-terminated, stored inline.
-    pub name:       [u8; 32],
-    pub parent_pid: u32,     // 0 = no parent
+    pub name: [u8; 32],
+    pub parent_pid: u32, // 0 = no parent
 
     // ── State ─────────────────────────────────────────────────────────────
-    pub state:      ProcessState,
-    pub exit_code:  Option<i32>,
+    pub state: ProcessState,
+    pub exit_code: Option<i32>,
 
     // ── CPU ───────────────────────────────────────────────────────────────
     /// Physical address of this process's PML4 table.
     /// For kernel threads this is identical to the kernel PML4 (shared).
-    pub cr3:        u64,
+    pub cr3: u64,
     /// Top of this process's kernel stack (for interrupt/syscall entry).
     pub kernel_stack_top: u64,
     /// Physical base address of the kernel stack allocation (to free later).
     pub kernel_stack_base: u64,
     /// Saved register state (populated on every context switch away).
-    pub context:    CpuContext,
+    pub context: CpuContext,
 
     // ── Memory ────────────────────────────────────────────────────────────
     /// Virtual address range of the user heap: `(base, size_bytes)`.
@@ -136,9 +129,9 @@ pub struct Process {
 
     // ── Scheduling ────────────────────────────────────────────────────────
     /// Scheduling priority (lower = higher priority; 0 = real-time).
-    pub priority:   u8,
+    pub priority: u8,
     /// Accumulated CPU ticks (for the task manager display).
-    pub cpu_ticks:  u64,
+    pub cpu_ticks: u64,
 
     // ── Signals ───────────────────────────────────────────────────────────
     pub pending_signals: signals::SignalSet,
@@ -151,21 +144,21 @@ pub struct Process {
 impl Process {
     pub const fn empty() -> Self {
         Self {
-            pid:              0,
-            name:             [0u8; 32],
-            parent_pid:       0,
-            state:            ProcessState::Terminated,
-            exit_code:        None,
-            cr3:              0,
-            kernel_stack_top:  0,
+            pid: 0,
+            name: [0u8; 32],
+            parent_pid: 0,
+            state: ProcessState::Terminated,
+            exit_code: None,
+            cr3: 0,
+            kernel_stack_top: 0,
             kernel_stack_base: 0,
-            context:          CpuContext::empty(),
-            heap_region:      (0, 0),
-            pages_allocated:  0,
-            priority:         128,
-            cpu_ticks:        0,
-            pending_signals:  signals::SignalSet::empty(),
-            fd_table:         morpheus_helix::vfs::FdTable::new(),
+            context: CpuContext::empty(),
+            heap_region: (0, 0),
+            pages_allocated: 0,
+            priority: 128,
+            cpu_ticks: 0,
+            pending_signals: signals::SignalSet::empty(),
+            fd_table: morpheus_helix::vfs::FdTable::new(),
         }
     }
 
@@ -198,14 +191,14 @@ impl Process {
         if !is_registry_initialized() {
             return Err("MemoryRegistry not ready");
         }
-        let pages = (PROCESS_KERNEL_STACK_SIZE as u64 + PAGE_SIZE - 1) / PAGE_SIZE;
+        let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);
         let registry = global_registry_mut();
         let base = registry
             .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedStack, pages)
             .map_err(|_| "failed to allocate kernel stack")?;
         self.kernel_stack_base = base;
-        self.kernel_stack_top  = base + PROCESS_KERNEL_STACK_SIZE as u64;
-        self.pages_allocated  += pages;
+        self.kernel_stack_top = base + PROCESS_KERNEL_STACK_SIZE as u64;
+        self.pages_allocated += pages;
         Ok(())
     }
 }

@@ -8,9 +8,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const ASM_KEYBOARD: &[&str] = &[
-    "asm/keyboard/ps2.s",
-];
+const ASM_KEYBOARD: &[&str] = &["asm/keyboard/ps2.s"];
 
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
@@ -25,7 +23,10 @@ fn main() {
 
     // Microsoft x64 ABI — same as hwinit
     let obj_format = "win64";
-    println!("cargo:warning=Building keyboard ASM for: {} ({})", target, obj_format);
+    println!(
+        "cargo:warning=Building keyboard ASM for: {} ({})",
+        target, obj_format
+    );
 
     let mut objects = Vec::new();
 
@@ -33,7 +34,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path);
         match assemble(path, &out_dir, obj_format) {
             Ok(obj) => objects.push(obj),
-            Err(e)  => panic!("NASM failed on {}: {}", path, e),
+            Err(e) => panic!("NASM failed on {}: {}", path, e),
         }
     }
 

@@ -95,85 +95,85 @@ pub const ROOT_DIR_KEY: u64 = 1;
 pub struct HelixSuperblock {
     // ── Identity (offset 0) ─────────────────────────────────────────
     /// Magic: `HELIXFS1`.
-    pub magic:             [u8; 8],
+    pub magic: [u8; 8],
     /// On-disk format version.
-    pub version:           u32,
+    pub version: u32,
     /// Block size in bytes (always 4096).
-    pub block_size:        u32,
+    pub block_size: u32,
 
     // ── Geometry (offset 16) ────────────────────────────────────────
     /// Total blocks on this partition.
-    pub total_blocks:      u64,
+    pub total_blocks: u64,
     /// First block of the log region.
-    pub log_start_block:   u64,
+    pub log_start_block: u64,
     /// Last block of the log region (inclusive).
-    pub log_end_block:     u64,
+    pub log_end_block: u64,
     /// Number of log segment slots.
     pub log_segment_count: u64,
     /// First block of the inode/block bitmaps.
-    pub bitmap_start:      u64,
+    pub bitmap_start: u64,
     /// Number of bitmap blocks.
-    pub bitmap_blocks:     u64,
+    pub bitmap_blocks: u64,
     /// First block of the data region.
-    pub data_start_block:  u64,
+    pub data_start_block: u64,
     /// Total data blocks available.
-    pub data_block_count:  u64,
+    pub data_block_count: u64,
 
     // ── Index root (offset 80) ─────────────────────────────────────
     /// Block address of the current B-tree root (valid at last checkpoint).
-    pub index_root_block:  BlockAddr,
+    pub index_root_block: BlockAddr,
     /// B-tree depth (0 = root is a leaf node).
-    pub index_depth:       u32,
+    pub index_depth: u32,
     /// Padding.
-    pub _pad0:             u32,
+    pub _pad0: u32,
 
     // ── Log state (offset 96) ──────────────────────────────────────
     /// Highest fully committed LSN.
-    pub committed_lsn:     Lsn,
+    pub committed_lsn: Lsn,
     /// LSN of the last checkpoint (B-tree was flushed here).
-    pub checkpoint_lsn:    Lsn,
+    pub checkpoint_lsn: Lsn,
     /// Log head segment index (next write position).
-    pub log_head_segment:  u64,
+    pub log_head_segment: u64,
     /// Log tail segment index (oldest live data).
-    pub log_tail_segment:  u64,
+    pub log_tail_segment: u64,
     /// Write offset within the head segment (bytes).
-    pub log_head_offset:   u32,
+    pub log_head_offset: u32,
     /// Padding.
-    pub _pad1:             u32,
+    pub _pad1: u32,
 
     // ── Volume identity (offset 136) ───────────────────────────────
     /// Random UUID (generated at format time).
-    pub uuid:              [u8; 16],
+    pub uuid: [u8; 16],
     /// Volume label (null-terminated UTF-8, max 63 chars).
-    pub label:             [u8; 64],
+    pub label: [u8; 64],
 
     // ── Snapshot bookkeeping (offset 216) ──────────────────────────
     /// Block address of the snapshot table (SnapshotEntry array).
     pub snapshot_table_block: BlockAddr,
     /// Number of named snapshots (0..MAX_SNAPSHOTS).
-    pub snapshot_count:    u32,
-    pub _pad2:             u32,
+    pub snapshot_count: u32,
+    pub _pad2: u32,
 
     // ── Statistics (offset 232) ────────────────────────────────────
     /// Total blocks currently allocated (data + index + log overhead).
-    pub blocks_used:       u64,
+    pub blocks_used: u64,
     /// Total files (non-dir index entries).
-    pub file_count:        u64,
+    pub file_count: u64,
     /// Total directories.
-    pub dir_count:         u64,
+    pub dir_count: u64,
     /// Creation timestamp (TSC nanoseconds since boot).
-    pub created_ns:        u64,
+    pub created_ns: u64,
     /// Last mount timestamp.
-    pub last_mount_ns:     u64,
+    pub last_mount_ns: u64,
     /// Mount count.
-    pub mount_count:       u64,
+    pub mount_count: u64,
 
     // ── Integrity (offset 280) ─────────────────────────────────────
     /// CRC32C of bytes [0..280).  Set to 0 during computation.
-    pub crc32c:            u32,
+    pub crc32c: u32,
 
     // ── Reserved (offset 284 → 4096) ──────────────────────────────
-    pub _reserved:         [u8; 3812],
+    pub _reserved: [u8; 3812],
 }
 
 const _ASSERT_SB_SIZE: () = assert!(core::mem::size_of::<HelixSuperblock>() == 4096);
@@ -196,9 +196,7 @@ impl HelixSuperblock {
     /// Recompute and store the CRC.
     pub fn update_crc(&mut self) {
         self.crc32c = 0;
-        let bytes = unsafe {
-            core::slice::from_raw_parts(self as *const _ as *const u8, 288)
-        };
+        let bytes = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, 288) };
         self.crc32c = crate::crc::crc32c(bytes);
     }
 
@@ -206,9 +204,7 @@ impl HelixSuperblock {
     pub fn verify_crc(&self) -> bool {
         let mut copy = *self;
         copy.crc32c = 0;
-        let bytes = unsafe {
-            core::slice::from_raw_parts(&copy as *const _ as *const u8, 288)
-        };
+        let bytes = unsafe { core::slice::from_raw_parts(&copy as *const _ as *const u8, 288) };
         crate::crc::crc32c(bytes) == self.crc32c
     }
 }
@@ -234,15 +230,15 @@ impl fmt::Debug for HelixSuperblock {
 #[derive(Clone, Copy)]
 pub struct SnapshotEntry {
     /// Snapshot name (null-terminated UTF-8, max 63 chars).
-    pub name:         [u8; 64],
+    pub name: [u8; 64],
     /// LSN at the moment of snapshot.
-    pub lsn:          Lsn,
+    pub lsn: Lsn,
     /// Timestamp (TSC nanoseconds).
     pub timestamp_ns: u64,
     /// Index root block at that LSN (for fast mount of snapshot view).
-    pub index_root:   BlockAddr,
+    pub index_root: BlockAddr,
     /// Reserved.
-    pub _pad:         [u8; 40],
+    pub _pad: [u8; 40],
 }
 
 const _ASSERT_SNAP_SIZE: () = assert!(core::mem::size_of::<SnapshotEntry>() == 128);
@@ -256,23 +252,23 @@ const _ASSERT_SNAP_SIZE: () = assert!(core::mem::size_of::<SnapshotEntry>() == 1
 #[derive(Clone, Copy, Debug)]
 pub struct LogSegmentHeader {
     /// Magic for segment validation.
-    pub magic:          [u8; 4],   // "HLSG"
+    pub magic: [u8; 4], // "HLSG"
     /// Explicit padding for alignment.
-    pub _pad_magic:     u32,
+    pub _pad_magic: u32,
     /// Segment sequence number (monotonically increasing).
-    pub sequence:       u64,
+    pub sequence: u64,
     /// LSN of the first record in this segment.
-    pub lsn_start:      Lsn,
+    pub lsn_start: Lsn,
     /// Number of complete records in this segment.
-    pub record_count:   u32,
+    pub record_count: u32,
     /// Bytes used in this segment (excluding this header).
-    pub bytes_used:     u32,
+    pub bytes_used: u32,
     /// Timestamp of first record (TSC ns).
-    pub timestamp_ns:   u64,
+    pub timestamp_ns: u64,
     /// CRC32C of this header (fields [0..56), crc set to 0).
-    pub crc32c:         u32,
+    pub crc32c: u32,
     /// Reserved.
-    pub _reserved:      [u8; 20],
+    pub _reserved: [u8; 20],
 }
 
 const _ASSERT_SEGHDR_SIZE: () = assert!(core::mem::size_of::<LogSegmentHeader>() == 64);
@@ -285,31 +281,31 @@ pub const LOG_SEGMENT_MAGIC: [u8; 4] = *b"HLSG";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogOp {
     /// Create or overwrite a file.  Payload = file data.
-    Write       = 0x01,
+    Write = 0x01,
     /// Append data to an existing file.
-    Append      = 0x02,
+    Append = 0x02,
     /// Delete a file or directory (tombstone).
-    Delete      = 0x03,
+    Delete = 0x03,
     /// Create a directory (no payload).
-    MkDir       = 0x04,
+    MkDir = 0x04,
     /// Rename: `old_path_hash` → `new_path_hash`.
-    Rename      = 0x05,
+    Rename = 0x05,
     /// Set metadata (flags, timestamps).
-    SetMeta     = 0x06,
+    SetMeta = 0x06,
     /// Dedup reference: payload_crc64 matches an existing block.
-    DedupRef    = 0x07,
+    DedupRef = 0x07,
     /// Transaction begin marker.
-    TxBegin     = 0x08,
+    TxBegin = 0x08,
     /// Transaction commit: atomically applies all records since TxBegin.
-    TxCommit    = 0x09,
+    TxCommit = 0x09,
     /// Transaction abort.
-    TxAbort     = 0x0A,
+    TxAbort = 0x0A,
     /// Snapshot label: names a point in the log.
-    Snapshot    = 0x0B,
+    Snapshot = 0x0B,
     /// Checkpoint: B-tree root was flushed to disk.
-    Checkpoint  = 0x0C,
+    Checkpoint = 0x0C,
     /// Truncate a file to a given size.
-    Truncate    = 0x0D,
+    Truncate = 0x0D,
 }
 
 impl LogOp {
@@ -328,7 +324,7 @@ impl LogOp {
             0x0B => Some(Self::Snapshot),
             0x0C => Some(Self::Checkpoint),
             0x0D => Some(Self::Truncate),
-            _    => None,
+            _ => None,
         }
     }
 }
@@ -342,29 +338,29 @@ impl LogOp {
 #[derive(Clone, Copy, Debug)]
 pub struct LogRecordHeader {
     /// Log Sequence Number (unique, monotonically increasing).
-    pub lsn:            Lsn,
+    pub lsn: Lsn,
     /// Timestamp from calibrated TSC (nanoseconds since boot).
-    pub timestamp_ns:   u64,
+    pub timestamp_ns: u64,
     /// Operation type.
-    pub op:             u8,
+    pub op: u8,
     /// Flags (reserved, must be 0).
-    pub flags:          u8,
+    pub flags: u8,
     /// Padding.
-    pub _pad:           [u8; 2],
+    pub _pad: [u8; 2],
     /// Total payload length in bytes.
-    pub payload_len:    u32,
+    pub payload_len: u32,
     /// FNV-1a hash of the full path (for namespace index key).
-    pub path_hash:      u64,
+    pub path_hash: u64,
     /// CRC64 of the payload (for content dedup).
-    pub payload_crc64:  u64,
+    pub payload_crc64: u64,
     /// For Rename: the *new* path hash.  Otherwise 0.
     pub secondary_hash: u64,
     /// For TxCommit: the LSN of the matching TxBegin.  Otherwise 0.
-    pub tx_begin_lsn:   Lsn,
+    pub tx_begin_lsn: Lsn,
     /// CRC32C of this header + payload.  Set to 0 during computation.
-    pub record_crc32c:  u32,
+    pub record_crc32c: u32,
     /// Reserved.
-    pub _reserved:      u32,
+    pub _reserved: u32,
 }
 
 const _ASSERT_RECHDR_SIZE: () = assert!(core::mem::size_of::<LogRecordHeader>() == 64);
@@ -384,15 +380,15 @@ impl LogRecordHeader {
 /// Flags on an index entry (leaf).
 pub mod entry_flags {
     /// Entry is a directory.
-    pub const IS_DIR:     u32 = 1 << 0;
+    pub const IS_DIR: u32 = 1 << 0;
     /// Entry has been deleted (tombstone).
     pub const IS_DELETED: u32 = 1 << 1;
     /// Data is stored inline in `inline_data`.
-    pub const IS_INLINE:  u32 = 1 << 2;
+    pub const IS_INLINE: u32 = 1 << 2;
     /// Entry is a synthetic VFS node (/sys).
-    pub const IS_SYS:     u32 = 1 << 3;
+    pub const IS_SYS: u32 = 1 << 3;
     /// Content-addressed dedup is active.
-    pub const IS_DEDUP:   u32 = 1 << 4;
+    pub const IS_DEDUP: u32 = 1 << 4;
 }
 
 /// A single entry in a B-tree leaf node.
@@ -402,39 +398,39 @@ pub mod entry_flags {
 #[derive(Clone, Copy)]
 pub struct IndexEntry {
     /// FNV-1a hash of the full path (primary key).
-    pub key:            u64,
+    pub key: u64,
     /// Full path, null-terminated UTF-8.
-    pub path:           [u8; 256],
+    pub path: [u8; 256],
     /// Bit flags (see `entry_flags`).
-    pub flags:          u32,
+    pub flags: u32,
     /// LSN of the log record containing the latest data.
-    pub lsn:            Lsn,
+    pub lsn: Lsn,
     /// File size in bytes (0 for directories).
-    pub size:           u64,
+    pub size: u64,
     /// Number of direct children (directories only).
-    pub child_count:    u32,
+    pub child_count: u32,
     /// Padding.
-    pub _pad0:          u32,
+    pub _pad0: u32,
     /// Creation timestamp (TSC ns).
-    pub created_ns:     u64,
+    pub created_ns: u64,
     /// Last modification timestamp.
-    pub modified_ns:    u64,
+    pub modified_ns: u64,
     /// Number of prior versions in the log.
-    pub version_count:  u32,
+    pub version_count: u32,
     /// LSN of the first version of this path.
-    pub first_lsn:      Lsn,
+    pub first_lsn: Lsn,
     /// Padding.
-    pub _pad1:          u32,
+    pub _pad1: u32,
     /// Inline data for small files (< 96 bytes).
-    pub inline_data:    [u8; INLINE_DATA_SIZE],
+    pub inline_data: [u8; INLINE_DATA_SIZE],
     /// Block address of extent tree root (large files).
-    pub extent_root:    BlockAddr,
+    pub extent_root: BlockAddr,
     /// CRC64 of current content (for dedup).
-    pub content_crc64:  u64,
+    pub content_crc64: u64,
     /// CRC32C of this entry.
-    pub crc32c:         u32,
+    pub crc32c: u32,
     /// Reserved.
-    pub _reserved:      [u8; 60],
+    pub _reserved: [u8; 60],
 }
 
 // Target: 512 bytes per entry → 8 entries per block
@@ -447,24 +443,24 @@ const _ASSERT_ENTRY_SIZE: () = assert!(core::mem::size_of::<IndexEntry>() == 512
 #[derive(Clone, Copy)]
 pub struct BTreeNodeHeader {
     /// Node type marker: 0x01 = internal, 0x02 = leaf.
-    pub node_type:    u8,
+    pub node_type: u8,
     /// Padding.
-    pub _pad:         [u8; 3],
+    pub _pad: [u8; 3],
     /// Number of keys currently stored.
-    pub key_count:    u32,
+    pub key_count: u32,
     /// Block address of this node (self-reference for validation).
-    pub self_block:   BlockAddr,
+    pub self_block: BlockAddr,
     /// CRC32C of the entire block.
-    pub crc32c:       u32,
+    pub crc32c: u32,
     /// Reserved.
-    pub _reserved:    [u8; 12],
+    pub _reserved: [u8; 12],
 }
 
 const _ASSERT_BTREE_HDR: () = assert!(core::mem::size_of::<BTreeNodeHeader>() == 32);
 
 /// Node type constants.
 pub const NODE_INTERNAL: u8 = 0x01;
-pub const NODE_LEAF:     u8 = 0x02;
+pub const NODE_LEAF: u8 = 0x02;
 
 /// Internal node: header + keys[ORDER] + children[ORDER+1].
 ///
@@ -485,13 +481,13 @@ pub const LEAF_ENTRIES_PER_BLOCK: usize = 7;
 #[derive(Clone, Copy, Debug)]
 pub struct ExtentEntry {
     /// Logical block offset within the file.
-    pub logical_block:  u64,
+    pub logical_block: u64,
     /// Physical block address on disk.
     pub physical_block: BlockAddr,
     /// Number of contiguous blocks.
-    pub block_count:    u32,
+    pub block_count: u32,
     /// Reserved.
-    pub _reserved:      u32,
+    pub _reserved: u32,
 }
 
 const _ASSERT_EXTENT_SIZE: () = assert!(core::mem::size_of::<ExtentEntry>() == 24);
@@ -501,13 +497,13 @@ const _ASSERT_EXTENT_SIZE: () = assert!(core::mem::size_of::<ExtentEntry>() == 2
 #[derive(Clone, Copy, Debug)]
 pub struct ExtentNodeHeader {
     /// 0x01 = leaf (entries are ExtentEntry), 0x02 = internal (entries are children).
-    pub node_type:  u8,
-    pub _pad:       [u8; 3],
+    pub node_type: u8,
+    pub _pad: [u8; 3],
     /// Number of entries in this node.
-    pub count:      u32,
+    pub count: u32,
     /// CRC32C of the block.
-    pub crc32c:     u32,
-    pub _reserved:  u32,
+    pub crc32c: u32,
+    pub _reserved: u32,
 }
 
 const _ASSERT_EXTHDR_SIZE: () = assert!(core::mem::size_of::<ExtentNodeHeader>() == 16);
@@ -522,38 +518,38 @@ pub const EXTENTS_PER_LEAF: usize = 170;
 /// Open mode flags.
 pub mod open_flags {
     /// Open for reading.
-    pub const O_READ:    u32 = 1 << 0;
+    pub const O_READ: u32 = 1 << 0;
     /// Open for writing.
-    pub const O_WRITE:   u32 = 1 << 1;
+    pub const O_WRITE: u32 = 1 << 1;
     /// Create if not exists.
-    pub const O_CREATE:  u32 = 1 << 2;
+    pub const O_CREATE: u32 = 1 << 2;
     /// Truncate on open.
-    pub const O_TRUNC:   u32 = 1 << 3;
+    pub const O_TRUNC: u32 = 1 << 3;
     /// Append mode (all writes go to end).
-    pub const O_APPEND:  u32 = 1 << 4;
+    pub const O_APPEND: u32 = 1 << 4;
     /// Open a directory for iteration.
-    pub const O_DIR:     u32 = 1 << 5;
+    pub const O_DIR: u32 = 1 << 5;
     /// Open at a specific LSN (temporal read).
-    pub const O_AT_LSN:  u32 = 1 << 6;
+    pub const O_AT_LSN: u32 = 1 << 6;
 }
 
 /// A file descriptor — per-process, in-memory only.
 #[derive(Clone, Copy, Debug)]
 pub struct FileDescriptor {
     /// Index entry key (path hash) this fd refers to.
-    pub key:          u64,
+    pub key: u64,
     /// Full path for safe index lookups (avoids hash-collision issues).
-    pub path:         [u8; 256],
+    pub path: [u8; 256],
     /// Open flags.
-    pub flags:        u32,
+    pub flags: u32,
     /// Current seek offset in bytes.
-    pub offset:       u64,
+    pub offset: u64,
     /// Mount table index (which filesystem instance).
-    pub mount_idx:    u8,
+    pub mount_idx: u8,
     /// Padding.
-    pub _pad:         [u8; 3],
+    pub _pad: [u8; 3],
     /// For O_AT_LSN: the pinned LSN for temporal reads.
-    pub pinned_lsn:   Lsn,
+    pub pinned_lsn: Lsn,
 }
 
 impl FileDescriptor {
@@ -603,23 +599,23 @@ pub struct DirEntry {
 #[derive(Clone, Copy, Debug)]
 pub struct FileStat {
     /// Full path hash.
-    pub key:           u64,
+    pub key: u64,
     /// File size in bytes.
-    pub size:          u64,
+    pub size: u64,
     /// Is directory?
-    pub is_dir:        bool,
+    pub is_dir: bool,
     /// Created timestamp (TSC ns).
-    pub created_ns:    u64,
+    pub created_ns: u64,
     /// Modified timestamp (TSC ns).
-    pub modified_ns:   u64,
+    pub modified_ns: u64,
     /// Number of prior versions.
     pub version_count: u32,
     /// Current LSN.
-    pub lsn:           Lsn,
+    pub lsn: Lsn,
     /// First LSN (creation).
-    pub first_lsn:     Lsn,
+    pub first_lsn: Lsn,
     /// Entry flags.
-    pub flags:         u32,
+    pub flags: u32,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -627,25 +623,25 @@ pub struct FileStat {
 // ═══════════════════════════════════════════════════════════════════════
 
 /// `open(path_ptr, path_len, flags) → fd`
-pub const SYS_OPEN:     u64 = 10;
+pub const SYS_OPEN: u64 = 10;
 /// `close(fd) → 0`
-pub const SYS_CLOSE:    u64 = 11;
+pub const SYS_CLOSE: u64 = 11;
 /// `seek(fd, offset, whence) → new_offset`
-pub const SYS_SEEK:     u64 = 12;
+pub const SYS_SEEK: u64 = 12;
 /// `stat(path_ptr, path_len, stat_buf_ptr) → 0`
-pub const SYS_STAT:     u64 = 13;
+pub const SYS_STAT: u64 = 13;
 /// `readdir(fd, entry_buf_ptr, max_entries) → count`
-pub const SYS_READDIR:  u64 = 14;
+pub const SYS_READDIR: u64 = 14;
 /// `mkdir(path_ptr, path_len) → 0`
-pub const SYS_MKDIR:    u64 = 15;
+pub const SYS_MKDIR: u64 = 15;
 /// `unlink(path_ptr, path_len) → 0`
-pub const SYS_UNLINK:   u64 = 16;
+pub const SYS_UNLINK: u64 = 16;
 /// `rename(old_ptr, old_len, new_ptr, new_len) → 0`
-pub const SYS_RENAME:   u64 = 17;
+pub const SYS_RENAME: u64 = 17;
 /// `truncate(fd, new_size) → 0`
 pub const SYS_TRUNCATE: u64 = 18;
 /// `sync() → 0` — flush all pending writes and checkpoint.
-pub const SYS_SYNC:     u64 = 19;
+pub const SYS_SYNC: u64 = 19;
 /// `snapshot(name_ptr, name_len) → snapshot_id`
 pub const SYS_SNAPSHOT: u64 = 20;
 /// `versions(path_ptr, path_len, buf_ptr, max) → count`

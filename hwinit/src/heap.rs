@@ -46,7 +46,7 @@ use core::ptr::{self, NonNull};
 use spin::Mutex;
 
 use crate::memory::{global_registry_mut, is_registry_initialized, MemoryType, PAGE_SIZE};
-use crate::serial::{puts, put_hex64, put_hex32};
+use crate::serial::{put_hex32, put_hex64, puts};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HEAP STATE
@@ -106,7 +106,8 @@ unsafe impl GlobalAlloc for HeapAllocator {
                 // Try to grow the heap
                 if try_grow_heap(state, layout.size()) {
                     // Retry allocation
-                    state.heap
+                    state
+                        .heap
                         .allocate_first_fit(layout)
                         .map(|p| p.as_ptr())
                         .unwrap_or(ptr::null_mut())
@@ -156,7 +157,7 @@ unsafe impl GlobalAlloc for HeapAllocator {
 /// Returns true if growth succeeded.
 unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
     // Round up to page size
-    let grow_size = ((needed + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize) * PAGE_SIZE as usize;
+    let grow_size = needed.div_ceil(PAGE_SIZE as usize) * PAGE_SIZE as usize;
 
     // Don't exceed max size
     if state.size + grow_size > state.max_size {
@@ -171,7 +172,7 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
     }
 
     let registry = global_registry_mut();
-    let pages = (grow_size as u64 + PAGE_SIZE - 1) / PAGE_SIZE;
+    let pages = (grow_size as u64).div_ceil(PAGE_SIZE);
 
     // We need contiguous memory, so allocate at a specific address
     // For simplicity, we extend from the current heap end
@@ -226,15 +227,17 @@ pub unsafe fn init_heap(initial_size: usize) -> Result<(), &'static str> {
     let registry = global_registry_mut();
 
     // Round up to page size
-    let size = ((initial_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize) * PAGE_SIZE as usize;
+    let size = initial_size.div_ceil(PAGE_SIZE as usize) * PAGE_SIZE as usize;
     let pages = size as u64 / PAGE_SIZE;
 
     // Allocate heap memory
-    let base = registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        MemoryType::AllocatedHeap,
-        pages,
-    ).map_err(|_| "failed to allocate heap memory")?;
+    let base = registry
+        .allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            MemoryType::AllocatedHeap,
+            pages,
+        )
+        .map_err(|_| "failed to allocate heap memory")?;
 
     // Initialize the linked_list_allocator heap
     let mut heap = linked_list_allocator::Heap::empty();
@@ -304,7 +307,7 @@ pub fn is_heap_initialized() -> bool {
 /// Get heap statistics.
 pub fn heap_stats() -> Option<(usize, usize, usize)> {
     let guard = HEAP.lock();
-    guard.as_ref().map(|state| {
-        (state.size, state.heap.used(), state.heap.free())
-    })
+    guard
+        .as_ref()
+        .map(|state| (state.size, state.heap.used(), state.heap.free()))
 }

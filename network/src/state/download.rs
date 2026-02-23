@@ -421,7 +421,7 @@ impl IsoDownloadState {
                 match result {
                     StepResult::Done => {
                         // Network ready, start HTTP download
-                        let network_config = dhcp.config().unwrap().clone();
+                        let network_config = *dhcp.config().unwrap();
 
                         match HttpDownloadState::new(config.url.clone()) {
                             Ok(mut http) => {

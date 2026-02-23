@@ -47,12 +47,11 @@ impl<T> SpinLock<T> {
         disable_interrupts();
 
         // Spin until we acquire the lock
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             // Spin hint
             core::hint::spin_loop();
         }
@@ -68,12 +67,11 @@ impl<T> SpinLock<T> {
         let interrupts_were_enabled = interrupts_enabled();
         disable_interrupts();
 
-        if self.locked.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             Some(SpinLockGuard {
                 lock: self,
                 interrupts_were_enabled,
@@ -152,12 +150,11 @@ impl RawSpinLock {
     }
 
     pub fn lock(&self) {
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -167,12 +164,9 @@ impl RawSpinLock {
     }
 
     pub fn try_lock(&self) -> bool {
-        self.locked.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok()
+        self.locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
     }
 }
 
@@ -203,12 +197,16 @@ impl Once {
         }
 
         // Try to become the runner
-        if self.state.compare_exchange(
-            ONCE_INCOMPLETE,
-            ONCE_RUNNING,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .state
+            .compare_exchange(
+                ONCE_INCOMPLETE,
+                ONCE_RUNNING,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             f();
             self.state.store(ONCE_COMPLETE, Ordering::Release);
         } else {
@@ -251,7 +249,9 @@ impl<T, F: FnOnce() -> T> Lazy<T, F> {
         self.once.call_once(|| {
             let init = unsafe { (*self.init.get()).take().unwrap() };
             let value = init();
-            unsafe { *self.value.get() = Some(value); }
+            unsafe {
+                *self.value.get() = Some(value);
+            }
         });
 
         unsafe { (*self.value.get()).as_ref().unwrap() }

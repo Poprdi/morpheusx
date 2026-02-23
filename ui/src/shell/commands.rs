@@ -1,5 +1,5 @@
-use alloc::string::String;
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -87,14 +87,17 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
         "list" | "windows" => CommandResult::ListWindows,
 
         // ── Filesystem commands ─────────────────────────────────────
-
         "pwd" => CommandResult::Output(String::from(cwd)),
 
         "cd" => {
             if arg.is_empty() {
-                CommandResult::FsCommand(FsOp::Cd { path: String::from("/") })
+                CommandResult::FsCommand(FsOp::Cd {
+                    path: String::from("/"),
+                })
             } else {
-                CommandResult::FsCommand(FsOp::Cd { path: resolve_path(cwd, arg) })
+                CommandResult::FsCommand(FsOp::Cd {
+                    path: resolve_path(cwd, arg),
+                })
             }
         }
 
@@ -112,7 +115,9 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
             if arg.is_empty() {
                 CommandResult::Output(String::from("Usage: mkdir <path>"))
             } else {
-                CommandResult::FsCommand(FsOp::Mkdir { path: resolve_path(cwd, arg) })
+                CommandResult::FsCommand(FsOp::Mkdir {
+                    path: resolve_path(cwd, arg),
+                })
             }
         }
 
@@ -120,7 +125,9 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
             if arg.is_empty() {
                 CommandResult::Output(String::from("Usage: touch <path>"))
             } else {
-                CommandResult::FsCommand(FsOp::Touch { path: resolve_path(cwd, arg) })
+                CommandResult::FsCommand(FsOp::Touch {
+                    path: resolve_path(cwd, arg),
+                })
             }
         }
 
@@ -128,7 +135,9 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
             if arg.is_empty() {
                 CommandResult::Output(String::from("Usage: cat <path>"))
             } else {
-                CommandResult::FsCommand(FsOp::Cat { path: resolve_path(cwd, arg) })
+                CommandResult::FsCommand(FsOp::Cat {
+                    path: resolve_path(cwd, arg),
+                })
             }
         }
 
@@ -136,7 +145,9 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
             if arg.is_empty() {
                 CommandResult::Output(String::from("Usage: rm <path>"))
             } else {
-                CommandResult::FsCommand(FsOp::Rm { path: resolve_path(cwd, arg) })
+                CommandResult::FsCommand(FsOp::Rm {
+                    path: resolve_path(cwd, arg),
+                })
             }
         }
 
@@ -172,7 +183,9 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
             if arg.is_empty() {
                 CommandResult::Output(String::from("Usage: stat <path>"))
             } else {
-                CommandResult::FsCommand(FsOp::Stat { path: resolve_path(cwd, arg) })
+                CommandResult::FsCommand(FsOp::Stat {
+                    path: resolve_path(cwd, arg),
+                })
             }
         }
 
@@ -209,7 +222,9 @@ fn normalize_path(path: &str) -> String {
     for part in path.split('/') {
         match part {
             "" | "." => {}
-            ".." => { components.pop(); }
+            ".." => {
+                components.pop();
+            }
             other => components.push(other),
         }
     }
@@ -274,7 +289,7 @@ fn help_text() -> String {
          \x20 stat <path>     HelixFS metadata\n\
          \x20 sync            Flush log to disk\n\
          \n\
-         \x20 exit            Halt system"
+         \x20 exit            Halt system",
     )
 }
 
@@ -284,7 +299,7 @@ fn parse_u32(s: &str) -> Option<u32> {
         return None;
     }
     for &b in s.as_bytes() {
-        if b < b'0' || b > b'9' {
+        if !(b'0'..=b'9').contains(&b) {
             return None;
         }
         result = result.checked_mul(10)?.checked_add((b - b'0') as u32)?;

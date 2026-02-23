@@ -1,3 +1,3 @@
-pub mod shapes;
-pub mod glyph;
 pub mod blit;
+pub mod glyph;
+pub mod shapes;

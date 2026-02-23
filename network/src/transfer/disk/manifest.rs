@@ -65,7 +65,7 @@ impl ManifestWriter {
     /// Create new manifest writer
     pub fn new(iso_name: &str, total_size: u64) -> Self {
         let mut name = [0u8; MAX_ISO_NAME_LEN];
-        let len = iso_name.as_bytes().len().min(MAX_ISO_NAME_LEN - 1);
+        let len = iso_name.len().min(MAX_ISO_NAME_LEN - 1);
         name[..len].copy_from_slice(&iso_name.as_bytes()[..len]);
 
         Self {
@@ -184,7 +184,7 @@ impl ManifestWriter {
 
         // Write manifest sectors
         let manifest_lba = esp_start_lba + manifest_offset;
-        let sectors_needed = (len + SECTOR_SIZE - 1) / SECTOR_SIZE;
+        let sectors_needed = len.div_ceil(SECTOR_SIZE);
 
         for i in 0..sectors_needed {
             let sector_data = &buffer[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE];
@@ -276,7 +276,7 @@ impl ManifestReader {
         }
 
         // Check magic
-        if &buffer[0..8] != &MANIFEST_MAGIC {
+        if buffer[0..8] != MANIFEST_MAGIC {
             return Err(DiskError::ManifestError);
         }
 

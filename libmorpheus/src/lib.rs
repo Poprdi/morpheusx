@@ -25,10 +25,10 @@
 #![allow(dead_code)]
 
 pub mod entry;
-pub mod raw;
 pub mod fs;
-pub mod process;
 pub mod io;
+pub mod process;
+pub mod raw;
 
 /// Error values returned by the kernel (high bits of u64).
 pub const ENOSYS: u64 = u64::MAX - 37;
