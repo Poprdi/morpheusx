@@ -299,7 +299,7 @@ fn parse_u32(s: &str) -> Option<u32> {
         return None;
     }
     for &b in s.as_bytes() {
-        if !(b'0'..=b'9').contains(&b) {
+        if !b.is_ascii_digit() {
             return None;
         }
         result = result.checked_mul(10)?.checked_add((b - b'0') as u32)?;

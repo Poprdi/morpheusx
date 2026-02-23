@@ -78,6 +78,7 @@ pub fn print_hex_byte(value: u8) {
 pub fn print_hex(value: u64) {
     print("0x");
     let mut buf = [0u8; 16];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..16 {
         let nibble = ((value >> ((15 - i) * 4)) & 0xF) as u8;
         let c = if nibble < 10 {

@@ -183,9 +183,7 @@ impl GptOps {
         let (partitions, count) = Self::scan_partitions(block_io)?;
 
         // Check for overlaps with any existing partition
-        for i in 0..count {
-            let part = &partitions[i];
-
+        for part in partitions.iter().take(count) {
             // Check if ranges overlap
             // Two ranges [a,b] and [c,d] overlap if: a <= d && c <= b
             if start_lba <= part.end_lba && part.start_lba <= end_lba {

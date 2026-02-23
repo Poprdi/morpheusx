@@ -136,7 +136,7 @@ impl TextConsole {
                     self.advance_cursor();
                 }
             }
-            c if c >= ' ' && c <= '~' => {
+            c if (' '..='~').contains(&c) => {
                 self.render_char(c);
                 self.advance_cursor();
             }
