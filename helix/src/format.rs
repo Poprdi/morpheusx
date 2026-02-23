@@ -59,7 +59,7 @@ pub fn format_helix<B: BlockIo>(
     let superblock_blocks: u64 = 2;
 
     // Log region: use ~1% of disk, minimum 1 segment, max 64 segments.
-    let desired_log_segments = (total_fs_blocks / (100 * LOG_SEGMENT_BLOCKS)).max(1).min(64);
+    let desired_log_segments = (total_fs_blocks / (100 * LOG_SEGMENT_BLOCKS)).clamp(1, 64);
     let log_blocks = desired_log_segments * LOG_SEGMENT_BLOCKS;
 
     let log_start = superblock_blocks;
@@ -67,7 +67,7 @@ pub fn format_helix<B: BlockIo>(
 
     // Bitmap: 1 bit per data block.  Each block holds 4096 × 8 = 32768 bits.
     let data_blocks_approx = total_fs_blocks - superblock_blocks - log_blocks;
-    let bitmap_blocks = (data_blocks_approx + 32767) / 32768;
+    let bitmap_blocks = data_blocks_approx.div_ceil(32768);
 
     let bitmap_start = log_end + 1;
     let data_start = bitmap_start + bitmap_blocks;

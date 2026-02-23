@@ -18,6 +18,7 @@ use gpt_disk_types::Lba;
 ///    and log the write.
 ///
 /// Automatically creates parent directories if they don't exist.
+#[allow(clippy::too_many_arguments)]
 pub fn write_file<B: BlockIo>(
     block_io: &mut B,
     log: &mut LogEngine,
@@ -77,7 +78,7 @@ pub fn write_file<B: BlockIo>(
     }
 
     // Large file — allocate data blocks.
-    let blocks_needed = (data.len() as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+    let blocks_needed = (data.len() as u64).div_ceil(BLOCK_SIZE as u64);
 
     // Try contiguous allocation first (best for sequential read performance).
     let data_start_relative = match bitmap.alloc_contiguous(blocks_needed) {
@@ -147,6 +148,7 @@ pub fn write_file<B: BlockIo>(
 }
 
 /// Fragmented allocation path — allocates blocks one at a time.
+#[allow(clippy::too_many_arguments)]
 fn write_file_fragmented<B: BlockIo>(
     block_io: &mut B,
     log: &mut LogEngine,
@@ -161,7 +163,7 @@ fn write_file_fragmented<B: BlockIo>(
     path_hash: u64,
     content_crc: u64,
 ) -> Result<Lsn, HelixError> {
-    let blocks_needed = (data.len() as u64 + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+    let blocks_needed = (data.len() as u64).div_ceil(BLOCK_SIZE as u64);
 
     // Allocate blocks individually.
     let mut extents: Vec<(u64, u64, u32)> = Vec::new(); // (logical, physical, count)

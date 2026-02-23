@@ -30,6 +30,12 @@ pub struct NamespaceIndex {
     entries: Vec<IndexEntry>,
 }
 
+impl Default for NamespaceIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NamespaceIndex {
     /// Create an empty index.
     pub fn new() -> Self {
