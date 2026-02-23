@@ -298,6 +298,16 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     morpheus_hwinit::serial::put_hex64(fb_info.base);
     puts("\n");
 
+    // Register framebuffer with the syscall layer so SYS_FB_INFO / SYS_FB_MAP work.
+    morpheus_hwinit::register_framebuffer(morpheus_hwinit::FbInfo {
+        base: fb_info.base,
+        size: fb_info.size as u64,
+        width: fb_info.width,
+        height: fb_info.height,
+        stride: stride_bytes,
+        format: fb_info.format,
+    });
+
     puts("[BAREMETAL] launching desktop\n");
     crate::tui::desktop::run_desktop(&display_info);
 }

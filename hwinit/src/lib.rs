@@ -263,16 +263,16 @@ pub use syscall::{
     SYS_SYSINFO,
     SYS_SYSLOG,
     // Networking stubs (32-41)
-    SYS_ACCEPT,
-    SYS_BIND,
-    SYS_CONNECT,
-    SYS_DNS_RESOLVE,
-    SYS_LISTEN,
-    SYS_RECV,
-    SYS_SEND,
-    SYS_SETSOCKOPT,
-    SYS_SHUTDOWN,
-    SYS_SOCKET,
+    SYS_NIC_INFO,
+    SYS_NIC_TX,
+    SYS_NIC_RX,
+    SYS_NIC_LINK,
+    SYS_NIC_MAC,
+    SYS_NIC_REFILL,
+    SYS_NET_RSVD38,
+    SYS_NET_RSVD39,
+    SYS_NET_RSVD40,
+    SYS_NET_RSVD41,
     // Device / mount stubs (42-45)
     SYS_IOCTL,
     SYS_MOUNT,
@@ -285,7 +285,36 @@ pub use syscall::{
     SYS_PERSIST_LIST,
     SYS_PERSIST_PUT,
     SYS_PE_INFO,
+    // Hardware primitives (52-62)
+    SYS_PORT_IN,
+    SYS_PORT_OUT,
+    SYS_PCI_CFG_READ,
+    SYS_PCI_CFG_WRITE,
+    SYS_DMA_ALLOC,
+    SYS_DMA_FREE,
+    SYS_MAP_PHYS,
+    SYS_VIRT_TO_PHYS,
+    SYS_IRQ_ATTACH,
+    SYS_IRQ_ACK,
+    SYS_CACHE_FLUSH,
+    // Display (63-64)
+    SYS_FB_INFO,
+    SYS_FB_MAP,
+    // Process management (65-68)
+    SYS_PS,
+    SYS_SIGACTION,
+    SYS_SETPRIORITY,
+    SYS_GETPRIORITY,
+    // CPU features / diagnostics (69-72)
+    SYS_CPUID,
+    SYS_RDTSC,
+    SYS_BOOT_LOG,
+    SYS_MEMMAP,
 };
+
+// Syscall handler registration APIs — used by the bootloader to wire
+// hardware backends that hwinit cannot depend on directly.
+pub use syscall::handler::{register_framebuffer, register_nic, FbInfo, NicOps};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM INIT RE-EXPORTS

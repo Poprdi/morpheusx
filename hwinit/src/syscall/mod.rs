@@ -22,10 +22,10 @@
 //! | 15     | SYS_MKDIR       | (path_ptr, path_len)              | 0             |
 //! | 16     | SYS_UNLINK      | (path_ptr, path_len)              | 0             |
 //! | 17     | SYS_RENAME      | (old_ptr, old_len, new_ptr,new_l) | 0             |
-//! | 18     | SYS_TRUNCATE    | (fd, new_size) [stub]             | -ENOSYS       |
+//! | 18     | SYS_TRUNCATE    | (path_ptr, path_len, new_size)    | 0             |
 //! | 19     | SYS_SYNC        | ()                                | 0             |
-//! | 20     | SYS_SNAPSHOT    | (name_ptr, name_len) [stub]       | -ENOSYS       |
-//! | 21     | SYS_VERSIONS    | (path_ptr, path_len, buf, max)[s] | -ENOSYS       |
+//! | 20     | SYS_SNAPSHOT    | (name_ptr, name_len)              | snapshot_id   |
+//! | 21     | SYS_VERSIONS    | (path_ptr, path_len, buf, max)    | count         |
 //! | 22     | SYS_CLOCK       | ()                                | nanos         |
 //! | 23     | SYS_SYSINFO     | (buf_ptr)                         | 0             |
 //! | 24     | SYS_GETPPID     | ()                                | parent_pid    |
@@ -36,17 +36,47 @@
 //! | 29     | SYS_SYSLOG      | (ptr, len)                        | len           |
 //! | 30     | SYS_GETCWD      | (buf_ptr, buf_len)                | cwd_len       |
 //! | 31     | SYS_CHDIR       | (path_ptr, path_len)              | 0             |
-//! | 32-41  | SYS_SOCKET..    | (reserved for networking)         | -ENOSYS       |
-//! | 42     | SYS_IOCTL       | (fd, cmd, arg) [stub]             | -ENOSYS       |
-//! | 43     | SYS_MOUNT       | (src_ptr,src_len,dst_ptr,dst_len) | -ENOSYS       |
-//! | 44     | SYS_UMOUNT      | (path_ptr, path_len) [stub]       | -ENOSYS       |
-//! | 45     | SYS_POLL        | (fds_ptr, nfds, timeout) [stub]   | -ENOSYS       |
+//! | 32     | SYS_NIC_INFO    | (buf_ptr)                         | 0 / -ENODEV   |
+//! | 33     | SYS_NIC_TX      | (frame_ptr, frame_len)            | 0 / -ENODEV   |
+//! | 34     | SYS_NIC_RX      | (buf_ptr, buf_len)                | bytes / -ENODEV|
+//! | 35     | SYS_NIC_LINK    | ()                                | 0/1 / -ENODEV |
+//! | 36     | SYS_NIC_MAC     | (buf_ptr)                         | 0 / -ENODEV   |
+//! | 37     | SYS_NIC_REFILL  | ()                                | 0 / -ENODEV   |
+//! | 38     | SYS_NET_RSVD38  | reserved                          | -ENOSYS       |
+//! | 39     | SYS_NET_RSVD39  | reserved                          | -ENOSYS       |
+//! | 40     | SYS_NET_RSVD40  | reserved                          | -ENOSYS       |
+//! | 41     | SYS_NET_RSVD41  | reserved                          | -ENOSYS       |
+//! | 42     | SYS_IOCTL       | (fd, cmd, arg)                    | depends       |
+//! | 43     | SYS_MOUNT       | (src_ptr,src_len,dst_ptr,dst_len) | 0             |
+//! | 44     | SYS_UMOUNT      | (path_ptr, path_len)              | 0             |
+//! | 45     | SYS_POLL        | (fds_ptr, nfds, timeout_ms)       | ready_count   |
 //! | 46     | SYS_PERSIST_PUT | (key_ptr,key_len,data_ptr,data_l) | 0             |
 //! | 47     | SYS_PERSIST_GET | (key_ptr,key_len,buf_ptr,buf_len) | bytes_read    |
 //! | 48     | SYS_PERSIST_DEL | (key_ptr, key_len)                | 0             |
 //! | 49     | SYS_PERSIST_LIST| (buf_ptr, buf_len, offset)        | count         |
 //! | 50     | SYS_PERSIST_INFO| (info_ptr)                        | 0             |
 //! | 51     | SYS_PE_INFO     | (path_ptr, path_len, info_ptr)    | 0             |
+//! | 52     | SYS_PORT_IN     | (port, width[1/2/4])              | value         |
+//! | 53     | SYS_PORT_OUT    | (port, width, value)              | 0             |
+//! | 54     | SYS_PCI_CFG_READ| (bdf, offset, width)              | value         |
+//! | 55     | SYS_PCI_CFG_WRITE|(bdf, offset, width, value)       | 0             |
+//! | 56     | SYS_DMA_ALLOC   | (pages)                           | phys_addr     |
+//! | 57     | SYS_DMA_FREE    | (phys, pages)                     | 0             |
+//! | 58     | SYS_MAP_PHYS    | (phys, pages, flags)              | virt_addr     |
+//! | 59     | SYS_VIRT_TO_PHYS| (virt)                            | phys          |
+//! | 60     | SYS_IRQ_ATTACH  | (irq_num)                         | 0             |
+//! | 61     | SYS_IRQ_ACK     | (irq_num)                         | 0             |
+//! | 62     | SYS_CACHE_FLUSH | (addr, len)                       | 0             |
+//! | 63     | SYS_FB_INFO     | (buf_ptr)                         | 0             |
+//! | 64     | SYS_FB_MAP      | ()                                | virt_addr     |
+//! | 65     | SYS_PS          | (buf_ptr, max_count)              | count         |
+//! | 66     | SYS_SIGACTION   | (signum, handler_addr)            | old_handler   |
+//! | 67     | SYS_SETPRIORITY | (pid, priority)                   | 0             |
+//! | 68     | SYS_GETPRIORITY | (pid)                             | priority      |
+//! | 69     | SYS_CPUID       | (leaf, subleaf, result_ptr)       | 0             |
+//! | 70     | SYS_RDTSC       | (result_ptr)                      | tsc_value     |
+//! | 71     | SYS_BOOT_LOG    | (buf_ptr, buf_len)                | bytes_written |
+//! | 72     | SYS_MEMMAP      | (buf_ptr, max_entries)            | count         |
 
 pub mod handler;
 
@@ -94,17 +124,17 @@ pub const SYS_SYSLOG: u64 = 29;
 pub const SYS_GETCWD: u64 = 30;
 pub const SYS_CHDIR: u64 = 31;
 
-// ── Networking (32-41) — reserved, all return ENOSYS ─────────────────
-pub const SYS_SOCKET: u64 = 32;
-pub const SYS_CONNECT: u64 = 33;
-pub const SYS_SEND: u64 = 34;
-pub const SYS_RECV: u64 = 35;
-pub const SYS_BIND: u64 = 36;
-pub const SYS_LISTEN: u64 = 37;
-pub const SYS_ACCEPT: u64 = 38;
-pub const SYS_SHUTDOWN: u64 = 39;
-pub const SYS_SETSOCKOPT: u64 = 40;
-pub const SYS_DNS_RESOLVE: u64 = 41;
+// ── Networking (32-41) — raw NIC primitives (exokernel) ──────────────
+pub const SYS_NIC_INFO: u64 = 32;
+pub const SYS_NIC_TX: u64 = 33;
+pub const SYS_NIC_RX: u64 = 34;
+pub const SYS_NIC_LINK: u64 = 35;
+pub const SYS_NIC_MAC: u64 = 36;
+pub const SYS_NIC_REFILL: u64 = 37;
+pub const SYS_NET_RSVD38: u64 = 38;
+pub const SYS_NET_RSVD39: u64 = 39;
+pub const SYS_NET_RSVD40: u64 = 40;
+pub const SYS_NET_RSVD41: u64 = 41;
 
 // ── Device / mount (42-45) — reserved stubs ──────────────────────────
 pub const SYS_IOCTL: u64 = 42;
@@ -119,6 +149,35 @@ pub const SYS_PERSIST_DEL: u64 = 48;
 pub const SYS_PERSIST_LIST: u64 = 49;
 pub const SYS_PERSIST_INFO: u64 = 50;
 pub const SYS_PE_INFO: u64 = 51;
+
+// ── Hardware primitives — exokernel essentials (52-62) ───────────────
+pub const SYS_PORT_IN: u64 = 52;
+pub const SYS_PORT_OUT: u64 = 53;
+pub const SYS_PCI_CFG_READ: u64 = 54;
+pub const SYS_PCI_CFG_WRITE: u64 = 55;
+pub const SYS_DMA_ALLOC: u64 = 56;
+pub const SYS_DMA_FREE: u64 = 57;
+pub const SYS_MAP_PHYS: u64 = 58;
+pub const SYS_VIRT_TO_PHYS: u64 = 59;
+pub const SYS_IRQ_ATTACH: u64 = 60;
+pub const SYS_IRQ_ACK: u64 = 61;
+pub const SYS_CACHE_FLUSH: u64 = 62;
+
+// ── Display (63-64) ─────────────────────────────────────────────────
+pub const SYS_FB_INFO: u64 = 63;
+pub const SYS_FB_MAP: u64 = 64;
+
+// ── Process management (65-68) ──────────────────────────────────────
+pub const SYS_PS: u64 = 65;
+pub const SYS_SIGACTION: u64 = 66;
+pub const SYS_SETPRIORITY: u64 = 67;
+pub const SYS_GETPRIORITY: u64 = 68;
+
+// ── CPU features / diagnostics (69-72) ──────────────────────────────
+pub const SYS_CPUID: u64 = 69;
+pub const SYS_RDTSC: u64 = 70;
+pub const SYS_BOOT_LOG: u64 = 71;
+pub const SYS_MEMMAP: u64 = 72;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EXTERN ASM FUNCTIONS
@@ -171,7 +230,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_MKDIR => sys_fs_mkdir(a1, a2),
         SYS_UNLINK => sys_fs_unlink(a1, a2),
         SYS_RENAME => sys_fs_rename(a1, a2, a3, a4),
-        SYS_TRUNCATE => sys_fs_truncate(a1, a2),
+        SYS_TRUNCATE => sys_fs_truncate(a1, a2, a3),
         SYS_SYNC => sys_fs_sync(),
         SYS_SNAPSHOT => sys_fs_snapshot(a1, a2),
         SYS_VERSIONS => sys_fs_versions(a1, a2, a3, a4),
@@ -187,15 +246,49 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_GETCWD => sys_getcwd(a1, a2),
         SYS_CHDIR => sys_chdir(a1, a2),
         // ── Networking stubs ──────────────────────────────────────
-        SYS_SOCKET..=SYS_DNS_RESOLVE => ENOSYS_RET,
-        // ── Device / mount stubs ──────────────────────────────────
-        SYS_IOCTL..=SYS_POLL => ENOSYS_RET,        // ── Persistence / introspection ───────────────────────────────
+        SYS_NIC_INFO => sys_nic_info(a1),
+        SYS_NIC_TX => sys_nic_tx(a1, a2),
+        SYS_NIC_RX => sys_nic_rx(a1, a2),
+        SYS_NIC_LINK => sys_nic_link(),
+        SYS_NIC_MAC => sys_nic_mac(a1),
+        SYS_NIC_REFILL => sys_nic_refill(),
+        SYS_NET_RSVD38..=SYS_NET_RSVD41 => ENOSYS_RET,
+        // ── Device / mount ────────────────────────────────────────
+        SYS_IOCTL => sys_ioctl(a1, a2, a3),
+        SYS_MOUNT => sys_mount(a1, a2, a3, a4),
+        SYS_UMOUNT => sys_umount(a1, a2),
+        SYS_POLL => sys_poll(a1, a2, a3),        // ── Persistence / introspection ───────────────────────────────
         SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
         SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
         SYS_PERSIST_DEL => sys_persist_del(a1, a2),
         SYS_PERSIST_LIST => sys_persist_list(a1, a2, a3),
         SYS_PERSIST_INFO => sys_persist_info(a1),
-        SYS_PE_INFO => sys_pe_info(a1, a2, a3),        unknown => {
+        SYS_PE_INFO => sys_pe_info(a1, a2, a3),
+        // ── Hardware primitives (exokernel) ───────────────────────
+        SYS_PORT_IN => sys_port_in(a1, a2),
+        SYS_PORT_OUT => sys_port_out(a1, a2, a3),
+        SYS_PCI_CFG_READ => sys_pci_cfg_read(a1, a2, a3),
+        SYS_PCI_CFG_WRITE => sys_pci_cfg_write(a1, a2, a3, a4),
+        SYS_DMA_ALLOC => sys_dma_alloc(a1),
+        SYS_DMA_FREE => sys_dma_free(a1, a2),
+        SYS_MAP_PHYS => sys_map_phys(a1, a2, a3),
+        SYS_VIRT_TO_PHYS => sys_virt_to_phys(a1),
+        SYS_IRQ_ATTACH => sys_irq_attach(a1),
+        SYS_IRQ_ACK => sys_irq_ack(a1),
+        SYS_CACHE_FLUSH => sys_cache_flush(a1, a2),
+        // ── Display ───────────────────────────────────────────────
+        SYS_FB_INFO => sys_fb_info(a1),
+        SYS_FB_MAP => sys_fb_map(),
+        // ── Process management ────────────────────────────────────
+        SYS_PS => sys_ps(a1, a2),
+        SYS_SIGACTION => sys_sigaction(a1, a2),
+        SYS_SETPRIORITY => sys_setpriority(a1, a2),
+        SYS_GETPRIORITY => sys_getpriority(a1),
+        // ── CPU features / diagnostics ────────────────────────────
+        SYS_CPUID => sys_cpuid(a1, a2, a3),
+        SYS_RDTSC => sys_rdtsc(a1),
+        SYS_BOOT_LOG => sys_boot_log(a1, a2),
+        SYS_MEMMAP => sys_memmap(a1, a2),        unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);
             puts("\n");

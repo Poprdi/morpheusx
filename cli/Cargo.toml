@@ -8,4 +8,6 @@ name = "morpheus-cli"
 path = "src/main.rs"
 
 [dependencies]
-# TODO: Add dependencies
+morpheus-helix = { path = "../helix" }
+gpt_disk_io = "0.16"
+gpt_disk_types = "0.16"

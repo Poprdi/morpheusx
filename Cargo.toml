@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "bootloader",
+    "cli",
     "core",
     "persistent",
     "updater",
@@ -12,6 +13,7 @@ members = [
     "ui",
     "helix",
     "libmorpheus",
+    "tests/syscall-e2e",
 ]
 
 [workspace.package]
