@@ -31,7 +31,7 @@
 //! | 48-255 | User-defined           | Interrupt |
 
 use crate::cpu::gdt::KERNEL_CS;
-use crate::serial::{newline, put_hex64, put_hex8, puts};
+use crate::serial::{newline, put_hex32, put_hex64, put_hex8, puts};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IDT ENTRY
@@ -140,6 +140,96 @@ pub struct ExceptionFrameWithError {
 // IDT TABLE
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CRASH DIAGNOSTICS — rich crash info for the BSoD
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Saved general-purpose registers — layout matches push order in `exception_common`.
+///
+/// Push order: rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15.
+/// Stack grows down → r15 at lowest address.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct SavedRegs {
+    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
+    pub r11: u64, pub r10: u64, pub r9: u64,  pub r8: u64,
+    pub rbp: u64, pub rdi: u64, pub rsi: u64, pub rdx: u64,
+    pub rcx: u64, pub rbx: u64, pub rax: u64,
+}
+
+/// Rich crash diagnostic — built entirely on the kernel stack, **zero allocation**.
+///
+/// Contains everything a developer needs to diagnose what went wrong:
+/// exception identity, all CPU registers, process context, human-readable
+/// explanation, and a best-effort kernel-mode stack backtrace.
+#[repr(C)]
+pub struct CrashInfo {
+    // ── Exception identity ───────────────────────────────────────────
+    /// CPU exception vector (0–31) or interrupt number.
+    pub vector: u64,
+    /// Hardware error code pushed by the CPU (0 if none).
+    pub error_code: u64,
+    /// Human-readable exception name (e.g. "Page Fault").
+    pub exception_name: &'static str,
+
+    // ── CPU exception frame (pushed by hardware) ─────────────────────
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+
+    // ── Control registers ────────────────────────────────────────────
+    /// CR2: faulting linear address (meaningful only for #PF, vector 14).
+    pub cr2: u64,
+    /// CR3: page-table root physical address.
+    pub cr3: u64,
+
+    // ── General-purpose registers at the instant of the fault ─────────
+    pub rax: u64, pub rbx: u64, pub rcx: u64, pub rdx: u64,
+    pub rsi: u64, pub rdi: u64, pub rbp: u64,
+    pub r8: u64,  pub r9: u64,  pub r10: u64, pub r11: u64,
+    pub r12: u64, pub r13: u64, pub r14: u64, pub r15: u64,
+
+    // ── Process context (lock-free, best-effort read) ────────────────
+    /// PID of the process executing when the fault occurred.
+    pub pid: u32,
+    /// Process name, NUL-terminated.  "[kernel]" for PID 0 / unknown.
+    pub process_name: [u8; 32],
+    /// True if the fault originated in user mode (CPL 3).
+    pub is_user_mode: bool,
+
+    // ── Stack backtrace (kernel-mode only, best-effort RBP walk) ─────
+    /// Return addresses from the RBP frame chain (most recent first).
+    pub backtrace: [u64; 16],
+    /// Number of valid entries in `backtrace`.
+    pub backtrace_depth: u8,
+
+    // ── Human-readable diagnostic ────────────────────────────────────
+    /// One-line explanation of what went wrong.
+    pub explanation: [u8; 256],
+    /// Length of the explanation text.
+    pub explanation_len: u16,
+}
+
+/// Crash hook callback — receives a reference to the rich crash diagnostics.
+///
+/// # Safety
+/// Called from exception context with interrupts disabled.  Must not
+/// allocate or acquire any lock.  The reference points to a stack-local
+/// struct inside the exception handler frame.
+pub type CrashHookFn = unsafe fn(&CrashInfo);
+
+static mut CRASH_HOOK: Option<CrashHookFn> = None;
+
+/// Register the crash screen callback (typically called during boot init).
+///
+/// # Safety
+/// Must be called during single-threaded init.
+pub unsafe fn set_crash_hook(hook: CrashHookFn) {
+    CRASH_HOOK = Some(hook);
+}
+
 /// Number of IDT entries
 const IDT_ENTRIES: usize = 256;
 
@@ -213,95 +303,195 @@ const EXCEPTION_NAMES: [&str; 32] = [
     "Reserved",
 ];
 
-/// Generic exception handler (called from assembly stubs)
-#[no_mangle]
-pub extern "C" fn exception_handler(vector: u64, error_code: u64, frame: &ExceptionFrame) {
-    puts("\n!!! EXCEPTION ");
-    put_hex8(vector as u8);
-    puts(": ");
+// ── Crash diagnostic helpers (zero-alloc) ────────────────────────────────
 
-    if (vector as usize) < EXCEPTION_NAMES.len() {
-        puts(EXCEPTION_NAMES[vector as usize]);
-    } else {
-        puts("Unknown");
+/// Tiny stack-only buffer writer for building diagnostic strings.
+struct BufWriter<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> BufWriter<'a> {
+    fn new(buf: &'a mut [u8]) -> Self { Self { buf, pos: 0 } }
+    fn len(&self) -> usize { self.pos }
+    fn push(&mut self, s: &str) {
+        let b = s.as_bytes();
+        let n = b.len().min(self.buf.len() - self.pos);
+        self.buf[self.pos..self.pos + n].copy_from_slice(&b[..n]);
+        self.pos += n;
     }
-    newline();
-
-    puts("  Error code: ");
-    put_hex64(error_code);
-    newline();
-
-    puts("  RIP: ");
-    put_hex64(frame.rip);
-    newline();
-
-    puts("  RSP: ");
-    put_hex64(frame.rsp);
-    newline();
-
-    puts("  RFLAGS: ");
-    put_hex64(frame.rflags);
-    newline();
-
-    // For now, halt on exception
-    puts("!!! SYSTEM HALTED\n");
-    loop {
-        unsafe {
-            core::arch::asm!("hlt");
+    fn hex64(&mut self, val: u64) {
+        const H: &[u8; 16] = b"0123456789ABCDEF";
+        self.push("0x");
+        for i in (0..16).rev() {
+            if self.pos < self.buf.len() {
+                self.buf[self.pos] = H[((val >> (i * 4)) & 0xF) as usize];
+                self.pos += 1;
+            }
         }
     }
 }
 
-/// Page fault handler (vector 14) - more detailed
+/// Build a human-readable explanation of the exception.
+fn build_explanation(vec: u64, ec: u64, cr2: u64, user: bool, buf: &mut [u8; 256]) -> u16 {
+    let mut w = BufWriter::new(buf);
+    match vec {
+        0  => w.push("Division by zero"),
+        1  => w.push("Hardware debug trap"),
+        2  => w.push("Non-maskable interrupt"),
+        3  => w.push("Breakpoint (INT3)"),
+        4  => w.push("Arithmetic overflow (INTO)"),
+        5  => w.push("Array index out of bounds (BOUND)"),
+        6  => {
+            w.push("Invalid CPU instruction");
+            if user { w.push(" \u{2014} bad user code or corrupted binary"); }
+            else { w.push(" \u{2014} kernel bug"); }
+        }
+        7  => w.push("FPU/SSE instruction but device not available"),
+        8  => w.push("Double fault: exception while handling another exception"),
+        10 => w.push("Invalid Task State Segment"),
+        11 => w.push("Segment not present in descriptor table"),
+        12 => w.push("Stack segment fault: stack overflow or bad SS"),
+        13 => {
+            w.push("General protection fault");
+            if user { w.push(" \u{2014} process tried a privileged operation"); }
+        }
+        14 => {
+            w.push("Attempted to ");
+            if ec & 16 != 0 { w.push("execute"); }
+            else if ec & 2 != 0 { w.push("write to"); }
+            else { w.push("read from"); }
+            if ec & 1 != 0 { w.push(" protected"); } else { w.push(" unmapped"); }
+            w.push(" memory at "); w.hex64(cr2);
+            if user { w.push(" from user mode"); } else { w.push(" from kernel"); }
+        }
+        16 => w.push("x87 floating-point exception"),
+        17 => w.push("Unaligned memory access (alignment check)"),
+        18 => w.push("Machine check: uncorrectable hardware error"),
+        19 => w.push("SIMD floating-point exception"),
+        20 => w.push("Virtualization exception"),
+        21 => w.push("Control-flow integrity violation (CET)"),
+        _  => w.push("Unknown exception"),
+    }
+    w.len() as u16
+}
+
+/// Walk the RBP frame chain (kernel-mode only) to collect return addresses.
+unsafe fn walk_stack(rbp: u64, out: &mut [u64; 16]) -> u8 {
+    let mut fp = rbp;
+    let mut depth: u8 = 0;
+    for _ in 0..16u8 {
+        // Sanity: aligned, non-null, in a plausible kernel range
+        if fp == 0 || fp % 8 != 0 || fp < 0x1000 || fp > 0x0000_7FFF_FFFF_FFFF { break; }
+        let ret = core::ptr::read_volatile((fp + 8) as *const u64);
+        let prev = core::ptr::read_volatile(fp as *const u64);
+        if ret == 0 { break; }
+        out[depth as usize] = ret;
+        depth += 1;
+        if prev <= fp { break; } // prevent loops
+        fp = prev;
+    }
+    depth
+}
+
+/// Unified exception handler — builds a rich [`CrashInfo`] and invokes the BSoD hook.
+///
+/// Called from the `exception_common` ASM stub for ALL CPU exceptions (vectors 0–21).
+/// Arguments arrive via MS x64 ABI: rcx=vector, rdx=error_code, r8=&frame, r9=&saved.
 #[no_mangle]
-pub extern "C" fn page_fault_handler(error_code: u64, frame: &ExceptionFrame) {
-    // CR2 contains faulting address
-    let cr2: u64;
+pub extern "C" fn exception_handler(
+    vector: u64,
+    error_code: u64,
+    frame: &ExceptionFrame,
+    saved: &SavedRegs,
+) {
+    // ── Serial dump (always, before anything that could re-fault) ─────
+    let exc_name = if (vector as usize) < EXCEPTION_NAMES.len() {
+        EXCEPTION_NAMES[vector as usize]
+    } else { "Unknown" };
+
+    puts("\n!!! EXCEPTION "); put_hex8(vector as u8); puts(": "); puts(exc_name); newline();
+    puts("  Error: "); put_hex64(error_code); newline();
+    puts("  RIP:   "); put_hex64(frame.rip); newline();
+    puts("  RSP:   "); put_hex64(frame.rsp); newline();
+    puts("  CS:    "); put_hex64(frame.cs); newline();
+
+    // Control registers
+    let (cr2, cr3): (u64, u64);
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
+        core::arch::asm!("mov {}, cr3", out(reg) cr3);
     }
+    if vector == 14 { puts("  CR2:   "); put_hex64(cr2); newline(); }
+    puts("  CR3:   "); put_hex64(cr3); newline();
 
-    puts("\n!!! PAGE FAULT\n");
-    puts("  Faulting address: ");
-    put_hex64(cr2);
-    newline();
-
-    puts("  Error code: ");
-    put_hex64(error_code);
-    puts(" (");
-    if error_code & 1 != 0 {
-        puts("P ");
-    } else {
-        puts("NP ");
-    }
-    if error_code & 2 != 0 {
-        puts("W ");
-    } else {
-        puts("R ");
-    }
-    if error_code & 4 != 0 {
-        puts("U ");
-    } else {
-        puts("S ");
-    }
-    if error_code & 8 != 0 {
-        puts("RSVD ");
-    }
-    if error_code & 16 != 0 {
-        puts("I ");
-    }
-    puts(")\n");
-
-    puts("  RIP: ");
-    put_hex64(frame.rip);
-    newline();
-
-    puts("!!! SYSTEM HALTED\n");
-    loop {
-        unsafe {
-            core::arch::asm!("hlt");
+    // Process context (lock-free read — safe even pre-scheduler-init)
+    let pid = crate::process::SCHEDULER.current_pid();
+    let mut proc_name = [0u8; 32];
+    unsafe {
+        if let Some(p) = crate::process::SCHEDULER.process_by_pid(pid) {
+            proc_name = p.name;
+        } else {
+            proc_name[..8].copy_from_slice(b"[kernel]");
         }
     }
+    let is_user_mode = (frame.cs & 3) == 3;
+
+    puts("  PID:   "); put_hex32(pid);
+    puts("  Name: ");
+    let name_end = proc_name.iter().position(|&b| b == 0).unwrap_or(32);
+    if let Ok(s) = core::str::from_utf8(&proc_name[..name_end]) { puts(s); }
+    puts(if is_user_mode { " [USER]\n" } else { " [KERNEL]\n" });
+
+    // GPR dump
+    puts("  RAX: "); put_hex64(saved.rax); puts("  RBX: "); put_hex64(saved.rbx); newline();
+    puts("  RCX: "); put_hex64(saved.rcx); puts("  RDX: "); put_hex64(saved.rdx); newline();
+    puts("  RSI: "); put_hex64(saved.rsi); puts("  RDI: "); put_hex64(saved.rdi); newline();
+    puts("  RBP: "); put_hex64(saved.rbp); puts("  R8:  "); put_hex64(saved.r8);  newline();
+    puts("  R9:  "); put_hex64(saved.r9);  puts("  R10: "); put_hex64(saved.r10); newline();
+    puts("  R11: "); put_hex64(saved.r11); puts("  R12: "); put_hex64(saved.r12); newline();
+    puts("  R13: "); put_hex64(saved.r13); puts("  R14: "); put_hex64(saved.r14); newline();
+    puts("  R15: "); put_hex64(saved.r15); newline();
+
+    // Explanation
+    let mut explanation = [0u8; 256];
+    let explanation_len = build_explanation(vector, error_code, cr2, is_user_mode, &mut explanation);
+    if explanation_len > 0 {
+        puts("  WHY:   ");
+        if let Ok(s) = core::str::from_utf8(&explanation[..explanation_len as usize]) { puts(s); }
+        newline();
+    }
+
+    // Backtrace (kernel only — user pages may be unmapped)
+    let mut backtrace = [0u64; 16];
+    let backtrace_depth = if !is_user_mode {
+        unsafe { walk_stack(saved.rbp, &mut backtrace) }
+    } else { 0 };
+    if backtrace_depth > 0 {
+        puts("  Backtrace:\n");
+        for i in 0..backtrace_depth as usize {
+            puts("    #"); put_hex8(i as u8); puts(" "); put_hex64(backtrace[i]); newline();
+        }
+    }
+
+    // ── Build CrashInfo & invoke BSoD hook ────────────────────────────
+    let info = CrashInfo {
+        vector, error_code, exception_name: exc_name,
+        rip: frame.rip, cs: frame.cs, rflags: frame.rflags, rsp: frame.rsp, ss: frame.ss,
+        cr2, cr3,
+        rax: saved.rax, rbx: saved.rbx, rcx: saved.rcx, rdx: saved.rdx,
+        rsi: saved.rsi, rdi: saved.rdi, rbp: saved.rbp,
+        r8: saved.r8, r9: saved.r9, r10: saved.r10, r11: saved.r11,
+        r12: saved.r12, r13: saved.r13, r14: saved.r14, r15: saved.r15,
+        pid, process_name: proc_name, is_user_mode,
+        backtrace, backtrace_depth,
+        explanation, explanation_len,
+    };
+
+    unsafe { if let Some(hook) = CRASH_HOOK { hook(&info); } }
+
+    puts("!!! SYSTEM HALTED\n");
+    loop { unsafe { core::arch::asm!("hlt"); } }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -363,12 +553,15 @@ unsafe extern "C" fn exception_common() {
         "push r14",
         "push r15",
 
-        // Call Rust handler
-        // rdi = vector, rsi = error_code, rdx = frame pointer
-        "mov rdi, [rsp + 120]",     // vector (15 regs * 8 = 120)
-        "mov rsi, [rsp + 128]",     // error_code
-        "lea rdx, [rsp + 136]",     // frame starts after error_code
+        // Call Rust handler (MS x64 ABI: rcx, rdx, r8, r9)
+        // rcx = vector, rdx = error_code, r8 = &ExceptionFrame, r9 = &SavedRegs
+        "mov rcx, [rsp + 120]",     // vector (15 regs * 8 = 120)
+        "mov rdx, [rsp + 128]",     // error_code
+        "lea r8, [rsp + 136]",      // frame starts after error_code
+        "mov r9, rsp",              // saved GPRs (r15..rax on stack)
+        "sub rsp, 32",              // shadow space (MS x64 ABI)
         "call {}",
+        "add rsp, 32",
 
         // Restore registers
         "pop r15",

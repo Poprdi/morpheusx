@@ -210,6 +210,17 @@ pub unsafe extern "C" fn syscall_dispatch(
     a4: u64,
     _a5: u64,
 ) -> u64 {
+    // ── DEBUG: trace syscall + RSP sanity check ──────────────────
+    let rsp_val: u64;
+    core::arch::asm!("mov {}, rsp", out(reg) rsp_val, options(nomem, nostack));
+    puts("[SC ");
+    crate::serial::put_hex8(nr as u8);
+    if rsp_val > 0x0000_7000_0000_0000 {
+        puts(" !!BAD_RSP!! ");
+        crate::serial::put_hex64(rsp_val);
+    }
+    puts("]\n");
+    // ── end debug ────────────────────────────────────────────────
     match nr {
         SYS_EXIT => sys_exit(a1),
         SYS_WRITE => sys_write(a1, a2, a3),

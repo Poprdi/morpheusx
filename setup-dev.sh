@@ -243,6 +243,90 @@ do_build() {
 
 # do_install_arch removed - use network downloader in bootloader TUI
 
+# ─────────────────────────────────────────────────────────────────────────────
+# User-space app build + HelixFS injection
+# ─────────────────────────────────────────────────────────────────────────────
+
+# List of (package, dest-path) pairs for all user apps to build and inject.
+# Add new apps here; they will be built and deployed automatically.
+USER_APPS=(
+    "syscall-e2e,/bin/syscall-e2e"
+)
+
+do_build_user_apps() {
+    log_step "Building User-Space Apps"
+
+    # Verify nightly is available (required for build-std + custom JSON target)
+    if ! rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
+        log_warn "Nightly Rust not found — skipping user app build"
+        log_warn "Install with: rustup toolchain add nightly"
+        return 0
+    fi
+
+    local built=0
+    for entry in "${USER_APPS[@]}"; do
+        local pkg="${entry%%,*}"
+        local elf="target/x86_64-morpheus/release/${pkg}"
+
+        if [[ -f "$elf" ]] && [[ "${FORCE_MODE}" != "true" ]]; then
+            log_success "${pkg}: already built"
+            continue
+        fi
+
+        log_info "Building ${pkg} (x86_64-morpheus, nightly)..."
+        cargo +nightly build --release \
+            --target x86_64-morpheus.json \
+            -p "${pkg}" \
+            -Z build-std=core,alloc \
+            -Z build-std-features=compiler-builtins-mem \
+            -Z json-target-spec \
+            2>&1 || { log_error "Build failed for ${pkg}"; return 1; }
+
+        [[ -f "$elf" ]] || { log_error "ELF not found after build: $elf"; return 1; }
+        log_success "${pkg}: $(du -h "$elf" | cut -f1)"
+        built=$((built + 1))
+    done
+
+    [[ $built -gt 0 ]] && log_success "User-space build complete" || true
+}
+
+do_inject_apps() {
+    log_step "Deploying Apps to HelixFS"
+
+    local data_disk="${TESTING_DIR}/helix-data.img"
+
+    # Create a fresh sparse data disk if it doesn't exist yet
+    if [[ ! -f "$data_disk" ]]; then
+        log_info "Creating HelixFS data disk (256MB sparse)..."
+        dd if=/dev/zero of="$data_disk" bs=1 count=0 seek=256M status=none 2>/dev/null || true
+    fi
+
+    # Build morpheus-cli on the host (fast, native target)
+    log_info "Building morpheus-cli (host)..."
+    cargo build --release -p morpheus-cli 2>&1 || { log_error "morpheus-cli build failed"; return 1; }
+
+    local injected=0
+    for entry in "${USER_APPS[@]}"; do
+        local pkg="${entry%%,*}"
+        local dest="${entry##*,}"
+        local elf="target/x86_64-morpheus/release/${pkg}"
+
+        if [[ ! -f "$elf" ]]; then
+            log_warn "${pkg}: ELF not found (build first), skipping inject"
+            continue
+        fi
+
+        log_info "Injecting ${pkg} → ${dest} ..."
+        cargo run --release -p morpheus-cli -- inject "$data_disk" "$elf" --dest "$dest" 2>&1 \
+            || { log_error "Inject failed for ${pkg}"; return 1; }
+        injected=$((injected + 1))
+    done
+
+    [[ $injected -gt 0 ]] \
+        && log_success "${injected} app(s) deployed — boot MorpheusX and run 'exec <name>'" \
+        || log_warn "No apps injected"
+}
+
 do_create_disk() {
     log_step "Creating Test Disk"
     
@@ -403,6 +487,9 @@ run_full_auto() {
     # Distributions are now downloaded via network downloader in bootloader TUI
     
     do_create_disk
+
+    do_build_user_apps
+    do_inject_apps
     
     printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
     
@@ -453,6 +540,12 @@ run_interactive() {
     if ask "Create 50GB test disk with bootloader?"; then
         FORCE_MODE=true
         do_create_disk
+    fi
+
+    if ask "Build & deploy user apps to HelixFS?"; then
+        FORCE_MODE=true
+        do_build_user_apps
+        do_inject_apps
     fi
     
     printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
@@ -505,6 +598,15 @@ cmd_run() {
     print_banner
     check_bootloader || die "Bootloader not built. Run: $0 build"
     do_launch_qemu
+}
+
+cmd_deploy() {
+    print_banner
+    check_rust || die "Rust not installed. Run: $0 setup"
+    FORCE_MODE=true
+    do_build_user_apps
+    do_inject_apps
+    log_success "Deploy complete — start QEMU to test"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -659,17 +761,22 @@ usage() {
     printf "  ${C_CYAN}disk${C_RESET} [target]      Create disk image (50g|info)\n"
     printf "  ${C_CYAN}run${C_RESET}                Launch QEMU (VirtIO devices)\n"
     printf "  ${C_CYAN}thinkpad${C_RESET}           Launch QEMU with ThinkPad T450s hardware\n"
+    printf "  ${C_CYAN}deploy${C_RESET}             Build & inject user apps into HelixFS\n"
     printf "  ${C_CYAN}status${C_RESET}             Show environment status\n"
     printf "  ${C_CYAN}clean${C_RESET}              Remove artifacts\n"
     
     printf "\n${C_BOLD}Examples:${C_RESET}\n"
-    printf "  ${C_DIM}# Complete auto-setup + launch${C_RESET}\n"
+    printf "  ${C_DIM}# Complete auto-setup + launch (includes user apps)${C_RESET}\n"
     printf "  %s\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Force full rebuild + redeploy everything + launch${C_RESET}\n"
+    printf "  %s -f\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Rebuild & redeploy user apps only (fast iteration)${C_RESET}\n"
+    printf "  %s deploy\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Interactive guided setup${C_RESET}\n"
     printf "  %s --interactive\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Setup without launching QEMU${C_RESET}\n"
     printf "  %s --no-qemu\n\n" "$(basename "$0")"
-    printf "  ${C_DIM}# Just rebuild${C_RESET}\n"
+    printf "  ${C_DIM}# Just rebuild bootloader${C_RESET}\n"
     printf "  %s build\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Test with ThinkPad T450s hardware (AHCI + Intel e1000)${C_RESET}\n"
     printf "  %s thinkpad\n\n" "$(basename "$0")"
@@ -700,6 +807,7 @@ main() {
             ;;
         setup|init)      cmd_setup ;;
         build|compile)   cmd_build ;;
+        deploy)          cmd_deploy ;;
         disk|image)      cmd_disk "${args[@]:-}" ;;
         run|start|qemu)  cmd_run ;;
         thinkpad|t450s)  cmd_thinkpad ;;
