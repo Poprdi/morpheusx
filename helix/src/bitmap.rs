@@ -155,6 +155,31 @@ impl BlockBitmap {
         Err(HelixError::NoSpace)
     }
 
+    /// Mark a specific block as allocated (idempotent).
+    ///
+    /// Used during bitmap rebuild after log replay: we scan the index for
+    /// extent-based files and mark their blocks.  Unlike `alloc_block()`,
+    /// this is a no-op if the block is already allocated.
+    pub fn mark_block_used(&mut self, block: u64) {
+        if block >= self.total_blocks {
+            return;
+        }
+        let byte_idx = (block / 8) as usize;
+        let bit_idx = (block % 8) as u32;
+        if self.bits[byte_idx] & (1 << bit_idx) == 0 {
+            // Block was free — mark it.
+            self.bits[byte_idx] |= 1 << bit_idx;
+            self.free_count -= 1;
+        }
+    }
+
+    /// Mark a contiguous range of blocks as allocated (idempotent).
+    pub fn mark_range_used(&mut self, start: u64, count: u64) {
+        for i in 0..count {
+            self.mark_block_used(start + i);
+        }
+    }
+
     /// Free a single block.
     pub fn free_block(&mut self, block: u64) -> Result<(), HelixError> {
         if block >= self.total_blocks {

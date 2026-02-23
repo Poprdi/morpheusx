@@ -9,6 +9,7 @@ use crate::types::*;
 use alloc::vec;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
+use gpt_disk_types::Lba;
 
 /// Write file data to the filesystem.
 ///
@@ -24,6 +25,7 @@ pub fn write_file<B: BlockIo>(
     bitmap: &mut BlockBitmap,
     partition_lba_start: u64,
     device_block_size: u32,
+    data_start_block: u64,
     path: &str,
     data: &[u8],
     timestamp_ns: u64,
@@ -84,7 +86,7 @@ pub fn write_file<B: BlockIo>(
             // Fall back to fragmented allocation.
             return write_file_fragmented(
                 block_io, log, index, bitmap,
-                partition_lba_start, device_block_size,
+                partition_lba_start, device_block_size, data_start_block,
                 path, data, timestamp_ns, path_hash, content_crc,
             );
         }
@@ -92,24 +94,17 @@ pub fn write_file<B: BlockIo>(
     };
 
     // Write data blocks to disk.
-    // data_start_relative is relative to the data region.  We need the
-    // absolute partition block to compute the LBA.
-    // This requires knowing data_start_block from the superblock, which
-    // the caller should have stored.  For now, we pass it through bitmap
-    // context.  A production impl would store this in a HelixInstance struct.
-    //
-    // For now, we log the extent info as the payload metadata and write
-    // blocks directly.
+    let scale = BLOCK_SIZE as u64 / device_block_size as u64;
     let mut write_offset = 0usize;
-    for _i in 0..blocks_needed {
+    for i in 0..blocks_needed {
         let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
         let chunk = (data.len() - write_offset).min(BLOCK_SIZE as usize);
         block_buf[..chunk].copy_from_slice(&data[write_offset..write_offset + chunk]);
         write_offset += chunk;
 
-        // Write block to data region.  Caller must provide the mapping from
-        // relative block → absolute LBA.
-        // For simplicity, we encode the extent as log payload metadata.
+        let abs_block = data_start_block + data_start_relative + i;
+        let lba = Lba(partition_lba_start + abs_block * scale);
+        block_io.write_blocks(lba, &block_buf).map_err(|_| HelixError::IoWriteFailed)?;
     }
 
     // Encode extent as payload: [logical_block: u64, physical_block: u64, count: u32, _pad: u32]
@@ -153,12 +148,13 @@ pub fn write_file<B: BlockIo>(
 
 /// Fragmented allocation path — allocates blocks one at a time.
 fn write_file_fragmented<B: BlockIo>(
-    _block_io: &mut B,
+    block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
     bitmap: &mut BlockBitmap,
-    _partition_lba_start: u64,
-    _device_block_size: u32,
+    partition_lba_start: u64,
+    device_block_size: u32,
+    data_start_block: u64,
     path: &str,
     data: &[u8],
     timestamp_ns: u64,
@@ -183,6 +179,22 @@ fn write_file_fragmented<B: BlockIo>(
         }
         extents.push((logical_block, phys, 1));
         logical_block += 1;
+    }
+
+    // Write data blocks to disk at their allocated positions.
+    let scale = BLOCK_SIZE as u64 / device_block_size as u64;
+    let mut write_offset = 0usize;
+    for (_, physical, count) in &extents {
+        for j in 0..*count as u64 {
+            let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
+            let chunk = (data.len() - write_offset).min(BLOCK_SIZE as usize);
+            block_buf[..chunk].copy_from_slice(&data[write_offset..write_offset + chunk]);
+            write_offset += chunk;
+
+            let abs_block = data_start_block + physical + j;
+            let lba = Lba(partition_lba_start + abs_block * scale);
+            block_io.write_blocks(lba, &block_buf).map_err(|_| HelixError::IoWriteFailed)?;
+        }
     }
 
     // Encode all extents as payload.

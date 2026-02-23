@@ -16,7 +16,7 @@
 pub mod segment;
 pub mod recovery;
 
-use crate::crc::{crc32c, crc64};
+use crate::crc::{crc32c, crc32c_two, crc64};
 use crate::error::HelixError;
 use crate::types::*;
 use alloc::vec;
@@ -392,49 +392,116 @@ impl LogEngine {
         Ok(())
     }
 
-    /// Scan the log forward from a starting segment/offset and call `visitor`
-    /// for each valid record.  Stops at the first CRC failure.
+    /// Scan the log forward from tail through head and call `visitor`
+    /// for each valid record.  Stops at the first CRC failure or at
+    /// the head write position.
+    ///
+    /// **Performance**: reads whole segments at a time instead of per-record
+    /// disk I/O.  For the head segment, reuses the already-loaded
+    /// `write_buf` — zero additional disk reads when `tail == head`.
     ///
     /// Returns the highest valid LSN seen.
     pub fn scan_forward<B: BlockIo, F>(
         &self,
         block_io: &mut B,
-        segment_idx: u64,
+        start_segment: u64,
         start_offset: u32,
         mut visitor: F,
     ) -> Result<Lsn, HelixError>
     where
         F: FnMut(&LogRecordHeader, &[u8]) -> Result<(), HelixError>,
     {
-        let mut seg = segment_idx;
-        let mut offset = start_offset;
+        let hdr_size = core::mem::size_of::<LogRecordHeader>();
+        let seg_hdr_size = core::mem::size_of::<LogSegmentHeader>() as u32;
         let mut highest_lsn: Lsn = 0;
+        let mut seg = start_segment;
+
+        // Lazily allocated buffer for reading non-head segments from disk.
+        let mut seg_buf: Option<Vec<u8>> = None;
 
         loop {
-            match self.read_record(block_io, seg, offset) {
-                Ok((hdr, payload)) => {
-                    highest_lsn = hdr.lsn;
-                    visitor(&hdr, &payload)?;
-                    offset += hdr.total_size() as u32;
+            let is_head = seg == self.head_segment;
+            let limit = if is_head { self.head_offset } else { LOG_SEGMENT_BYTES as u32 };
+            let first_offset = if seg == start_segment { start_offset } else { seg_hdr_size };
 
-                    // Check if we've reached the end of this segment.
-                    if offset >= LOG_SEGMENT_BYTES as u32 - core::mem::size_of::<LogRecordHeader>() as u32
-                    {
-                        // Move to next segment.
-                        let next = (seg + 1) % self.segment_count;
-                        if next == self.head_segment && offset >= self.head_offset {
-                            break; // Caught up with head.
-                        }
-                        seg = next;
-                        offset = core::mem::size_of::<LogSegmentHeader>() as u32;
-                    }
+            if first_offset >= limit {
+                // Nothing to scan in this segment.
+                if is_head { break; }
+                seg = (seg + 1) % self.segment_count;
+                continue;
+            }
+
+            // Get a reference to the segment data.
+            // Head segment: reuse write_buf (already loaded by reload_head_segment).
+            // Other segments: read from disk into temp buffer.
+            let buf: &[u8] = if is_head {
+                &self.write_buf
+            } else {
+                let b = seg_buf.get_or_insert_with(|| vec![0u8; LOG_SEGMENT_BYTES as usize]);
+                let seg_start = self.segment_to_block(seg);
+                let blocks = ((limit as u64) + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+                for i in 0..blocks {
+                    let off = (i * BLOCK_SIZE as u64) as usize;
+                    let lba = self.abs_lba(seg_start + i);
+                    block_io.read_blocks(lba, &mut b[off..off + BLOCK_SIZE as usize])
+                        .map_err(|_| HelixError::IoReadFailed)?;
                 }
-                Err(HelixError::LogCrcMismatch) => {
-                    // End of valid records — this is normal during recovery.
+                b
+            };
+
+            // Parse records from the in-memory buffer.
+            // Zero per-record disk I/O, zero per-record heap allocation.
+            let mut offset = first_offset;
+            loop {
+                if (offset as usize) + hdr_size > limit as usize {
                     break;
                 }
-                Err(e) => return Err(e),
+
+                let off = offset as usize;
+                let header: LogRecordHeader = unsafe {
+                    core::ptr::read_unaligned(buf[off..].as_ptr() as *const LogRecordHeader)
+                };
+
+                // Invalid op code → end of valid records in this segment.
+                if LogOp::from_u8(header.op).is_none() {
+                    break;
+                }
+
+                let total = header.total_size() as u32;
+                let payload_len = header.payload_len as usize;
+                let payload_start = off + hdr_size;
+                let payload_end = payload_start + payload_len;
+
+                if payload_end > buf.len() || offset + total > LOG_SEGMENT_BYTES as u32 {
+                    break;
+                }
+
+                let payload = &buf[payload_start..payload_end];
+
+                // Zero-allocation CRC verification.
+                let mut hdr_copy = header;
+                hdr_copy.record_crc32c = 0;
+                let hdr_bytes = unsafe {
+                    core::slice::from_raw_parts(
+                        &hdr_copy as *const _ as *const u8,
+                        hdr_size,
+                    )
+                };
+                let computed = crc32c_two(hdr_bytes, payload);
+                if computed != header.record_crc32c {
+                    break; // CRC mismatch → end of valid records.
+                }
+
+                highest_lsn = header.lsn;
+                visitor(&header, payload)?;
+                offset += total;
             }
+
+            // Head segment is always the last one to scan.
+            if is_head {
+                break;
+            }
+            seg = (seg + 1) % self.segment_count;
         }
 
         Ok(highest_lsn)

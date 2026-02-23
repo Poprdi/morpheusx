@@ -12,13 +12,7 @@ MorpheusX is a UEFI boot and hardware exokernel-like runtime that loads Linux ke
 
 ### Features
 
-- Boots Linux kernels from the EFI system partition with custom GPT and FAT32 handling.
-- Provides a boot-time TUI for selecting images and guiding installs.
-- Includes a bare-metal network stack (operating after ExitBootServices) for downloading ISOs and updates. (Work in progress)
-- **Implements a self-persisting runtime**: The in-memory, relocated PE loader can clone itself, reverse its own relocations, and reconstruct a fully bootable on-disk binary—enabling live regeneratio[...]
-- Contains the **full** iso9660-rs implementation: A pure no_std, Rust ISO9660 and El Torito parser/reader, written for MorpheusX and developed in this repository; enables direct extraction and booting[...]
-- Implements a custom, standalone FAT32 filesystem library: Written from scratch for this project (no_std, Rust), enabling direct parsing, allocation, and manipulation of FAT32 volumes and boot records[...]
-
+A lot, this is an exokernel just try it out play arround and see for yourself.
 ---
 
 ### Building
@@ -60,36 +54,10 @@ See additional helper scripts in `testing/` for preparing initrds and disk image
 
 ---
 
-### CI/CD Pipeline
-
-The project uses GitHub Actions for continuous integration:
-
-| Workflow | Purpose |
-|----------|---------|
-| **CI** | Lint (rustfmt, clippy), build, and test on host |
-| **UEFI Build** | 2-pass build for relocation embedding |
-| **UEFI E2E** | Boot test in QEMU with OVMF |
-| **Security Audit** | Weekly cargo-audit and cargo-deny |
-| **Release** | Automated releases on version tags |
-
-#### Local CI Scripts
-
-```bash
-# Build UEFI bootloader (2-pass with reloc embedding)
-./scripts/ci-build-uefi.sh
-
-# Run E2E boot test
-./scripts/qemu-e2e.sh target/x86_64-unknown-uefi/release/morpheus-bootloader.efi
-
-# Generate test fixtures (ISO, FAT images)
-./scripts/gen-fixtures.sh fixtures/
-```
-
----
-
 ### Project Status
 
-This is experimental, not production-hardened, and the network and persistence layers are still under construction. Expect sharp edges and incomplete flows.
+This is experimental, not production-hardened, be aware of uncomplete workflows and sharp edges, 
+the platform is shortly before being able to self host.
 
 ---
 

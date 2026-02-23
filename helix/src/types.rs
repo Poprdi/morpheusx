@@ -542,6 +542,8 @@ pub mod open_flags {
 pub struct FileDescriptor {
     /// Index entry key (path hash) this fd refers to.
     pub key:          u64,
+    /// Full path for safe index lookups (avoids hash-collision issues).
+    pub path:         [u8; 256],
     /// Open flags.
     pub flags:        u32,
     /// Current seek offset in bytes.
@@ -558,6 +560,7 @@ impl FileDescriptor {
     pub const fn empty() -> Self {
         FileDescriptor {
             key: 0,
+            path: [0u8; 256],
             flags: 0,
             offset: 0,
             mount_idx: 0,
