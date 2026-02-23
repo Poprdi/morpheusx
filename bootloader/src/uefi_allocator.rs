@@ -231,13 +231,8 @@ unsafe fn post_ebs_dealloc(ptr: *mut u8, layout: Layout) {
 /// Returns None if registry is not yet ready or allocation fails.
 unsafe fn try_init_overflow() -> Option<OverflowState> {
     if !morpheus_hwinit::is_registry_initialized() {
-        morpheus_hwinit::serial::puts("[ALLOC] Primary OOM — registry not ready, cannot grow\n");
         return None;
     }
-
-    morpheus_hwinit::serial::puts(
-        "[ALLOC] Primary heap OOM — allocating 16 MB overflow from registry\n",
-    );
 
     let registry = morpheus_hwinit::global_registry_mut();
     let pages = (OVERFLOW_GROW_CHUNK as u64).div_ceil(morpheus_hwinit::PAGE_SIZE);
@@ -253,10 +248,6 @@ unsafe fn try_init_overflow() -> Option<OverflowState> {
 
             OVERFLOW_BASE.store(base, Ordering::SeqCst);
             OVERFLOW_SIZE.store(OVERFLOW_GROW_CHUNK, Ordering::SeqCst);
-
-            morpheus_hwinit::serial::puts("[ALLOC] Overflow heap @ ");
-            morpheus_hwinit::serial::put_hex64(base);
-            morpheus_hwinit::serial::puts(", 16 MB\n");
 
             Some(OverflowState {
                 heap,
@@ -303,9 +294,6 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
             state.size += grow;
             OVERFLOW_SIZE.store(state.size, Ordering::SeqCst);
 
-            morpheus_hwinit::serial::puts("[ALLOC] Overflow heap grew +16 MB, total = ");
-            morpheus_hwinit::serial::put_hex32(state.size as u32);
-            morpheus_hwinit::serial::puts(" bytes\n");
             true
         }
         Err(_) => {

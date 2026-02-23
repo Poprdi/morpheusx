@@ -54,9 +54,6 @@ pub unsafe fn init_kernel_page_table() {
     }
 
     let mgr = PageTableManager::from_cr3();
-    puts("[PAGING] adopted UEFI PML4 @ ");
-    crate::serial::put_hex64(mgr.pml4_phys);
-    puts("\n");
 
     // UEFI / OVMF sets CR0.WP = 1 (Write Protect) and marks its own
     // page-table pages as read-only.  With WP=1, even Ring 0 code faults
@@ -287,10 +284,6 @@ pub unsafe fn reserve_page_table_pages() -> usize {
 
     let (pt_pages, pt_count) = collect_page_table_pages();
 
-    puts("[PAGING] reserving ");
-    put_hex32(pt_count as u32);
-    puts(" page-table pages from allocator\n");
-
     let registry = global_registry_mut();
     let mut reserved = 0usize;
 
@@ -306,9 +299,6 @@ pub unsafe fn reserve_page_table_pages() -> usize {
             Err(_) => {
                 // Page might already be in a non-free region (e.g. RuntimeServices).
                 // That's fine — it just means the allocator can't hand it out anyway.
-                puts("[PAGING]   page ");
-                put_hex64(phys);
-                puts(" not in free list (already reserved)\n");
             }
         }
     }

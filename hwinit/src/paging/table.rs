@@ -413,12 +413,6 @@ impl PageTableManager {
         let end = (phys + size + 0xFFF) & !0xFFF;
         let mut cur = start;
 
-        puts("[MMIO] map_mmio_inner: ");
-        crate::serial::put_hex64(start);
-        puts(" - ");
-        crate::serial::put_hex64(end);
-        puts("\n");
-
         while cur < end {
             let va = VirtAddr::from_u64(cur);
             let pml4 = self.pml4_phys as *mut PageTable;
@@ -426,29 +420,19 @@ impl PageTableManager {
             // ── PML4 ──
             let pml4_e = (*pml4).entry_mut(va.pml4_idx);
             if !pml4_e.is_present() {
-                puts("[MMIO]   PML4 not present, alloc...\n");
                 let child = alloc_table()?;
                 *pml4_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
 
             // ── PDPT ──
             let pdpt = pml4_e.phys_addr() as *mut PageTable;
-            puts("[MMIO]   PDPT @ ");
-            crate::serial::put_hex64(pdpt as u64);
             let pdpt_e = (*pdpt).entry_mut(va.pdpt_idx);
-            puts(" [");
-            crate::serial::put_hex32(va.pdpt_idx as u32);
-            puts("] raw=");
-            crate::serial::put_hex64(pdpt_e.raw());
-            puts("\n");
 
             if !pdpt_e.is_present() {
-                puts("[MMIO]   PDPT not present, alloc...\n");
                 let child = alloc_table()?;
                 *pdpt_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
             if pdpt_e.is_huge() {
-                puts("[MMIO]   1GiB huge -> UC\n");
                 pdpt_e.set_raw(pdpt_e.raw() | uc_bits);
                 let next_1g = (cur & !(0x4000_0000 - 1)) + 0x4000_0000;
                 cur = next_1g;
@@ -457,22 +441,13 @@ impl PageTableManager {
 
             // ── PD ──
             let pd = pdpt_e.phys_addr() as *mut PageTable;
-            puts("[MMIO]   PD @ ");
-            crate::serial::put_hex64(pd as u64);
             let pd_e = (*pd).entry_mut(va.pd_idx);
-            puts(" [");
-            crate::serial::put_hex32(va.pd_idx as u32);
-            puts("] raw=");
-            crate::serial::put_hex64(pd_e.raw());
-            puts("\n");
 
             if !pd_e.is_present() {
-                puts("[MMIO]   PD not present, alloc...\n");
                 let child = alloc_table()?;
                 *pd_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
             if pd_e.is_huge() {
-                puts("[MMIO]   2MiB huge -> UC\n");
                 pd_e.set_raw(pd_e.raw() | uc_bits);
                 let next_2m = (cur & !(0x20_0000 - 1)) + 0x20_0000;
                 cur = next_2m;
@@ -481,14 +456,7 @@ impl PageTableManager {
 
             // ── PT (4 KiB leaf) ──
             let pt = pd_e.phys_addr() as *mut PageTable;
-            puts("[MMIO]   PT @ ");
-            crate::serial::put_hex64(pt as u64);
             let pt_e = (*pt).entry_mut(va.pt_idx);
-            puts(" [");
-            crate::serial::put_hex32(va.pt_idx as u32);
-            puts("] raw=");
-            crate::serial::put_hex64(pt_e.raw());
-            puts("\n");
 
             if pt_e.is_present() {
                 pt_e.set_raw(pt_e.raw() | uc_bits);
@@ -498,13 +466,11 @@ impl PageTableManager {
             cur += PAGE_SIZE;
         }
 
-        puts("[MMIO]   WBINVD + TLB flush\n");
         // WBINVD: write-back and invalidate ALL caches.  Critical when
         // changing a region from WB → UC — stale WB cache lines from
         // UEFI's PCI enumeration can shadow the real device registers.
         core::arch::asm!("wbinvd", options(nomem, nostack));
         self.flush_tlb_all();
-        puts("[MMIO]   done\n");
         Ok(())
     }
 
@@ -553,40 +519,22 @@ impl PageTableManager {
         let pml4 = self.pml4_phys as *mut PageTable;
 
         // ── Level 1: PML4[idx] → PDPT ───────────────────────────────────
-        puts("[PGSPLIT] PML4[");
-        crate::serial::put_hex64(va.pml4_idx as u64);
-        puts("] ");
         let pml4_e = (*pml4).entry_mut(va.pml4_idx);
         if !pml4_e.is_present() {
-            puts("not present — skip\n");
             // Not mapped at all — map_4k will allocate as needed.
             return Ok(());
         }
-        // PML4 entries cannot be huge on x86-64 (PS bit is reserved).
         let pdpt_phys = pml4_e.phys_addr();
-        puts("present, PDPT @ ");
-        crate::serial::put_hex64(pdpt_phys);
-        puts("\n");
 
         // ── Level 2: PDPT[idx] → PD ─────────────────────────────────────
         let pdpt = pdpt_phys as *mut PageTable;
-        puts("[PGSPLIT] PDPT[");
-        crate::serial::put_hex64(va.pdpt_idx as u64);
-        puts("] raw=");
         let pdpt_e = (*pdpt).entry_mut(va.pdpt_idx);
-        crate::serial::put_hex64(pdpt_e.raw());
-        puts("\n");
         if !pdpt_e.is_present() {
-            puts("[PGSPLIT]   not present — skip\n");
             return Ok(());
         }
         if pdpt_e.is_huge() {
-            puts("[PGSPLIT]   1GiB huge page — splitting\n");
             // 1 GiB huge page — split into 512 × 2 MiB pages.
-            let huge_base = pdpt_e.phys_addr(); // 1 GiB-aligned
-            puts("[PGSPLIT]   huge_base=");
-            crate::serial::put_hex64(huge_base);
-            puts("\n");
+            let huge_base = pdpt_e.phys_addr();
             let raw = pdpt_e.raw();
             // Propagate: P, W, U, PWT, PCD, A, G, XD (NOT PS — we set it per-entry)
             let leaf_flags = PageFlags(
@@ -600,11 +548,7 @@ impl PageTableManager {
                     | PageFlags::NO_EXECUTE.0),
             );
 
-            puts("[PGSPLIT]   allocating PD...\n");
             let new_pd_phys = alloc_table()?;
-            puts("[PGSPLIT]   PD @ ");
-            crate::serial::put_hex64(new_pd_phys);
-            puts("\n");
             let new_pd = new_pd_phys as *mut PageTable;
             let two_mb: u64 = 2 * 1024 * 1024;
             for i in 0..512usize {
@@ -612,7 +556,6 @@ impl PageTableManager {
                 *(*new_pd).entry_mut(i) =
                     PageTableEntry::new(page_phys, leaf_flags.with(PageFlags::HUGE_PAGE));
             }
-            puts("[PGSPLIT]   512 PD entries filled\n");
 
             // Replace PDPT entry: directory (not huge) pointing to the new PD.
             let dir_flags = PageFlags::PRESENT.with(PageFlags::WRITABLE);
@@ -622,39 +565,22 @@ impl PageTableManager {
                 dir_flags
             };
             *pdpt_e = PageTableEntry::new(new_pd_phys, dir_flags);
-            puts("[PGSPLIT]   PDPT entry replaced\n");
 
-            // Flush TLB immediately after replacing the 1GiB entry
-            // to prevent stale huge-page TLB from interfering.
             Self::flush_tlb_page(virt);
-            puts("[PGSPLIT]   TLB flushed (1GiB split)\n");
         }
 
         // Re-read PDPT entry (may have been replaced above).
         let pd_phys = (*pdpt).entry(va.pdpt_idx).phys_addr();
-        puts("[PGSPLIT] PD @ ");
-        crate::serial::put_hex64(pd_phys);
-        puts("\n");
 
         // ── Level 3: PD[idx] → PT ───────────────────────────────────────
         let pd = pd_phys as *mut PageTable;
         let pd_e = (*pd).entry_mut(va.pd_idx);
-        puts("[PGSPLIT] PD[");
-        crate::serial::put_hex64(va.pd_idx as u64);
-        puts("] raw=");
-        crate::serial::put_hex64(pd_e.raw());
-        puts("\n");
         if !pd_e.is_present() {
-            puts("[PGSPLIT]   not present — skip\n");
             return Ok(());
         }
         if pd_e.is_huge() {
-            puts("[PGSPLIT]   2MiB huge page — splitting\n");
             // 2 MiB huge page — split into 512 × 4 KiB pages.
-            let huge_base = pd_e.phys_addr(); // 2 MiB-aligned
-            puts("[PGSPLIT]   huge_base=");
-            crate::serial::put_hex64(huge_base);
-            puts("\n");
+            let huge_base = pd_e.phys_addr();
             let raw = pd_e.raw();
             let leaf_flags = PageFlags(
                 raw & (PageFlags::PRESENT.0
@@ -667,17 +593,12 @@ impl PageTableManager {
                     | PageFlags::NO_EXECUTE.0),
             );
 
-            puts("[PGSPLIT]   allocating PT...\n");
             let new_pt_phys = alloc_table()?;
-            puts("[PGSPLIT]   PT @ ");
-            crate::serial::put_hex64(new_pt_phys);
-            puts("\n");
             let new_pt = new_pt_phys as *mut PageTable;
             for i in 0..512usize {
                 let page_phys = huge_base + (i as u64) * PAGE_SIZE;
                 *(*new_pt).entry_mut(i) = PageTableEntry::new(page_phys, leaf_flags);
             }
-            puts("[PGSPLIT]   512 PT entries filled\n");
 
             // Replace PD entry: directory (not huge) pointing to the new PT.
             let dir_flags = PageFlags::PRESENT.with(PageFlags::WRITABLE);
@@ -687,13 +608,9 @@ impl PageTableManager {
                 dir_flags
             };
             *pd_e = PageTableEntry::new(new_pt_phys, dir_flags);
-            puts("[PGSPLIT]   PD entry replaced\n");
         }
 
-        // Flush TLB for the target page (and surrounding pages that were in
-        // the same huge page — the TLB may cache the old huge-page entry).
         Self::flush_tlb_page(virt);
-        puts("[PGSPLIT] done\n");
 
         Ok(())
     }

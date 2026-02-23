@@ -167,8 +167,6 @@ pub unsafe fn platform_init_selfcontained(
         config.descriptor_version,
     );
 
-    puts("[HWINIT]   memory registry initialized\n");
-
     // ── Reserve active page-table pages ──────────────────────────────────
     // UEFI leaves page tables in memory regions marked as BootServicesData
     // (reclaimable).  Our registry imports those as "free".  If we allocate
@@ -179,13 +177,6 @@ pub unsafe fn platform_init_selfcontained(
     crate::paging::reserve_page_table_pages();
 
     let registry = global_registry_mut();
-    let total_mb = registry.total_memory() / (1024 * 1024);
-    let free_mb = registry.free_memory() / (1024 * 1024);
-    puts("[HWINIT]   total: ");
-    put_hex32(total_mb as u32);
-    puts(" MB, free: ");
-    put_hex32(free_mb as u32);
-    puts(" MB\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 2: CPU STATE - Our GDT, our IDT, our rules
@@ -214,26 +205,11 @@ pub unsafe fn platform_init_selfcontained(
         .map_err(|_| InitError::NoFreeMemory)?;
     let ist1_stack_top = ist1_stack_base + IST1_STACK_SIZE as u64;
 
-    puts("[HWINIT]   kernel stack: ");
-    put_hex64(kernel_stack_base);
-    puts(" - ");
-    put_hex64(kernel_stack_top);
-    newline();
-
-    puts("[HWINIT]   IST1 stack: ");
-    put_hex64(ist1_stack_base);
-    puts(" - ");
-    put_hex64(ist1_stack_top);
-    newline();
-
     // Load our GDT with TSS
-    puts("[HWINIT]   calling init_gdt...\n");
     init_gdt(kernel_stack_top, ist1_stack_top);
-    puts("[HWINIT]   GDT loaded\n");
 
     // Load our IDT with exception handlers
     init_idt();
-    puts("[HWINIT]   IDT loaded\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 3: INTERRUPTS - PIC remapped, sane vectors
@@ -241,7 +217,6 @@ pub unsafe fn platform_init_selfcontained(
     puts("[HWINIT] Phase 3: Interrupt controller\n");
 
     init_pic();
-    puts("[HWINIT]   PIC remapped (IRQ0-7 -> 0x20, IRQ8-15 -> 0x28)\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 4: HEAP - GlobalAlloc works after this
@@ -255,9 +230,7 @@ pub unsafe fn platform_init_selfcontained(
         puts("\n");
         return Err(InitError::NoFreeMemory);
     }
-    puts("[HWINIT]   heap initialized (");
-    put_hex32((HEAP_SIZE / 1024) as u32);
-    puts(" KB)\n");
+
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 5: TSC - Calibrate for timing
@@ -268,11 +241,7 @@ pub unsafe fn platform_init_selfcontained(
     if tsc_freq == 0 {
         return Err(InitError::TscCalibrationFailed);
     }
-    puts("[HWINIT]   TSC: ");
-    put_hex64(tsc_freq);
-    puts(" Hz (");
-    put_hex32((tsc_freq / 1_000_000) as u32);
-    puts(" MHz)\n");
+
 
     // Store TSC frequency for scheduler sleep deadline computation.
     crate::process::scheduler::set_tsc_frequency(tsc_freq);
@@ -296,11 +265,7 @@ pub unsafe fn platform_init_selfcontained(
     // avail->idx causes "bogus descriptor" and permanently desyncs the driver.
     core::ptr::write_bytes(dma_phys as *mut u8, 0u8, DMA_SIZE);
 
-    puts("[HWINIT]   DMA: ");
-    put_hex64(dma_phys);
-    puts(" (");
-    put_hex32((DMA_SIZE / 1024) as u32);
-    puts(" KB) — zeroed\n");
+
 
     // Identity-mapped: CPU address = bus address = physical address
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);
@@ -310,10 +275,7 @@ pub unsafe fn platform_init_selfcontained(
     // ─────────────────────────────────────────────────────────────────────
     puts("[HWINIT] Phase 7: PCI bus mastering\n");
 
-    let devices_enabled = enable_all_pci_devices();
-    puts("[HWINIT]   enabled ");
-    put_hex32(devices_enabled as u32);
-    puts(" devices\n");
+    enable_all_pci_devices();
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 8: PAGING - Adopt UEFI page tables; prepare for per-process maps
@@ -321,7 +283,6 @@ pub unsafe fn platform_init_selfcontained(
     puts("[HWINIT] Phase 8: Paging\n");
 
     init_kernel_page_table();
-    puts("[HWINIT]   kernel page table adopted from CR3\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 9: PROCESS SCHEDULER
@@ -329,7 +290,6 @@ pub unsafe fn platform_init_selfcontained(
     puts("[HWINIT] Phase 9: Process scheduler\n");
 
     init_scheduler();
-    puts("[HWINIT]   scheduler ready (PID 0 = kernel)\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 10: SYSCALL INTERFACE
@@ -348,7 +308,6 @@ pub unsafe fn platform_init_selfcontained(
         outb(0x43, 0x36); // channel 0, lo/hi, mode 3
         outb(0x40, (PIT_DIVISOR & 0xFF) as u8);
         outb(0x40, ((PIT_DIVISOR >> 8) & 0xFF) as u8);
-        puts("[HWINIT]   PIT channel 0 programmed at ~100 Hz\n");
     }
 
     // Install timer ISR into IDT now that scheduler is ready.
@@ -357,17 +316,14 @@ pub unsafe fn platform_init_selfcontained(
         fn irq_timer_isr();
     }
     set_interrupt_handler(0x20, irq_timer_isr as u64, 0, 0);
-    puts("[HWINIT]   timer ISR installed (vector 0x20)\n");
 
     // Enable IRQ 0 (PIT timer) via PIC.
     use crate::cpu::pic::enable_irq;
     enable_irq(0);
-    puts("[HWINIT]   IRQ 0 (PIT timer) unmasked\n");
 
     // Enable interrupts globally.
     use crate::cpu::idt::enable_interrupts;
     enable_interrupts();
-    puts("[HWINIT]   interrupts enabled\n");
 
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 11: ROOT FILESYSTEM — HelixFS on memory-backed block device
@@ -389,12 +345,6 @@ pub unsafe fn platform_init_selfcontained(
         // Zero the region.
         core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
 
-        puts("[HWINIT]   FS region: ");
-        put_hex64(root_fs_base);
-        puts(" (");
-        put_hex32((ROOT_FS_SIZE / 1024) as u32);
-        puts(" KB)\n");
-
         match morpheus_helix::vfs::global::init_root_fs(root_fs_base as *mut u8, ROOT_FS_SIZE) {
             Ok(()) => puts("[HWINIT]   HelixFS mounted at /\n"),
             Err(_) => {
@@ -410,9 +360,6 @@ pub unsafe fn platform_init_selfcontained(
             static mut kernel_syscall_rsp: u64;
         }
         kernel_syscall_rsp = kernel_stack_top;
-        puts("[HWINIT]   kernel_syscall_rsp = ");
-        put_hex64(kernel_stack_top);
-        puts("\n");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -446,19 +393,11 @@ pub unsafe fn platform_init_selfcontained(
 /// - DMA region must be valid and identity-mapped
 /// - Must be called exactly once
 pub unsafe fn platform_init(config: PlatformConfig) -> Result<PlatformInit, InitError> {
-    puts("[HWINIT] platform_init (legacy) start\n");
-
     // Validate DMA region
     if config.dma_base.is_null() || config.dma_size < DmaRegion::MIN_SIZE {
         puts("[HWINIT] ERROR: invalid DMA region\n");
         return Err(InitError::InvalidDmaRegion);
     }
-
-    puts("[HWINIT] DMA base=");
-    put_hex64(config.dma_base as u64);
-    puts(" size=");
-    put_hex32(config.dma_size as u32);
-    newline();
 
     let dma_region = DmaRegion::new(config.dma_base, config.dma_bus, config.dma_size);
 
