@@ -161,6 +161,23 @@ impl Scheduler {
         &mut PROCESS_TABLE[pid].as_mut().unwrap().fd_table
     }
 
+    /// Mutable reference to the current process descriptor.
+    ///
+    /// # Safety
+    /// Single-threaded; call only with interrupts disabled (e.g. from a syscall handler).
+    pub unsafe fn current_process_mut(&self) -> &'static mut Process {
+        let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+        PROCESS_TABLE[pid].as_mut().unwrap()
+    }
+
+    /// Immutable reference to a process by PID.
+    ///
+    /// # Safety
+    /// Single-threaded; call only with interrupts disabled.
+    pub unsafe fn process_by_pid(&self, pid: u32) -> Option<&'static Process> {
+        PROCESS_TABLE.get(pid as usize).and_then(|s| s.as_ref())
+    }
+
     /// Send a signal to a process by PID.
     /// Returns `Err` if the PID is not found or not alive.
     pub unsafe fn send_signal(&self, pid: u32, sig: Signal) -> Result<(), &'static str> {

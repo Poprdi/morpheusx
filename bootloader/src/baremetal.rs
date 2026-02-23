@@ -12,6 +12,7 @@
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
+use morpheus_display::console::TextConsole;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES THAT CROSS THE BORDER
@@ -54,6 +55,46 @@ static mut FRAMEBUFFER_INFO: FramebufferInfo = FramebufferInfo {
 
 static BAREMETAL_MODE: AtomicBool = AtomicBool::new(false);
 
+// ── Live framebuffer console ─────────────────────────────────────────────────
+// Initialized as soon as we have a valid framebuffer (before EBS).
+// After that every puts() in hwinit mirrors to the screen in real-time.
+
+static mut LIVE_CONSOLE: Option<TextConsole> = None;
+
+/// Called by the hwinit serial hook for every byte emitted via `puts()`.
+/// Writes directly to the TextConsole backed by the GOP framebuffer.
+pub unsafe fn live_console_putc(b: u8) {
+    if let Some(ref mut con) = LIVE_CONSOLE {
+        con.write_char(b as char);
+    }
+}
+
+/// Initialize the live framebuffer console and register it as the serial hook.
+/// Call this once after FRAMEBUFFER_INFO is set and before any hwinit phases.
+unsafe fn start_live_console(fb: &FramebufferInfo) {
+    if fb.base == 0 || fb.width == 0 {
+        return;
+    }
+    // GOP stride is pixels_per_scan_line; display crate wants stride in bytes.
+    let stride_bytes = fb.stride * 4;
+    let display_fb = morpheus_display::types::FramebufferInfo {
+        base: fb.base,
+        size: fb.size,
+        width: fb.width,
+        height: fb.height,
+        stride: stride_bytes,
+        format: match fb.format {
+            0 => morpheus_display::types::PixelFormat::Rgbx,
+            _ => morpheus_display::types::PixelFormat::Bgrx,
+        },
+    };
+    let raw_fb = morpheus_display::framebuffer::Framebuffer::new(display_fb);
+    let mut con = TextConsole::new(raw_fb);
+    con.clear();
+    LIVE_CONSOLE = Some(con);
+    morpheus_hwinit::serial::set_live_console_hook(live_console_putc);
+}
+
 pub fn is_baremetal() -> bool {
     BAREMETAL_MODE.load(Ordering::Relaxed)
 }
@@ -77,6 +118,10 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     puts("[MORPHEUSX] enter_baremetal\n");
 
     FRAMEBUFFER_INFO = config.framebuffer;
+
+    // Start mirroring serial output to the framebuffer immediately so all
+    // boot messages appear on screen in real-time, not just on COM1.
+    start_live_console(&FRAMEBUFFER_INFO);
 
     // ── Allocate stack from UEFI (LoaderData survives EBS) ──────────────
     const STACK_SIZE: usize = 256 * 1024;

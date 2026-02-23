@@ -43,7 +43,7 @@ macro_rules! entry {
 #[panic_handler]
 fn _panic(_info: &core::panic::PanicInfo) -> ! {
     // Write a terse panic message to stderr (fd 2) via SYS_WRITE.
-    let msg = "PANIC in user process\n";
+    let msg = "User Process shit the bed!\n";
     let _ = unsafe {
         crate::raw::syscall3(
             crate::raw::SYS_WRITE,

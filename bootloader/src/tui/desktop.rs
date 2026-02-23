@@ -3,7 +3,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use morpheus_display::types::FramebufferInfo;
-use morpheus_hwinit::serial::puts;
+use morpheus_hwinit::serial::{clear_live_console_hook, puts};
 use morpheus_ui::app::{App, AppRegistry, AppResult};
 use morpheus_ui::shell::commands::{self, FsOp};
 use morpheus_ui::shell::{Shell, ShellAction};
@@ -63,6 +63,21 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// Wait for a keypress showing the boot log that was already rendered live.
+/// Clears the serial hook before returning so the WM takes over the screen.
+fn show_boot_log_screen(keyboard: &mut Keyboard) {
+    // The entire boot log is already on the framebuffer — it was written there
+    // in real-time via the live console hook as each puts() fired. Just append
+    // a footer and block until the user acknowledges.
+    puts("\n");
+    puts("────────────────────────────────────────────────────────────────────────────────\n");
+    puts("Press any key to enter shell...");
+    keyboard.wait_for_key();
+    puts("\n");
+    // Hand screen ownership to the window manager.
+    clear_live_console_hook();
+}
+
 pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     puts("[DESKTOP] initializing window manager\n");
 
@@ -70,6 +85,10 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     let mut fb_canvas = unsafe { FbCanvas::new(display_info) };
     let screen_w = fb_canvas.width();
     let screen_h = fb_canvas.height();
+
+    // Show the full boot log on-screen before entering the windowed UI.
+    let mut keyboard = Keyboard::new();
+    show_boot_log_screen(&mut keyboard);
 
     let mut wm = WindowManager::new(screen_w, screen_h, fb_canvas.pixel_format(), &theme);
 
@@ -107,8 +126,6 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
     wm.compose(&mut fb_canvas, &theme);
 
     puts("[DESKTOP] entering event loop\n");
-
-    let mut keyboard = Keyboard::new();
 
     loop {
         let input = match keyboard.poll_key_with_delay() {

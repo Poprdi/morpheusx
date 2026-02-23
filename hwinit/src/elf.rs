@@ -254,7 +254,7 @@ unsafe fn clone_kernel_mappings(dst: &mut PageTableManager) -> Result<(), ElfErr
 
 /// Map a single 4 KiB user page, ensuring all intermediate paging levels
 /// have the USER bit set (required by x86-64 for Ring 3 access).
-unsafe fn map_user_page(
+pub(crate) unsafe fn map_user_page(
     pt: &mut PageTableManager,
     virt: u64,
     phys: u64,
