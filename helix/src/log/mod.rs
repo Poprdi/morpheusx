@@ -255,8 +255,7 @@ impl LogEngine {
         }
 
         // Write all blocks of the current segment that have data.
-        let blocks_used = ((self.head_offset as u64) + BLOCK_SIZE as u64 - 1)
-            / BLOCK_SIZE as u64;
+        let blocks_used = (self.head_offset as u64).div_ceil(BLOCK_SIZE as u64);
         let seg_start = self.segment_to_block(self.head_segment);
 
         for i in 0..blocks_used {
@@ -355,9 +354,9 @@ impl LogEngine {
     /// existing log records in the head segment.
     pub fn reload_head_segment<B: BlockIo>(&mut self, block_io: &mut B) -> Result<(), HelixError> {
         let seg_start = self.segment_to_block(self.head_segment);
-        let blocks_to_read = ((self.head_offset as u64) + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+        let blocks_to_read = (self.head_offset as u64).div_ceil(BLOCK_SIZE as u64);
         // Always read at least the first block (segment header).
-        let blocks_to_read = blocks_to_read.max(1).min(LOG_SEGMENT_BLOCKS);
+        let blocks_to_read = blocks_to_read.clamp(1, LOG_SEGMENT_BLOCKS);
 
         for i in 0..blocks_to_read {
             let off = (i * BLOCK_SIZE as u64) as usize;
@@ -439,7 +438,7 @@ impl LogEngine {
             } else {
                 let b = seg_buf.get_or_insert_with(|| vec![0u8; LOG_SEGMENT_BYTES as usize]);
                 let seg_start = self.segment_to_block(seg);
-                let blocks = ((limit as u64) + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64;
+                let blocks = (limit as u64).div_ceil(BLOCK_SIZE as u64);
                 for i in 0..blocks {
                     let off = (i * BLOCK_SIZE as u64) as usize;
                     let lba = self.abs_lba(seg_start + i);

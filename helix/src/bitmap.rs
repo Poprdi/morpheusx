@@ -29,7 +29,7 @@ pub struct BlockBitmap {
 impl BlockBitmap {
     /// Create a new bitmap for `total_blocks` data blocks, all initially free.
     pub fn new(total_blocks: u64) -> Self {
-        let byte_count = ((total_blocks + 7) / 8) as usize;
+        let byte_count = total_blocks.div_ceil(8) as usize;
         Self {
             bits: vec![0u8; byte_count],
             total_blocks,
@@ -40,7 +40,7 @@ impl BlockBitmap {
 
     /// Load bitmap from raw bytes (read from disk).
     pub fn from_bytes(data: &[u8], total_blocks: u64) -> Self {
-        let byte_count = ((total_blocks + 7) / 8) as usize;
+        let byte_count = total_blocks.div_ceil(8) as usize;
         let mut bits = vec![0u8; byte_count];
         let copy_len = data.len().min(byte_count);
         bits[..copy_len].copy_from_slice(&data[..copy_len]);
@@ -211,6 +211,6 @@ impl BlockBitmap {
     /// Number of bitmap blocks needed on disk.
     pub fn disk_blocks_needed(total_data_blocks: u64) -> u64 {
         let bits_per_block = BLOCK_SIZE as u64 * 8;
-        (total_data_blocks + bits_per_block - 1) / bits_per_block
+        total_data_blocks.div_ceil(bits_per_block)
     }
 }
