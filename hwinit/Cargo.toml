@@ -14,3 +14,5 @@ linked_list_allocator = "0.10"
 spin = "0.9"
 # HelixFS filesystem
 morpheus-helix = { path = "../helix" }
+# Persistence layer (PE parsing, storage backends)
+morpheus-persistent = { path = "../persistent" }

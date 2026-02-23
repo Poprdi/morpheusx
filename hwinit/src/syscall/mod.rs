@@ -41,6 +41,12 @@
 //! | 43     | SYS_MOUNT       | (src_ptr,src_len,dst_ptr,dst_len) | -ENOSYS       |
 //! | 44     | SYS_UMOUNT      | (path_ptr, path_len) [stub]       | -ENOSYS       |
 //! | 45     | SYS_POLL        | (fds_ptr, nfds, timeout) [stub]   | -ENOSYS       |
+//! | 46     | SYS_PERSIST_PUT | (key_ptr,key_len,data_ptr,data_l) | 0             |
+//! | 47     | SYS_PERSIST_GET | (key_ptr,key_len,buf_ptr,buf_len) | bytes_read    |
+//! | 48     | SYS_PERSIST_DEL | (key_ptr, key_len)                | 0             |
+//! | 49     | SYS_PERSIST_LIST| (buf_ptr, buf_len, offset)        | count         |
+//! | 50     | SYS_PERSIST_INFO| (info_ptr)                        | 0             |
+//! | 51     | SYS_PE_INFO     | (path_ptr, path_len, info_ptr)    | 0             |
 
 pub mod handler;
 
@@ -106,6 +112,14 @@ pub const SYS_MOUNT: u64 = 43;
 pub const SYS_UMOUNT: u64 = 44;
 pub const SYS_POLL: u64 = 45;
 
+// ── Persistence / introspection (46-51) ──────────────────────────────
+pub const SYS_PERSIST_PUT: u64 = 46;
+pub const SYS_PERSIST_GET: u64 = 47;
+pub const SYS_PERSIST_DEL: u64 = 48;
+pub const SYS_PERSIST_LIST: u64 = 49;
+pub const SYS_PERSIST_INFO: u64 = 50;
+pub const SYS_PE_INFO: u64 = 51;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // EXTERN ASM FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -114,6 +128,9 @@ extern "C" {
     /// Set up IA32_STAR / IA32_LSTAR / IA32_FMASK MSRs.
     pub fn syscall_init();
 }
+
+/// Standard ENOSYS return value (used for stubs and unknown syscalls).
+const ENOSYS_RET: u64 = u64::MAX - 37;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DISPATCH — called from syscall.s (MS x64 ABI)
@@ -158,11 +175,31 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_SYNC => sys_fs_sync(),
         SYS_SNAPSHOT => sys_fs_snapshot(a1, a2),
         SYS_VERSIONS => sys_fs_versions(a1, a2, a3, a4),
-        unknown => {
+        // ── System / process / memory ─────────────────────────────
+        SYS_CLOCK => sys_clock(),
+        SYS_SYSINFO => sys_sysinfo(a1),
+        SYS_GETPPID => sys_getppid(),
+        SYS_SPAWN => sys_spawn(a1, a2),
+        SYS_MMAP => sys_mmap(a1),
+        SYS_MUNMAP => sys_munmap(a1, a2),
+        SYS_DUP => sys_dup(a1),
+        SYS_SYSLOG => sys_syslog(a1, a2),
+        SYS_GETCWD => sys_getcwd(a1, a2),
+        SYS_CHDIR => sys_chdir(a1, a2),
+        // ── Networking stubs ──────────────────────────────────────
+        SYS_SOCKET..=SYS_DNS_RESOLVE => ENOSYS_RET,
+        // ── Device / mount stubs ──────────────────────────────────
+        SYS_IOCTL..=SYS_POLL => ENOSYS_RET,        // ── Persistence / introspection ───────────────────────────────
+        SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
+        SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
+        SYS_PERSIST_DEL => sys_persist_del(a1, a2),
+        SYS_PERSIST_LIST => sys_persist_list(a1, a2, a3),
+        SYS_PERSIST_INFO => sys_persist_info(a1),
+        SYS_PE_INFO => sys_pe_info(a1, a2, a3),        unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);
             puts("\n");
-            u64::MAX - 37 // -ENOSYS
+            ENOSYS_RET
         }
     }
 }
@@ -188,9 +225,18 @@ unsafe fn sys_alloc(pages: u64) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-unsafe fn sys_free(_phys_base: u64, _pages: u64) -> u64 {
-    // TODO: call registry.free_pages() once that API is wired up.
-    0
+unsafe fn sys_free(phys_base: u64, pages: u64) -> u64 {
+    if phys_base == 0 || pages == 0 || pages > 1024 {
+        return u64::MAX; // -EINVAL
+    }
+    if !crate::memory::is_registry_initialized() {
+        return u64::MAX; // -ENOMEM
+    }
+    let registry = crate::memory::global_registry_mut();
+    match registry.free_pages(phys_base, pages) {
+        Ok(()) => 0,
+        Err(_) => u64::MAX, // -EINVAL
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

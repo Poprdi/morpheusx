@@ -141,3 +141,55 @@ pub fn sync() -> Result<(), u64> {
         Ok(())
     }
 }
+
+/// Duplicate a file descriptor.  Returns the new fd.
+pub fn dup(old_fd: usize) -> Result<usize, u64> {
+    let ret = unsafe { syscall1(SYS_DUP, old_fd as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Get the current working directory.
+///
+/// Writes the CWD path into `buf` and returns the actual length.
+pub fn getcwd(buf: &mut [u8]) -> Result<usize, u64> {
+    let ret = unsafe { syscall2(SYS_GETCWD, buf.as_mut_ptr() as u64, buf.len() as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Change the current working directory.
+pub fn chdir(path: &str) -> Result<(), u64> {
+    let ret = unsafe { syscall2(SYS_CHDIR, path.as_ptr() as u64, path.len() as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Read directory entries at `path`.
+///
+/// `buf` should point to a buffer large enough for the returned entries.
+/// Returns the number of directory entries.
+pub fn readdir(path: &str, buf: &mut [u8]) -> Result<usize, u64> {
+    let ret = unsafe {
+        syscall3(
+            SYS_READDIR,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            buf.as_mut_ptr() as u64,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as usize)
+    }
+}
