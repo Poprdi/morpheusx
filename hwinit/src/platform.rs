@@ -97,6 +97,13 @@ pub struct SelfContainedConfig {
     pub descriptor_size: usize,
     /// Descriptor version (from UEFI)
     pub descriptor_version: u32,
+    /// Physical base address of the loaded PE image (page-aligned).
+    /// All pages in [image_base, image_base + image_pages * 4096) are
+    /// reserved from the buddy allocator so our .text/.data/.bss are
+    /// never handed out as free memory.
+    pub image_base: u64,
+    /// Number of 4 KiB pages the PE image occupies (derived from SizeOfImage).
+    pub image_pages: u64,
 }
 
 /// Platform configuration input (legacy - externally allocated).
@@ -160,12 +167,33 @@ pub unsafe fn platform_init_selfcontained(
     // ─────────────────────────────────────────────────────────────────────
     puts("[HWINIT] Phase 1: Memory ownership\n");
 
+    // The PE image exclusion range is passed into import_uefi_map so the
+    // buddy allocator NEVER adds our own pages to its free lists.  This is
+    // critical: the buddy writes intrusive FreeNode structs at the start
+    // of each free block.  Without this exclusion it would overwrite the
+    // PRIMARY_HEAP (a 4 MB linked_list_allocator in .bss), PROCESS_TABLE,
+    // GLOBAL_REGISTRY and other live statics, causing heap metadata
+    // corruption and #GP faults.
+    //
+    // A post-hoc reserve_range() is insufficient because the corruption
+    // happens DURING import_uefi_map() when buddy_add_range() writes
+    // FreeNode structs — before reserve_range() ever runs.
     init_global_registry(
         config.memory_map_ptr,
         config.memory_map_size,
         config.descriptor_size,
         config.descriptor_version,
+        config.image_base,
+        config.image_pages,
     );
+
+    if config.image_pages > 0 {
+        puts("[MEM] excluded PE image from buddy: ");
+        put_hex64(config.image_base);
+        puts(" (");
+        put_hex32(config.image_pages as u32);
+        puts(" pages)\n");
+    }
 
     // ── Reserve active page-table pages ──────────────────────────────────
     // UEFI leaves page tables in memory regions marked as BootServicesData

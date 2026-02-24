@@ -358,6 +358,14 @@ impl MemoryRegistry {
 
     /// Parse the UEFI memory map and populate the buddy free lists.
     ///
+    /// `exclude_base`/`exclude_pages` define a physical range that must NEVER
+    /// be added to the buddy free lists.  This is used to protect the loaded
+    /// PE image (.text, .rdata, .data, .bss) whose pages are typed as
+    /// LoaderCode / LoaderData (both considered "free").  Without this
+    /// exclusion the buddy writes intrusive FreeNode structs into the PE
+    /// image, corrupting the heap allocator's BSS metadata and global statics.
+    /// Pass (0, 0) when no exclusion is needed.
+    ///
     /// # Safety
     /// `map_ptr` must point to a valid UEFI memory map of `map_size` bytes
     /// with entries spaced `descriptor_size` bytes apart.
@@ -368,7 +376,11 @@ impl MemoryRegistry {
         map_size: usize,
         descriptor_size: usize,
         _descriptor_version: u32,
+        exclude_base: u64,
+        exclude_pages: u64,
     ) {
+        let excl_start = exclude_base;
+        let excl_end = exclude_base + exclude_pages * PAGE_SIZE;
         let entry_count = map_size / descriptor_size;
 
         for i in 0..entry_count {
@@ -419,7 +431,21 @@ impl MemoryRegistry {
                 let region_end = phys + pages * PAGE_SIZE;
                 let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
                 if start < region_end {
-                    self.buddy_add_range(start, region_end);
+                    // Clip around the PE-image exclusion zone so the buddy
+                    // allocator never writes FreeNode structs into live code
+                    // or BSS (which contains the heap, process table, etc.).
+                    if excl_end > excl_start && start < excl_end && region_end > excl_start {
+                        // Part before the exclusion zone.
+                        if start < excl_start {
+                            self.buddy_add_range(start, excl_start);
+                        }
+                        // Part after the exclusion zone.
+                        if region_end > excl_end {
+                            self.buddy_add_range(excl_end, region_end);
+                        }
+                    } else {
+                        self.buddy_add_range(start, region_end);
+                    }
                 }
             }
         }
@@ -958,12 +984,17 @@ pub unsafe fn init_global_registry(
     map_size: usize,
     descriptor_size: usize,
     descriptor_version: u32,
+    exclude_base: u64,
+    exclude_pages: u64,
 ) {
     if REGISTRY_INITIALIZED {
         puts("[MEM] WARNING: registry already initialized!\n");
         return;
     }
-    GLOBAL_REGISTRY.import_uefi_map(map_ptr, map_size, descriptor_size, descriptor_version);
+    GLOBAL_REGISTRY.import_uefi_map(
+        map_ptr, map_size, descriptor_size, descriptor_version,
+        exclude_base, exclude_pages,
+    );
     REGISTRY_INITIALIZED = true;
 }
 
@@ -1038,7 +1069,7 @@ pub unsafe fn parse_uefi_memory_map(
     desc_size: usize,
 ) -> MemoryRegistry {
     let mut r = MemoryRegistry::new();
-    r.import_uefi_map(map_ptr, map_size, desc_size, 1);
+    r.import_uefi_map(map_ptr, map_size, desc_size, 1, 0, 0);
     r
 }
 
