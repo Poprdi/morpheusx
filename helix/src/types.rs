@@ -516,21 +516,25 @@ pub const EXTENTS_PER_LEAF: usize = 170;
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Open mode flags.
+///
+/// MUST match the constants in `libmorpheus/src/fs.rs` exactly — these
+/// values cross the syscall ABI boundary verbatim.
 pub mod open_flags {
     /// Open for reading.
-    pub const O_READ: u32 = 1 << 0;
+    pub const O_READ: u32 = 1 << 0;    // 0x01
     /// Open for writing.
-    pub const O_WRITE: u32 = 1 << 1;
+    pub const O_WRITE: u32 = 1 << 1;   // 0x02
     /// Create if not exists.
-    pub const O_CREATE: u32 = 1 << 2;
+    pub const O_CREATE: u32 = 1 << 2;  // 0x04
+    // bit 3 (0x08) reserved — not used in libmorpheus ABI
     /// Truncate on open.
-    pub const O_TRUNC: u32 = 1 << 3;
+    pub const O_TRUNC: u32 = 1 << 4;   // 0x10  (matches libmorpheus)
     /// Append mode (all writes go to end).
-    pub const O_APPEND: u32 = 1 << 4;
+    pub const O_APPEND: u32 = 1 << 5;  // 0x20  (matches libmorpheus)
     /// Open a directory for iteration.
-    pub const O_DIR: u32 = 1 << 5;
+    pub const O_DIR: u32 = 1 << 6;     // 0x40
     /// Open at a specific LSN (temporal read).
-    pub const O_AT_LSN: u32 = 1 << 6;
+    pub const O_AT_LSN: u32 = 1 << 7;  // 0x80
 }
 
 /// A file descriptor — per-process, in-memory only.

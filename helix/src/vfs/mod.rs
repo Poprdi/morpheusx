@@ -177,9 +177,13 @@ impl FdTable {
     }
 
     /// Allocate the lowest available fd.
+    ///
+    /// Indices 0–2 are reserved for stdin / stdout / stderr which are
+    /// handled directly by the syscall layer, so file descriptors start
+    /// at index 3.
     pub fn alloc(&mut self) -> Result<usize, HelixError> {
-        for (i, fd) in self.fds.iter().enumerate() {
-            if !fd.is_open() {
+        for i in 3..MAX_FDS {
+            if !self.fds[i].is_open() {
                 return Ok(i);
             }
         }

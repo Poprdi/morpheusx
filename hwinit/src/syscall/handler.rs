@@ -195,7 +195,9 @@ pub unsafe fn sys_sleep(millis: u64) -> u64 {
 
 const ENOSYS: u64 = u64::MAX - 37;
 const EINVAL: u64 = u64::MAX;
+const EPERM: u64 = u64::MAX - 1;
 const ENOENT: u64 = u64::MAX - 2;
+const ESRCH: u64 = u64::MAX - 3;
 const EIO: u64 = u64::MAX - 5;
 const EBADF: u64 = u64::MAX - 9;
 const ENOMEM: u64 = u64::MAX - 12;
@@ -701,13 +703,23 @@ const USER_MMAP_BASE: u64 = 0x0000_0040_0000_0000;
 ///
 /// Allocates physical pages from MemoryRegistry, maps them into the
 /// calling process's address space at the next available virtual address,
+/// zeroes the memory, records the mapping in the process VMA table,
 /// and returns that virtual address.
+///
+/// Returns `-EINVAL` for bad args, `-ENOMEM` on allocation failure,
+/// `-ENOSYS` for PID 0 (kernel shares identity-mapped page table).
 pub unsafe fn sys_mmap(pages: u64) -> u64 {
     if pages == 0 || pages > 1024 {
         return EINVAL;
     }
     if !crate::memory::is_registry_initialized() {
         return ENOMEM;
+    }
+
+    // PID 0 uses the kernel identity-mapped page table.
+    // Mapping user pages into it would corrupt kernel mappings.
+    if SCHEDULER.current_pid() == 0 {
+        return ENOSYS;
     }
 
     let proc = SCHEDULER.current_process_mut();
@@ -753,6 +765,19 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     // Zero the memory (important for security — don't leak kernel data).
     core::ptr::write_bytes(phys as *mut u8, 0, (pages * 4096) as usize);
 
+    // Record the mapping in the VMA table.
+    if proc.vma_table.insert(vaddr, phys, pages, true).is_err() {
+        // VMA table full — unmap and free.
+        let mut ptm2 = crate::paging::table::PageTableManager {
+            pml4_phys: proc.cr3,
+        };
+        for i in 0..pages {
+            let _ = ptm2.unmap_4k(vaddr + i * 4096);
+        }
+        let _ = registry.free_pages(phys, pages);
+        return ENOMEM;
+    }
+
     proc.mmap_brk = vaddr + pages * 4096;
     proc.pages_allocated += pages;
 
@@ -766,7 +791,11 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
 /// `SYS_MUNMAP(vaddr, pages) → 0`
 ///
 /// Unmaps pages from the calling process's address space.
-/// Currently does not reclaim physical memory (no reverse mapping yet).
+/// If the region was allocated by SYS_MMAP (owns_phys == true), the
+/// physical pages are freed back to the buddy allocator.
+///
+/// The `vaddr` must match the exact base address of a VMA entry and
+/// `pages` must match its size.  Partial unmaps are not supported.
 pub unsafe fn sys_munmap(vaddr: u64, pages: u64) -> u64 {
     if vaddr == 0 || pages == 0 || pages > 1024 {
         return EINVAL;
@@ -776,13 +805,43 @@ pub unsafe fn sys_munmap(vaddr: u64, pages: u64) -> u64 {
         return EINVAL;
     }
 
+    // PID 0 never creates user VMAs.
+    if SCHEDULER.current_pid() == 0 {
+        return ENOSYS;
+    }
+
     let proc = SCHEDULER.current_process_mut();
 
-    // Walk the page table and unmap each page.
+    // Find the VMA entry for this address.
+    let (idx, vma) = match proc.vma_table.find_exact(vaddr) {
+        Some(pair) => pair,
+        None => return EINVAL, // not a known mapping
+    };
+
+    // Require exact size match (no partial munmap).
+    if vma.pages != pages {
+        return EINVAL;
+    }
+
+    let phys = vma.phys;
+    let owns = vma.owns_phys;
+
+    // Remove the VMA entry first (before any page table manipulation).
+    proc.vma_table.remove(idx);
+
+    // Unmap from the process's own page table.
+    let mut ptm = crate::paging::table::PageTableManager {
+        pml4_phys: proc.cr3,
+    };
     for i in 0..pages {
         let page_virt = vaddr + i * 4096;
-        // Use the kernel unmap function if available.  For now, zero the PTE.
-        let _ = crate::paging::kunmap_4k(page_virt);
+        let _ = ptm.unmap_4k(page_virt);
+    }
+
+    // If we own the physical pages, free them back to the allocator.
+    if owns {
+        let registry = crate::memory::global_registry_mut();
+        let _ = registry.free_pages(phys, pages);
     }
 
     if proc.pages_allocated >= pages {
@@ -1429,7 +1488,66 @@ pub struct NicOps {
     pub mac: Option<unsafe fn(out: *mut u8) -> i64>,
     /// Refill RX descriptor ring.
     pub refill: Option<unsafe fn() -> i64>,
+    /// Hardware control — set promisc, MAC, VLAN, offloads, etc.
+    /// `cmd` selects the operation, `arg` is command-specific.
+    /// Returns 0 on success, negative on error.
+    pub ctrl: Option<unsafe fn(cmd: u32, arg: u64) -> i64>,
 }
+
+// ── NIC_CTRL command constants ───────────────────────────────────────
+/// Enable/disable promiscuous mode.  arg: 1=on, 0=off.
+pub const NIC_CTRL_PROMISC: u32 = 1;
+/// Set MAC address (arg = pointer to 6 bytes).
+pub const NIC_CTRL_MAC_SET: u32 = 2;
+/// Get hardware statistics (arg = pointer to NicHwStats).
+pub const NIC_CTRL_STATS: u32 = 3;
+/// Reset hardware statistics counters.
+pub const NIC_CTRL_STATS_RESET: u32 = 4;
+/// Set MTU.  arg = new MTU value.
+pub const NIC_CTRL_MTU: u32 = 5;
+/// Enable/disable multicast (arg: 1=accept all, 0=filter).
+pub const NIC_CTRL_MULTICAST: u32 = 6;
+/// Set VLAN tag (arg: 0=disable, 1..4095=VLAN ID).
+pub const NIC_CTRL_VLAN: u32 = 7;
+/// Enable/disable TX checksum offload (arg: 1=on, 0=off).
+pub const NIC_CTRL_TX_CSUM: u32 = 8;
+/// Enable/disable RX checksum offload (arg: 1=on, 0=off).
+pub const NIC_CTRL_RX_CSUM: u32 = 9;
+/// Enable/disable TCP segmentation offload (arg: 1=on, 0=off).
+pub const NIC_CTRL_TSO: u32 = 10;
+/// Set RX ring buffer size (arg: number of descriptors).
+pub const NIC_CTRL_RX_RING_SIZE: u32 = 11;
+/// Set TX ring buffer size (arg: number of descriptors).
+pub const NIC_CTRL_TX_RING_SIZE: u32 = 12;
+/// Set interrupt coalescing (arg: microseconds between interrupts).
+pub const NIC_CTRL_IRQ_COALESCE: u32 = 13;
+/// Get NIC capabilities bitmask (arg = pointer to u64 out).
+pub const NIC_CTRL_CAPS: u32 = 14;
+
+/// Hardware NIC statistics (returned by NIC_CTRL_STATS).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NicHwStats {
+    pub tx_packets: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+    pub tx_errors: u64,
+    pub rx_errors: u64,
+    pub rx_dropped: u64,
+    pub rx_crc_errors: u64,
+    pub collisions: u64,
+}
+
+/// NIC capability bits (returned by NIC_CTRL_CAPS).
+pub const NIC_CAP_PROMISC: u64 = 1 << 0;
+pub const NIC_CAP_MAC_SET: u64 = 1 << 1;
+pub const NIC_CAP_MULTICAST: u64 = 1 << 2;
+pub const NIC_CAP_VLAN: u64 = 1 << 3;
+pub const NIC_CAP_TX_CSUM: u64 = 1 << 4;
+pub const NIC_CAP_RX_CSUM: u64 = 1 << 5;
+pub const NIC_CAP_TSO: u64 = 1 << 6;
+pub const NIC_CAP_IRQ_COALESCE: u64 = 1 << 7;
 
 static mut NIC_OPS: NicOps = NicOps {
     tx: None,
@@ -1437,6 +1555,7 @@ static mut NIC_OPS: NicOps = NicOps {
     link_up: None,
     mac: None,
     refill: None,
+    ctrl: None,
 };
 
 /// Register NIC function pointers.  Called by the bootloader after driver init.
@@ -1589,6 +1708,24 @@ pub unsafe fn sys_nic_refill() -> u64 {
         Some(f) => {
             f();
             0
+        }
+        None => ENODEV,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NIC_CTRL — hardware-level NIC control (exokernel)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `sys_nic_ctrl(cmd, arg) → 0`
+///
+/// Direct hardware control: promiscuous mode, MAC spoofing, VLAN,
+/// checksum offloads, ring sizing, interrupt coalescing, etc.
+pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
+    match NIC_OPS.ctrl {
+        Some(f) => {
+            let rc = f(cmd as u32, arg);
+            if rc < 0 { EIO } else { rc as u64 }
         }
         None => ENODEV,
     }
@@ -1901,7 +2038,9 @@ pub unsafe fn sys_dma_free(phys: u64, pages: u64) -> u64 {
 /// `SYS_MAP_PHYS(phys, pages, flags) → virt_addr`
 ///
 /// Maps `pages` 4K pages starting at physical address `phys` into the
-/// calling process's virtual address space.
+/// calling process's virtual address space.  The physical memory is NOT
+/// owned by the process — MUNMAP will unmap the PTEs but not free the
+/// physical pages.
 ///
 /// Flags: bit 0 = writable, bit 1 = uncacheable.
 pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
@@ -1910,6 +2049,11 @@ pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
     }
     if phys & 0xFFF != 0 {
         return EINVAL; // must be page-aligned
+    }
+
+    // PID 0 uses the kernel identity-mapped page table.
+    if SCHEDULER.current_pid() == 0 {
+        return ENOSYS;
     }
 
     let proc = SCHEDULER.current_process_mut();
@@ -1941,6 +2085,18 @@ pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
         if crate::elf::map_user_page(&mut ptm, page_virt, page_phys, pte_flags).is_err() {
             return ENOMEM;
         }
+    }
+
+    // Record VMA (owns_phys = false: physical pages are not ours to free).
+    if proc.vma_table.insert(vaddr, phys, pages, false).is_err() {
+        // VMA table full — unmap what we just mapped.
+        let mut ptm2 = crate::paging::table::PageTableManager {
+            pml4_phys: proc.cr3,
+        };
+        for i in 0..pages {
+            let _ = ptm2.unmap_4k(vaddr + i * 4096);
+        }
+        return ENOMEM;
     }
 
     proc.mmap_brk = vaddr + pages * 4096;
@@ -2356,4 +2512,889 @@ pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
     }
 
     count as u64
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NETWORK STACK — function-pointer bridge (TCP, DNS, config, poll)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Like NicOps, the bootloader registers these after initialising the smoltcp
+// stack.  hwinit has zero dependency on smoltcp — everything crosses the
+// boundary as raw u64 / pointers / packed IPv4.
+//
+// Socket handles are opaque i64 values (smoltcp SocketHandle ordinals).
+// Negative returns indicate errors.
+//
+// The raw NIC layer (32-37) + NIC_CTRL gives userspace full hardware
+// control — userspace can build entirely custom protocol stacks from
+// scratch.  The NET/DNS/CFG/POLL layer (38-41) is the *convenience*
+// smoltcp-backed stack for programs that want TCP/IP without writing
+// their own.  Both coexist; neither depends on the other.
+
+// ── Sub-commands for SYS_NET (38) ────────────────────────────────────
+pub const NET_TCP_SOCKET: u64 = 0;
+pub const NET_TCP_CONNECT: u64 = 1;
+pub const NET_TCP_SEND: u64 = 2;
+pub const NET_TCP_RECV: u64 = 3;
+pub const NET_TCP_CLOSE: u64 = 4;
+pub const NET_TCP_STATE: u64 = 5;
+pub const NET_TCP_LISTEN: u64 = 6;
+pub const NET_TCP_ACCEPT: u64 = 7;
+pub const NET_TCP_SHUTDOWN: u64 = 8;
+pub const NET_TCP_NODELAY: u64 = 9;
+pub const NET_TCP_KEEPALIVE: u64 = 10;
+// ── UDP sub-commands for SYS_NET (38) ────────────────────────────────
+pub const NET_UDP_SOCKET: u64 = 11;
+pub const NET_UDP_SEND_TO: u64 = 12;
+pub const NET_UDP_RECV_FROM: u64 = 13;
+pub const NET_UDP_CLOSE: u64 = 14;
+
+// ── Sub-commands for SYS_DNS (39) ────────────────────────────────────
+pub const DNS_START: u64 = 0;
+pub const DNS_RESULT: u64 = 1;
+pub const DNS_SET_SERVERS: u64 = 2;
+
+// ── Sub-commands for SYS_NET_CFG (40) ────────────────────────────────
+pub const NET_CFG_GET: u64 = 0;
+pub const NET_CFG_DHCP: u64 = 1;
+pub const NET_CFG_STATIC: u64 = 2;
+pub const NET_CFG_HOSTNAME: u64 = 3;
+
+// ── Sub-commands for SYS_NET_POLL (41) ───────────────────────────────
+pub const NET_POLL_DRIVE: u64 = 0;
+pub const NET_POLL_STATS: u64 = 1;
+
+/// Network stack configuration snapshot, returned by NET_CFG_GET.
+///
+/// Packed C layout — userspace casts the result buffer to this.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NetConfigInfo {
+    /// Stack state: 0=unconfigured, 1=dhcp_discovering, 2=ready, 3=error.
+    pub state: u32,
+    /// Bit 0: DHCP active, bit 1: has gateway, bit 2: has DNS.
+    pub flags: u32,
+    /// IPv4 address (network byte order).
+    pub ipv4_addr: u32,
+    /// CIDR prefix length.
+    pub prefix_len: u8,
+    pub _pad0: [u8; 3],
+    /// Gateway IPv4 (network byte order).
+    pub gateway: u32,
+    /// Primary DNS (network byte order).
+    pub dns_primary: u32,
+    /// Secondary DNS (network byte order).
+    pub dns_secondary: u32,
+    /// Current MAC address (6 bytes).
+    pub mac: [u8; 6],
+    pub _pad1: [u8; 2],
+    /// Current MTU.
+    pub mtu: u32,
+    /// NUL-terminated hostname (max 63 + NUL).
+    pub hostname: [u8; 64],
+}
+
+/// Network statistics, returned by NET_POLL_STATS.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NetStats {
+    pub tx_packets: u64,
+    pub rx_packets: u64,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+    pub tx_errors: u64,
+    pub rx_errors: u64,
+    /// Number of active TCP sockets.
+    pub tcp_active: u32,
+    pub _pad: u32,
+}
+
+/// Network stack function-pointer table.
+///
+/// Registered by the bootloader after it creates a `NetInterface<D>`.
+/// Every function returns >=0 on success (or a meaningful value),
+/// negative on error.
+#[repr(C)]
+pub struct NetStackOps {
+    // ── TCP ──────────────────────────────────────────────────────────
+    /// Create a TCP socket.  Returns handle (>=0) or negative error.
+    pub tcp_socket: Option<unsafe fn() -> i64>,
+    /// Connect.  `ip` is network-byte-order IPv4.
+    pub tcp_connect: Option<unsafe fn(handle: i64, ip: u32, port: u16) -> i64>,
+    /// Send.  Returns bytes sent (>=0) or negative error.
+    pub tcp_send: Option<unsafe fn(handle: i64, buf: *const u8, len: usize) -> i64>,
+    /// Receive.  Returns bytes received (>=0) or negative error.
+    pub tcp_recv: Option<unsafe fn(handle: i64, buf: *mut u8, len: usize) -> i64>,
+    /// Close a socket.
+    pub tcp_close: Option<unsafe fn(handle: i64)>,
+    /// Query TCP state.  Returns state ordinal (0=Closed..10=TimeWait).
+    pub tcp_state: Option<unsafe fn(handle: i64) -> i64>,
+    /// Bind + listen on a local port.  Returns 0 or negative error.
+    pub tcp_listen: Option<unsafe fn(handle: i64, port: u16) -> i64>,
+    /// Accept an incoming connection.  Returns new handle or negative.
+    pub tcp_accept: Option<unsafe fn(listen_handle: i64) -> i64>,
+    /// Half-close: shutdown write side.  Returns 0 or negative.
+    pub tcp_shutdown: Option<unsafe fn(handle: i64) -> i64>,
+    /// Set TCP_NODELAY (Nagle disable). arg: 1=on 0=off.
+    pub tcp_nodelay: Option<unsafe fn(handle: i64, on: i64) -> i64>,
+    /// Set keepalive interval in ms.  0=disable.
+    pub tcp_keepalive: Option<unsafe fn(handle: i64, ms: u64) -> i64>,
+
+    // ── UDP ──────────────────────────────────────────────────────────
+    /// Create a UDP socket.  Returns handle (>=0) or negative error.
+    pub udp_socket: Option<unsafe fn() -> i64>,
+    /// Send a datagram.  `dest_ip` is NBO IPv4.  Returns bytes sent.
+    pub udp_send_to: Option<unsafe fn(handle: i64, dest_ip: u32, dest_port: u16, buf: *const u8, len: usize) -> i64>,
+    /// Receive a datagram.  Writes sender IP (NBO) + port into `src_out`.
+    /// Returns bytes received (>=0), 0 if nothing available.
+    /// `src_out` layout: [u32 ip_nbo, u16 port, u16 _pad] = 8 bytes.
+    pub udp_recv_from: Option<unsafe fn(handle: i64, buf: *mut u8, len: usize, src_out: *mut u8) -> i64>,
+    /// Close a UDP socket.
+    pub udp_close: Option<unsafe fn(handle: i64)>,
+
+    // ── DNS ──────────────────────────────────────────────────────────
+    /// Start an async DNS query.  Returns query handle or negative.
+    pub dns_start: Option<unsafe fn(name: *const u8, len: usize) -> i64>,
+    /// Poll a DNS query.  Writes 4-byte IPv4 to `out`.
+    /// Returns 0 if resolved, 1 if pending, negative on error.
+    pub dns_result: Option<unsafe fn(query: i64, out: *mut u8) -> i64>,
+    /// Override DNS servers.  `servers` points to packed u32 IPv4 addrs.
+    pub dns_set_servers: Option<unsafe fn(servers: *const u32, count: usize) -> i64>,
+
+    // ── Configuration ────────────────────────────────────────────────
+    /// Fill a `NetConfigInfo` at `buf`.
+    pub cfg_get: Option<unsafe fn(buf: *mut u8) -> i64>,
+    /// Switch to DHCP mode.
+    pub cfg_dhcp: Option<unsafe fn() -> i64>,
+    /// Set a static IPv4.  `ip` and `gateway` are NBO.
+    pub cfg_static_ip: Option<unsafe fn(ip: u32, prefix_len: u8, gateway: u32) -> i64>,
+    /// Set the hostname (for DHCP FQDN option, etc.).
+    pub cfg_hostname: Option<unsafe fn(name: *const u8, len: usize) -> i64>,
+
+    // ── Poll / stats ─────────────────────────────────────────────────
+    /// Drive the smoltcp stack (DHCP, ARP, TCP timers).  Returns 1 if
+    /// any socket activity occurred, 0 otherwise.
+    pub poll_drive: Option<unsafe fn(timestamp_ms: u64) -> i64>,
+    /// Fill a `NetStats` at `buf`.
+    pub poll_stats: Option<unsafe fn(buf: *mut u8) -> i64>,
+}
+
+static mut NET_STACK_OPS: NetStackOps = NetStackOps {
+    tcp_socket: None,
+    tcp_connect: None,
+    tcp_send: None,
+    tcp_recv: None,
+    tcp_close: None,
+    tcp_state: None,
+    tcp_listen: None,
+    tcp_accept: None,
+    tcp_shutdown: None,
+    tcp_nodelay: None,
+    tcp_keepalive: None,
+    udp_socket: None,
+    udp_send_to: None,
+    udp_recv_from: None,
+    udp_close: None,
+    dns_start: None,
+    dns_result: None,
+    dns_set_servers: None,
+    cfg_get: None,
+    cfg_dhcp: None,
+    cfg_static_ip: None,
+    cfg_hostname: None,
+    poll_drive: None,
+    poll_stats: None,
+};
+
+/// Register network stack function pointers.
+///
+/// Called by the bootloader after it creates a `NetInterface<D>` and
+/// wraps its methods into `unsafe fn` closures.
+pub unsafe fn register_net_stack(ops: NetStackOps) {
+    NET_STACK_OPS = ops;
+}
+
+/// Check if a network stack is registered.
+fn net_stack_present() -> bool {
+    unsafe { NET_STACK_OPS.tcp_socket.is_some() }
+}
+
+const ENOSYS_NET: u64 = u64::MAX - 37;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_NET (38) — TCP socket operations (multiplexed via subcmd)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_NET(subcmd, a2, a3, a4) → result`
+pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
+    if !net_stack_present() {
+        return ENODEV;
+    }
+
+    match subcmd {
+        // TCP_SOCKET() → handle
+        NET_TCP_SOCKET => {
+            match NET_STACK_OPS.tcp_socket {
+                Some(f) => {
+                    let h = f();
+                    if h < 0 { ENOMEM } else { h as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_CONNECT(handle, ipv4_nbo, port) → 0
+        NET_TCP_CONNECT => {
+            let handle = a2 as i64;
+            let ip = a3 as u32;
+            let port = a4 as u16;
+            match NET_STACK_OPS.tcp_connect {
+                Some(f) => {
+                    let rc = f(handle, ip, port);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_SEND(handle, buf_ptr, buf_len) → bytes_sent
+        NET_TCP_SEND => {
+            let handle = a2 as i64;
+            if a4 > 0 && !validate_user_buf(a3, a4) { return EFAULT; }
+            match NET_STACK_OPS.tcp_send {
+                Some(f) => {
+                    let rc = f(handle, a3 as *const u8, a4 as usize);
+                    if rc < 0 { EIO } else { rc as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_RECV(handle, buf_ptr, buf_len) → bytes_received
+        NET_TCP_RECV => {
+            let handle = a2 as i64;
+            if a4 > 0 && !validate_user_buf(a3, a4) { return EFAULT; }
+            match NET_STACK_OPS.tcp_recv {
+                Some(f) => {
+                    let rc = f(handle, a3 as *mut u8, a4 as usize);
+                    if rc < 0 { EIO } else { rc as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_CLOSE(handle) → 0
+        NET_TCP_CLOSE => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.tcp_close {
+                Some(f) => { f(handle); 0 }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_STATE(handle) → state ordinal
+        NET_TCP_STATE => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.tcp_state {
+                Some(f) => {
+                    let s = f(handle);
+                    if s < 0 { EINVAL } else { s as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_LISTEN(handle, port) → 0
+        NET_TCP_LISTEN => {
+            let handle = a2 as i64;
+            let port = a3 as u16;
+            match NET_STACK_OPS.tcp_listen {
+                Some(f) => {
+                    let rc = f(handle, port);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_ACCEPT(listen_handle) → new handle
+        NET_TCP_ACCEPT => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.tcp_accept {
+                Some(f) => {
+                    let h = f(handle);
+                    if h < 0 { EIO } else { h as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_SHUTDOWN(handle) → 0
+        NET_TCP_SHUTDOWN => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.tcp_shutdown {
+                Some(f) => {
+                    let rc = f(handle);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_NODELAY(handle, on) → 0
+        NET_TCP_NODELAY => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.tcp_nodelay {
+                Some(f) => {
+                    let rc = f(handle, a3 as i64);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // TCP_KEEPALIVE(handle, interval_ms) → 0
+        NET_TCP_KEEPALIVE => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.tcp_keepalive {
+                Some(f) => {
+                    let rc = f(handle, a3);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // ── UDP sub-commands ─────────────────────────────────────────
+        // UDP_SOCKET() → handle
+        NET_UDP_SOCKET => {
+            match NET_STACK_OPS.udp_socket {
+                Some(f) => {
+                    let h = f();
+                    if h < 0 { ENOMEM } else { h as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // UDP_SEND_TO(handle, dest_ip_nbo, dest_port | buf_ptr, buf_len)
+        // a2 = handle, a3 = dest_ip_nbo | (port << 32), a4 = buf_ptr | (len << 32)
+        // Re-pack: dest_ip in lower 32 of a3, port in upper 16 bits
+        // Actually, with 4 args available (subcmd, a2, a3, a4):
+        //   subcmd=12, a2=handle, a3=packed(ip:32|port:16|pad:16), a4=buf_ptr
+        // But we need 5 args (handle, ip, port, buf, len). Solution: pack
+        // ip+port into a3 and buf+len into a4 won't work (64-bit ptrs).
+        // Use 5th arg via a4 as buf_ptr, and pass len via a2 upper bits.
+        // Better: repack. handle=a2, dest_addr_ptr=a3 (8-byte struct), buf=a4.
+        //
+        // Cleanest ABI for UDP send_to with 4 args:
+        //   a2 = handle
+        //   a3 = pointer to UdpTarget { ip_nbo: u32, port: u16, _pad: u16 }
+        //   a4 = pointer to (buf_ptr: u64, buf_len: u64) pair
+        //
+        // No — too many indirections. Use the 5-arg dispatch variant:
+        //   The dispatch passes a1..a4 (4 user args after subcmd).
+        //   a2=handle, a3=dest_ip_nbo, a4=dest_port|(len<<16), but len>65535
+        //   is possible. Bad.
+        //
+        // Final design — message struct:
+        //   a2 = handle
+        //   a3 = pointer to UdpSendDesc { ip: u32, port: u16, _pad: u16, buf: *const u8, len: u64 }
+        NET_UDP_SEND_TO => {
+            let handle = a2 as i64;
+            // a3 points to UdpSendDesc in user memory
+            let desc_size = 24u64; // u32 + u16 + u16 + u64 + u64 = 24
+            if !validate_user_buf(a3, desc_size) { return EFAULT; }
+            let desc = a3 as *const u8;
+            let ip = *(desc as *const u32);
+            let port = *((desc.add(4)) as *const u16);
+            let buf_ptr = *((desc.add(8)) as *const u64);
+            let buf_len = *((desc.add(16)) as *const u64);
+            if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) { return EFAULT; }
+            if buf_len > 65535 { return EINVAL; } // UDP max payload
+            match NET_STACK_OPS.udp_send_to {
+                Some(f) => {
+                    let rc = f(handle, ip, port, buf_ptr as *const u8, buf_len as usize);
+                    if rc < 0 { EIO } else { rc as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // UDP_RECV_FROM(handle, buf_ptr, buf_len)
+        //   a2 = handle
+        //   a3 = pointer to UdpRecvDesc { buf: *mut u8, buf_len: u64, src_ip: u32, src_port: u16, _pad: u16 }
+        NET_UDP_RECV_FROM => {
+            let handle = a2 as i64;
+            let desc_size = 24u64; // *mut u8(8) + u64(8) + u32(4) + u16(2) + u16(2) = 24
+            if !validate_user_buf(a3, desc_size) { return EFAULT; }
+            let desc = a3 as *mut u8;
+            let buf_ptr = *(desc as *const u64);
+            let buf_len = *((desc.add(8)) as *const u64);
+            if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) { return EFAULT; }
+            // src_out is at offset 16 in the desc (4 + 2 + 2 = 8 bytes for src info)
+            let src_out = desc.add(16);
+            match NET_STACK_OPS.udp_recv_from {
+                Some(f) => {
+                    let rc = f(handle, buf_ptr as *mut u8, buf_len as usize, src_out);
+                    if rc < 0 { EIO } else { rc as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // UDP_CLOSE(handle) → 0
+        NET_UDP_CLOSE => {
+            let handle = a2 as i64;
+            match NET_STACK_OPS.udp_close {
+                Some(f) => { f(handle); 0 }
+                None => ENOSYS_NET,
+            }
+        }
+        _ => EINVAL,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_DNS (39) — DNS resolution
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_DNS(subcmd, a2, a3) → result`
+pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
+    if !net_stack_present() {
+        return ENODEV;
+    }
+
+    match subcmd {
+        // DNS_START(name_ptr, name_len) → query handle
+        DNS_START => {
+            if a3 == 0 || a3 > 253 { return EINVAL; }
+            if !validate_user_buf(a2, a3) { return EFAULT; }
+            match NET_STACK_OPS.dns_start {
+                Some(f) => {
+                    let h = f(a2 as *const u8, a3 as usize);
+                    if h < 0 { EIO } else { h as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // DNS_RESULT(query_handle, result_buf_ptr) → 0=resolved, 1=pending
+        DNS_RESULT => {
+            let query = a2 as i64;
+            if !validate_user_buf(a3, 4) { return EFAULT; }
+            match NET_STACK_OPS.dns_result {
+                Some(f) => {
+                    let rc = f(query, a3 as *mut u8);
+                    if rc < 0 { EIO } else { rc as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // DNS_SET_SERVERS(servers_ptr, count)
+        DNS_SET_SERVERS => {
+            let count = a3;
+            if count == 0 || count > 4 { return EINVAL; }
+            if !validate_user_buf(a2, count * 4) { return EFAULT; }
+            match NET_STACK_OPS.dns_set_servers {
+                Some(f) => {
+                    let rc = f(a2 as *const u32, count as usize);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        _ => EINVAL,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_NET_CFG (40) — IP stack configuration
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_NET_CFG(subcmd, a2, a3, a4) → result`
+pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
+    match subcmd {
+        // CFG_GET(buf_ptr) — works even without stack (returns zeroed)
+        NET_CFG_GET => {
+            let size = core::mem::size_of::<NetConfigInfo>() as u64;
+            if !validate_user_buf(a2, size) { return EFAULT; }
+            match NET_STACK_OPS.cfg_get {
+                Some(f) => {
+                    let rc = f(a2 as *mut u8);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => {
+                    // No stack: zero-fill so userspace sees state=0 (unconfigured)
+                    core::ptr::write_bytes(a2 as *mut u8, 0, size as usize);
+                    0
+                }
+            }
+        }
+        // All remaining subcmds require the stack.
+        _ if !net_stack_present() => ENODEV,
+
+        // CFG_DHCP() — enable DHCP
+        NET_CFG_DHCP => {
+            match NET_STACK_OPS.cfg_dhcp {
+                Some(f) => { let rc = f(); if rc < 0 { EIO } else { 0 } }
+                None => ENOSYS_NET,
+            }
+        }
+        // CFG_STATIC(ip_nbo, prefix_gw_packed, 0)
+        // prefix_gw_packed = (prefix_len << 32) | gateway_nbo
+        NET_CFG_STATIC => {
+            let ip_nbo = a2 as u32;
+            let prefix_len = (a3 >> 32) as u8;
+            let gw_nbo = a3 as u32;
+            match NET_STACK_OPS.cfg_static_ip {
+                Some(f) => {
+                    let rc = f(ip_nbo, prefix_len, gw_nbo);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // CFG_HOSTNAME(name_ptr, name_len)
+        NET_CFG_HOSTNAME => {
+            if a3 == 0 || a3 > 63 { return EINVAL; }
+            if !validate_user_buf(a2, a3) { return EFAULT; }
+            match NET_STACK_OPS.cfg_hostname {
+                Some(f) => {
+                    let rc = f(a2 as *const u8, a3 as usize);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // ── NIC hardware control (subcmd >= 128) ────────────────────
+        // These go directly to NicOps.ctrl, bypassing the IP stack.
+        // This is the exokernel escape hatch: promisc, MAC spoof,
+        // VLAN, offloads, ring sizing, interrupt coalescing.
+        128.. => {
+            let nic_cmd = (subcmd - 128) as u32;
+            sys_nic_ctrl(nic_cmd as u64, a2)
+        }
+        _ => EINVAL,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_NET_POLL (41) — drive the stack & query statistics
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_NET_POLL(subcmd, a2) → result`
+pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
+    if !net_stack_present() {
+        return ENODEV;
+    }
+
+    match subcmd {
+        // POLL_DRIVE(timestamp_ms) → 0/1 (activity)
+        NET_POLL_DRIVE => {
+            match NET_STACK_OPS.poll_drive {
+                Some(f) => {
+                    let rc = f(a2);
+                    if rc < 0 { EIO } else { rc as u64 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        // POLL_STATS(buf_ptr) → 0
+        NET_POLL_STATS => {
+            let size = core::mem::size_of::<NetStats>() as u64;
+            if !validate_user_buf(a2, size) { return EFAULT; }
+            match NET_STACK_OPS.poll_stats {
+                Some(f) => {
+                    let rc = f(a2 as *mut u8);
+                    if rc < 0 { EIO } else { 0 }
+                }
+                None => ENOSYS_NET,
+            }
+        }
+        _ => EINVAL,
+    }
+}
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_SHM_GRANT (73) — grant shared physical pages to another process
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Exokernel shared memory primitive.  The caller specifies physical pages
+// it owns (via SYS_MMAP or SYS_DMA_ALLOC), and the kernel maps those same
+// physical frames into the target process's address space.
+//
+// This is *unidirectional grant*, not symmetric attach.  The granting
+// process retains its own mapping.  The target receives a new VMA with
+// `owns_phys = false` so that munmap in the target does NOT free the
+// physical pages (the granter still owns them).
+//
+// # Arguments
+//
+//   a1 = target_pid (u32)
+//   a2 = source virtual address (must be start of a VMA in the caller)
+//   a3 = number of 4 KiB pages (must match the VMA exactly)
+//   a4 = flags: bit 0 = writable, bit 1 = executable
+//
+// # Returns
+//
+//   Virtual address in the target process, or error code.
+//
+// # Security model
+//
+//   - Only processes that OWN physical pages can grant them (owns_phys=true)
+//   - The target process cannot free the underlying physical memory
+//   - The granter can munmap its side, but the target's mapping persists
+//     until the target munmaps or exits
+//   - There is no ambient authority: you must know the PID and possess
+//     a valid VMA
+
+/// Protection flags for SYS_SHM_GRANT and SYS_MPROTECT.
+pub const PROT_READ: u64 = 0;     // Read-only (no additional bits)
+pub const PROT_WRITE: u64 = 1;    // Writable
+pub const PROT_EXEC: u64 = 2;     // Executable (clears NX)
+
+/// `SYS_SHM_GRANT(target_pid, src_vaddr, pages, flags) → target_vaddr`
+pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
+    // ── Argument validation ──────────────────────────────────────────
+    if pages == 0 || pages > 1024 {
+        return EINVAL;
+    }
+    if src_vaddr == 0 || src_vaddr & 0xFFF != 0 {
+        return EINVAL;
+    }
+    if src_vaddr >= USER_ADDR_LIMIT {
+        return EINVAL;
+    }
+
+    let caller_pid = SCHEDULER.current_pid();
+
+    // Cannot grant to self (use mmap), cannot grant to kernel.
+    if target_pid == 0 || target_pid == caller_pid as u64 {
+        return EINVAL;
+    }
+    // Caller must not be the kernel.
+    if caller_pid == 0 {
+        return EPERM;
+    }
+
+    // ── Verify source VMA in the caller ──────────────────────────────
+    let caller_proc = SCHEDULER.current_process_mut();
+    let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
+        Some(pair) => pair,
+        None => return EINVAL,  // not a known mapping
+    };
+
+    // Must match exact page count.
+    if src_vma.pages != pages {
+        return EINVAL;
+    }
+
+    // Only owned physical pages can be granted.  We refuse to re-grant
+    // pages that were themselves granted (owns_phys=false), because the
+    // original owner controls their lifetime.
+    if !src_vma.owns_phys {
+        return EPERM;
+    }
+
+    let phys = src_vma.phys;
+
+    // ── Validate target process ──────────────────────────────────────
+    let target_pid_u32 = target_pid as u32;
+    let target_proc = match SCHEDULER.process_by_pid(target_pid_u32) {
+        Some(p) => p,
+        None => return ESRCH,  // no such process
+    };
+
+    // Target must be alive (Ready, Running, or Blocked).
+    if target_proc.is_free() {
+        return ESRCH;
+    }
+    if target_proc.cr3 == 0 {
+        return ESRCH;  // kernel thread without user page table
+    }
+
+    // ── Compute target virtual address ───────────────────────────────
+    // We need mutable access to the target.  Re-acquire via raw table
+    // access since we can't hold two &mut through SCHEDULER.
+    // SAFETY: single-core, interrupts disabled during syscall.
+    let target = {
+        use crate::process::scheduler::PROCESS_TABLE;
+        match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
+            Some(Some(p)) => p as *mut crate::process::Process,
+            _ => return ESRCH,
+        }
+    };
+
+    let target_ref = &mut *target;
+
+    if target_ref.mmap_brk == 0 {
+        target_ref.mmap_brk = USER_MMAP_BASE;
+    }
+    let target_vaddr = target_ref.mmap_brk;
+
+    // ── Build PTE flags ──────────────────────────────────────────────
+    let mut pte_flags = crate::paging::entry::PageFlags::PRESENT
+        .with(crate::paging::entry::PageFlags::USER)
+        .with(crate::paging::entry::PageFlags::NO_EXECUTE);
+
+    if flags & PROT_WRITE != 0 {
+        pte_flags = pte_flags.with(crate::paging::entry::PageFlags::WRITABLE);
+    }
+    if flags & PROT_EXEC != 0 {
+        pte_flags = pte_flags.without(crate::paging::entry::PageFlags::NO_EXECUTE);
+    }
+
+    // ── Map physical pages into target's address space ───────────────
+    let mut ptm = crate::paging::table::PageTableManager {
+        pml4_phys: target_ref.cr3,
+    };
+
+    for i in 0..pages {
+        let page_virt = target_vaddr + i * 4096;
+        let page_phys = phys + i * 4096;
+        if crate::elf::map_user_page(&mut ptm, page_virt, page_phys, pte_flags).is_err() {
+            // Roll back: unmap pages we already mapped.
+            let mut ptm2 = crate::paging::table::PageTableManager {
+                pml4_phys: target_ref.cr3,
+            };
+            for j in 0..i {
+                let _ = ptm2.unmap_4k(target_vaddr + j * 4096);
+            }
+            return ENOMEM;
+        }
+    }
+
+    // ── Record VMA in target (owns_phys = false) ─────────────────────
+    if target_ref.vma_table.insert(target_vaddr, phys, pages, false).is_err() {
+        // VMA table full — unmap everything.
+        let mut ptm3 = crate::paging::table::PageTableManager {
+            pml4_phys: target_ref.cr3,
+        };
+        for i in 0..pages {
+            let _ = ptm3.unmap_4k(target_vaddr + i * 4096);
+        }
+        return ENOMEM;
+    }
+
+    target_ref.mmap_brk = target_vaddr + pages * 4096;
+
+    target_vaddr
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_MPROTECT (74) — change page protection flags
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Modifies the x86-64 page table flags on an existing VMA in the calling
+// process.  This is a bare page-table-flag-flip — the minimum kernel
+// mechanism for W^X enforcement, guard pages, and JIT compilation.
+//
+// # Arguments
+//
+//   a1 = virtual address (must be the exact start of a VMA)
+//   a2 = number of 4 KiB pages (must match the VMA exactly)
+//   a3 = protection flags:
+//        bit 0 (PROT_WRITE) = set WRITABLE
+//        bit 1 (PROT_EXEC)  = clear NO_EXECUTE (allow execution)
+//        All other bits must be zero.
+//        PROT_READ is implied (a present page is always readable on x86-64).
+//
+// # Returns
+//
+//   0 on success, or error code.
+//
+// # Constraints
+//
+//   - Must match an existing VMA exactly (vaddr and pages).
+//   - PROT_WRITE | PROT_EXEC simultaneously is allowed but discouraged
+//     (breaks W^X).
+//   - Does NOT split VMAs.  If you need different protections on sub-ranges,
+//     mmap separate regions.
+
+/// `SYS_MPROTECT(vaddr, pages, prot) → 0`
+pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
+    // ── Argument validation ──────────────────────────────────────────
+    if pages == 0 || pages > 1024 {
+        return EINVAL;
+    }
+    if vaddr == 0 || vaddr & 0xFFF != 0 {
+        return EINVAL;
+    }
+    if vaddr >= USER_ADDR_LIMIT {
+        return EINVAL;
+    }
+    // Only bits 0 and 1 are defined.
+    if prot & !3 != 0 {
+        return EINVAL;
+    }
+
+    if SCHEDULER.current_pid() == 0 {
+        return EPERM;
+    }
+
+    let proc = SCHEDULER.current_process_mut();
+
+    // ── Find the VMA ─────────────────────────────────────────────────
+    let (_, vma) = match proc.vma_table.find_exact(vaddr) {
+        Some(pair) => pair,
+        None => return EINVAL,
+    };
+
+    if vma.pages != pages {
+        return EINVAL;
+    }
+
+    // ── Build new PTE flags ──────────────────────────────────────────
+    // Base: PRESENT + USER + NX (read-only, non-executable)
+    let mut new_flags = crate::paging::entry::PageFlags::PRESENT
+        .with(crate::paging::entry::PageFlags::USER)
+        .with(crate::paging::entry::PageFlags::NO_EXECUTE);
+
+    if prot & PROT_WRITE != 0 {
+        new_flags = new_flags.with(crate::paging::entry::PageFlags::WRITABLE);
+    }
+    if prot & PROT_EXEC != 0 {
+        new_flags = new_flags.without(crate::paging::entry::PageFlags::NO_EXECUTE);
+    }
+
+    // ── Walk and update each PTE ─────────────────────────────────────
+    //
+    // We walk the process's own page table tree.  Each 4 KiB page maps
+    // to a leaf PTE at the PT level.  We rewrite the PTE preserving the
+    // physical address but replacing the flag bits.
+    //
+    // This is safe because:
+    //   1. We verified the VMA exists (so the pages ARE mapped).
+    //   2. We only touch leaf PTEs in the user's page table.
+    //   3. We flush the TLB after every PTE write.
+
+    let pml4 = proc.cr3 as *mut crate::paging::entry::PageTable;
+
+    for i in 0..pages {
+        let page_virt = vaddr + i * 4096;
+        let va = crate::paging::table::VirtAddr::from_u64(page_virt);
+
+        // Walk PML4 → PDPT → PD → PT
+        let pml4_e = (*pml4).entry(va.pml4_idx);
+        if !pml4_e.is_present() {
+            return EFAULT; // page table corruption — shouldn't happen
+        }
+
+        let pdpt = pml4_e.phys_addr() as *mut crate::paging::entry::PageTable;
+        let pdpt_e = (*pdpt).entry(va.pdpt_idx);
+        if !pdpt_e.is_present() {
+            return EFAULT;
+        }
+
+        let pd = pdpt_e.phys_addr() as *mut crate::paging::entry::PageTable;
+        let pd_e = (*pd).entry(va.pd_idx);
+        if !pd_e.is_present() {
+            return EFAULT;
+        }
+        if pd_e.is_huge() {
+            // 2 MiB huge page — cannot mprotect sub-ranges of a huge page.
+            // This shouldn't occur for user VMAs (we only map 4 KiB pages).
+            return EINVAL;
+        }
+
+        let pt = pd_e.phys_addr() as *mut crate::paging::entry::PageTable;
+        let pte = (*pt).entry_mut(va.pt_idx);
+
+        if !pte.is_present() {
+            return EFAULT; // VMA says it's mapped but PTE disagrees
+        }
+
+        // Preserve the physical address, replace flags.
+        let phys_addr = pte.phys_addr();
+        *pte = crate::paging::entry::PageTableEntry::new(phys_addr, new_flags);
+
+        crate::paging::table::PageTableManager::flush_tlb_page(page_virt);
+    }
+
+    0
 }

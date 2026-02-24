@@ -22,11 +22,19 @@ entry!(main);
 
 static mut PASS: u32 = 0;
 static mut FAIL: u32 = 0;
+static mut TOTAL: u32 = 0;
 
 fn ok(name: &str) {
     print("[PASS] ");
     println(name);
-    unsafe { PASS += 1; }
+    unsafe {
+        let p = core::ptr::addr_of_mut!(PASS);
+        let v = core::ptr::read_volatile(p);
+        core::ptr::write_volatile(p, v + 1);
+        let t = core::ptr::addr_of_mut!(TOTAL);
+        let tv = core::ptr::read_volatile(t);
+        core::ptr::write_volatile(t, tv + 1);
+    }
 }
 
 fn fail(name: &str, detail: &str) {
@@ -34,7 +42,14 @@ fn fail(name: &str, detail: &str) {
     print(name);
     print(" — ");
     println(detail);
-    unsafe { FAIL += 1; }
+    unsafe {
+        let p = core::ptr::addr_of_mut!(FAIL);
+        let v = core::ptr::read_volatile(p);
+        core::ptr::write_volatile(p, v + 1);
+        let t = core::ptr::addr_of_mut!(TOTAL);
+        let tv = core::ptr::read_volatile(t);
+        core::ptr::write_volatile(t, tv + 1);
+    }
 }
 
 fn check(name: &str, cond: bool, detail: &str) {
@@ -76,8 +91,15 @@ fn print_hex(val: u64) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn main() -> i32 {
+    // Explicitly zero counters — BSS may not be zeroed by ELF loader
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(PASS), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(FAIL), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(TOTAL), 0);
+    }
+
     println("╔══════════════════════════════════════════╗");
-    println("║  MorpheusX Syscall E2E Test Suite v2.0   ║");
+    println("║  MorpheusX Syscall E2E Test Suite v2.1   ║");
     println("╚══════════════════════════════════════════╝");
     println("");
 
@@ -112,9 +134,7 @@ fn main() -> i32 {
     test_getppid();     // 24
     // 25: SPAWN — needs an ELF on disk
     ok("SYS_SPAWN (requires ELF binary — deferred)");
-    // 26/27: MMAP/MUNMAP — known buggy for PID 0
-    ok("SYS_MMAP (known bug for PID 0 — skipped)");
-    ok("SYS_MUNMAP (known bug — skipped)");
+    test_mmap_munmap();  // 26-27
     test_dup();         // 28
     test_syslog();      // 29
     test_getcwd();      // 30
@@ -125,10 +145,10 @@ fn main() -> i32 {
     println("── Raw NIC (32-37) ──");
     test_nic();         // 32-37
 
-    // ── Reserved (38-41) ─────────────────────────────────────────────
+    // ── Network Stack (38-41) ──────────────────────────────────────
     println("");
-    println("── Reserved (38-41) ──");
-    test_reserved();    // 38-41
+    println("── Network (38-41) ──");
+    test_net_stack();   // 38-41
 
     // ── Device / Mount (42-45) ───────────────────────────────────────
     println("");
@@ -142,8 +162,7 @@ fn main() -> i32 {
     println("");
     println("── Persistence (46-51) ──");
     test_persist();     // 46-50
-    // 51: PE_INFO — needs a binary file
-    ok("SYS_PE_INFO (requires binary on disk — deferred)");
+    test_pe_info();     // 51
 
     // ── Hardware I/O (52-62) ─────────────────────────────────────────
     println("");
@@ -151,8 +170,7 @@ fn main() -> i32 {
     test_port_io();     // 52-53
     test_pci();         // 54-55
     test_dma();         // 56-57
-    // 58: MAP_PHYS — needs per-process page table
-    ok("SYS_MAP_PHYS (needs user cr3 — deferred)");
+    test_map_phys();    // 58
     test_virt_to_phys();// 59
     test_irq();         // 60-61
     test_cache_flush(); // 62
@@ -161,8 +179,7 @@ fn main() -> i32 {
     println("");
     println("── Display (63-64) ──");
     test_fb_info();     // 63
-    // 64: FB_MAP — needs per-process page table
-    ok("SYS_FB_MAP (needs user cr3 — deferred)");
+    test_fb_map();      // 64
 
     // ── Process Management (65-68) ───────────────────────────────────
     println("");
@@ -179,12 +196,18 @@ fn main() -> i32 {
     test_boot_log();    // 71
     test_memmap();      // 72
 
+    // ── Memory sharing / protection (73-74) ───────────────────
+    println("");
+    println("── Memory (73-74) ──");
+    test_shm_grant();   // 73
+    test_mprotect();    // 74
+
     // ── Summary ──────────────────────────────────────────────────────
     println("");
     println("════════════════════════════════════════════");
-    let p = unsafe { PASS };
-    let f = unsafe { FAIL };
-    let total = p + f;
+    let total = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(TOTAL)) };
+    let p = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PASS)) };
+    let f = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FAIL)) };
     print("TOTAL: ");
     print_u32(total);
     print("  PASS: ");
@@ -204,14 +227,13 @@ fn main() -> i32 {
 
 fn print_u32(v: u32) {
     if v == 0 { print("0"); return; }
-    let mut buf = [b'0'; 10];
+    let mut buf = [0u8; 10];
     let mut n = v;
-    let mut i = 9;
+    let mut i = 10usize;
     while n > 0 {
+        i -= 1;
         buf[i] = b'0' + (n % 10) as u8;
         n /= 10;
-        if i == 0 { break; }
-        i -= 1;
     }
     let s = unsafe { core::str::from_utf8_unchecked(&buf[i..]) };
     print(s);
@@ -305,6 +327,8 @@ fn test_fs() {
         }
         Err(_) => {
             fail("SYS_OPEN(create)", "open failed");
+            fail("SYS_WRITE(vfs)", "skipped (open failed)");
+            fail("SYS_CLOSE", "skipped (open failed)");
         }
     }
 
@@ -432,6 +456,26 @@ fn test_getppid() {
     check("SYS_GETPPID", ppid < 256, "ppid out of range");
 }
 
+// ── SYS_MMAP / SYS_MUNMAP (26-27) ──────────────────────────────────────
+fn test_mmap_munmap() {
+    // Allocate 1 page via mmap.
+    let r = libmorpheus::mem::mmap(1);
+    match r {
+        Ok(vaddr) => {
+            // The returned address must be in user mmap range.
+            check("SYS_MMAP(1 page)", vaddr >= 0x40_0000_0000, "vaddr out of range");
+
+            // Unmap the same page.
+            let ur = libmorpheus::mem::munmap(vaddr, 1);
+            check("SYS_MUNMAP(1 page)", ur.is_ok(), "munmap failed");
+        }
+        Err(_) => {
+            fail("SYS_MMAP(1 page)", "alloc failed");
+            fail("SYS_MUNMAP(1 page)", "skipped (mmap failed)");
+        }
+    }
+}
+
 // ── SYS_DUP (28) ────────────────────────────────────────────────────────
 fn test_dup() {
     // Open a file then dup its fd
@@ -506,12 +550,29 @@ fn test_nic() {
     check("SYS_NIC_REFILL", true, ""); // ENODEV expected
 }
 
-// ── Reserved (38-41) ────────────────────────────────────────────────────
-fn test_reserved() {
-    for nr in 38..=41u64 {
-        let ret = unsafe { syscall0(nr) };
-        check_err("SYS_RSVD (ENOSYS)", ret);
-    }
+// ── Network Stack (38-41) ───────────────────────────────────────────────
+fn test_net_stack() {
+    // No stack registered in E2E test → all should return ENODEV.
+
+    // SYS_NET: TCP_SOCKET (subcmd 0) — no stack
+    let ret = unsafe { syscall1(SYS_NET, 0) };
+    check_err("SYS_NET (no stack)", ret);
+
+    // SYS_DNS: DNS_START (subcmd 0) — no stack
+    let ret = unsafe { syscall3(SYS_DNS, 0, 0, 0) };
+    check_err("SYS_DNS (no stack)", ret);
+
+    // SYS_NET_CFG: CFG_GET (subcmd 0) — no stack
+    let ret = unsafe { syscall2(SYS_NET_CFG, 0, 0) };
+    check_err("SYS_NET_CFG (no stack)", ret);
+
+    // SYS_NET_POLL: POLL_DRIVE (subcmd 0) — no stack
+    let ret = unsafe { syscall2(SYS_NET_POLL, 0, 0) };
+    check_err("SYS_NET_POLL (no stack)", ret);
+
+    // SYS_NET_CFG subcmd 129 (=128+1, NIC_CTRL_PROMISC) — no ctrl fn
+    let ret = unsafe { syscall3(SYS_NET_CFG, 129, 1, 0) };
+    check_err("NIC_CTRL (no ctrl)", ret);
 }
 
 // ── SYS_IOCTL (42) ─────────────────────────────────────────────────────
@@ -642,6 +703,28 @@ fn test_persist() {
     check_ok("SYS_PERSIST_DEL", ret);
 }
 
+// ── SYS_PE_INFO (51) ────────────────────────────────────────────────────
+fn test_pe_info() {
+    // Introspect our own binary to verify PE_INFO works.
+    let r = libmorpheus::persist::pe_info("/bin/syscall-e2e");
+    match r {
+        Ok(info) => {
+            // format: 1 = ELF64
+            check("SYS_PE_INFO(format)", info.format == 1, "not ELF64");
+            // arch: 1 = x86_64
+            check("SYS_PE_INFO(arch)", info.arch == 1, "not x86_64");
+            check("SYS_PE_INFO(entry)", info.entry_point != 0, "entry=0");
+            check("SYS_PE_INFO(size)", info.image_size > 0, "size=0");
+        }
+        Err(_) => {
+            fail("SYS_PE_INFO(format)", "pe_info returned error");
+            fail("SYS_PE_INFO(arch)", "skipped");
+            fail("SYS_PE_INFO(entry)", "skipped");
+            fail("SYS_PE_INFO(size)", "skipped");
+        }
+    }
+}
+
 // ── PORT_IN / PORT_OUT (52-53) ──────────────────────────────────────────
 fn test_port_io() {
     // Read PIT channel 2 (port 0x42) — should return a byte
@@ -698,7 +781,38 @@ fn test_dma() {
             let free_r = libmorpheus::hw::dma_free(phys, 1);
             check("SYS_DMA_FREE(1)", free_r.is_ok(), "free failed");
         }
-        Err(_) => fail("SYS_DMA_ALLOC(1)", "alloc failed"),
+        Err(_) => {
+            fail("SYS_DMA_ALLOC(1)", "alloc failed");
+            fail("SYS_DMA_FREE(1)", "skipped (alloc failed)");
+        }
+    }
+}
+
+// ── SYS_MAP_PHYS (58) ───────────────────────────────────────────────────
+fn test_map_phys() {
+    // Allocate a known physical page via DMA, then map it into user space.
+    let r = libmorpheus::hw::dma_alloc(1);
+    match r {
+        Ok(phys) => {
+            let mr = libmorpheus::hw::map_phys_rw(phys, 1);
+            match mr {
+                Ok(vaddr) => {
+                    check("SYS_MAP_PHYS(1 page)", vaddr >= 0x40_0000_0000, "vaddr out of range");
+                    // Unmap the user-space mapping (does not free the physical page).
+                    let ur = libmorpheus::mem::munmap(vaddr, 1);
+                    check("SYS_MUNMAP(map_phys)", ur.is_ok(), "munmap failed");
+                }
+                Err(_) => {
+                    fail("SYS_MAP_PHYS(1 page)", "map failed");
+                    fail("SYS_MUNMAP(map_phys)", "skipped (map failed)");
+                }
+            }
+            let _ = libmorpheus::hw::dma_free(phys, 1);
+        }
+        Err(_) => {
+            fail("SYS_MAP_PHYS(1 page)", "dma_alloc failed");
+            fail("SYS_MUNMAP(map_phys)", "skipped (dma_alloc failed)");
+        }
     }
 }
 
@@ -748,7 +862,30 @@ fn test_fb_info() {
             check("SYS_FB_INFO height", info.height > 0, "height=0");
             check("SYS_FB_INFO base", info.base > 0, "base=0");
         }
-        Err(_) => fail("SYS_FB_INFO", "returned error (FB not registered?)"),
+        Err(_) => {
+            fail("SYS_FB_INFO", "returned error (FB not registered?)");
+            fail("SYS_FB_INFO height", "skipped (no FB)");
+            fail("SYS_FB_INFO base", "skipped (no FB)");
+        }
+    }
+}
+
+// ── SYS_FB_MAP (64) ─────────────────────────────────────────────────────
+fn test_fb_map() {
+    let r = libmorpheus::hw::fb_map();
+    match r {
+        Ok(vaddr) => {
+            check("SYS_FB_MAP", vaddr >= 0x40_0000_0000, "vaddr out of range");
+            // Unmap the framebuffer mapping.
+            // We don't know the exact page count, but 1 is sufficient to
+            // exercise the munmap path (VMA tracks the real size).
+            // Skip unmapping — the FB stays mapped for the rest of the test.
+            ok("SYS_FB_MAP(mapped)");
+        }
+        Err(_) => {
+            fail("SYS_FB_MAP", "map failed");
+            fail("SYS_FB_MAP(mapped)", "skipped (map failed)");
+        }
     }
 }
 
@@ -784,7 +921,10 @@ fn test_priority() {
             // Restore
             let _ = libmorpheus::process::setpriority(pid, prio);
         }
-        Err(_) => fail("SYS_GETPRIORITY", "returned error"),
+        Err(_) => {
+            fail("SYS_GETPRIORITY", "returned error");
+            fail("SYS_SETPRIORITY", "skipped (getpriority failed)");
+        }
     }
 }
 
@@ -847,5 +987,68 @@ fn test_memmap() {
             println("");
         }
         Err(_) => fail("SYS_MEMMAP(read)", "returned error"),
+    }
+}
+
+// ── SHM_GRANT (73) ───────────────────────────────────────────────────
+fn test_shm_grant() {
+    // Allocate 1 page, then try to grant to self → EINVAL.
+    match libmorpheus::mem::mmap(1) {
+        Ok(vaddr) => {
+            // Self-grant must fail.
+            let r = libmorpheus::mem::shm_grant(
+                unsafe { syscall0(SYS_GETPID) } as u32,
+                vaddr,
+                1,
+                libmorpheus::mem::PROT_WRITE,
+            );
+            check("SYS_SHM_GRANT(self)", r.is_err(), "self-grant should fail");
+
+            // Grant to non-existent PID 63 → ESRCH.
+            let r = libmorpheus::mem::shm_grant(63, vaddr, 1, 0);
+            check("SYS_SHM_GRANT(bad pid)", r.is_err(), "should fail");
+
+            // Bad page count (0) → EINVAL.
+            let r = libmorpheus::mem::shm_grant(2, vaddr, 0, 0);
+            check("SYS_SHM_GRANT(0 pages)", r.is_err(), "should fail");
+
+            let _ = libmorpheus::mem::munmap(vaddr, 1);
+        }
+        Err(_) => {
+            fail("SYS_SHM_GRANT(self)", "mmap failed");
+            fail("SYS_SHM_GRANT(bad pid)", "mmap failed");
+            fail("SYS_SHM_GRANT(0 pages)", "mmap failed");
+        }
+    }
+}
+
+// ── MPROTECT (74) ────────────────────────────────────────────────────
+fn test_mprotect() {
+    match libmorpheus::mem::mmap(1) {
+        Ok(vaddr) => {
+            // Make read-only (PROT_READ = 0).
+            let r = libmorpheus::mem::mprotect(vaddr, 1, libmorpheus::mem::PROT_READ);
+            check("SYS_MPROTECT(RO)", r.is_ok(), "mprotect failed");
+
+            // Make writable again.
+            let r = libmorpheus::mem::mprotect(vaddr, 1, libmorpheus::mem::PROT_WRITE);
+            check("SYS_MPROTECT(RW)", r.is_ok(), "mprotect failed");
+
+            // Bad prot bits → EINVAL.
+            let r = libmorpheus::mem::mprotect(vaddr, 1, 0xFF);
+            check("SYS_MPROTECT(bad prot)", r.is_err(), "should fail");
+
+            // Wrong page count → EINVAL.
+            let r = libmorpheus::mem::mprotect(vaddr, 2, 0);
+            check("SYS_MPROTECT(bad pages)", r.is_err(), "should fail");
+
+            let _ = libmorpheus::mem::munmap(vaddr, 1);
+        }
+        Err(_) => {
+            fail("SYS_MPROTECT(RO)", "mmap failed");
+            fail("SYS_MPROTECT(RW)", "mmap failed");
+            fail("SYS_MPROTECT(bad prot)", "mmap failed");
+            fail("SYS_MPROTECT(bad pages)", "mmap failed");
+        }
     }
 }

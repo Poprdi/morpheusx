@@ -42,10 +42,10 @@
 //! | 35     | SYS_NIC_LINK    | ()                                | 0/1 / -ENODEV |
 //! | 36     | SYS_NIC_MAC     | (buf_ptr)                         | 0 / -ENODEV   |
 //! | 37     | SYS_NIC_REFILL  | ()                                | 0 / -ENODEV   |
-//! | 38     | SYS_NET_RSVD38  | reserved                          | -ENOSYS       |
-//! | 39     | SYS_NET_RSVD39  | reserved                          | -ENOSYS       |
-//! | 40     | SYS_NET_RSVD40  | reserved                          | -ENOSYS       |
-//! | 41     | SYS_NET_RSVD41  | reserved                          | -ENOSYS       |
+//! | 38     | SYS_NET         | (subcmd, a2, a3, a4)              | result        |
+//! | 39     | SYS_DNS         | (subcmd, a2, a3)                  | result        |
+//! | 40     | SYS_NET_CFG     | (subcmd, a2, a3, a4)              | result        |
+//! | 41     | SYS_NET_POLL    | (subcmd, a2)                      | result        |
 //! | 42     | SYS_IOCTL       | (fd, cmd, arg)                    | depends       |
 //! | 43     | SYS_MOUNT       | (src_ptr,src_len,dst_ptr,dst_len) | 0             |
 //! | 44     | SYS_UMOUNT      | (path_ptr, path_len)              | 0             |
@@ -77,6 +77,8 @@
 //! | 70     | SYS_RDTSC       | (result_ptr)                      | tsc_value     |
 //! | 71     | SYS_BOOT_LOG    | (buf_ptr, buf_len)                | bytes_written |
 //! | 72     | SYS_MEMMAP      | (buf_ptr, max_entries)            | count         |
+//! | 73     | SYS_SHM_GRANT   | (pid, vaddr, pages, flags)        | target_vaddr  |
+//! | 74     | SYS_MPROTECT    | (vaddr, pages, prot)              | 0             |
 
 pub mod handler;
 
@@ -131,10 +133,10 @@ pub const SYS_NIC_RX: u64 = 34;
 pub const SYS_NIC_LINK: u64 = 35;
 pub const SYS_NIC_MAC: u64 = 36;
 pub const SYS_NIC_REFILL: u64 = 37;
-pub const SYS_NET_RSVD38: u64 = 38;
-pub const SYS_NET_RSVD39: u64 = 39;
-pub const SYS_NET_RSVD40: u64 = 40;
-pub const SYS_NET_RSVD41: u64 = 41;
+pub const SYS_NET: u64 = 38;
+pub const SYS_DNS: u64 = 39;
+pub const SYS_NET_CFG: u64 = 40;
+pub const SYS_NET_POLL: u64 = 41;
 
 // ── Device / mount (42-45) — reserved stubs ──────────────────────────
 pub const SYS_IOCTL: u64 = 42;
@@ -178,6 +180,10 @@ pub const SYS_CPUID: u64 = 69;
 pub const SYS_RDTSC: u64 = 70;
 pub const SYS_BOOT_LOG: u64 = 71;
 pub const SYS_MEMMAP: u64 = 72;
+
+// ── Memory sharing / protection (73-74) ──────────────────────────────
+pub const SYS_SHM_GRANT: u64 = 73;
+pub const SYS_MPROTECT: u64 = 74;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EXTERN ASM FUNCTIONS
@@ -252,7 +258,10 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_NIC_LINK => sys_nic_link(),
         SYS_NIC_MAC => sys_nic_mac(a1),
         SYS_NIC_REFILL => sys_nic_refill(),
-        SYS_NET_RSVD38..=SYS_NET_RSVD41 => ENOSYS_RET,
+        SYS_NET => sys_net(a1, a2, a3, a4),
+        SYS_DNS => sys_dns(a1, a2, a3),
+        SYS_NET_CFG => sys_net_cfg(a1, a2, a3, a4),
+        SYS_NET_POLL => sys_net_poll(a1, a2),
         // ── Device / mount ────────────────────────────────────────
         SYS_IOCTL => sys_ioctl(a1, a2, a3),
         SYS_MOUNT => sys_mount(a1, a2, a3, a4),
@@ -288,7 +297,11 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_CPUID => sys_cpuid(a1, a2, a3),
         SYS_RDTSC => sys_rdtsc(a1),
         SYS_BOOT_LOG => sys_boot_log(a1, a2),
-        SYS_MEMMAP => sys_memmap(a1, a2),        unknown => {
+        SYS_MEMMAP => sys_memmap(a1, a2),
+        // ── Memory sharing / protection ────────────────────────
+        SYS_SHM_GRANT => sys_shm_grant(a1, a2, a3, a4),
+        SYS_MPROTECT => sys_mprotect(a1, a2, a3),
+        unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);
             puts("\n");
