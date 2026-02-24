@@ -41,6 +41,11 @@ pub const ENOSYS: u64 = u64::MAX - 37;
 pub const EINVAL: u64 = u64::MAX;
 pub const ENOMEM: u64 = u64::MAX - 12;
 pub const ENOENT: u64 = u64::MAX - 2;
+pub const EBADF: u64 = u64::MAX - 9;
+pub const EPIPE: u64 = u64::MAX - 32;
+pub const EFAULT: u64 = u64::MAX - 14;
+pub const ESRCH: u64 = u64::MAX - 3;
+pub const EIO: u64 = u64::MAX - 5;
 
 /// Check if a syscall return value is an error.
 #[inline]
