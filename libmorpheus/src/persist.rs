@@ -161,13 +161,7 @@ pub fn del(key: &str) -> Result<(), u64> {
     if key.is_empty() || key.len() > 255 {
         return Err(EINVAL);
     }
-    let ret = unsafe {
-        syscall2(
-            SYS_PERSIST_DEL,
-            key.as_ptr() as u64,
-            key.len() as u64,
-        )
-    };
+    let ret = unsafe { syscall2(SYS_PERSIST_DEL, key.as_ptr() as u64, key.len() as u64) };
     to_result(ret).map(|_| ())
 }
 

@@ -163,7 +163,11 @@ pub struct NicHwStats {
 pub fn nic_ctrl(cmd: u32, arg: u64) -> Result<u64, u64> {
     let subcmd = 128 + cmd as u64;
     let ret = unsafe { syscall3(SYS_NET_CFG, subcmd, arg, 0) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
 }
 
 /// Enable or disable promiscuous mode.
@@ -298,7 +302,11 @@ impl TcpState {
 /// Create a new TCP socket.
 pub fn tcp_socket() -> Result<TcpHandle, u64> {
     let ret = unsafe { syscall1(SYS_NET, NET_TCP_SOCKET) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
 }
 
 /// Connect a TCP socket to a remote host.
@@ -306,7 +314,11 @@ pub fn tcp_socket() -> Result<TcpHandle, u64> {
 /// `ip` is a 4-byte IPv4 address in **network byte order** (big-endian).
 pub fn tcp_connect(handle: TcpHandle, ip: u32, port: u16) -> Result<(), u64> {
     let ret = unsafe { syscall4(SYS_NET, NET_TCP_CONNECT, handle, ip as u64, port as u64) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Connect using a dotted-decimal IPv4 address.
@@ -320,9 +332,19 @@ pub fn tcp_connect_ip(handle: TcpHandle, a: u8, b: u8, c: u8, d: u8, port: u16) 
 /// Returns the number of bytes accepted into the send buffer.
 pub fn tcp_send(handle: TcpHandle, data: &[u8]) -> Result<usize, u64> {
     let ret = unsafe {
-        syscall4(SYS_NET, NET_TCP_SEND, handle, data.as_ptr() as u64, data.len() as u64)
+        syscall4(
+            SYS_NET,
+            NET_TCP_SEND,
+            handle,
+            data.as_ptr() as u64,
+            data.len() as u64,
+        )
     };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret as usize) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as usize)
+    }
 }
 
 /// Receive data from a connected TCP socket.
@@ -330,26 +352,46 @@ pub fn tcp_send(handle: TcpHandle, data: &[u8]) -> Result<usize, u64> {
 /// Returns the number of bytes received (0 if no data available yet).
 pub fn tcp_recv(handle: TcpHandle, buf: &mut [u8]) -> Result<usize, u64> {
     let ret = unsafe {
-        syscall4(SYS_NET, NET_TCP_RECV, handle, buf.as_mut_ptr() as u64, buf.len() as u64)
+        syscall4(
+            SYS_NET,
+            NET_TCP_RECV,
+            handle,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+        )
     };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret as usize) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as usize)
+    }
 }
 
 /// Close a TCP socket (sends FIN, initiates graceful shutdown).
 pub fn tcp_close(handle: TcpHandle) {
-    unsafe { syscall2(SYS_NET, NET_TCP_CLOSE, handle); }
+    unsafe {
+        syscall2(SYS_NET, NET_TCP_CLOSE, handle);
+    }
 }
 
 /// Query a TCP socket's current state.
 pub fn tcp_state(handle: TcpHandle) -> Result<TcpState, u64> {
     let ret = unsafe { syscall2(SYS_NET, NET_TCP_STATE, handle) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(TcpState::from_raw(ret)) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(TcpState::from_raw(ret))
+    }
 }
 
 /// Bind a socket and start listening for incoming connections.
 pub fn tcp_listen(handle: TcpHandle, port: u16) -> Result<(), u64> {
     let ret = unsafe { syscall3(SYS_NET, NET_TCP_LISTEN, handle, port as u64) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Accept an incoming connection on a listening socket.
@@ -358,25 +400,41 @@ pub fn tcp_listen(handle: TcpHandle, port: u16) -> Result<(), u64> {
 /// if no connection is pending.
 pub fn tcp_accept(listen_handle: TcpHandle) -> Result<TcpHandle, u64> {
     let ret = unsafe { syscall2(SYS_NET, NET_TCP_ACCEPT, listen_handle) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
 }
 
 /// Shutdown the write half of a TCP connection.
 pub fn tcp_shutdown(handle: TcpHandle) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_NET, NET_TCP_SHUTDOWN, handle) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Set TCP_NODELAY (disable Nagle's algorithm).
 pub fn tcp_set_nodelay(handle: TcpHandle, on: bool) -> Result<(), u64> {
     let ret = unsafe { syscall3(SYS_NET, NET_TCP_NODELAY, handle, on as u64) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Set TCP keepalive interval (0 = disable).
 pub fn tcp_set_keepalive(handle: TcpHandle, interval_ms: u64) -> Result<(), u64> {
     let ret = unsafe { syscall3(SYS_NET, NET_TCP_KEEPALIVE, handle, interval_ms) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -395,9 +453,18 @@ pub type DnsQuery = u64;
 /// Returns a query handle.  Call [`dns_poll`] in a loop until resolved.
 pub fn dns_start(hostname: &str) -> Result<DnsQuery, u64> {
     let ret = unsafe {
-        syscall3(SYS_DNS, DNS_START_CMD, hostname.as_ptr() as u64, hostname.len() as u64)
+        syscall3(
+            SYS_DNS,
+            DNS_START_CMD,
+            hostname.as_ptr() as u64,
+            hostname.len() as u64,
+        )
     };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
 }
 
 /// Poll a DNS query.
@@ -406,9 +473,7 @@ pub fn dns_start(hostname: &str) -> Result<DnsQuery, u64> {
 /// or `Err` on failure.
 pub fn dns_poll(query: DnsQuery) -> Result<Option<u32>, u64> {
     let mut ip: u32 = 0;
-    let ret = unsafe {
-        syscall3(SYS_DNS, DNS_RESULT_CMD, query, &mut ip as *mut u32 as u64)
-    };
+    let ret = unsafe { syscall3(SYS_DNS, DNS_RESULT_CMD, query, &mut ip as *mut u32 as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else if ret == 1 {
@@ -430,7 +495,9 @@ pub fn dns_resolve(hostname: &str) -> Result<u32, u64> {
             Some(ip) => return Ok(ip),
             None => {
                 // Yield to let the network stack process packets
-                unsafe { syscall0(SYS_YIELD); }
+                unsafe {
+                    syscall0(SYS_YIELD);
+                }
             }
         }
     }
@@ -448,7 +515,11 @@ pub fn dns_set_servers(servers: &[u32]) -> Result<(), u64> {
             servers.len() as u64,
         )
     };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -492,16 +563,22 @@ pub const NET_FLAG_HAS_DNS: u32 = 1 << 2;
 /// Get the current network configuration.
 pub fn net_config() -> Result<NetConfigInfo, u64> {
     let mut info = unsafe { core::mem::zeroed::<NetConfigInfo>() };
-    let ret = unsafe {
-        syscall2(SYS_NET_CFG, CFG_GET, &mut info as *mut NetConfigInfo as u64)
-    };
-    if crate::is_error(ret) { Err(ret) } else { Ok(info) }
+    let ret = unsafe { syscall2(SYS_NET_CFG, CFG_GET, &mut info as *mut NetConfigInfo as u64) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(info)
+    }
 }
 
 /// Switch to DHCP mode.
 pub fn net_dhcp() -> Result<(), u64> {
     let ret = unsafe { syscall1(SYS_NET_CFG, CFG_DHCP) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Set a static IPv4 address.
@@ -513,15 +590,28 @@ pub fn net_static_ip(ip: u32, prefix_len: u8, gateway: u32) -> Result<(), u64> {
     // bits [63:32] = prefix_len, bits [31:0] = gateway
     let packed = ((prefix_len as u64) << 32) | (gateway as u64);
     let ret = unsafe { syscall3(SYS_NET_CFG, CFG_STATIC, ip as u64, packed) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Set the hostname (for DHCP FQDN, mDNS, etc.).
 pub fn net_set_hostname(hostname: &str) -> Result<(), u64> {
     let ret = unsafe {
-        syscall3(SYS_NET_CFG, CFG_HOSTNAME, hostname.as_ptr() as u64, hostname.len() as u64)
+        syscall3(
+            SYS_NET_CFG,
+            CFG_HOSTNAME,
+            hostname.as_ptr() as u64,
+            hostname.len() as u64,
+        )
     };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -557,10 +647,12 @@ pub fn net_poll_drive(timestamp_ms: u64) -> bool {
 /// Get network stack statistics.
 pub fn net_stats() -> Result<NetStats, u64> {
     let mut stats = NetStats::default();
-    let ret = unsafe {
-        syscall2(SYS_NET_POLL, POLL_STATS, &mut stats as *mut NetStats as u64)
-    };
-    if crate::is_error(ret) { Err(ret) } else { Ok(stats) }
+    let ret = unsafe { syscall2(SYS_NET_POLL, POLL_STATS, &mut stats as *mut NetStats as u64) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(stats)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -617,7 +709,11 @@ pub struct UdpRecvDesc {
 /// Returns a handle on success.
 pub fn udp_socket() -> Result<u64, u64> {
     let ret = unsafe { syscall2(SYS_NET, UDP_SOCKET, 0) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(ret) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
 }
 
 /// Send a UDP datagram to `ip:port`.
@@ -643,7 +739,11 @@ pub fn udp_send_to(handle: u64, ip: u32, port: u16, data: &[u8]) -> Result<(), u
             0,
         )
     };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }
 
 /// Receive a UDP datagram.
@@ -677,5 +777,9 @@ pub fn udp_recv_from(handle: u64, buf: &mut [u8]) -> Result<(u64, u32, u16), u64
 /// Close a UDP socket.
 pub fn udp_close(handle: u64) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_NET, UDP_CLOSE, handle) };
-    if crate::is_error(ret) { Err(ret) } else { Ok(()) }
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }

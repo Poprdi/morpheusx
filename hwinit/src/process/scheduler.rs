@@ -504,16 +504,16 @@ pub unsafe fn spawn_user_process(name: &str, elf_data: &[u8]) -> Result<u32, &'s
         use crate::serial::puts;
         puts("[SCHED] ELF load error: ");
         match e {
-            ElfError::TooSmall       => puts("too small\n"),
-            ElfError::BadMagic       => puts("bad magic\n"),
-            ElfError::Not64Bit       => puts("not 64-bit\n"),
-            ElfError::NotLittleEndian=> puts("not little-endian\n"),
-            ElfError::NotX86_64      => puts("not x86-64\n"),
-            ElfError::NotExecutable  => puts("not executable (e_type)\n"),
-            ElfError::BadPhdr        => puts("bad program header\n"),
+            ElfError::TooSmall => puts("too small\n"),
+            ElfError::BadMagic => puts("bad magic\n"),
+            ElfError::Not64Bit => puts("not 64-bit\n"),
+            ElfError::NotLittleEndian => puts("not little-endian\n"),
+            ElfError::NotX86_64 => puts("not x86-64\n"),
+            ElfError::NotExecutable => puts("not executable (e_type)\n"),
+            ElfError::BadPhdr => puts("bad program header\n"),
             ElfError::NoLoadSegments => puts("no PT_LOAD segments\n"),
-            ElfError::MapFailed      => puts("page mapping failed\n"),
-            ElfError::AllocFailed    => puts("physical page alloc failed\n"),
+            ElfError::MapFailed => puts("page mapping failed\n"),
+            ElfError::AllocFailed => puts("physical page alloc failed\n"),
         }
         "ELF load failed"
     })?;

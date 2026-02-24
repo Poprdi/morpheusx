@@ -35,8 +35,8 @@ use morpheus_helix::format;
 use morpheus_helix::index::btree::NamespaceIndex;
 use morpheus_helix::log::recovery::{recover_superblock, replay_log};
 use morpheus_helix::types::*;
-use morpheus_helix::vfs::{FdTable, HelixInstance, MountTable};
 use morpheus_helix::vfs::{self};
+use morpheus_helix::vfs::{FdTable, HelixInstance, MountTable};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // FileBlockDevice — wraps a std::fs::File as a block device
@@ -54,7 +54,10 @@ impl FileBlockDevice {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let len = file.metadata()?.len();
         let total_sectors = len / SECTOR_SIZE as u64;
-        Ok(Self { file, total_sectors })
+        Ok(Self {
+            file,
+            total_sectors,
+        })
     }
 }
 
@@ -80,13 +83,17 @@ impl BlockIo for FileBlockDevice {
 
     fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<(), Self::Error> {
         let offset = start_lba.0 * SECTOR_SIZE as u64;
-        self.file.seek(SeekFrom::Start(offset)).map_err(|_| FileIoError)?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|_| FileIoError)?;
         self.file.read_exact(dst).map_err(|_| FileIoError)
     }
 
     fn write_blocks(&mut self, start_lba: Lba, src: &[u8]) -> Result<(), Self::Error> {
         let offset = start_lba.0 * SECTOR_SIZE as u64;
-        self.file.seek(SeekFrom::Start(offset)).map_err(|_| FileIoError)?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|_| FileIoError)?;
         self.file.write_all(src).map_err(|_| FileIoError)
     }
 
@@ -111,19 +118,20 @@ fn usage() {
     eprintln!(
         "  morpheus-cli inject testing/helix-data.img \\\n      target/x86_64-morpheus/release/syscall-e2e"
     );
-    eprintln!(
-        "  morpheus-cli inject testing/helix-data.img my-app --dest /bin/app"
-    );
+    eprintln!("  morpheus-cli inject testing/helix-data.img my-app --dest /bin/app");
     eprintln!("  morpheus-cli ls testing/helix-data.img /bin");
 }
 
 // Mount an existing or fresh HelixFS from a FileBlockDevice.
 // Returns (device, mount_table).
 fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
-    let mut dev = FileBlockDevice::open(disk)
-        .map_err(|e| format!("cannot open '{}': {}", disk, e))?;
+    let mut dev =
+        FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
 
-    println!("[helix] disk: {} sectors × {} bytes", dev.total_sectors, SECTOR_SIZE);
+    println!(
+        "[helix] disk: {} sectors × {} bytes",
+        dev.total_sectors, SECTOR_SIZE
+    );
 
     // Try to recover an existing superblock.
     let (sb, do_replay) = match recover_superblock(&mut dev, 0, SECTOR_SIZE) {
@@ -188,22 +196,29 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
 fn do_format(dev: &mut FileBlockDevice) -> Result<HelixSuperblock, String> {
     let total_sectors = dev.total_sectors;
     let uuid = [
-        0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01,
     ]; // "MXROOT"
     format::format_helix(dev, 0, total_sectors, SECTOR_SIZE, "root", uuid)
         .map_err(|e| format!("format_helix: {:?}", e))?;
-    recover_superblock(dev, 0, SECTOR_SIZE)
-        .map_err(|e| format!("recover after format: {:?}", e))
+    recover_superblock(dev, 0, SECTOR_SIZE).map_err(|e| format!("recover after format: {:?}", e))
 }
 
 /// Rebuild the block bitmap from index entries (mirrors vfs/global.rs private fn).
 fn rebuild_bitmap(instance: &mut HelixInstance) {
     for entry in instance.index.all_entries() {
-        if entry.flags & entry_flags::IS_DELETED != 0 { continue; }
-        if entry.flags & entry_flags::IS_DIR != 0 { continue; }
-        if entry.flags & entry_flags::IS_INLINE != 0 { continue; }
-        if entry.extent_root == BLOCK_NULL { continue; }
+        if entry.flags & entry_flags::IS_DELETED != 0 {
+            continue;
+        }
+        if entry.flags & entry_flags::IS_DIR != 0 {
+            continue;
+        }
+        if entry.flags & entry_flags::IS_INLINE != 0 {
+            continue;
+        }
+        if entry.extent_root == BLOCK_NULL {
+            continue;
+        }
         let blocks = entry.size.div_ceil(BLOCK_SIZE as u64);
         if blocks > 0 {
             instance.bitmap.mark_range_used(entry.extent_root, blocks);
@@ -221,9 +236,13 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     println!("[inject] dest   : {}", dest);
 
     // Read ELF bytes from host filesystem.
-    let elf_bytes = std::fs::read(binary)
-        .map_err(|e| format!("cannot read '{}': {}", binary, e))?;
-    println!("[inject] binary size: {} bytes ({:.1} KB)", elf_bytes.len(), elf_bytes.len() as f64 / 1024.0);
+    let elf_bytes =
+        std::fs::read(binary).map_err(|e| format!("cannot read '{}': {}", binary, e))?;
+    println!(
+        "[inject] binary size: {} bytes ({:.1} KB)",
+        elf_bytes.len(),
+        elf_bytes.len() as f64 / 1024.0
+    );
 
     // Validate it looks like an ELF64.
     if elf_bytes.len() < 4 || &elf_bytes[0..4] != b"\x7fELF" {
@@ -249,15 +268,16 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     let written = vfs::vfs_write(&mut dev, &mut mt, &mut fdt, fd, &elf_bytes, 0)
         .map_err(|e| format!("vfs_write: {:?}", e))?;
 
-    vfs::vfs_close(&mut fdt, fd)
-        .map_err(|e| format!("vfs_close: {:?}", e))?;
+    vfs::vfs_close(&mut fdt, fd).map_err(|e| format!("vfs_close: {:?}", e))?;
 
     // Flush log + update superblock.
-    vfs::vfs_sync(&mut dev, &mut mt)
-        .map_err(|e| format!("vfs_sync: {:?}", e))?;
+    vfs::vfs_sync(&mut dev, &mut mt).map_err(|e| format!("vfs_sync: {:?}", e))?;
 
     println!("[inject] OK — wrote {} bytes to {}", written, dest);
-    println!("[inject] flush complete. Boot MorpheusX and run:  exec {}", dest_name(dest));
+    println!(
+        "[inject] flush complete. Boot MorpheusX and run:  exec {}",
+        dest_name(dest)
+    );
     Ok(())
 }
 
@@ -271,8 +291,8 @@ fn dest_name(dest: &str) -> &str {
 
 fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     let (_dev, mt) = mount(disk)?;
-    let entries = vfs::vfs_readdir(&mt, path)
-        .map_err(|e| format!("vfs_readdir {}: {:?}", path, e))?;
+    let entries =
+        vfs::vfs_readdir(&mt, path).map_err(|e| format!("vfs_readdir {}: {:?}", path, e))?;
 
     println!("{}/  ({} entries)", path, entries.len());
     for e in &entries {

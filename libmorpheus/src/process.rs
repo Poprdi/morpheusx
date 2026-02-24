@@ -110,10 +110,12 @@ pub fn ps_count() -> u32 {
 
 /// List all processes.  Returns the number of entries written.
 pub fn ps(entries: &mut [PsEntry]) -> usize {
-    let ret = unsafe {
-        syscall2(SYS_PS, entries.as_mut_ptr() as u64, entries.len() as u64)
-    };
-    if is_error(ret) { 0 } else { ret as usize }
+    let ret = unsafe { syscall2(SYS_PS, entries.as_mut_ptr() as u64, entries.len() as u64) };
+    if is_error(ret) {
+        0
+    } else {
+        ret as usize
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

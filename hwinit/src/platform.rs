@@ -78,7 +78,7 @@ const CMD_BUS_MASTER: u16 = 1 << 2;
 
 /// Stack sizes for CPU state
 const KERNEL_STACK_SIZE: usize = 64 * 1024; // 64KB kernel stack
-// IST1 stack is now a static array in gdt.rs — no heap allocation needed.
+                                            // IST1 stack is now a static array in gdt.rs — no heap allocation needed.
 const HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB initial heap
 const DMA_SIZE: usize = 2 * 1024 * 1024; // 2MB DMA region
 
@@ -221,7 +221,6 @@ pub unsafe fn platform_init_selfcontained(
         return Err(InitError::NoFreeMemory);
     }
 
-
     // ─────────────────────────────────────────────────────────────────────
     // PHASE 5: TSC - Calibrate for timing
     // ─────────────────────────────────────────────────────────────────────
@@ -231,7 +230,6 @@ pub unsafe fn platform_init_selfcontained(
     if tsc_freq == 0 {
         return Err(InitError::TscCalibrationFailed);
     }
-
 
     // Store TSC frequency for scheduler sleep deadline computation.
     crate::process::scheduler::set_tsc_frequency(tsc_freq);
@@ -254,8 +252,6 @@ pub unsafe fn platform_init_selfcontained(
     // VirtIO inspects avail/used ring indices at enable_queue() time; garbage
     // avail->idx causes "bogus descriptor" and permanently desyncs the driver.
     core::ptr::write_bytes(dma_phys as *mut u8, 0u8, DMA_SIZE);
-
-
 
     // Identity-mapped: CPU address = bus address = physical address
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);

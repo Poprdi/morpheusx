@@ -30,17 +30,23 @@ pub fn port_inl(port: u16) -> u32 {
 
 /// Write a byte to an x86 I/O port.
 pub fn port_outb(port: u16, value: u8) {
-    unsafe { syscall3(SYS_PORT_OUT, port as u64, 1, value as u64); }
+    unsafe {
+        syscall3(SYS_PORT_OUT, port as u64, 1, value as u64);
+    }
 }
 
 /// Write a word (16-bit) to an x86 I/O port.
 pub fn port_outw(port: u16, value: u16) {
-    unsafe { syscall3(SYS_PORT_OUT, port as u64, 2, value as u64); }
+    unsafe {
+        syscall3(SYS_PORT_OUT, port as u64, 2, value as u64);
+    }
 }
 
 /// Write a dword (32-bit) to an x86 I/O port.
 pub fn port_outl(port: u16, value: u32) {
-    unsafe { syscall3(SYS_PORT_OUT, port as u64, 4, value as u64); }
+    unsafe {
+        syscall3(SYS_PORT_OUT, port as u64, 4, value as u64);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -74,19 +80,25 @@ pub fn pci_cfg_read32(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
 /// Write a byte to PCI configuration space.
 pub fn pci_cfg_write8(bus: u8, device: u8, function: u8, offset: u8, value: u8) {
     let bdf = pci_bdf(bus, device, function);
-    unsafe { syscall4(SYS_PCI_CFG_WRITE, bdf, offset as u64, 1, value as u64); }
+    unsafe {
+        syscall4(SYS_PCI_CFG_WRITE, bdf, offset as u64, 1, value as u64);
+    }
 }
 
 /// Write a word (16-bit) to PCI configuration space.
 pub fn pci_cfg_write16(bus: u8, device: u8, function: u8, offset: u8, value: u16) {
     let bdf = pci_bdf(bus, device, function);
-    unsafe { syscall4(SYS_PCI_CFG_WRITE, bdf, offset as u64, 2, value as u64); }
+    unsafe {
+        syscall4(SYS_PCI_CFG_WRITE, bdf, offset as u64, 2, value as u64);
+    }
 }
 
 /// Write a dword (32-bit) to PCI configuration space.
 pub fn pci_cfg_write32(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
     let bdf = pci_bdf(bus, device, function);
-    unsafe { syscall4(SYS_PCI_CFG_WRITE, bdf, offset as u64, 4, value as u64); }
+    unsafe {
+        syscall4(SYS_PCI_CFG_WRITE, bdf, offset as u64, 4, value as u64);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -315,9 +327,7 @@ pub fn boot_log_size() -> u64 {
 ///
 /// Returns the number of bytes written.
 pub fn boot_log(buf: &mut [u8]) -> Result<usize, u64> {
-    let ret = unsafe {
-        syscall2(SYS_BOOT_LOG, buf.as_mut_ptr() as u64, buf.len() as u64)
-    };
+    let ret = unsafe { syscall2(SYS_BOOT_LOG, buf.as_mut_ptr() as u64, buf.len() as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else {

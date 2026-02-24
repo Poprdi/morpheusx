@@ -266,7 +266,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_IOCTL => sys_ioctl(a1, a2, a3),
         SYS_MOUNT => sys_mount(a1, a2, a3, a4),
         SYS_UMOUNT => sys_umount(a1, a2),
-        SYS_POLL => sys_poll(a1, a2, a3),        // ── Persistence / introspection ───────────────────────────────
+        SYS_POLL => sys_poll(a1, a2, a3), // ── Persistence / introspection ───────────────────────────────
         SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
         SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
         SYS_PERSIST_DEL => sys_persist_del(a1, a2),

@@ -1,8 +1,8 @@
 //! DEPRICATED: This module is now just a thin wrapper around the mainloop download orchestrator.
-//! durign bringup 
-//! 
+//! durign bringup
+//!
 //! TODO: Properly use network ;)
-//! 
+//!
 //! //! Top-level network stack entry point.
 //!
 //! This is THE entry point for the network stack. The bootloader calls this
