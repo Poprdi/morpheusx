@@ -82,10 +82,12 @@ pub const PROT_EXEC: u64 = 2;
 /// - `ESRCH` — target process doesn't exist
 /// - `ENOMEM` — target's VMA table or page tables are full
 pub fn shm_grant(target_pid: u32, src_vaddr: u64, pages: u64, flags: u64) -> Result<u64, u64> {
-    let ret = unsafe {
-        syscall4(SYS_SHM_GRANT, target_pid as u64, src_vaddr, pages, flags)
-    };
-    if is_error(ret) { Err(ret) } else { Ok(ret) }
+    let ret = unsafe { syscall4(SYS_SHM_GRANT, target_pid as u64, src_vaddr, pages, flags) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -106,5 +108,9 @@ pub fn shm_grant(target_pid: u32, src_vaddr: u64, pages: u64, flags: u64) -> Res
 /// - `EFAULT` — internal page table corruption
 pub fn mprotect(vaddr: u64, pages: u64, prot: u64) -> Result<(), u64> {
     let ret = unsafe { syscall3(SYS_MPROTECT, vaddr, pages, prot) };
-    if is_error(ret) { Err(ret) } else { Ok(()) }
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
 }

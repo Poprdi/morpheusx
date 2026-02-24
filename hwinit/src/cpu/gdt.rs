@@ -232,9 +232,7 @@ static mut IST1_STATIC_STACK: StaticStack = StaticStack([0; IST1_STATIC_STACK_SI
 /// (stacks grow downward on x86-64).  Written into TSS.IST[0] once at boot.
 pub fn ist1_static_stack_top() -> u64 {
     // SAFETY: read-only pointer arithmetic on a static array.
-    unsafe {
-        IST1_STATIC_STACK.0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64
-    }
+    unsafe { IST1_STATIC_STACK.0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64 }
 }
 
 /// Our GDT (static, page-aligned for safety)

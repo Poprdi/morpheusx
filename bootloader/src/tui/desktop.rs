@@ -295,9 +295,7 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                     match elf_data {
                         Some(ref data) => {
                             match unsafe {
-                                morpheus_hwinit::process::scheduler::spawn_user_process(
-                                    &name, data,
-                                )
+                                morpheus_hwinit::process::scheduler::spawn_user_process(&name, data)
                             } {
                                 Ok(pid) => {
                                     shell

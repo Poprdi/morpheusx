@@ -151,10 +151,21 @@ pub struct ExceptionFrameWithError {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SavedRegs {
-    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
-    pub r11: u64, pub r10: u64, pub r9: u64,  pub r8: u64,
-    pub rbp: u64, pub rdi: u64, pub rsi: u64, pub rdx: u64,
-    pub rcx: u64, pub rbx: u64, pub rax: u64,
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
 }
 
 /// Rich crash diagnostic — built entirely on the kernel stack, **zero allocation**.
@@ -186,10 +197,21 @@ pub struct CrashInfo {
     pub cr3: u64,
 
     // ── General-purpose registers at the instant of the fault ─────────
-    pub rax: u64, pub rbx: u64, pub rcx: u64, pub rdx: u64,
-    pub rsi: u64, pub rdi: u64, pub rbp: u64,
-    pub r8: u64,  pub r9: u64,  pub r10: u64, pub r11: u64,
-    pub r12: u64, pub r13: u64, pub r14: u64, pub r15: u64,
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
 
     // ── Process context (lock-free, best-effort read) ────────────────
     /// PID of the process executing when the fault occurred.
@@ -312,8 +334,12 @@ struct BufWriter<'a> {
 }
 
 impl<'a> BufWriter<'a> {
-    fn new(buf: &'a mut [u8]) -> Self { Self { buf, pos: 0 } }
-    fn len(&self) -> usize { self.pos }
+    fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+    fn len(&self) -> usize {
+        self.pos
+    }
     fn push(&mut self, s: &str) {
         let b = s.as_bytes();
         let n = b.len().min(self.buf.len() - self.pos);
@@ -336,34 +362,52 @@ impl<'a> BufWriter<'a> {
 fn build_explanation(vec: u64, ec: u64, cr2: u64, user: bool, buf: &mut [u8; 256]) -> u16 {
     let mut w = BufWriter::new(buf);
     match vec {
-        0  => w.push("Division by zero"),
-        1  => w.push("Hardware debug trap"),
-        2  => w.push("Non-maskable interrupt"),
-        3  => w.push("Breakpoint (INT3)"),
-        4  => w.push("Arithmetic overflow (INTO)"),
-        5  => w.push("Array index out of bounds (BOUND)"),
-        6  => {
+        0 => w.push("Division by zero"),
+        1 => w.push("Hardware debug trap"),
+        2 => w.push("Non-maskable interrupt"),
+        3 => w.push("Breakpoint (INT3)"),
+        4 => w.push("Arithmetic overflow (INTO)"),
+        5 => w.push("Array index out of bounds (BOUND)"),
+        6 => {
             w.push("Invalid CPU instruction");
-            if user { w.push(" \u{2014} bad user code or corrupted binary"); }
-            else { w.push(" \u{2014} kernel bug"); }
+            if user {
+                w.push(" \u{2014} bad user code or corrupted binary");
+            } else {
+                w.push(" \u{2014} kernel bug");
+            }
         }
-        7  => w.push("FPU/SSE instruction but device not available"),
-        8  => w.push("Double fault: exception while handling another exception"),
+        7 => w.push("FPU/SSE instruction but device not available"),
+        8 => w.push("Double fault: exception while handling another exception"),
         10 => w.push("Invalid Task State Segment"),
         11 => w.push("Segment not present in descriptor table"),
         12 => w.push("Stack segment fault: stack overflow or bad SS"),
         13 => {
             w.push("General protection fault");
-            if user { w.push(" \u{2014} process tried a privileged operation"); }
+            if user {
+                w.push(" \u{2014} process tried a privileged operation");
+            }
         }
         14 => {
             w.push("Attempted to ");
-            if ec & 16 != 0 { w.push("execute"); }
-            else if ec & 2 != 0 { w.push("write to"); }
-            else { w.push("read from"); }
-            if ec & 1 != 0 { w.push(" protected"); } else { w.push(" unmapped"); }
-            w.push(" memory at "); w.hex64(cr2);
-            if user { w.push(" from user mode"); } else { w.push(" from kernel"); }
+            if ec & 16 != 0 {
+                w.push("execute");
+            } else if ec & 2 != 0 {
+                w.push("write to");
+            } else {
+                w.push("read from");
+            }
+            if ec & 1 != 0 {
+                w.push(" protected");
+            } else {
+                w.push(" unmapped");
+            }
+            w.push(" memory at ");
+            w.hex64(cr2);
+            if user {
+                w.push(" from user mode");
+            } else {
+                w.push(" from kernel");
+            }
         }
         16 => w.push("x87 floating-point exception"),
         17 => w.push("Unaligned memory access (alignment check)"),
@@ -371,7 +415,7 @@ fn build_explanation(vec: u64, ec: u64, cr2: u64, user: bool, buf: &mut [u8; 256
         19 => w.push("SIMD floating-point exception"),
         20 => w.push("Virtualization exception"),
         21 => w.push("Control-flow integrity violation (CET)"),
-        _  => w.push("Unknown exception"),
+        _ => w.push("Unknown exception"),
     }
     w.len() as u16
 }
@@ -382,13 +426,19 @@ unsafe fn walk_stack(rbp: u64, out: &mut [u64; 16]) -> u8 {
     let mut depth: u8 = 0;
     for _ in 0..16u8 {
         // Sanity: aligned, non-null, in a plausible kernel range
-        if fp == 0 || fp % 8 != 0 || fp < 0x1000 || fp > 0x0000_7FFF_FFFF_FFFF { break; }
+        if fp == 0 || fp % 8 != 0 || fp < 0x1000 || fp > 0x0000_7FFF_FFFF_FFFF {
+            break;
+        }
         let ret = core::ptr::read_volatile((fp + 8) as *const u64);
         let prev = core::ptr::read_volatile(fp as *const u64);
-        if ret == 0 { break; }
+        if ret == 0 {
+            break;
+        }
         out[depth as usize] = ret;
         depth += 1;
-        if prev <= fp { break; } // prevent loops
+        if prev <= fp {
+            break;
+        } // prevent loops
         fp = prev;
     }
     depth
@@ -408,13 +458,27 @@ pub extern "C" fn exception_handler(
     // ── Serial dump (always, before anything that could re-fault) ─────
     let exc_name = if (vector as usize) < EXCEPTION_NAMES.len() {
         EXCEPTION_NAMES[vector as usize]
-    } else { "Unknown" };
+    } else {
+        "Unknown"
+    };
 
-    puts("\n!!! EXCEPTION "); put_hex8(vector as u8); puts(": "); puts(exc_name); newline();
-    puts("  Error: "); put_hex64(error_code); newline();
-    puts("  RIP:   "); put_hex64(frame.rip); newline();
-    puts("  RSP:   "); put_hex64(frame.rsp); newline();
-    puts("  CS:    "); put_hex64(frame.cs); newline();
+    puts("\n!!! EXCEPTION ");
+    put_hex8(vector as u8);
+    puts(": ");
+    puts(exc_name);
+    newline();
+    puts("  Error: ");
+    put_hex64(error_code);
+    newline();
+    puts("  RIP:   ");
+    put_hex64(frame.rip);
+    newline();
+    puts("  RSP:   ");
+    put_hex64(frame.rsp);
+    newline();
+    puts("  CS:    ");
+    put_hex64(frame.cs);
+    newline();
 
     // Control registers
     let (cr2, cr3): (u64, u64);
@@ -422,8 +486,14 @@ pub extern "C" fn exception_handler(
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
         core::arch::asm!("mov {}, cr3", out(reg) cr3);
     }
-    if vector == 14 { puts("  CR2:   "); put_hex64(cr2); newline(); }
-    puts("  CR3:   "); put_hex64(cr3); newline();
+    if vector == 14 {
+        puts("  CR2:   ");
+        put_hex64(cr2);
+        newline();
+    }
+    puts("  CR3:   ");
+    put_hex64(cr3);
+    newline();
 
     // Process context (lock-free read — safe even pre-scheduler-init)
     let pid = crate::process::SCHEDULER.current_pid();
@@ -437,28 +507,68 @@ pub extern "C" fn exception_handler(
     }
     let is_user_mode = (frame.cs & 3) == 3;
 
-    puts("  PID:   "); put_hex32(pid);
+    puts("  PID:   ");
+    put_hex32(pid);
     puts("  Name: ");
     let name_end = proc_name.iter().position(|&b| b == 0).unwrap_or(32);
-    if let Ok(s) = core::str::from_utf8(&proc_name[..name_end]) { puts(s); }
-    puts(if is_user_mode { " [USER]\n" } else { " [KERNEL]\n" });
+    if let Ok(s) = core::str::from_utf8(&proc_name[..name_end]) {
+        puts(s);
+    }
+    puts(if is_user_mode {
+        " [USER]\n"
+    } else {
+        " [KERNEL]\n"
+    });
 
     // GPR dump
-    puts("  RAX: "); put_hex64(saved.rax); puts("  RBX: "); put_hex64(saved.rbx); newline();
-    puts("  RCX: "); put_hex64(saved.rcx); puts("  RDX: "); put_hex64(saved.rdx); newline();
-    puts("  RSI: "); put_hex64(saved.rsi); puts("  RDI: "); put_hex64(saved.rdi); newline();
-    puts("  RBP: "); put_hex64(saved.rbp); puts("  R8:  "); put_hex64(saved.r8);  newline();
-    puts("  R9:  "); put_hex64(saved.r9);  puts("  R10: "); put_hex64(saved.r10); newline();
-    puts("  R11: "); put_hex64(saved.r11); puts("  R12: "); put_hex64(saved.r12); newline();
-    puts("  R13: "); put_hex64(saved.r13); puts("  R14: "); put_hex64(saved.r14); newline();
-    puts("  R15: "); put_hex64(saved.r15); newline();
+    puts("  RAX: ");
+    put_hex64(saved.rax);
+    puts("  RBX: ");
+    put_hex64(saved.rbx);
+    newline();
+    puts("  RCX: ");
+    put_hex64(saved.rcx);
+    puts("  RDX: ");
+    put_hex64(saved.rdx);
+    newline();
+    puts("  RSI: ");
+    put_hex64(saved.rsi);
+    puts("  RDI: ");
+    put_hex64(saved.rdi);
+    newline();
+    puts("  RBP: ");
+    put_hex64(saved.rbp);
+    puts("  R8:  ");
+    put_hex64(saved.r8);
+    newline();
+    puts("  R9:  ");
+    put_hex64(saved.r9);
+    puts("  R10: ");
+    put_hex64(saved.r10);
+    newline();
+    puts("  R11: ");
+    put_hex64(saved.r11);
+    puts("  R12: ");
+    put_hex64(saved.r12);
+    newline();
+    puts("  R13: ");
+    put_hex64(saved.r13);
+    puts("  R14: ");
+    put_hex64(saved.r14);
+    newline();
+    puts("  R15: ");
+    put_hex64(saved.r15);
+    newline();
 
     // Explanation
     let mut explanation = [0u8; 256];
-    let explanation_len = build_explanation(vector, error_code, cr2, is_user_mode, &mut explanation);
+    let explanation_len =
+        build_explanation(vector, error_code, cr2, is_user_mode, &mut explanation);
     if explanation_len > 0 {
         puts("  WHY:   ");
-        if let Ok(s) = core::str::from_utf8(&explanation[..explanation_len as usize]) { puts(s); }
+        if let Ok(s) = core::str::from_utf8(&explanation[..explanation_len as usize]) {
+            puts(s);
+        }
         newline();
     }
 
@@ -466,32 +576,68 @@ pub extern "C" fn exception_handler(
     let mut backtrace = [0u64; 16];
     let backtrace_depth = if !is_user_mode {
         unsafe { walk_stack(saved.rbp, &mut backtrace) }
-    } else { 0 };
+    } else {
+        0
+    };
     if backtrace_depth > 0 {
         puts("  Backtrace:\n");
         for i in 0..backtrace_depth as usize {
-            puts("    #"); put_hex8(i as u8); puts(" "); put_hex64(backtrace[i]); newline();
+            puts("    #");
+            put_hex8(i as u8);
+            puts(" ");
+            put_hex64(backtrace[i]);
+            newline();
         }
     }
 
     // ── Build CrashInfo & invoke BSoD hook ────────────────────────────
     let info = CrashInfo {
-        vector, error_code, exception_name: exc_name,
-        rip: frame.rip, cs: frame.cs, rflags: frame.rflags, rsp: frame.rsp, ss: frame.ss,
-        cr2, cr3,
-        rax: saved.rax, rbx: saved.rbx, rcx: saved.rcx, rdx: saved.rdx,
-        rsi: saved.rsi, rdi: saved.rdi, rbp: saved.rbp,
-        r8: saved.r8, r9: saved.r9, r10: saved.r10, r11: saved.r11,
-        r12: saved.r12, r13: saved.r13, r14: saved.r14, r15: saved.r15,
-        pid, process_name: proc_name, is_user_mode,
-        backtrace, backtrace_depth,
-        explanation, explanation_len,
+        vector,
+        error_code,
+        exception_name: exc_name,
+        rip: frame.rip,
+        cs: frame.cs,
+        rflags: frame.rflags,
+        rsp: frame.rsp,
+        ss: frame.ss,
+        cr2,
+        cr3,
+        rax: saved.rax,
+        rbx: saved.rbx,
+        rcx: saved.rcx,
+        rdx: saved.rdx,
+        rsi: saved.rsi,
+        rdi: saved.rdi,
+        rbp: saved.rbp,
+        r8: saved.r8,
+        r9: saved.r9,
+        r10: saved.r10,
+        r11: saved.r11,
+        r12: saved.r12,
+        r13: saved.r13,
+        r14: saved.r14,
+        r15: saved.r15,
+        pid,
+        process_name: proc_name,
+        is_user_mode,
+        backtrace,
+        backtrace_depth,
+        explanation,
+        explanation_len,
     };
 
-    unsafe { if let Some(hook) = CRASH_HOOK { hook(&info); } }
+    unsafe {
+        if let Some(hook) = CRASH_HOOK {
+            hook(&info);
+        }
+    }
 
     puts("!!! SYSTEM HALTED\n");
-    loop { unsafe { core::arch::asm!("hlt"); } }
+    loop {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -88,7 +88,7 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
 
     // RLE cursor state
     let mut rle_byte_idx: usize = 0; // byte index into BG_RLE_DATA (steps by 2)
-    let mut rle_pos: u8 = 0;         // position within current run
+    let mut rle_pos: u8 = 0; // position within current run
     let mut src_pixel_idx: usize = 0; // linear source pixel index
 
     // Helper: read current run (count, palette_index) from RLE
@@ -495,8 +495,15 @@ struct Line {
 }
 
 impl Line {
-    fn new() -> Self { Self { buf: [0; 96], pos: 0 } }
-    fn clear(&mut self) { self.pos = 0; }
+    fn new() -> Self {
+        Self {
+            buf: [0; 96],
+            pos: 0,
+        }
+    }
+    fn clear(&mut self) {
+        self.pos = 0;
+    }
     fn push(&mut self, s: &str) {
         let b = s.as_bytes();
         let n = b.len().min(96 - self.pos);
@@ -596,12 +603,33 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
 
     let title_x = text_x + face_size * 2 + 30;
     let title_y = text_y + face_size / 2 - (FONT_HEIGHT as u32 * scale);
-    text_y = draw_string(fb, stride, fmt, w, h, title_x, title_y, "MorpheusX", white, scale * 2);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        title_x,
+        title_y,
+        "MorpheusX",
+        white,
+        scale * 2,
+    );
     text_y = text_y.max(face_cy + face_size + 10);
 
     // 5. Subtitle
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y,
-        "Your system ran into a problem and needs to stop.", gray, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        "Your system ran into a problem and needs to stop.",
+        gray,
+        scale,
+    );
     text_y += 6 * scale;
 
     // 6. Process identification
@@ -612,8 +640,23 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     line.push(" (PID ");
     line.push(dec32(info.pid, &mut dbuf));
     line.push(") ");
-    line.push(if info.is_user_mode { "- User Mode (Ring 3)" } else { "- Kernel Mode (Ring 0)" });
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), cyan, scale);
+    line.push(if info.is_user_mode {
+        "- User Mode (Ring 3)"
+    } else {
+        "- Kernel Mode (Ring 0)"
+    });
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        cyan,
+        scale,
+    );
     text_y += 6 * scale;
 
     // 7. Exception stop code
@@ -623,9 +666,23 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     line.push(" (0x");
     let vb = info.vector as u8;
     let hex_chars = b"0123456789ABCDEF";
-    line.push_bytes(&[hex_chars[(vb >> 4) as usize], hex_chars[(vb & 0xF) as usize]]);
+    line.push_bytes(&[
+        hex_chars[(vb >> 4) as usize],
+        hex_chars[(vb & 0xF) as usize],
+    ]);
     line.push(") ***");
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), red, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        red,
+        scale,
+    );
 
     // 8. Explanation
     if info.explanation_len > 0 {
@@ -636,72 +693,206 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     text_y += 6 * scale;
 
     // 9. Exception frame
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y,
-        "--- Exception Frame ---", gray, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        "--- Exception Frame ---",
+        gray,
+        scale,
+    );
 
     line.clear();
-    line.push("RIP: "); line.push(hex64(info.rip, &mut hbuf));
-    line.push("    RSP: "); line.push(hex64(info.rsp, &mut hbuf));
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), white, scale);
+    line.push("RIP: ");
+    line.push(hex64(info.rip, &mut hbuf));
+    line.push("    RSP: ");
+    line.push(hex64(info.rsp, &mut hbuf));
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        white,
+        scale,
+    );
 
     line.clear();
-    line.push("CS:  "); line.push(hex64(info.cs, &mut hbuf));
-    line.push("    SS:  "); line.push(hex64(info.ss, &mut hbuf));
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), white, scale);
+    line.push("CS:  ");
+    line.push(hex64(info.cs, &mut hbuf));
+    line.push("    SS:  ");
+    line.push(hex64(info.ss, &mut hbuf));
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        white,
+        scale,
+    );
 
     line.clear();
-    line.push("RFLAGS: "); line.push(hex64(info.rflags, &mut hbuf));
-    line.push("  Error: "); line.push(hex64(info.error_code, &mut hbuf));
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), white, scale);
+    line.push("RFLAGS: ");
+    line.push(hex64(info.rflags, &mut hbuf));
+    line.push("  Error: ");
+    line.push(hex64(info.error_code, &mut hbuf));
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        white,
+        scale,
+    );
 
     line.clear();
-    line.push("CR2: "); line.push(hex64(info.cr2, &mut hbuf));
-    line.push("    CR3: "); line.push(hex64(info.cr3, &mut hbuf));
+    line.push("CR2: ");
+    line.push(hex64(info.cr2, &mut hbuf));
+    line.push("    CR3: ");
+    line.push(hex64(info.cr3, &mut hbuf));
     let cr_color = if info.vector == 14 { yellow } else { white };
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), cr_color, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        cr_color,
+        scale,
+    );
 
     // Page fault bit decode
     if info.vector == 14 {
         line.clear();
         line.push("Flags: ");
-        if info.error_code & 1 != 0 { line.push("PRESENT "); } else { line.push("NOT_PRESENT "); }
-        if info.error_code & 2 != 0 { line.push("WRITE "); } else { line.push("READ "); }
-        if info.error_code & 4 != 0 { line.push("USER "); } else { line.push("SUPERVISOR "); }
-        if info.error_code & 8 != 0 { line.push("RSVD "); }
-        if info.error_code & 16 != 0 { line.push("IFETCH "); }
-        text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), yellow, scale);
+        if info.error_code & 1 != 0 {
+            line.push("PRESENT ");
+        } else {
+            line.push("NOT_PRESENT ");
+        }
+        if info.error_code & 2 != 0 {
+            line.push("WRITE ");
+        } else {
+            line.push("READ ");
+        }
+        if info.error_code & 4 != 0 {
+            line.push("USER ");
+        } else {
+            line.push("SUPERVISOR ");
+        }
+        if info.error_code & 8 != 0 {
+            line.push("RSVD ");
+        }
+        if info.error_code & 16 != 0 {
+            line.push("IFETCH ");
+        }
+        text_y = draw_string(
+            fb,
+            stride,
+            fmt,
+            w,
+            h,
+            text_x,
+            text_y,
+            line.as_str(),
+            yellow,
+            scale,
+        );
     }
     text_y += 4 * scale;
 
     // 10. All general-purpose registers (2 per line)
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y,
-        "--- Registers ---", gray, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        "--- Registers ---",
+        gray,
+        scale,
+    );
 
     let reg_pairs: [(&str, u64, &str, u64); 7] = [
         ("RAX: ", info.rax, "RBX: ", info.rbx),
         ("RCX: ", info.rcx, "RDX: ", info.rdx),
         ("RSI: ", info.rsi, "RDI: ", info.rdi),
         ("RBP: ", info.rbp, "R8:  ", info.r8),
-        ("R9:  ", info.r9,  "R10: ", info.r10),
+        ("R9:  ", info.r9, "R10: ", info.r10),
         ("R11: ", info.r11, "R12: ", info.r12),
         ("R13: ", info.r13, "R14: ", info.r14),
     ];
     for &(na, va, nb, vb) in reg_pairs.iter() {
         line.clear();
-        line.push(na); line.push(hex64(va, &mut hbuf));
+        line.push(na);
+        line.push(hex64(va, &mut hbuf));
         line.push("    ");
-        line.push(nb); line.push(hex64(vb, &mut hbuf));
-        text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), white, scale);
+        line.push(nb);
+        line.push(hex64(vb, &mut hbuf));
+        text_y = draw_string(
+            fb,
+            stride,
+            fmt,
+            w,
+            h,
+            text_x,
+            text_y,
+            line.as_str(),
+            white,
+            scale,
+        );
     }
     line.clear();
-    line.push("R15: "); line.push(hex64(info.r15, &mut hbuf));
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), white, scale);
+    line.push("R15: ");
+    line.push(hex64(info.r15, &mut hbuf));
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        line.as_str(),
+        white,
+        scale,
+    );
     text_y += 4 * scale;
 
     // 11. Backtrace (kernel-mode only, if available)
     if info.backtrace_depth > 0 {
-        text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y,
-            "--- Backtrace ---", gray, scale);
+        text_y = draw_string(
+            fb,
+            stride,
+            fmt,
+            w,
+            h,
+            text_x,
+            text_y,
+            "--- Backtrace ---",
+            gray,
+            scale,
+        );
         let show = (info.backtrace_depth as usize).min(10); // cap to avoid overflow
         for i in 0..show {
             line.clear();
@@ -709,14 +900,35 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
             line.push(dec32(i as u32, &mut dbuf));
             line.push("  ");
             line.push(hex64(info.backtrace[i], &mut hbuf));
-            text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, line.as_str(), white, scale);
+            text_y = draw_string(
+                fb,
+                stride,
+                fmt,
+                w,
+                h,
+                text_x,
+                text_y,
+                line.as_str(),
+                white,
+                scale,
+            );
         }
         text_y += 4 * scale;
     }
 
     // 12. Footer
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y,
-        "System halted. Power off or reset to restart.", gray, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        "System halted. Power off or reset to restart.",
+        gray,
+        scale,
+    );
     let _ = text_y;
 
     puts("[BSOD] Crash screen rendered\n");
@@ -783,13 +995,28 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
 
     // Sad face
     let face_size = if w >= 1920 { 50u32 } else { 30 };
-    draw_sad_face(fb, stride, fmt, w, h, text_x + face_size, text_y + face_size, face_size, white);
+    draw_sad_face(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x + face_size,
+        text_y + face_size,
+        face_size,
+        white,
+    );
 
     // Title
     let title_x = text_x + face_size * 2 + 30;
     text_y = draw_string(
-        fb, stride, fmt, w, h,
-        title_x, text_y + face_size / 2,
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        title_x,
+        text_y + face_size / 2,
         "MorpheusX",
         white,
         scale * 2,
@@ -797,8 +1024,13 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
     text_y = text_y.max(panel_y + margin + face_size * 2 + 20);
 
     text_y = draw_string(
-        fb, stride, fmt, w, h,
-        text_x, text_y,
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
         "Your system ran into a problem and needs to stop.",
         gray,
         scale,
@@ -806,8 +1038,13 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
     text_y += 10 * scale;
 
     text_y = draw_string(
-        fb, stride, fmt, w, h,
-        text_x, text_y,
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
         "*** KERNEL PANIC ***",
         red,
         scale,
@@ -815,10 +1052,32 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
     text_y += 8 * scale;
 
     // File location
-    text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, "Location:", gray, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
+        "Location:",
+        gray,
+        scale,
+    );
 
     // File name (may be long, just print as-is)
-    text_y = draw_string(fb, stride, fmt, w, h, text_x + 20, text_y, file, white, scale);
+    text_y = draw_string(
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x + 20,
+        text_y,
+        file,
+        white,
+        scale,
+    );
 
     // Line number
     let mut buf32 = [0u8; 10];
@@ -834,8 +1093,13 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
     text_y += 16 * scale;
 
     text_y = draw_string(
-        fb, stride, fmt, w, h,
-        text_x, text_y,
+        fb,
+        stride,
+        fmt,
+        w,
+        h,
+        text_x,
+        text_y,
         "System halted. Power off or reset to restart.",
         gray,
         scale,
