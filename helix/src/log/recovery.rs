@@ -167,8 +167,11 @@ pub fn replay_log<B: BlockIo>(
                         if !data.is_empty() && data[0] == 0xFF && data.len() >= 1 + 8 + 24 {
                             // Extent-based file — v3 format:
                             // [0xFF][file_size: u64 LE][logical: u64][physical: u64][count: u32][pad: u32]
-                            let file_size = u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
-                            let phys = u64::from_le_bytes(data[9 + 8..9 + 16].try_into().unwrap_or([0u8; 8]));
+                            let file_size =
+                                u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
+                            let phys = u64::from_le_bytes(
+                                data[9 + 8..9 + 16].try_into().unwrap_or([0u8; 8]),
+                            );
                             let crc = crate::crc::crc64(&data[1..]);
                             let entry = NamespaceIndex::make_file_entry(
                                 path,

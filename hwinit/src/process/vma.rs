@@ -86,7 +86,13 @@ impl VmaTable {
     }
 
     /// Record a new mapping.  Returns `Ok(index)` or `Err` if the table is full.
-    pub fn insert(&mut self, vaddr: u64, phys: u64, pages: u64, owns_phys: bool) -> Result<usize, ()> {
+    pub fn insert(
+        &mut self,
+        vaddr: u64,
+        phys: u64,
+        pages: u64,
+        owns_phys: bool,
+    ) -> Result<usize, ()> {
         for (i, entry) in self.entries.iter_mut().enumerate() {
             if entry.is_free() {
                 *entry = Vma {

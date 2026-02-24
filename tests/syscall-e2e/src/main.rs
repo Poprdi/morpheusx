@@ -53,7 +53,11 @@ fn fail(name: &str, detail: &str) {
 }
 
 fn check(name: &str, cond: bool, detail: &str) {
-    if cond { ok(name); } else { fail(name, detail); }
+    if cond {
+        ok(name);
+    } else {
+        fail(name, detail);
+    }
 }
 
 /// Check that a raw return value is NOT an error.
@@ -108,99 +112,99 @@ fn main() -> i32 {
     // 0: EXIT — tested implicitly at the end
     ok("SYS_EXIT (tested at program end)");
 
-    test_write();       // 1
-    test_read();        // 2
-    test_yield();       // 3
-    test_alloc_free();  // 4, 5
-    test_getpid();      // 6
-    test_kill();        // 7
-    // 8: WAIT — tested later with spawn if possible
+    test_write(); // 1
+    test_read(); // 2
+    test_yield(); // 3
+    test_alloc_free(); // 4, 5
+    test_getpid(); // 6
+    test_kill(); // 7
+                 // 8: WAIT — tested later with spawn if possible
     ok("SYS_WAIT (requires child — deferred)");
-    test_sleep();       // 9
+    test_sleep(); // 9
 
     // ── HelixFS (10-21) ──────────────────────────────────────────────
     println("");
     println("── HelixFS (10-21) ──");
-    test_fs();          // 10-17, 19
-    test_truncate();    // 18
-    test_snapshot();    // 20
-    test_versions();    // 21
+    test_fs(); // 10-17, 19
+    test_truncate(); // 18
+    test_snapshot(); // 20
+    test_versions(); // 21
 
     // ── System (22-31) ───────────────────────────────────────────────
     println("");
     println("── System (22-31) ──");
-    test_clock();       // 22
-    test_sysinfo();     // 23
-    test_getppid();     // 24
-    // 25: SPAWN — needs an ELF on disk
+    test_clock(); // 22
+    test_sysinfo(); // 23
+    test_getppid(); // 24
+                    // 25: SPAWN — needs an ELF on disk
     ok("SYS_SPAWN (requires ELF binary — deferred)");
-    test_mmap_munmap();  // 26-27
-    test_dup();         // 28
-    test_syslog();      // 29
-    test_getcwd();      // 30
-    test_chdir();       // 31
+    test_mmap_munmap(); // 26-27
+    test_dup(); // 28
+    test_syslog(); // 29
+    test_getcwd(); // 30
+    test_chdir(); // 31
 
     // ── Raw NIC (32-37) ──────────────────────────────────────────────
     println("");
     println("── Raw NIC (32-37) ──");
-    test_nic();         // 32-37
+    test_nic(); // 32-37
 
     // ── Network Stack (38-41) ──────────────────────────────────────
     println("");
     println("── Network (38-41) ──");
-    test_net_stack();   // 38-41
+    test_net_stack(); // 38-41
 
     // ── Device / Mount (42-45) ───────────────────────────────────────
     println("");
     println("── Device (42-45) ──");
-    test_ioctl();       // 42
-    test_mount();       // 43
-    test_umount();      // 44
-    test_poll();        // 45
+    test_ioctl(); // 42
+    test_mount(); // 43
+    test_umount(); // 44
+    test_poll(); // 45
 
     // ── Persistence (46-51) ──────────────────────────────────────────
     println("");
     println("── Persistence (46-51) ──");
-    test_persist();     // 46-50
-    test_pe_info();     // 51
+    test_persist(); // 46-50
+    test_pe_info(); // 51
 
     // ── Hardware I/O (52-62) ─────────────────────────────────────────
     println("");
     println("── Hardware I/O (52-62) ──");
-    test_port_io();     // 52-53
-    test_pci();         // 54-55
-    test_dma();         // 56-57
-    test_map_phys();    // 58
-    test_virt_to_phys();// 59
-    test_irq();         // 60-61
+    test_port_io(); // 52-53
+    test_pci(); // 54-55
+    test_dma(); // 56-57
+    test_map_phys(); // 58
+    test_virt_to_phys(); // 59
+    test_irq(); // 60-61
     test_cache_flush(); // 62
 
     // ── Display (63-64) ──────────────────────────────────────────────
     println("");
     println("── Display (63-64) ──");
-    test_fb_info();     // 63
-    test_fb_map();      // 64
+    test_fb_info(); // 63
+    test_fb_map(); // 64
 
     // ── Process Management (65-68) ───────────────────────────────────
     println("");
     println("── Process Mgmt (65-68) ──");
-    test_ps();          // 65
-    test_sigaction();   // 66
-    test_priority();    // 67-68
+    test_ps(); // 65
+    test_sigaction(); // 66
+    test_priority(); // 67-68
 
     // ── CPU / Diag (69-72) ───────────────────────────────────────────
     println("");
     println("── CPU / Diagnostics (69-72) ──");
-    test_cpuid();       // 69
-    test_rdtsc();       // 70
-    test_boot_log();    // 71
-    test_memmap();      // 72
+    test_cpuid(); // 69
+    test_rdtsc(); // 70
+    test_boot_log(); // 71
+    test_memmap(); // 72
 
     // ── Memory sharing / protection (73-74) ───────────────────
     println("");
     println("── Memory (73-74) ──");
-    test_shm_grant();   // 73
-    test_mprotect();    // 74
+    test_shm_grant(); // 73
+    test_mprotect(); // 74
 
     // ── Summary ──────────────────────────────────────────────────────
     println("");
@@ -222,11 +226,14 @@ fn main() -> i32 {
     }
     println("════════════════════════════════════════════");
 
-    f as i32  // exit code = number of failures
+    f as i32 // exit code = number of failures
 }
 
 fn print_u32(v: u32) {
-    if v == 0 { print("0"); return; }
+    if v == 0 {
+        print("0");
+        return;
+    }
     let mut buf = [0u8; 10];
     let mut n = v;
     let mut i = 10usize;
@@ -247,11 +254,19 @@ fn print_u32(v: u32) {
 fn test_write() {
     let msg = b"test_write output\n";
     let ret = unsafe { syscall3(SYS_WRITE, 1, msg.as_ptr() as u64, msg.len() as u64) };
-    check("SYS_WRITE(1) stdout", ret == msg.len() as u64, "wrong byte count");
+    check(
+        "SYS_WRITE(1) stdout",
+        ret == msg.len() as u64,
+        "wrong byte count",
+    );
 
     // stderr
     let ret = unsafe { syscall3(SYS_WRITE, 2, msg.as_ptr() as u64, msg.len() as u64) };
-    check("SYS_WRITE(2) stderr", ret == msg.len() as u64, "wrong byte count");
+    check(
+        "SYS_WRITE(2) stderr",
+        ret == msg.len() as u64,
+        "wrong byte count",
+    );
 }
 
 // ── SYS_READ (2) ─────────────────────────────────────────────────────────
@@ -260,7 +275,11 @@ fn test_read() {
     let mut buf = [0u8; 16];
     let ret = unsafe { syscall3(SYS_READ, 0, buf.as_mut_ptr() as u64, buf.len() as u64) };
     // Returns 0 or some small number (non-blocking)
-    check("SYS_READ(0) stdin non-blocking", !libmorpheus::is_error(ret), "returned error");
+    check(
+        "SYS_READ(0) stdin non-blocking",
+        !libmorpheus::is_error(ret),
+        "returned error",
+    );
 }
 
 // ── SYS_YIELD (3) ────────────────────────────────────────────────────────
@@ -311,7 +330,11 @@ fn test_fs() {
     // Create test directory
     let _ = fs::mkdir("/tmp");
     let r = fs::mkdir("/tmp/e2etest");
-    check("SYS_MKDIR", r.is_ok() || r == Err(libmorpheus::EINVAL - 17), "mkdir failed");
+    check(
+        "SYS_MKDIR",
+        r.is_ok() || r == Err(libmorpheus::EINVAL - 17),
+        "mkdir failed",
+    );
     // Ignore EEXIST
 
     // OPEN + WRITE + CLOSE
@@ -351,7 +374,11 @@ fn test_fs() {
     match fd {
         Ok(fd) => {
             let pos = fs::seek(fd, 0, fs::SEEK_END);
-            check("SYS_SEEK", pos.is_ok() && pos.unwrap() > 0, "seek returned 0");
+            check(
+                "SYS_SEEK",
+                pos.is_ok() && pos.unwrap() > 0,
+                "seek returned 0",
+            );
             let _ = fs::close(fd);
         }
         Err(_) => fail("SYS_SEEK setup", "open failed"),
@@ -387,18 +414,13 @@ fn test_fs() {
 fn test_truncate() {
     let path = "/tmp/e2etrunc.txt";
     // Create a file with some data
-    if let Ok(fd) = libmorpheus::fs::open(path, libmorpheus::fs::O_WRITE | libmorpheus::fs::O_CREATE) {
+    if let Ok(fd) =
+        libmorpheus::fs::open(path, libmorpheus::fs::O_WRITE | libmorpheus::fs::O_CREATE)
+    {
         let _ = libmorpheus::fs::write(fd, b"Some test data for truncation");
         let _ = libmorpheus::fs::close(fd);
     }
-    let ret = unsafe {
-        syscall3(
-            SYS_TRUNCATE,
-            path.as_ptr() as u64,
-            path.len() as u64,
-            0,
-        )
-    };
+    let ret = unsafe { syscall3(SYS_TRUNCATE, path.as_ptr() as u64, path.len() as u64, 0) };
     check_ok("SYS_TRUNCATE", ret);
     let _ = libmorpheus::fs::unlink(path);
 }
@@ -406,15 +428,13 @@ fn test_truncate() {
 // ── SYS_SNAPSHOT (20) ───────────────────────────────────────────────────
 fn test_snapshot() {
     let name = "e2e_snap";
-    let ret = unsafe {
-        syscall2(
-            SYS_SNAPSHOT,
-            name.as_ptr() as u64,
-            name.len() as u64,
-        )
-    };
+    let ret = unsafe { syscall2(SYS_SNAPSHOT, name.as_ptr() as u64, name.len() as u64) };
     // Returns a TSC-based checkpoint ID (non-error, non-zero)
-    check("SYS_SNAPSHOT", !libmorpheus::is_error(ret), "returned error");
+    check(
+        "SYS_SNAPSHOT",
+        !libmorpheus::is_error(ret),
+        "returned error",
+    );
 }
 
 // ── SYS_VERSIONS (21) ──────────────────────────────────────────────────
@@ -463,7 +483,11 @@ fn test_mmap_munmap() {
     match r {
         Ok(vaddr) => {
             // The returned address must be in user mmap range.
-            check("SYS_MMAP(1 page)", vaddr >= 0x40_0000_0000, "vaddr out of range");
+            check(
+                "SYS_MMAP(1 page)",
+                vaddr >= 0x40_0000_0000,
+                "vaddr out of range",
+            );
 
             // Unmap the same page.
             let ur = libmorpheus::mem::munmap(vaddr, 1);
@@ -624,14 +648,24 @@ fn test_poll() {
         revents: i16,
     }
     let mut fds = [
-        PollFd { fd: 0, events: 1, revents: 0 },  // stdin POLLIN
-        PollFd { fd: 1, events: 4, revents: 0 },  // stdout POLLOUT
+        PollFd {
+            fd: 0,
+            events: 1,
+            revents: 0,
+        }, // stdin POLLIN
+        PollFd {
+            fd: 1,
+            events: 4,
+            revents: 0,
+        }, // stdout POLLOUT
     ];
-    let ret = unsafe {
-        syscall3(SYS_POLL, fds.as_mut_ptr() as u64, 2, 0)
-    };
+    let ret = unsafe { syscall3(SYS_POLL, fds.as_mut_ptr() as u64, 2, 0) };
     // stdout should always be ready → at least 1
-    check("SYS_POLL", !libmorpheus::is_error(ret), "poll returned error");
+    check(
+        "SYS_POLL",
+        !libmorpheus::is_error(ret),
+        "poll returned error",
+    );
 }
 
 // ── Persistence (46-50) ─────────────────────────────────────────────────
@@ -652,10 +686,12 @@ fn test_persist() {
     check_ok("SYS_PERSIST_PUT", ret);
 
     // GET (size query)
-    let ret = unsafe {
-        syscall4(SYS_PERSIST_GET, key.as_ptr() as u64, key.len() as u64, 0, 0)
-    };
-    check("SYS_PERSIST_GET(size)", !libmorpheus::is_error(ret) && ret == val.len() as u64, "wrong size");
+    let ret = unsafe { syscall4(SYS_PERSIST_GET, key.as_ptr() as u64, key.len() as u64, 0, 0) };
+    check(
+        "SYS_PERSIST_GET(size)",
+        !libmorpheus::is_error(ret) && ret == val.len() as u64,
+        "wrong size",
+    );
 
     // GET (read)
     let mut buf = [0u8; 64];
@@ -668,7 +704,11 @@ fn test_persist() {
             buf.len() as u64,
         )
     };
-    check("SYS_PERSIST_GET(read)", !libmorpheus::is_error(ret) && ret == val.len() as u64, "wrong read count");
+    check(
+        "SYS_PERSIST_GET(read)",
+        !libmorpheus::is_error(ret) && ret == val.len() as u64,
+        "wrong read count",
+    );
 
     // LIST
     let mut list_buf = [0u8; 512];
@@ -680,7 +720,11 @@ fn test_persist() {
             0,
         )
     };
-    check("SYS_PERSIST_LIST", !libmorpheus::is_error(ret) && ret >= 1, "no keys found");
+    check(
+        "SYS_PERSIST_LIST",
+        !libmorpheus::is_error(ret) && ret >= 1,
+        "no keys found",
+    );
 
     // INFO
     #[repr(C)]
@@ -690,16 +734,17 @@ fn test_persist() {
         num_keys: u64,
         used_bytes: u64,
     }
-    let mut info = PersistInfo { backend_flags: 0, _pad: 0, num_keys: 0, used_bytes: 0 };
-    let ret = unsafe {
-        syscall1(SYS_PERSIST_INFO, &mut info as *mut PersistInfo as u64)
+    let mut info = PersistInfo {
+        backend_flags: 0,
+        _pad: 0,
+        num_keys: 0,
+        used_bytes: 0,
     };
+    let ret = unsafe { syscall1(SYS_PERSIST_INFO, &mut info as *mut PersistInfo as u64) };
     check_ok("SYS_PERSIST_INFO", ret);
 
     // DEL
-    let ret = unsafe {
-        syscall2(SYS_PERSIST_DEL, key.as_ptr() as u64, key.len() as u64)
-    };
+    let ret = unsafe { syscall2(SYS_PERSIST_DEL, key.as_ptr() as u64, key.len() as u64) };
     check_ok("SYS_PERSIST_DEL", ret);
 }
 
@@ -750,7 +795,11 @@ fn test_pci() {
     // Read vendor ID from bus=0, device=0, function=0, offset=0
     let vendor = libmorpheus::hw::pci_cfg_read16(0, 0, 0, 0x00);
     // QEMU typically has vendor 0x8086 (Intel) or 0x1234 (QEMU)
-    check("SYS_PCI_CFG_READ(vendor)", vendor != 0xFFFF, "no device at 00:00.0");
+    check(
+        "SYS_PCI_CFG_READ(vendor)",
+        vendor != 0xFFFF,
+        "no device at 00:00.0",
+    );
 
     // Read device ID
     let _device = libmorpheus::hw::pci_cfg_read16(0, 0, 0, 0x02);
@@ -797,7 +846,11 @@ fn test_map_phys() {
             let mr = libmorpheus::hw::map_phys_rw(phys, 1);
             match mr {
                 Ok(vaddr) => {
-                    check("SYS_MAP_PHYS(1 page)", vaddr >= 0x40_0000_0000, "vaddr out of range");
+                    check(
+                        "SYS_MAP_PHYS(1 page)",
+                        vaddr >= 0x40_0000_0000,
+                        "vaddr out of range",
+                    );
                     // Unmap the user-space mapping (does not free the physical page).
                     let ur = libmorpheus::mem::munmap(vaddr, 1);
                     check("SYS_MUNMAP(map_phys)", ur.is_ok(), "munmap failed");
@@ -824,7 +877,11 @@ fn test_virt_to_phys() {
     let virt = &stack_var as *const u64 as u64;
     let ret = unsafe { syscall1(SYS_VIRT_TO_PHYS, virt) };
     // In identity-mapped mode, phys should equal virt
-    check("SYS_VIRT_TO_PHYS", !libmorpheus::is_error(ret), "translation failed");
+    check(
+        "SYS_VIRT_TO_PHYS",
+        !libmorpheus::is_error(ret),
+        "translation failed",
+    );
 }
 
 // ── IRQ_ATTACH / IRQ_ACK (60-61) ────────────────────────────────────────
@@ -895,7 +952,11 @@ fn test_ps() {
     let count = libmorpheus::process::ps(&mut entries);
     check("SYS_PS", count >= 1, "no processes");
     if count >= 1 {
-        check("SYS_PS pid[0]", entries[0].pid == 0 || entries[0].pid < 256, "bad pid");
+        check(
+            "SYS_PS pid[0]",
+            entries[0].pid == 0 || entries[0].pid < 256,
+            "bad pid",
+        );
     }
 }
 
@@ -975,7 +1036,10 @@ fn test_memmap() {
     check("SYS_MEMMAP(count)", count > 0, "no entries");
 
     let mut entries = [libmorpheus::hw::MemmapEntry {
-        phys_start: 0, num_pages: 0, mem_type: 0, _pad: 0,
+        phys_start: 0,
+        num_pages: 0,
+        mem_type: 0,
+        _pad: 0,
     }; 128];
     let r = libmorpheus::hw::memmap(&mut entries);
     match r {

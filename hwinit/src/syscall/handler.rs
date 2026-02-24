@@ -659,20 +659,15 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64) -> u64 {
 
     // Read entire file into the buffer.
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, file_size);
-    let bytes_read = match morpheus_helix::vfs::vfs_read(
-        &mut fs.device,
-        &fs.mount_table,
-        fd_table,
-        fd,
-        buf,
-    ) {
-        Ok(n) => n,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            let _ = registry.free_pages(buf_phys, pages_needed);
-            return EIO;
-        }
-    };
+    let bytes_read =
+        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
+            Ok(n) => n,
+            Err(_) => {
+                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                let _ = registry.free_pages(buf_phys, pages_needed);
+                return EIO;
+            }
+        };
 
     let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
 
@@ -1145,19 +1140,14 @@ pub unsafe fn sys_persist_get(key_ptr: u64, key_len: u64, buf_ptr: u64, buf_len:
     };
 
     let buf = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize);
-    let bytes = match morpheus_helix::vfs::vfs_read(
-        &mut fs.device,
-        &fs.mount_table,
-        fd_table,
-        fd,
-        buf,
-    ) {
-        Ok(n) => n as u64,
-        Err(e) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            return helix_err_to_errno(e);
-        }
-    };
+    let bytes =
+        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
+            Ok(n) => n as u64,
+            Err(e) => {
+                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                return helix_err_to_errno(e);
+            }
+        };
 
     let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
     bytes
@@ -1289,11 +1279,8 @@ pub unsafe fn sys_persist_info(info_ptr: u64) -> u64 {
                 continue;
             }
             path_buf[..prefix.len()].copy_from_slice(prefix);
-            path_buf[prefix.len()..prefix.len() + name_bytes.len()]
-                .copy_from_slice(name_bytes);
-            if let Ok(p) =
-                core::str::from_utf8(&path_buf[..prefix.len() + name_bytes.len()])
-            {
+            path_buf[prefix.len()..prefix.len() + name_bytes.len()].copy_from_slice(name_bytes);
+            if let Ok(p) = core::str::from_utf8(&path_buf[..prefix.len() + name_bytes.len()]) {
                 if let Ok(stat) = morpheus_helix::vfs::vfs_stat(&fs.mount_table, p) {
                     num_keys += 1;
                     used_bytes += stat.size;
@@ -1385,20 +1372,15 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     };
 
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, read_size);
-    let bytes_read = match morpheus_helix::vfs::vfs_read(
-        &mut fs.device,
-        &fs.mount_table,
-        fd_table,
-        fd,
-        buf,
-    ) {
-        Ok(n) => n,
-        Err(e) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            let _ = registry.free_pages(buf_phys, pages_needed);
-            return helix_err_to_errno(e);
-        }
-    };
+    let bytes_read =
+        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                let _ = registry.free_pages(buf_phys, pages_needed);
+                return helix_err_to_errno(e);
+            }
+        };
     let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
 
     let data = core::slice::from_raw_parts(buf_phys as *const u8, bytes_read);
@@ -1414,11 +1396,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     };
 
     // ── Detect ELF ──────────────────────────────────────────────────
-    if bytes_read >= 64
-        && data[0] == 0x7f
-        && data[1] == b'E'
-        && data[2] == b'L'
-        && data[3] == b'F'
+    if bytes_read >= 64 && data[0] == 0x7f && data[1] == b'E' && data[2] == b'L' && data[3] == b'F'
     {
         info.format = 1; // ELF64
         let ei_class = data[4];
@@ -1432,8 +1410,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
                 _ => 0,
             };
             info.entry_point = u64::from_le_bytes([
-                data[24], data[25], data[26], data[27], data[28], data[29], data[30],
-                data[31],
+                data[24], data[25], data[26], data[27], data[28], data[29], data[30], data[31],
             ]);
             info.num_sections = u16::from_le_bytes([data[60], data[61]]) as u32;
         }
@@ -1441,11 +1418,8 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     // ── Detect PE/MZ ────────────────────────────────────────────────
     else if bytes_read >= 256 && data[0] == b'M' && data[1] == b'Z' {
         info.format = 2; // PE32+
-        // Use morpheus_persistent's PE parser for full header extraction.
-        match morpheus_persistent::pe::header::PeHeaders::parse(
-            buf_phys as *const u8,
-            bytes_read,
-        ) {
+                         // Use morpheus_persistent's PE parser for full header extraction.
+        match morpheus_persistent::pe::header::PeHeaders::parse(buf_phys as *const u8, bytes_read) {
             Ok(pe) => {
                 info.image_base = pe.optional.image_base;
                 info.entry_point = pe.optional.address_of_entry_point as u64;
@@ -1644,7 +1618,11 @@ pub unsafe fn sys_nic_tx(frame_ptr: u64, frame_len: u64) -> u64 {
     match NIC_OPS.tx {
         Some(tx_fn) => {
             let rc = tx_fn(frame_ptr as *const u8, frame_len as usize);
-            if rc < 0 { EIO } else { 0 }
+            if rc < 0 {
+                EIO
+            } else {
+                0
+            }
         }
         None => ENODEV,
     }
@@ -1662,7 +1640,11 @@ pub unsafe fn sys_nic_rx(buf_ptr: u64, buf_len: u64) -> u64 {
     match NIC_OPS.rx {
         Some(rx_fn) => {
             let rc = rx_fn(buf_ptr as *mut u8, buf_len as usize);
-            if rc < 0 { EIO } else { rc as u64 }
+            if rc < 0 {
+                EIO
+            } else {
+                rc as u64
+            }
         }
         None => ENODEV,
     }
@@ -1725,7 +1707,11 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     match NIC_OPS.ctrl {
         Some(f) => {
             let rc = f(cmd as u32, arg);
-            if rc < 0 { EIO } else { rc as u64 }
+            if rc < 0 {
+                EIO
+            } else {
+                rc as u64
+            }
         }
         None => ENODEV,
     }
@@ -1754,10 +1740,10 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
         (0..=2, IOCTL_TIOCGWINSZ) => {
             if arg != 0 && validate_user_buf(arg, 8) {
                 let buf = arg as *mut u16;
-                *buf = 25;        // ws_row
+                *buf = 25; // ws_row
                 *buf.add(1) = 80; // ws_col
-                *buf.add(2) = 0;  // ws_xpixel
-                *buf.add(3) = 0;  // ws_ypixel
+                *buf.add(2) = 0; // ws_xpixel
+                *buf.add(3) = 0; // ws_ypixel
             }
             0
         }
@@ -1931,9 +1917,18 @@ pub unsafe fn sys_port_out(port: u64, width: u64, value: u64) -> u64 {
     }
     let port = port as u16;
     match width {
-        1 => { crate::cpu::pio::outb(port, value as u8); 0 }
-        2 => { crate::cpu::pio::outw(port, value as u16); 0 }
-        4 => { crate::cpu::pio::outl(port, value as u32); 0 }
+        1 => {
+            crate::cpu::pio::outb(port, value as u8);
+            0
+        }
+        2 => {
+            crate::cpu::pio::outw(port, value as u16);
+            0
+        }
+        4 => {
+            crate::cpu::pio::outl(port, value as u32);
+            0
+        }
         _ => EINVAL,
     }
 }
@@ -1955,7 +1950,11 @@ pub unsafe fn sys_pci_cfg_read(bdf: u64, offset: u64, width: u64) -> u64 {
     if offset > 255 {
         return EINVAL;
     }
-    let addr = crate::pci::PciAddr { bus, device: dev, function: func };
+    let addr = crate::pci::PciAddr {
+        bus,
+        device: dev,
+        function: func,
+    };
     let off = offset as u8;
     match width {
         1 => crate::pci::pci_cfg_read8(addr, off) as u64,
@@ -1977,12 +1976,25 @@ pub unsafe fn sys_pci_cfg_write(bdf: u64, offset: u64, width: u64, value: u64) -
     if offset > 255 {
         return EINVAL;
     }
-    let addr = crate::pci::PciAddr { bus, device: dev, function: func };
+    let addr = crate::pci::PciAddr {
+        bus,
+        device: dev,
+        function: func,
+    };
     let off = offset as u8;
     match width {
-        1 => { crate::pci::pci_cfg_write8(addr, off, value as u8); 0 }
-        2 => { crate::pci::pci_cfg_write16(addr, off, value as u16); 0 }
-        4 => { crate::pci::pci_cfg_write32(addr, off, value as u32); 0 }
+        1 => {
+            crate::pci::pci_cfg_write8(addr, off, value as u8);
+            0
+        }
+        2 => {
+            crate::pci::pci_cfg_write16(addr, off, value as u16);
+            0
+        }
+        4 => {
+            crate::pci::pci_cfg_write32(addr, off, value as u32);
+            0
+        }
         _ => EINVAL,
     }
 }
@@ -2220,11 +2232,11 @@ pub unsafe fn sys_fb_map() -> u64 {
 pub struct PsEntry {
     pub pid: u32,
     pub ppid: u32,
-    pub state: u32,      // 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated
+    pub state: u32, // 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated
     pub priority: u32,
     pub cpu_ticks: u64,
     pub pages_alloc: u64,
-    pub name: [u8; 32],  // NUL-terminated
+    pub name: [u8; 32], // NUL-terminated
 }
 
 /// `SYS_PS(buf_ptr, max_count) → count`
@@ -2492,10 +2504,7 @@ pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
         return EFAULT;
     }
 
-    let out = core::slice::from_raw_parts_mut(
-        buf_ptr as *mut MemmapEntry,
-        max_entries as usize,
-    );
+    let out = core::slice::from_raw_parts_mut(buf_ptr as *mut MemmapEntry, max_entries as usize);
     let count = total.min(max_entries as usize);
 
     for i in 0..count {
@@ -2644,11 +2653,14 @@ pub struct NetStackOps {
     /// Create a UDP socket.  Returns handle (>=0) or negative error.
     pub udp_socket: Option<unsafe fn() -> i64>,
     /// Send a datagram.  `dest_ip` is NBO IPv4.  Returns bytes sent.
-    pub udp_send_to: Option<unsafe fn(handle: i64, dest_ip: u32, dest_port: u16, buf: *const u8, len: usize) -> i64>,
+    pub udp_send_to: Option<
+        unsafe fn(handle: i64, dest_ip: u32, dest_port: u16, buf: *const u8, len: usize) -> i64,
+    >,
     /// Receive a datagram.  Writes sender IP (NBO) + port into `src_out`.
     /// Returns bytes received (>=0), 0 if nothing available.
     /// `src_out` layout: [u32 ip_nbo, u16 port, u16 _pad] = 8 bytes.
-    pub udp_recv_from: Option<unsafe fn(handle: i64, buf: *mut u8, len: usize, src_out: *mut u8) -> i64>,
+    pub udp_recv_from:
+        Option<unsafe fn(handle: i64, buf: *mut u8, len: usize, src_out: *mut u8) -> i64>,
     /// Close a UDP socket.
     pub udp_close: Option<unsafe fn(handle: i64)>,
 
@@ -2733,15 +2745,17 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
 
     match subcmd {
         // TCP_SOCKET() → handle
-        NET_TCP_SOCKET => {
-            match NET_STACK_OPS.tcp_socket {
-                Some(f) => {
-                    let h = f();
-                    if h < 0 { ENOMEM } else { h as u64 }
+        NET_TCP_SOCKET => match NET_STACK_OPS.tcp_socket {
+            Some(f) => {
+                let h = f();
+                if h < 0 {
+                    ENOMEM
+                } else {
+                    h as u64
                 }
-                None => ENOSYS_NET,
             }
-        }
+            None => ENOSYS_NET,
+        },
         // TCP_CONNECT(handle, ipv4_nbo, port) → 0
         NET_TCP_CONNECT => {
             let handle = a2 as i64;
@@ -2750,7 +2764,11 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_connect {
                 Some(f) => {
                     let rc = f(handle, ip, port);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2758,11 +2776,17 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         // TCP_SEND(handle, buf_ptr, buf_len) → bytes_sent
         NET_TCP_SEND => {
             let handle = a2 as i64;
-            if a4 > 0 && !validate_user_buf(a3, a4) { return EFAULT; }
+            if a4 > 0 && !validate_user_buf(a3, a4) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.tcp_send {
                 Some(f) => {
                     let rc = f(handle, a3 as *const u8, a4 as usize);
-                    if rc < 0 { EIO } else { rc as u64 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2770,11 +2794,17 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         // TCP_RECV(handle, buf_ptr, buf_len) → bytes_received
         NET_TCP_RECV => {
             let handle = a2 as i64;
-            if a4 > 0 && !validate_user_buf(a3, a4) { return EFAULT; }
+            if a4 > 0 && !validate_user_buf(a3, a4) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.tcp_recv {
                 Some(f) => {
                     let rc = f(handle, a3 as *mut u8, a4 as usize);
-                    if rc < 0 { EIO } else { rc as u64 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2783,7 +2813,10 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         NET_TCP_CLOSE => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_close {
-                Some(f) => { f(handle); 0 }
+                Some(f) => {
+                    f(handle);
+                    0
+                }
                 None => ENOSYS_NET,
             }
         }
@@ -2793,7 +2826,11 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_state {
                 Some(f) => {
                     let s = f(handle);
-                    if s < 0 { EINVAL } else { s as u64 }
+                    if s < 0 {
+                        EINVAL
+                    } else {
+                        s as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2805,7 +2842,11 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_listen {
                 Some(f) => {
                     let rc = f(handle, port);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2816,7 +2857,11 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_accept {
                 Some(f) => {
                     let h = f(handle);
-                    if h < 0 { EIO } else { h as u64 }
+                    if h < 0 {
+                        EIO
+                    } else {
+                        h as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2827,7 +2872,11 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_shutdown {
                 Some(f) => {
                     let rc = f(handle);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2838,7 +2887,11 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_nodelay {
                 Some(f) => {
                     let rc = f(handle, a3 as i64);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2849,22 +2902,28 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_keepalive {
                 Some(f) => {
                     let rc = f(handle, a3);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
         }
         // ── UDP sub-commands ─────────────────────────────────────────
         // UDP_SOCKET() → handle
-        NET_UDP_SOCKET => {
-            match NET_STACK_OPS.udp_socket {
-                Some(f) => {
-                    let h = f();
-                    if h < 0 { ENOMEM } else { h as u64 }
+        NET_UDP_SOCKET => match NET_STACK_OPS.udp_socket {
+            Some(f) => {
+                let h = f();
+                if h < 0 {
+                    ENOMEM
+                } else {
+                    h as u64
                 }
-                None => ENOSYS_NET,
             }
-        }
+            None => ENOSYS_NET,
+        },
         // UDP_SEND_TO(handle, dest_ip_nbo, dest_port | buf_ptr, buf_len)
         // a2 = handle, a3 = dest_ip_nbo | (port << 32), a4 = buf_ptr | (len << 32)
         // Re-pack: dest_ip in lower 32 of a3, port in upper 16 bits
@@ -2892,18 +2951,28 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             let handle = a2 as i64;
             // a3 points to UdpSendDesc in user memory
             let desc_size = 24u64; // u32 + u16 + u16 + u64 + u64 = 24
-            if !validate_user_buf(a3, desc_size) { return EFAULT; }
+            if !validate_user_buf(a3, desc_size) {
+                return EFAULT;
+            }
             let desc = a3 as *const u8;
             let ip = *(desc as *const u32);
             let port = *((desc.add(4)) as *const u16);
             let buf_ptr = *((desc.add(8)) as *const u64);
             let buf_len = *((desc.add(16)) as *const u64);
-            if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) { return EFAULT; }
-            if buf_len > 65535 { return EINVAL; } // UDP max payload
+            if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) {
+                return EFAULT;
+            }
+            if buf_len > 65535 {
+                return EINVAL;
+            } // UDP max payload
             match NET_STACK_OPS.udp_send_to {
                 Some(f) => {
                     let rc = f(handle, ip, port, buf_ptr as *const u8, buf_len as usize);
-                    if rc < 0 { EIO } else { rc as u64 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2914,17 +2983,25 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         NET_UDP_RECV_FROM => {
             let handle = a2 as i64;
             let desc_size = 24u64; // *mut u8(8) + u64(8) + u32(4) + u16(2) + u16(2) = 24
-            if !validate_user_buf(a3, desc_size) { return EFAULT; }
+            if !validate_user_buf(a3, desc_size) {
+                return EFAULT;
+            }
             let desc = a3 as *mut u8;
             let buf_ptr = *(desc as *const u64);
             let buf_len = *((desc.add(8)) as *const u64);
-            if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) { return EFAULT; }
+            if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) {
+                return EFAULT;
+            }
             // src_out is at offset 16 in the desc (4 + 2 + 2 = 8 bytes for src info)
             let src_out = desc.add(16);
             match NET_STACK_OPS.udp_recv_from {
                 Some(f) => {
                     let rc = f(handle, buf_ptr as *mut u8, buf_len as usize, src_out);
-                    if rc < 0 { EIO } else { rc as u64 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2933,7 +3010,10 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         NET_UDP_CLOSE => {
             let handle = a2 as i64;
             match NET_STACK_OPS.udp_close {
-                Some(f) => { f(handle); 0 }
+                Some(f) => {
+                    f(handle);
+                    0
+                }
                 None => ENOSYS_NET,
             }
         }
@@ -2954,12 +3034,20 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
     match subcmd {
         // DNS_START(name_ptr, name_len) → query handle
         DNS_START => {
-            if a3 == 0 || a3 > 253 { return EINVAL; }
-            if !validate_user_buf(a2, a3) { return EFAULT; }
+            if a3 == 0 || a3 > 253 {
+                return EINVAL;
+            }
+            if !validate_user_buf(a2, a3) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.dns_start {
                 Some(f) => {
                     let h = f(a2 as *const u8, a3 as usize);
-                    if h < 0 { EIO } else { h as u64 }
+                    if h < 0 {
+                        EIO
+                    } else {
+                        h as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2967,11 +3055,17 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
         // DNS_RESULT(query_handle, result_buf_ptr) → 0=resolved, 1=pending
         DNS_RESULT => {
             let query = a2 as i64;
-            if !validate_user_buf(a3, 4) { return EFAULT; }
+            if !validate_user_buf(a3, 4) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.dns_result {
                 Some(f) => {
                     let rc = f(query, a3 as *mut u8);
-                    if rc < 0 { EIO } else { rc as u64 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -2979,12 +3073,20 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
         // DNS_SET_SERVERS(servers_ptr, count)
         DNS_SET_SERVERS => {
             let count = a3;
-            if count == 0 || count > 4 { return EINVAL; }
-            if !validate_user_buf(a2, count * 4) { return EFAULT; }
+            if count == 0 || count > 4 {
+                return EINVAL;
+            }
+            if !validate_user_buf(a2, count * 4) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.dns_set_servers {
                 Some(f) => {
                     let rc = f(a2 as *const u32, count as usize);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -3003,11 +3105,17 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
         // CFG_GET(buf_ptr) — works even without stack (returns zeroed)
         NET_CFG_GET => {
             let size = core::mem::size_of::<NetConfigInfo>() as u64;
-            if !validate_user_buf(a2, size) { return EFAULT; }
+            if !validate_user_buf(a2, size) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.cfg_get {
                 Some(f) => {
                     let rc = f(a2 as *mut u8);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => {
                     // No stack: zero-fill so userspace sees state=0 (unconfigured)
@@ -3020,12 +3128,17 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
         _ if !net_stack_present() => ENODEV,
 
         // CFG_DHCP() — enable DHCP
-        NET_CFG_DHCP => {
-            match NET_STACK_OPS.cfg_dhcp {
-                Some(f) => { let rc = f(); if rc < 0 { EIO } else { 0 } }
-                None => ENOSYS_NET,
+        NET_CFG_DHCP => match NET_STACK_OPS.cfg_dhcp {
+            Some(f) => {
+                let rc = f();
+                if rc < 0 {
+                    EIO
+                } else {
+                    0
+                }
             }
-        }
+            None => ENOSYS_NET,
+        },
         // CFG_STATIC(ip_nbo, prefix_gw_packed, 0)
         // prefix_gw_packed = (prefix_len << 32) | gateway_nbo
         NET_CFG_STATIC => {
@@ -3035,19 +3148,31 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
             match NET_STACK_OPS.cfg_static_ip {
                 Some(f) => {
                     let rc = f(ip_nbo, prefix_len, gw_nbo);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
         }
         // CFG_HOSTNAME(name_ptr, name_len)
         NET_CFG_HOSTNAME => {
-            if a3 == 0 || a3 > 63 { return EINVAL; }
-            if !validate_user_buf(a2, a3) { return EFAULT; }
+            if a3 == 0 || a3 > 63 {
+                return EINVAL;
+            }
+            if !validate_user_buf(a2, a3) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.cfg_hostname {
                 Some(f) => {
                     let rc = f(a2 as *const u8, a3 as usize);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -3076,23 +3201,31 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
 
     match subcmd {
         // POLL_DRIVE(timestamp_ms) → 0/1 (activity)
-        NET_POLL_DRIVE => {
-            match NET_STACK_OPS.poll_drive {
-                Some(f) => {
-                    let rc = f(a2);
-                    if rc < 0 { EIO } else { rc as u64 }
+        NET_POLL_DRIVE => match NET_STACK_OPS.poll_drive {
+            Some(f) => {
+                let rc = f(a2);
+                if rc < 0 {
+                    EIO
+                } else {
+                    rc as u64
                 }
-                None => ENOSYS_NET,
             }
-        }
+            None => ENOSYS_NET,
+        },
         // POLL_STATS(buf_ptr) → 0
         NET_POLL_STATS => {
             let size = core::mem::size_of::<NetStats>() as u64;
-            if !validate_user_buf(a2, size) { return EFAULT; }
+            if !validate_user_buf(a2, size) {
+                return EFAULT;
+            }
             match NET_STACK_OPS.poll_stats {
                 Some(f) => {
                     let rc = f(a2 as *mut u8);
-                    if rc < 0 { EIO } else { 0 }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
                 }
                 None => ENOSYS_NET,
             }
@@ -3134,9 +3267,9 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
 //     a valid VMA
 
 /// Protection flags for SYS_SHM_GRANT and SYS_MPROTECT.
-pub const PROT_READ: u64 = 0;     // Read-only (no additional bits)
-pub const PROT_WRITE: u64 = 1;    // Writable
-pub const PROT_EXEC: u64 = 2;     // Executable (clears NX)
+pub const PROT_READ: u64 = 0; // Read-only (no additional bits)
+pub const PROT_WRITE: u64 = 1; // Writable
+pub const PROT_EXEC: u64 = 2; // Executable (clears NX)
 
 /// `SYS_SHM_GRANT(target_pid, src_vaddr, pages, flags) → target_vaddr`
 pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
@@ -3166,7 +3299,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     let caller_proc = SCHEDULER.current_process_mut();
     let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
         Some(pair) => pair,
-        None => return EINVAL,  // not a known mapping
+        None => return EINVAL, // not a known mapping
     };
 
     // Must match exact page count.
@@ -3187,7 +3320,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     let target_pid_u32 = target_pid as u32;
     let target_proc = match SCHEDULER.process_by_pid(target_pid_u32) {
         Some(p) => p,
-        None => return ESRCH,  // no such process
+        None => return ESRCH, // no such process
     };
 
     // Target must be alive (Ready, Running, or Blocked).
@@ -3195,7 +3328,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         return ESRCH;
     }
     if target_proc.cr3 == 0 {
-        return ESRCH;  // kernel thread without user page table
+        return ESRCH; // kernel thread without user page table
     }
 
     // ── Compute target virtual address ───────────────────────────────
@@ -3250,7 +3383,11 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     }
 
     // ── Record VMA in target (owns_phys = false) ─────────────────────
-    if target_ref.vma_table.insert(target_vaddr, phys, pages, false).is_err() {
+    if target_ref
+        .vma_table
+        .insert(target_vaddr, phys, pages, false)
+        .is_err()
+    {
         // VMA table full — unmap everything.
         let mut ptm3 = crate::paging::table::PageTableManager {
             pml4_phys: target_ref.cr3,

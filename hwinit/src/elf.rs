@@ -146,7 +146,7 @@ fn elf_flags_to_page_flags(p_flags: u32) -> PageFlags {
 /// # Safety
 /// MemoryRegistry and paging must be initialized.
 pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), ElfError> {
-    use crate::serial::{puts, put_hex64, put_hex32};
+    use crate::serial::{put_hex32, put_hex64, puts};
 
     puts("[ELF] load_elf64: data len=");
     put_hex32(data.len() as u32);
@@ -394,8 +394,7 @@ unsafe fn ensure_user_table(
                 let base = raw_phys & !(MIB_2 - 1);
                 for i in 0u64..512 {
                     let sub_phys = base + i * 4096;
-                    *(*new_table).entry_mut(i as usize) =
-                        PageTableEntry::new(sub_phys, sub_flags);
+                    *(*new_table).entry_mut(i as usize) = PageTableEntry::new(sub_phys, sub_flags);
                 }
             }
 

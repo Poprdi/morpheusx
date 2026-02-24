@@ -37,7 +37,7 @@ use crate::serial::{put_hex32, puts};
 // FUNDAMENTAL CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub const PAGE_SIZE:  u64 = 4096;
+pub const PAGE_SIZE: u64 = 4096;
 pub const PAGE_SHIFT: u32 = 12;
 
 /// Maximum buddy order.  2^MAX_ORDER × 4 KiB = maximum single allocation.
@@ -59,49 +59,49 @@ const MAX_MAP: usize = 384;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum MemoryType {
-    Reserved            = 0,
-    LoaderCode          = 1,
-    LoaderData          = 2,
-    BootServicesCode    = 3,
-    BootServicesData    = 4,
+    Reserved = 0,
+    LoaderCode = 1,
+    LoaderData = 2,
+    BootServicesCode = 3,
+    BootServicesData = 4,
     RuntimeServicesCode = 5,
     RuntimeServicesData = 6,
-    Conventional        = 7,
-    Unusable            = 8,
-    AcpiReclaim         = 9,
-    AcpiNvs             = 10,
-    Mmio                = 11,
-    MmioPortSpace       = 12,
-    PalCode             = 13,
-    Persistent          = 14,
+    Conventional = 7,
+    Unusable = 8,
+    AcpiReclaim = 9,
+    AcpiNvs = 10,
+    Mmio = 11,
+    MmioPortSpace = 12,
+    PalCode = 13,
+    Persistent = 14,
 
     // Our custom allocator tags (high range, never overlap UEFI values).
-    AllocatedDma        = 0x8000_0001,
-    AllocatedStack      = 0x8000_0002,
-    AllocatedPageTable  = 0x8000_0003,
-    AllocatedHeap       = 0x8000_0004,
-    Allocated           = 0x8000_0000,
+    AllocatedDma = 0x8000_0001,
+    AllocatedStack = 0x8000_0002,
+    AllocatedPageTable = 0x8000_0003,
+    AllocatedHeap = 0x8000_0004,
+    Allocated = 0x8000_0000,
 }
 
 impl MemoryType {
     pub fn from_uefi_raw(value: u32) -> Self {
         match value {
-            0  => Self::Reserved,
-            1  => Self::LoaderCode,
-            2  => Self::LoaderData,
-            3  => Self::BootServicesCode,
-            4  => Self::BootServicesData,
-            5  => Self::RuntimeServicesCode,
-            6  => Self::RuntimeServicesData,
-            7  => Self::Conventional,
-            8  => Self::Unusable,
-            9  => Self::AcpiReclaim,
+            0 => Self::Reserved,
+            1 => Self::LoaderCode,
+            2 => Self::LoaderData,
+            3 => Self::BootServicesCode,
+            4 => Self::BootServicesData,
+            5 => Self::RuntimeServicesCode,
+            6 => Self::RuntimeServicesData,
+            7 => Self::Conventional,
+            8 => Self::Unusable,
+            9 => Self::AcpiReclaim,
             10 => Self::AcpiNvs,
             11 => Self::Mmio,
             12 => Self::MmioPortSpace,
             13 => Self::PalCode,
             14 => Self::Persistent,
-            _  => Self::Reserved,
+            _ => Self::Reserved,
         }
     }
 
@@ -116,9 +116,7 @@ impl MemoryType {
     pub fn is_free(&self) -> bool {
         matches!(
             self,
-            Self::Conventional
-                | Self::LoaderCode
-                | Self::LoaderData
+            Self::Conventional | Self::LoaderCode | Self::LoaderData
         )
     }
 
@@ -126,9 +124,13 @@ impl MemoryType {
     /// (under UEFI's page tables — used for initial buddy population).
     /// Identical to `is_free()` by design; kept as a named alias so the
     /// invariant is explicit at the call site.
-    pub fn is_immediately_writable(&self) -> bool { self.is_free() }
+    pub fn is_immediately_writable(&self) -> bool {
+        self.is_free()
+    }
 
-    pub fn is_reclaimable(&self) -> bool { matches!(self, Self::AcpiReclaim) }
+    pub fn is_reclaimable(&self) -> bool {
+        matches!(self, Self::AcpiReclaim)
+    }
 
     pub fn must_preserve(&self) -> bool {
         matches!(
@@ -174,23 +176,29 @@ impl MemoryType {
 pub struct MemoryAttribute(pub u64);
 
 impl MemoryAttribute {
-    pub const UC:      Self = Self(0x0000_0000_0000_0001);
-    pub const WC:      Self = Self(0x0000_0000_0000_0002);
-    pub const WT:      Self = Self(0x0000_0000_0000_0004);
-    pub const WB:      Self = Self(0x0000_0000_0000_0008);
-    pub const UCE:     Self = Self(0x0000_0000_0000_0010);
-    pub const WP:      Self = Self(0x0000_0000_0000_1000);
-    pub const RP:      Self = Self(0x0000_0000_0000_2000);
-    pub const XP:      Self = Self(0x0000_0000_0000_4000);
-    pub const NV:      Self = Self(0x0000_0000_0000_8000);
+    pub const UC: Self = Self(0x0000_0000_0000_0001);
+    pub const WC: Self = Self(0x0000_0000_0000_0002);
+    pub const WT: Self = Self(0x0000_0000_0000_0004);
+    pub const WB: Self = Self(0x0000_0000_0000_0008);
+    pub const UCE: Self = Self(0x0000_0000_0000_0010);
+    pub const WP: Self = Self(0x0000_0000_0000_1000);
+    pub const RP: Self = Self(0x0000_0000_0000_2000);
+    pub const XP: Self = Self(0x0000_0000_0000_4000);
+    pub const NV: Self = Self(0x0000_0000_0000_8000);
     pub const MORE_RELIABLE: Self = Self(0x0000_0000_0001_0000);
-    pub const RO:      Self = Self(0x0000_0000_0002_0000);
-    pub const SP:      Self = Self(0x0000_0000_0004_0000);
+    pub const RO: Self = Self(0x0000_0000_0002_0000);
+    pub const SP: Self = Self(0x0000_0000_0004_0000);
     pub const RUNTIME: Self = Self(0x8000_0000_0000_0000);
 
-    pub const fn empty()             -> Self { Self(0) }
-    pub const fn contains(self, o: Self) -> bool { (self.0 & o.0) == o.0 }
-    pub const fn union(self, o: Self) -> Self { Self(self.0 | o.0) }
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+    pub const fn contains(self, o: Self) -> bool {
+        (self.0 & o.0) == o.0
+    }
+    pub const fn union(self, o: Self) -> Self {
+        Self(self.0 | o.0)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -200,21 +208,21 @@ impl MemoryAttribute {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum E820Type {
-    Ram      = 1,
+    Ram = 1,
     Reserved = 2,
-    Acpi     = 3,
-    Nvs      = 4,
+    Acpi = 3,
+    Nvs = 4,
     Unusable = 5,
     Disabled = 6,
-    Pmem     = 7,
+    Pmem = 7,
     Undefined = 8,
 }
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct E820Entry {
-    pub addr:       u64,
-    pub size:       u64,
+    pub addr: u64,
+    pub size: u64,
     pub entry_type: u32,
 }
 
@@ -225,25 +233,29 @@ pub struct E820Entry {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct MemoryDescriptor {
-    pub mem_type:        MemoryType,
-    pub physical_start:  u64,
-    pub virtual_start:   u64,
+    pub mem_type: MemoryType,
+    pub physical_start: u64,
+    pub virtual_start: u64,
     pub number_of_pages: u64,
-    pub attribute:       MemoryAttribute,
+    pub attribute: MemoryAttribute,
 }
 
 impl MemoryDescriptor {
     pub const fn empty() -> Self {
         Self {
-            mem_type:        MemoryType::Reserved,
-            physical_start:  0,
-            virtual_start:   0,
+            mem_type: MemoryType::Reserved,
+            physical_start: 0,
+            virtual_start: 0,
             number_of_pages: 0,
-            attribute:       MemoryAttribute::empty(),
+            attribute: MemoryAttribute::empty(),
         }
     }
-    pub const fn physical_end(&self) -> u64 { self.physical_start + self.number_of_pages * PAGE_SIZE }
-    pub const fn size(&self)         -> u64 { self.number_of_pages * PAGE_SIZE }
+    pub const fn physical_end(&self) -> u64 {
+        self.physical_start + self.number_of_pages * PAGE_SIZE
+    }
+    pub const fn size(&self) -> u64 {
+        self.number_of_pages * PAGE_SIZE
+    }
     pub const fn contains(&self, addr: u64) -> bool {
         addr >= self.physical_start && addr < self.physical_end()
     }
@@ -307,8 +319,8 @@ pub struct MemoryRegistry {
     free_at_order: [u64; MAX_ORDER + 1],
 
     /// Aggregate statistics.
-    total_pages:     u64,
-    free_pages:      u64,
+    total_pages: u64,
+    free_pages: u64,
     allocated_pages: u64,
 
     /// Monotonically increasing — callers can detect map changes.
@@ -317,7 +329,7 @@ pub struct MemoryRegistry {
     /// UEFI memory map snapshot.
     /// Used ONLY for `memory_type_at()` and E820 export.
     /// Allocation state is owned entirely by the buddy lists above.
-    map:       [MemoryDescriptor; MAX_MAP],
+    map: [MemoryDescriptor; MAX_MAP],
     map_count: usize,
 }
 
@@ -329,14 +341,14 @@ impl MemoryRegistry {
     /// Create a zeroed, empty registry.  `const` so it fits in BSS.
     pub const fn new() -> Self {
         Self {
-            free_lists:      [core::ptr::null_mut(); MAX_ORDER + 1],
-            free_at_order:   [0; MAX_ORDER + 1],
-            total_pages:     0,
-            free_pages:      0,
+            free_lists: [core::ptr::null_mut(); MAX_ORDER + 1],
+            free_at_order: [0; MAX_ORDER + 1],
+            total_pages: 0,
+            free_pages: 0,
             allocated_pages: 0,
-            map_key:         0,
-            map:             [MemoryDescriptor::empty(); MAX_MAP],
-            map_count:       0,
+            map_key: 0,
+            map: [MemoryDescriptor::empty(); MAX_MAP],
+            map_count: 0,
         }
     }
 
@@ -369,13 +381,15 @@ impl MemoryRegistry {
             //  16  : u64 VirtualStart
             //  24  : u64 NumberOfPages
             //  32  : u64 Attribute
-            let raw_type = *(ptr        as *const u32);
-            let phys     = *(ptr.add(8) as *const u64);
-            let virt     = *(ptr.add(16) as *const u64);
-            let pages    = *(ptr.add(24) as *const u64);
-            let attr     = *(ptr.add(32) as *const u64);
+            let raw_type = *(ptr as *const u32);
+            let phys = *(ptr.add(8) as *const u64);
+            let virt = *(ptr.add(16) as *const u64);
+            let pages = *(ptr.add(24) as *const u64);
+            let attr = *(ptr.add(32) as *const u64);
 
-            if pages == 0 { continue; }
+            if pages == 0 {
+                continue;
+            }
 
             let mem_type = MemoryType::from_uefi_raw(raw_type);
 
@@ -383,10 +397,10 @@ impl MemoryRegistry {
             if self.map_count < MAX_MAP {
                 self.map[self.map_count] = MemoryDescriptor {
                     mem_type,
-                    physical_start:  phys,
-                    virtual_start:   virt,
+                    physical_start: phys,
+                    virtual_start: virt,
                     number_of_pages: pages,
-                    attribute:       MemoryAttribute(attr),
+                    attribute: MemoryAttribute(attr),
                 };
                 self.map_count += 1;
             }
@@ -449,9 +463,9 @@ impl MemoryRegistry {
         let order = pages_to_order(pages);
 
         let addr = match alloc_type {
-            AllocateType::AnyPages          => self.buddy_alloc(order)?,
+            AllocateType::AnyPages => self.buddy_alloc(order)?,
             AllocateType::MaxAddress(limit) => self.buddy_alloc_below(order, limit)?,
-            AllocateType::Address(want)     => self.buddy_alloc_at(want, pages)?,
+            AllocateType::Address(want) => self.buddy_alloc_at(want, pages)?,
         };
 
         self.map_snapshot_add(addr, pages, mem_type);
@@ -477,10 +491,12 @@ impl MemoryRegistry {
         while base < end {
             let remaining_pages = (end - base) / PAGE_SIZE;
             let align_order = (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
-            let size_order  = usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
+            let size_order = usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
             let order = align_order.min(size_order).min(MAX_ORDER);
             // SAFETY: addr came from allocate_pages; identity-mapped.
-            unsafe { self.buddy_free(base, order); }
+            unsafe {
+                self.buddy_free(base, order);
+            }
             base += (1u64 << order) * PAGE_SIZE;
         }
 
@@ -504,19 +520,35 @@ impl MemoryRegistry {
     // QUERY API  (same as previous MemoryRegistry)
     // ─────────────────────────────────────────────────────────────────────
 
-    pub fn get_memory_map(&self) -> (u64, usize) { (self.map_key, self.map_count) }
-    pub fn get_map_key(&self)    -> u64 { self.map_key }
-
-    pub fn get_descriptor(&self, index: usize) -> Option<&MemoryDescriptor> {
-        if index < self.map_count { Some(&self.map[index]) } else { None }
+    pub fn get_memory_map(&self) -> (u64, usize) {
+        (self.map_key, self.map_count)
+    }
+    pub fn get_map_key(&self) -> u64 {
+        self.map_key
     }
 
-    pub fn total_memory(&self)     -> u64 { self.total_pages * PAGE_SIZE }
-    pub fn free_memory(&self)      -> u64 { self.free_pages.saturating_mul(PAGE_SIZE) }
-    pub fn allocated_memory(&self) -> u64 { self.allocated_pages.saturating_mul(PAGE_SIZE) }
+    pub fn get_descriptor(&self, index: usize) -> Option<&MemoryDescriptor> {
+        if index < self.map_count {
+            Some(&self.map[index])
+        } else {
+            None
+        }
+    }
+
+    pub fn total_memory(&self) -> u64 {
+        self.total_pages * PAGE_SIZE
+    }
+    pub fn free_memory(&self) -> u64 {
+        self.free_pages.saturating_mul(PAGE_SIZE)
+    }
+    pub fn allocated_memory(&self) -> u64 {
+        self.allocated_pages.saturating_mul(PAGE_SIZE)
+    }
 
     /// Legacy: returned remaining bump space.  Always 0 now (no bump).
-    pub fn bump_remaining(&self) -> u64 { 0 }
+    pub fn bump_remaining(&self) -> u64 {
+        0
+    }
 
     /// Find the largest free region entirely below 4 GiB.
     pub fn find_largest_free_below_4gb(&self) -> Option<(u64, u64)> {
@@ -529,7 +561,9 @@ impl MemoryRegistry {
                     return Some((base, block_bytes));
                 }
                 // SAFETY: node was written by list_push; identity-mapped.
-                unsafe { cur = (*cur).next; }
+                unsafe {
+                    cur = (*cur).next;
+                }
             }
         }
         None
@@ -551,15 +585,17 @@ impl MemoryRegistry {
         for i in 0..n {
             let d = &self.map[i];
             buffer[i] = E820Entry {
-                addr:       d.physical_start,
-                size:       d.size(),
+                addr: d.physical_start,
+                size: d.size(),
                 entry_type: d.mem_type.to_e820() as u32,
             };
         }
         n
     }
 
-    pub fn e820_count(&self) -> usize { self.map_count }
+    pub fn e820_count(&self) -> usize {
+        self.map_count
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // CONVENIENCE ALLOCATORS
@@ -613,8 +649,14 @@ impl MemoryRegistry {
             if cur == target {
                 let prev = (*cur).prev;
                 let next = (*cur).next;
-                if !prev.is_null() { (*prev).next = next; } else { self.free_lists[order] = next; }
-                if !next.is_null() { (*next).prev = prev; }
+                if !prev.is_null() {
+                    (*prev).next = next;
+                } else {
+                    self.free_lists[order] = next;
+                }
+                if !next.is_null() {
+                    (*next).prev = prev;
+                }
                 self.free_at_order[order] -= 1;
                 return true;
             }
@@ -626,10 +668,14 @@ impl MemoryRegistry {
     /// Pop the head block from free_lists[order].
     unsafe fn list_pop(&mut self, order: usize) -> Option<u64> {
         let head = self.free_lists[order];
-        if head.is_null() { return None; }
+        if head.is_null() {
+            return None;
+        }
         let next = (*head).next;
         self.free_lists[order] = next;
-        if !next.is_null() { (*next).prev = core::ptr::null_mut(); }
+        if !next.is_null() {
+            (*next).prev = core::ptr::null_mut();
+        }
         self.free_at_order[order] -= 1;
         Some(head as u64)
     }
@@ -650,12 +696,14 @@ impl MemoryRegistry {
         let addr = unsafe { self.list_pop(top).unwrap() };
 
         // Split from `top` down to `order`, pushing spare halves back.
-        let cur   = addr;
+        let cur = addr;
         let mut cur_k = top;
         while cur_k > order {
             cur_k -= 1;
             let spare = cur + (1u64 << cur_k) * PAGE_SIZE;
-            unsafe { self.list_push(spare, cur_k); }
+            unsafe {
+                self.list_push(spare, cur_k);
+            }
         }
 
         self.allocated_pages += 1u64 << order;
@@ -672,13 +720,15 @@ impl MemoryRegistry {
             let k_bytes = (1u64 << k) * PAGE_SIZE;
             let mut cur = self.free_lists[k];
             while !cur.is_null() {
-                let base     = cur as u64;
+                let base = cur as u64;
                 let base_end = base.saturating_add(k_bytes);
                 if base.saturating_add(block_bytes) <= limit.saturating_add(1)
                     && base_end <= limit.saturating_add(1)
                 {
                     // Carve `order` pages from this block.
-                    unsafe { self.list_remove(base, k); }
+                    unsafe {
+                        self.list_remove(base, k);
+                    }
                     // Temporarily credit these pages as free so split
                     // list_pushes don't over-subtract.
                     self.free_pages += 1u64 << k;
@@ -688,7 +738,9 @@ impl MemoryRegistry {
                     while current_k > order {
                         current_k -= 1;
                         let spare = current + (1u64 << current_k) * PAGE_SIZE;
-                        unsafe { self.list_push(spare, current_k); }
+                        unsafe {
+                            self.list_push(spare, current_k);
+                        }
                         self.free_pages += 1u64 << current_k; // list_push doesn't track
                     }
 
@@ -699,7 +751,9 @@ impl MemoryRegistry {
                     self.allocated_pages += 1u64 << order;
                     return Ok(current);
                 }
-                unsafe { cur = (*cur).next; }
+                unsafe {
+                    cur = (*cur).next;
+                }
             }
         }
         Err(MemoryError::OutOfResources)
@@ -715,10 +769,12 @@ impl MemoryRegistry {
         while base < end {
             let remaining = (end - base) / PAGE_SIZE;
             let align_order = (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
-            let size_order  = usize::BITS as usize - 1 - remaining.leading_zeros() as usize;
+            let size_order = usize::BITS as usize - 1 - remaining.leading_zeros() as usize;
             let order = align_order.min(size_order).min(MAX_ORDER);
             // SAFETY: identity-mapped physical range.
-            unsafe { self.carve_block(base, order); }
+            unsafe {
+                self.carve_block(base, order);
+            }
             self.allocated_pages += 1u64 << order;
             self.free_pages = self.free_pages.saturating_sub(1u64 << order);
             base += (1u64 << order) * PAGE_SIZE;
@@ -738,12 +794,12 @@ impl MemoryRegistry {
 
         // Slow path: find the smallest enclosing free block and split down.
         for k in (order + 1)..=MAX_ORDER {
-            let k_bytes   = (1u64 << k) * PAGE_SIZE;
+            let k_bytes = (1u64 << k) * PAGE_SIZE;
             let container = addr & !(k_bytes - 1);
             if self.list_remove(container, k) {
                 self.free_pages += 1u64 << k; // will be consumed by list_pushes below
 
-                let mut current   = container;
+                let mut current = container;
                 let mut current_k = k;
                 while current_k > order {
                     current_k -= 1;
@@ -796,9 +852,14 @@ impl MemoryRegistry {
         let mut cur = base;
         while cur < end {
             let remaining_pages = (end - cur) / PAGE_SIZE;
-            if remaining_pages == 0 { break; }
-            let align_order = (cur.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize).min(MAX_ORDER);
-            let size_order  = (usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize).min(MAX_ORDER);
+            if remaining_pages == 0 {
+                break;
+            }
+            let align_order = (cur.trailing_zeros() as usize)
+                .saturating_sub(PAGE_SHIFT as usize)
+                .min(MAX_ORDER);
+            let size_order = (usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize)
+                .min(MAX_ORDER);
             let order = align_order.min(size_order);
             self.list_push(cur, order);
             self.free_pages += 1u64 << order;
@@ -821,8 +882,8 @@ impl MemoryRegistry {
         // Update existing overlapping free descriptor if found.
         for i in 0..self.map_count {
             if self.map[i].mem_type.is_free() && self.map[i].contains(addr) {
-                self.map[i].mem_type        = mem_type;
-                self.map[i].physical_start  = addr;
+                self.map[i].mem_type = mem_type;
+                self.map[i].physical_start = addr;
                 self.map[i].number_of_pages = pages;
                 return;
             }
@@ -831,10 +892,10 @@ impl MemoryRegistry {
         if self.map_count < MAX_MAP {
             self.map[self.map_count] = MemoryDescriptor {
                 mem_type,
-                physical_start:  addr,
-                virtual_start:   0,
+                physical_start: addr,
+                virtual_start: 0,
                 number_of_pages: pages,
-                attribute:       MemoryAttribute::WB,
+                attribute: MemoryAttribute::WB,
             };
             self.map_count += 1;
         }
@@ -856,7 +917,7 @@ impl MemoryRegistry {
 
     fn print_summary(&self) {
         let total_mb = (self.total_pages * PAGE_SIZE) >> 20;
-        let free_mb  = (self.free_pages  * PAGE_SIZE) >> 20;
+        let free_mb = (self.free_pages * PAGE_SIZE) >> 20;
         puts("[MEM] buddy allocator ready: total=");
         put_hex32(total_mb as u32);
         puts("MB free=");
@@ -874,7 +935,9 @@ impl MemoryRegistry {
 /// Smallest order k such that 2ᵏ ≥ pages.
 #[inline]
 fn pages_to_order(pages: u64) -> usize {
-    if pages <= 1 { return 0; }
+    if pages <= 1 {
+        return 0;
+    }
     let p2 = pages.next_power_of_two();
     (p2.trailing_zeros() as usize).min(MAX_ORDER)
 }
@@ -883,17 +946,17 @@ fn pages_to_order(pages: u64) -> usize {
 // GLOBAL REGISTRY
 // ═══════════════════════════════════════════════════════════════════════════
 
-static mut GLOBAL_REGISTRY:       MemoryRegistry = MemoryRegistry::new();
-static mut REGISTRY_INITIALIZED:  bool           = false;
+static mut GLOBAL_REGISTRY: MemoryRegistry = MemoryRegistry::new();
+static mut REGISTRY_INITIALIZED: bool = false;
 
 /// Parse and ingest the UEFI memory map into the global registry.
 ///
 /// # Safety
 /// Call exactly once, immediately after `ExitBootServices`, single-threaded.
 pub unsafe fn init_global_registry(
-    map_ptr:            *const u8,
-    map_size:           usize,
-    descriptor_size:    usize,
+    map_ptr: *const u8,
+    map_size: usize,
+    descriptor_size: usize,
     descriptor_version: u32,
 ) {
     if REGISTRY_INITIALIZED {
@@ -905,11 +968,17 @@ pub unsafe fn init_global_registry(
 }
 
 /// # Safety: bare-metal, single-threaded.
-pub unsafe fn global_registry()     -> &'static     MemoryRegistry { &GLOBAL_REGISTRY }
+pub unsafe fn global_registry() -> &'static MemoryRegistry {
+    &GLOBAL_REGISTRY
+}
 /// # Safety: bare-metal, single-threaded.
-pub unsafe fn global_registry_mut() -> &'static mut MemoryRegistry { &mut GLOBAL_REGISTRY }
+pub unsafe fn global_registry_mut() -> &'static mut MemoryRegistry {
+    &mut GLOBAL_REGISTRY
+}
 
-pub fn is_registry_initialized() -> bool { unsafe { REGISTRY_INITIALIZED } }
+pub fn is_registry_initialized() -> bool {
+    unsafe { REGISTRY_INITIALIZED }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LEGACY COMPATIBILITY SHIMS
@@ -924,39 +993,48 @@ pub type MemoryRegion = MemoryDescriptor;
 /// Minimal bump allocator for early pre-registry use (rarely needed now).
 pub struct PhysicalAllocator {
     current: u64,
-    end:     u64,
+    end: u64,
 }
 
 impl PhysicalAllocator {
     pub const fn new(base: u64, size: u64) -> Self {
-        Self { current: base, end: base.wrapping_add(size) }
+        Self {
+            current: base,
+            end: base.wrapping_add(size),
+        }
     }
 
     pub fn alloc_pages(&mut self, count: usize) -> Option<u64> {
         let aligned = (self.current + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-        let size    = (count as u64) * PAGE_SIZE;
-        if aligned + size > self.end { return None; }
+        let size = (count as u64) * PAGE_SIZE;
+        if aligned + size > self.end {
+            return None;
+        }
         self.current = aligned + size;
         Some(aligned)
     }
 
     pub fn alloc_bytes(&mut self, size: usize) -> Option<u64> {
         let aligned = (self.current + 15) & !15;
-        let end     = aligned + size as u64;
-        if end > self.end { return None; }
+        let end = aligned + size as u64;
+        if end > self.end {
+            return None;
+        }
         self.current = end;
         Some(aligned)
     }
 
-    pub fn remaining(&self) -> u64 { self.end.saturating_sub(self.current) }
+    pub fn remaining(&self) -> u64 {
+        self.end.saturating_sub(self.current)
+    }
 }
 
 /// Parse a UEFI memory map and return a standalone (non-global) registry.
 ///
 /// # Safety: Same as `import_uefi_map`.
 pub unsafe fn parse_uefi_memory_map(
-    map_ptr:   *const u8,
-    map_size:  usize,
+    map_ptr: *const u8,
+    map_size: usize,
     desc_size: usize,
 ) -> MemoryRegistry {
     let mut r = MemoryRegistry::new();
