@@ -3,18 +3,13 @@
 //! # Architecture
 //!
 //! ```text
-//! ┌────────────────────────────────────────────────────────────────────┐
-//! │                       PROCESS TABLE                               │
-//! │  [0] = kernel (PID 0, always Running or Ready, never killed)      │
-//! │  [1..MAX_PROCESSES-1] = user/app processes                        │
-//! └────────────────────────────────────────────────────────────────────┘
-//!               │
+//! PROCESS TABLE
+//! [0] = kernel (PID 0, always Running or Ready, never killed)
+//! [1..MAX_PROCESSES-1] = user/app processes
 //!               ▼
-//! ┌────────────────────────────────────────────────────────────────────┐
-//! │                       SCHEDULER                                   │
-//! │  Round-robin over Ready processes.                                │
-//! │  Timer ISR calls scheduler_tick() → context switch if due.        │
-//! └────────────────────────────────────────────────────────────────────┘
+//! SCHEDULER
+//! Round-robin over Ready processes.
+//! Timer ISR calls scheduler_tick() → context switch if due.
 //! ```
 //!
 //! # Thread safety
@@ -38,8 +33,8 @@ pub mod vma;
 pub use context::CpuContext;
 pub use scheduler::{
     block_sleep, exit_process, init_scheduler, scheduler_tick, set_tsc_frequency,
-    spawn_kernel_thread, tsc_frequency, wait_for_child, wake_pipe_readers,
-    wake_stdin_waiters, ProcessInfo, Scheduler, SCHEDULER,
+    spawn_kernel_thread, tsc_frequency, wait_for_child, wake_pipe_readers, wake_stdin_waiters,
+    ProcessInfo, Scheduler, SCHEDULER,
 };
 pub use signals::{Signal, SignalSet};
 pub use vma::{Vma, VmaTable};
@@ -48,9 +43,7 @@ use crate::memory::{
     global_registry_mut, is_registry_initialized, AllocateType, MemoryType, PAGE_SIZE,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum number of concurrent processes (including PID 0 kernel).
 pub const MAX_PROCESSES: usize = 64;
@@ -58,9 +51,7 @@ pub const MAX_PROCESSES: usize = 64;
 /// Per-process kernel stack size.
 pub const PROCESS_KERNEL_STACK_SIZE: usize = 32 * 1024; // 32 KiB
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PROCESS STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Reason a process is blocked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,26 +89,24 @@ impl ProcessState {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PROCESS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A kernel process descriptor.
 ///
 /// Stored in a fixed-size static slot; no heap allocation for the descriptor
 /// itself.  The kernel stack is allocated from MemoryRegistry.
 pub struct Process {
-    // ── Identity ─────────────────────────────────────────────────────────
+    // identity
     pub pid: u32,
     /// Process name — UTF-8, NUL-terminated, stored inline.
     pub name: [u8; 32],
     pub parent_pid: u32, // 0 = no parent
 
-    // ── State ─────────────────────────────────────────────────────────────
+    // state
     pub state: ProcessState,
     pub exit_code: Option<i32>,
 
-    // ── CPU ───────────────────────────────────────────────────────────────
+    // cpu
     /// Physical address of this process's PML4 table.
     /// For kernel threads this is identical to the kernel PML4 (shared).
     pub cr3: u64,
@@ -128,40 +117,40 @@ pub struct Process {
     /// Saved register state (populated on every context switch away).
     pub context: CpuContext,
 
-    // ── Memory ────────────────────────────────────────────────────────────
+    // memory
     /// Virtual address range of the user heap: `(base, size_bytes)`.
     pub heap_region: (u64, u64),
     /// Total number of 4 KiB pages allocated for this process.
     pub pages_allocated: u64,
 
-    // ── Scheduling ────────────────────────────────────────────────────────
+    // scheduling
     /// Scheduling priority (lower = higher priority; 0 = real-time).
     pub priority: u8,
     /// Accumulated CPU ticks (for the task manager display).
     pub cpu_ticks: u64,
 
-    // ── Signals ───────────────────────────────────────────────────────────
+    // signals
     pub pending_signals: signals::SignalSet,
     /// Per-signal handler addresses. 0 = SIG_DFL, 1 = SIG_IGN, >1 = user fn.
     pub signal_handlers: [u64; 32],
 
-    // ── File descriptors ─────────────────────────────────────────────────
+    // file descriptors
     /// Per-process file descriptor table.
     pub fd_table: morpheus_helix::vfs::FdTable,
 
-    // ── Virtual memory ────────────────────────────────────────────────────
+    // virtual memory
     /// Next free virtual address for SYS_MMAP (user-space heap bump).
     /// Starts at 0x0000_0040_0000_0000 for user processes, 0 for kernel.
     pub mmap_brk: u64,
     /// Per-process VMA table — tracks all mmap'd regions for proper munmap.
     pub vma_table: VmaTable,
 
-    // ── Working directory ─────────────────────────────────────────────────
+    // working directory
     /// Per-process current working directory (null-terminated, max 255 chars).
     pub cwd: [u8; 256],
     pub cwd_len: u16,
 
-    // ── Spawn arguments ───────────────────────────────────────────────────
+    // spawn arguments
     /// Arg strings from parent, null-separated. Retrieved via SYS_GETARGS.
     pub args: [u8; 256],
     pub args_len: u16,

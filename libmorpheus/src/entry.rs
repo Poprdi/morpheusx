@@ -1,32 +1,9 @@
-//! C runtime for MorpheusX user processes.
-//!
-//! Provides `_start` (the ELF entry point) and a minimal `#[panic_handler]`.
-//! User binaries define `fn main() -> i32` (or `fn main()`) which this
-//! runtime calls after zeroing BSS.
-//!
-//! # Usage
-//!
-//! In your binary crate:
-//!
-//! ```ignore
-//! #![no_std]
-//! #![no_main]
-//!
-//! use libmorpheus::entry;
-//!
-//! entry!(main);
-//!
-//! fn main() -> i32 {
-//!     libmorpheus::io::println("Hello from userspace!");
-//!     0
-//! }
-//! ```
+//! CRT0 for userspace. provides `_start` and a panic handler that
+//! prints something vaguely useful before dying.
 
 use crate::process;
 
-/// The entry-point macro.  Generates `_start` that calls your `main`.
-///
-/// `main` must be `fn() -> i32` or `fn()`.
+/// Generates `_start`. your main() returns i32, we call exit(). simple.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {

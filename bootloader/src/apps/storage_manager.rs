@@ -616,7 +616,7 @@ impl StorageManager {
         );
     }
 
-    // ── Drawing helpers ─────────────────────────────────────────────────
+    // drawing helpers
 
     fn render_section_header(
         &self,
@@ -1109,14 +1109,14 @@ impl App for StorageManager {
     }
 }
 
-// ── Color constants ─────────────────────────────────────────────────────
+// color constants
 
 const COLOR_FREE: Color = Color::rgb(0, 200, 0);
 const COLOR_ALLOC: Color = Color::rgb(200, 100, 0);
 const COLOR_RESERVED: Color = Color::rgb(100, 100, 100);
 const COLOR_HEAP: Color = Color::rgb(60, 160, 220);
 
-// ── Formatting helpers ──────────────────────────────────────────────────
+// formatting helpers
 
 fn format_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {

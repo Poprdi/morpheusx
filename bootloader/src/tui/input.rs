@@ -15,9 +15,7 @@
 //! InputKey { scan_code, unicode_char } — same struct the TUI consumes.
 //! scan_code uses EFI-compatible values so main_menu.rs needs zero changes.
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ASM BINDINGS — from bootloader/asm/keyboard/ps2.s
-// ═══════════════════════════════════════════════════════════════════════════
 
 extern "win64" {
     /// Read PS/2 status register (port 0x64).
@@ -32,9 +30,7 @@ extern "win64" {
     fn asm_ps2_flush();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC KEY TYPE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Key event. scan_code != 0 for special keys, unicode_char != 0 for ASCII.
 /// Both can be set simultaneously (e.g. Enter = scan_code 0, unicode_char 0x0D).
@@ -45,7 +41,7 @@ pub struct InputKey {
     pub unicode_char: u16,
 }
 
-// ── EFI-compatible scan codes (main_menu.rs expects these exact values) ──
+// efi-compatible scan codes (main_menu.rs expects these exact values)
 
 pub const SCAN_NULL: u16 = 0x00;
 pub const SCAN_UP: u16 = 0x01;
@@ -72,16 +68,14 @@ pub const SCAN_F11: u16 = 0x15;
 pub const SCAN_F12: u16 = 0x16;
 pub const SCAN_ESC: u16 = 0x17;
 
-// ── ASCII codes ──
+// ascii codes
 
 pub const KEY_ENTER: u16 = 0x0D;
 pub const KEY_SPACE: u16 = 0x20;
 pub const KEY_TAB: u16 = 0x09;
 pub const KEY_BACKSPACE: u16 = 0x08;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // KEYBOARD LAYOUT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Active keyboard layout. Switchable at runtime via `keyboard.set_layout()`.
 ///
@@ -99,11 +93,9 @@ pub enum KeyLayout {
     De,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SCAN CODE SET 1 → ASCII TRANSLATION TABLES
-// ═══════════════════════════════════════════════════════════════════════════
 
-// ── US QWERTY ──────────────────────────────────────────────────────────────
+// us qwerty
 
 /// Unshifted ASCII for scan code set 1 make codes 0x00..0x58, US QWERTY.
 /// 0 = no printable character (modifier or special key).
@@ -164,7 +156,7 @@ static US_SHIFTED: [u8; 89] = [
     0,
 ];
 
-// ── DE QWERTZ ─────────────────────────────────────────────────────────────
+// de qwertz
 //
 // Key divergences from US:
 //   0x15 (US y)  → z      0x2C (US z) → y
@@ -265,9 +257,7 @@ static DE_ALTGR: [u8; 89] = [
     0,
 ];
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PS/2 SCAN CODE CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 // Make codes (key press)
 const SC_ESC: u8 = 0x01;
@@ -299,9 +289,7 @@ const BREAK_FLAG: u8 = 0x80;
 // Extended prefix byte
 const EXTENDED_PREFIX: u8 = 0xE0;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // KEYBOARD STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub struct Keyboard {
     /// Shift held (left or right)
@@ -453,9 +441,7 @@ impl Keyboard {
         );
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
     // PUBLIC API (unchanged signatures — TUI code needs zero changes)
-    // ═══════════════════════════════════════════════════════════════════════
 
     /// Non-blocking key read. Returns `Some(InputKey)` if a complete
     /// key-press event was decoded, `None` if the buffer was empty or
@@ -493,9 +479,7 @@ impl Keyboard {
         key
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
     // SCAN CODE DECODER
-    // ═══════════════════════════════════════════════════════════════════════
 
     /// Decode a single raw byte from port 0x60.
     ///
@@ -517,7 +501,7 @@ impl Keyboard {
             return self.decode_extended(make, is_break);
         }
 
-        // ── Break codes (key release) — update modifiers, emit nothing ──
+        // break codes (key release) — update modifiers, emit nothing
         if is_break {
             match make {
                 SC_LSHIFT | SC_RSHIFT => self.shift = false,
@@ -528,7 +512,7 @@ impl Keyboard {
             return None;
         }
 
-        // ── Make codes (key press) ──
+        // make codes (key press)
 
         // Modifiers
         match make {

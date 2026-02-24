@@ -1,30 +1,9 @@
-//! Networking — exokernel NIC + IP stack API.
-//!
-//! MorpheusX provides two complementary networking layers:
-//!
-//! ## Layer 1: Raw NIC (syscalls 32-37)
-//! Direct Ethernet frame TX/RX, MAC read, link status, descriptor refill.
-//! Use these to build completely custom protocol stacks in userspace.
-//!
-//! ## Layer 1.5: NIC Hardware Control (via `nic_ctrl`)
-//! Promiscuous mode, MAC spoofing, VLAN tags, checksum/TSO offloads,
-//! ring buffer sizing, interrupt coalescing, capability queries.
-//! Full exokernel hardware control from Ring 3.
-//!
-//! ## Layer 2: TCP/IP Stack (syscalls 38-41)
-//! Kernel-side smoltcp stack: TCP sockets, DNS resolution, DHCP, static
-//! IP config, hostname, stack polling.  Programs that just want TCP/IP
-//! use this layer.  TLS runs in userspace on top of `tcp_send`/`tcp_recv`.
-//!
-//! Both layers coexist.  A program can use raw NIC for custom protocols
-//! (ARP probing, ICMP, custom L2) while simultaneously using the TCP
-//! stack for HTTP connections.
+//! Networking. raw NIC frames, hardware knobs, and a smoltcp TCP/IP stack.
+//! Use layer 1 for custom protocols, layer 2 for "just give me TCP".
 
 use crate::raw::*;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RAW NIC (Layer 1)
-// ═══════════════════════════════════════════════════════════════════════════
+// raw nic
 
 /// NIC information.
 #[repr(C)]
@@ -109,14 +88,12 @@ pub fn nic_refill() -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NIC HARDWARE CONTROL (Layer 1.5) — exokernel escape hatch
-// ═══════════════════════════════════════════════════════════════════════════
+// nic hardware control — the deep knobs
 //
 // These route through SYS_NET_CFG with subcmd >= 128, which dispatches
 // directly to the NIC driver's ctrl function pointer.
 
-// NIC control command constants.
+// nic ctrl subcmds
 pub const NIC_CTRL_PROMISC: u32 = 1;
 pub const NIC_CTRL_MAC_SET: u32 = 2;
 pub const NIC_CTRL_STATS: u32 = 3;
@@ -132,7 +109,7 @@ pub const NIC_CTRL_TX_RING_SIZE: u32 = 12;
 pub const NIC_CTRL_IRQ_COALESCE: u32 = 13;
 pub const NIC_CTRL_CAPS: u32 = 14;
 
-// NIC capability bits.
+// nic capability bits
 pub const NIC_CAP_PROMISC: u64 = 1 << 0;
 pub const NIC_CAP_MAC_SET: u64 = 1 << 1;
 pub const NIC_CAP_MULTICAST: u64 = 1 << 2;
@@ -244,11 +221,9 @@ pub fn nic_caps() -> Result<u64, u64> {
     Ok(caps)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TCP SOCKETS (Layer 2) — smoltcp-backed convenience API
-// ═══════════════════════════════════════════════════════════════════════════
+// tcp sockets (smoltcp)
 
-// Sub-command constants (must match hwinit handler).
+// subcmds (must match kernel)
 const NET_TCP_SOCKET: u64 = 0;
 const NET_TCP_CONNECT: u64 = 1;
 const NET_TCP_SEND: u64 = 2;
@@ -437,9 +412,7 @@ pub fn tcp_set_keepalive(handle: TcpHandle, interval_ms: u64) -> Result<(), u64>
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DNS RESOLUTION
-// ═══════════════════════════════════════════════════════════════════════════
+// dns
 
 const DNS_START_CMD: u64 = 0;
 const DNS_RESULT_CMD: u64 = 1;
@@ -522,9 +495,7 @@ pub fn dns_set_servers(servers: &[u32]) -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STACK CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
+// stack config
 
 const CFG_GET: u64 = 0;
 const CFG_DHCP: u64 = 1;
@@ -614,9 +585,7 @@ pub fn net_set_hostname(hostname: &str) -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STACK POLLING & STATISTICS
-// ═══════════════════════════════════════════════════════════════════════════
+// stack polling
 
 const POLL_DRIVE: u64 = 0;
 const POLL_STATS: u64 = 1;
@@ -655,9 +624,7 @@ pub fn net_stats() -> Result<NetStats, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONVENIENCE — IPv4 helpers
-// ═══════════════════════════════════════════════════════════════════════════
+// ipv4 helpers
 
 /// Convert a dotted-decimal IPv4 to network byte order u32.
 pub const fn ipv4(a: u8, b: u8, c: u8, d: u8) -> u32 {
@@ -669,9 +636,7 @@ pub const fn ipv4_bytes(ip: u32) -> [u8; 4] {
     ip.to_be_bytes()
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// UDP SOCKETS (via SYS_NET subcmds 11-14)
-// ═══════════════════════════════════════════════════════════════════════════
+// udp sockets
 
 /// UDP subcmd constants (must match hwinit/src/syscall/handler.rs).
 const UDP_SOCKET: u64 = 11;

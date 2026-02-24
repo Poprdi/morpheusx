@@ -24,7 +24,7 @@
 pub struct PageFlags(pub u64);
 
 impl PageFlags {
-    // ── Core flags ───────────────────────────────────────────────────────
+    // core flags
     pub const PRESENT: Self = Self(1 << 0);
     pub const WRITABLE: Self = Self(1 << 1);
     pub const USER: Self = Self(1 << 2);
@@ -36,7 +36,7 @@ impl PageFlags {
     pub const GLOBAL: Self = Self(1 << 8);
     pub const NO_EXECUTE: Self = Self(1 << 63); // XD bit (EFER.NXE must be set)
 
-    // ── Convenience presets ──────────────────────────────────────────────
+    // convenience presets
 
     /// Kernel read-only page (present + global, NX).
     pub const KERNEL_RO: Self = Self(Self::PRESENT.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0);
@@ -61,7 +61,7 @@ impl PageFlags {
     /// Empty (not present).
     pub const EMPTY: Self = Self(0);
 
-    // ── Combinators ──────────────────────────────────────────────────────
+    // combinators
 
     #[inline]
     pub const fn contains(self, other: Self) -> bool {
@@ -105,9 +105,7 @@ impl core::fmt::Debug for PageFlags {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PAGE TABLE ENTRY
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A single 64-bit page table entry.
 #[derive(Clone, Copy)]
@@ -186,9 +184,7 @@ impl core::fmt::Debug for PageTableEntry {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PAGE TABLE (one page = 512 entries)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A single 4 KiB page table — 512 × 8-byte entries.
 ///

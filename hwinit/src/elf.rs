@@ -6,7 +6,7 @@ use crate::paging::entry::PageFlags;
 use crate::paging::table::PageTableManager;
 use alloc::vec::Vec;
 
-// ── ELF64 constants ──────────────────────────────────────────────────
+// elf64 constants
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const ELFCLASS64: u8 = 2;
@@ -23,7 +23,7 @@ pub const USER_STACK_PAGES: u64 = 8;
 pub const USER_STACK_SIZE: u64 = USER_STACK_PAGES * PAGE_SIZE;
 pub const USER_STACK_TOP: u64 = 0x0000_007F_FFFF_F000;
 
-// ── ELF64 structures ─────────────────────────────────────────────────
+// elf64 structures
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -57,7 +57,7 @@ pub struct Elf64Phdr {
     pub p_align: u64,
 }
 
-// ── Error type ───────────────────────────────────────────────────────
+// error type
 
 #[derive(Debug, Clone, Copy)]
 pub enum ElfError {
@@ -73,7 +73,7 @@ pub enum ElfError {
     AllocFailed,
 }
 
-// ── Parsed segment ───────────────────────────────────────────────────
+// parsed segment
 
 pub struct LoadedSegment {
     pub vaddr: u64,
@@ -87,7 +87,7 @@ pub struct ElfImage {
     pub segments: Vec<LoadedSegment>,
 }
 
-// ── Parsing ──────────────────────────────────────────────────────────
+// parsing
 
 pub fn validate_elf64(data: &[u8]) -> Result<&Elf64Ehdr, ElfError> {
     if data.len() < core::mem::size_of::<Elf64Ehdr>() {
@@ -136,7 +136,7 @@ fn elf_flags_to_page_flags(p_flags: u32) -> PageFlags {
     f
 }
 
-// ── Loading into a new address space ──────────────────────────────────
+// loading into a new address space
 
 /// Load an ELF64 binary into a fresh page table.
 ///
@@ -155,8 +155,8 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
     // Print first 4 bytes to verify ELF magic.
     if data.len() >= 4 {
         puts("[ELF] first 4 bytes: ");
-        for i in 0..4 {
-            crate::serial::put_hex8(data[i]);
+        for &byte in &data[..4] {
+            crate::serial::put_hex8(byte);
             puts(" ");
         }
         puts("\n");
@@ -363,7 +363,7 @@ unsafe fn ensure_user_table(
 
     if e.is_present() {
         if e.is_huge() {
-            // ── Split a huge page (2 MiB or 1 GiB) into sub-pages ──────
+            // split a huge page (2 mib or 1 gib) into sub-pages
             // At this point, the entry `e` resides in a page we OWN (either
             // the user PML4 or a deep-copied intermediate table), so it is
             // safe to overwrite it.
@@ -403,7 +403,7 @@ unsafe fn ensure_user_table(
             return Ok(new_table_phys);
         }
 
-        // ── Copy-on-write: kernel-shared table page ─────────────────────
+        // copy-on-write: kernel-shared table page
         // Entries cloned from the kernel don't have the USER bit.  If we see
         // such an entry, the page it points to is shared with the kernel's
         // active page tables.  Deep-copy it so modifications happen on our

@@ -87,9 +87,7 @@ pub mod handler;
 use crate::serial::puts;
 use handler::*;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYSCALL NUMBERS — core (0-9)
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub const SYS_EXIT: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
@@ -102,7 +100,7 @@ pub const SYS_KILL: u64 = 7;
 pub const SYS_WAIT: u64 = 8;
 pub const SYS_SLEEP: u64 = 9;
 
-// ── HelixFS file system syscalls (10-21) ─────────────────────────────
+// helixfs file system syscalls (10-21)
 pub const SYS_OPEN: u64 = 10;
 pub const SYS_CLOSE: u64 = 11;
 pub const SYS_SEEK: u64 = 12;
@@ -116,7 +114,7 @@ pub const SYS_SYNC: u64 = 19;
 pub const SYS_SNAPSHOT: u64 = 20;
 pub const SYS_VERSIONS: u64 = 21;
 
-// ── System / process / memory (22-31) ────────────────────────────────
+// system / process / memory (22-31)
 pub const SYS_CLOCK: u64 = 22;
 pub const SYS_SYSINFO: u64 = 23;
 pub const SYS_GETPPID: u64 = 24;
@@ -128,7 +126,7 @@ pub const SYS_SYSLOG: u64 = 29;
 pub const SYS_GETCWD: u64 = 30;
 pub const SYS_CHDIR: u64 = 31;
 
-// ── Networking (32-41) — raw NIC primitives (exokernel) ──────────────
+// networking (32-41) — raw nic primitives (exokernel)
 pub const SYS_NIC_INFO: u64 = 32;
 pub const SYS_NIC_TX: u64 = 33;
 pub const SYS_NIC_RX: u64 = 34;
@@ -140,13 +138,13 @@ pub const SYS_DNS: u64 = 39;
 pub const SYS_NET_CFG: u64 = 40;
 pub const SYS_NET_POLL: u64 = 41;
 
-// ── Device / mount (42-45) — reserved stubs ──────────────────────────
+// device / mount (42-45) — reserved stubs
 pub const SYS_IOCTL: u64 = 42;
 pub const SYS_MOUNT: u64 = 43;
 pub const SYS_UMOUNT: u64 = 44;
 pub const SYS_POLL: u64 = 45;
 
-// ── Persistence / introspection (46-51) ──────────────────────────────
+// persistence / introspection (46-51)
 pub const SYS_PERSIST_PUT: u64 = 46;
 pub const SYS_PERSIST_GET: u64 = 47;
 pub const SYS_PERSIST_DEL: u64 = 48;
@@ -154,7 +152,7 @@ pub const SYS_PERSIST_LIST: u64 = 49;
 pub const SYS_PERSIST_INFO: u64 = 50;
 pub const SYS_PE_INFO: u64 = 51;
 
-// ── Hardware primitives — exokernel essentials (52-62) ───────────────
+// hardware primitives — exokernel essentials (52-62)
 pub const SYS_PORT_IN: u64 = 52;
 pub const SYS_PORT_OUT: u64 = 53;
 pub const SYS_PCI_CFG_READ: u64 = 54;
@@ -167,35 +165,33 @@ pub const SYS_IRQ_ATTACH: u64 = 60;
 pub const SYS_IRQ_ACK: u64 = 61;
 pub const SYS_CACHE_FLUSH: u64 = 62;
 
-// ── Display (63-64) ─────────────────────────────────────────────────
+// display (63-64)
 pub const SYS_FB_INFO: u64 = 63;
 pub const SYS_FB_MAP: u64 = 64;
 
-// ── Process management (65-68) ──────────────────────────────────────
+// process management (65-68)
 pub const SYS_PS: u64 = 65;
 pub const SYS_SIGACTION: u64 = 66;
 pub const SYS_SETPRIORITY: u64 = 67;
 pub const SYS_GETPRIORITY: u64 = 68;
 
-// ── CPU features / diagnostics (69-72) ──────────────────────────────
+// cpu features / diagnostics (69-72)
 pub const SYS_CPUID: u64 = 69;
 pub const SYS_RDTSC: u64 = 70;
 pub const SYS_BOOT_LOG: u64 = 71;
 pub const SYS_MEMMAP: u64 = 72;
 
-// ── Memory sharing / protection (73-74) ──────────────────────────────
+// memory sharing / protection (73-74)
 pub const SYS_SHM_GRANT: u64 = 73;
 pub const SYS_MPROTECT: u64 = 74;
 
-// ── Shell / IPC primitives (75-78) ───────────────────────────────────
+// shell / ipc primitives (75-78)
 pub const SYS_PIPE: u64 = 75;
 pub const SYS_DUP2: u64 = 76;
 pub const SYS_SET_FG: u64 = 77;
 pub const SYS_GETARGS: u64 = 78;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // EXTERN ASM FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════
 
 extern "C" {
     /// Set up IA32_STAR / IA32_LSTAR / IA32_FMASK MSRs.
@@ -205,9 +201,7 @@ extern "C" {
 /// Standard ENOSYS return value (used for stubs and unknown syscalls).
 const ENOSYS_RET: u64 = u64::MAX - 37;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // DISPATCH — called from syscall.s (MS x64 ABI)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Main syscall dispatcher.  Called by the `syscall_entry` ASM stub with the
 /// syscall number in `nr` and up to 5 arguments in `a1`..`a5`.
@@ -235,7 +229,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_KILL => sys_kill(a1, a2),
         SYS_WAIT => sys_wait(a1),
         SYS_SLEEP => sys_sleep(a1),
-        // ── HelixFS syscalls ──────────────────────────────────────
+        // helixfs syscalls
         SYS_OPEN => sys_fs_open(a1, a2, a3),
         SYS_CLOSE => sys_fs_close(a1),
         SYS_SEEK => sys_fs_seek(a1, a2, a3),
@@ -248,7 +242,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_SYNC => sys_fs_sync(),
         SYS_SNAPSHOT => sys_fs_snapshot(a1, a2),
         SYS_VERSIONS => sys_fs_versions(a1, a2, a3, a4),
-        // ── System / process / memory ─────────────────────────────
+        // system / process / memory
         SYS_CLOCK => sys_clock(),
         SYS_SYSINFO => sys_sysinfo(a1),
         SYS_GETPPID => sys_getppid(),
@@ -259,7 +253,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_SYSLOG => sys_syslog(a1, a2),
         SYS_GETCWD => sys_getcwd(a1, a2),
         SYS_CHDIR => sys_chdir(a1, a2),
-        // ── Networking stubs ──────────────────────────────────────
+        // networking stubs
         SYS_NIC_INFO => sys_nic_info(a1),
         SYS_NIC_TX => sys_nic_tx(a1, a2),
         SYS_NIC_RX => sys_nic_rx(a1, a2),
@@ -270,18 +264,18 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_DNS => sys_dns(a1, a2, a3),
         SYS_NET_CFG => sys_net_cfg(a1, a2, a3, a4),
         SYS_NET_POLL => sys_net_poll(a1, a2),
-        // ── Device / mount ────────────────────────────────────────
+        // device / mount
         SYS_IOCTL => sys_ioctl(a1, a2, a3),
         SYS_MOUNT => sys_mount(a1, a2, a3, a4),
         SYS_UMOUNT => sys_umount(a1, a2),
-        SYS_POLL => sys_poll(a1, a2, a3), // ── Persistence / introspection ───────────────────────────────
+        SYS_POLL => sys_poll(a1, a2, a3), // persistence / introspection
         SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
         SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
         SYS_PERSIST_DEL => sys_persist_del(a1, a2),
         SYS_PERSIST_LIST => sys_persist_list(a1, a2, a3),
         SYS_PERSIST_INFO => sys_persist_info(a1),
         SYS_PE_INFO => sys_pe_info(a1, a2, a3),
-        // ── Hardware primitives (exokernel) ───────────────────────
+        // hardware primitives (exokernel)
         SYS_PORT_IN => sys_port_in(a1, a2),
         SYS_PORT_OUT => sys_port_out(a1, a2, a3),
         SYS_PCI_CFG_READ => sys_pci_cfg_read(a1, a2, a3),
@@ -293,23 +287,23 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_IRQ_ATTACH => sys_irq_attach(a1),
         SYS_IRQ_ACK => sys_irq_ack(a1),
         SYS_CACHE_FLUSH => sys_cache_flush(a1, a2),
-        // ── Display ───────────────────────────────────────────────
+        // display
         SYS_FB_INFO => sys_fb_info(a1),
         SYS_FB_MAP => sys_fb_map(),
-        // ── Process management ────────────────────────────────────
+        // process management
         SYS_PS => sys_ps(a1, a2),
         SYS_SIGACTION => sys_sigaction(a1, a2),
         SYS_SETPRIORITY => sys_setpriority(a1, a2),
         SYS_GETPRIORITY => sys_getpriority(a1),
-        // ── CPU features / diagnostics ────────────────────────────
+        // cpu features / diagnostics
         SYS_CPUID => sys_cpuid(a1, a2, a3),
         SYS_RDTSC => sys_rdtsc(a1),
         SYS_BOOT_LOG => sys_boot_log(a1, a2),
         SYS_MEMMAP => sys_memmap(a1, a2),
-        // ── Memory sharing / protection ────────────────────────
+        // memory sharing / protection
         SYS_SHM_GRANT => sys_shm_grant(a1, a2, a3, a4),
         SYS_MPROTECT => sys_mprotect(a1, a2, a3),
-        // ── Shell / IPC primitives ────────────────────────────────
+        // shell / ipc primitives
         SYS_PIPE => sys_pipe(a1),
         SYS_DUP2 => sys_dup2(a1, a2),
         SYS_SET_FG => sys_set_fg(a1),
@@ -323,9 +317,7 @@ pub unsafe extern "C" fn syscall_dispatch(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_ALLOC / SYS_FREE  (physical page allocation)
-// ═══════════════════════════════════════════════════════════════════════════
 
 unsafe fn sys_alloc(pages: u64) -> u64 {
     if pages == 0 || pages > 1024 {
@@ -358,9 +350,7 @@ unsafe fn sys_free(phys_base: u64, pages: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize the SYSCALL/SYSRET mechanism and install the timer ISR.
 ///

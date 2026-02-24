@@ -78,9 +78,7 @@ pub fn available() -> usize {
     (head.wrapping_sub(tail)) & BUF_MASK
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // FOREGROUND PROCESS (for Ctrl+C → SIGINT delivery)
-// ═══════════════════════════════════════════════════════════════════════
 
 /// PID of the foreground process (receives Ctrl+C as SIGINT).
 /// 0 = no foreground process, Ctrl+C pushed to stdin instead.

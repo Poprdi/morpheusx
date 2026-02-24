@@ -23,7 +23,14 @@ pub fn write_fd(fd: u32, data: &[u8]) -> Result<usize, u64> {
     if data.is_empty() {
         return Ok(0);
     }
-    let ret = unsafe { syscall3(SYS_WRITE, fd as u64, data.as_ptr() as u64, data.len() as u64) };
+    let ret = unsafe {
+        syscall3(
+            SYS_WRITE,
+            fd as u64,
+            data.as_ptr() as u64,
+            data.len() as u64,
+        )
+    };
     if crate::is_error(ret) {
         Err(ret)
     } else {
@@ -36,7 +43,14 @@ pub fn read_fd(fd: u32, buf: &mut [u8]) -> Result<usize, u64> {
     if buf.is_empty() {
         return Ok(0);
     }
-    let ret = unsafe { syscall3(SYS_READ, fd as u64, buf.as_mut_ptr() as u64, buf.len() as u64) };
+    let ret = unsafe {
+        syscall3(
+            SYS_READ,
+            fd as u64,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+        )
+    };
     if crate::is_error(ret) {
         Err(ret)
     } else {

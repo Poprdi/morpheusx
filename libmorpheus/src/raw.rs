@@ -1,10 +1,8 @@
 //! Raw syscall wrappers — thin inline asm around the `syscall` instruction.
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Syscall numbers (must match hwinit/src/syscall/mod.rs)
-// ═══════════════════════════════════════════════════════════════════════════
 
-// ── Core (0-9) ───────────────────────────────────────────────────────
+// Core (0-9)
 pub const SYS_EXIT: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
 pub const SYS_READ: u64 = 2;
@@ -16,7 +14,7 @@ pub const SYS_KILL: u64 = 7;
 pub const SYS_WAIT: u64 = 8;
 pub const SYS_SLEEP: u64 = 9;
 
-// ── HelixFS (10-21) ─────────────────────────────────────────────────
+// HelixFS (10-21)
 pub const SYS_OPEN: u64 = 10;
 pub const SYS_CLOSE: u64 = 11;
 pub const SYS_SEEK: u64 = 12;
@@ -30,7 +28,7 @@ pub const SYS_SYNC: u64 = 19;
 pub const SYS_SNAPSHOT: u64 = 20;
 pub const SYS_VERSIONS: u64 = 21;
 
-// ── System / process / memory (22-31) ────────────────────────────────
+// System / process / memory (22-31)
 pub const SYS_CLOCK: u64 = 22;
 pub const SYS_SYSINFO: u64 = 23;
 pub const SYS_GETPPID: u64 = 24;
@@ -42,7 +40,7 @@ pub const SYS_SYSLOG: u64 = 29;
 pub const SYS_GETCWD: u64 = 30;
 pub const SYS_CHDIR: u64 = 31;
 
-// ── Networking (32-41) — raw NIC + IP stack ──────────────────────────
+// Networking (32-41) — raw NIC + IP stack
 pub const SYS_NIC_INFO: u64 = 32;
 pub const SYS_NIC_TX: u64 = 33;
 pub const SYS_NIC_RX: u64 = 34;
@@ -54,13 +52,13 @@ pub const SYS_DNS: u64 = 39;
 pub const SYS_NET_CFG: u64 = 40;
 pub const SYS_NET_POLL: u64 = 41;
 
-// ── Device / mount (42-45) — reserved stubs ──────────────────────────
+// Device / mount (42-45) — reserved stubs
 pub const SYS_IOCTL: u64 = 42;
 pub const SYS_MOUNT: u64 = 43;
 pub const SYS_UMOUNT: u64 = 44;
 pub const SYS_POLL: u64 = 45;
 
-// ── Persistence / introspection (46-51) ──────────────────────────────
+// Persistence / introspection (46-51)
 pub const SYS_PERSIST_PUT: u64 = 46;
 pub const SYS_PERSIST_GET: u64 = 47;
 pub const SYS_PERSIST_DEL: u64 = 48;
@@ -68,7 +66,7 @@ pub const SYS_PERSIST_LIST: u64 = 49;
 pub const SYS_PERSIST_INFO: u64 = 50;
 pub const SYS_PE_INFO: u64 = 51;
 
-// ── Hardware primitives — exokernel essentials (52-62) ───────────────
+// Hardware primitives — exokernel essentials (52-62)
 pub const SYS_PORT_IN: u64 = 52;
 pub const SYS_PORT_OUT: u64 = 53;
 pub const SYS_PCI_CFG_READ: u64 = 54;
@@ -81,27 +79,27 @@ pub const SYS_IRQ_ATTACH: u64 = 60;
 pub const SYS_IRQ_ACK: u64 = 61;
 pub const SYS_CACHE_FLUSH: u64 = 62;
 
-// ── Display (63-64) ─────────────────────────────────────────────────
+// Display (63-64)
 pub const SYS_FB_INFO: u64 = 63;
 pub const SYS_FB_MAP: u64 = 64;
 
-// ── Process management (65-68) ──────────────────────────────────────
+// Process management (65-68)
 pub const SYS_PS: u64 = 65;
 pub const SYS_SIGACTION: u64 = 66;
 pub const SYS_SETPRIORITY: u64 = 67;
 pub const SYS_GETPRIORITY: u64 = 68;
 
-// ── CPU features / diagnostics (69-72) ──────────────────────────────
+// CPU features / diagnostics (69-72)
 pub const SYS_CPUID: u64 = 69;
 pub const SYS_RDTSC: u64 = 70;
 pub const SYS_BOOT_LOG: u64 = 71;
 pub const SYS_MEMMAP: u64 = 72;
 
-// ── Memory sharing / protection (73-74) ──────────────────────────────
+// Memory sharing / protection (73-74)
 pub const SYS_SHM_GRANT: u64 = 73;
 pub const SYS_MPROTECT: u64 = 74;
 
-// ── Shell / IPC primitives (75-78) ───────────────────────────────────
+// Shell / IPC primitives (75-78)
 pub const SYS_PIPE: u64 = 75;
 pub const SYS_DUP2: u64 = 76;
 pub const SYS_SET_FG: u64 = 77;

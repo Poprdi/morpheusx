@@ -25,20 +25,15 @@ use super::entry::{PageFlags, PageTable, PageTableEntry};
 use crate::memory::{
     global_registry_mut, is_registry_initialized, AllocateType, MemoryType, PAGE_SIZE,
 };
-use crate::serial::puts;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // VIRTUAL ADDRESS DECOMPOSITION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Decompose a 64-bit virtual address into 4-level page table indices + offset.
 ///
 /// ```text
 ///  63      48 47     39 38     30 29     21 20     12 11       0
-/// ┌──────────┬─────────┬─────────┬─────────┬─────────┬──────────┐
-/// │  sign    │  PML4   │  PDPT   │   PD    │   PT    │  offset  │
-/// │  extend  │ [8:0]   │ [8:0]   │  [8:0]  │  [8:0]  │  [11:0]  │
-/// └──────────┴─────────┴─────────┴─────────┴─────────┴──────────┘
+/// sign    │  PML4   │  PDPT   │   PD    │   PT    │  offset
+/// extend  │ [8:0]   │ [8:0]   │  [8:0]  │  [8:0]  │  [11:0]
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct VirtAddr {
@@ -61,9 +56,7 @@ impl VirtAddr {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PAGE SIZE VARIANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// The size of pages supported by the mapper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,9 +67,7 @@ pub enum MappedPageSize {
     Size2M,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PAGE TABLE MANAGER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Provides high-level operations over the x86-64 4-level page table tree.
 ///
@@ -88,7 +79,7 @@ pub struct PageTableManager {
 }
 
 impl PageTableManager {
-    // ── Construction ─────────────────────────────────────────────────────
+    // construction
 
     /// Initialise from the currently active CR3 register.
     ///
@@ -118,7 +109,7 @@ impl PageTableManager {
         Ok(Self { pml4_phys: phys })
     }
 
-    // ── CR3 operations ───────────────────────────────────────────────────
+    // cr3 operations
 
     /// Load this page table as the active page table (writes CR3).
     ///
@@ -139,7 +130,7 @@ impl PageTableManager {
         core::arch::asm!("invlpg [{addr}]", addr = in(reg) virt, options(nostack));
     }
 
-    // ── Mapping ──────────────────────────────────────────────────────────
+    // mapping
 
     /// Map `virt` → `phys` using 4 KiB pages with the given flags.
     ///
@@ -159,15 +150,15 @@ impl PageTableManager {
     ) -> Result<(), &'static str> {
         let va = VirtAddr::from_u64(virt);
 
-        // Walk / create PML4 → PDPT ──────────────────────────────────────
+        // PML4 → PDPT
         let pml4 = self.pml4_phys as *mut PageTable;
         let pdpt_phys = ensure_table((*pml4).entry_mut(va.pml4_idx))?;
 
-        // Walk / create PDPT → PD ────────────────────────────────────────
+        // PDPT → PD
         let pdpt = pdpt_phys as *mut PageTable;
         let pd_phys = ensure_table((*pdpt).entry_mut(va.pdpt_idx))?;
 
-        // Walk / create PD → PT ──────────────────────────────────────────
+        // PD → PT
         let pd = pd_phys as *mut PageTable;
         let e = (*pd).entry_mut(va.pd_idx);
         if e.is_present() && e.is_huge() {
@@ -175,7 +166,7 @@ impl PageTableManager {
         }
         let pt_phys = ensure_table(e)?;
 
-        // Write the PT entry ──────────────────────────────────────────────
+        // write PT entry
         let pt = pt_phys as *mut PageTable;
         *(*pt).entry_mut(va.pt_idx) = PageTableEntry::new(phys, flags.with(PageFlags::PRESENT));
 
@@ -216,7 +207,7 @@ impl PageTableManager {
         Ok(())
     }
 
-    // ── Unmapping ────────────────────────────────────────────────────────
+    // unmapping
 
     /// Unmap the 4 KiB page at `virt`.
     ///
@@ -283,7 +274,7 @@ impl PageTableManager {
         Ok(())
     }
 
-    // ── Translation ──────────────────────────────────────────────────────
+    // translation
 
     /// Walk the page tables to translate `virt` → physical address.
     ///
@@ -333,7 +324,7 @@ impl PageTableManager {
         Some(pt_e.phys_addr() | va.page_off as u64)
     }
 
-    // ── Identity-map a contiguous physical range ─────────────────────────
+    // identity-map a contiguous physical range
 
     /// Identity-map `[phys_base, phys_base + size)` using 2 MiB huge pages
     /// where aligned, falling back to 4 KiB pages for unaligned edges.
@@ -365,7 +356,7 @@ impl PageTableManager {
         Ok(())
     }
 
-    // ── MMIO mapping ─────────────────────────────────────────────────────
+    // mmio mapping
 
     /// Identity-map a physical MMIO region with Uncacheable (UC) flags.
     ///
@@ -417,14 +408,14 @@ impl PageTableManager {
             let va = VirtAddr::from_u64(cur);
             let pml4 = self.pml4_phys as *mut PageTable;
 
-            // ── PML4 ──
+            // pml4
             let pml4_e = (*pml4).entry_mut(va.pml4_idx);
             if !pml4_e.is_present() {
                 let child = alloc_table()?;
                 *pml4_e = PageTableEntry::new(child, PageFlags::PRESENT.with(PageFlags::WRITABLE));
             }
 
-            // ── PDPT ──
+            // pdpt
             let pdpt = pml4_e.phys_addr() as *mut PageTable;
             let pdpt_e = (*pdpt).entry_mut(va.pdpt_idx);
 
@@ -439,7 +430,7 @@ impl PageTableManager {
                 continue;
             }
 
-            // ── PD ──
+            // pd
             let pd = pdpt_e.phys_addr() as *mut PageTable;
             let pd_e = (*pd).entry_mut(va.pd_idx);
 
@@ -454,7 +445,7 @@ impl PageTableManager {
                 continue;
             }
 
-            // ── PT (4 KiB leaf) ──
+            // pt (4 kib leaf)
             let pt = pd_e.phys_addr() as *mut PageTable;
             let pt_e = (*pt).entry_mut(va.pt_idx);
 
@@ -496,7 +487,7 @@ impl PageTableManager {
         );
     }
 
-    // ── Huge-page splitting ──────────────────────────────────────────────
+    // huge-page splitting
 
     /// Split any huge pages along the path to `virt` so that `map_4k()` can
     /// proceed without hitting a "tried to walk through a huge-page entry"
@@ -518,7 +509,7 @@ impl PageTableManager {
 
         let pml4 = self.pml4_phys as *mut PageTable;
 
-        // ── Level 1: PML4[idx] → PDPT ───────────────────────────────────
+        // level 1: pml4[idx] → pdpt
         let pml4_e = (*pml4).entry_mut(va.pml4_idx);
         if !pml4_e.is_present() {
             // Not mapped at all — map_4k will allocate as needed.
@@ -526,7 +517,7 @@ impl PageTableManager {
         }
         let pdpt_phys = pml4_e.phys_addr();
 
-        // ── Level 2: PDPT[idx] → PD ─────────────────────────────────────
+        // level 2: pdpt[idx] → pd
         let pdpt = pdpt_phys as *mut PageTable;
         let pdpt_e = (*pdpt).entry_mut(va.pdpt_idx);
         if !pdpt_e.is_present() {
@@ -572,7 +563,7 @@ impl PageTableManager {
         // Re-read PDPT entry (may have been replaced above).
         let pd_phys = (*pdpt).entry(va.pdpt_idx).phys_addr();
 
-        // ── Level 3: PD[idx] → PT ───────────────────────────────────────
+        // level 3: pd[idx] → pt
         let pd = pd_phys as *mut PageTable;
         let pd_e = (*pd).entry_mut(va.pd_idx);
         if !pd_e.is_present() {
@@ -616,9 +607,7 @@ impl PageTableManager {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Allocate a single zeroed page from MemoryRegistry for use as a page table.
 unsafe fn alloc_table() -> Result<u64, &'static str> {

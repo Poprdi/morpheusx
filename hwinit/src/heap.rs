@@ -6,22 +6,14 @@
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                    GlobalAlloc trait                     │
-//! │                   (alloc/dealloc/etc)                    │
-//! └─────────────────────────────────────────────────────────┘
-//!                            │
+//! GlobalAlloc trait
+//! (alloc/dealloc/etc)
 //!                            ▼
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                    HeapAllocator                         │
-//! │              (linked_list_allocator::Heap)               │
-//! └─────────────────────────────────────────────────────────┘
-//!                            │
+//! HeapAllocator
+//! (linked_list_allocator::Heap)
 //!                            ▼
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                   MemoryRegistry                         │
-//! │            (allocate_pages for heap growth)              │
-//! └─────────────────────────────────────────────────────────┘
+//! MemoryRegistry
+//! (allocate_pages for heap growth)
 //! ```
 //!
 //! # Usage
@@ -48,9 +40,7 @@ use spin::Mutex;
 use crate::memory::{global_registry_mut, is_registry_initialized, MemoryType, PAGE_SIZE};
 use crate::serial::puts;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Heap metadata
 struct HeapState {
@@ -70,9 +60,7 @@ static HEAP: Mutex<Option<HeapState>> = Mutex::new(None);
 /// Heap initialized flag (for fast path check)
 static mut HEAP_INITIALIZED: bool = false;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP ALLOCATOR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Global heap allocator.
 ///
@@ -148,9 +136,7 @@ unsafe impl GlobalAlloc for HeapAllocator {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP GROWTH
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Try to grow the heap by at least `needed` bytes.
 ///
@@ -197,9 +183,7 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize the heap allocator.
 ///

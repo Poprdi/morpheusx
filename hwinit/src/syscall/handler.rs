@@ -1,22 +1,12 @@
-//! Syscall dispatch handler — individual syscall implementations.
-//!
-//! Each `sys_*` function receives arguments already decoded by the assembly
-//! trampoline and dispatched by `syscall_dispatch()` in `mod.rs`.
-//!
-//! # Calling convention
-//!
-//! All handlers are called with MS x64 ABI by the Rust dispatcher.
-//! They receive arguments as plain `u64` values and return a `u64` result
-//! (negative value = errno equivalent; 0 = success; positive = data).
+//! Syscall handlers. args come in as u64, result goes out as u64.
+//! Negative = errno, 0 = ok, positive = data. MS x64 ABI.
 
 use crate::process::scheduler::{exit_process, SCHEDULER};
 use crate::process::signals::Signal;
 use crate::serial::puts;
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_EXIT — terminate the current process
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_EXIT(code: i32)` — terminate the calling process.
 ///
@@ -25,9 +15,7 @@ pub unsafe fn sys_exit(code: u64) -> u64 {
     exit_process(code as i32);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_WRITE — fd-aware write (serial for fd 1/2, VFS for fd >= 3)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_WRITE(fd, ptr, len)` — write bytes.
 ///
@@ -36,6 +24,9 @@ pub unsafe fn sys_exit(code: u64) -> u64 {
 pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
+    }
+    if !validate_user_buf(ptr, len) {
+        return EFAULT;
     }
     match fd {
         1 | 2 => {
@@ -90,9 +81,7 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_READ — fd-aware read (VFS for fd >= 3)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_READ(fd, ptr, len)` — read bytes.
 ///
@@ -101,6 +90,9 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
 pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
+    }
+    if !validate_user_buf(ptr, len) {
+        return EFAULT;
     }
     match fd {
         0 => {
@@ -114,7 +106,9 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 // No data yet — block until keyboard pushes something.
                 {
                     let proc = SCHEDULER.current_process_mut();
-                    proc.state = crate::process::ProcessState::Blocked(crate::process::BlockReason::StdinRead);
+                    proc.state = crate::process::ProcessState::Blocked(
+                        crate::process::BlockReason::StdinRead,
+                    );
                 }
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }
@@ -150,34 +144,21 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_YIELD — voluntary context switch
-// ═══════════════════════════════════════════════════════════════════════════
 
-/// `SYS_YIELD()` — yield the rest of the current time slice.
-///
-/// Enables interrupts and executes HLT to relinquish the CPU until the
-/// next timer tick.  The timer ISR will context-switch to another Ready
-/// process; when we are eventually scheduled again we resume here.
+/// Yield. STI+HLT is atomic on x86-64 — no surprise interrupts.
 pub unsafe fn sys_yield() -> u64 {
-    // STI + HLT is atomic on x86-64: no interrupt window between them.
-    // After the timer ISR context-switches away and later resumes us,
-    // execution continues at HLT+1.  Re-disable for the syscall return path.
     core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_GETPID
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub unsafe fn sys_getpid() -> u64 {
     SCHEDULER.current_pid() as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_KILL — send a signal to a process
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_KILL(pid: u32, signal: u8)` — send signal to process.
 pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
@@ -191,9 +172,7 @@ pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_WAIT — wait for a child process to exit
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_WAIT(pid)` — block until child `pid` exits, then return its exit code.
 ///
@@ -203,9 +182,7 @@ pub unsafe fn sys_wait(pid: u64) -> u64 {
     crate::process::scheduler::wait_for_child(pid as u32)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SLEEP — sleep for N milliseconds
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_SLEEP(millis)` — suspend the calling process for at least `millis` ms.
 ///
@@ -225,9 +202,7 @@ pub unsafe fn sys_sleep(millis: u64) -> u64 {
     crate::process::scheduler::block_sleep(deadline)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HelixFS Syscall Implementations
-// ═══════════════════════════════════════════════════════════════════════════
 
 const ENOSYS: u64 = u64::MAX - 37;
 const EINVAL: u64 = u64::MAX;
@@ -240,9 +215,7 @@ const ENOMEM: u64 = u64::MAX - 12;
 const EFAULT: u64 = u64::MAX - 14;
 const EPIPE: u64 = u64::MAX - 32;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // USER-POINTER VALIDATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum canonical user virtual address (lower-half).
 const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
@@ -268,6 +241,9 @@ fn validate_user_buf(ptr: u64, len: u64) -> bool {
 /// Extract a path `&str` from a user pointer+length, with validation.
 unsafe fn user_path(ptr: u64, len: u64) -> Option<&'static str> {
     if ptr == 0 || len == 0 || len > 255 {
+        return None;
+    }
+    if !validate_user_buf(ptr, len) {
         return None;
     }
     let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
@@ -370,6 +346,12 @@ pub unsafe fn sys_fs_stat(path_ptr: u64, path_len: u64, stat_buf: u64) -> u64 {
     match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
         Ok(stat) => {
             if stat_buf != 0 {
+                if !validate_user_buf(
+                    stat_buf,
+                    core::mem::size_of::<morpheus_helix::types::FileStat>() as u64,
+                ) {
+                    return EFAULT;
+                }
                 let dst = stat_buf as *mut morpheus_helix::types::FileStat;
                 *dst = stat;
             }
@@ -393,6 +375,11 @@ pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64) -> u64 
         Ok(entries) => {
             let count = entries.len();
             if buf_ptr != 0 && count > 0 {
+                let entry_size = core::mem::size_of::<morpheus_helix::types::DirEntry>() as u64;
+                let total_size = (count as u64).saturating_mul(entry_size);
+                if !validate_user_buf(buf_ptr, total_size) {
+                    return EFAULT;
+                }
                 let dst = buf_ptr as *mut morpheus_helix::types::DirEntry;
                 for (i, entry) in entries.iter().enumerate() {
                     *dst.add(i) = *entry;
@@ -559,9 +546,7 @@ pub unsafe fn sys_fs_versions(path_ptr: u64, path_len: u64, buf_ptr: u64, max: u
     0 // 0 versions written
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_CLOCK — monotonic nanoseconds since boot (TSC-based)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_CLOCK() → nanoseconds`
 ///
@@ -579,9 +564,7 @@ pub unsafe fn sys_clock() -> u64 {
     nanos_wide as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SYSINFO — fill a SysInfo struct for the caller
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `#[repr(C)]` layout shared between kernel and userspace.
 /// Must match `libmorpheus::sys::SysInfo` exactly.
@@ -628,9 +611,7 @@ pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_GETPPID — parent process ID
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_GETPPID() → parent_pid`
 pub unsafe fn sys_getppid() -> u64 {
@@ -638,9 +619,7 @@ pub unsafe fn sys_getppid() -> u64 {
     proc.parent_pid as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SPAWN — spawn a child process from an ELF path in the VFS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_SPAWN(path_ptr, path_len, argv_ptr, argc) → child_pid`
 ///
@@ -692,7 +671,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     }
 
     // Allocate physical pages for a temporary read buffer.
-    let pages_needed = ((file_size + 4095) / 4096) as u64;
+    let pages_needed = file_size.div_ceil(4096) as u64;
     let registry = crate::memory::global_registry_mut();
     let buf_phys = match registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,
@@ -728,14 +707,19 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     let mut blob_len: usize = 0;
     let mut arg_count: u8 = 0;
     if argc > 0 && argc <= 16 && argv_ptr != 0 {
-        let argv = core::slice::from_raw_parts(
-            argv_ptr as *const [u64; 2],
-            argc as usize,
-        );
+        let argv_size = argc.saturating_mul(16); // each pair is [u64; 2] = 16 bytes
+        if !validate_user_buf(argv_ptr, argv_size) {
+            let _ = registry.free_pages(buf_phys, pages_needed);
+            return EFAULT;
+        }
+        let argv = core::slice::from_raw_parts(argv_ptr as *const [u64; 2], argc as usize);
         for pair in argv.iter() {
             let a_ptr = pair[0];
             let a_len = pair[1] as usize;
             if a_ptr == 0 || a_len == 0 || a_len > 127 {
+                continue;
+            }
+            if !validate_user_buf(a_ptr, a_len as u64) {
                 continue;
             }
             if blob_len + a_len + 1 > 256 {
@@ -769,9 +753,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_MMAP — allocate + map pages into user virtual address space
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Starting virtual address for user mmap allocations.
 const USER_MMAP_BASE: u64 = 0x0000_0040_0000_0000;
@@ -861,9 +843,7 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     vaddr
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_MUNMAP — unmap pages from user virtual address space
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_MUNMAP(vaddr, pages) → 0`
 ///
@@ -928,9 +908,7 @@ pub unsafe fn sys_munmap(vaddr: u64, pages: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_DUP — duplicate a file descriptor
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_DUP(old_fd) → new_fd`
 pub unsafe fn sys_dup(old_fd: u64) -> u64 {
@@ -952,9 +930,7 @@ pub unsafe fn sys_dup(old_fd: u64) -> u64 {
     new_fd as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SYSLOG — write to kernel serial log
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_SYSLOG(ptr, len) → len`
 ///
@@ -983,9 +959,7 @@ pub unsafe fn sys_syslog(ptr: u64, len: u64) -> u64 {
     len
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_GETCWD — get current working directory
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_GETCWD(buf_ptr, buf_len) → cwd_len`
 ///
@@ -1003,9 +977,7 @@ pub unsafe fn sys_getcwd(buf_ptr: u64, buf_len: u64) -> u64 {
     cwd.len() as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_CHDIR — change current working directory
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_CHDIR(path_ptr, path_len) → 0`
 ///
@@ -1033,9 +1005,7 @@ pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PERSISTENCE — Key-Value store backed by HelixFS /persist/ directory
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // The persistent KV store maps keys to files under `/persist/<key>`.
 // Backend is HelixFS today, but the `morpheus-persistent` crate's
@@ -1382,9 +1352,7 @@ pub unsafe fn sys_persist_info(info_ptr: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PE_INFO — Binary introspection (PE + ELF)
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // Uses `morpheus_persistent::pe::header::PeHeaders` for PE/COFF parsing
 // and inline ELF64 header parsing for ELF binaries.
@@ -1423,7 +1391,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
 
     // Read at most 64 KB for header parsing.
     let read_size = file_size.min(65536);
-    let pages_needed = ((read_size + 4095) / 4096) as u64;
+    let pages_needed = read_size.div_ceil(4096) as u64;
 
     let registry = crate::memory::global_registry_mut();
     let buf_phys = match registry.allocate_pages(
@@ -1477,7 +1445,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
         _pad0: 0,
     };
 
-    // ── Detect ELF ──────────────────────────────────────────────────
+    // detect elf
     if bytes_read >= 64 && data[0] == 0x7f && data[1] == b'E' && data[2] == b'L' && data[3] == b'F'
     {
         info.format = 1; // ELF64
@@ -1497,23 +1465,21 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
             info.num_sections = u16::from_le_bytes([data[60], data[61]]) as u32;
         }
     }
-    // ── Detect PE/MZ ────────────────────────────────────────────────
+    // detect pe/mz
     else if bytes_read >= 256 && data[0] == b'M' && data[1] == b'Z' {
         info.format = 2; // PE32+
-                         // Use morpheus_persistent's PE parser for full header extraction.
-        match morpheus_persistent::pe::header::PeHeaders::parse(buf_phys as *const u8, bytes_read) {
-            Ok(pe) => {
-                info.image_base = pe.optional.image_base;
-                info.entry_point = pe.optional.address_of_entry_point as u64;
-                info.num_sections = pe.coff.number_of_sections as u32;
-                match pe.arch() {
-                    Ok(morpheus_persistent::pe::PeArch::X64) => info.arch = 1,
-                    Ok(morpheus_persistent::pe::PeArch::ARM64) => info.arch = 2,
-                    Ok(morpheus_persistent::pe::PeArch::ARM) => info.arch = 3,
-                    _ => info.arch = 0,
-                }
+        if let Ok(pe) =
+            morpheus_persistent::pe::header::PeHeaders::parse(buf_phys as *const u8, bytes_read)
+        {
+            info.image_base = pe.optional.image_base;
+            info.entry_point = pe.optional.address_of_entry_point as u64;
+            info.num_sections = pe.coff.number_of_sections as u32;
+            match pe.arch() {
+                Ok(morpheus_persistent::pe::PeArch::X64) => info.arch = 1,
+                Ok(morpheus_persistent::pe::PeArch::ARM64) => info.arch = 2,
+                Ok(morpheus_persistent::pe::PeArch::ARM) => info.arch = 3,
+                _ => info.arch = 0,
             }
-            Err(_) => {} // format=2 but details left as zero
         }
     }
 
@@ -1523,9 +1489,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // NIC REGISTRATION — function-pointer bridge for network drivers
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // hwinit does not depend on morpheus-network, so the NIC driver is
 // registered by the bootloader via function pointers.
@@ -1550,7 +1514,7 @@ pub struct NicOps {
     pub ctrl: Option<unsafe fn(cmd: u32, arg: u64) -> i64>,
 }
 
-// ── NIC_CTRL command constants ───────────────────────────────────────
+// nic_ctrl command constants
 /// Enable/disable promiscuous mode.  arg: 1=on, 0=off.
 pub const NIC_CTRL_PROMISC: u32 = 1;
 /// Set MAC address (arg = pointer to 6 bytes).
@@ -1630,9 +1594,7 @@ pub struct NicInfo {
     pub present: u32,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // FRAMEBUFFER REGISTRATION — pass FB info from bootloader to hwinit
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Framebuffer information registered by the bootloader.
 /// Matches display/src/types.rs FramebufferInfo layout.
@@ -1655,9 +1617,7 @@ pub unsafe fn register_framebuffer(info: FbInfo) {
     FB_REGISTERED = Some(info);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NIC_INFO (32) — get NIC information
-// ═══════════════════════════════════════════════════════════════════════════
 
 const ENODEV: u64 = u64::MAX - 19;
 
@@ -1685,16 +1645,14 @@ pub unsafe fn sys_nic_info(buf_ptr: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NIC_TX (33) — transmit a raw Ethernet frame
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NIC_TX(frame_ptr, frame_len) → 0`
 pub unsafe fn sys_nic_tx(frame_ptr: u64, frame_len: u64) -> u64 {
     if !validate_user_buf(frame_ptr, frame_len) {
         return EFAULT;
     }
-    if frame_len < 14 || frame_len > 9000 {
+    if !(14..=9000).contains(&frame_len) {
         return EINVAL; // min Ethernet header, max jumbo frame
     }
     match NIC_OPS.tx {
@@ -1710,9 +1668,7 @@ pub unsafe fn sys_nic_tx(frame_ptr: u64, frame_len: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NIC_RX (34) — receive a raw Ethernet frame
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NIC_RX(buf_ptr, buf_len) → bytes_received`
 pub unsafe fn sys_nic_rx(buf_ptr: u64, buf_len: u64) -> u64 {
@@ -1732,9 +1688,7 @@ pub unsafe fn sys_nic_rx(buf_ptr: u64, buf_len: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NIC_LINK (35) — get link status
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NIC_LINK() → 0/1 (down/up)`
 pub unsafe fn sys_nic_link() -> u64 {
@@ -1744,9 +1698,7 @@ pub unsafe fn sys_nic_link() -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NIC_MAC (36) — get 6-byte MAC address
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NIC_MAC(buf_ptr) → 0`
 pub unsafe fn sys_nic_mac(buf_ptr: u64) -> u64 {
@@ -1762,9 +1714,7 @@ pub unsafe fn sys_nic_mac(buf_ptr: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NIC_REFILL (37) — refill RX descriptor ring
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NIC_REFILL() → 0`
 pub unsafe fn sys_nic_refill() -> u64 {
@@ -1777,9 +1727,7 @@ pub unsafe fn sys_nic_refill() -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // NIC_CTRL — hardware-level NIC control (exokernel)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `sys_nic_ctrl(cmd, arg) → 0`
 ///
@@ -1799,9 +1747,7 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_IOCTL (42) — device control
-// ═══════════════════════════════════════════════════════════════════════════
 
 // ioctl commands
 const IOCTL_FIONREAD: u64 = 0x541B; // bytes available on fd (like FIONREAD)
@@ -1833,9 +1779,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_MOUNT (43) — mount a filesystem
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_MOUNT(src_ptr, src_len, dst_ptr, dst_len) → 0`
 ///
@@ -1854,9 +1798,7 @@ pub unsafe fn sys_mount(src_ptr: u64, src_len: u64, dst_ptr: u64, dst_len: u64) 
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_UMOUNT (44) — unmount a filesystem
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_UMOUNT(path_ptr, path_len) → 0`
 ///
@@ -1876,9 +1818,7 @@ pub unsafe fn sys_umount(path_ptr: u64, path_len: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_POLL (45) — poll file descriptors for readiness
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Poll entry (matches POSIX pollfd).
 #[repr(C)]
@@ -1966,9 +1906,7 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
     ready
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PORT_IN (52) — read from I/O port
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_PORT_IN(port, width) → value`
 ///
@@ -1986,9 +1924,7 @@ pub unsafe fn sys_port_in(port: u64, width: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PORT_OUT (53) — write to I/O port
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_PORT_OUT(port, width, value) → 0`
 ///
@@ -2015,9 +1951,7 @@ pub unsafe fn sys_port_out(port: u64, width: u64, value: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PCI_CFG_READ (54) — read PCI configuration space
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_PCI_CFG_READ(bdf, offset, width) → value`
 ///
@@ -2046,9 +1980,7 @@ pub unsafe fn sys_pci_cfg_read(bdf: u64, offset: u64, width: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PCI_CFG_WRITE (55) — write PCI configuration space
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_PCI_CFG_WRITE(bdf, offset, width, value) → 0`
 pub unsafe fn sys_pci_cfg_write(bdf: u64, offset: u64, width: u64, value: u64) -> u64 {
@@ -2081,9 +2013,7 @@ pub unsafe fn sys_pci_cfg_write(bdf: u64, offset: u64, width: u64, value: u64) -
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_DMA_ALLOC (56) — allocate DMA-safe memory below 4GB
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_DMA_ALLOC(pages) → phys_addr`
 ///
@@ -2106,9 +2036,7 @@ pub unsafe fn sys_dma_alloc(pages: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_DMA_FREE (57) — free DMA memory
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_DMA_FREE(phys, pages) → 0`
 pub unsafe fn sys_dma_free(phys: u64, pages: u64) -> u64 {
@@ -2125,9 +2053,7 @@ pub unsafe fn sys_dma_free(phys: u64, pages: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_MAP_PHYS (58) — map physical address into process virtual space
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_MAP_PHYS(phys, pages, flags) → virt_addr`
 ///
@@ -2197,24 +2123,24 @@ pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
     vaddr
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_VIRT_TO_PHYS (59) — translate virtual to physical address
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_VIRT_TO_PHYS(virt) → phys`
 ///
-/// Walk the page tables to resolve a virtual address to its physical address.
-/// Returns EINVAL if the page is not mapped.
+/// Walk the calling process's page table to resolve a user virtual address
+/// to its physical address.  Kernel addresses are rejected to prevent
+/// information leaks.
 pub unsafe fn sys_virt_to_phys(virt: u64) -> u64 {
+    if virt >= USER_ADDR_LIMIT {
+        return EFAULT;
+    }
     match crate::paging::kvirt_to_phys(virt) {
         Some(phys) => phys,
         None => EINVAL,
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_IRQ_ATTACH (60) — enable an IRQ line
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_IRQ_ATTACH(irq_num) → 0`
 ///
@@ -2228,9 +2154,7 @@ pub unsafe fn sys_irq_attach(irq_num: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_IRQ_ACK (61) — acknowledge an IRQ (send EOI)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_IRQ_ACK(irq_num) → 0`
 ///
@@ -2243,9 +2167,7 @@ pub unsafe fn sys_irq_ack(irq_num: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_CACHE_FLUSH (62) — flush CPU cache for an address range
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_CACHE_FLUSH(addr, len) → 0`
 ///
@@ -2262,9 +2184,7 @@ pub unsafe fn sys_cache_flush(addr: u64, len: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_FB_INFO (63) — get framebuffer information
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_FB_INFO(buf_ptr) → 0`
 ///
@@ -2284,9 +2204,7 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_FB_MAP (64) — map framebuffer into process virtual address space
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_FB_MAP() → virt_addr`
 ///
@@ -2299,14 +2217,12 @@ pub unsafe fn sys_fb_map() -> u64 {
         None => return ENODEV,
     };
 
-    let pages = ((info.size as u64) + 4095) / 4096;
+    let pages = info.size.div_ceil(4096);
     // Use MAP_PHYS with writable + uncacheable flags.
     sys_map_phys(info.base, pages, 0x03) // flags: writable(1) | uncacheable(2)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PS (65) — list all processes
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Process info returned by SYS_PS.
 /// Must match `libmorpheus::process::PsEntry` exactly.
@@ -2367,9 +2283,7 @@ pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
     count as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SIGACTION (66) — register a signal handler
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_SIGACTION(signum, handler_addr) → old_handler`
 ///
@@ -2394,9 +2308,7 @@ pub unsafe fn sys_sigaction(signum: u64, handler: u64) -> u64 {
     old
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SETPRIORITY (67) — set process scheduling priority
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_SETPRIORITY(pid, priority) → 0`
 ///
@@ -2418,9 +2330,7 @@ pub unsafe fn sys_setpriority(pid: u64, priority: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_GETPRIORITY (68) — get process scheduling priority
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_GETPRIORITY(pid) → priority`
 ///
@@ -2437,9 +2347,7 @@ pub unsafe fn sys_getpriority(pid: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_CPUID (69) — execute CPUID instruction
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// CPUID result.
 #[repr(C)]
@@ -2487,9 +2395,7 @@ pub unsafe fn sys_cpuid(leaf: u64, subleaf: u64, result_ptr: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_RDTSC (70) — read TSC with frequency info
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TSC result struct.
 #[repr(C)]
@@ -2523,9 +2429,7 @@ pub unsafe fn sys_rdtsc(result_ptr: u64) -> u64 {
     tsc
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_BOOT_LOG (71) — read kernel boot log
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_BOOT_LOG(buf_ptr, buf_len) → bytes_written`
 ///
@@ -2547,9 +2451,7 @@ pub unsafe fn sys_boot_log(buf_ptr: u64, buf_len: u64) -> u64 {
     copy_len as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_MEMMAP (72) — read physical memory map
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Memory map entry returned by SYS_MEMMAP.
 #[repr(C)]
@@ -2582,9 +2484,9 @@ pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
     let out = core::slice::from_raw_parts_mut(buf_ptr as *mut MemmapEntry, max_entries as usize);
     let count = total.min(max_entries as usize);
 
-    for i in 0..count {
+    for (i, slot) in out.iter_mut().enumerate().take(count) {
         if let Some(desc) = registry.get_descriptor(i) {
-            out[i] = MemmapEntry {
+            *slot = MemmapEntry {
                 phys_start: desc.physical_start,
                 num_pages: desc.number_of_pages,
                 mem_type: desc.mem_type as u32,
@@ -2598,9 +2500,7 @@ pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
     count as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // NETWORK STACK — function-pointer bridge (TCP, DNS, config, poll)
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // Like NicOps, the bootloader registers these after initialising the smoltcp
 // stack.  hwinit has zero dependency on smoltcp — everything crosses the
@@ -2615,7 +2515,7 @@ pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
 // smoltcp-backed stack for programs that want TCP/IP without writing
 // their own.  Both coexist; neither depends on the other.
 
-// ── Sub-commands for SYS_NET (38) ────────────────────────────────────
+// sub-commands for sys_net (38)
 pub const NET_TCP_SOCKET: u64 = 0;
 pub const NET_TCP_CONNECT: u64 = 1;
 pub const NET_TCP_SEND: u64 = 2;
@@ -2627,24 +2527,24 @@ pub const NET_TCP_ACCEPT: u64 = 7;
 pub const NET_TCP_SHUTDOWN: u64 = 8;
 pub const NET_TCP_NODELAY: u64 = 9;
 pub const NET_TCP_KEEPALIVE: u64 = 10;
-// ── UDP sub-commands for SYS_NET (38) ────────────────────────────────
+// udp sub-commands for sys_net (38)
 pub const NET_UDP_SOCKET: u64 = 11;
 pub const NET_UDP_SEND_TO: u64 = 12;
 pub const NET_UDP_RECV_FROM: u64 = 13;
 pub const NET_UDP_CLOSE: u64 = 14;
 
-// ── Sub-commands for SYS_DNS (39) ────────────────────────────────────
+// sub-commands for sys_dns (39)
 pub const DNS_START: u64 = 0;
 pub const DNS_RESULT: u64 = 1;
 pub const DNS_SET_SERVERS: u64 = 2;
 
-// ── Sub-commands for SYS_NET_CFG (40) ────────────────────────────────
+// sub-commands for sys_net_cfg (40)
 pub const NET_CFG_GET: u64 = 0;
 pub const NET_CFG_DHCP: u64 = 1;
 pub const NET_CFG_STATIC: u64 = 2;
 pub const NET_CFG_HOSTNAME: u64 = 3;
 
-// ── Sub-commands for SYS_NET_POLL (41) ───────────────────────────────
+// sub-commands for sys_net_poll (41)
 pub const NET_POLL_DRIVE: u64 = 0;
 pub const NET_POLL_STATS: u64 = 1;
 
@@ -2693,6 +2593,12 @@ pub struct NetStats {
     pub _pad: u32,
 }
 
+/// UDP send function signature.
+type UdpSendFn =
+    unsafe fn(handle: i64, dest_ip: u32, dest_port: u16, buf: *const u8, len: usize) -> i64;
+/// UDP receive function signature.
+type UdpRecvFn = unsafe fn(handle: i64, buf: *mut u8, len: usize, src_out: *mut u8) -> i64;
+
 /// Network stack function-pointer table.
 ///
 /// Registered by the bootloader after it creates a `NetInterface<D>`.
@@ -2700,7 +2606,7 @@ pub struct NetStats {
 /// negative on error.
 #[repr(C)]
 pub struct NetStackOps {
-    // ── TCP ──────────────────────────────────────────────────────────
+    // tcp
     /// Create a TCP socket.  Returns handle (>=0) or negative error.
     pub tcp_socket: Option<unsafe fn() -> i64>,
     /// Connect.  `ip` is network-byte-order IPv4.
@@ -2724,22 +2630,19 @@ pub struct NetStackOps {
     /// Set keepalive interval in ms.  0=disable.
     pub tcp_keepalive: Option<unsafe fn(handle: i64, ms: u64) -> i64>,
 
-    // ── UDP ──────────────────────────────────────────────────────────
+    // udp
     /// Create a UDP socket.  Returns handle (>=0) or negative error.
     pub udp_socket: Option<unsafe fn() -> i64>,
     /// Send a datagram.  `dest_ip` is NBO IPv4.  Returns bytes sent.
-    pub udp_send_to: Option<
-        unsafe fn(handle: i64, dest_ip: u32, dest_port: u16, buf: *const u8, len: usize) -> i64,
-    >,
+    pub udp_send_to: Option<UdpSendFn>,
     /// Receive a datagram.  Writes sender IP (NBO) + port into `src_out`.
     /// Returns bytes received (>=0), 0 if nothing available.
     /// `src_out` layout: [u32 ip_nbo, u16 port, u16 _pad] = 8 bytes.
-    pub udp_recv_from:
-        Option<unsafe fn(handle: i64, buf: *mut u8, len: usize, src_out: *mut u8) -> i64>,
+    pub udp_recv_from: Option<UdpRecvFn>,
     /// Close a UDP socket.
     pub udp_close: Option<unsafe fn(handle: i64)>,
 
-    // ── DNS ──────────────────────────────────────────────────────────
+    // dns
     /// Start an async DNS query.  Returns query handle or negative.
     pub dns_start: Option<unsafe fn(name: *const u8, len: usize) -> i64>,
     /// Poll a DNS query.  Writes 4-byte IPv4 to `out`.
@@ -2748,7 +2651,7 @@ pub struct NetStackOps {
     /// Override DNS servers.  `servers` points to packed u32 IPv4 addrs.
     pub dns_set_servers: Option<unsafe fn(servers: *const u32, count: usize) -> i64>,
 
-    // ── Configuration ────────────────────────────────────────────────
+    // configuration
     /// Fill a `NetConfigInfo` at `buf`.
     pub cfg_get: Option<unsafe fn(buf: *mut u8) -> i64>,
     /// Switch to DHCP mode.
@@ -2758,7 +2661,7 @@ pub struct NetStackOps {
     /// Set the hostname (for DHCP FQDN option, etc.).
     pub cfg_hostname: Option<unsafe fn(name: *const u8, len: usize) -> i64>,
 
-    // ── Poll / stats ─────────────────────────────────────────────────
+    // poll / stats
     /// Drive the smoltcp stack (DHCP, ARP, TCP timers).  Returns 1 if
     /// any socket activity occurred, 0 otherwise.
     pub poll_drive: Option<unsafe fn(timestamp_ms: u64) -> i64>,
@@ -2808,9 +2711,7 @@ fn net_stack_present() -> bool {
 
 const ENOSYS_NET: u64 = u64::MAX - 37;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NET (38) — TCP socket operations (multiplexed via subcmd)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NET(subcmd, a2, a3, a4) → result`
 pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
@@ -2986,7 +2887,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                 None => ENOSYS_NET,
             }
         }
-        // ── UDP sub-commands ─────────────────────────────────────────
+        // udp sub-commands
         // UDP_SOCKET() → handle
         NET_UDP_SOCKET => match NET_STACK_OPS.udp_socket {
             Some(f) => {
@@ -3096,9 +2997,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_DNS (39) — DNS resolution
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_DNS(subcmd, a2, a3) → result`
 pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
@@ -3170,9 +3069,7 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NET_CFG (40) — IP stack configuration
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NET_CFG(subcmd, a2, a3, a4) → result`
 pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
@@ -3252,7 +3149,7 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
                 None => ENOSYS_NET,
             }
         }
-        // ── NIC hardware control (subcmd >= 128) ────────────────────
+        // nic hardware control (subcmd >= 128)
         // These go directly to NicOps.ctrl, bypassing the IP stack.
         // This is the exokernel escape hatch: promisc, MAC spoof,
         // VLAN, offloads, ring sizing, interrupt coalescing.
@@ -3264,9 +3161,7 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_NET_POLL (41) — drive the stack & query statistics
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_NET_POLL(subcmd, a2) → result`
 pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
@@ -3308,9 +3203,7 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
         _ => EINVAL,
     }
 }
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SHM_GRANT (73) — grant shared physical pages to another process
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // Exokernel shared memory primitive.  The caller specifies physical pages
 // it owns (via SYS_MMAP or SYS_DMA_ALLOC), and the kernel maps those same
@@ -3348,7 +3241,7 @@ pub const PROT_EXEC: u64 = 2; // Executable (clears NX)
 
 /// `SYS_SHM_GRANT(target_pid, src_vaddr, pages, flags) → target_vaddr`
 pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
-    // ── Argument validation ──────────────────────────────────────────
+    // argument validation
     if pages == 0 || pages > 1024 {
         return EINVAL;
     }
@@ -3370,7 +3263,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         return EPERM;
     }
 
-    // ── Verify source VMA in the caller ──────────────────────────────
+    // verify source vma in the caller
     let caller_proc = SCHEDULER.current_process_mut();
     let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
         Some(pair) => pair,
@@ -3391,7 +3284,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
 
     let phys = src_vma.phys;
 
-    // ── Validate target process ──────────────────────────────────────
+    // validate target process
     let target_pid_u32 = target_pid as u32;
     let target_proc = match SCHEDULER.process_by_pid(target_pid_u32) {
         Some(p) => p,
@@ -3406,7 +3299,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         return ESRCH; // kernel thread without user page table
     }
 
-    // ── Compute target virtual address ───────────────────────────────
+    // compute target virtual address
     // We need mutable access to the target.  Re-acquire via raw table
     // access since we can't hold two &mut through SCHEDULER.
     // SAFETY: single-core, interrupts disabled during syscall.
@@ -3425,7 +3318,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     }
     let target_vaddr = target_ref.mmap_brk;
 
-    // ── Build PTE flags ──────────────────────────────────────────────
+    // build pte flags
     let mut pte_flags = crate::paging::entry::PageFlags::PRESENT
         .with(crate::paging::entry::PageFlags::USER)
         .with(crate::paging::entry::PageFlags::NO_EXECUTE);
@@ -3437,7 +3330,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         pte_flags = pte_flags.without(crate::paging::entry::PageFlags::NO_EXECUTE);
     }
 
-    // ── Map physical pages into target's address space ───────────────
+    // map physical pages into target's address space
     let mut ptm = crate::paging::table::PageTableManager {
         pml4_phys: target_ref.cr3,
     };
@@ -3457,7 +3350,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         }
     }
 
-    // ── Record VMA in target (owns_phys = false) ─────────────────────
+    // record vma in target (owns_phys = false)
     if target_ref
         .vma_table
         .insert(target_vaddr, phys, pages, false)
@@ -3478,9 +3371,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     target_vaddr
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_MPROTECT (74) — change page protection flags
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // Modifies the x86-64 page table flags on an existing VMA in the calling
 // process.  This is a bare page-table-flag-flip — the minimum kernel
@@ -3510,7 +3401,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
 
 /// `SYS_MPROTECT(vaddr, pages, prot) → 0`
 pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
-    // ── Argument validation ──────────────────────────────────────────
+    // argument validation
     if pages == 0 || pages > 1024 {
         return EINVAL;
     }
@@ -3531,7 +3422,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
 
     let proc = SCHEDULER.current_process_mut();
 
-    // ── Find the VMA ─────────────────────────────────────────────────
+    // find the vma
     let (_, vma) = match proc.vma_table.find_exact(vaddr) {
         Some(pair) => pair,
         None => return EINVAL,
@@ -3541,7 +3432,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
         return EINVAL;
     }
 
-    // ── Build new PTE flags ──────────────────────────────────────────
+    // build new pte flags
     // Base: PRESENT + USER + NX (read-only, non-executable)
     let mut new_flags = crate::paging::entry::PageFlags::PRESENT
         .with(crate::paging::entry::PageFlags::USER)
@@ -3554,7 +3445,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
         new_flags = new_flags.without(crate::paging::entry::PageFlags::NO_EXECUTE);
     }
 
-    // ── Walk and update each PTE ─────────────────────────────────────
+    // walk and update each pte
     //
     // We walk the process's own page table tree.  Each 4 KiB page maps
     // to a leaf PTE at the PT level.  We rewrite the PTE preserving the
@@ -3611,15 +3502,13 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_PIPE (75) — create a unidirectional pipe
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_PIPE(result_ptr) → 0`
 ///
 /// Creates a pipe.  Writes `[read_fd, write_fd]` (two u64s) at `result_ptr`.
 pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
-    if !validate_user_buf(result_ptr, 16) {
+    if !validate_user_buf(result_ptr, 8) {
         return EFAULT;
     }
     let pipe_idx = match crate::pipe::pipe_alloc() {
@@ -3662,15 +3551,14 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
         pinned_lsn: 0,
     };
 
-    let out = result_ptr as *mut [u64; 2];
-    (*out)[0] = read_fd as u64;
-    (*out)[1] = write_fd as u64;
+    // Write back as [u32; 2] — matches userspace `fds: [u32; 2]`.
+    let out = result_ptr as *mut [u32; 2];
+    (*out)[0] = read_fd as u32;
+    (*out)[1] = write_fd as u32;
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_DUP2 (76) — duplicate a file descriptor
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_DUP2(old_fd, new_fd) → new_fd`
 ///
@@ -3708,9 +3596,7 @@ pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
     new_fd
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_SET_FG (77) — set foreground process for stdin
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_SET_FG(pid) → 0`
 pub unsafe fn sys_set_fg(pid: u64) -> u64 {
@@ -3718,9 +3604,7 @@ pub unsafe fn sys_set_fg(pid: u64) -> u64 {
     0
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYS_GETARGS (78) — retrieve command-line arguments
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// `SYS_GETARGS(buf_ptr, buf_len) → argc`
 ///
@@ -3742,9 +3626,7 @@ pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     argc as u64
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Helper — blocking pipe read
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Read from a pipe, blocking if empty until data arrives or all writers close.
 unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
@@ -3760,7 +3642,9 @@ unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
         // Block until a writer wakes us.
         {
             let proc = SCHEDULER.current_process_mut();
-            proc.state = crate::process::ProcessState::Blocked(crate::process::BlockReason::PipeRead(pipe_idx));
+            proc.state = crate::process::ProcessState::Blocked(
+                crate::process::BlockReason::PipeRead(pipe_idx),
+            );
         }
         core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
     }

@@ -65,12 +65,7 @@ pub fn spawn(path: &str) -> Result<u32, u64> {
     }
 }
 
-/// Spawn a child process with arguments.
-///
-/// `args` is a slice of string slices.  Each arg is passed to the child
-/// as a null-separated blob, retrievable via `getargs()`.
-///
-/// The child inherits the parent's file descriptor table (including pipes).
+/// Spawn with args. max 16 args, null-separated blob. child inherits our FDs.
 pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
     // Build argv descriptor array: [ptr, len] pairs on the stack.
     let mut descs = [[0u64; 2]; 16];
@@ -95,9 +90,7 @@ pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROCESS LISTING (SYS_PS)
-// ═══════════════════════════════════════════════════════════════════════════
+// process listing
 
 /// Process table entry returned by `ps()`.
 #[repr(C)]
@@ -148,9 +141,7 @@ pub fn ps(entries: &mut [PsEntry]) -> usize {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SIGNAL HANDLING (SYS_SIGACTION)
-// ═══════════════════════════════════════════════════════════════════════════
+// signals
 
 /// Well-known signal numbers.
 pub mod signal {
@@ -163,10 +154,7 @@ pub mod signal {
     pub const SIGSTOP: u8 = 19;
 }
 
-/// Register a signal handler.
-///
-/// `handler` = 0 → default action, `handler` = 1 → ignore.
-/// Returns the previous handler address.
+/// sigaction. handler=0 → default, handler=1 → ignore.
 pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64> {
     let ret = unsafe { syscall2(SYS_SIGACTION, signum as u64, handler) };
     if is_error(ret) {
@@ -176,14 +164,9 @@ pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PRIORITY (SYS_SETPRIORITY / SYS_GETPRIORITY)
-// ═══════════════════════════════════════════════════════════════════════════
+// priority
 
-/// Set the scheduling priority of a process.
-///
-/// `pid` = 0 means current process.
-/// `priority`: 0 (highest) to 255 (lowest).
+/// pid=0 means us. 0=highest, 255=lowest.
 pub fn setpriority(pid: u32, priority: u8) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_SETPRIORITY, pid as u64, priority as u64) };
     if is_error(ret) {
@@ -193,9 +176,7 @@ pub fn setpriority(pid: u32, priority: u8) -> Result<(), u64> {
     }
 }
 
-/// Get the scheduling priority of a process.
-///
-/// `pid` = 0 means current process.
+/// pid=0 means us.
 pub fn getpriority(pid: u32) -> Result<u8, u64> {
     let ret = unsafe { syscall1(SYS_GETPRIORITY, pid as u64) };
     if is_error(ret) {
@@ -205,9 +186,7 @@ pub fn getpriority(pid: u32) -> Result<u8, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PIPES (SYS_PIPE, SYS_DUP2)
-// ═══════════════════════════════════════════════════════════════════════════
+// pipes and dup2
 
 /// Create a pipe.
 ///
@@ -222,9 +201,7 @@ pub fn pipe() -> Result<(u32, u32), u64> {
     }
 }
 
-/// Duplicate a file descriptor to a specific target fd.
-///
-/// Closes `new_fd` first if it's open.  Returns `new_fd` on success.
+/// dup2. closes new_fd if open first.
 pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, u64> {
     let ret = unsafe { syscall2(SYS_DUP2, old_fd as u64, new_fd as u64) };
     if is_error(ret) {
@@ -234,9 +211,7 @@ pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// FOREGROUND / ARGV
-// ═══════════════════════════════════════════════════════════════════════════
+// foreground / argv
 
 /// Set the foreground process (receives Ctrl+C as SIGINT).
 pub fn set_foreground(pid: u32) {
@@ -251,10 +226,7 @@ pub fn argc() -> usize {
     ret as usize
 }
 
-/// Retrieve argument strings into `buf`.
-///
-/// Returns the argument count.  Arguments in `buf` are null-separated.
-/// Use `parse_args()` to split them.
+/// Args into buf, null-separated. use `parse_args()` to split.
 pub fn getargs(buf: &mut [u8]) -> usize {
     let ret = unsafe { syscall2(SYS_GETARGS, buf.as_mut_ptr() as u64, buf.len() as u64) };
     if is_error(ret) {

@@ -1,41 +1,9 @@
-//! Persistent key-value storage and binary introspection.
-//!
-//! # Key-Value Store
-//!
-//! The persistence subsystem provides a simple key-value store backed by
-//! HelixFS (files stored under `/persist/<key>`).  Keys must be non-empty,
-//! at most 255 bytes, and may not contain `/` or `\0`.  Values can be up
-//! to 4 MiB.
-//!
-//! ```ignore
-//! use libmorpheus::persist;
-//!
-//! // Store a value
-//! persist::put("my_app.cfg", b"theme=dark\nlang=en\n").unwrap();
-//!
-//! // Read it back
-//! let mut buf = [0u8; 256];
-//! let n = persist::get("my_app.cfg", &mut buf).unwrap();
-//!
-//! // Enumerate keys
-//! let mut listing = [0u8; 4096];
-//! let count = persist::list(&mut listing, 0).unwrap();
-//!
-//! // Delete
-//! persist::del("my_app.cfg").unwrap();
-//! ```
-//!
-//! # Binary Introspection
-//!
-//! `pe_info` parses PE32+ and ELF64 headers from a file on the VFS and
-//! returns architecture, entry point, section count, etc.
+//! Persistent KV store (backed by HelixFS) and PE/ELF binary introspection.
 
 use crate::raw::*;
 use crate::{is_error, EINVAL};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// FFI-compatible structs — must match hwinit/src/syscall/handler.rs exactly
-// ═══════════════════════════════════════════════════════════════════════════
+// FFI structs — must match kernel handler exactly
 
 /// Persistence backend status and usage statistics.
 #[repr(C)]
@@ -69,9 +37,7 @@ pub struct BinaryInfo {
     pub _pad0: u32,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Error helper
-// ═══════════════════════════════════════════════════════════════════════════
+// error helper
 
 /// Convert a raw syscall return into `Result`.
 /// Non-error values are returned as `Ok(v)`.
@@ -84,9 +50,7 @@ fn to_result(ret: u64) -> Result<u64, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Key-Value Persistence
-// ═══════════════════════════════════════════════════════════════════════════
+// kv store
 
 /// Store a named blob to persistent storage.
 ///
@@ -196,9 +160,7 @@ pub fn info() -> Result<PersistInfo, u64> {
     to_result(ret).map(|_| pi)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Binary Introspection
-// ═══════════════════════════════════════════════════════════════════════════
+// binary introspection
 
 /// Parse PE32+ or ELF64 headers from a file and return binary metadata.
 ///
@@ -231,9 +193,7 @@ pub fn pe_info(path: &str) -> Result<BinaryInfo, u64> {
     to_result(ret).map(|_| bi)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Convenience iterators
-// ═══════════════════════════════════════════════════════════════════════════
+// iterators
 
 /// Parse a NUL-separated key listing (as returned by [`list`]) into
 /// individual key slices.

@@ -1,12 +1,4 @@
-//! Blue Screen of Death — MorpheusX crash screen.
-//!
-//! Renders a full-screen crash display directly to the framebuffer with:
-//!   - Dark-tinted Morpheus background image (RLE-compressed thumbnail scaled up)
-//!   - Sad face emoticon
-//!   - Detailed crash information (vector, error code, registers)
-//!   - Panic location if available
-//!
-//! **Zero allocation** — this module must work even when the heap is dead.
+//! Crash screen. Zero-alloc because the heap is probably what died.
 
 #[path = "bsod_bg_data.rs"]
 mod bsod_bg_data;
@@ -19,9 +11,7 @@ use morpheus_hwinit::serial::puts;
 
 use crate::baremetal;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // FRAMEBUFFER PRIMITIVES (no alloc, direct pixel writes)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Write a single pixel to the framebuffer.
 ///
@@ -57,9 +47,7 @@ fn to_fb_pixel(rgb: u32, format: u32) -> u32 {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // BACKGROUND IMAGE RENDERING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Expand a palette index (0x0RGB, 4-bit/channel) to 0x00RRGGBB.
 #[inline(always)]
@@ -179,11 +167,10 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TEXT RENDERING (8×16 VGA font, directly to framebuffer)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Draw a character at (x, y) pixel position.
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_char(
     fb: *mut u32,
     stride: u32,
@@ -198,8 +185,8 @@ unsafe fn draw_char(
 ) {
     let glyph = get_glyph_or_space(c);
     let fg_pixel = to_fb_pixel(fg, format);
-    let char_w = (FONT_WIDTH as u32) * scale;
-    let char_h = (FONT_HEIGHT as u32) * scale;
+    let _char_w = (FONT_WIDTH as u32) * scale;
+    let _char_h = (FONT_HEIGHT as u32) * scale;
 
     for row in 0..FONT_HEIGHT as u32 {
         let bits = glyph[row as usize];
@@ -221,6 +208,7 @@ unsafe fn draw_char(
 }
 
 /// Draw a string at (x, y), returning the next Y position.
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_string(
     fb: *mut u32,
     stride: u32,
@@ -257,11 +245,10 @@ unsafe fn draw_string(
     cy + char_h + 2
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SAD FACE DRAWING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Draw a sad face emoticon centered at (cx, cy) with given radius.
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_sad_face(
     fb: *mut u32,
     stride: u32,
@@ -406,9 +393,7 @@ unsafe fn draw_sad_face(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEX FORMATTING (no alloc)
-// ═══════════════════════════════════════════════════════════════════════════
 
 fn hex64(val: u64, buf: &mut [u8; 18]) -> &str {
     buf[0] = b'0';
@@ -447,9 +432,7 @@ fn dec32(val: u32, buf: &mut [u8; 10]) -> &str {
     unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC API — CRASH SCREEN
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Exception names for the crash screen (kept for show_panic_screen / future use).
 #[allow(dead_code)]
@@ -561,7 +544,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
             let er = (existing >> 16) & 0xFF;
             let eg = (existing >> 8) & 0xFF;
             let eb = existing & 0xFF;
-            let blended = (er / 3) << 16 | (eg / 3) << 8 | eb / 3;
+            let blended = ((er / 3) << 16) | ((eg / 3) << 8) | (eb / 3);
             fb.add(offset).write_volatile(to_fb_pixel(blended, fmt));
         }
     }
@@ -917,7 +900,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     }
 
     // 12. Footer
-    text_y = draw_string(
+    let _ = draw_string(
         fb,
         stride,
         fmt,
@@ -929,7 +912,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         gray,
         scale,
     );
-    let _ = text_y;
 
     puts("[BSOD] Crash screen rendered\n");
 }
@@ -938,7 +920,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
 ///
 /// # Safety
 /// Same constraints as `show_crash_screen`.
-pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
+pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     let fb_info = match baremetal::get_framebuffer_info() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => return,
@@ -966,7 +948,7 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
             let er = (existing >> 16) & 0xFF;
             let eg = (existing >> 8) & 0xFF;
             let eb = existing & 0xFF;
-            let blended = (er / 3) << 16 | (eg / 3) << 8 | eb / 3;
+            let blended = ((er / 3) << 16) | ((eg / 3) << 8) | (eb / 3);
             fb.add(offset).write_volatile(to_fb_pixel(blended, fmt));
         }
     }
@@ -1092,7 +1074,7 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, col: u32) {
 
     text_y += 16 * scale;
 
-    text_y = draw_string(
+    let _ = draw_string(
         fb,
         stride,
         fmt,

@@ -100,9 +100,7 @@ pub mod stdin;
 pub mod sync;
 pub mod syscall;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CPU RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use cpu::gdt::{init_gdt, KERNEL_CS, KERNEL_DS, USER_CS, USER_DS};
 pub use cpu::idt::{
@@ -113,9 +111,7 @@ pub use cpu::pic::{disable_irq, enable_irq, init_pic, send_eoi, PIC1_VECTOR_OFFS
 pub use cpu::tsc::calibrate_tsc_pit;
 pub use cpu::{barriers, cache, mmio, pio, tsc};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // MEMORY RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use memory::{
     fallback_allocator,
@@ -148,33 +144,23 @@ pub use memory::{
     PAGE_SIZE,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use heap::{heap_stats, init_heap, init_heap_with_buffer, is_heap_initialized, HeapAllocator};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYNC RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use sync::{
     without_interrupts, InterruptGuard, Lazy, Once, RawSpinLock, SpinLock, SpinLockGuard,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
 // DMA RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use dma::DmaRegion;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PCI RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PAGING RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use paging::{
     init_kernel_page_table, is_paging_initialized, kensure_4k, kernel_page_table,
@@ -183,16 +169,12 @@ pub use paging::{
     VirtAddr,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PCI RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use pci::{pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
 pub use pci::{pci_cfg_write16, pci_cfg_write32, pci_cfg_write8};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PROCESS RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use process::{
     block_sleep,
@@ -225,9 +207,7 @@ pub use elf::{load_elf64, validate_elf64, ElfError, ElfImage};
 // User process spawning
 pub use process::scheduler::spawn_user_process;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SYSCALL RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use syscall::{
     init_syscall,
@@ -386,9 +366,7 @@ pub use syscall::handler::{
     PROT_WRITE,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM INIT RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use platform::{
     // Legacy entry (external DMA/TSC)

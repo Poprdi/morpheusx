@@ -29,9 +29,7 @@ use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
 use crate::serial::{put_hex32, put_hex64, puts};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// The flat process table.  Index == PID.
 pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = {
@@ -63,9 +61,7 @@ extern "C" {
     static mut next_cr3: u64;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC INFO SNAPSHOT (allocation-free, for the task manager)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A cheap, copyable snapshot of one process's status for display.
 #[derive(Clone, Copy, Debug)]
@@ -98,9 +94,7 @@ impl ProcessInfo {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SCHEDULER HANDLE (zero-size, all methods are statics)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Handle to the global scheduler.  Obtain via `SCHEDULER`.
 pub struct Scheduler;
@@ -108,9 +102,7 @@ pub struct Scheduler;
 /// The single global scheduler instance.
 pub static SCHEDULER: Scheduler = Scheduler;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TSC FREQUENCY (set once, read by sleep computation)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Store the TSC frequency for sleep deadline computation.
 ///
@@ -259,9 +251,7 @@ impl Scheduler {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INIT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize the scheduler and create PID 0 (the kernel process).
 ///
@@ -298,9 +288,7 @@ pub unsafe fn init_scheduler() {
     puts("[SCHED] initialized — kernel is PID 0\n");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SPAWN
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Spawn a new kernel-mode thread at `entry_fn`.
 ///
@@ -367,9 +355,7 @@ pub unsafe fn spawn_kernel_thread(
     Ok(pid)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // EXIT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Terminate the calling process with the given exit code.
 ///
@@ -417,9 +403,7 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SCHEDULER TICK (called from timer ISR — Phase 4)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Called from the timer ISR (ASM, MS x64 ABI) on every tick.
 ///
@@ -480,9 +464,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // USER PROCESS SPAWN
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Spawn a Ring 3 user process from an ELF64 binary.
 ///
@@ -552,7 +534,7 @@ pub unsafe fn spawn_user_process(
     // Allocate a per-process kernel stack (for interrupts from Ring 3).
     proc.alloc_kernel_stack()?;
 
-    // ── Fd inheritance ────────────────────────────────────────────────
+    // fd inheritance
     if inherit_fds {
         let parent_pid = proc.parent_pid as usize;
         if let Some(Some(parent)) = PROCESS_TABLE.get(parent_pid) {
@@ -572,7 +554,7 @@ pub unsafe fn spawn_user_process(
         }
     }
 
-    // ── Argv blob ─────────────────────────────────────────────────────
+    // argv blob
     if !arg_blob.is_empty() && arg_count > 0 {
         let len = arg_blob.len().min(256);
         proc.args[..len].copy_from_slice(&arg_blob[..len]);
@@ -609,9 +591,7 @@ pub unsafe fn spawn_user_process(
     Ok(pid)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // BLOCKING PRIMITIVES (called from syscall handlers)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Block the current process until a TSC deadline, then yield to the scheduler.
 ///
@@ -706,7 +686,7 @@ unsafe fn reap_child(pid: u32) -> u64 {
 /// User-space page tables and mapped physical frames are freed by walking
 /// the PML4 hierarchy (only for non-kernel processes with cr3 ≠ kernel cr3).
 unsafe fn free_process_resources(proc: &mut Process) {
-    // ── Free kernel stack ────────────────────────────────────────────────
+    // free kernel stack
     if proc.kernel_stack_base != 0 && is_registry_initialized() {
         let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);
         let registry = global_registry_mut();
@@ -715,7 +695,7 @@ unsafe fn free_process_resources(proc: &mut Process) {
         proc.kernel_stack_top = 0;
     }
 
-    // ── Free user page tables (if this isn't the kernel process) ─────────
+    // free user page tables (if this isn't the kernel process)
     if proc.cr3 != 0 && proc.pid != 0 {
         // Read the kernel's CR3 so we don't accidentally free the kernel PML4.
         let kernel_cr3: u64;
@@ -801,9 +781,7 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
     let _ = registry.free_pages(pml4_phys, 1);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Unblock any processes whose sleep deadline has been reached.
 ///
@@ -849,7 +827,11 @@ unsafe fn deliver_pending_signals(pid: u32) {
     };
 
     while let Some(sig) = proc.pending_signals.take_next() {
-        let handler = proc.signal_handlers.get(sig as u8 as usize).copied().unwrap_or(0);
+        let handler = proc
+            .signal_handlers
+            .get(sig as u8 as usize)
+            .copied()
+            .unwrap_or(0);
         if handler == 1 {
             // SIG_IGN — ignore this signal.
             continue;
@@ -877,9 +859,7 @@ unsafe fn deliver_pending_signals(pid: u32) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // WAKE FUNCTIONS (called from producers to unblock waiting processes)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Wake all processes blocked on `BlockReason::StdinRead`.
 ///
