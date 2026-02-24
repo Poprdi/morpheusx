@@ -131,18 +131,12 @@ pub unsafe fn pipe_read(idx: u8, buf: &mut [u8]) -> usize {
 
 /// Get the number of open writers for a pipe.
 pub unsafe fn pipe_writers(idx: u8) -> u8 {
-    PIPE_TABLE
-        .get(idx as usize)
-        .map(|p| p.writers)
-        .unwrap_or(0)
+    PIPE_TABLE.get(idx as usize).map(|p| p.writers).unwrap_or(0)
 }
 
 /// Get the number of open readers for a pipe.
 pub unsafe fn pipe_readers(idx: u8) -> u8 {
-    PIPE_TABLE
-        .get(idx as usize)
-        .map(|p| p.readers)
-        .unwrap_or(0)
+    PIPE_TABLE.get(idx as usize).map(|p| p.readers).unwrap_or(0)
 }
 
 /// Close the read end of a pipe.  Frees the pipe if both ends are closed.

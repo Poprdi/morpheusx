@@ -17,9 +17,7 @@
 use crate::serial::puts;
 use core::mem::size_of;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SEGMENT SELECTORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Kernel code segment selector
 pub const KERNEL_CS: u16 = 0x08;
@@ -32,9 +30,7 @@ pub const USER_CS: u16 = 0x20 | 3; // RPL=3
 /// TSS segment selector
 pub const TSS_SEL: u16 = 0x28;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GDT ENTRY
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// GDT entry (8 bytes for normal, 16 bytes for TSS in long mode)
 #[derive(Clone, Copy)]
@@ -137,9 +133,7 @@ impl TssDescriptor {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TASK STATE SEGMENT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Task State Segment for long mode
 #[derive(Clone, Copy)]
@@ -177,9 +171,7 @@ impl Tss {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GDT TABLE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Number of normal GDT entries (before TSS)
 const GDT_ENTRY_COUNT: usize = 5;
@@ -198,11 +190,8 @@ pub struct GdtPtr {
     pub base: u64,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════
 // STATIC IST1 STACK — baked into .bss, never allocated from the heap.
 //
 // The double-fault handler points at this stack via IST[0].  Because it lives
@@ -216,7 +205,6 @@ pub struct GdtPtr {
 // handler runs, and our BSOD is displayed instead of an invisible reset.
 //
 // Size: 32 KiB — generous enough for the BSOD rendering path.
-// ═══════════════════════════════════════════════════════════════════════════
 
 const IST1_STATIC_STACK_SIZE: usize = 32 * 1024;
 
@@ -253,9 +241,7 @@ static mut TSS: Tss = Tss::new();
 /// GDT initialized flag
 static mut GDT_INITIALIZED: bool = false;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize GDT and TSS.
 ///

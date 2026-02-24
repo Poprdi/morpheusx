@@ -17,9 +17,7 @@
 //! | 19     | SIGSTOP   | Pause process                        | **No**    |
 //! | 18     | SIGCONT   | Resume stopped process               | Yes       |
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SIGNAL NUMBERS (match Linux/POSIX for familiarity)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Named signal constants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,9 +88,7 @@ pub enum SignalAction {
     Continue,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SIGNAL SET (bitmask)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A bitmask of pending or blocked signals (up to 64).
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]

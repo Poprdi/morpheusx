@@ -10,7 +10,7 @@ const COM1: u16 = 0x3F8;
 const COM1_LSR: u16 = COM1 + 5;
 const LSR_TX_EMPTY: u8 = 0x20;
 
-// ── Boot log capture ─────────────────────────────────────────────────────────
+// boot log capture
 
 const BOOT_LOG_SIZE: usize = 64 * 1024; // 64 KB — enough for the full platform init
 
@@ -80,7 +80,7 @@ pub fn puts(s: &str) {
     }
 }
 
-// ── Live framebuffer console hook ────────────────────────────────────────────
+// live framebuffer console hook
 
 /// Function pointer set by the bootloader to mirror serial output to the
 /// framebuffer. `None` until the framebuffer is ready.

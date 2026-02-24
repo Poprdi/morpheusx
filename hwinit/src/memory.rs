@@ -1,61 +1,21 @@
-//! Physical Memory — Binary Buddy Allocator
-//!
-//! A buddy system over the full physical address space.
-//! Allocation and freeing are O(log₂ N) where N = total pages.
-//! No bitmap, no descriptor table that overflows, no fixed region limit.
-//!
-//! # The Algorithm
-//!
-//! Every free block has size 2ᵏ pages (k = "order", 0 ≤ k ≤ MAX_ORDER).
-//! The buddy of block at address A with order k is at A ^ (1 << (k + PAGE_SHIFT)).
-//!
-//! Alloc(k): take from free_lists[k]; if empty, split a block from order k+1,
-//!            push the spare half onto free_lists[k], return the other half.
-//!
-//! Free(A, k): compute buddy = A ^ (1 << (k+12)); if buddy is in free_lists[k],
-//!             remove it, merge into a block of order k+1 and repeat.
-//!             Otherwise push A onto free_lists[k].
-//!
-//! # Capacity
-//!
-//!   MAX_ORDER = 26 → max contiguous block = 2²⁶ × 4 KiB = 256 GiB
-//!   MAX_ORDER = 28 → 1 TiB   (change one constant — nothing else)
-//!   MAX_ORDER = 30 → 4 TiB
-//!
-//! # Metadata
-//!
-//! Free-list nodes live INSIDE the free pages themselves (intrusive list).
-//! The allocator struct is ~13 KiB in BSS.  There is no per-page array.
-//!
-//! # Public API
-//!
-//! Identical to the previous MemoryRegistry so all callers compile unchanged.
+//! Physical memory buddy allocator.
+//! Intrusive free-lists, XOR buddy math, O(log N) alloc/free.
+//! MAX_ORDER = 26 → 256 GiB max block. change one constant for more.
+//! No bitmap, no per-page array, ~13 KiB BSS. the dream.
 
 use crate::serial::{put_hex32, puts};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// FUNDAMENTAL CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub const PAGE_SIZE: u64 = 4096;
 pub const PAGE_SHIFT: u32 = 12;
 
-/// Maximum buddy order.  2^MAX_ORDER × 4 KiB = maximum single allocation.
-///
-///   26 → 256 GiB    28 → 1 TiB    30 → 4 TiB
-///
-/// Only this constant needs changing to support a larger address space.
+/// one constant to rule them all. 26 → 256 GiB, 28 → 1 TiB, 30 → 4 TiB.
 const MAX_ORDER: usize = 26;
 
-/// Maximum entries in the UEFI-snapshot map (for type queries and E820 export).
-/// Controls only a fixed backup store; allocation is free from this limit.
-const MAX_MAP: usize = 384;
+const MAX_MAP: usize = 384; // UEFI snapshot slots
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEMORY TYPES  (public — callers bind to these names)
-// ═══════════════════════════════════════════════════════════════════════════
+// memory types (UEFI + our own tags)
 
-/// Memory type — mirrors UEFI EFI_MEMORY_TYPE extended with our own tags.
+/// UEFI EFI_MEMORY_TYPE + custom allocator tags in the 0x8000_xxxx range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum MemoryType {
@@ -75,7 +35,7 @@ pub enum MemoryType {
     PalCode = 13,
     Persistent = 14,
 
-    // Our custom allocator tags (high range, never overlap UEFI values).
+    // custom tags (0x8000_xxxx range, safe from UEFI collisions)
     AllocatedDma = 0x8000_0001,
     AllocatedStack = 0x8000_0002,
     AllocatedPageTable = 0x8000_0003,
@@ -105,14 +65,8 @@ impl MemoryType {
         }
     }
 
-    /// True for memory that is free to use immediately after boot.
-    ///
-    /// Note: `BootServicesCode` and `BootServicesData` are semantically free
-    /// after `ExitBootServices`, but EDK2 maps them with write-protection bits
-    /// still set in the UEFI page tables.  Writing an intrusive free-list node
-    /// into those pages before we own the page tables causes a #PF(W=1,P=1).
-    /// We therefore exclude them here — they are tracked in the snapshot map
-    /// for E820 accuracy but never given to the buddy system.
+    /// Free to use right now. we intentionally exclude BootServices{Code,Data}
+    /// because EDK2 still has WP bits set and writing FreeNode into them = #PF.
     pub fn is_free(&self) -> bool {
         matches!(
             self,
@@ -120,10 +74,7 @@ impl MemoryType {
         )
     }
 
-    /// True for memory that is free AND guaranteed writable right now
-    /// (under UEFI's page tables — used for initial buddy population).
-    /// Identical to `is_free()` by design; kept as a named alias so the
-    /// invariant is explicit at the call site.
+    /// same as is_free(). exists so call sites read better.
     pub fn is_immediately_writable(&self) -> bool {
         self.is_free()
     }
@@ -168,9 +119,7 @@ impl MemoryType {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEMORY ATTRIBUTES  (mirrors UEFI)
-// ═══════════════════════════════════════════════════════════════════════════
+// memory attributes (UEFI verbatim)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryAttribute(pub u64);
@@ -201,9 +150,7 @@ impl MemoryAttribute {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// E820  (for Linux handoff)
-// ═══════════════════════════════════════════════════════════════════════════
+// e820 (linux handoff)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -226,9 +173,7 @@ pub struct E820Entry {
     pub entry_type: u32,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEMORY DESCRIPTOR  (mirrors UEFI EFI_MEMORY_DESCRIPTOR)
-// ═══════════════════════════════════════════════════════════════════════════
+// UEFI EFI_MEMORY_DESCRIPTOR verbatim
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -261,9 +206,7 @@ impl MemoryDescriptor {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ALLOCATION TYPE  (mirrors UEFI EFI_ALLOCATE_TYPE)
-// ═══════════════════════════════════════════════════════════════════════════
+// allocation types (mirrors UEFI)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocateType {
@@ -275,9 +218,7 @@ pub enum AllocateType {
     Address(u64),
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ERROR TYPE
-// ═══════════════════════════════════════════════════════════════════════════
+// errors
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryError {
@@ -288,52 +229,29 @@ pub enum MemoryError {
     AlreadyAllocated,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BUDDY FREE-LIST NODE  — intrusive, lives inside each free block
-// ═══════════════════════════════════════════════════════════════════════════
+// intrusive free-list node — 16 bytes crammed into each free page
 
-/// Written at offset 0 of every free physical block.
-///
-/// A free block of order k spans 2ᵏ × 4 KiB ≥ 4 KiB, which is always enough
-/// room to embed these 16 bytes.
 #[repr(C)]
 struct FreeNode {
     next: *mut FreeNode,
     prev: *mut FreeNode,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BUDDY ALLOCATOR  (type alias kept as MemoryRegistry for ABI compat)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Physical memory allocator — buddy system over the full address space.
-///
-/// Rename-proof: the public name `MemoryRegistry` is stable; internals are free
-/// to evolve.  MAX_ORDER is the only knob needed to extend address range.
+/// the buddy allocator. public name is MemoryRegistry, don't rename it.
 pub struct MemoryRegistry {
-    /// free_lists[k] = head of doubly-linked free list for order k.
-    /// null = empty.  Nodes live INSIDE the free pages (intrusive).
     free_lists: [*mut FreeNode; MAX_ORDER + 1],
-
-    /// Pages free at each order (for diagnostics / sysinfo).
     free_at_order: [u64; MAX_ORDER + 1],
-
-    /// Aggregate statistics.
     total_pages: u64,
     free_pages: u64,
     allocated_pages: u64,
+    map_key: u64, // monotonic, callers detect changes
 
-    /// Monotonically increasing — callers can detect map changes.
-    map_key: u64,
-
-    /// UEFI memory map snapshot.
-    /// Used ONLY for `memory_type_at()` and E820 export.
-    /// Allocation state is owned entirely by the buddy lists above.
+    /// UEFI snapshot. only for type queries and E820 export, not allocation.
     map: [MemoryDescriptor; MAX_MAP],
     map_count: usize,
 }
 
-// SAFETY: single-threaded bare-metal; raw pointers into identity-mapped RAM.
+// no SMP, bare-metal, identity-mapped. these are fine.
 unsafe impl Send for MemoryRegistry {}
 unsafe impl Sync for MemoryRegistry {}
 
@@ -352,19 +270,12 @@ impl MemoryRegistry {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // INITIALISATION  (called once, immediately after ExitBootServices)
-    // ─────────────────────────────────────────────────────────────────────
+    // init (once, after ExitBootServices, don't call again or you'll hurt)
 
-    /// Parse the UEFI memory map and populate the buddy free lists.
-    ///
-    /// `exclude_base`/`exclude_pages` define a physical range that must NEVER
-    /// be added to the buddy free lists.  This is used to protect the loaded
-    /// PE image (.text, .rdata, .data, .bss) whose pages are typed as
-    /// LoaderCode / LoaderData (both considered "free").  Without this
-    /// exclusion the buddy writes intrusive FreeNode structs into the PE
-    /// image, corrupting the heap allocator's BSS metadata and global statics.
-    /// Pass (0, 0) when no exclusion is needed.
+    /// Parse UEFI memory map into buddy free lists.
+    /// exclude_base/exclude_pages: PE image range that must NOT become free
+    /// (the buddy would scribble FreeNode into our own .bss — ask me how I know).
+    /// Pass (0,0) for no exclusion.
     ///
     /// # Safety
     /// `map_ptr` must point to a valid UEFI memory map of `map_size` bytes
@@ -420,20 +331,13 @@ impl MemoryRegistry {
             self.total_pages += pages;
 
             if mem_type.is_immediately_writable() {
-                // Add this region to the buddy system.
-                //
-                // Only EfiConventional / LoaderCode / LoaderData are safe to
-                // write into RIGHT NOW — UEFI's page tables still mark
-                // BootServicesCode as execute-only and BootServicesData pages
-                // may be write-protected.  Touching them here causes #PF W=1.
-                //
-                // Skip the first 1 MiB (legacy BIOS area — never safe to claim).
+                // only Conventional/LoaderCode/LoaderData are safe to touch NOW.
+                // BootServices pages still have WP bits = instant #PF.
+                // also skip first 1 MiB (BIOS land, here be dragons).
                 let region_end = phys + pages * PAGE_SIZE;
                 let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
                 if start < region_end {
-                    // Clip around the PE-image exclusion zone so the buddy
-                    // allocator never writes FreeNode structs into live code
-                    // or BSS (which contains the heap, process table, etc.).
+                    // clip around PE image so we don't write FreeNode into our own code
                     if excl_end > excl_start && start < excl_end && region_end > excl_start {
                         // Part before the exclusion zone.
                         if start < excl_start {
@@ -454,12 +358,7 @@ impl MemoryRegistry {
         self.print_summary();
     }
 
-    /// Punch a hole: remove pages [base, base + pages * PAGE_SIZE) from the
-    /// buddy free lists.  Used immediately after import to protect live
-    /// page tables, stacks, and other pre-allocated regions.
-    ///
-    /// # Safety
-    /// `base` must be page-aligned.  Pages must currently be in the free lists.
+    /// punch a hole in the buddy free lists. protect page tables, stacks, etc.
     pub unsafe fn reserve_range(&mut self, base: u64, pages: u64) {
         let mut addr = base & !(PAGE_SIZE - 1);
         let end = addr + pages * PAGE_SIZE;
@@ -469,13 +368,9 @@ impl MemoryRegistry {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PUBLIC ALLOCATION API  (same signature as previous MemoryRegistry)
-    // ─────────────────────────────────────────────────────────────────────
+    // allocation API
 
-    /// Allocate `pages` contiguous physical pages.
-    ///
-    /// Mirrors UEFI `AllocatePages()`.
+    /// allocate_pages. the one function that matters.
     pub fn allocate_pages(
         &mut self,
         alloc_type: AllocateType,
@@ -499,10 +394,7 @@ impl MemoryRegistry {
         Ok(addr)
     }
 
-    /// Free `pages` physical pages starting at `addr`.
-    ///
-    /// Mirrors UEFI `FreePages()`.  Decomposes the range into naturally-aligned
-    /// buddy blocks and releases each one, triggering coalescing automatically.
+    /// free_pages. decomposes into aligned buddy blocks, coalesces automatically.
     pub fn free_pages(&mut self, addr: u64, pages: u64) -> Result<(), MemoryError> {
         if addr & (PAGE_SIZE - 1) != 0 || pages == 0 {
             return Err(MemoryError::InvalidParameter);
@@ -530,21 +422,16 @@ impl MemoryRegistry {
         Ok(())
     }
 
-    /// Byte-granular allocation — returns a page-aligned block large enough.
-    ///
-    /// The previous bump-pool is gone; callers receive whole pages.  This is
-    /// always correct because callers only write within their requested size.
+    /// byte-granular alloc. rounds up to pages because that's all we have.
     pub fn allocate_pool(&mut self, size: usize) -> Result<u64, MemoryError> {
         if size == 0 {
             return Err(MemoryError::InvalidParameter);
         }
-        let pages = (size as u64 + PAGE_SIZE - 1) / PAGE_SIZE;
+        let pages = (size as u64).div_ceil(PAGE_SIZE);
         self.allocate_pages(AllocateType::AnyPages, MemoryType::Allocated, pages)
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // QUERY API  (same as previous MemoryRegistry)
-    // ─────────────────────────────────────────────────────────────────────
+    // query api
 
     pub fn get_memory_map(&self) -> (u64, usize) {
         (self.map_key, self.map_count)
@@ -571,7 +458,7 @@ impl MemoryRegistry {
         self.allocated_pages.saturating_mul(PAGE_SIZE)
     }
 
-    /// Legacy: returned remaining bump space.  Always 0 now (no bump).
+    /// bump space remaining. always 0 because bump is dead. long live buddy.
     pub fn bump_remaining(&self) -> u64 {
         0
     }
@@ -608,9 +495,9 @@ impl MemoryRegistry {
     /// Write E820 entries into `buffer`, return count written.
     pub fn export_e820(&self, buffer: &mut [E820Entry]) -> usize {
         let n = self.map_count.min(buffer.len());
-        for i in 0..n {
+        for (i, slot) in buffer.iter_mut().enumerate().take(n) {
             let d = &self.map[i];
-            buffer[i] = E820Entry {
+            *slot = E820Entry {
                 addr: d.physical_start,
                 size: d.size(),
                 entry_type: d.mem_type.to_e820() as u32,
@@ -623,9 +510,7 @@ impl MemoryRegistry {
         self.map_count
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // CONVENIENCE ALLOCATORS
-    // ─────────────────────────────────────────────────────────────────────
+    // convenience allocators
 
     /// DMA-safe pages (physical address + size ≤ 4 GiB).
     pub fn alloc_dma_pages(&mut self, pages: u64) -> Result<u64, MemoryError> {
@@ -638,7 +523,7 @@ impl MemoryRegistry {
 
     /// DMA-safe bytes (page-rounded, below 4 GiB).
     pub fn alloc_dma_bytes(&mut self, size: usize) -> Result<u64, MemoryError> {
-        let pages = (size as u64 + PAGE_SIZE - 1) / PAGE_SIZE;
+        let pages = (size as u64).div_ceil(PAGE_SIZE);
         self.alloc_dma_pages(pages)
     }
 
@@ -647,9 +532,7 @@ impl MemoryRegistry {
         self.allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedStack, pages)
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // BUDDY CORE — PRIVATE
-    // ─────────────────────────────────────────────────────────────────────
+    // buddy internals
 
     /// Push a block at `addr` onto free_lists[order].
     ///
@@ -900,9 +783,7 @@ impl MemoryRegistry {
         self.free_pages = self.free_pages.saturating_sub(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // SNAPSHOT MAP MAINTENANCE  (used for type queries / E820 only)
-    // ─────────────────────────────────────────────────────────────────────
+    // snapshot bookkeeping (E820 + type queries only)
 
     fn map_snapshot_add(&mut self, addr: u64, pages: u64, mem_type: MemoryType) {
         // Update existing overlapping free descriptor if found.
@@ -937,9 +818,7 @@ impl MemoryRegistry {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // DIAGNOSTICS
-    // ─────────────────────────────────────────────────────────────────────
+    // diagnostics
 
     fn print_summary(&self) {
         let total_mb = (self.total_pages * PAGE_SIZE) >> 20;
@@ -954,9 +833,7 @@ impl MemoryRegistry {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ORDER ARITHMETIC
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Smallest order k such that 2ᵏ ≥ pages.
 #[inline]
@@ -968,9 +845,7 @@ fn pages_to_order(pages: u64) -> usize {
     (p2.trailing_zeros() as usize).min(MAX_ORDER)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL REGISTRY
-// ═══════════════════════════════════════════════════════════════════════════
 
 static mut GLOBAL_REGISTRY: MemoryRegistry = MemoryRegistry::new();
 static mut REGISTRY_INITIALIZED: bool = false;
@@ -992,8 +867,12 @@ pub unsafe fn init_global_registry(
         return;
     }
     GLOBAL_REGISTRY.import_uefi_map(
-        map_ptr, map_size, descriptor_size, descriptor_version,
-        exclude_base, exclude_pages,
+        map_ptr,
+        map_size,
+        descriptor_size,
+        descriptor_version,
+        exclude_base,
+        exclude_pages,
     );
     REGISTRY_INITIALIZED = true;
 }
@@ -1011,9 +890,7 @@ pub fn is_registry_initialized() -> bool {
     unsafe { REGISTRY_INITIALIZED }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // LEGACY COMPATIBILITY SHIMS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Type alias — MemoryRegistry was previously called PhysicalMemoryMap in some callers.
 pub type PhysicalMemoryMap = MemoryRegistry;

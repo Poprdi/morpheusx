@@ -15,9 +15,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::cpu::idt::{disable_interrupts, enable_interrupts, interrupts_enabled};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SPINLOCK
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A simple spinlock.
 ///
@@ -131,9 +129,7 @@ impl<T> Drop for SpinLockGuard<'_, T> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // RAW SPINLOCK (no interrupt disable, for when you manage it yourself)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Raw spinlock without interrupt management.
 ///
@@ -171,9 +167,7 @@ impl RawSpinLock {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ONCE (run-once initialization)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Run-once initialization primitive.
 pub struct Once {
@@ -224,9 +218,7 @@ impl Once {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // LAZY (lazily initialized value)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Lazily initialized value.
 pub struct Lazy<T, F = fn() -> T> {
@@ -267,9 +259,7 @@ impl<T, F: FnOnce() -> T> Deref for Lazy<T, F> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INTERRUPT GUARD
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// RAII guard that disables interrupts and restores on drop.
 pub struct InterruptGuard {

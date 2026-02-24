@@ -1143,7 +1143,11 @@ fn test_pipe() {
             let mut buf = [0u8; 32];
             let rd = libmorpheus::io::read_fd(read_fd, &mut buf);
             match rd {
-                Ok(n) => check("SYS_PIPE(read)", n == 10 && buf[..10] == *msg, "data mismatch"),
+                Ok(n) => check(
+                    "SYS_PIPE(read)",
+                    n == 10 && buf[..10] == *msg,
+                    "data mismatch",
+                ),
                 Err(_) => fail("SYS_PIPE(read)", "pipe read failed"),
             }
 

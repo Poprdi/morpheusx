@@ -1,25 +1,5 @@
-//! x86-64 Paging Manager
-//!
-//! Provides a safe-ish, `no_std` interface for the 4-level x86-64 page table
-//! tree.  Currently operates in *identity-mapped* mode (physical == virtual),
-//! which is how UEFI leaves the CPU.  Process isolation (per-process PML4s)
-//! is built on top of this in Phase 3+.
-//!
-//! # Usage
-//!
-//! After `platform_init_selfcontained()` completes (i.e., MemoryRegistry and
-//! the global heap are both up), call:
-//!
-//! ```ignore
-//! unsafe {
-//!     // Adopt the UEFI page tables as the kernel's own.
-//!     morpheus_hwinit::paging::init_kernel_page_table();
-//!
-//!     // Map/unmap additional pages:
-//!     let mut pt = morpheus_hwinit::paging::kernel_page_table();
-//!     pt.map_4k(virt, phys, PageFlags::KERNEL_RW)?;
-//! }
-//! ```
+//! 4-level x86-64 page tables. Identity-mapped (VA=PA) post-UEFI.
+//! Per-process PML4 clones for user isolation.
 
 pub mod entry;
 pub mod table;
@@ -29,14 +9,7 @@ pub use table::{MappedPageSize, PageTableManager, VirtAddr};
 
 use crate::serial::puts;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// GLOBAL KERNEL PAGE TABLE
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Singleton kernel `PageTableManager`.
-///
-/// Initialized by `init_kernel_page_table()`.  Access via
-/// `kernel_page_table()` / `kernel_page_table_mut()`.
+// kernel page table singleton
 static mut KERNEL_PT: Option<PageTableManager> = None;
 static mut PAGING_INITIALIZED: bool = false;
 
@@ -101,9 +74,7 @@ pub unsafe fn kernel_page_table_mut() -> &'static mut PageTableManager {
         .expect("kernel page table not initialized")
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CONVENIENCE WRAPPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Map a single 4 KiB page in the kernel page table.
 ///
@@ -170,9 +141,7 @@ pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
     kernel_page_table_mut().mark_uncacheable(virt)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PAGE TABLE RESERVATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum number of page-table pages we expect to encounter.
 ///
@@ -280,7 +249,7 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
 /// - Memory registry must be initialized.
 pub unsafe fn reserve_page_table_pages() -> usize {
     use crate::memory::{global_registry_mut, AllocateType, MemoryType};
-    use crate::serial::{put_hex32, put_hex64};
+    use crate::serial::put_hex32;
 
     let (pt_pages, pt_count) = collect_page_table_pages();
 

@@ -20,9 +20,7 @@
 use crate::cpu::pio::{inb, outb};
 use crate::serial::puts;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PIC PORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// PIC1 (master) command port
 const PIC1_COMMAND: u16 = 0x20;
@@ -36,9 +34,7 @@ const PIC2_DATA: u16 = 0xA1;
 /// End of interrupt command
 const PIC_EOI: u8 = 0x20;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INTERRUPT VECTORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Base vector for PIC1 (master) IRQs after remapping
 pub const PIC1_VECTOR_OFFSET: u8 = 0x20;
@@ -65,17 +61,13 @@ pub mod irq {
     pub const SECONDARY_ATA: u8 = 15;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PIC STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 static mut PIC_INITIALIZED: bool = false;
 static mut PIC_MASK1: u8 = 0xFF; // All masked initially
 static mut PIC_MASK2: u8 = 0xFF;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PIC INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize and remap the 8259 PIC.
 ///
@@ -133,9 +125,7 @@ pub unsafe fn disable_pic() {
     puts("[PIC] disabled\n");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // IRQ MANAGEMENT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Enable an IRQ.
 pub unsafe fn enable_irq(irq: u8) {
@@ -194,9 +184,7 @@ pub fn irq_to_vector(irq: u8) -> Option<u8> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SPURIOUS INTERRUPT HANDLING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Check if this is a spurious IRQ7 (master PIC).
 pub unsafe fn is_spurious_irq7() -> bool {
@@ -219,9 +207,7 @@ pub unsafe fn is_spurious_irq15() -> bool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Small delay for PIC I/O
 #[inline(always)]
@@ -230,9 +216,7 @@ unsafe fn io_wait() {
     outb(0x80, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // LOCAL APIC (TODO - STUB)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Local APIC base address (default)
 pub const LAPIC_BASE: u64 = 0xFEE0_0000;

@@ -1,41 +1,10 @@
-//! Interrupt Descriptor Table (IDT) Management
-//!
-//! Sets up the IDT for exception and interrupt handling. After this,
-//! we own all CPU exceptions and can handle hardware interrupts.
-//!
-//! # Vector Layout
-//!
-//! | Vector | Exception              | Type      |
-//! |--------|------------------------|-----------|
-//! | 0      | Divide Error           | Fault     |
-//! | 1      | Debug                  | Fault/Trap|
-//! | 2      | NMI                    | Interrupt |
-//! | 3      | Breakpoint             | Trap      |
-//! | 4      | Overflow               | Trap      |
-//! | 5      | Bound Range Exceeded   | Fault     |
-//! | 6      | Invalid Opcode         | Fault     |
-//! | 7      | Device Not Available   | Fault     |
-//! | 8      | Double Fault           | Abort     |
-//! | 10     | Invalid TSS            | Fault     |
-//! | 11     | Segment Not Present    | Fault     |
-//! | 12     | Stack-Segment Fault    | Fault     |
-//! | 13     | General Protection     | Fault     |
-//! | 14     | Page Fault             | Fault     |
-//! | 16     | x87 FP Exception       | Fault     |
-//! | 17     | Alignment Check        | Fault     |
-//! | 18     | Machine Check          | Abort     |
-//! | 19     | SIMD FP Exception      | Fault     |
-//! | 20     | Virtualization         | Fault     |
-//! | 21     | Control Protection     | Fault     |
-//! | 32-47  | IRQs (remapped PIC)    | Interrupt |
-//! | 48-255 | User-defined           | Interrupt |
+//! IDT. 0-31 = exceptions, 32-47 = PIC IRQs, 48+ = ours.
+//! Double fault on IST1 so we get a stack even when the kernel stack is toast.
 
 use crate::cpu::gdt::KERNEL_CS;
 use crate::serial::{newline, put_hex32, put_hex64, put_hex8, puts};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // IDT ENTRY
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// IDT entry (16 bytes in long mode)
 #[derive(Clone, Copy)]
@@ -98,9 +67,7 @@ impl IdtEntry {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // IDT POINTER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// IDT pointer for lidt instruction
 #[repr(C, packed)]
@@ -109,9 +76,7 @@ pub struct IdtPtr {
     pub base: u64,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // EXCEPTION FRAME
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Exception stack frame pushed by CPU
 #[derive(Debug, Clone, Copy)]
@@ -136,13 +101,9 @@ pub struct ExceptionFrameWithError {
     pub ss: u64,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // IDT TABLE
-// ═══════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CRASH DIAGNOSTICS — rich crash info for the BSoD
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Saved general-purpose registers — layout matches push order in `exception_common`.
 ///
@@ -175,7 +136,7 @@ pub struct SavedRegs {
 /// explanation, and a best-effort kernel-mode stack backtrace.
 #[repr(C)]
 pub struct CrashInfo {
-    // ── Exception identity ───────────────────────────────────────────
+    // exception identity
     /// CPU exception vector (0–31) or interrupt number.
     pub vector: u64,
     /// Hardware error code pushed by the CPU (0 if none).
@@ -183,20 +144,20 @@ pub struct CrashInfo {
     /// Human-readable exception name (e.g. "Page Fault").
     pub exception_name: &'static str,
 
-    // ── CPU exception frame (pushed by hardware) ─────────────────────
+    // cpu exception frame (pushed by hardware)
     pub rip: u64,
     pub cs: u64,
     pub rflags: u64,
     pub rsp: u64,
     pub ss: u64,
 
-    // ── Control registers ────────────────────────────────────────────
+    // control registers
     /// CR2: faulting linear address (meaningful only for #PF, vector 14).
     pub cr2: u64,
     /// CR3: page-table root physical address.
     pub cr3: u64,
 
-    // ── General-purpose registers at the instant of the fault ─────────
+    // general-purpose registers at the instant of the fault
     pub rax: u64,
     pub rbx: u64,
     pub rcx: u64,
@@ -213,7 +174,7 @@ pub struct CrashInfo {
     pub r14: u64,
     pub r15: u64,
 
-    // ── Process context (lock-free, best-effort read) ────────────────
+    // process context (lock-free, best-effort read)
     /// PID of the process executing when the fault occurred.
     pub pid: u32,
     /// Process name, NUL-terminated.  "[kernel]" for PID 0 / unknown.
@@ -221,13 +182,13 @@ pub struct CrashInfo {
     /// True if the fault originated in user mode (CPL 3).
     pub is_user_mode: bool,
 
-    // ── Stack backtrace (kernel-mode only, best-effort RBP walk) ─────
+    // stack backtrace (kernel-mode only, best-effort rbp walk)
     /// Return addresses from the RBP frame chain (most recent first).
     pub backtrace: [u64; 16],
     /// Number of valid entries in `backtrace`.
     pub backtrace_depth: u8,
 
-    // ── Human-readable diagnostic ────────────────────────────────────
+    // human-readable diagnostic
     /// One-line explanation of what went wrong.
     pub explanation: [u8; 256],
     /// Length of the explanation text.
@@ -275,9 +236,7 @@ impl Idt {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Our IDT
 static mut IDT: Idt = Idt::new();
@@ -285,9 +244,7 @@ static mut IDT: Idt = Idt::new();
 /// IDT initialized flag
 static mut IDT_INITIALIZED: bool = false;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // EXCEPTION HANDLERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Exception names for debugging
 const EXCEPTION_NAMES: [&str; 32] = [
@@ -325,7 +282,7 @@ const EXCEPTION_NAMES: [&str; 32] = [
     "Reserved",
 ];
 
-// ── Crash diagnostic helpers (zero-alloc) ────────────────────────────────
+// crash diagnostic helpers (zero-alloc)
 
 /// Tiny stack-only buffer writer for building diagnostic strings.
 struct BufWriter<'a> {
@@ -426,7 +383,7 @@ unsafe fn walk_stack(rbp: u64, out: &mut [u64; 16]) -> u8 {
     let mut depth: u8 = 0;
     for _ in 0..16u8 {
         // Sanity: aligned, non-null, in a plausible kernel range
-        if fp == 0 || fp % 8 != 0 || fp < 0x1000 || fp > 0x0000_7FFF_FFFF_FFFF {
+        if fp == 0 || !fp.is_multiple_of(8) || !(0x1000..=0x0000_7FFF_FFFF_FFFF).contains(&fp) {
             break;
         }
         let ret = core::ptr::read_volatile((fp + 8) as *const u64);
@@ -455,7 +412,7 @@ pub extern "C" fn exception_handler(
     frame: &ExceptionFrame,
     saved: &SavedRegs,
 ) {
-    // ── Serial dump (always, before anything that could re-fault) ─────
+    // serial dump (always, before anything that could re-fault)
     let exc_name = if (vector as usize) < EXCEPTION_NAMES.len() {
         EXCEPTION_NAMES[vector as usize]
     } else {
@@ -581,16 +538,16 @@ pub extern "C" fn exception_handler(
     };
     if backtrace_depth > 0 {
         puts("  Backtrace:\n");
-        for i in 0..backtrace_depth as usize {
+        for (i, &addr) in backtrace.iter().enumerate().take(backtrace_depth as usize) {
             puts("    #");
             put_hex8(i as u8);
             puts(" ");
-            put_hex64(backtrace[i]);
+            put_hex64(addr);
             newline();
         }
     }
 
-    // ── Build CrashInfo & invoke BSoD hook ────────────────────────────
+    // build crashinfo & invoke bsod hook
     let info = CrashInfo {
         vector,
         error_code,
@@ -640,9 +597,7 @@ pub extern "C" fn exception_handler(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ASSEMBLY STUBS
-// ═══════════════════════════════════════════════════════════════════════════
 
 // Exception stubs - these push the vector number and jump to common handler
 // Exceptions with error codes: 8, 10, 11, 12, 13, 14, 17, 21
@@ -757,9 +712,7 @@ exception_stub_no_error!(exc_simd_fp, 19);
 exception_stub_no_error!(exc_virtualization, 20);
 exception_stub_with_error!(exc_control_protection, 21);
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize IDT with exception handlers.
 ///

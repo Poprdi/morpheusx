@@ -21,9 +21,7 @@ mod storage;
 mod tui;
 mod uefi_allocator;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // UEFI FFI — minimal subset: just enough to locate GOP and feed the allocator
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Only field we read is boot_services. Everything else is padding.
 #[repr(C)]
@@ -87,9 +85,7 @@ pub struct BootServices {
     pub locate_protocol: extern "efiapi" fn(*const [u8; 16], *const (), *mut *mut ()) -> usize,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GOP — just enough to read the framebuffer address
-// ═══════════════════════════════════════════════════════════════════════════
 
 const GOP_GUID: [u8; 16] = [
     0xDE, 0xA9, 0x42, 0x90, 0xDC, 0x23, 0x38, 0x4A, 0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A,
@@ -123,9 +119,7 @@ struct Gop {
     mode: *mut GopMode,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ENTRY
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) -> usize {
