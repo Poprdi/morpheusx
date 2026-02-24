@@ -35,9 +35,7 @@ use morpheus_ui::event::{Event, Key};
 use morpheus_ui::font;
 use morpheus_ui::theme::Theme;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // LAYOUT CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 const HEADER_H: u32 = 40;
 const ROW_H: u32 = 16;
@@ -52,9 +50,7 @@ const COL_TICKS: u32 = 200;
 const COL_MEM: u32 = 288;
 const COL_PRIO: u32 = 368;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // STATE DISPLAY HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 fn state_name(s: ProcessState) -> &'static str {
     match s {
@@ -103,9 +99,7 @@ fn fmt_pages(pages: u64) -> String {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // APP STRUCT
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub struct TaskManager {
     procs: [ProcessInfo; SNAP_CAP],
@@ -190,14 +184,14 @@ impl TaskManager {
         self.status_ttl = 80; // ~0.8 s at 100 Hz
     }
 
-    // ── Layout helper ────────────────────────────────────────────────────
+    // layout helper
 
     fn table_top(&self) -> u32 {
         // title bar height + col-label row + 1-px separator
         font::FONT_HEIGHT + 6 + ROW_H + 3
     }
 
-    // ── Rendering ─────────────────────────────────────────────────────────
+    // rendering
 
     fn draw_header(&self, canvas: &mut dyn Canvas, theme: &Theme) {
         let w = canvas.width();
@@ -364,9 +358,7 @@ impl TaskManager {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // APP TRAIT IMPL
-// ═══════════════════════════════════════════════════════════════════════════
 
 impl App for TaskManager {
     fn title(&self) -> &str {
@@ -452,9 +444,7 @@ impl App for TaskManager {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // REGISTRATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub fn register(registry: &mut AppRegistry) {
     registry.register(AppEntry {

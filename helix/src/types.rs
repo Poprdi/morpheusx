@@ -535,7 +535,7 @@ pub mod open_flags {
     pub const O_DIR: u32 = 1 << 6; // 0x40
     /// Open at a specific LSN (temporal read).
     pub const O_AT_LSN: u32 = 1 << 7; // 0x80
-    // ── Pipe markers (kernel-internal, not user-visible) ─────────
+                                      // ── Pipe markers (kernel-internal, not user-visible) ─────────
     /// This fd is the read end of a kernel pipe.
     pub const O_PIPE_READ: u32 = 1 << 8;
     /// This fd is the write end of a kernel pipe.

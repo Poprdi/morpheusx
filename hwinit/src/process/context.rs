@@ -118,9 +118,7 @@ impl core::fmt::Debug for CpuContext {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // COMPILE-TIME OFFSET ASSERTIONS (keep in sync with context_switch.s)
-// ═══════════════════════════════════════════════════════════════════════════
 
 const _: () = {
     use core::mem::offset_of;

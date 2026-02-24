@@ -34,9 +34,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering
 use linked_list_allocator::Heap;
 use spin::Mutex;
 
-// ─────────────────────────────────────────────────────────────────────────
 // Configuration
-// ─────────────────────────────────────────────────────────────────────────
 
 /// UEFI EFI_LOADER_DATA memory type constant.
 const EFI_LOADER_DATA: usize = 2;
@@ -50,9 +48,7 @@ const OVERFLOW_GROW_CHUNK: usize = 16 * 1024 * 1024;
 /// Hard cap on overflow heap size.
 const OVERFLOW_MAX_SIZE: usize = 256 * 1024 * 1024;
 
-// ─────────────────────────────────────────────────────────────────────────
 // Static storage
-// ─────────────────────────────────────────────────────────────────────────
 
 /// UEFI BootServices pointer (valid pre-EBS only).
 static BOOT_SERVICES: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
@@ -73,9 +69,7 @@ static PRIMARY_HEAP: Mutex<Heap> = Mutex::new(Heap::empty());
 /// Used for dealloc routing.
 static PRIMARY_BASE: AtomicU64 = AtomicU64::new(0);
 
-// ─────────────────────────────────────────────────────────────────────────
 // Overflow heap
-// ─────────────────────────────────────────────────────────────────────────
 
 /// State for the dynamically-allocated overflow heap.
 struct OverflowState {
@@ -95,9 +89,7 @@ static OVERFLOW_BASE: AtomicU64 = AtomicU64::new(0);
 /// Current committed size of overflow heap (for dealloc routing).
 static OVERFLOW_SIZE: AtomicUsize = AtomicUsize::new(0);
 
-// ─────────────────────────────────────────────────────────────────────────
 // Public API
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Register the UEFI BootServices pointer.  Call once at efi_main entry.
 pub fn set_boot_services(bs: *const crate::BootServices) {
@@ -119,9 +111,7 @@ pub unsafe fn switch_to_post_ebs() {
     POST_EBS.store(true, Ordering::SeqCst);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // GlobalAlloc implementation
-// ─────────────────────────────────────────────────────────────────────────
 
 /// The hybrid allocator type registered as #[global_allocator].
 pub struct HybridAllocator;
@@ -147,13 +137,11 @@ unsafe impl GlobalAlloc for HybridAllocator {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Post-EBS allocation path
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Post-EBS allocation: primary → overflow (init / grow on demand).
 unsafe fn post_ebs_alloc(layout: Layout) -> *mut u8 {
-    // ── 1. Try primary heap ──────────────────────────────────────────────
+    // 1. try primary heap
     {
         let mut h = PRIMARY_HEAP.lock();
         if let Ok(nn) = h.allocate_first_fit(layout) {
@@ -161,7 +149,7 @@ unsafe fn post_ebs_alloc(layout: Layout) -> *mut u8 {
         }
     }
 
-    // ── 2. Primary OOM — use / initialise overflow heap ──────────────────
+    // 2. primary oom — use / initialise overflow heap
     let mut guard = OVERFLOW_HEAP.lock();
 
     if guard.is_none() {
@@ -174,12 +162,12 @@ unsafe fn post_ebs_alloc(layout: Layout) -> *mut u8 {
 
     let state = guard.as_mut().unwrap();
 
-    // ── 3. Try allocation in overflow ────────────────────────────────────
+    // 3. try allocation in overflow
     if let Ok(nn) = state.heap.allocate_first_fit(layout) {
         return nn.as_ptr();
     }
 
-    // ── 4. Overflow OOM — try to grow it ────────────────────────────────
+    // 4. overflow oom — try to grow it
     if try_grow_overflow(state, layout.size()) {
         state
             .heap
@@ -223,9 +211,7 @@ unsafe fn post_ebs_dealloc(ptr: *mut u8, layout: Layout) {
     morpheus_hwinit::serial::puts(" not in any heap\n");
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Overflow heap management (MemoryRegistry backed)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Allocate the first overflow chunk from MemoryRegistry.
 /// Returns None if registry is not yet ready or allocation fails.
@@ -307,9 +293,7 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Pre-EBS UEFI allocation path
-// ─────────────────────────────────────────────────────────────────────────
 
 unsafe fn alloc_uefi(layout: Layout) -> *mut u8 {
     let bs_ptr = BOOT_SERVICES.load(Ordering::SeqCst);
@@ -363,9 +347,7 @@ unsafe fn dealloc_uefi(ptr: *mut u8, layout: Layout) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Registration
-// ─────────────────────────────────────────────────────────────────────────
 
 #[global_allocator]
 static ALLOCATOR: HybridAllocator = HybridAllocator;

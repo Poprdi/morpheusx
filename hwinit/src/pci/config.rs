@@ -2,9 +2,7 @@
 //!
 //! Thin wrappers around ASM functions for PCI config space read/write.
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ASM BINDINGS
-// ═══════════════════════════════════════════════════════════════════════════
 
 extern "win64" {
     /// Read 8-bit value from PCI config space.
@@ -26,9 +24,7 @@ extern "win64" {
     fn asm_pci_cfg_write32(bus: u8, device: u8, function: u8, offset: u8, value: u32);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SAFE WRAPPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// PCI device address (bus/device/function).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,9 +81,7 @@ pub fn pci_cfg_write32(addr: PciAddr, offset: u8, value: u32) {
     unsafe { asm_pci_cfg_write32(addr.bus, addr.device, addr.function, offset, value) }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PCI STANDARD OFFSETS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// PCI configuration space standard offsets.
 pub mod offset {

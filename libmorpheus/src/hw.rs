@@ -1,17 +1,9 @@
-//! Hardware primitives — exokernel direct hardware access.
-//!
-//! These syscalls give userland programs direct access to x86 I/O ports,
-//! PCI configuration space, DMA memory, physical address mapping, IRQ
-//! management, and CPU cache control.
-//!
-//! With these primitives, userland can build its own device drivers for
-//! NICs, storage controllers, GPUs, and any other PCI/PCIe device.
+//! Hardware primitives. ports, PCI, DMA, IRQs, cache, framebuffer.
+//! The exokernel escape hatch — build your own drivers from Ring 3.
 
 use crate::raw::*;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PORT I/O
-// ═══════════════════════════════════════════════════════════════════════════
+// port i/o
 
 /// Read a byte from an x86 I/O port.
 pub fn port_inb(port: u16) -> u8 {
@@ -49,9 +41,7 @@ pub fn port_outl(port: u16, value: u32) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PCI CONFIGURATION SPACE
-// ═══════════════════════════════════════════════════════════════════════════
+// pci config space
 
 /// Encode bus/device/function into the BDF format used by PCI syscalls.
 #[inline]
@@ -101,9 +91,7 @@ pub fn pci_cfg_write32(bus: u8, device: u8, function: u8, offset: u8, value: u32
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DMA MEMORY
-// ═══════════════════════════════════════════════════════════════════════════
+// dma memory
 
 /// Allocate DMA-safe physical memory below 4GB.
 ///
@@ -128,9 +116,7 @@ pub fn dma_free(phys: u64, pages: u64) -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PHYSICAL MEMORY MAPPING
-// ═══════════════════════════════════════════════════════════════════════════
+// physical memory mapping
 
 /// Map physical address into the process virtual address space.
 ///
@@ -165,9 +151,7 @@ pub fn virt_to_phys(virt: u64) -> Result<u64, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// IRQ MANAGEMENT
-// ═══════════════════════════════════════════════════════════════════════════
+// irq management
 
 /// Enable an IRQ line on the PIC.
 ///
@@ -191,14 +175,9 @@ pub fn irq_ack(irq: u8) -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CPU CACHE
-// ═══════════════════════════════════════════════════════════════════════════
+// cpu cache
 
-/// Flush CPU cache lines covering the address range `[addr, addr+len)`.
-///
-/// Essential for DMA coherence when the CPU writes data that a device
-/// will read via DMA.
+/// clflush the range. do this before DMA reads or you're debugging for hours.
 pub fn cache_flush(addr: u64, len: u64) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_CACHE_FLUSH, addr, len) };
     if crate::is_error(ret) {
@@ -208,11 +187,9 @@ pub fn cache_flush(addr: u64, len: u64) -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CPUID
-// ═══════════════════════════════════════════════════════════════════════════
+// cpuid
 
-/// CPUID result registers.
+/// cpuid result registers.
 #[repr(C)]
 pub struct CpuidResult {
     pub eax: u32,
@@ -240,9 +217,7 @@ pub fn cpuid(leaf: u32, subleaf: u32) -> CpuidResult {
     result
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RDTSC
-// ═══════════════════════════════════════════════════════════════════════════
+// rdtsc
 
 /// TSC result (value + calibrated frequency).
 #[repr(C)]
@@ -267,9 +242,7 @@ pub fn rdtsc_raw() -> u64 {
     unsafe { syscall1(SYS_RDTSC, 0) }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// FRAMEBUFFER
-// ═══════════════════════════════════════════════════════════════════════════
+// framebuffer
 
 /// Framebuffer information.
 #[repr(C)]
@@ -314,9 +287,7 @@ pub fn fb_map() -> Result<u64, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BOOT LOG
-// ═══════════════════════════════════════════════════════════════════════════
+// boot log
 
 /// Get the total size of the kernel boot log.
 pub fn boot_log_size() -> u64 {
@@ -335,9 +306,7 @@ pub fn boot_log(buf: &mut [u8]) -> Result<usize, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEMORY MAP
-// ═══════════════════════════════════════════════════════════════════════════
+// memory map
 
 /// Physical memory map entry.
 #[repr(C)]

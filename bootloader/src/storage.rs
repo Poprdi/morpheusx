@@ -11,7 +11,6 @@
 //!
 //! ```text
 //! Offset     Size     Purpose
-//! ──────────────────────────────────────────────────
 //! 0x00000    512 B    VirtIO descriptor table (32 entries × 16 B)
 //! 0x00200    70 B     VirtIO available ring
 //! 0x00400    262 B    VirtIO used ring
@@ -22,7 +21,6 @@
 //! 0x02800    8 KB     AHCI command tables (128-byte aligned)
 //! 0x04800    512 B    AHCI IDENTIFY buffer
 //! 0x10000    64 KB    I/O DMA buffer (for UnifiedBlockIo transfers)
-//! ──────────────────────────────────────────────────
 //! Total      ≈ 128 KB (well within 2 MB)
 //! ```
 
@@ -36,9 +34,7 @@ use morpheus_network::{
     DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
 // DMA LAYOUT CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 const VIRTIO_QUEUE_SIZE: u16 = 32;
 
@@ -59,9 +55,7 @@ const OFF_AHCI_IDENTIFY: usize = 0x0_4800;
 const OFF_IO_BUFFER: usize = 0x1_0000;
 const IO_BUFFER_SIZE: usize = 64 * 1024; // 64 KB = UnifiedBlockIo::MAX_TRANSFER_SIZE
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PCI BUS DUMP (diagnostic)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Dump all PCI devices with vendor/device IDs and BARs to serial.
 ///
@@ -141,9 +135,7 @@ unsafe fn dump_pci_devices() {
     puts("[PCI-DUMP] done\n");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // MMIO BAR MAPPING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Identity-map PCI BAR MMIO regions for a VirtIO device with UC flags.
 ///
@@ -208,9 +200,7 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // STATIC STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// The unified block device lives here for the kernel's lifetime.
 static mut BLOCK_DEVICE: Option<UnifiedBlockDevice> = None;
@@ -224,7 +214,7 @@ static mut STORAGE_TSC_FREQ: u64 = 0;
 /// Whether persistent storage was successfully initialized.
 static mut PERSISTENT_READY: bool = false;
 
-// ── Spinner ──────────────────────────────────────────────────────────────────
+// spinner
 
 static mut SPIN_ACTIVE: bool = false;
 static mut SPIN_FRAME: usize = 0;
@@ -283,9 +273,7 @@ fn spinner_done() {
     morpheus_hwinit::serial::fb_puts("\r");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC API
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Probe for a persistent block device and mount HelixFS on it.
 ///
@@ -311,7 +299,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     // time, so VirtIO queue structures (desc, avail, used, headers, status)
     // are already clean.  No additional zeroing needed here.
 
-    // ── Build BlockDmaConfig from the DMA region ────────────────────────
+    // build blockdmaconfig from the dma region
     let base_cpu = dma.cpu_base();
     let base_bus = dma.bus_base();
 
@@ -343,7 +331,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         ahci_identify_phys: base_bus + OFF_AHCI_IDENTIFY as u64,
     };
 
-    // ── Scan all block devices on PCI bus ─────────────────────────────
+    // scan all block devices on pci bus
     let (devices, dev_count) = scan_all_block_devices();
 
     if dev_count == 0 {
@@ -402,7 +390,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         puts("[STORAGE]   selected as data disk\n");
         found_data_disk = true;
 
-        // ── Try to recover or format HelixFS ──────────────────────────
+        // try to recover or format helixfs
         let mut raw_dev = make_raw_block_device();
 
         let needs_format = {
@@ -537,9 +525,7 @@ pub fn is_persistent() -> bool {
     unsafe { PERSISTENT_READY }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // BOOT DISK DETECTION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Check if the currently probed block device is a boot disk (GPT or MBR).
 ///
@@ -629,9 +615,7 @@ pub fn create_init_directories() {
     puts("[INITFS] directory structure ready\n");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // RAW BLOCK DEVICE BRIDGE
-// ═══════════════════════════════════════════════════════════════════════════
 //
 // We create a `RawBlockDevice` whose function pointers call through
 // the network crate's `UnifiedBlockIo` adapter for each operation.

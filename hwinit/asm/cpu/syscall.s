@@ -120,6 +120,20 @@ syscall_entry:
     push    rcx                             ; user RIP
     push    r11                             ; user RFLAGS
 
+    ; ── Save user argument registers ──────────────────────────────────────
+    ; The kernel runs with MS x64 ABI which freely clobbers these registers.
+    ; Userspace compiled with SYSV convention expects only RCX and R11 to be
+    ; destroyed by the syscall instruction — all other registers (including
+    ; the arg registers RDI/RSI/RDX/R10/R8) must be restored on return.
+    ; Failure to restore these causes hidden return pointers or values that
+    ; the compiler saved in caller-saved registers to be corrupted (e.g.
+    ; RDX holding a Result<> hidden pointer clobbered to 0x480 by sys_pipe).
+    push    r8                              ; user a5
+    push    r10                             ; user a4
+    push    rdi                             ; user a1
+    push    rsi                             ; user a2
+    push    rdx                             ; user a3
+
     ; ── Save callee-saved (MS x64 ABI for the Rust call) ─────────────────
     push    rbp
     push    rbx
@@ -133,8 +147,8 @@ syscall_entry:
     ;   User:   RAX=nr, RDI=a1, RSI=a2, RDX=a3, R10=a4, R8=a5
     ;   MS x64: RCX=nr, RDX=a1, R8=a2,  R9=a3,  [rsp+0x20]=a4, [rsp+0x28]=a5
     sub     rsp, 48                 ; 32 shadow + 16 stack args
-    mov     [rsp + 0x28], r8        ; a5
-    mov     [rsp + 0x20], r10       ; a4
+    mov     [rsp + 0x28], r8        ; a5  (from original r8, not the saved r8)
+    mov     [rsp + 0x20], r10       ; a4  (from original r10)
     mov     r9, rdx                 ; a3
     mov     r8, rsi                 ; a2
     mov     rdx, rdi                ; a1
@@ -150,6 +164,13 @@ syscall_entry:
     pop     r12
     pop     rbx
     pop     rbp
+
+    ; ── Restore user argument registers ───────────────────────────────────
+    pop     rdx                     ; user a3
+    pop     rsi                     ; user a2
+    pop     rdi                     ; user a1
+    pop     r10                     ; user a4
+    pop     r8                      ; user a5
 
     pop     r11                     ; user RFLAGS
     pop     rcx                     ; user RIP

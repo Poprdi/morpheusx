@@ -1,29 +1,12 @@
-//! libmorpheus — Userspace library for MorpheusX native binaries.
-//!
-//! Apps link against this crate to access kernel services via syscalls.
-//! All functions use the `syscall` instruction with the MorpheusX ABI:
-//!   RAX=number, RDI=a1, RSI=a2, RDX=a3, R10=a4, R8=a5, R9=a6
-//!   Return: RAX (negative = error)
-//!
-//! # Quick Start
-//!
-//! ```ignore
-//! #![no_std]
-//! #![no_main]
-//!
-//! use libmorpheus::entry;
-//!
-//! entry!(main);
-//!
-//! fn main() -> i32 {
-//!     libmorpheus::io::println("hello from Ring 3!");
-//!     0
-//! }
-//! ```
+//! libmorpheus — userspace syscall library.
+//! RAX=nr, RDI..R9=args, RAX=return. errors > 0xFFFF_FFFF_FFFF_FF00.
 
 #![no_std]
 #![allow(dead_code)]
 
+extern crate alloc; // buddy.rs registers #[global_allocator] → Vec/Box/String work
+
+pub mod buddy;
 pub mod entry;
 pub mod fs;
 pub mod hw;
@@ -36,7 +19,7 @@ pub mod raw;
 pub mod sys;
 pub mod time;
 
-/// Error values returned by the kernel (high bits of u64).
+/// Error codes from kernel. high bits = bad news.
 pub const ENOSYS: u64 = u64::MAX - 37;
 pub const EINVAL: u64 = u64::MAX;
 pub const ENOMEM: u64 = u64::MAX - 12;
@@ -47,7 +30,7 @@ pub const EFAULT: u64 = u64::MAX - 14;
 pub const ESRCH: u64 = u64::MAX - 3;
 pub const EIO: u64 = u64::MAX - 5;
 
-/// Check if a syscall return value is an error.
+/// true if the kernel is telling you to go away.
 #[inline]
 pub fn is_error(ret: u64) -> bool {
     ret > 0xFFFF_FFFF_FFFF_FF00

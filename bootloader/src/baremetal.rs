@@ -1,22 +1,12 @@
-//! Bare-metal platform entry.
-//!
-//! enter_baremetal() is THE border. Before: UEFI. After: we own everything.
-//!
-//! Flow:
-//!   allocate stack (UEFI) → EBS → stack switch → hwinit → framebuffer Screen → TUI
-//!
-//! Data that crosses the border (raw values only, no UEFI types):
-//!   - image_handle, system_table (opaque ptrs, for EBS call)
-//!   - GOP framebuffer info (address, resolution, format)
+//! The border. Before: UEFI. After: we own everything.
+//! Stack switch → ExitBootServices → hwinit → framebuffer → TUI.
 
 #![allow(dead_code)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use morpheus_display::console::TextConsole;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TYPES THAT CROSS THE BORDER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Raw framebuffer info from GOP. stride is pixels_per_scan_line from GOP.
 #[derive(Clone, Copy)]
@@ -40,9 +30,7 @@ pub struct BaremetalEntryConfig {
     pub framebuffer: FramebufferInfo,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // POST-EBS STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 static mut FRAMEBUFFER_INFO: FramebufferInfo = FramebufferInfo {
     base: 0,
@@ -55,7 +43,7 @@ static mut FRAMEBUFFER_INFO: FramebufferInfo = FramebufferInfo {
 
 static BAREMETAL_MODE: AtomicBool = AtomicBool::new(false);
 
-// ── Live framebuffer console ─────────────────────────────────────────────────
+// live framebuffer console
 // Initialized as soon as we have a valid framebuffer (before EBS).
 // After that every puts() in hwinit mirrors to the screen in real-time.
 
@@ -107,9 +95,7 @@ pub fn get_framebuffer_info() -> Option<FramebufferInfo> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // BSoD CRASH HOOK — called by exception handlers in hwinit
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Callback invoked by hwinit exception handlers to display the crash screen.
 ///
@@ -119,9 +105,7 @@ unsafe fn bsod_crash_hook(info: &morpheus_hwinit::CrashInfo) {
     crate::bsod::show_crash_screen(info);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // THE ENTRY POINT — NEVER RETURNS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     use morpheus_hwinit::serial::puts;
@@ -135,7 +119,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     // boot messages appear on screen in real-time, not just on COM1.
     start_live_console(&FRAMEBUFFER_INFO);
 
-    // ── Allocate stack from UEFI (LoaderData survives EBS) ──────────────
+    // allocate stack from uefi (loaderdata survives ebs)
     const STACK_SIZE: usize = 256 * 1024;
     const STACK_PAGES: usize = STACK_SIZE.div_ceil(4096);
 
@@ -186,7 +170,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let stack_top = stack_base + STACK_SIZE as u64;
     puts("[EBS-PREP] stack ready, getting memory map\n");
 
-    // ── Memory map + ExitBootServices ───────────────────────────────────
+    // memory map + exitbootservices
     static mut MMAP_BUF: [u8; 32768] = [0u8; 32768];
     static mut MMAP_SIZE: usize = 0;
     static mut DESC_SIZE: usize = 0;
@@ -227,22 +211,20 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
     // UEFI IS DEAD. WE OWN THE MACHINE.
-    // ═══════════════════════════════════════════════════════════════════════
 
     BAREMETAL_MODE.store(true, Ordering::SeqCst);
 
     // Switch allocator to our own heap (UEFI pool is gone)
     crate::uefi_allocator::switch_to_post_ebs();
 
-    // ── Switch stack ────────────────────────────────────────────────────
+    // switch stack
     core::arch::asm!("mov rsp, {0}", in(reg) stack_top, options(nostack));
 
     puts("\n");
     puts("[MORPHEUS] machine is ours\n");
 
-    // ── Compute PE image bounds for buddy-allocator reservation ────────
+    // compute pe image bounds for buddy-allocator reservation
     // __ImageBase is defined by LLD for every PE/COFF binary.  From it we
     // read the PE optional header's SizeOfImage to determine the full
     // virtual extent (including BSS) that must be kept out of the free pool.
@@ -257,10 +239,10 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         // PE signature (4) + COFF header (20) + offset 56 into optional header = +80.
         let size_of_image_ptr = (image_base + pe_off + 4 + 20 + 56) as *const u32;
         let size_of_image = core::ptr::read_unaligned(size_of_image_ptr) as u64;
-        (size_of_image + 4095) / 4096
+        size_of_image.div_ceil(4096)
     };
 
-    // ── hwinit — GDT, IDT, PIC, heap, TSC, DMA, bus mastering ─────────
+    // hwinit — gdt, idt, pic, heap, tsc, dma, bus mastering
     let hwinit_cfg = morpheus_hwinit::SelfContainedConfig {
         memory_map_ptr: MMAP_BUF.as_ptr(),
         memory_map_size: MMAP_SIZE,
@@ -297,13 +279,13 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         }
     };
 
-    // ── Persistent storage — try to mount a real block device ───────────
+    // persistent storage — try to mount a real block device
     crate::storage::init_persistent_storage(platform.dma(), platform.tsc_freq());
 
-    // ── InitFS — ensure standard directory structure exists ─────────────
+    // initfs — ensure standard directory structure exists
     crate::storage::create_init_directories();
 
-    // ── Framebuffer → Screen ────────────────────────────────────────────
+    // framebuffer → screen
     let fb_info = FRAMEBUFFER_INFO;
     if fb_info.base == 0 || fb_info.width == 0 {
         puts("[FATAL] no framebuffer\n");

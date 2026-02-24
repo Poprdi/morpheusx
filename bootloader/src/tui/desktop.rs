@@ -149,7 +149,7 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
 
     let shell_id = wm.create_window("MorpheusX Shell", shell_x, shell_y, shell_w, shell_h);
     let mut shell = Shell::new();
-    shell.set_echo_hook(|s| puts(s));
+    shell.set_echo_hook(puts);
     let mut app_instances: Vec<AppInstance> = Vec::new();
 
     // Print available apps
@@ -212,11 +212,15 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                     }
                 } else {
                     morpheus_hwinit::stdin::push(ch);
-                    unsafe { morpheus_hwinit::process::wake_stdin_waiters(); }
+                    unsafe {
+                        morpheus_hwinit::process::wake_stdin_waiters();
+                    }
                 }
             } else {
                 morpheus_hwinit::stdin::push(ch);
-                unsafe { morpheus_hwinit::process::wake_stdin_waiters(); }
+                unsafe {
+                    morpheus_hwinit::process::wake_stdin_waiters();
+                }
             }
         }
 
@@ -311,7 +315,13 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                     match elf_data {
                         Some(ref data) => {
                             match unsafe {
-                                morpheus_hwinit::process::scheduler::spawn_user_process(&name, data, &[], 0, false)
+                                morpheus_hwinit::process::scheduler::spawn_user_process(
+                                    &name,
+                                    data,
+                                    &[],
+                                    0,
+                                    false,
+                                )
                             } {
                                 Ok(pid) => {
                                     shell
@@ -380,9 +390,7 @@ fn render_app(inst: &mut AppInstance, wm: &mut WindowManager, theme: &morpheus_u
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 // Filesystem command execution
-// ═══════════════════════════════════════════════════════════════════════
 
 fn handle_fs_command(op: FsOp, shell: &mut Shell) {
     match op {
@@ -658,7 +666,7 @@ fn handle_fs_command(op: FsOp, shell: &mut Shell) {
     }
 }
 
-// ── ls formatting ────────────────────────────────────────────────────
+// ls formatting
 
 fn format_ls_short(entries: &[morpheus_helix::types::DirEntry]) -> String {
     let mut out = String::new();
