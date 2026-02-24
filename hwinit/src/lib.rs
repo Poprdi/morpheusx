@@ -272,10 +272,10 @@ pub use syscall::{
     SYS_NIC_LINK,
     SYS_NIC_MAC,
     SYS_NIC_REFILL,
-    SYS_NET_RSVD38,
-    SYS_NET_RSVD39,
-    SYS_NET_RSVD40,
-    SYS_NET_RSVD41,
+    SYS_NET,
+    SYS_DNS,
+    SYS_NET_CFG,
+    SYS_NET_POLL,
     // Device / mount stubs (42-45)
     SYS_IOCTL,
     SYS_MOUNT,
@@ -313,11 +313,38 @@ pub use syscall::{
     SYS_RDTSC,
     SYS_BOOT_LOG,
     SYS_MEMMAP,
+    // Memory sharing / protection (73-74)
+    SYS_SHM_GRANT,
+    SYS_MPROTECT,
 };
 
 // Syscall handler registration APIs — used by the bootloader to wire
 // hardware backends that hwinit cannot depend on directly.
-pub use syscall::handler::{register_framebuffer, register_nic, FbInfo, NicOps};
+pub use syscall::handler::{
+    register_framebuffer, register_nic, register_net_stack,
+    FbInfo, NicOps, NetStackOps, NetConfigInfo, NetStats,
+    NicHwStats,
+    // NIC hardware control constants (exokernel)
+    NIC_CTRL_PROMISC, NIC_CTRL_MAC_SET, NIC_CTRL_STATS,
+    NIC_CTRL_STATS_RESET, NIC_CTRL_MTU, NIC_CTRL_MULTICAST,
+    NIC_CTRL_VLAN, NIC_CTRL_TX_CSUM, NIC_CTRL_RX_CSUM,
+    NIC_CTRL_TSO, NIC_CTRL_RX_RING_SIZE, NIC_CTRL_TX_RING_SIZE,
+    NIC_CTRL_IRQ_COALESCE, NIC_CTRL_CAPS,
+    NIC_CAP_PROMISC, NIC_CAP_MAC_SET, NIC_CAP_MULTICAST,
+    NIC_CAP_VLAN, NIC_CAP_TX_CSUM, NIC_CAP_RX_CSUM,
+    NIC_CAP_TSO, NIC_CAP_IRQ_COALESCE,
+    // Net stack sub-command constants
+    NET_TCP_SOCKET, NET_TCP_CONNECT, NET_TCP_SEND, NET_TCP_RECV,
+    NET_TCP_CLOSE, NET_TCP_STATE, NET_TCP_LISTEN, NET_TCP_ACCEPT,
+    NET_TCP_SHUTDOWN, NET_TCP_NODELAY, NET_TCP_KEEPALIVE,
+    DNS_START, DNS_RESULT, DNS_SET_SERVERS,
+    NET_CFG_GET, NET_CFG_DHCP, NET_CFG_STATIC, NET_CFG_HOSTNAME,
+    NET_POLL_DRIVE, NET_POLL_STATS,
+    // UDP sub-commands
+    NET_UDP_SOCKET, NET_UDP_SEND_TO, NET_UDP_RECV_FROM, NET_UDP_CLOSE,
+    // Protection flags
+    PROT_READ, PROT_WRITE, PROT_EXEC,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM INIT RE-EXPORTS

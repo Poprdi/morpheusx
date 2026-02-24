@@ -33,6 +33,7 @@
 pub mod context;
 pub mod scheduler;
 pub mod signals;
+pub mod vma;
 
 pub use context::CpuContext;
 pub use scheduler::{
@@ -40,6 +41,7 @@ pub use scheduler::{
     spawn_kernel_thread, tsc_frequency, wait_for_child, ProcessInfo, Scheduler, SCHEDULER,
 };
 pub use signals::{Signal, SignalSet};
+pub use vma::{Vma, VmaTable};
 
 use crate::memory::{
     global_registry_mut, is_registry_initialized, AllocateType, MemoryType, PAGE_SIZE,
@@ -144,6 +146,8 @@ pub struct Process {
     /// Next free virtual address for SYS_MMAP (user-space heap bump).
     /// Starts at 0x0000_0040_0000_0000 for user processes, 0 for kernel.
     pub mmap_brk: u64,
+    /// Per-process VMA table — tracks all mmap'd regions for proper munmap.
+    pub vma_table: VmaTable,
 
     // ── Working directory ─────────────────────────────────────────────────
     /// Per-process current working directory (null-terminated, max 255 chars).
@@ -173,6 +177,7 @@ impl Process {
             pending_signals: signals::SignalSet::empty(),
             fd_table: morpheus_helix::vfs::FdTable::new(),
             mmap_brk: 0,
+            vma_table: VmaTable::new(),
             cwd,
             cwd_len: 1,
         }

@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRICATED!!
 # Setup script to download and configure initrd for real Linux userspace boot
 # This enables testing actual kernel boot to userspace
 

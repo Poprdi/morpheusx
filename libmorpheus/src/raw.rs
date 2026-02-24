@@ -42,17 +42,17 @@ pub const SYS_SYSLOG: u64 = 29;
 pub const SYS_GETCWD: u64 = 30;
 pub const SYS_CHDIR: u64 = 31;
 
-// ── Networking (32-41) — raw NIC primitives (exokernel) ──────────────
+// ── Networking (32-41) — raw NIC + IP stack ──────────────────────────
 pub const SYS_NIC_INFO: u64 = 32;
 pub const SYS_NIC_TX: u64 = 33;
 pub const SYS_NIC_RX: u64 = 34;
 pub const SYS_NIC_LINK: u64 = 35;
 pub const SYS_NIC_MAC: u64 = 36;
 pub const SYS_NIC_REFILL: u64 = 37;
-pub const SYS_NET_RSVD38: u64 = 38;
-pub const SYS_NET_RSVD39: u64 = 39;
-pub const SYS_NET_RSVD40: u64 = 40;
-pub const SYS_NET_RSVD41: u64 = 41;
+pub const SYS_NET: u64 = 38;
+pub const SYS_DNS: u64 = 39;
+pub const SYS_NET_CFG: u64 = 40;
+pub const SYS_NET_POLL: u64 = 41;
 
 // ── Device / mount (42-45) — reserved stubs ──────────────────────────
 pub const SYS_IOCTL: u64 = 42;
@@ -97,6 +97,10 @@ pub const SYS_RDTSC: u64 = 70;
 pub const SYS_BOOT_LOG: u64 = 71;
 pub const SYS_MEMMAP: u64 = 72;
 
+// ── Memory sharing / protection (73-74) ──────────────────────────────
+pub const SYS_SHM_GRANT: u64 = 73;
+pub const SYS_MPROTECT: u64 = 74;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;
@@ -105,6 +109,9 @@ pub unsafe fn syscall0(nr: u64) -> u64 {
         inlateout("rax") nr => ret,
         out("rcx") _,
         out("r11") _,
+        out("r8") _,
+        out("r9") _,
+        out("r10") _,
         options(nostack),
     );
     ret
@@ -119,6 +126,9 @@ pub unsafe fn syscall1(nr: u64, a1: u64) -> u64 {
         in("rdi") a1,
         out("rcx") _,
         out("r11") _,
+        out("r8") _,
+        out("r9") _,
+        out("r10") _,
         options(nostack),
     );
     ret
@@ -134,6 +144,9 @@ pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64 {
         in("rsi") a2,
         out("rcx") _,
         out("r11") _,
+        out("r8") _,
+        out("r9") _,
+        out("r10") _,
         options(nostack),
     );
     ret
@@ -150,6 +163,9 @@ pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         in("rdx") a3,
         out("rcx") _,
         out("r11") _,
+        out("r8") _,
+        out("r9") _,
+        out("r10") _,
         options(nostack),
     );
     ret
@@ -167,6 +183,8 @@ pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         in("r10") a4,
         out("rcx") _,
         out("r11") _,
+        out("r8") _,
+        out("r9") _,
         options(nostack),
     );
     ret
@@ -185,6 +203,7 @@ pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> 
         in("r8") a5,
         out("rcx") _,
         out("r11") _,
+        out("r9") _,
         options(nostack),
     );
     ret

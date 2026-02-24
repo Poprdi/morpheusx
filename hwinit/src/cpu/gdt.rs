@@ -202,6 +202,41 @@ pub struct GdtPtr {
 // GLOBAL STATE
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// STATIC IST1 STACK — baked into .bss, never allocated from the heap.
+//
+// The double-fault handler points at this stack via IST[0].  Because it lives
+// in the binary image, it is valid from the very first instruction and stays
+// valid regardless of what the physical memory allocator does.  This is the
+// ONLY thing that prevents a double fault from cascading into a triple fault
+// (which causes an unconditional CPU/QEMU reset with no BSOD).
+//
+// If the double-fault handler itself were to fault (e.g., heap-allocated stack
+// gets corrupted), the CPU switches to this stack for the double fault, the
+// handler runs, and our BSOD is displayed instead of an invisible reset.
+//
+// Size: 32 KiB — generous enough for the BSOD rendering path.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const IST1_STATIC_STACK_SIZE: usize = 32 * 1024;
+
+/// 16-byte aligned wrapper so RSP stays aligned after the CPU pushes the
+/// exception frame (which is 40 or 48 bytes — both leave RSP 16-aligned).
+#[repr(C, align(16))]
+struct StaticStack([u8; IST1_STATIC_STACK_SIZE]);
+
+/// The actual stack bytes.  Zeroed by the BSS loader; no runtime init needed.
+static mut IST1_STATIC_STACK: StaticStack = StaticStack([0; IST1_STATIC_STACK_SIZE]);
+
+/// Public accessor: returns a pointer to the TOP of the static IST1 stack
+/// (stacks grow downward on x86-64).  Written into TSS.IST[0] once at boot.
+pub fn ist1_static_stack_top() -> u64 {
+    // SAFETY: read-only pointer arithmetic on a static array.
+    unsafe {
+        IST1_STATIC_STACK.0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64
+    }
+}
+
 /// Our GDT (static, page-aligned for safety)
 static mut GDT: Gdt = Gdt {
     entries: [
@@ -227,13 +262,18 @@ static mut GDT_INITIALIZED: bool = false;
 /// Initialize GDT and TSS.
 ///
 /// # Arguments
-/// - `kernel_stack`: Stack pointer for ring 0 (used for interrupts from user mode)
-/// - `ist1_stack`: Interrupt stack 1 (for NMI, double fault, etc.)
+/// - `kernel_stack`: Stack pointer for ring 0 (RSP0 — used for interrupts
+///   arriving from user mode when no IST is configured on that vector).
+///
+/// IST[0] (IST1) is always set from `IST1_STATIC_STACK` — it is NEVER
+/// taken from the heap.  This guarantees the double-fault handler can always
+/// run even when the allocator or heap is in an invalid state, preventing the
+/// CPU from silently triple-faulting and resetting.
 ///
 /// # Safety
 /// - Must be called once
-/// - Stacks must be valid and large enough
-pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
+/// - `kernel_stack` must be a valid, mapped stack top
+pub unsafe fn init_gdt(kernel_stack: u64) {
     if GDT_INITIALIZED {
         puts("[GDT] WARNING: already initialized\n");
         return;
@@ -241,7 +281,8 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
 
     // Set up TSS
     TSS.rsp0 = kernel_stack;
-    TSS.ist[0] = ist1_stack; // IST1 for critical exceptions
+    // IST1 — static stack baked into BSS.  Always valid; see comment above.
+    TSS.ist[0] = ist1_static_stack_top();
 
     // Update TSS descriptor in GDT
     let tss_addr = &TSS as *const Tss as u64;

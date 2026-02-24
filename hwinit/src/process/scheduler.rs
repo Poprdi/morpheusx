@@ -34,7 +34,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// The flat process table.  Index == PID.
-static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = {
+pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = {
     // Can't call Process::empty() in a const context with Option::None,
     // so we use a macro trick: all 64 slots start as None.
     [const { None }; MAX_PROCESSES]
