@@ -242,12 +242,32 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     puts("\n");
     puts("[MORPHEUS] machine is ours\n");
 
+    // ── Compute PE image bounds for buddy-allocator reservation ────────
+    // __ImageBase is defined by LLD for every PE/COFF binary.  From it we
+    // read the PE optional header's SizeOfImage to determine the full
+    // virtual extent (including BSS) that must be kept out of the free pool.
+    extern "C" {
+        static __ImageBase: u8;
+    }
+    let image_base = &__ImageBase as *const u8 as u64;
+    let image_pages = {
+        let pe_off_ptr = (image_base + 0x3C) as *const u32;
+        let pe_off = core::ptr::read_unaligned(pe_off_ptr) as u64;
+        // SizeOfImage is at offset 56 in the PE32+ optional header.
+        // PE signature (4) + COFF header (20) + offset 56 into optional header = +80.
+        let size_of_image_ptr = (image_base + pe_off + 4 + 20 + 56) as *const u32;
+        let size_of_image = core::ptr::read_unaligned(size_of_image_ptr) as u64;
+        (size_of_image + 4095) / 4096
+    };
+
     // ── hwinit — GDT, IDT, PIC, heap, TSC, DMA, bus mastering ─────────
     let hwinit_cfg = morpheus_hwinit::SelfContainedConfig {
         memory_map_ptr: MMAP_BUF.as_ptr(),
         memory_map_size: MMAP_SIZE,
         descriptor_size: DESC_SIZE,
         descriptor_version: DESC_VER,
+        image_base,
+        image_pages,
     };
 
     let platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {
