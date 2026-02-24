@@ -78,8 +78,10 @@
 //! | 71     | SYS_BOOT_LOG    | (buf_ptr, buf_len)                | bytes_written |
 //! | 72     | SYS_MEMMAP      | (buf_ptr, max_entries)            | count         |
 //! | 73     | SYS_SHM_GRANT   | (pid, vaddr, pages, flags)        | target_vaddr  |
-//! | 74     | SYS_MPROTECT    | (vaddr, pages, prot)              | 0             |
-
+//! | 74     | SYS_MPROTECT    | (vaddr, pages, prot)              | 0             |/// | 75     | SYS_PIPE        | (result_ptr)                      | 0             |
+/// | 76     | SYS_DUP2        | (old_fd, new_fd)                  | new_fd        |
+/// | 77     | SYS_SET_FG      | (pid)                             | 0             |
+/// | 78     | SYS_GETARGS     | (buf_ptr, buf_len)                | argc          |
 pub mod handler;
 
 use crate::serial::puts;
@@ -185,6 +187,12 @@ pub const SYS_MEMMAP: u64 = 72;
 pub const SYS_SHM_GRANT: u64 = 73;
 pub const SYS_MPROTECT: u64 = 74;
 
+// ── Shell / IPC primitives (75-78) ───────────────────────────────────
+pub const SYS_PIPE: u64 = 75;
+pub const SYS_DUP2: u64 = 76;
+pub const SYS_SET_FG: u64 = 77;
+pub const SYS_GETARGS: u64 = 78;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // EXTERN ASM FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -244,7 +252,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_CLOCK => sys_clock(),
         SYS_SYSINFO => sys_sysinfo(a1),
         SYS_GETPPID => sys_getppid(),
-        SYS_SPAWN => sys_spawn(a1, a2),
+        SYS_SPAWN => sys_spawn(a1, a2, a3, a4),
         SYS_MMAP => sys_mmap(a1),
         SYS_MUNMAP => sys_munmap(a1, a2),
         SYS_DUP => sys_dup(a1),
@@ -301,6 +309,11 @@ pub unsafe extern "C" fn syscall_dispatch(
         // ── Memory sharing / protection ────────────────────────
         SYS_SHM_GRANT => sys_shm_grant(a1, a2, a3, a4),
         SYS_MPROTECT => sys_mprotect(a1, a2, a3),
+        // ── Shell / IPC primitives ────────────────────────────────
+        SYS_PIPE => sys_pipe(a1),
+        SYS_DUP2 => sys_dup2(a1, a2),
+        SYS_SET_FG => sys_set_fg(a1),
+        SYS_GETARGS => sys_getargs(a1, a2),
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);

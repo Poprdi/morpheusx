@@ -12,6 +12,7 @@
 use crate::process::scheduler::{exit_process, SCHEDULER};
 use crate::process::signals::Signal;
 use crate::serial::puts;
+use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SYS_EXIT — terminate the current process
@@ -51,6 +52,21 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
             }
         }
         fd if fd >= 3 => {
+            // Check if this fd is a pipe write end.
+            let fd_table = SCHEDULER.current_fd_table_mut();
+            if let Ok(desc) = fd_table.get(fd as usize) {
+                if desc.flags & O_PIPE_WRITE != 0 {
+                    let pipe_idx = desc.mount_idx;
+                    let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+                    // Check if anyone is reading the other end.
+                    if crate::pipe::pipe_readers(pipe_idx) == 0 {
+                        return EPIPE;
+                    }
+                    let n = crate::pipe::pipe_write(pipe_idx, data);
+                    crate::process::scheduler::wake_pipe_readers(pipe_idx);
+                    return n as u64;
+                }
+            }
             let fs = match morpheus_helix::vfs::global::fs_global_mut() {
                 Some(fs) => fs,
                 None => return ENOSYS,
@@ -88,11 +104,31 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
     match fd {
         0 => {
-            // stdin — read from kernel keyboard ring buffer.
+            // stdin — blocking read from kernel keyboard ring buffer.
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-            crate::stdin::read(buf) as u64
+            loop {
+                let n = crate::stdin::read(buf);
+                if n > 0 {
+                    return n as u64;
+                }
+                // No data yet — block until keyboard pushes something.
+                {
+                    let proc = SCHEDULER.current_process_mut();
+                    proc.state = crate::process::ProcessState::Blocked(crate::process::BlockReason::StdinRead);
+                }
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+            }
         }
         fd if fd >= 3 => {
+            // Check if this fd is actually a pipe read end.
+            let fd_table = SCHEDULER.current_fd_table_mut();
+            if let Ok(desc) = fd_table.get(fd as usize) {
+                if desc.flags & O_PIPE_READ != 0 {
+                    let pipe_idx = desc.mount_idx;
+                    let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
+                    return sys_pipe_read_blocking(pipe_idx, buf);
+                }
+            }
             let fs = match morpheus_helix::vfs::global::fs_global_mut() {
                 Some(fs) => fs,
                 None => return ENOSYS,
@@ -202,6 +238,7 @@ const EIO: u64 = u64::MAX - 5;
 const EBADF: u64 = u64::MAX - 9;
 const ENOMEM: u64 = u64::MAX - 12;
 const EFAULT: u64 = u64::MAX - 14;
+const EPIPE: u64 = u64::MAX - 32;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // USER-POINTER VALIDATION
@@ -285,6 +322,16 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
 /// `SYS_CLOSE(fd) → 0`
 pub unsafe fn sys_fs_close(fd: u64) -> u64 {
     let fd_table = SCHEDULER.current_fd_table_mut();
+    // Pipe-aware close: decrement refcounts on pipe ends.
+    if let Ok(desc) = fd_table.get(fd as usize) {
+        let pipe_idx = desc.mount_idx;
+        if desc.flags & O_PIPE_READ != 0 {
+            crate::pipe::pipe_close_reader(pipe_idx);
+        }
+        if desc.flags & O_PIPE_WRITE != 0 {
+            crate::pipe::pipe_close_writer(pipe_idx);
+        }
+    }
     match morpheus_helix::vfs::vfs_close(fd_table, fd as usize) {
         Ok(()) => 0,
         Err(e) => helix_err_to_errno(e),
@@ -595,11 +642,13 @@ pub unsafe fn sys_getppid() -> u64 {
 // SYS_SPAWN — spawn a child process from an ELF path in the VFS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// `SYS_SPAWN(path_ptr, path_len) → child_pid`
+/// `SYS_SPAWN(path_ptr, path_len, argv_ptr, argc) → child_pid`
 ///
 /// Reads an ELF binary from the filesystem, loads it, and spawns a new
-/// user process.  Returns the child PID on success.
-pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64) -> u64 {
+/// user process with optional argument passing and fd inheritance.
+/// `argv_ptr` points to an array of `[ptr, len]` pairs (each 2×u64).
+/// `argc` is the number of arguments (0 = no args).
+pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) -> u64 {
     let path = match user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
@@ -674,9 +723,42 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64) -> u64 {
     // Extract a short name from the path for the process table.
     let name = path.rsplit('/').next().unwrap_or(path);
 
-    // Spawn the process.
+    // Build null-separated argument blob from user argv array.
+    let mut arg_blob = [0u8; 256];
+    let mut blob_len: usize = 0;
+    let mut arg_count: u8 = 0;
+    if argc > 0 && argc <= 16 && argv_ptr != 0 {
+        let argv = core::slice::from_raw_parts(
+            argv_ptr as *const [u64; 2],
+            argc as usize,
+        );
+        for pair in argv.iter() {
+            let a_ptr = pair[0];
+            let a_len = pair[1] as usize;
+            if a_ptr == 0 || a_len == 0 || a_len > 127 {
+                continue;
+            }
+            if blob_len + a_len + 1 > 256 {
+                break;
+            }
+            let src = core::slice::from_raw_parts(a_ptr as *const u8, a_len);
+            arg_blob[blob_len..blob_len + a_len].copy_from_slice(src);
+            blob_len += a_len;
+            arg_blob[blob_len] = 0; // null separator
+            blob_len += 1;
+            arg_count += 1;
+        }
+    }
+
+    // Spawn the process with fd inheritance and arguments.
     let elf_data = &buf[..bytes_read];
-    let result = crate::process::scheduler::spawn_user_process(name, elf_data);
+    let result = crate::process::scheduler::spawn_user_process(
+        name,
+        elf_data,
+        &arg_blob[..blob_len],
+        arg_count,
+        true, // inherit fds from parent
+    );
 
     // Free the temporary buffer.
     let _ = registry.free_pages(buf_phys, pages_needed);
@@ -2306,17 +2388,10 @@ pub unsafe fn sys_sigaction(signum: u64, handler: u64) -> u64 {
     }
 
     let proc = SCHEDULER.current_process_mut();
-
-    // Signal handlers stored per-process.  Use pending_signals for now
-    // as a simplified mechanism — the real handler addresses are stored
-    // in a separate array.  For now, return 0 (SIG_DFL) as old handler
-    // and record the new handler address.
-    // TODO: add signal_handlers: [u64; 32] field to Process struct.
-    let _ = handler;
-    let _ = proc;
-
-    // For now, accept the registration and return 0 (old = SIG_DFL).
-    0
+    let sig_idx = signum as usize;
+    let old = proc.signal_handlers[sig_idx];
+    proc.signal_handlers[sig_idx] = handler;
+    old
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3534,4 +3609,159 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
     }
 
     0
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_PIPE (75) — create a unidirectional pipe
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_PIPE(result_ptr) → 0`
+///
+/// Creates a pipe.  Writes `[read_fd, write_fd]` (two u64s) at `result_ptr`.
+pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
+    if !validate_user_buf(result_ptr, 16) {
+        return EFAULT;
+    }
+    let pipe_idx = match crate::pipe::pipe_alloc() {
+        Some(idx) => idx,
+        None => return ENOMEM,
+    };
+
+    let fd_table = SCHEDULER.current_fd_table_mut();
+
+    // Allocate read-end fd.
+    let read_fd = match fd_table.alloc() {
+        Ok(fd) => fd,
+        Err(_) => return ENOMEM,
+    };
+    fd_table.fds[read_fd] = morpheus_helix::types::FileDescriptor {
+        key: 0,
+        path: [0u8; 256],
+        flags: O_PIPE_READ,
+        offset: 0,
+        mount_idx: pipe_idx,
+        _pad: [0; 3],
+        pinned_lsn: 0,
+    };
+
+    // Allocate write-end fd.
+    let write_fd = match fd_table.alloc() {
+        Ok(fd) => fd,
+        Err(_) => {
+            let _ = morpheus_helix::vfs::vfs_close(fd_table, read_fd);
+            return ENOMEM;
+        }
+    };
+    fd_table.fds[write_fd] = morpheus_helix::types::FileDescriptor {
+        key: 0,
+        path: [0u8; 256],
+        flags: O_PIPE_WRITE,
+        offset: 0,
+        mount_idx: pipe_idx,
+        _pad: [0; 3],
+        pinned_lsn: 0,
+    };
+
+    let out = result_ptr as *mut [u64; 2];
+    (*out)[0] = read_fd as u64;
+    (*out)[1] = write_fd as u64;
+    0
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_DUP2 (76) — duplicate a file descriptor
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_DUP2(old_fd, new_fd) → new_fd`
+///
+/// Duplicate `old_fd` into `new_fd`.  If `new_fd` is already open it is
+/// silently closed first.
+pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let src = match fd_table.get(old_fd as usize) {
+        Ok(d) => *d,
+        Err(_) => return EBADF,
+    };
+
+    // Close new_fd if it's in use (pipe-aware).
+    if fd_table.get(new_fd as usize).is_ok() {
+        sys_fs_close(new_fd);
+    }
+
+    // Ensure new_fd slot is within bounds.
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    if new_fd as usize >= morpheus_helix::types::MAX_FDS {
+        return EBADF;
+    }
+
+    // Place the duplicated descriptor.
+    fd_table.fds[new_fd as usize] = src;
+
+    // Bump pipe refcounts.
+    if src.flags & O_PIPE_READ != 0 {
+        crate::pipe::pipe_add_reader(src.mount_idx);
+    }
+    if src.flags & O_PIPE_WRITE != 0 {
+        crate::pipe::pipe_add_writer(src.mount_idx);
+    }
+
+    new_fd
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_SET_FG (77) — set foreground process for stdin
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_SET_FG(pid) → 0`
+pub unsafe fn sys_set_fg(pid: u64) -> u64 {
+    crate::stdin::set_foreground_pid(pid as u32);
+    0
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_GETARGS (78) — retrieve command-line arguments
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `SYS_GETARGS(buf_ptr, buf_len) → argc`
+///
+/// Copies the null-separated argument blob into the user buffer.
+/// Returns the argument count (argc) in RAX.
+pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
+    let proc = SCHEDULER.current_process_mut();
+    let argc = proc.argc;
+    let args_len = proc.args_len as usize;
+
+    if buf_ptr != 0 && buf_len > 0 {
+        let copy_len = core::cmp::min(args_len, buf_len as usize);
+        if validate_user_buf(buf_ptr, copy_len as u64) {
+            let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
+            dst.copy_from_slice(&proc.args[..copy_len]);
+        }
+    }
+
+    argc as u64
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Helper — blocking pipe read
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Read from a pipe, blocking if empty until data arrives or all writers close.
+unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
+    loop {
+        let n = crate::pipe::pipe_read(pipe_idx, buf);
+        if n > 0 {
+            return n as u64;
+        }
+        // No data — if no writers remain, return EOF (0).
+        if crate::pipe::pipe_writers(pipe_idx) == 0 {
+            return 0;
+        }
+        // Block until a writer wakes us.
+        {
+            let proc = SCHEDULER.current_process_mut();
+            proc.state = crate::process::ProcessState::Blocked(crate::process::BlockReason::PipeRead(pipe_idx));
+        }
+        core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+    }
 }

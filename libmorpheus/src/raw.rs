@@ -101,6 +101,12 @@ pub const SYS_MEMMAP: u64 = 72;
 pub const SYS_SHM_GRANT: u64 = 73;
 pub const SYS_MPROTECT: u64 = 74;
 
+// ── Shell / IPC primitives (75-78) ───────────────────────────────────
+pub const SYS_PIPE: u64 = 75;
+pub const SYS_DUP2: u64 = 76;
+pub const SYS_SET_FG: u64 = 77;
+pub const SYS_GETARGS: u64 = 78;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;

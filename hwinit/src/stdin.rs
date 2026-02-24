@@ -8,7 +8,7 @@
 //! Single-producer / single-consumer on a single core.  Atomic loads/stores
 //! on head and tail provide acquire/release ordering without locks.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 /// Capacity of the stdin ring buffer (must be a power of two for mask trick).
 const BUF_SIZE: usize = 256;
@@ -76,4 +76,22 @@ pub fn available() -> usize {
     let head = HEAD.load(Ordering::Acquire);
     let tail = TAIL.load(Ordering::Relaxed);
     (head.wrapping_sub(tail)) & BUF_MASK
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FOREGROUND PROCESS (for Ctrl+C → SIGINT delivery)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// PID of the foreground process (receives Ctrl+C as SIGINT).
+/// 0 = no foreground process, Ctrl+C pushed to stdin instead.
+static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Set the foreground process PID.
+pub fn set_foreground_pid(pid: u32) {
+    FOREGROUND_PID.store(pid, Ordering::Release);
+}
+
+/// Get the foreground process PID.
+pub fn foreground_pid() -> u32 {
+    FOREGROUND_PID.load(Ordering::Acquire)
 }
