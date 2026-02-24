@@ -78,7 +78,7 @@ const CMD_BUS_MASTER: u16 = 1 << 2;
 
 /// Stack sizes for CPU state
 const KERNEL_STACK_SIZE: usize = 64 * 1024; // 64KB kernel stack
-const IST1_STACK_SIZE: usize = 16 * 1024; // 16KB IST1 for critical exceptions
+// IST1 stack is now a static array in gdt.rs — no heap allocation needed.
 const HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB initial heap
 const DMA_SIZE: usize = 2 * 1024 * 1024; // 2MB DMA region
 
@@ -194,19 +194,9 @@ pub unsafe fn platform_init_selfcontained(
         .map_err(|_| InitError::NoFreeMemory)?;
     let kernel_stack_top = kernel_stack_base + KERNEL_STACK_SIZE as u64;
 
-    // Allocate IST1 stack (for NMI, double fault, machine check)
-    let ist1_stack_pages = IST1_STACK_SIZE.div_ceil(4096) as u64;
-    let ist1_stack_base = registry
-        .allocate_pages(
-            AllocateType::AnyPages,
-            MemoryType::LoaderData,
-            ist1_stack_pages,
-        )
-        .map_err(|_| InitError::NoFreeMemory)?;
-    let ist1_stack_top = ist1_stack_base + IST1_STACK_SIZE as u64;
-
     // Load our GDT with TSS
-    init_gdt(kernel_stack_top, ist1_stack_top);
+    // IST1 (double-fault stack) is a static array in BSS — no allocation needed.
+    init_gdt(kernel_stack_top);
 
     // Load our IDT with exception handlers
     init_idt();

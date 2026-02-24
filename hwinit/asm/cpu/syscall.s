@@ -156,4 +156,4 @@ syscall_entry:
     ; RAX = return value (preserved across all the above)
     mov     rsp, [rsp]              ; load user RSP (top of stack is user RSP)
 
-    sysretq
+    o64 sysret                      ; SYSRETQ — back to Ring 3 (NASM: o64 prefix = REX.W)
