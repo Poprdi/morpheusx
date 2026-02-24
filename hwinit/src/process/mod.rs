@@ -38,7 +38,8 @@ pub mod vma;
 pub use context::CpuContext;
 pub use scheduler::{
     block_sleep, exit_process, init_scheduler, scheduler_tick, set_tsc_frequency,
-    spawn_kernel_thread, tsc_frequency, wait_for_child, ProcessInfo, Scheduler, SCHEDULER,
+    spawn_kernel_thread, tsc_frequency, wait_for_child, wake_pipe_readers,
+    wake_stdin_waiters, ProcessInfo, Scheduler, SCHEDULER,
 };
 pub use signals::{Signal, SignalSet};
 pub use vma::{Vma, VmaTable};
@@ -70,6 +71,10 @@ pub enum BlockReason {
     WaitChild(u32),
     /// Waiting for I/O (unblocked externally by a driver).
     Io,
+    /// Waiting for stdin data (keyboard input).
+    StdinRead,
+    /// Waiting for data on a pipe (index into PIPE_TABLE).
+    PipeRead(u8),
 }
 
 /// Process lifecycle state.
@@ -137,6 +142,8 @@ pub struct Process {
 
     // ── Signals ───────────────────────────────────────────────────────────
     pub pending_signals: signals::SignalSet,
+    /// Per-signal handler addresses. 0 = SIG_DFL, 1 = SIG_IGN, >1 = user fn.
+    pub signal_handlers: [u64; 32],
 
     // ── File descriptors ─────────────────────────────────────────────────
     /// Per-process file descriptor table.
@@ -153,6 +160,12 @@ pub struct Process {
     /// Per-process current working directory (null-terminated, max 255 chars).
     pub cwd: [u8; 256],
     pub cwd_len: u16,
+
+    // ── Spawn arguments ───────────────────────────────────────────────────
+    /// Arg strings from parent, null-separated. Retrieved via SYS_GETARGS.
+    pub args: [u8; 256],
+    pub args_len: u16,
+    pub argc: u8,
 }
 
 impl Process {
@@ -175,11 +188,15 @@ impl Process {
             priority: 128,
             cpu_ticks: 0,
             pending_signals: signals::SignalSet::empty(),
+            signal_handlers: [0u64; 32],
             fd_table: morpheus_helix::vfs::FdTable::new(),
             mmap_brk: 0,
             vma_table: VmaTable::new(),
             cwd,
             cwd_len: 1,
+            args: [0u8; 256],
+            args_len: 0,
+            argc: 0,
         }
     }
 

@@ -201,7 +201,23 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
         // Feed printable ASCII characters to the kernel stdin buffer
         // so that user-space processes can read them via SYS_READ(fd=0).
         if input.unicode_char > 0 && input.unicode_char < 128 {
-            morpheus_hwinit::stdin::push(input.unicode_char as u8);
+            let ch = input.unicode_char as u8;
+            // Ctrl+C (0x03) — deliver SIGINT to the foreground process.
+            if ch == 0x03 {
+                let fg = morpheus_hwinit::stdin::foreground_pid();
+                if fg != 0 {
+                    unsafe {
+                        let _ = morpheus_hwinit::process::SCHEDULER
+                            .send_signal(fg, morpheus_hwinit::process::signals::Signal::SIGINT);
+                    }
+                } else {
+                    morpheus_hwinit::stdin::push(ch);
+                    unsafe { morpheus_hwinit::process::wake_stdin_waiters(); }
+                }
+            } else {
+                morpheus_hwinit::stdin::push(ch);
+                unsafe { morpheus_hwinit::process::wake_stdin_waiters(); }
+            }
         }
 
         let wm_result = wm.dispatch_event(&event);
@@ -295,7 +311,7 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
                     match elf_data {
                         Some(ref data) => {
                             match unsafe {
-                                morpheus_hwinit::process::scheduler::spawn_user_process(&name, data)
+                                morpheus_hwinit::process::scheduler::spawn_user_process(&name, data, &[], 0, false)
                             } {
                                 Ok(pid) => {
                                     shell

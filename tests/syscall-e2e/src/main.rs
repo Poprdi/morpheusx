@@ -206,6 +206,14 @@ fn main() -> i32 {
     test_shm_grant(); // 73
     test_mprotect(); // 74
 
+    // ── Shell / IPC primitives (75-78) ───────────────────────
+    println("");
+    println("── Shell / IPC (75-78) ──");
+    test_pipe(); // 75
+    test_dup2(); // 76
+    test_set_fg(); // 77
+    test_getargs(); // 78
+
     // ── Summary ──────────────────────────────────────────────────────
     println("");
     println("════════════════════════════════════════════");
@@ -1115,4 +1123,111 @@ fn test_mprotect() {
             fail("SYS_MPROTECT(bad pages)", "mmap failed");
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_PIPE (75) — create a pipe, write/read through it
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_pipe() {
+    match libmorpheus::process::pipe() {
+        Ok((read_fd, write_fd)) => {
+            check("SYS_PIPE(create)", true, "");
+
+            // Write to the pipe.
+            let msg = b"hello pipe";
+            let wr = libmorpheus::io::write_fd(write_fd, msg);
+            check("SYS_PIPE(write)", wr.is_ok(), "pipe write failed");
+
+            // Read back.
+            let mut buf = [0u8; 32];
+            let rd = libmorpheus::io::read_fd(read_fd, &mut buf);
+            match rd {
+                Ok(n) => check("SYS_PIPE(read)", n == 10 && buf[..10] == *msg, "data mismatch"),
+                Err(_) => fail("SYS_PIPE(read)", "pipe read failed"),
+            }
+
+            // Close both ends.
+            unsafe {
+                syscall1(SYS_CLOSE, read_fd as u64);
+                syscall1(SYS_CLOSE, write_fd as u64);
+            }
+        }
+        Err(_) => {
+            fail("SYS_PIPE(create)", "pipe() failed");
+            fail("SYS_PIPE(write)", "no pipe");
+            fail("SYS_PIPE(read)", "no pipe");
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_DUP2 (76)
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_dup2() {
+    match libmorpheus::process::pipe() {
+        Ok((read_fd, write_fd)) => {
+            // Dup the read fd to fd 10.
+            match libmorpheus::process::dup2(read_fd, 10) {
+                Ok(fd) => check("SYS_DUP2(ok)", fd == 10, "wrong fd"),
+                Err(_) => fail("SYS_DUP2(ok)", "dup2 failed"),
+            }
+
+            // Write through the original write end, read from fd 10.
+            let msg = b"dup2";
+            let _ = libmorpheus::io::write_fd(write_fd, msg);
+            let mut buf = [0u8; 16];
+            let rd = libmorpheus::io::read_fd(10, &mut buf);
+            match rd {
+                Ok(n) => check("SYS_DUP2(data)", n == 4, "wrong len"),
+                Err(_) => fail("SYS_DUP2(data)", "read failed"),
+            }
+
+            // Invalid: dup2 with a bad old_fd.
+            let r = libmorpheus::process::dup2(62, 11);
+            check("SYS_DUP2(bad)", r.is_err(), "should fail");
+
+            unsafe {
+                syscall1(SYS_CLOSE, read_fd as u64);
+                syscall1(SYS_CLOSE, write_fd as u64);
+                syscall1(SYS_CLOSE, 10);
+            }
+        }
+        Err(_) => {
+            fail("SYS_DUP2(ok)", "no pipe");
+            fail("SYS_DUP2(data)", "no pipe");
+            fail("SYS_DUP2(bad)", "no pipe");
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_SET_FG (77)
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_set_fg() {
+    // Set foreground to ourselves — should not fail.
+    let pid = libmorpheus::process::getpid();
+    libmorpheus::process::set_foreground(pid);
+    check("SYS_SET_FG(self)", true, "");
+
+    // Reset to 0 (no foreground).
+    libmorpheus::process::set_foreground(0);
+    check("SYS_SET_FG(reset)", true, "");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_GETARGS (78)
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_getargs() {
+    // We were spawned without args, so argc should be 0.
+    let c = libmorpheus::process::argc();
+    check("SYS_GETARGS(argc=0)", c == 0, "expected 0 args");
+
+    // getargs into buffer should also return 0.
+    let mut buf = [0u8; 64];
+    let c2 = libmorpheus::process::getargs(&mut buf);
+    check("SYS_GETARGS(buf)", c2 == 0, "expected 0 args");
 }

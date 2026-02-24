@@ -92,6 +92,7 @@ pub mod heap;
 pub mod memory;
 pub mod paging;
 pub mod pci;
+pub mod pipe;
 pub mod platform;
 pub mod process;
 pub mod serial;

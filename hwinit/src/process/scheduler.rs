@@ -489,9 +489,21 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 /// The binary is parsed, loaded into a fresh address space (with kernel
 /// mappings cloned), and added to the process table as Ready.
 ///
+/// If `inherit_fds` is true, the child gets a copy of the parent's fd table
+/// (with pipe refcounts incremented).  Otherwise, it gets an empty fd table.
+///
+/// If `arg_blob` is non-empty, the null-separated arg strings are stored
+/// in the child's `args` buffer for retrieval via `SYS_GETARGS`.
+///
 /// # Safety
 /// Scheduler, paging, and MemoryRegistry must all be initialized.
-pub unsafe fn spawn_user_process(name: &str, elf_data: &[u8]) -> Result<u32, &'static str> {
+pub unsafe fn spawn_user_process(
+    name: &str,
+    elf_data: &[u8],
+    arg_blob: &[u8],
+    arg_count: u8,
+    inherit_fds: bool,
+) -> Result<u32, &'static str> {
     use crate::cpu::gdt::{USER_CS, USER_DS};
     use crate::elf::{load_elf64, USER_STACK_TOP};
 
@@ -539,6 +551,34 @@ pub unsafe fn spawn_user_process(name: &str, elf_data: &[u8]) -> Result<u32, &'s
 
     // Allocate a per-process kernel stack (for interrupts from Ring 3).
     proc.alloc_kernel_stack()?;
+
+    // ── Fd inheritance ────────────────────────────────────────────────
+    if inherit_fds {
+        let parent_pid = proc.parent_pid as usize;
+        if let Some(Some(parent)) = PROCESS_TABLE.get(parent_pid) {
+            proc.fd_table = parent.fd_table;
+            // Increment pipe refcounts for inherited pipe fds.
+            use morpheus_helix::types::open_flags;
+            for fd_desc in proc.fd_table.fds.iter() {
+                if fd_desc.is_open() {
+                    let fl = fd_desc.flags;
+                    if fl & open_flags::O_PIPE_READ != 0 {
+                        crate::pipe::pipe_add_reader(fd_desc.mount_idx);
+                    } else if fl & open_flags::O_PIPE_WRITE != 0 {
+                        crate::pipe::pipe_add_writer(fd_desc.mount_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Argv blob ─────────────────────────────────────────────────────
+    if !arg_blob.is_empty() && arg_count > 0 {
+        let len = arg_blob.len().min(256);
+        proc.args[..len].copy_from_slice(&arg_blob[..len]);
+        proc.args_len = len as u16;
+        proc.argc = arg_count;
+    }
 
     // Set up Ring 3 entry context.
     proc.context = CpuContext {
@@ -809,6 +849,12 @@ unsafe fn deliver_pending_signals(pid: u32) {
     };
 
     while let Some(sig) = proc.pending_signals.take_next() {
+        let handler = proc.signal_handlers.get(sig as u8 as usize).copied().unwrap_or(0);
+        if handler == 1 {
+            // SIG_IGN — ignore this signal.
+            continue;
+        }
+        // handler == 0 (SIG_DFL) or >1 (custom — not yet dispatched, use default).
         match sig.default_action() {
             super::signals::SignalAction::Terminate => {
                 puts("[SCHED] signal → PID ");
@@ -827,6 +873,34 @@ unsafe fn deliver_pending_signals(pid: u32) {
                 }
             }
             super::signals::SignalAction::Ignore => {}
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WAKE FUNCTIONS (called from producers to unblock waiting processes)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Wake all processes blocked on `BlockReason::StdinRead`.
+///
+/// Called by the keyboard input path after pushing bytes to the stdin buffer.
+pub unsafe fn wake_stdin_waiters() {
+    for proc in PROCESS_TABLE.iter_mut().flatten() {
+        if matches!(proc.state, ProcessState::Blocked(BlockReason::StdinRead)) {
+            proc.state = ProcessState::Ready;
+        }
+    }
+}
+
+/// Wake all processes blocked on `BlockReason::PipeRead(idx)`.
+///
+/// Called after writing to a pipe so that blocked readers can proceed.
+pub unsafe fn wake_pipe_readers(pipe_idx: u8) {
+    for proc in PROCESS_TABLE.iter_mut().flatten() {
+        if let ProcessState::Blocked(BlockReason::PipeRead(idx)) = proc.state {
+            if idx == pipe_idx {
+                proc.state = ProcessState::Ready;
+            }
         }
     }
 }

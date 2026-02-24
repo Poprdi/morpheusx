@@ -57,7 +57,37 @@ pub fn wait(pid: u32) -> Result<i32, u64> {
 ///
 /// Returns the child PID on success.
 pub fn spawn(path: &str) -> Result<u32, u64> {
-    let ret = unsafe { syscall2(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64) };
+    let ret = unsafe { syscall4(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64, 0, 0) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as u32)
+    }
+}
+
+/// Spawn a child process with arguments.
+///
+/// `args` is a slice of string slices.  Each arg is passed to the child
+/// as a null-separated blob, retrievable via `getargs()`.
+///
+/// The child inherits the parent's file descriptor table (including pipes).
+pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
+    // Build argv descriptor array: [ptr, len] pairs on the stack.
+    let mut descs = [[0u64; 2]; 16];
+    let count = args.len().min(16);
+    for i in 0..count {
+        descs[i][0] = args[i].as_ptr() as u64;
+        descs[i][1] = args[i].len() as u64;
+    }
+    let ret = unsafe {
+        syscall4(
+            SYS_SPAWN,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            descs.as_ptr() as u64,
+            count as u64,
+        )
+    };
     if is_error(ret) {
         Err(ret)
     } else {
@@ -173,4 +203,92 @@ pub fn getpriority(pid: u32) -> Result<u8, u64> {
     } else {
         Ok(ret as u8)
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPES (SYS_PIPE, SYS_DUP2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Create a pipe.
+///
+/// Returns `(read_fd, write_fd)` on success.
+pub fn pipe() -> Result<(u32, u32), u64> {
+    let mut fds = [0u32; 2];
+    let ret = unsafe { syscall1(SYS_PIPE, fds.as_mut_ptr() as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok((fds[0], fds[1]))
+    }
+}
+
+/// Duplicate a file descriptor to a specific target fd.
+///
+/// Closes `new_fd` first if it's open.  Returns `new_fd` on success.
+pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, u64> {
+    let ret = unsafe { syscall2(SYS_DUP2, old_fd as u64, new_fd as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as u32)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FOREGROUND / ARGV
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Set the foreground process (receives Ctrl+C as SIGINT).
+pub fn set_foreground(pid: u32) {
+    unsafe {
+        syscall1(SYS_SET_FG, pid as u64);
+    }
+}
+
+/// Get the number of arguments passed to this process.
+pub fn argc() -> usize {
+    let ret = unsafe { syscall2(SYS_GETARGS, 0, 0) };
+    ret as usize
+}
+
+/// Retrieve argument strings into `buf`.
+///
+/// Returns the argument count.  Arguments in `buf` are null-separated.
+/// Use `parse_args()` to split them.
+pub fn getargs(buf: &mut [u8]) -> usize {
+    let ret = unsafe { syscall2(SYS_GETARGS, buf.as_mut_ptr() as u64, buf.len() as u64) };
+    if is_error(ret) {
+        0
+    } else {
+        ret as usize
+    }
+}
+
+/// Parse a null-separated argument buffer into individual slices.
+///
+/// Returns the number of args written into `out`.
+pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
+    let mut count = 0;
+    let mut start = 0;
+    for i in 0..buf.len() {
+        if buf[i] == 0 {
+            if i > start && count < out.len() {
+                if let Ok(s) = core::str::from_utf8(&buf[start..i]) {
+                    out[count] = s;
+                    count += 1;
+                }
+            }
+            start = i + 1;
+        }
+    }
+    // Handle last arg if no trailing null.
+    if start < buf.len() && count < out.len() {
+        if let Ok(s) = core::str::from_utf8(&buf[start..]) {
+            if !s.is_empty() {
+                out[count] = s;
+                count += 1;
+            }
+        }
+    }
+    count
 }
