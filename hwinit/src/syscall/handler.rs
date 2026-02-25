@@ -840,19 +840,6 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     proc.mmap_brk = vaddr + pages * 4096;
     proc.pages_allocated += pages;
 
-    // Debug: log mmap allocation
-    if pages >= 16 {
-        crate::serial::puts("[MMAP] vaddr=");
-        crate::serial::put_hex64(vaddr);
-        crate::serial::puts(" pages=");
-        crate::serial::put_hex64(pages);
-        crate::serial::puts(" phys=");
-        crate::serial::put_hex64(phys);
-        crate::serial::puts(" brk=");
-        crate::serial::put_hex64(proc.mmap_brk);
-        crate::serial::puts("\n");
-    }
-
     vaddr
 }
 // SYS_MUNMAP — unmap pages from user virtual address space
@@ -3731,16 +3718,6 @@ pub unsafe fn sys_futex(addr: u64, op: u64, val: u64, timeout_ms: u64) -> u64 {
 /// starts at `entry` with `rdi = arg` and `rsp = stack_top`.  Caller
 /// must allocate the stack (via SYS_MMAP) before calling this.
 pub unsafe fn sys_thread_create(entry: u64, stack_top: u64, arg: u64) -> u64 {
-    use crate::serial::{put_hex64, puts};
-
-    puts("[THREAD_CREATE] entry=");
-    put_hex64(entry);
-    puts(" stack_top=");
-    put_hex64(stack_top);
-    puts(" arg=");
-    put_hex64(arg);
-    puts("\n");
-
     if entry == 0 || stack_top == 0 {
         return EINVAL;
     }
@@ -3750,30 +3727,6 @@ pub unsafe fn sys_thread_create(entry: u64, stack_top: u64, arg: u64) -> u64 {
     // Stack must be 16-byte aligned (x86-64 ABI).
     if stack_top & 0xF != 0 {
         return EINVAL;
-    }
-
-    // Verify stack top - 8 is mapped (first push target).
-    {
-        let proc = SCHEDULER.current_process_mut();
-        let ptm = crate::paging::table::PageTableManager {
-            pml4_phys: proc.cr3,
-        };
-        let check_addr = stack_top - 8;
-        let page_addr = check_addr & !0xFFF;
-        match ptm.translate(page_addr) {
-            Some(phys) => {
-                puts("[THREAD_CREATE] stack page ");
-                put_hex64(page_addr);
-                puts(" -> phys ");
-                put_hex64(phys);
-                puts(" OK\n");
-            }
-            None => {
-                puts("[THREAD_CREATE] stack page ");
-                put_hex64(page_addr);
-                puts(" NOT MAPPED!\n");
-            }
-        }
     }
 
     match crate::process::spawn_user_thread(entry, stack_top, arg) {

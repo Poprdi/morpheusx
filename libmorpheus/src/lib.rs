@@ -1,4 +1,12 @@
-//! libmorpheus — userspace syscall library.
+//! libmorpheus — userspace syscall library and SDK.
+//!
+//! # Layers
+//!
+//! 1. **Raw**: `raw::syscall0`..`syscall5` — thin `syscall` instruction wrappers.
+//! 2. **Bare functions**: `fs::open`, `net::tcp_send`, etc. — return `Result<T, u64>`.
+//! 3. **Ergonomic types**: `fs::File`, `net::TcpStream`, `time::Instant`, etc. —
+//!    RAII, implement `io::Read`/`io::Write`, use `error::Error`.
+//!
 //! RAX=nr, RDI..R9=args, RAX=return. errors > 0xFFFF_FFFF_FFFF_FF00.
 
 #![no_std]
@@ -8,6 +16,8 @@ extern crate alloc; // buddy.rs registers #[global_allocator] → Vec/Box/String
 
 pub mod buddy;
 pub mod entry;
+pub mod env;
+pub mod error;
 pub mod fs;
 pub mod hw;
 pub mod io;

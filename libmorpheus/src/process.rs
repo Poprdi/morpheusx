@@ -1,5 +1,11 @@
-//! Process management — exit, yield, signal, getpid, spawn.
+//! Process management — exit, yield, signal, getpid, spawn, Command.
 
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::error::{self, Error};
 use crate::is_error;
 use crate::raw::*;
 
@@ -263,4 +269,92 @@ pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
         }
     }
     count
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Command — builder for child process spawning
+// ═══════════════════════════════════════════════════════════════════════
+
+/// A process builder, providing fine-grained control over how a new
+/// process is configured.
+///
+/// # Example
+/// ```ignore
+/// use libmorpheus::process::Command;
+/// let status = Command::new("/bin/ls")
+///     .arg("/home")
+///     .status()?;
+/// println!("exited with {}", status);
+/// ```
+pub struct Command {
+    path: String,
+    args: Vec<String>,
+}
+
+impl Command {
+    /// Create a new Command for launching the program at `path`.
+    pub fn new(path: &str) -> Self {
+        Self {
+            path: String::from(path),
+            args: Vec::new(),
+        }
+    }
+
+    /// Append an argument.
+    pub fn arg(&mut self, arg: &str) -> &mut Self {
+        self.args.push(String::from(arg));
+        self
+    }
+
+    /// Append multiple arguments.
+    pub fn args(&mut self, args: &[&str]) -> &mut Self {
+        for a in args {
+            self.args.push(String::from(*a));
+        }
+        self
+    }
+
+    /// Spawn the process and return its PID.
+    pub fn spawn_pid(&self) -> error::Result<u32> {
+        if self.args.is_empty() {
+            spawn(&self.path).map_err(Error::from_raw)
+        } else {
+            let refs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
+            spawn_with_args(&self.path, &refs).map_err(Error::from_raw)
+        }
+    }
+
+    /// Spawn and wait for exit.  Returns the exit code.
+    pub fn status(&self) -> error::Result<i32> {
+        let pid = self.spawn_pid()?;
+        wait(pid).map_err(Error::from_raw)
+    }
+}
+
+/// Exit status from a child process.
+#[derive(Debug, Clone, Copy)]
+pub struct ExitStatus {
+    code: i32,
+}
+
+impl ExitStatus {
+    pub fn new(code: i32) -> Self {
+        Self { code }
+    }
+
+    /// The exit code.
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    /// Did the process exit successfully (code 0)?
+    pub fn success(&self) -> bool {
+        self.code == 0
+    }
+}
+
+impl core::fmt::Display for ExitStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "exit code: {}", self.code)
+    }
 }
