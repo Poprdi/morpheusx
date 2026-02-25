@@ -106,3 +106,95 @@ where
         _marker: PhantomData,
     })
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Builder — configure stack size before spawning
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Thread builder.  Allows setting stack size before spawning.
+///
+/// # Example
+/// ```ignore
+/// use libmorpheus::thread;
+/// let h = thread::Builder::new()
+///     .stack_size(128 * 1024) // 128 KiB
+///     .spawn(|| { /* work */ })?;
+/// h.join()?;
+/// ```
+pub struct Builder {
+    stack_pages: u64,
+}
+
+impl Builder {
+    pub fn new() -> Self {
+        Self {
+            stack_pages: DEFAULT_STACK_PAGES,
+        }
+    }
+
+    /// Set the stack size in bytes.  Rounded up to page boundary.
+    pub fn stack_size(mut self, bytes: usize) -> Self {
+        self.stack_pages = ((bytes as u64) + 4095) / 4096;
+        if self.stack_pages == 0 {
+            self.stack_pages = 1;
+        }
+        self
+    }
+
+    /// Spawn a thread with these settings.
+    pub fn spawn<F>(self, f: F) -> Result<JoinHandle<()>, u64>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        spawn_with_stack(f, self.stack_pages)
+    }
+}
+
+/// Spawn with a custom stack size (in pages).
+fn spawn_with_stack<F>(f: F, stack_pages: u64) -> Result<JoinHandle<()>, u64>
+where
+    F: FnOnce() + Send + 'static,
+{
+    let stack_size = stack_pages * 4096;
+
+    let stack_base = unsafe { syscall1(SYS_MMAP, stack_pages) };
+    if crate::is_error(stack_base) {
+        return Err(stack_base);
+    }
+
+    let stack_top = (stack_base + stack_size) & !0xF;
+
+    let closure: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
+    let arg = Box::into_raw(closure) as u64;
+
+    let entry = thread_trampoline as *const () as u64;
+    let ret = unsafe { syscall3(SYS_THREAD_CREATE, entry, stack_top, arg) };
+
+    if crate::is_error(ret) {
+        unsafe {
+            let _ = Box::from_raw(arg as *mut Box<dyn FnOnce()>);
+            syscall2(SYS_MUNMAP, stack_base, stack_pages);
+        }
+        return Err(ret);
+    }
+
+    Ok(JoinHandle {
+        tid: ret as u32,
+        _marker: PhantomData,
+    })
+}
+
+/// Get the current thread's TID.
+pub fn current_tid() -> u32 {
+    crate::process::getpid()
+}
+
+/// Yield the current thread's time slice.
+pub fn yield_now() {
+    crate::process::yield_cpu();
+}
+
+/// Sleep the current thread for `millis` milliseconds.
+pub fn sleep_ms(millis: u64) {
+    crate::process::sleep(millis);
+}
