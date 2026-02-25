@@ -369,10 +369,11 @@ pub unsafe fn exit_process(code: i32) -> ! {
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
         terminate_process_inner(proc, code);
     }
-    // Yield — the scheduler will pick a different process.
-    // We never return since our state is Zombie.
+    // Re-enable interrupts so the timer ISR can fire and the scheduler
+    // switches away.  We are Zombie — the scheduler will never pick us again.
+    core::arch::asm!("sti", options(nostack, nomem));
     loop {
-        core::hint::spin_loop();
+        core::arch::asm!("hlt", options(nostack, nomem));
     }
 }
 
@@ -465,6 +466,94 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 }
 
 // USER PROCESS SPAWN
+
+/// Spawn a Ring 3 user thread in the caller's address space.
+///
+/// Shares the parent's CR3 (same page tables, same heap, same mmap state).
+/// Gets its own kernel stack, its own slot in PROCESS_TABLE, and starts
+/// execution at `entry` with `rdi = arg` and `rsp = stack_top`.
+///
+/// The caller must provide a valid, mapped user stack.  Use SYS_MMAP to
+/// allocate one before calling this.
+///
+/// Returns the new thread's PID (which also serves as the TID).
+pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<u32, &'static str> {
+    use crate::cpu::gdt::{USER_CS, USER_DS};
+
+    if !SCHEDULER_READY {
+        return Err("scheduler not initialized");
+    }
+
+    let parent_pid = CURRENT_PID.load(Ordering::Relaxed);
+    let parent = match PROCESS_TABLE
+        .get(parent_pid as usize)
+        .and_then(|s| s.as_ref())
+    {
+        Some(p) => p,
+        None => return Err("no current process"),
+    };
+    let parent_cr3 = parent.cr3;
+    let parent_mmap_brk = parent.mmap_brk;
+    let parent_cwd = parent.cwd;
+    let parent_cwd_len = parent.cwd_len;
+
+    // Determine thread group leader: if parent is already a thread, inherit
+    // its leader.  Otherwise, parent IS the leader.
+    let group_leader = if parent.thread_group_leader != 0 {
+        parent.thread_group_leader
+    } else {
+        parent_pid
+    };
+
+    let slot_idx = (1..MAX_PROCESSES)
+        .find(|&i| {
+            PROCESS_TABLE[i]
+                .as_ref()
+                .map(|p| p.is_free())
+                .unwrap_or(true)
+        })
+        .ok_or("process table full")?;
+
+    let tid = slot_idx as u32;
+
+    let mut thread = Process::empty();
+    thread.pid = tid;
+    thread.set_name("thread");
+    thread.parent_pid = parent_pid;
+    thread.priority = 128;
+    thread.state = ProcessState::Ready;
+    thread.cr3 = parent_cr3;
+    thread.thread_group_leader = group_leader;
+    thread.mmap_brk = parent_mmap_brk;
+    thread.cwd = parent_cwd;
+    thread.cwd_len = parent_cwd_len;
+
+    // Own kernel stack for interrupt/syscall entry from Ring 3.
+    thread.alloc_kernel_stack()?;
+
+    // Ring 3 entry: rip=entry, rsp=stack_top, rdi=arg.
+    thread.context = CpuContext {
+        rip: entry,
+        rsp: stack_top,
+        rdi: arg,
+        rflags: 0x202, // IF=1
+        cs: USER_CS as u64,
+        ss: USER_DS as u64,
+        ..CpuContext::empty()
+    };
+
+    puts("[SCHED] spawned thread TID ");
+    put_hex32(tid);
+    puts(" in group ");
+    put_hex32(group_leader);
+    puts(" entry=");
+    put_hex64(entry);
+    puts("\n");
+
+    PROCESS_TABLE[slot_idx] = Some(thread);
+    LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    Ok(tid)
+}
 
 /// Spawn a Ring 3 user process from an ELF64 binary.
 ///
@@ -695,8 +784,9 @@ unsafe fn free_process_resources(proc: &mut Process) {
         proc.kernel_stack_top = 0;
     }
 
-    // free user page tables (if this isn't the kernel process)
-    if proc.cr3 != 0 && proc.pid != 0 {
+    // free user page tables (if this isn't the kernel process and not a thread)
+    // Threads share their leader's CR3 — freeing it would nuke the parent.
+    if proc.cr3 != 0 && proc.pid != 0 && proc.thread_group_leader == 0 {
         // Read the kernel's CR3 so we don't accidentally free the kernel PML4.
         let kernel_cr3: u64;
         core::arch::asm!("mov {}, cr3", out(reg) kernel_cr3, options(nostack, nomem));
@@ -789,10 +879,19 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
 unsafe fn wake_expired_sleepers() {
     let now = crate::cpu::tsc::read_tsc();
     for proc in PROCESS_TABLE.iter_mut().flatten() {
-        if let ProcessState::Blocked(BlockReason::Sleep(deadline)) = proc.state {
-            if now >= deadline {
-                proc.state = ProcessState::Ready;
+        match proc.state {
+            ProcessState::Blocked(BlockReason::Sleep(deadline)) => {
+                if now >= deadline {
+                    proc.state = ProcessState::Ready;
+                }
             }
+            ProcessState::Blocked(BlockReason::FutexWait(_)) => {
+                if proc.futex_deadline != 0 && now >= proc.futex_deadline {
+                    proc.state = ProcessState::Ready;
+                    proc.futex_deadline = 0;
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -883,4 +982,23 @@ pub unsafe fn wake_pipe_readers(pipe_idx: u8) {
             }
         }
     }
+}
+
+/// Wake up to `count` processes blocked on `FutexWait(addr)`.
+///
+/// Returns number actually woken.  If count == u32::MAX, wakes all.
+pub unsafe fn wake_futex_waiters(addr: u64, count: u32) -> u32 {
+    let mut woken = 0u32;
+    for proc in PROCESS_TABLE.iter_mut().flatten() {
+        if woken >= count {
+            break;
+        }
+        if let ProcessState::Blocked(BlockReason::FutexWait(wait_addr)) = proc.state {
+            if wait_addr == addr {
+                proc.state = ProcessState::Ready;
+                woken += 1;
+            }
+        }
+    }
+    woken
 }
