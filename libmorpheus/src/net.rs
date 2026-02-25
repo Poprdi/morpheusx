@@ -1,6 +1,21 @@
 //! Networking. raw NIC frames, hardware knobs, and a smoltcp TCP/IP stack.
 //! Use layer 1 for custom protocols, layer 2 for "just give me TCP".
+//!
+//! # Layers
+//!
+//! - **Raw functions**: `tcp_socket`, `tcp_connect`, `tcp_send`, etc.
+//! - **RAII types**: [`TcpStream`], [`TcpListener`], [`UdpSocket`]
+//!   Auto-close on drop, implement [`Read`]/[`Write`] where applicable.
+//!
+//! # Polling
+//!
+//! MorpheusX networking is **explicitly polled** — you must call
+//! [`net_poll_drive`] periodically to drive DHCP, ARP, TCP timers, etc.
+//! The RAII types poll internally where needed, but for event loops
+//! you should call it yourself.
 
+use crate::error::{self, Error, ErrorKind};
+use crate::io;
 use crate::raw::*;
 
 // raw nic
@@ -746,5 +761,378 @@ pub fn udp_close(handle: u64) -> Result<(), u64> {
         Err(ret)
     } else {
         Ok(())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// IPv4 address type
+// ═══════════════════════════════════════════════════════════════════════
+
+/// An IPv4 address.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Ipv4Addr {
+    octets: [u8; 4],
+}
+
+impl Ipv4Addr {
+    pub const LOCALHOST: Self = Self::new(127, 0, 0, 1);
+    pub const UNSPECIFIED: Self = Self::new(0, 0, 0, 0);
+    pub const BROADCAST: Self = Self::new(255, 255, 255, 255);
+
+    pub const fn new(a: u8, b: u8, c: u8, d: u8) -> Self {
+        Self {
+            octets: [a, b, c, d],
+        }
+    }
+
+    /// Create from network byte order u32.
+    pub const fn from_nbo(nbo: u32) -> Self {
+        let b = nbo.to_be_bytes();
+        Self::new(b[0], b[1], b[2], b[3])
+    }
+
+    /// Convert to network byte order u32.
+    pub const fn to_nbo(self) -> u32 {
+        u32::from_be_bytes(self.octets)
+    }
+
+    pub const fn octets(&self) -> [u8; 4] {
+        self.octets
+    }
+}
+
+impl core::fmt::Debug for Ipv4Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let [a, b, c, d] = self.octets;
+        write!(f, "{}.{}.{}.{}", a, b, c, d)
+    }
+}
+
+impl core::fmt::Display for Ipv4Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let [a, b, c, d] = self.octets;
+        write!(f, "{}.{}.{}.{}", a, b, c, d)
+    }
+}
+
+/// A socket address: IPv4 + port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SocketAddr {
+    pub ip: Ipv4Addr,
+    pub port: u16,
+}
+
+impl SocketAddr {
+    pub const fn new(ip: Ipv4Addr, port: u16) -> Self {
+        Self { ip, port }
+    }
+}
+
+impl core::fmt::Display for SocketAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}:{}", self.ip, self.port)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TcpStream — RAII TCP client socket
+// ═══════════════════════════════════════════════════════════════════════
+
+/// A connected TCP stream.  Closes the socket on drop.
+///
+/// Implements [`Read`](io::Read) and [`Write`](io::Write).
+/// The kernel's TCP stack is **non-blocking** — reads return 0 if no data
+/// is available, sends may accept fewer bytes than provided.
+///
+/// # Example
+/// ```ignore
+/// use libmorpheus::net::TcpStream;
+/// let mut stream = TcpStream::connect(Ipv4Addr::new(10,0,2,2), 80)?;
+/// stream.write_all(b"GET / HTTP/1.0\r\n\r\n")?;
+/// let mut buf = [0u8; 1024];
+/// let n = stream.read(&mut buf)?;
+/// ```
+pub struct TcpStream {
+    handle: TcpHandle,
+}
+
+impl TcpStream {
+    /// Create a TCP socket and connect to `ip:port`.
+    ///
+    /// This initiates the TCP handshake.  The connection is established
+    /// asynchronously — poll [`state()`](Self::state) or just start
+    /// reading/writing (the kernel buffers data during handshake).
+    pub fn connect(ip: Ipv4Addr, port: u16) -> error::Result<Self> {
+        let handle = tcp_socket().map_err(Error::from_raw)?;
+        tcp_connect(handle, ip.to_nbo(), port).map_err(|e| {
+            tcp_close(handle);
+            Error::from_raw(e)
+        })?;
+        Ok(Self { handle })
+    }
+
+    /// Connect using a hostname (DNS resolution + TCP connect).
+    pub fn connect_host(hostname: &str, port: u16) -> error::Result<Self> {
+        let ip_nbo = dns_resolve(hostname).map_err(Error::from_raw)?;
+        let handle = tcp_socket().map_err(Error::from_raw)?;
+        tcp_connect(handle, ip_nbo, port).map_err(|e| {
+            tcp_close(handle);
+            Error::from_raw(e)
+        })?;
+        Ok(Self { handle })
+    }
+
+    /// Wrap an existing raw handle (e.g. from [`TcpListener::accept`]).
+    pub fn from_raw_handle(handle: TcpHandle) -> Self {
+        Self { handle }
+    }
+
+    /// Return the raw handle without closing it.
+    pub fn into_raw_handle(self) -> TcpHandle {
+        let h = self.handle;
+        core::mem::forget(self);
+        h
+    }
+
+    /// The raw socket handle.
+    pub fn handle(&self) -> TcpHandle {
+        self.handle
+    }
+
+    /// Query the TCP state machine.
+    pub fn state(&self) -> error::Result<TcpState> {
+        tcp_state(self.handle).map_err(Error::from_raw)
+    }
+
+    /// Shutdown the write half (sends FIN).
+    pub fn shutdown(&self) -> error::Result<()> {
+        tcp_shutdown(self.handle).map_err(Error::from_raw)
+    }
+
+    /// Set TCP_NODELAY (disable Nagle's algorithm).
+    pub fn set_nodelay(&self, on: bool) -> error::Result<()> {
+        tcp_set_nodelay(self.handle, on).map_err(Error::from_raw)
+    }
+
+    /// Set keepalive interval (0 = disable).
+    pub fn set_keepalive(&self, interval_ms: u64) -> error::Result<()> {
+        tcp_set_keepalive(self.handle, interval_ms).map_err(Error::from_raw)
+    }
+
+    /// Wait until fully connected or an error occurs.
+    ///
+    /// Polls the stack in a loop.  Use for blocking-style programming.
+    pub fn wait_connected(&self) -> error::Result<()> {
+        loop {
+            net_poll_drive(0);
+            match self.state()? {
+                TcpState::Established => return Ok(()),
+                TcpState::Closed => return Err(Error::new(ErrorKind::ConnectionRefused)),
+                _ => {
+                    unsafe { syscall0(SYS_YIELD); }
+                }
+            }
+        }
+    }
+
+    /// Blocking send: poll + retry until all data is sent or error.
+    pub fn send_all(&self, mut data: &[u8]) -> error::Result<()> {
+        while !data.is_empty() {
+            net_poll_drive(0);
+            match tcp_send(self.handle, data) {
+                Ok(0) => {
+                    // Check if connection is still alive.
+                    match self.state()? {
+                        TcpState::Established | TcpState::CloseWait => {
+                            unsafe { syscall0(SYS_YIELD); }
+                        }
+                        _ => return Err(Error::new(ErrorKind::BrokenPipe)),
+                    }
+                }
+                Ok(n) => data = &data[n..],
+                Err(e) => return Err(Error::from_raw(e)),
+            }
+        }
+        Ok(())
+    }
+
+    /// Blocking receive: poll until at least 1 byte arrives or EOF/error.
+    pub fn recv_blocking(&self, buf: &mut [u8]) -> error::Result<usize> {
+        loop {
+            net_poll_drive(0);
+            match tcp_recv(self.handle, buf) {
+                Ok(0) => {
+                    match self.state()? {
+                        TcpState::Established | TcpState::SynSent | TcpState::SynReceived => {
+                            unsafe { syscall0(SYS_YIELD); }
+                        }
+                        _ => return Ok(0), // EOF
+                    }
+                }
+                Ok(n) => return Ok(n),
+                Err(e) => return Err(Error::from_raw(e)),
+            }
+        }
+    }
+}
+
+impl io::Read for TcpStream {
+    fn read(&mut self, buf: &mut [u8]) -> error::Result<usize> {
+        net_poll_drive(0);
+        tcp_recv(self.handle, buf).map_err(Error::from_raw)
+    }
+}
+
+impl io::Write for TcpStream {
+    fn write(&mut self, buf: &[u8]) -> error::Result<usize> {
+        net_poll_drive(0);
+        tcp_send(self.handle, buf).map_err(Error::from_raw)
+    }
+
+    fn flush(&mut self) -> error::Result<()> {
+        net_poll_drive(0);
+        Ok(())
+    }
+}
+
+impl Drop for TcpStream {
+    fn drop(&mut self) {
+        tcp_close(self.handle);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TcpListener — RAII TCP server socket
+// ═══════════════════════════════════════════════════════════════════════
+
+/// A TCP listener that accepts incoming connections.
+///
+/// # Example
+/// ```ignore
+/// let listener = TcpListener::bind(8080)?;
+/// loop {
+///     if let Ok(stream) = listener.accept() {
+///         // handle connection
+///     }
+///     net_poll_drive(0);
+/// }
+/// ```
+pub struct TcpListener {
+    handle: TcpHandle,
+}
+
+impl TcpListener {
+    /// Create a socket and start listening on `port`.
+    pub fn bind(port: u16) -> error::Result<Self> {
+        let handle = tcp_socket().map_err(Error::from_raw)?;
+        tcp_listen(handle, port).map_err(|e| {
+            tcp_close(handle);
+            Error::from_raw(e)
+        })?;
+        Ok(Self { handle })
+    }
+
+    /// Accept a pending connection.
+    ///
+    /// Returns `Err(WouldBlock)` if no connection is pending.
+    pub fn accept(&self) -> error::Result<TcpStream> {
+        net_poll_drive(0);
+        match tcp_accept(self.handle) {
+            Ok(new_handle) => Ok(TcpStream::from_raw_handle(new_handle)),
+            Err(e) => Err(Error::from_raw(e)),
+        }
+    }
+
+    /// Blocking accept: wait until a connection arrives.
+    pub fn accept_blocking(&self) -> error::Result<TcpStream> {
+        loop {
+            match self.accept() {
+                Ok(stream) => return Ok(stream),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    unsafe { syscall0(SYS_YIELD); }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// The raw socket handle.
+    pub fn handle(&self) -> TcpHandle {
+        self.handle
+    }
+}
+
+impl Drop for TcpListener {
+    fn drop(&mut self) {
+        tcp_close(self.handle);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// UdpSocket — RAII UDP socket
+// ═══════════════════════════════════════════════════════════════════════
+
+/// A UDP socket.  Closes on drop.
+///
+/// # Example
+/// ```ignore
+/// let sock = UdpSocket::new()?;
+/// sock.send_to(Ipv4Addr::new(10,0,2,2), 53, &query)?;
+/// let (n, src_ip, src_port) = sock.recv_from(&mut buf)?;
+/// ```
+pub struct UdpSocket {
+    handle: u64,
+}
+
+impl UdpSocket {
+    /// Create a new UDP socket.
+    pub fn new() -> error::Result<Self> {
+        let handle = udp_socket().map_err(Error::from_raw)?;
+        Ok(Self { handle })
+    }
+
+    /// Wrap an existing handle.
+    pub fn from_raw_handle(handle: u64) -> Self {
+        Self { handle }
+    }
+
+    /// Send a datagram to `ip:port`.
+    pub fn send_to(&self, ip: Ipv4Addr, port: u16, data: &[u8]) -> error::Result<()> {
+        net_poll_drive(0);
+        udp_send_to(self.handle, ip.to_nbo(), port, data).map_err(Error::from_raw)
+    }
+
+    /// Receive a datagram.  Returns `(bytes_read, src_ip, src_port)`.
+    pub fn recv_from(&self, buf: &mut [u8]) -> error::Result<(usize, Ipv4Addr, u16)> {
+        net_poll_drive(0);
+        let (n, ip_nbo, port) = udp_recv_from(self.handle, buf).map_err(Error::from_raw)?;
+        Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port))
+    }
+
+    /// Blocking receive: poll until a datagram arrives.
+    pub fn recv_from_blocking(&self, buf: &mut [u8]) -> error::Result<(usize, Ipv4Addr, u16)> {
+        loop {
+            net_poll_drive(0);
+            match udp_recv_from(self.handle, buf) {
+                Ok((0, _, _)) => {
+                    unsafe { syscall0(SYS_YIELD); }
+                }
+                Ok((n, ip_nbo, port)) => {
+                    return Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port));
+                }
+                Err(e) => return Err(Error::from_raw(e)),
+            }
+        }
+    }
+
+    /// The raw socket handle.
+    pub fn handle(&self) -> u64 {
+        self.handle
+    }
+}
+
+impl Drop for UdpSocket {
+    fn drop(&mut self) {
+        let _ = udp_close(self.handle);
     }
 }
