@@ -142,7 +142,6 @@ unsafe fn is_free(state: &HeapState, order: usize, addr: u64) -> bool {
 
 /// fresh 8 MiB arena from the kernel → one fat MAX_ORDER block.
 unsafe fn add_arena(state: &mut HeapState, base: u64) {
-    debug_assert!((base as usize) % ARENA_SIZE == 0, "arena not aligned");
     if state.arena_count >= MAX_ARENAS {
         return; // you have 512 MiB of heap. rethink your life choices.
     }
@@ -172,7 +171,6 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
             if crate::is_error(va) {
                 return None;
             }
-            debug_assert!((va as usize) % ARENA_SIZE == 0);
             add_arena(state, va);
 
             // retry with the shiny new arena

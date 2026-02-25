@@ -33,8 +33,8 @@ pub mod vma;
 pub use context::CpuContext;
 pub use scheduler::{
     block_sleep, exit_process, init_scheduler, scheduler_tick, set_tsc_frequency,
-    spawn_kernel_thread, tsc_frequency, wait_for_child, wake_pipe_readers, wake_stdin_waiters,
-    ProcessInfo, Scheduler, SCHEDULER,
+    spawn_kernel_thread, spawn_user_thread, tsc_frequency, wait_for_child, wake_futex_waiters,
+    wake_pipe_readers, wake_stdin_waiters, ProcessInfo, Scheduler, SCHEDULER,
 };
 pub use signals::{Signal, SignalSet};
 pub use vma::{Vma, VmaTable};
@@ -66,6 +66,8 @@ pub enum BlockReason {
     StdinRead,
     /// Waiting for data on a pipe (index into PIPE_TABLE).
     PipeRead(u8),
+    /// Waiting on a futex word at this user virtual address.
+    FutexWait(u64),
 }
 
 /// Process lifecycle state.
@@ -155,6 +157,16 @@ pub struct Process {
     pub args: [u8; 256],
     pub args_len: u16,
     pub argc: u8,
+
+    // threading
+    /// 0 = independent process.  Nonzero = PID of the thread group leader
+    /// whose address space (CR3) this thread shares.  On exit, threads skip
+    /// address-space teardown — only the leader frees the page table.
+    pub thread_group_leader: u32,
+
+    // futex timeout
+    /// TSC deadline for futex wait timeout. 0 = wait forever.
+    pub futex_deadline: u64,
 }
 
 impl Process {
@@ -186,6 +198,8 @@ impl Process {
             args: [0u8; 256],
             args_len: 0,
             argc: 0,
+            thread_group_leader: 0,
+            futex_deadline: 0,
         }
     }
 
