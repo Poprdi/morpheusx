@@ -214,6 +214,26 @@ fn main() -> i32 {
     test_set_fg(); // 77
     test_getargs(); // 78
 
+    // ── Synchronization (79) ──────────────────────────────────────
+    println("");
+    println("── Sync (79) ──");
+    test_futex(); // 79
+
+    // ── Threading (80-82) ─────────────────────────────────────────
+    println("");
+    println("── Threading (80-82) ──");
+    test_thread_create_join(); // 80, 82
+    test_thread_shared_memory(); // 80 (shared address space)
+
+    // ── Async Runtime ────────────────────────────────────────────
+    println("\n── Async Runtime ──");
+    test_async_block_on();
+    test_async_spawn_multi();
+    test_async_yield();
+    test_async_join_handle();
+    test_async_sleep();
+    test_async_chained_await();
+
     // ── Summary ──────────────────────────────────────────────────────
     println("");
     println("════════════════════════════════════════════");
@@ -1234,4 +1254,212 @@ fn test_getargs() {
     let mut buf = [0u8; 64];
     let c2 = libmorpheus::process::getargs(&mut buf);
     check("SYS_GETARGS(buf)", c2 == 0, "expected 0 args");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_FUTEX (79)
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_futex() {
+    use core::sync::atomic::AtomicU32;
+
+    // FUTEX_WAIT with wrong expected value should return EAGAIN immediately.
+    let word = AtomicU32::new(42);
+    let ret = unsafe {
+        syscall3(
+            SYS_FUTEX,
+            &word as *const AtomicU32 as u64,
+            FUTEX_WAIT,
+            99, // expected=99, but word=42 → EAGAIN
+        )
+    };
+    // EAGAIN = u64::MAX - 11
+    check(
+        "SYS_FUTEX(wait-eagain)",
+        ret == u64::MAX - 11,
+        "expected EAGAIN",
+    );
+
+    // FUTEX_WAKE with no waiters should return 0 (nobody woken).
+    let ret2 = unsafe { syscall3(SYS_FUTEX, &word as *const AtomicU32 as u64, FUTEX_WAKE, 1) };
+    check("SYS_FUTEX(wake-none)", ret2 == 0, "expected 0 woken");
+
+    // Test Mutex via the sync module.
+    {
+        let m = libmorpheus::sync::Mutex::new(0u32);
+        {
+            let mut guard = m.lock();
+            *guard = 123;
+        }
+        let guard = m.lock();
+        check("Mutex(lock-unlock)", *guard == 123, "wrong value");
+    }
+
+    ok("SYS_FUTEX(basic)");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYS_THREAD_CREATE (80), SYS_THREAD_JOIN (82)
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_thread_create_join() {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    // Spawn a thread that writes a sentinel value to shared memory.
+    static SENTINEL: AtomicU32 = AtomicU32::new(0);
+
+    let handle = libmorpheus::thread::spawn(|| {
+        SENTINEL.store(0xDEAD, Ordering::Release);
+    });
+
+    match handle {
+        Ok(h) => {
+            let _ = h.join();
+            let val = SENTINEL.load(Ordering::Acquire);
+            check("SYS_THREAD_CREATE+JOIN", val == 0xDEAD, "sentinel mismatch");
+        }
+        Err(_) => fail("SYS_THREAD_CREATE+JOIN", "spawn failed"),
+    }
+}
+
+fn test_thread_shared_memory() {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    // Verify threads share address space by having two threads
+    // increment a shared atomic counter.
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    COUNTER.store(0, Ordering::SeqCst);
+
+    let h1 = libmorpheus::thread::spawn(|| {
+        for _ in 0..100 {
+            COUNTER.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    let h2 = libmorpheus::thread::spawn(|| {
+        for _ in 0..100 {
+            COUNTER.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+
+    match (h1, h2) {
+        (Ok(h1), Ok(h2)) => {
+            let _ = h1.join();
+            let _ = h2.join();
+            let val = COUNTER.load(Ordering::SeqCst);
+            check("THREAD(shared_mem)", val == 200, "count mismatch");
+        }
+        _ => fail("THREAD(shared_mem)", "spawn failed"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Async Runtime Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn test_async_block_on() {
+    // block_on a simple async block that returns a value.
+    let result = libmorpheus::task::block_on(async { 42u32 });
+    check("async(block_on)", result == 42, "wrong return value");
+}
+
+fn test_async_spawn_multi() {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    // Spawn multiple async tasks and verify they all complete.
+    static ASYNC_COUNTER: AtomicU32 = AtomicU32::new(0);
+    ASYNC_COUNTER.store(0, Ordering::SeqCst);
+
+    let rt = libmorpheus::task::Runtime::new();
+    for _ in 0..5 {
+        rt.spawn(async {
+            ASYNC_COUNTER.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+    rt.run();
+
+    let val = ASYNC_COUNTER.load(Ordering::SeqCst);
+    check("async(spawn_multi)", val == 5, "not all tasks completed");
+}
+
+fn test_async_yield() {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    // Two tasks interleave execution via yield_now.
+    static ORDER: AtomicU32 = AtomicU32::new(0);
+    ORDER.store(0, Ordering::SeqCst);
+
+    let rt = libmorpheus::task::Runtime::new();
+    rt.spawn(async {
+        ORDER.fetch_add(1, Ordering::SeqCst); // 1
+        libmorpheus::task::yield_now().await;
+        ORDER.fetch_add(10, Ordering::SeqCst); // 11 or 12
+    });
+    rt.spawn(async {
+        ORDER.fetch_add(1, Ordering::SeqCst); // 2
+        libmorpheus::task::yield_now().await;
+        ORDER.fetch_add(10, Ordering::SeqCst); // 12 or 22
+    });
+    rt.run();
+
+    let val = ORDER.load(Ordering::SeqCst);
+    // Both tasks add 1 + 10 = 11 each, total = 22.
+    check("async(yield)", val == 22, "yield interleave failed");
+}
+
+fn test_async_join_handle() {
+    // spawn_with_handle returns a JoinHandle we can .await for the result.
+    let rt = libmorpheus::task::Runtime::new();
+    let handle = rt.spawn_with_handle(async {
+        42u64 + 58
+    });
+    // Spawn a consumer that awaits the handle.
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static RESULT: AtomicU64 = AtomicU64::new(0);
+    RESULT.store(0, Ordering::SeqCst);
+    rt.spawn(async move {
+        let val = handle.await;
+        RESULT.store(val, Ordering::SeqCst);
+    });
+    rt.run();
+    check("async(join_handle)", RESULT.load(Ordering::SeqCst) == 100, "wrong join result");
+}
+
+fn test_async_sleep() {
+    // sleep() should complete after approximately the requested duration.
+    let before = libmorpheus::time::clock_gettime();
+    libmorpheus::task::block_on(async {
+        libmorpheus::task::sleep(50).await;
+    });
+    let elapsed_ns = libmorpheus::time::clock_gettime() - before;
+    let elapsed_ms = elapsed_ns / 1_000_000;
+    // Allow generous timing: 30..500ms (QEMU timer resolution varies).
+    check("async(sleep)", elapsed_ms >= 30 && elapsed_ms < 500, "sleep timing off");
+}
+
+fn test_async_chained_await() {
+    // Chain multiple async operations: spawn several tasks that each
+    // do some work, yield, then produce a value. Collect via JoinHandles.
+    use core::sync::atomic::{AtomicU32, Ordering};
+    static SUM: AtomicU32 = AtomicU32::new(0);
+    SUM.store(0, Ordering::SeqCst);
+
+    let rt = libmorpheus::task::Runtime::new();
+    let h1 = rt.spawn_with_handle(async {
+        libmorpheus::task::yield_now().await;
+        10u32
+    });
+    let h2 = rt.spawn_with_handle(async {
+        libmorpheus::task::yield_now().await;
+        20u32
+    });
+    let h3 = rt.spawn_with_handle(async {
+        libmorpheus::task::yield_now().await;
+        30u32
+    });
+    rt.spawn(async move {
+        let total = h1.await + h2.await + h3.await;
+        SUM.store(total, Ordering::SeqCst);
+    });
+    rt.run();
+    check("async(chained)", SUM.load(Ordering::SeqCst) == 60, "chained await sum wrong");
 }

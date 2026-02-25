@@ -82,6 +82,10 @@
 /// | 76     | SYS_DUP2        | (old_fd, new_fd)                  | new_fd        |
 /// | 77     | SYS_SET_FG      | (pid)                             | 0             |
 /// | 78     | SYS_GETARGS     | (buf_ptr, buf_len)                | argc          |
+/// | 79     | SYS_FUTEX       | (addr, op, val, timeout_ms)       | woken / 0     |
+/// | 80     | SYS_THREAD_CREATE|(entry, stack_top, arg)            | tid           |
+/// | 81     | SYS_THREAD_EXIT | (code)                            | never         |
+/// | 82     | SYS_THREAD_JOIN | (tid)                             | exit_code     |
 pub mod handler;
 
 use crate::serial::puts;
@@ -190,6 +194,14 @@ pub const SYS_PIPE: u64 = 75;
 pub const SYS_DUP2: u64 = 76;
 pub const SYS_SET_FG: u64 = 77;
 pub const SYS_GETARGS: u64 = 78;
+
+// synchronization (79)
+pub const SYS_FUTEX: u64 = 79;
+
+// threading (80-82)
+pub const SYS_THREAD_CREATE: u64 = 80;
+pub const SYS_THREAD_EXIT: u64 = 81;
+pub const SYS_THREAD_JOIN: u64 = 82;
 
 // EXTERN ASM FUNCTIONS
 
@@ -308,6 +320,10 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_DUP2 => sys_dup2(a1, a2),
         SYS_SET_FG => sys_set_fg(a1),
         SYS_GETARGS => sys_getargs(a1, a2),
+        SYS_FUTEX => sys_futex(a1, a2, a3, a4),
+        SYS_THREAD_CREATE => sys_thread_create(a1, a2, a3),
+        SYS_THREAD_EXIT => sys_thread_exit(a1),
+        SYS_THREAD_JOIN => sys_thread_join(a1),
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);

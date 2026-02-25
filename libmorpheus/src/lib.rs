@@ -16,7 +16,10 @@ pub mod net;
 pub mod persist;
 pub mod process;
 pub mod raw;
+pub mod sync;
 pub mod sys;
+pub mod task;
+pub mod thread;
 pub mod time;
 
 /// Error codes from kernel. high bits = bad news.

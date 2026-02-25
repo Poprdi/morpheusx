@@ -120,6 +120,30 @@ pub unsafe fn platform_init_selfcontained(
     // but allocating over live PML4 entries is... educational.
     crate::paging::reserve_page_table_pages();
 
+    // reserve the boot stack from the buddy allocator.
+    // PID 0 runs on the original UEFI boot stack for its entire lifetime.
+    // If the boot stack falls in a Conventional/LoaderData region the buddy
+    // will happily hand those pages out, silently corrupting PID 0's live
+    // stack frame with page-table entries or kernel-stack ISR frames.
+    {
+        let rsp: u64;
+        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
+        // 128 KiB below RSP (for deep call chains) + 32 KiB above (caller
+        // frames and locals living above the current SP in run_desktop).
+        let base = (rsp & !0xFFF).saturating_sub(128 * 1024);
+        let top = (rsp & !0xFFF) + 32 * 1024;
+        let pages = (top - base) / 4096;
+        let reg = global_registry_mut();
+        reg.reserve_range(base, pages);
+        puts("[MEM] reserved boot stack: ");
+        put_hex64(base);
+        puts(" .. ");
+        put_hex64(top);
+        puts(" (");
+        put_hex32(pages as u32);
+        puts(" pages)\n");
+    }
+
     let registry = global_registry_mut();
 
     // phase 2: cpu

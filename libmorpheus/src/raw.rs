@@ -105,6 +105,18 @@ pub const SYS_DUP2: u64 = 76;
 pub const SYS_SET_FG: u64 = 77;
 pub const SYS_GETARGS: u64 = 78;
 
+// synchronization (79)
+pub const SYS_FUTEX: u64 = 79;
+
+// futex ops
+pub const FUTEX_WAIT: u64 = 0;
+pub const FUTEX_WAKE: u64 = 1;
+
+// threading (80-82)
+pub const SYS_THREAD_CREATE: u64 = 80;
+pub const SYS_THREAD_EXIT: u64 = 81;
+pub const SYS_THREAD_JOIN: u64 = 82;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;
