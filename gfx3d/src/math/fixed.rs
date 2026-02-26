@@ -79,7 +79,7 @@ impl Fx16 {
         if rhs.0 == 0 {
             return Self(if self.0 >= 0 { i32::MAX } else { i32::MIN });
         }
-        Self(((self.0 as i64) << SHIFT) as i64 / rhs.0 as i64) as i32 as Self
+        Self((((self.0 as i64) << SHIFT) / rhs.0 as i64) as i32)
     }
 
     #[inline(always)]
