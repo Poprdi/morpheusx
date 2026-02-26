@@ -54,9 +54,9 @@ pub fn fast_log2(x: f32) -> f32 {
     let bits = f32::to_bits(x);
     let exp = ((bits >> 23) & 0xFF) as f32 - 127.0;
     let mantissa = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
-    // Minimax polynomial for log2(mantissa) in [1, 2):
-    // -0.3358 + mantissa * (2.0024 + mantissa * (-0.6665))
-    exp + (-0.3358 + mantissa * (2.0024 + mantissa * (-0.6665)))
+    let y = mantissa - 1.0;
+    let log2_m = y * (1.3465557 + y * (-0.3606740 + y * 0.0141670));
+    exp + log2_m
 }
 
 /// Fast 2^x using IEEE-754 bit reconstruction.
@@ -92,7 +92,7 @@ pub fn ilerp_u8(a: u8, b: u8, t: u8) -> u8 {
     let a = a as u32;
     let b = b as u32;
     let t = t as u32;
-    ((a * (255 - t) + b * t + 128) >> 8) as u8
+    ((a * (255 - t) + b * t + 127) / 255) as u8
 }
 
 #[cfg(test)]

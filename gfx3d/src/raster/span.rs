@@ -1,4 +1,5 @@
 use crate::math::fixed::Fx16;
+use super::triangle::Vertex;
 
 /// A horizontal span (scanline segment) produced by the edge walker.
 ///
@@ -19,39 +20,27 @@ pub struct Span {
 
     // Interpolated attributes at left edge (all pre-divided by w for perspective correction)
     pub inv_w_left: Fx16,
-    pub inv_w_right: Fx16,
-
     pub r_left: Fx16,
-    pub r_right: Fx16,
     pub g_left: Fx16,
-    pub g_right: Fx16,
     pub b_left: Fx16,
-    pub b_right: Fx16,
-
     pub u_left: Fx16,
-    pub u_right: Fx16,
     pub v_left: Fx16,
-    pub v_right: Fx16,
-
     pub z_left: Fx16,
-    pub z_right: Fx16,
-
     pub fog_left: Fx16,
-    pub fog_right: Fx16,
 }
 
 impl Span {
     pub const EMPTY: Self = Self {
         y: 0,
         x_left: Fx16::ZERO, x_right: Fx16::ZERO,
-        inv_w_left: Fx16::ZERO, inv_w_right: Fx16::ZERO,
-        r_left: Fx16::ZERO, r_right: Fx16::ZERO,
-        g_left: Fx16::ZERO, g_right: Fx16::ZERO,
-        b_left: Fx16::ZERO, b_right: Fx16::ZERO,
-        u_left: Fx16::ZERO, u_right: Fx16::ZERO,
-        v_left: Fx16::ZERO, v_right: Fx16::ZERO,
-        z_left: Fx16::ZERO, z_right: Fx16::ZERO,
-        fog_left: Fx16::ZERO, fog_right: Fx16::ZERO,
+        inv_w_left: Fx16::ZERO,
+        r_left: Fx16::ZERO,
+        g_left: Fx16::ZERO,
+        b_left: Fx16::ZERO,
+        u_left: Fx16::ZERO,
+        v_left: Fx16::ZERO,
+        z_left: Fx16::ZERO,
+        fog_left: Fx16::ZERO,
     };
 
     /// Width of this span in pixels.
@@ -78,26 +67,39 @@ pub struct SpanGradients {
 }
 
 impl SpanGradients {
-    pub fn from_span(span: &Span) -> Self {
-        let dx = span.x_right - span.x_left;
-        if dx.0 <= 0 {
+    pub fn from_triangle(v0: &Vertex, v1: &Vertex, v2: &Vertex) -> Self {
+        let dx1 = v1.pos.x - v0.pos.x;
+        let dy1 = v1.pos.y - v0.pos.y;
+        let dx2 = v2.pos.x - v0.pos.x;
+        let dy2 = v2.pos.y - v0.pos.y;
+
+        let area = dx1 * dy2 - dx2 * dy1;
+        if area.abs() < 0.0001 {
             return Self {
                 inv_w_step: Fx16::ZERO, r_step: Fx16::ZERO, g_step: Fx16::ZERO,
                 b_step: Fx16::ZERO, u_step: Fx16::ZERO, v_step: Fx16::ZERO,
                 z_step: Fx16::ZERO, fog_step: Fx16::ZERO,
             };
         }
-        let inv_dx = Fx16::ONE.div(dx);
+
+        let inv_area = 1.0 / area;
+
+        let calc_step = |a0: f32, a1: f32, a2: f32| -> Fx16 {
+            let da1 = a1 - a0;
+            let da2 = a2 - a0;
+            let step_x = (da1 * dy2 - da2 * dy1) * inv_area;
+            Fx16::from_f32(step_x)
+        };
 
         Self {
-            inv_w_step: (span.inv_w_right - span.inv_w_left).mul(inv_dx),
-            r_step: (span.r_right - span.r_left).mul(inv_dx),
-            g_step: (span.g_right - span.g_left).mul(inv_dx),
-            b_step: (span.b_right - span.b_left).mul(inv_dx),
-            u_step: (span.u_right - span.u_left).mul(inv_dx),
-            v_step: (span.v_right - span.v_left).mul(inv_dx),
-            z_step: (span.z_right - span.z_left).mul(inv_dx),
-            fog_step: (span.fog_right - span.fog_left).mul(inv_dx),
+            inv_w_step: calc_step(v0.pos.w, v1.pos.w, v2.pos.w),
+            r_step: calc_step(v0.color[0], v1.color[0], v2.color[0]),
+            g_step: calc_step(v0.color[1], v1.color[1], v2.color[1]),
+            b_step: calc_step(v0.color[2], v1.color[2], v2.color[2]),
+            u_step: calc_step(v0.uv.x, v1.uv.x, v2.uv.x),
+            v_step: calc_step(v0.uv.y, v1.uv.y, v2.uv.y),
+            z_step: calc_step(v0.pos.z, v1.pos.z, v2.pos.z),
+            fog_step: calc_step(v0.world_z, v1.world_z, v2.world_z),
         }
     }
 }

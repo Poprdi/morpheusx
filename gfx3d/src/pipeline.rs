@@ -155,8 +155,15 @@ impl Pipeline {
         // ── 1. Frustum cull (bounding sphere in world space) ──
         let world_center = model.transform_point(mesh.bound_center).xyz();
         let scale_approx = {
-            let sx = model.cols[0][0] * model.cols[0][0] + model.cols[0][1] * model.cols[0][1] + model.cols[0][2] * model.cols[0][2];
-            sx * fast::inv_sqrt(sx)
+            let sx2 = model.cols[0][0] * model.cols[0][0] + model.cols[0][1] * model.cols[0][1] + model.cols[0][2] * model.cols[0][2];
+            let sy2 = model.cols[1][0] * model.cols[1][0] + model.cols[1][1] * model.cols[1][1] + model.cols[1][2] * model.cols[1][2];
+            let sz2 = model.cols[2][0] * model.cols[2][0] + model.cols[2][1] * model.cols[2][1] + model.cols[2][2] * model.cols[2][2];
+
+            let sx = if sx2 > 0.0 { sx2 * fast::inv_sqrt(sx2) } else { 0.0 };
+            let sy = if sy2 > 0.0 { sy2 * fast::inv_sqrt(sy2) } else { 0.0 };
+            let sz = if sz2 > 0.0 { sz2 * fast::inv_sqrt(sz2) } else { 0.0 };
+
+            sx.max(sy).max(sz)
         };
         let world_radius = mesh.bound_radius * scale_approx;
 
@@ -269,6 +276,8 @@ impl Pipeline {
                     self.viewport_h,
                 );
 
+                let grads = SpanGradients::from_triangle(&v0, &v1, &v2);
+
                 let format = target.pixel_format();
                 let stride = target.stride();
                 let vp_w = self.viewport_w;
@@ -276,7 +285,7 @@ impl Pipeline {
 
                 for s in 0..span_count {
                     self.stats.pixels_written += fill_span(
-                        &self.spans[s], material, &self.fog, &self.fog_color,
+                        &self.spans[s], &grads, material, &self.fog, &self.fog_color,
                         self.sample_mode, format, stride, vp_w, color_buf, depth_buf,
                     );
                 }
@@ -299,9 +308,13 @@ impl Pipeline {
 #[inline]
 fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     let clip_w = v.pos.w;
-    if clip_w.abs() < 1e-6 { return *v; }
+    let safe_w = if clip_w.abs() < 1e-6 {
+        if clip_w.is_sign_negative() { -1e-6 } else { 1e-6 }
+    } else {
+        clip_w
+    };
 
-    let inv_w = 1.0 / clip_w;
+    let inv_w = 1.0 / safe_w;
     let ndc_x = v.pos.x * inv_w;
     let ndc_y = v.pos.y * inv_w;
     let ndc_z = v.pos.z * inv_w;
@@ -353,6 +366,7 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
 /// Extracted as a free function to avoid borrow conflicts with Pipeline fields.
 fn fill_span(
     span: &Span,
+    grads: &SpanGradients,
     material: &Material,
     fog: &FogMode,
     fog_color: &[f32; 3],
@@ -363,7 +377,6 @@ fn fill_span(
     color_buf: &mut [u32],
     depth_buf: &mut [u32],
 ) -> u32 {
-    let grads = SpanGradients::from_span(span);
     let x_start = span.x_left.ceil().max(0) as u32;
     let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
     if x_start >= x_end { return 0; }

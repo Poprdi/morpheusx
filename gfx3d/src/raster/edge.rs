@@ -123,14 +123,14 @@ impl Edge {
         Span {
             y,
             x_left: left.x, x_right: right.x,
-            inv_w_left: left.inv_w, inv_w_right: right.inv_w,
-            r_left: left.r, r_right: right.r,
-            g_left: left.g, g_right: right.g,
-            b_left: left.b, b_right: right.b,
-            u_left: left.u, u_right: right.u,
-            v_left: left.v, v_right: right.v,
-            z_left: left.z, z_right: right.z,
-            fog_left: left.fog, fog_right: right.fog,
+            inv_w_left: left.inv_w,
+            r_left: left.r,
+            g_left: left.g,
+            b_left: left.b,
+            u_left: left.u,
+            v_left: left.v,
+            z_left: left.z,
+            fog_left: left.fog,
         }
     }
 }
