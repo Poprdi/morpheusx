@@ -368,8 +368,8 @@ fn fill_span(
     let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
     if x_start >= x_end { return 0; }
 
-    let prestep = x_start as i32 - span.x_left.ceil();
-    let prestep_fx = Fx16::from_i32(prestep);
+    let x_start_fx = Fx16::from_i32(x_start as i32);
+    let prestep_fx = x_start_fx - span.x_left;
 
     let mut inv_w = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
     let mut cr = span.r_left + grads.r_step.mul(prestep_fx);
