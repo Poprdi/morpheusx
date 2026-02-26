@@ -422,7 +422,7 @@ Ops: `FUTEX_WAIT=0` (sleep while `*addr == val`; optional 4th arg = timeout ms),
 
 | # | Name | Signature | Returns |
 |---|---|---|---|
-| 80 | `SYS_THREAD_CREATE` | `(u64 entry_fn, u64 stack_ptr, u64 stack_size, u64 arg)` | tid |
+| 80 | `SYS_THREAD_CREATE` | `(u64 entry_fn, u64 stack_top, u64 arg)` | tid |
 | 81 | `SYS_THREAD_EXIT` | `(u64 code)` | `!` |
 | 82 | `SYS_THREAD_JOIN` | `(u64 tid)` | thread exit code |
 
@@ -910,7 +910,7 @@ pub fn yield_now();             // SYS_YIELD
 pub fn sleep_ms(ms: u64);      // SYS_SLEEP
 ```
 
-Default stack size: 1 MiB.
+Default stack size: 64 KiB (16 pages).
 
 ### 5.8 `task` (async)
 
@@ -960,11 +960,11 @@ Command-line arguments and working directory.
 
 ```rust
 pub struct Args { ... }
-impl Iterator          for Args { type Item = &'static str; }
+impl Iterator          for Args { type Item = String; }
 impl ExactSizeIterator for Args { fn len(&self) -> usize; }
 
 pub fn args()          -> Args;              // lazy iterator
-pub fn args_vec()      -> Vec<&'static str>; // collected
+pub fn args_vec()      -> Vec<String>;       // collected
 
 pub fn current_dir()          -> crate::error::Result<String>;
 pub fn set_current_dir(path: &str) -> crate::error::Result<()>;
@@ -976,31 +976,42 @@ Process management and control.
 
 ```rust
 pub fn exit(code: i32)  -> !;     // SYS_EXIT
-pub fn abort()          -> !;     // SYS_EXIT(1) without cleanup
-pub fn self_pid()       -> u32;   // SYS_GETPID
+pub fn getpid()         -> u32;   // SYS_GETPID
 pub fn getppid()        -> u32;   // SYS_GETPPID
-pub fn exec(path: &str, args: &[&str]) -> crate::error::Result<()>;
-pub fn wait()           -> crate::error::Result<(u32, u32)>; // (pid, exit_code)
-pub fn wait_pid(pid: u32) -> crate::error::Result<u32>;
-pub fn sched_yield();
-pub fn getenv(key: &str)             -> Option<&'static str>;
-pub fn setenv(key: &str, val: &str)  -> crate::error::Result<()>;
-pub fn getcwd()                      -> crate::error::Result<String>;
-pub fn chdir(path: &str)             -> crate::error::Result<()>;
-pub fn sbrk(increment: i64)          -> crate::error::Result<u64>;
+pub fn yield_cpu();
+pub fn kill(pid: u32, signal: u8)    -> Result<(), u64>;
+pub fn sleep(millis: u64);
+pub fn wait(pid: u32)                -> Result<i32, u64>;
+pub fn spawn(path: &str)             -> Result<u32, u64>;
+pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64>;
+
+pub fn ps_count() -> u32;
+pub fn ps(entries: &mut [PsEntry]) -> usize;
+
+pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64>;
+pub fn setpriority(pid: u32, priority: u8) -> Result<(), u64>;
+pub fn getpriority(pid: u32) -> Result<u8, u64>;
+
+pub fn pipe() -> Result<(u32, u32), u64>;
+pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, u64>;
+pub fn set_foreground(pid: u32);
+
+pub fn argc() -> usize;
+pub fn getargs(buf: &mut [u8]) -> usize;
+pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize;
 
 pub struct Command { ... }
 impl Command {
-    pub fn new(prog: &str)             -> Self;
-    pub fn arg(self, a: &str)          -> Self;
-    pub fn args(self, args: &[&str])   -> Self;
-    pub fn spawn_pid(self)             -> crate::error::Result<u32>;
-    pub fn status(self)                -> crate::error::Result<ExitStatus>;
+    pub fn new(path: &str)                       -> Self;
+    pub fn arg(&mut self, arg: &str)             -> &mut Self;
+    pub fn args(&mut self, args: &[&str])        -> &mut Self;
+    pub fn spawn_pid(&self)                      -> crate::error::Result<u32>;
+    pub fn status(&self)                         -> crate::error::Result<i32>;
 }
 
-pub struct ExitStatus { code: u32 }
+pub struct ExitStatus { code: i32 }
 impl ExitStatus {
-    pub fn code(&self)    -> u32;
+    pub fn code(&self)    -> i32;
     pub fn success(&self) -> bool;
 }
 ```
@@ -1390,7 +1401,9 @@ let (read_fd, write_fd) = (fds[0] as u64, fds[1] as u64);
 
 // In child: redirect stdout -> pipe write end, then exec
 // unsafe { syscall2(SYS_DUP2, write_fd, 1); }
-// process::exec("/bin/ls", &["/data"]).unwrap();
+// let mut cmd = process::Command::new("/bin/ls");
+// cmd.arg("/data");
+// cmd.status().unwrap();
 
 // In parent: read output from pipe
 let mut buf = [0u8; 4096];

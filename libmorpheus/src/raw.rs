@@ -117,6 +117,9 @@ pub const SYS_THREAD_CREATE: u64 = 80;
 pub const SYS_THREAD_EXIT: u64 = 81;
 pub const SYS_THREAD_JOIN: u64 = 82;
 
+// signal return (83)
+pub const SYS_SIGRETURN: u64 = 83;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;
