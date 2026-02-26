@@ -105,17 +105,52 @@ impl LightEnv {
         }
 
         // Point lights (closest MAX_POINT_LIGHTS only)
-        let point_count = self.point_lights.len().min(MAX_POINT_LIGHTS);
-        for i in 0..point_count {
-            let pl = &self.point_lights[i];
+        let mut best_idx = [usize::MAX; MAX_POINT_LIGHTS];
+        let mut best_dist_sq = [f32::INFINITY; MAX_POINT_LIGHTS];
+
+        for (idx, pl) in self.point_lights.iter().enumerate() {
             let to_light = pl.position - world_pos;
             let dist_sq = to_light.length_sq();
+            if dist_sq > pl.radius * pl.radius {
+                continue;
+            }
 
-            // Early out: beyond light radius
-            if dist_sq > pl.radius * pl.radius { continue; }
+            let mut insert_at = MAX_POINT_LIGHTS;
+            for slot in 0..MAX_POINT_LIGHTS {
+                if dist_sq < best_dist_sq[slot] {
+                    insert_at = slot;
+                    break;
+                }
+            }
 
-            let dist = dist_sq * crate::math::fast::inv_sqrt(dist_sq);
-            let light_dir = to_light * crate::math::fast::fast_recip(dist);
+            if insert_at < MAX_POINT_LIGHTS {
+                let mut slot = MAX_POINT_LIGHTS - 1;
+                while slot > insert_at {
+                    best_dist_sq[slot] = best_dist_sq[slot - 1];
+                    best_idx[slot] = best_idx[slot - 1];
+                    slot -= 1;
+                }
+                best_dist_sq[insert_at] = dist_sq;
+                best_idx[insert_at] = idx;
+            }
+        }
+
+        for slot in 0..MAX_POINT_LIGHTS {
+            let idx = best_idx[slot];
+            if idx == usize::MAX {
+                continue;
+            }
+
+            let pl = &self.point_lights[idx];
+            let to_light = pl.position - world_pos;
+            let dist_sq = to_light.length_sq();
+            if dist_sq <= 1e-12 {
+                continue;
+            }
+
+            let inv_dist = crate::math::fast::inv_sqrt(dist_sq);
+            let dist = dist_sq * inv_dist;
+            let light_dir = to_light * inv_dist;
 
             let n_dot_l = normal.dot(light_dir);
             if n_dot_l <= 0.0 { continue; }

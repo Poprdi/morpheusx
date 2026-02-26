@@ -245,7 +245,7 @@ mod tests {
         let z = x.cross(y);
         assert!((z.x - 0.0).abs() < 1e-6);
         assert!((z.y - 0.0).abs() < 1e-6);
-        assert!((z.z - (-1.0)).abs() < 1e-6);
+        assert!((z.z - 1.0).abs() < 1e-6);
     }
 
     #[test]

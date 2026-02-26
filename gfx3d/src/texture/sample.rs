@@ -57,19 +57,28 @@ pub fn sample_bilinear(tex: &Texture, u_fx: i32, v_fx: i32) -> u32 {
 /// Same technique used in Intel's Mesa software rasterizer (swrast).
 #[inline(always)]
 fn lerp_packed(a: u32, b: u32, t: u8) -> u32 {
-    const RB_MASK: u32 = 0x00FF00FF;
+    if t == 0 { return a; }
+    if t == 255 { return b; }
+
     let t32 = t as u32;
     let inv_t = 255 - t32;
 
-    let a_rb = a & RB_MASK;
-    let b_rb = b & RB_MASK;
-    let rb = (a_rb * inv_t + b_rb * t32 + 0x00800080) >> 8;
+    let ar = (a >> 24) & 0xFF;
+    let ag = (a >> 16) & 0xFF;
+    let ab = (a >> 8) & 0xFF;
+    let aa = a & 0xFF;
 
-    let a_ga = (a >> 8) & RB_MASK;
-    let b_ga = (b >> 8) & RB_MASK;
-    let ga = (a_ga * inv_t + b_ga * t32 + 0x00800080) >> 8;
+    let br = (b >> 24) & 0xFF;
+    let bg = (b >> 16) & 0xFF;
+    let bb = (b >> 8) & 0xFF;
+    let ba = b & 0xFF;
 
-    (rb & RB_MASK) | ((ga & RB_MASK) << 8)
+    let r = (ar * inv_t + br * t32 + 127) / 255;
+    let g = (ag * inv_t + bg * t32 + 127) / 255;
+    let b = (ab * inv_t + bb * t32 + 127) / 255;
+    let a = (aa * inv_t + ba * t32 + 127) / 255;
+
+    (r << 24) | (g << 16) | (b << 8) | a
 }
 
 #[cfg(test)]
