@@ -154,10 +154,9 @@ impl Pipeline {
     ) {
         // ── 1. Frustum cull (bounding sphere in world space) ──
         let world_center = model.transform_point(mesh.bound_center).xyz();
-        // Approximate world-space radius (assumes uniform or near-uniform scale)
         let scale_approx = {
             let sx = model.cols[0][0] * model.cols[0][0] + model.cols[0][1] * model.cols[0][1] + model.cols[0][2] * model.cols[0][2];
-            sx * fast::inv_sqrt(sx) // = sqrt(sx) using inv_sqrt trick: x * inv_sqrt(x) = sqrt(x)
+            sx * fast::inv_sqrt(sx)
         };
         let world_radius = mesh.bound_radius * scale_approx;
 
@@ -169,35 +168,28 @@ impl Pipeline {
         // ── 2. Compute combined model-view-projection ──
         let mvp = self.view_proj.mul(model);
         let model_view = self.view.mul(model);
+        let camera_pos = self.camera_pos;
 
         // ── 3. Transform + light all vertices ──
         let vert_count = mesh.vertices.len();
-        let clip_verts = match self.arena.alloc_slice::<Vec4>(vert_count) {
-            Some(s) => s,
-            None => return, // Arena full — skip mesh
-        };
-        let lit_colors = match self.arena.alloc_slice::<[f32; 3]>(vert_count) {
-            Some(s) => s,
-            None => return,
-        };
+        let mut clip_verts = Vec::with_capacity(vert_count);
+        let mut lit_colors = Vec::with_capacity(vert_count);
 
-        for (i, mv) in mesh.vertices.iter().enumerate() {
-            // Model → clip space
-            clip_verts[i] = mvp.transform_point(mv.position);
+        for mv in mesh.vertices.iter() {
+            clip_verts.push(mvp.transform_point(mv.position));
 
-            // Per-vertex lighting in world space
             let world_pos = model.transform_point(mv.position).xyz();
             let world_normal = model.transform_dir(mv.normal).normalize();
-            let view_dir = (self.camera_pos - world_pos).normalize();
+            let view_dir = (camera_pos - world_pos).normalize();
             let vc = [
                 mv.color[0] as f32 / 255.0,
                 mv.color[1] as f32 / 255.0,
                 mv.color[2] as f32 / 255.0,
             ];
-            lit_colors[i] = lights.evaluate(
+            lit_colors.push(lights.evaluate(
                 world_pos, world_normal, view_dir,
                 material.specular_power, vc,
-            );
+            ));
         }
 
         // ── 4. Process each triangle ──
@@ -215,23 +207,21 @@ impl Pipeline {
 
             let clip_tri = [clip_verts[i0], clip_verts[i1], clip_verts[i2]];
 
-            // Quick reject: all 3 vertices outside the same plane
             if trivial_reject(&clip_tri) {
                 self.stats.triangles_culled += 1;
                 continue;
             }
 
-            // Build Vertex structs for clipper (in clip space)
-            let build_vert = |idx: usize, clip: Vec4| -> Vertex {
-                let mv = &mesh.vertices[idx];
+            let build_vert = |vi: usize, clip: Vec4| -> Vertex {
+                let mv = &mesh.vertices[vi];
                 Vertex {
                     pos: clip,
-                    color: lit_colors[idx],
+                    color: lit_colors[vi],
                     uv: mv.uv,
                     normal: mv.normal,
                     world_z: {
                         let eye = model_view.transform_point(mv.position);
-                        -eye.z // positive distance from camera
+                        -eye.z
                     },
                 }
             };
@@ -250,13 +240,19 @@ impl Pipeline {
             }
             if clipped.len() > 3 { self.stats.triangles_clipped += 1; }
 
-            // ── 6. Fan-triangulate clipped polygon and rasterize ──
-            for fan_idx in 1..(clipped.len() - 1) {
-                let v0 = project_vertex(&clipped[0], self.half_w, self.half_h);
-                let v1 = project_vertex(&clipped[fan_idx], self.half_w, self.half_h);
-                let v2 = project_vertex(&clipped[fan_idx + 1], self.half_w, self.half_h);
+            // Copy clipped verts out so we can release the clipper borrow
+            let clipped_count = clipped.len();
+            let mut clipped_buf = [Vertex::ZEROED; 12];
+            for (i, v) in clipped.iter().enumerate() {
+                clipped_buf[i] = *v;
+            }
 
-                // Back-face cull in screen space
+            // ── 6. Fan-triangulate clipped polygon and rasterize ──
+            for fan_idx in 1..(clipped_count - 1) {
+                let v0 = project_vertex(&clipped_buf[0], self.half_w, self.half_h);
+                let v1 = project_vertex(&clipped_buf[fan_idx], self.half_w, self.half_h);
+                let v2 = project_vertex(&clipped_buf[fan_idx + 1], self.half_w, self.half_h);
+
                 if self.backface_cull {
                     let area = screen_area_2x(&v0, &v1, &v2);
                     if area <= 0.0 {
@@ -267,26 +263,21 @@ impl Pipeline {
 
                 self.stats.triangles_drawn += 1;
 
-                // ── 7. Rasterize to spans ──
                 let span_count = rasterize_triangle_to_spans(
                     &[v0, v1, v2],
                     &mut self.spans,
                     self.viewport_h,
                 );
 
-                // ── 8. Fill spans ──
                 let format = target.pixel_format();
                 let stride = target.stride();
-                let w = self.viewport_w;
+                let vp_w = self.viewport_w;
                 let color_buf = target.color_buffer_mut();
-                // We need depth buffer separately — split borrows
-                // (Rust can't split &mut self, so we work around it)
 
                 for s in 0..span_count {
-                    let span = &self.spans[s];
-                    self.stats.pixels_written += self.fill_span(
-                        span, material, &self.fog, &self.fog_color,
-                        self.sample_mode, format, stride, w, color_buf,
+                    self.stats.pixels_written += fill_span(
+                        &self.spans[s], material, &self.fog, &self.fog_color,
+                        self.sample_mode, format, stride, vp_w, color_buf,
                     );
                 }
             }
@@ -296,115 +287,6 @@ impl Pipeline {
     /// Fill a single scanline span with shaded pixels.
     ///
     /// This is THE hot inner loop — every optimization matters here.
-    /// The loop processes one pixel per iteration with:
-    /// - Fixed-point stepping (zero FPU ops in the step)
-    /// - Perspective-correct UV recovery (one multiply per pixel)
-    /// - Texture fetch (bilinear = 4 fetches + blend)
-    /// - Depth test (one compare)
-    /// - Fog blend (one lerp, skipped if FogMode::None)
-    /// - Format conversion + write
-    fn fill_span(
-        &self,
-        span: &Span,
-        material: &Material,
-        fog: &FogMode,
-        fog_color: &[f32; 3],
-        sample_mode: SampleMode,
-        format: TargetPixelFormat,
-        stride: u32,
-        vp_w: u32,
-        color_buf: &mut [u32],
-    ) -> u32 {
-        let grads = SpanGradients::from_span(span);
-        let x_start = span.x_left.ceil().max(0) as u32;
-        let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
-        if x_start >= x_end { return 0; }
-
-        let prestep = x_start as i32 - span.x_left.ceil();
-        let prestep_fx = Fx16::from_i32(prestep);
-
-        let mut inv_w = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
-        let mut cr = span.r_left + grads.r_step.mul(prestep_fx);
-        let mut cg = span.g_left + grads.g_step.mul(prestep_fx);
-        let mut cb = span.b_left + grads.b_step.mul(prestep_fx);
-        let mut tu = span.u_left + grads.u_step.mul(prestep_fx);
-        let mut tv = span.v_left + grads.v_step.mul(prestep_fx);
-        let mut fog_val = span.fog_left + grads.fog_step.mul(prestep_fx);
-
-        let row_offset = (span.y * stride) as usize;
-        let mut pixels_written = 0u32;
-
-        for x in x_start..x_end {
-            let buf_idx = row_offset + x as usize;
-            if buf_idx >= color_buf.len() { break; }
-
-            // Perspective-correct UV recovery
-            let w = if inv_w.0 != 0 {
-                Fx16::ONE.div(inv_w)
-            } else {
-                Fx16::ONE
-            };
-
-            // Recover true color (un-divide by w)
-            let r_f = cr.mul(w);
-            let g_f = cg.mul(w);
-            let b_f = cb.mul(w);
-
-            // Texture sampling
-            let (tex_r, tex_g, tex_b) = if let Some(mip) = material.texture {
-                let u_px = tu.mul(w);
-                let v_px = tv.mul(w);
-                let level = 0usize; // TODO: mip selection from span derivatives
-                let tex = mip.level(level);
-                let u_fx = u_px.0; // already in 16.16 texel coords
-                let v_fx = v_px.0;
-                let texel = match sample_mode {
-                    SampleMode::Nearest => sample::sample_nearest(tex, u_fx, v_fx),
-                    SampleMode::Bilinear => sample::sample_bilinear(tex, u_fx, v_fx),
-                };
-                let (tr, tg, tb, _ta) = Texture::unpack(texel);
-                (tr as f32 / 255.0, tg as f32 / 255.0, tb as f32 / 255.0)
-            } else {
-                (material.base_color[0], material.base_color[1], material.base_color[2])
-            };
-
-            // Combine lighting × texture
-            let mut out_r = r_f.to_f32() * tex_r;
-            let mut out_g = g_f.to_f32() * tex_g;
-            let mut out_b = b_f.to_f32() * tex_b;
-
-            // Fog
-            match *fog {
-                FogMode::None => {}
-                _ => {
-                    let fog_factor = fog.compute(fog_val.to_f32());
-                    out_r = out_r * fog_factor + fog_color[0] * (1.0 - fog_factor);
-                    out_g = out_g * fog_factor + fog_color[1] * (1.0 - fog_factor);
-                    out_b = out_b * fog_factor + fog_color[2] * (1.0 - fog_factor);
-                }
-            }
-
-            // Clamp to [0, 255] and pack
-            let pr = fast::clamp_u8((out_r * 255.0) as i32);
-            let pg = fast::clamp_u8((out_g * 255.0) as i32);
-            let pb = fast::clamp_u8((out_b * 255.0) as i32);
-            let internal = Texture::pack(pr, pg, pb, 255);
-            color_buf[buf_idx] = convert_pixel(internal, format);
-            pixels_written += 1;
-
-            // Step all interpolants
-            inv_w += grads.inv_w_step;
-            cr += grads.r_step;
-            cg += grads.g_step;
-            cb += grads.b_step;
-            tu += grads.u_step;
-            tv += grads.v_step;
-            fog_val += grads.fog_step;
-        }
-
-        pixels_written
-    }
-
     pub fn end_frame(&mut self) {
         // Reserved for post-processing passes (gamma correction, etc.)
     }
@@ -464,4 +346,101 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
     let c1 = outcode(&tri[1]);
     let c2 = outcode(&tri[2]);
     (c0 & c1 & c2) != 0
+}
+
+/// Inner pixel loop — process one span (horizontal scanline segment).
+///
+/// Extracted as a free function to avoid borrow conflicts with Pipeline fields.
+fn fill_span(
+    span: &Span,
+    material: &Material,
+    fog: &FogMode,
+    fog_color: &[f32; 3],
+    sample_mode: SampleMode,
+    format: TargetPixelFormat,
+    stride: u32,
+    vp_w: u32,
+    color_buf: &mut [u32],
+) -> u32 {
+    let grads = SpanGradients::from_span(span);
+    let x_start = span.x_left.ceil().max(0) as u32;
+    let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
+    if x_start >= x_end { return 0; }
+
+    let prestep = x_start as i32 - span.x_left.ceil();
+    let prestep_fx = Fx16::from_i32(prestep);
+
+    let mut inv_w = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
+    let mut cr = span.r_left + grads.r_step.mul(prestep_fx);
+    let mut cg = span.g_left + grads.g_step.mul(prestep_fx);
+    let mut cb = span.b_left + grads.b_step.mul(prestep_fx);
+    let mut tu = span.u_left + grads.u_step.mul(prestep_fx);
+    let mut tv = span.v_left + grads.v_step.mul(prestep_fx);
+    let mut fog_val = span.fog_left + grads.fog_step.mul(prestep_fx);
+
+    let row_offset = (span.y * stride) as usize;
+    let mut pixels_written = 0u32;
+
+    for x in x_start..x_end {
+        let buf_idx = row_offset + x as usize;
+        if buf_idx >= color_buf.len() { break; }
+
+        let w = if inv_w.0 != 0 {
+            Fx16::ONE.div(inv_w)
+        } else {
+            Fx16::ONE
+        };
+
+        let r_f = cr.mul(w);
+        let g_f = cg.mul(w);
+        let b_f = cb.mul(w);
+
+        let (tex_r, tex_g, tex_b) = if let Some(mip) = material.texture {
+            let u_px = tu.mul(w);
+            let v_px = tv.mul(w);
+            let level = 0usize;
+            let tex = mip.level(level);
+            let u_fx = u_px.0;
+            let v_fx = v_px.0;
+            let texel = match sample_mode {
+                SampleMode::Nearest => sample::sample_nearest(tex, u_fx, v_fx),
+                SampleMode::Bilinear => sample::sample_bilinear(tex, u_fx, v_fx),
+            };
+            let (tr, tg, tb, _ta) = Texture::unpack(texel);
+            (tr as f32 / 255.0, tg as f32 / 255.0, tb as f32 / 255.0)
+        } else {
+            (material.base_color[0], material.base_color[1], material.base_color[2])
+        };
+
+        let mut out_r = r_f.to_f32() * tex_r;
+        let mut out_g = g_f.to_f32() * tex_g;
+        let mut out_b = b_f.to_f32() * tex_b;
+
+        match *fog {
+            FogMode::None => {}
+            _ => {
+                let fog_factor = fog.compute(fog_val.to_f32());
+                out_r = out_r * fog_factor + fog_color[0] * (1.0 - fog_factor);
+                out_g = out_g * fog_factor + fog_color[1] * (1.0 - fog_factor);
+                out_b = out_b * fog_factor + fog_color[2] * (1.0 - fog_factor);
+            }
+        }
+
+        let pr = fast::clamp_u8((out_r * 255.0) as i32);
+        let pg = fast::clamp_u8((out_g * 255.0) as i32);
+        let pb = fast::clamp_u8((out_b * 255.0) as i32);
+        let internal = Texture::pack(pr, pg, pb, 255);
+        color_buf[buf_idx] = convert_pixel(internal, format);
+        pixels_written += 1;
+
+        inv_w += grads.inv_w_step;
+        cr += grads.r_step;
+        cg += grads.g_step;
+        cb += grads.b_step;
+        tu += grads.u_step;
+        tv += grads.v_step;
+        fog_val += grads.fog_step;
+    }
+
+    pixels_written
 }

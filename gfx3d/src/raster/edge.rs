@@ -63,7 +63,7 @@ impl Edge {
         // All attributes are pre-divided by clip_w in the vertex
         let inv_w_a = a.pos.w;
         let inv_w_b = b.pos.w;
-        let inv_w_step_f = (inv_w_b - inv_w_a) * inv_dy;
+        let _inv_w_step_f = (inv_w_b - inv_w_a) * inv_dy;
 
         let lerp_attr = |a_val: f32, b_val: f32| -> (Fx16, Fx16) {
             let step_f = (b_val - a_val) * inv_dy;
