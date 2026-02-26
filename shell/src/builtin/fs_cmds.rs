@@ -9,6 +9,18 @@ use crate::path;
 
 pub fn ls(args: &[String], cwd: &str) -> i32 {
     let (long, target) = parse_ls_args(args, cwd);
+    // If target is a file, show just that entry
+    if let Ok(m) = libmorpheus::fs::metadata(&target) {
+        if m.is_file() {
+            let name = path::basename(&target);
+            if long {
+                libmorpheus::println!("FILE {:>10}  v{:<3} {}", m.len(), m.version_count, name);
+            } else {
+                libmorpheus::println!("{}", name);
+            }
+            return 0;
+        }
+    }
     let entries = match libmorpheus::fs::read_dir(&target) {
         Ok(e) => e,
         Err(e) => {
@@ -17,7 +29,9 @@ pub fn ls(args: &[String], cwd: &str) -> i32 {
         }
     };
 
+    let mut count = 0u32;
     for entry in entries {
+        count += 1;
         if long {
             let kind = if entry.is_dir() { "DIR " } else { "FILE" };
             libmorpheus::println!(
@@ -33,7 +47,7 @@ pub fn ls(args: &[String], cwd: &str) -> i32 {
         }
     }
 
-    if !long {
+    if !long && count > 0 {
         libmorpheus::io::print("\n");
     }
     0
@@ -41,6 +55,22 @@ pub fn ls(args: &[String], cwd: &str) -> i32 {
 
 pub fn ls_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
     let (long, target) = parse_ls_args(args, cwd);
+    // If target is a file, show just that entry
+    if let Ok(m) = libmorpheus::fs::metadata(&target) {
+        if m.is_file() {
+            let name = path::basename(&target);
+            if long {
+                con.write_str(
+                    fb,
+                    &format!("FILE {:>10}  v{:<3} {}\n", m.len(), m.version_count, name),
+                );
+            } else {
+                con.write_str(fb, name);
+                con.write_str(fb, "\n");
+            }
+            return 0;
+        }
+    }
     let entries = match libmorpheus::fs::read_dir(&target) {
         Ok(e) => e,
         Err(e) => {
@@ -49,7 +79,9 @@ pub fn ls_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         }
     };
 
+    let mut count = 0u32;
     for entry in entries {
+        count += 1;
         if long {
             let kind = if entry.is_dir() { "DIR " } else { "FILE" };
             con.write_str(
@@ -75,7 +107,7 @@ pub fn ls_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         }
     }
 
-    if !long {
+    if !long && count > 0 {
         con.write_str(fb, "\n");
     }
     0
@@ -86,7 +118,15 @@ fn parse_ls_args<'a>(args: &'a [String], cwd: &str) -> (bool, String) {
     let mut path_arg: Option<&'a str> = None;
 
     for a in args {
-        if a == "-l" {
+        if a.starts_with('-') && a.len() > 1 && a.as_bytes()[1] != b'-' {
+            // Parse combined short flags: -l, -la, -al, etc.
+            for ch in a[1..].chars() {
+                if ch == 'l' {
+                    long = true;
+                }
+                // -a is accepted but no-op (we always show all files)
+            }
+        } else if a == "--long" {
             long = true;
         } else if path_arg.is_none() {
             path_arg = Some(a.as_str());
@@ -106,6 +146,17 @@ pub fn cat(args: &[String], cwd: &str) -> i32 {
         return 1;
     };
     let p = path::resolve(cwd, arg);
+    match libmorpheus::fs::metadata(&p) {
+        Ok(m) if m.is_dir() => {
+            libmorpheus::eprintln!("cat: {}: Is a directory", p);
+            return 1;
+        }
+        Err(e) => {
+            libmorpheus::eprintln!("cat: {}: {}", p, e);
+            return 1;
+        }
+        _ => {}
+    }
     match libmorpheus::fs::read_to_string(&p) {
         Ok(content) => {
             libmorpheus::io::print(&content);
@@ -127,6 +178,17 @@ pub fn cat_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -
         return 1;
     };
     let p = path::resolve(cwd, arg);
+    match libmorpheus::fs::metadata(&p) {
+        Ok(m) if m.is_dir() => {
+            con.write_colored(fb, &format!("cat: {}: Is a directory\n", p), (170, 0, 0));
+            return 1;
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("cat: {}: {}\n", p, e), (170, 0, 0));
+            return 1;
+        }
+        _ => {}
+    }
     match libmorpheus::fs::read_to_string(&p) {
         Ok(content) => {
             con.write_str(fb, &content);
@@ -148,6 +210,14 @@ pub fn mkdir(args: &[String], cwd: &str) -> i32 {
         return 1;
     };
     let p = path::resolve(cwd, arg);
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            libmorpheus::eprintln!("mkdir: {}: Directory already exists", p);
+        } else {
+            libmorpheus::eprintln!("mkdir: {}: File exists", p);
+        }
+        return 1;
+    }
     match libmorpheus::fs::create_dir(&p) {
         Ok(()) => {
             super::help::auto_sync();
@@ -166,6 +236,14 @@ pub fn mkdir_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console)
         return 1;
     };
     let p = path::resolve(cwd, arg);
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            con.write_colored(fb, &format!("mkdir: {}: Directory already exists\n", p), (170, 0, 0));
+        } else {
+            con.write_colored(fb, &format!("mkdir: {}: File exists\n", p), (170, 0, 0));
+        }
+        return 1;
+    }
     match libmorpheus::fs::create_dir(&p) {
         Ok(()) => {
             super::help::auto_sync();
@@ -184,6 +262,12 @@ pub fn rm(args: &[String], cwd: &str) -> i32 {
         return 1;
     };
     let p = path::resolve(cwd, arg);
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            libmorpheus::eprintln!("rm: {}: Is a directory", p);
+            return 1;
+        }
+    }
     match libmorpheus::fs::remove_file(&p) {
         Ok(()) => {
             super::help::auto_sync();
@@ -202,6 +286,12 @@ pub fn rm_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         return 1;
     };
     let p = path::resolve(cwd, arg);
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            con.write_colored(fb, &format!("rm: {}: Is a directory\n", p), (170, 0, 0));
+            return 1;
+        }
+    }
     match libmorpheus::fs::remove_file(&p) {
         Ok(()) => {
             super::help::auto_sync();
@@ -220,7 +310,14 @@ pub fn mv(args: &[String], cwd: &str) -> i32 {
         return 1;
     }
     let src = path::resolve(cwd, &args[0]);
-    let dst = path::resolve(cwd, &args[1]);
+    let mut dst = path::resolve(cwd, &args[1]);
+    if let Ok(m) = libmorpheus::fs::metadata(&dst) {
+        if m.is_dir() {
+            let name = path::basename(&src);
+            dst.push('/');
+            dst.push_str(name);
+        }
+    }
     match libmorpheus::fs::rename_path(&src, &dst) {
         Ok(()) => {
             super::help::auto_sync();
@@ -239,7 +336,14 @@ pub fn mv_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         return 1;
     }
     let src = path::resolve(cwd, &args[0]);
-    let dst = path::resolve(cwd, &args[1]);
+    let mut dst = path::resolve(cwd, &args[1]);
+    if let Ok(m) = libmorpheus::fs::metadata(&dst) {
+        if m.is_dir() {
+            let name = path::basename(&src);
+            dst.push('/');
+            dst.push_str(name);
+        }
+    }
     match libmorpheus::fs::rename_path(&src, &dst) {
         Ok(()) => {
             super::help::auto_sync();
@@ -258,7 +362,14 @@ pub fn cp(args: &[String], cwd: &str) -> i32 {
         return 1;
     }
     let src = path::resolve(cwd, &args[0]);
-    let dst = path::resolve(cwd, &args[1]);
+    let mut dst = path::resolve(cwd, &args[1]);
+    if let Ok(m) = libmorpheus::fs::metadata(&dst) {
+        if m.is_dir() {
+            let name = path::basename(&src);
+            dst.push('/');
+            dst.push_str(name);
+        }
+    }
     match libmorpheus::fs::copy(&src, &dst) {
         Ok(_) => {
             super::help::auto_sync();
@@ -277,7 +388,14 @@ pub fn cp_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         return 1;
     }
     let src = path::resolve(cwd, &args[0]);
-    let dst = path::resolve(cwd, &args[1]);
+    let mut dst = path::resolve(cwd, &args[1]);
+    if let Ok(m) = libmorpheus::fs::metadata(&dst) {
+        if m.is_dir() {
+            let name = path::basename(&src);
+            dst.push('/');
+            dst.push_str(name);
+        }
+    }
     match libmorpheus::fs::copy(&src, &dst) {
         Ok(_) => {
             super::help::auto_sync();
@@ -296,7 +414,11 @@ pub fn touch(args: &[String], cwd: &str) -> i32 {
         return 1;
     };
     let p = path::resolve(cwd, arg);
-    if libmorpheus::fs::metadata(&p).is_ok() {
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            libmorpheus::eprintln!("touch: {}: Is a directory", p);
+            return 1;
+        }
         return 0;
     }
     match libmorpheus::fs::write_bytes(&p, b"") {
@@ -317,7 +439,11 @@ pub fn touch_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console)
         return 1;
     };
     let p = path::resolve(cwd, arg);
-    if libmorpheus::fs::metadata(&p).is_ok() {
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            con.write_colored(fb, &format!("touch: {}: Is a directory\n", p), (170, 0, 0));
+            return 1;
+        }
         return 0;
     }
     match libmorpheus::fs::write_bytes(&p, b"") {
@@ -392,6 +518,12 @@ pub fn write(args: &[String], cwd: &str) -> i32 {
         return 1;
     }
     let p = path::resolve(cwd, &args[0]);
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            libmorpheus::eprintln!("write: {}: Is a directory", p);
+            return 1;
+        }
+    }
     let text = join_args(&args[1..]);
     match libmorpheus::fs::write_bytes(&p, text.as_bytes()) {
         Ok(()) => {
@@ -411,6 +543,12 @@ pub fn write_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console)
         return 1;
     }
     let p = path::resolve(cwd, &args[0]);
+    if let Ok(m) = libmorpheus::fs::metadata(&p) {
+        if m.is_dir() {
+            con.write_colored(fb, &format!("write: {}: Is a directory\n", p), (170, 0, 0));
+            return 1;
+        }
+    }
     let text = join_args(&args[1..]);
     match libmorpheus::fs::write_bytes(&p, text.as_bytes()) {
         Ok(()) => {
