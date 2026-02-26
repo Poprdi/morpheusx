@@ -90,6 +90,7 @@ pub mod dma;
 pub mod elf;
 pub mod heap;
 pub mod memory;
+pub mod mouse;
 pub mod paging;
 pub mod pci;
 pub mod pipe;

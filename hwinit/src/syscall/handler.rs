@@ -3799,7 +3799,18 @@ pub unsafe fn sys_sigreturn() -> u64 {
     proc.context = proc.saved_signal_context;
     proc.fpu_state = proc.saved_signal_fpu;
     proc.in_signal_handler = false;
-    // Return the RAX value from the saved context so syscall return
-    // doesn't clobber whatever the interrupted code was doing.
     proc.context.rax
+}
+
+// SYS_MOUSE_READ (84) — read accumulated relative mouse state
+
+/// `SYS_MOUSE_READ() → packed(dx:i16 | dy:i16 | buttons:u8)`
+///
+/// Returns accumulated relative motion since last call.
+/// Bits [15:0] = dx (i16), [31:16] = dy (i16), [39:32] = buttons.
+pub unsafe fn sys_mouse_read() -> u64 {
+    let (dx, dy, buttons) = crate::mouse::drain();
+    let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
+    let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
+    (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32)
 }

@@ -287,6 +287,28 @@ pub fn fb_map() -> Result<u64, u64> {
     }
 }
 
+// mouse
+
+/// Relative mouse state returned by `mouse_read()`.
+#[derive(Clone, Copy, Default)]
+pub struct MouseState {
+    pub dx: i16,
+    pub dy: i16,
+    /// Bit 0 = left, bit 1 = right, bit 2 = middle
+    pub buttons: u8,
+}
+
+/// Read accumulated relative mouse motion since last call.
+/// Resets the accumulator after reading.
+pub fn mouse_read() -> MouseState {
+    let raw = unsafe { syscall0(SYS_MOUSE_READ) };
+    MouseState {
+        dx: raw as i16,
+        dy: (raw >> 16) as i16,
+        buttons: (raw >> 32) as u8,
+    }
+}
+
 // boot log
 
 /// Get the total size of the kernel boot log.
