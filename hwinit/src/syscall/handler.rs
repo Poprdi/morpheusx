@@ -1771,14 +1771,22 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             }
             avail as u64
         }
-        // Terminal window size: return 80×25 default
+        // Terminal window size: derive from framebuffer if available, else 80×25.
         (0..=2, IOCTL_TIOCGWINSZ) => {
             if arg != 0 && validate_user_buf(arg, 8) {
+                let (rows, cols, xpix, ypix) = match FB_REGISTERED {
+                    Some(fb) => {
+                        let c = fb.width / 8;   // 8px font width
+                        let r = fb.height / 16;  // 16px font height
+                        (r as u16, c as u16, fb.width as u16, fb.height as u16)
+                    }
+                    None => (25, 80, 0, 0),
+                };
                 let buf = arg as *mut u16;
-                *buf = 25; // ws_row
-                *buf.add(1) = 80; // ws_col
-                *buf.add(2) = 0; // ws_xpixel
-                *buf.add(3) = 0; // ws_ypixel
+                *buf = rows;         // ws_row
+                *buf.add(1) = cols;  // ws_col
+                *buf.add(2) = xpix;  // ws_xpixel
+                *buf.add(3) = ypix;  // ws_ypixel
             }
             0
         }
@@ -3774,4 +3782,23 @@ pub unsafe fn sys_thread_exit(code: u64) -> u64 {
 /// mechanism since threads are just processes with shared CR3.
 pub unsafe fn sys_thread_join(tid: u64) -> u64 {
     crate::process::scheduler::wait_for_child(tid as u32)
+}
+
+// SYS_SIGRETURN (83) — restore context after signal handler
+
+/// `SYS_SIGRETURN() → 0`
+///
+/// Restores the saved pre-signal context.  Must be called by user signal
+/// handlers when they are done.  If called outside a signal handler, returns
+/// -EINVAL.
+pub unsafe fn sys_sigreturn() -> u64 {
+    let proc = SCHEDULER.current_process_mut();
+    if !proc.in_signal_handler {
+        return EINVAL;
+    }
+    proc.context = proc.saved_signal_context;
+    proc.in_signal_handler = false;
+    // Return the RAX value from the saved context so syscall return
+    // doesn't clobber whatever the interrupted code was doing.
+    proc.context.rax
 }

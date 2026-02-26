@@ -282,6 +282,7 @@ pub use syscall::{
     // Memory sharing / protection (73-74)
     SYS_SHM_GRANT,
     SYS_SIGACTION,
+    SYS_SIGRETURN,
     SYS_SLEEP,
     SYS_SNAPSHOT,
     SYS_SPAWN,

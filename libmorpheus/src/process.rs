@@ -170,6 +170,17 @@ pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64> {
     }
 }
 
+/// Restore the pre-signal context after a user signal handler is done.
+///
+/// Must be called at the end of every signal handler registered via
+/// `sigaction()`.  Failure to call this results in undefined behavior
+/// (the handler's return address is 0, triggering a page fault).
+pub fn sigreturn() {
+    unsafe {
+        syscall0(SYS_SIGRETURN);
+    }
+}
+
 // priority
 
 /// pid=0 means us. 0=highest, 255=lowest.

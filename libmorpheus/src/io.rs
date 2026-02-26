@@ -626,3 +626,37 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
         total += n as u64;
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// ioctl wrappers
+// ═══════════════════════════════════════════════════════════════════════
+
+const IOCTL_FIONREAD: u64 = 0x541B;
+const IOCTL_TIOCGWINSZ: u64 = 0x5413;
+
+/// Raw ioctl syscall.
+pub fn ioctl(fd: u32, cmd: u64, arg: u64) -> Result<u64, u64> {
+    let ret = unsafe { syscall3(SYS_IOCTL, fd as u64, cmd, arg) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
+}
+
+/// Terminal dimensions: (rows, cols, xpixel, ypixel).
+///
+/// Derived from the framebuffer resolution and 8×16 font size.
+/// Falls back to (25, 80, 0, 0) if no framebuffer is registered.
+pub fn terminal_size() -> (u16, u16, u16, u16) {
+    let mut buf = [0u16; 4];
+    let _ = ioctl(0, IOCTL_TIOCGWINSZ, buf.as_mut_ptr() as u64);
+    (buf[0], buf[1], buf[2], buf[3])
+}
+
+/// Number of bytes available on stdin without blocking.
+pub fn stdin_available() -> usize {
+    let mut avail = 0u32;
+    let _ = ioctl(0, IOCTL_FIONREAD, &mut avail as *mut u32 as u64);
+    avail as usize
+}

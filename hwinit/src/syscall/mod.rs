@@ -203,6 +203,9 @@ pub const SYS_THREAD_CREATE: u64 = 80;
 pub const SYS_THREAD_EXIT: u64 = 81;
 pub const SYS_THREAD_JOIN: u64 = 82;
 
+// signal return (83)
+pub const SYS_SIGRETURN: u64 = 83;
+
 // EXTERN ASM FUNCTIONS
 
 extern "C" {
@@ -324,6 +327,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_THREAD_CREATE => sys_thread_create(a1, a2, a3),
         SYS_THREAD_EXIT => sys_thread_exit(a1),
         SYS_THREAD_JOIN => sys_thread_join(a1),
+        SYS_SIGRETURN => sys_sigreturn(),
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);
