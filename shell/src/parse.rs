@@ -129,7 +129,10 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
             }
             ">" => {
                 if let Some(path) = iter.next() {
-                    stdout_file = Some(Redirect { path, append: false });
+                    stdout_file = Some(Redirect {
+                        path,
+                        append: false,
+                    });
                 }
             }
             ">>" => {
@@ -171,5 +174,9 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
     if argv.is_empty() {
         return None;
     }
-    Some(SimpleCommand { argv, stdin_file, stdout_file })
+    Some(SimpleCommand {
+        argv,
+        stdin_file,
+        stdout_file,
+    })
 }

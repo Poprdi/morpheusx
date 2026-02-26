@@ -1,7 +1,10 @@
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::String;
 
+use crate::console::Console;
+use crate::fb::Framebuffer;
 use crate::path;
 
 pub fn ls(args: &[String], cwd: &str) -> i32 {
@@ -32,6 +35,48 @@ pub fn ls(args: &[String], cwd: &str) -> i32 {
 
     if !long {
         libmorpheus::io::print("\n");
+    }
+    0
+}
+
+pub fn ls_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let (long, target) = parse_ls_args(args, cwd);
+    let entries = match libmorpheus::fs::read_dir(&target) {
+        Ok(e) => e,
+        Err(e) => {
+            con.write_colored(fb, &format!("ls: {}: {}\n", target, e), (170, 0, 0));
+            return 1;
+        }
+    };
+
+    for entry in entries {
+        if long {
+            let kind = if entry.is_dir() { "DIR " } else { "FILE" };
+            con.write_str(
+                fb,
+                &format!(
+                    "{} {:>10}  v{:<3} {}\n",
+                    kind,
+                    entry.size(),
+                    entry.version_count(),
+                    entry.name()
+                ),
+            );
+        } else {
+            let suffix = if entry.is_dir() { "/" } else { "" };
+            let name = entry.name();
+            if entry.is_dir() {
+                con.write_colored(fb, name, (85, 85, 255));
+                con.write_colored(fb, suffix, (85, 85, 255));
+            } else {
+                con.write_str(fb, name);
+            }
+            con.write_str(fb, "  ");
+        }
+    }
+
+    if !long {
+        con.write_str(fb, "\n");
     }
     0
 }
@@ -76,6 +121,27 @@ pub fn cat(args: &[String], cwd: &str) -> i32 {
     }
 }
 
+pub fn cat_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let Some(arg) = args.first() else {
+        con.write_colored(fb, "cat: missing operand\n", (170, 0, 0));
+        return 1;
+    };
+    let p = path::resolve(cwd, arg);
+    match libmorpheus::fs::read_to_string(&p) {
+        Ok(content) => {
+            con.write_str(fb, &content);
+            if !content.ends_with('\n') {
+                con.write_str(fb, "\n");
+            }
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("cat: {}: {}\n", p, e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 pub fn mkdir(args: &[String], cwd: &str) -> i32 {
     let Some(arg) = args.first() else {
         libmorpheus::eprintln!("mkdir: missing operand");
@@ -94,6 +160,24 @@ pub fn mkdir(args: &[String], cwd: &str) -> i32 {
     }
 }
 
+pub fn mkdir_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let Some(arg) = args.first() else {
+        con.write_colored(fb, "mkdir: missing operand\n", (170, 0, 0));
+        return 1;
+    };
+    let p = path::resolve(cwd, arg);
+    match libmorpheus::fs::create_dir(&p) {
+        Ok(()) => {
+            super::help::auto_sync();
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("mkdir: {}: {}\n", p, e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 pub fn rm(args: &[String], cwd: &str) -> i32 {
     let Some(arg) = args.first() else {
         libmorpheus::eprintln!("rm: missing operand");
@@ -107,6 +191,24 @@ pub fn rm(args: &[String], cwd: &str) -> i32 {
         }
         Err(e) => {
             libmorpheus::eprintln!("rm: {}: {}", p, e);
+            1
+        }
+    }
+}
+
+pub fn rm_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let Some(arg) = args.first() else {
+        con.write_colored(fb, "rm: missing operand\n", (170, 0, 0));
+        return 1;
+    };
+    let p = path::resolve(cwd, arg);
+    match libmorpheus::fs::remove_file(&p) {
+        Ok(()) => {
+            super::help::auto_sync();
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("rm: {}: {}\n", p, e), (170, 0, 0));
             1
         }
     }
@@ -131,6 +233,25 @@ pub fn mv(args: &[String], cwd: &str) -> i32 {
     }
 }
 
+pub fn mv_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    if args.len() < 2 {
+        con.write_colored(fb, "mv: need <src> <dst>\n", (170, 0, 0));
+        return 1;
+    }
+    let src = path::resolve(cwd, &args[0]);
+    let dst = path::resolve(cwd, &args[1]);
+    match libmorpheus::fs::rename_path(&src, &dst) {
+        Ok(()) => {
+            super::help::auto_sync();
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("mv: {}\n", e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 pub fn cp(args: &[String], cwd: &str) -> i32 {
     if args.len() < 2 {
         libmorpheus::eprintln!("cp: need <src> <dst>");
@@ -145,6 +266,25 @@ pub fn cp(args: &[String], cwd: &str) -> i32 {
         }
         Err(e) => {
             libmorpheus::eprintln!("cp: {}", e);
+            1
+        }
+    }
+}
+
+pub fn cp_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    if args.len() < 2 {
+        con.write_colored(fb, "cp: need <src> <dst>\n", (170, 0, 0));
+        return 1;
+    }
+    let src = path::resolve(cwd, &args[0]);
+    let dst = path::resolve(cwd, &args[1]);
+    match libmorpheus::fs::copy(&src, &dst) {
+        Ok(_) => {
+            super::help::auto_sync();
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("cp: {}\n", e), (170, 0, 0));
             1
         }
     }
@@ -166,6 +306,27 @@ pub fn touch(args: &[String], cwd: &str) -> i32 {
         }
         Err(e) => {
             libmorpheus::eprintln!("touch: {}: {}", p, e);
+            1
+        }
+    }
+}
+
+pub fn touch_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let Some(arg) = args.first() else {
+        con.write_colored(fb, "touch: missing operand\n", (170, 0, 0));
+        return 1;
+    };
+    let p = path::resolve(cwd, arg);
+    if libmorpheus::fs::metadata(&p).is_ok() {
+        return 0;
+    }
+    match libmorpheus::fs::write_bytes(&p, b"") {
+        Ok(()) => {
+            super::help::auto_sync();
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("touch: {}: {}\n", p, e), (170, 0, 0));
             1
         }
     }
@@ -195,6 +356,36 @@ pub fn stat(args: &[String], cwd: &str) -> i32 {
     }
 }
 
+pub fn stat_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let Some(arg) = args.first() else {
+        con.write_colored(fb, "stat: missing operand\n", (170, 0, 0));
+        return 1;
+    };
+    let p = path::resolve(cwd, arg);
+    match libmorpheus::fs::metadata(&p) {
+        Ok(m) => {
+            con.write_str(fb, &format!("  Path: {}\n", p));
+            con.write_str(
+                fb,
+                &format!(
+                    "  Type: {}\n",
+                    if m.is_dir() { "directory" } else { "file" }
+                ),
+            );
+            con.write_str(fb, &format!("  Size: {} bytes\n", m.len()));
+            con.write_str(fb, &format!("   Key: 0x{:016x}\n", m.key));
+            con.write_str(fb, &format!("   LSN: {} (first: {})\n", m.lsn, m.first_lsn));
+            con.write_str(fb, &format!("  Vers: {}\n", m.version_count));
+            con.write_str(fb, &format!(" Flags: 0x{:08x}\n", m.flags));
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("stat: {}: {}\n", p, e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 pub fn write(args: &[String], cwd: &str) -> i32 {
     if args.len() < 2 {
         libmorpheus::eprintln!("write: need <path> <text>");
@@ -214,6 +405,25 @@ pub fn write(args: &[String], cwd: &str) -> i32 {
     }
 }
 
+pub fn write_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    if args.len() < 2 {
+        con.write_colored(fb, "write: need <path> <text>\n", (170, 0, 0));
+        return 1;
+    }
+    let p = path::resolve(cwd, &args[0]);
+    let text = join_args(&args[1..]);
+    match libmorpheus::fs::write_bytes(&p, text.as_bytes()) {
+        Ok(()) => {
+            super::help::auto_sync();
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("write: {}: {}\n", p, e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 pub fn sync_cmd() -> i32 {
     match libmorpheus::fs::sync() {
         Ok(()) => {
@@ -222,6 +432,19 @@ pub fn sync_cmd() -> i32 {
         }
         Err(e) => {
             libmorpheus::eprintln!("sync: {:?}", e);
+            1
+        }
+    }
+}
+
+pub fn sync_cmd_fb(fb: &Framebuffer, con: &mut Console) -> i32 {
+    match libmorpheus::fs::sync() {
+        Ok(()) => {
+            con.write_str(fb, "synced\n");
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("sync: {:?}\n", e), (170, 0, 0));
             1
         }
     }

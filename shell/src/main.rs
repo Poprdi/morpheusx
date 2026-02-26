@@ -4,17 +4,20 @@
 extern crate alloc;
 
 mod builtin;
+mod console;
 mod exec;
+mod fb;
+mod font;
 mod line;
 mod parse;
 mod path;
 mod prompt;
 
+use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use libmorpheus::entry;
 use libmorpheus::env;
-use libmorpheus::io;
 use libmorpheus::process;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -23,45 +26,65 @@ entry!(main);
 
 fn main() -> i32 {
     install_signals();
-    print_banner();
 
-    let mut editor = line::LineEditor::new();
+    let framebuffer = match fb::Framebuffer::init() {
+        Some(fb) => fb,
+        None => {
+            libmorpheus::io::print("msh: failed to map framebuffer\n");
+            return 1;
+        }
+    };
+
+    let mut con = console::Console::new(&framebuffer);
+    con.clear(&framebuffer);
+
+    con.write_colored(&framebuffer, "msh 1.0", (85, 255, 85));
+    con.write_str(&framebuffer, " - MorpheusX Shell\n");
+    con.write_str(&framebuffer, "Type 'help' for commands.\n\n");
+
     let mut last_status: i32 = 0;
 
     loop {
-        prompt::render(last_status);
+        let cwd = env::current_dir().unwrap_or_else(|_| String::from("/"));
+        con.render_prompt(&framebuffer, &cwd, last_status);
+
         INTERRUPTED.store(false, Ordering::Release);
 
-        let line = match editor.read_line(&|| INTERRUPTED.load(Ordering::Acquire)) {
+        let prompt_col = con.cursor_col();
+
+        let input = match line::read_line_fb(&framebuffer, &mut con, prompt_col, &|| {
+            INTERRUPTED.load(Ordering::Acquire)
+        }) {
             Some(l) => l,
             None => {
-                // Ctrl+C: print ^C and restart
-                io::print("^C\n");
+                con.write_str(&framebuffer, "^C\n");
                 last_status = 130;
                 continue;
             }
         };
 
-        // Ctrl+L sentinel: redraw prompt
-        if line == "\x0c" {
-            continue;
-        }
+        con.newline(&framebuffer);
 
-        let trimmed = line.trim();
+        let trimmed = input.trim();
         if trimmed.is_empty() {
             continue;
         }
 
-        let cwd = env::current_dir().unwrap_or_else(|_| alloc::string::String::from("/"));
+        // Ctrl+L: clear and restart
+        if trimmed == "\x0c" {
+            con.clear(&framebuffer);
+            continue;
+        }
 
         let pipeline = match parse::parse(trimmed) {
             Some(p) => p,
             None => continue,
         };
 
-        // Try builtins first (only for single non-piped commands)
         if pipeline.commands.len() == 1 {
-            if let Some(code) = builtin::dispatch(&pipeline.commands[0].argv, &cwd) {
+            if let Some(code) =
+                builtin::dispatch_fb(&pipeline.commands[0].argv, &cwd, &framebuffer, &mut con)
+            {
                 if code == builtin::EXIT_SENTINEL {
                     return builtin::exit_code();
                 }
@@ -80,12 +103,5 @@ fn install_signals() {
         process::sigreturn();
     }
 
-    let _ = process::sigaction(
-        process::signal::SIGINT,
-        sigint_handler as *const () as u64,
-    );
-}
-
-fn print_banner() {
-    io::print("msh 1.0 — MorpheusX Shell\nType 'help' for commands.\n\n");
+    let _ = process::sigaction(process::signal::SIGINT, sigint_handler as *const () as u64);
 }
