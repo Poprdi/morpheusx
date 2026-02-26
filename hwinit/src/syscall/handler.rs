@@ -205,6 +205,7 @@ const ENOMEM: u64 = u64::MAX - 12;
 const EFAULT: u64 = u64::MAX - 14;
 const ENOTDIR: u64 = u64::MAX - 20;
 const EPIPE: u64 = u64::MAX - 32;
+const EBUSY: u64 = u64::MAX - 16;
 
 // USER-POINTER VALIDATION
 
@@ -2217,6 +2218,50 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
         }
         None => ENODEV,
     }
+}
+
+// SYS_FB_LOCK (85) / SYS_FB_UNLOCK (86) — exclusive framebuffer access
+
+/// PID that currently holds exclusive framebuffer access (0 = unlocked).
+static mut FB_LOCK_PID: u32 = 0;
+
+pub unsafe fn release_fb_lock_if_holder(pid: u32) {
+    if FB_LOCK_PID == pid {
+        FB_LOCK_PID = 0;
+    }
+}
+
+/// `SYS_FB_LOCK() → 0`
+///
+/// Claim exclusive framebuffer access. Other processes should check
+/// `fb_is_locked()` before writing to the framebuffer.
+pub unsafe fn sys_fb_lock() -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if FB_LOCK_PID != 0 && FB_LOCK_PID != pid {
+        return EBUSY;
+    }
+    FB_LOCK_PID = pid;
+    0
+}
+
+/// `SYS_FB_UNLOCK() → 0`
+///
+/// Release exclusive framebuffer access. Only the lock holder can unlock.
+pub unsafe fn sys_fb_unlock() -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if FB_LOCK_PID != pid && FB_LOCK_PID != 0 {
+        return EPERM;
+    }
+    FB_LOCK_PID = 0;
+    0
+}
+
+/// `SYS_FB_INFO(buf_ptr) → 0` — also writes lock status into a query-able field.
+///
+/// Other processes can call `fb_info()` and check the lock_pid field to
+/// decide whether to skip rendering.
+pub fn fb_lock_holder() -> u32 {
+    unsafe { FB_LOCK_PID }
 }
 
 // SYS_FB_MAP (64) — map framebuffer into process virtual address space

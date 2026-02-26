@@ -123,6 +123,11 @@ pub const SYS_SIGRETURN: u64 = 83;
 // input (84)
 pub const SYS_MOUSE_READ: u64 = 84;
 
+// framebuffer exclusive access (85-87)
+pub const SYS_FB_LOCK: u64 = 85;
+pub const SYS_FB_UNLOCK: u64 = 86;
+pub const SYS_FB_IS_LOCKED: u64 = 87;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;

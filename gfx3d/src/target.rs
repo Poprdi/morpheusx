@@ -18,6 +18,7 @@ pub trait RenderTarget {
     fn height(&self) -> u32;
     fn color_buffer_mut(&mut self) -> &mut [u32];
     fn depth_buffer_mut(&mut self) -> &mut [u32]; // 16.16 fixed-point depth
+    fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]);
     fn pixel_format(&self) -> TargetPixelFormat;
 
     /// Stride in pixels (may differ from width for hardware framebuffers).
@@ -81,6 +82,8 @@ impl RenderTarget for SoftwareTarget {
     fn color_buffer_mut(&mut self) -> &mut [u32] { &mut self.color }
     #[inline(always)]
     fn depth_buffer_mut(&mut self) -> &mut [u32] { &mut self.depth }
+    #[inline(always)]
+    fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]) { (&mut self.color, &mut self.depth) }
     #[inline(always)]
     fn pixel_format(&self) -> TargetPixelFormat { self.format }
     #[inline(always)]

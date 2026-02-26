@@ -8,6 +8,7 @@
 /// This gives 0.088° angular resolution — far beyond what 1024×768 pixels can show.
 
 use alloc::boxed::Box;
+use super::fast;
 
 const TABLE_SIZE: usize = 4096;
 const TABLE_MASK: usize = TABLE_SIZE - 1;
@@ -37,25 +38,44 @@ impl TrigTable {
 
     #[inline(always)]
     pub fn sin(&self, radians: f32) -> f32 {
-        let idx = (radians * INV_TABLE) as i32;
-        let idx = (idx as usize) & TABLE_MASK;
-        self.sin_table[idx]
+        let (sin, _) = self.sin_cos(radians);
+        sin
     }
 
     #[inline(always)]
     pub fn cos(&self, radians: f32) -> f32 {
-        let idx = (radians * INV_TABLE) as i32 + (TABLE_SIZE as i32 >> 2);
-        let idx = (idx as usize) & TABLE_MASK;
-        self.sin_table[idx]
+        let (_, cos) = self.sin_cos(radians);
+        cos
     }
 
     /// sin and cos in one call (avoids redundant index math).
     #[inline]
     pub fn sin_cos(&self, radians: f32) -> (f32, f32) {
-        let base = (radians * INV_TABLE) as i32;
-        let si = (base as usize) & TABLE_MASK;
-        let ci = ((base as usize) + (TABLE_SIZE >> 2)) & TABLE_MASK;
-        (self.sin_table[si], self.sin_table[ci])
+        let turn = radians.rem_euclid(2.0 * core::f32::consts::PI) * INV_TABLE;
+        let base = turn as usize;
+        let frac = turn - base as f32;
+
+        let si0 = base & TABLE_MASK;
+        let si1 = (si0 + 1) & TABLE_MASK;
+        let ci0 = (si0 + (TABLE_SIZE >> 2)) & TABLE_MASK;
+        let ci1 = (ci0 + 1) & TABLE_MASK;
+
+        let sin0 = self.sin_table[si0];
+        let sin1 = self.sin_table[si1];
+        let cos0 = self.sin_table[ci0];
+        let cos1 = self.sin_table[ci1];
+
+        let mut sin = sin0 + (sin1 - sin0) * frac;
+        let mut cos = cos0 + (cos1 - cos0) * frac;
+
+        let len_sq = sin * sin + cos * cos;
+        if len_sq > 1e-12 {
+            let inv_len = fast::inv_sqrt(len_sq);
+            sin *= inv_len;
+            cos *= inv_len;
+        }
+
+        (sin, cos)
     }
 
     /// Atan2 approximation (useful for angle-based effects, not in hot render path).

@@ -252,6 +252,7 @@ do_build() {
 USER_APPS=(
     "syscall-e2e,/bin/syscall-e2e"
     "msh,/bin/msh"
+    "spinning-cube,/bin/spinning-cube"
 )
 
 do_build_user_apps() {

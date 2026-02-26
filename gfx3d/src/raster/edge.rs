@@ -190,7 +190,9 @@ pub fn rasterize_triangle_to_spans(
         };
         count += 1;
         short.step();
+        short.y_start += 1;
         long_edge.step();
+        long_edge.y_start += 1;
     }
 
     // Bottom half: v1 → v2
@@ -213,7 +215,9 @@ pub fn rasterize_triangle_to_spans(
         };
         count += 1;
         short.step();
+        short.y_start += 1;
         long_edge.step();
+        long_edge.y_start += 1;
     }
 
     count
