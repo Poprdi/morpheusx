@@ -34,6 +34,7 @@ global asm_ps2_read_status
 global asm_ps2_write_cmd
 global asm_ps2_write_data
 global asm_ps2_poll
+global asm_ps2_poll_any
 global asm_ps2_flush
 
 PS2_DATA   equ 0x60        ; Data port
@@ -112,63 +113,54 @@ asm_ps2_write_data:
     out     PS2_DATA, al            ; Write to data port
     ret
 
-; ───────────────────────────────────────────────────────────────────────────
-; asm_ps2_poll() -> u32
-; ───────────────────────────────────────────────────────────────────────────
-; Non-blocking check for an available keyboard scancode.
-;
-; Mouse bytes (AUXB set in status) are silently discarded — read and dropped
-; so they don't block keyboard data.
-;
-; Returns:
-;   0x00000000        — output buffer empty (OBF=0), no data
-;   0x000001xx        — keyboard byte ready; xx = scan byte from port 0x60
-;
-; Caller pattern:
-;   let r = asm_ps2_poll();
-;   if r & 0x100 != 0 { let byte = (r & 0xFF) as u8; ... }
-;
-; Clobbers: RAX
-; ───────────────────────────────────────────────────────────────────────────
+; asm_ps2_poll() -> u32   0=empty, 0x1xx=keyboard byte xx
 asm_ps2_poll:
     xor     eax, eax
-    in      al, PS2_STATUS          ; Read status
-    test    al, OBF                 ; Output buffer has data?
-    jz      .poll_empty             ; OBF=0 — nothing to read
-    test    al, AUXB                ; Is it mouse data?
-    jnz     .poll_mouse             ; Yes — drain and return empty
-    ; Keyboard data available — read and flag it
+    in      al, PS2_STATUS
+    test    al, OBF
+    jz      .poll_empty
+    test    al, AUXB
+    jnz     .poll_mouse
     xor     eax, eax
-    in      al, PS2_DATA            ; AL = scan byte
-    or      eax, 0x100              ; Set has-data flag (bit 8)
+    in      al, PS2_DATA
+    or      eax, 0x100
     ret
 .poll_mouse:
-    in      al, PS2_DATA            ; Read and discard mouse byte
+    in      al, PS2_DATA
 .poll_empty:
-    xor     eax, eax                ; Return 0 = no keyboard data
+    xor     eax, eax
     ret
 
-; ───────────────────────────────────────────────────────────────────────────
-; asm_ps2_flush()
-; ───────────────────────────────────────────────────────────────────────────
-; Drain the PS/2 output buffer by reading until OBF=0, discarding all bytes.
-; Bounded to FLUSH_MAX reads to prevent infinite loops on broken hardware.
-;
-; Call after PS/2 init and after ExitBootServices to discard any stale
-; scancodes or self-test bytes left by UEFI.
-;
-; Parameters: none
-; Returns: none
-; Clobbers: RAX, RCX
-; ───────────────────────────────────────────────────────────────────────────
+; asm_ps2_poll_any() -> u32   0=empty, 0x1xx=keyboard xx, 0x3xx=mouse xx
+asm_ps2_poll_any:
+    xor     eax, eax
+    in      al, PS2_STATUS
+    test    al, OBF
+    jz      .pollany_empty
+    test    al, AUXB               ; AUXB=1 → mouse port
+    mov     al, 0
+    jz      .pollany_read
+    mov     al, 2                  ; mouse: device bits → 0x300
+.pollany_read:
+    xor     edx, edx
+    in      dl, PS2_DATA
+    shl     eax, 8
+    or      eax, 0x100
+    or      eax, edx
+    ret
+.pollany_empty:
+    xor     eax, eax
+    ret
+
+; asm_ps2_flush()   drain output buffer (max FLUSH_MAX reads)
 asm_ps2_flush:
     mov     ecx, FLUSH_MAX
 .flush_loop:
-    in      al, PS2_STATUS          ; Read status
-    test    al, OBF                 ; Data available?
-    jz      .flush_done             ; OBF=0 — buffer clear
-    in      al, PS2_DATA            ; Read and discard
-    pause                           ; Spin hint between reads
+    in      al, PS2_STATUS
+    test    al, OBF
+    jz      .flush_done
+    in      al, PS2_DATA
+    pause
     dec     ecx
     jnz     .flush_loop
 .flush_done:
