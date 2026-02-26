@@ -214,6 +214,7 @@ const EIO: u64 = u64::MAX - 5;
 const EBADF: u64 = u64::MAX - 9;
 const ENOMEM: u64 = u64::MAX - 12;
 const EFAULT: u64 = u64::MAX - 14;
+const ENOTDIR: u64 = u64::MAX - 20;
 const EPIPE: u64 = u64::MAX - 32;
 
 // USER-POINTER VALIDATION
@@ -997,14 +998,23 @@ pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
         None => return EINVAL,
     };
 
-    // Verify path exists via VFS stat.
+    // Root always exists.
+    if path == "/" {
+        let proc = SCHEDULER.current_process_mut();
+        proc.set_cwd(path);
+        return 0;
+    }
+
+    // Verify path exists and is a directory via VFS stat.
     let fs = match morpheus_helix::vfs::global::fs_global() {
         Some(fs) => fs,
         None => return ENOSYS,
     };
     match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
-        Ok(_stat) => {
-            // TODO: verify it's a directory once FileStat exposes type.
+        Ok(stat) => {
+            if !stat.is_dir {
+                return ENOTDIR;
+            }
             let proc = SCHEDULER.current_process_mut();
             proc.set_cwd(path);
             0

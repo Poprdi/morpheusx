@@ -67,3 +67,10 @@ fn file_exists(path: &str) -> bool {
         Err(_) => false,
     }
 }
+
+pub fn basename(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[i + 1..],
+        None => path,
+    }
+}

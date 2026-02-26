@@ -13,6 +13,30 @@ use crate::path;
 
 pub const EXIT_SENTINEL: i32 = i32::MIN;
 
+static mut PREV_DIR: [u8; 256] = [0u8; 256];
+static mut PREV_DIR_LEN: usize = 0;
+
+fn save_prev_dir(cwd: &str) {
+    let bytes = cwd.as_bytes();
+    let len = bytes.len().min(255);
+    unsafe {
+        PREV_DIR[..len].copy_from_slice(&bytes[..len]);
+        PREV_DIR_LEN = len;
+    }
+}
+
+fn get_prev_dir() -> Option<String> {
+    unsafe {
+        if PREV_DIR_LEN == 0 {
+            None
+        } else {
+            core::str::from_utf8(&PREV_DIR[..PREV_DIR_LEN])
+                .ok()
+                .map(String::from)
+        }
+    }
+}
+
 pub fn dispatch(argv: &[String], cwd: &str) -> Option<i32> {
     if argv.is_empty() {
         return None;
@@ -133,10 +157,36 @@ pub fn exit_code() -> i32 {
 }
 
 fn cd_cmd(args: &[String], cwd: &str) -> i32 {
-    let target = match args.first() {
-        Some(p) => path::resolve(cwd, p),
+    let target = match args.first().map(|s| s.as_str()) {
         None => String::from("/"),
+        Some("-") => match get_prev_dir() {
+            Some(p) => {
+                libmorpheus::println!("{}", p);
+                p
+            }
+            None => {
+                libmorpheus::eprintln!("cd: OLDPWD not set");
+                return 1;
+            }
+        },
+        Some(p) => path::resolve(cwd, p),
     };
+    // Root always exists — skip metadata check
+    if target != "/" {
+        match libmorpheus::fs::metadata(&target) {
+            Ok(m) => {
+                if !m.is_dir() {
+                    libmorpheus::eprintln!("cd: {}: Not a directory", target);
+                    return 1;
+                }
+            }
+            Err(_) => {
+                libmorpheus::eprintln!("cd: {}: No such directory", target);
+                return 1;
+            }
+        }
+    }
+    save_prev_dir(cwd);
     match libmorpheus::env::set_current_dir(&target) {
         Ok(()) => 0,
         Err(e) => {
@@ -147,10 +197,37 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
 }
 
 fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
-    let target = match args.first() {
-        Some(p) => path::resolve(cwd, p),
+    let target = match args.first().map(|s| s.as_str()) {
         None => String::from("/"),
+        Some("-") => match get_prev_dir() {
+            Some(p) => {
+                con.write_str(fb, &p);
+                con.write_str(fb, "\n");
+                p
+            }
+            None => {
+                con.write_colored(fb, "cd: OLDPWD not set\n", (170, 0, 0));
+                return 1;
+            }
+        },
+        Some(p) => path::resolve(cwd, p),
     };
+    // Root always exists — skip metadata check
+    if target != "/" {
+        match libmorpheus::fs::metadata(&target) {
+            Ok(m) => {
+                if !m.is_dir() {
+                    con.write_colored(fb, &format!("cd: {}: Not a directory\n", target), (170, 0, 0));
+                    return 1;
+                }
+            }
+            Err(_) => {
+                con.write_colored(fb, &format!("cd: {}: No such directory\n", target), (170, 0, 0));
+                return 1;
+            }
+        }
+    }
+    save_prev_dir(cwd);
     match libmorpheus::env::set_current_dir(&target) {
         Ok(()) => 0,
         Err(e) => {

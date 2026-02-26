@@ -1,7 +1,5 @@
 extern crate alloc;
 
-use alloc::string::String;
-
 use crate::fb::Framebuffer;
 use crate::font;
 
