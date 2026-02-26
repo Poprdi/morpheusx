@@ -100,7 +100,9 @@ fn parse_kill_args(args: &[String]) -> Option<(u32, u8)> {
     let pid = parse_u32(first)?;
     let sig = if let Some(s) = args.get(1) {
         let n = parse_u32(s)?;
-        if n > 255 { return None; }
+        if n > 255 {
+            return None;
+        }
         n as u8
     } else {
         process::signal::SIGTERM

@@ -58,6 +58,10 @@ static mut TSC_FREQUENCY: u64 = 0;
 // space switch.  Defined in `context_switch.s`.
 extern "C" {
     static mut next_cr3: u64;
+    /// Pointer to the currently-running process's `FpuState`.
+    /// Written here, read by the timer ISR for FXSAVE (outgoing) and
+    /// FXRSTOR (incoming).  Defined in `context_switch.s`.
+    static mut current_fpu_ptr: u64;
 }
 
 // PUBLIC INFO SNAPSHOT (allocation-free, for the task manager)
@@ -288,6 +292,12 @@ pub unsafe fn init_scheduler() {
     CURRENT_PID.store(0, Ordering::SeqCst);
     SCHEDULER_READY = true;
 
+    // Point the ISR's FPU save/restore at PID 0's FpuState so the very
+    // first timer tick FXSAVE's into the right place.
+    if let Some(p) = PROCESS_TABLE[0].as_mut() {
+        current_fpu_ptr = &mut p.fpu_state as *mut super::context::FpuState as u64;
+    }
+
     puts("[SCHED] initialized — kernel is PID 0\n");
 }
 
@@ -454,6 +464,9 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
         // Tell the ISR ASM which CR3 to load before iretq.
         next_cr3 = next.cr3;
+
+        // Point the ISR's FXRSTOR at the incoming process's FPU area.
+        current_fpu_ptr = &mut next.fpu_state as *mut super::context::FpuState as u64;
 
         &next.context
     } else {
@@ -663,9 +676,13 @@ pub unsafe fn spawn_user_process(
     }
 
     // Set up Ring 3 entry context.
+    //
+    // SysV x86-64 ABI requires RSP ≡ 8 (mod 16) at function entry
+    // (as if a `call` pushed the return address).  `iretq` doesn't
+    // push a return address, so we pre-adjust RSP by -8.
     proc.context = CpuContext {
         rip: image.entry,
-        rsp: USER_STACK_TOP,
+        rsp: USER_STACK_TOP - 8,
         rflags: 0x202, // IF=1
         cs: USER_CS as u64,
         ss: USER_DS as u64,
@@ -956,6 +973,7 @@ unsafe fn deliver_pending_signals(pid: u32) {
             // User-registered handler — redirect execution.
             // Save the current context so SYS_SIGRETURN can restore it.
             proc.saved_signal_context = proc.context;
+            proc.saved_signal_fpu = proc.fpu_state;
             proc.in_signal_handler = true;
 
             // SysV x86-64 ABI: RSP must be 16-byte aligned, then -8 for
