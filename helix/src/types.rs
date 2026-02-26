@@ -589,6 +589,7 @@ impl FileDescriptor {
 
 /// Directory entry returned by readdir.
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct DirEntry {
     /// Filename (not full path — just the last component).
     pub name: [u8; 256],
@@ -606,6 +607,7 @@ pub struct DirEntry {
 
 /// File stat information.
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct FileStat {
     /// Full path hash.
     pub key: u64,
