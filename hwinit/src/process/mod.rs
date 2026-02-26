@@ -49,7 +49,7 @@ use crate::memory::{
 pub const MAX_PROCESSES: usize = 64;
 
 /// Per-process kernel stack size.
-pub const PROCESS_KERNEL_STACK_SIZE: usize = 32 * 1024; // 32 KiB
+pub const PROCESS_KERNEL_STACK_SIZE: usize = 128 * 1024; // 128 KiB
 
 // PROCESS STATE
 

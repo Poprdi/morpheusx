@@ -928,9 +928,9 @@ impl TcpStream {
             match self.state()? {
                 TcpState::Established => return Ok(()),
                 TcpState::Closed => return Err(Error::new(ErrorKind::ConnectionRefused)),
-                _ => {
-                    unsafe { syscall0(SYS_YIELD); }
-                }
+                _ => unsafe {
+                    syscall0(SYS_YIELD);
+                },
             }
         }
     }
@@ -943,9 +943,9 @@ impl TcpStream {
                 Ok(0) => {
                     // Check if connection is still alive.
                     match self.state()? {
-                        TcpState::Established | TcpState::CloseWait => {
-                            unsafe { syscall0(SYS_YIELD); }
-                        }
+                        TcpState::Established | TcpState::CloseWait => unsafe {
+                            syscall0(SYS_YIELD);
+                        },
                         _ => return Err(Error::new(ErrorKind::BrokenPipe)),
                     }
                 }
@@ -963,9 +963,9 @@ impl TcpStream {
             match tcp_recv(self.handle, buf) {
                 Ok(0) => {
                     match self.state()? {
-                        TcpState::Established | TcpState::SynSent | TcpState::SynReceived => {
-                            unsafe { syscall0(SYS_YIELD); }
-                        }
+                        TcpState::Established | TcpState::SynSent | TcpState::SynReceived => unsafe {
+                            syscall0(SYS_YIELD);
+                        },
                         _ => return Ok(0), // EOF
                     }
                 }
@@ -1048,9 +1048,9 @@ impl TcpListener {
         loop {
             match self.accept() {
                 Ok(stream) => return Ok(stream),
-                Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                    unsafe { syscall0(SYS_YIELD); }
-                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => unsafe {
+                    syscall0(SYS_YIELD);
+                },
                 Err(e) => return Err(e),
             }
         }
@@ -1114,9 +1114,9 @@ impl UdpSocket {
         loop {
             net_poll_drive(0);
             match udp_recv_from(self.handle, buf) {
-                Ok((0, _, _)) => {
-                    unsafe { syscall0(SYS_YIELD); }
-                }
+                Ok((0, _, _)) => unsafe {
+                    syscall0(SYS_YIELD);
+                },
                 Ok((n, ip_nbo, port)) => {
                     return Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port));
                 }

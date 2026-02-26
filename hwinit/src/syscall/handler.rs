@@ -840,6 +840,14 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     proc.mmap_brk = vaddr + pages * 4096;
     proc.pages_allocated += pages;
 
+    // ── Full TLB + paging-structure cache flush ──────────────────────
+    // map_user_page calls invlpg per-page, but COW at intermediate
+    // levels (PML4→PDPT→PD) can leave stale paging-structure cache
+    // entries for other addresses sharing those levels.  A CR3
+    // write-back flushes everything, guaranteeing any thread sharing
+    // this address space sees the new mappings.
+    core::arch::asm!("mov {tmp}, cr3", "mov cr3, {tmp}", tmp = out(reg) _);
+
     vaddr
 }
 // SYS_MUNMAP — unmap pages from user virtual address space
@@ -3727,6 +3735,19 @@ pub unsafe fn sys_thread_create(entry: u64, stack_top: u64, arg: u64) -> u64 {
     // Stack must be 16-byte aligned (x86-64 ABI).
     if stack_top & 0xF != 0 {
         return EINVAL;
+    }
+
+    // Verify the first stack push target is mapped.
+    {
+        let proc = SCHEDULER.current_process_mut();
+        let cr3 = proc.cr3;
+
+        let ptm = crate::paging::table::PageTableManager { pml4_phys: cr3 };
+        let check_addr = stack_top - 8;
+        let page_addr = check_addr & !0xFFF;
+        if ptm.translate(page_addr).is_none() {
+            return EFAULT;
+        }
     }
 
     match crate::process::spawn_user_thread(entry, stack_top, arg) {

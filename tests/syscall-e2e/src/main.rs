@@ -1409,9 +1409,7 @@ fn test_async_yield() {
 fn test_async_join_handle() {
     // spawn_with_handle returns a JoinHandle we can .await for the result.
     let rt = libmorpheus::task::Runtime::new();
-    let handle = rt.spawn_with_handle(async {
-        42u64 + 58
-    });
+    let handle = rt.spawn_with_handle(async { 42u64 + 58 });
     // Spawn a consumer that awaits the handle.
     use core::sync::atomic::{AtomicU64, Ordering};
     static RESULT: AtomicU64 = AtomicU64::new(0);
@@ -1421,7 +1419,11 @@ fn test_async_join_handle() {
         RESULT.store(val, Ordering::SeqCst);
     });
     rt.run();
-    check("async(join_handle)", RESULT.load(Ordering::SeqCst) == 100, "wrong join result");
+    check(
+        "async(join_handle)",
+        RESULT.load(Ordering::SeqCst) == 100,
+        "wrong join result",
+    );
 }
 
 fn test_async_sleep() {
@@ -1433,7 +1435,11 @@ fn test_async_sleep() {
     let elapsed_ns = libmorpheus::time::clock_gettime() - before;
     let elapsed_ms = elapsed_ns / 1_000_000;
     // Allow generous timing: 30..500ms (QEMU timer resolution varies).
-    check("async(sleep)", elapsed_ms >= 30 && elapsed_ms < 500, "sleep timing off");
+    check(
+        "async(sleep)",
+        elapsed_ms >= 30 && elapsed_ms < 500,
+        "sleep timing off",
+    );
 }
 
 fn test_async_chained_await() {
@@ -1461,5 +1467,9 @@ fn test_async_chained_await() {
         SUM.store(total, Ordering::SeqCst);
     });
     rt.run();
-    check("async(chained)", SUM.load(Ordering::SeqCst) == 60, "chained await sum wrong");
+    check(
+        "async(chained)",
+        SUM.load(Ordering::SeqCst) == 60,
+        "chained await sum wrong",
+    );
 }

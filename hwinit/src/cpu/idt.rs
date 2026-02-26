@@ -529,6 +529,84 @@ pub extern "C" fn exception_handler(
         newline();
     }
 
+    // Page fault diagnostic: full page table walk from CR3 for CR2
+    if vector == 14 {
+        unsafe {
+            puts("  ── PT walk for CR2 ──\n");
+            let va = cr2;
+            let pml4_idx = ((va >> 39) & 0x1FF) as usize;
+            let pdpt_idx = ((va >> 30) & 0x1FF) as usize;
+            let pd_idx = ((va >> 21) & 0x1FF) as usize;
+            let pt_idx = ((va >> 12) & 0x1FF) as usize;
+
+            puts("  indices: PML4[");
+            put_hex32(pml4_idx as u32);
+            puts("] PDPT[");
+            put_hex32(pdpt_idx as u32);
+            puts("] PD[");
+            put_hex32(pd_idx as u32);
+            puts("] PT[");
+            put_hex32(pt_idx as u32);
+            puts("]\n");
+
+            let pml4_base = cr3 & 0x000F_FFFF_FFFF_F000;
+            let pml4_entry = *((pml4_base + pml4_idx as u64 * 8) as *const u64);
+            puts("  PML4e: ");
+            put_hex64(pml4_entry);
+            if pml4_entry & 1 == 0 {
+                puts(" NOT PRESENT\n");
+            } else {
+                puts(if pml4_entry & 4 != 0 { " U" } else { " S" });
+                newline();
+
+                let pdpt_base = pml4_entry & 0x000F_FFFF_FFFF_F000;
+                let pdpt_entry = *((pdpt_base + pdpt_idx as u64 * 8) as *const u64);
+                puts("  PDPTe: ");
+                put_hex64(pdpt_entry);
+                if pdpt_entry & 1 == 0 {
+                    puts(" NOT PRESENT\n");
+                } else {
+                    puts(if pdpt_entry & 4 != 0 { " U" } else { " S" });
+                    if pdpt_entry & 0x80 != 0 {
+                        puts(" HUGE\n");
+                    } else {
+                        newline();
+
+                        let pd_base = pdpt_entry & 0x000F_FFFF_FFFF_F000;
+                        let pd_entry = *((pd_base + pd_idx as u64 * 8) as *const u64);
+                        puts("  PDe:   ");
+                        put_hex64(pd_entry);
+                        if pd_entry & 1 == 0 {
+                            puts(" NOT PRESENT\n");
+                        } else {
+                            puts(if pd_entry & 4 != 0 { " U" } else { " S" });
+                            if pd_entry & 0x80 != 0 {
+                                puts(" HUGE\n");
+                            } else {
+                                newline();
+
+                                let pt_base = pd_entry & 0x000F_FFFF_FFFF_F000;
+                                let pt_entry = *((pt_base + pt_idx as u64 * 8) as *const u64);
+                                puts("  PTe:   ");
+                                put_hex64(pt_entry);
+                                if pt_entry & 1 == 0 {
+                                    puts(" NOT PRESENT\n");
+                                } else {
+                                    puts(if pt_entry & 4 != 0 { " U" } else { " S" });
+                                    puts(if pt_entry & 2 != 0 { " W" } else { " R" });
+                                    puts(" phys=");
+                                    put_hex64(pt_entry & 0x000F_FFFF_FFFF_F000);
+                                    newline();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            puts("  ── end PT walk ──\n");
+        }
+    }
+
     // Backtrace (kernel only — user pages may be unmapped)
     let mut backtrace = [0u64; 16];
     let backtrace_depth = if !is_user_mode {
