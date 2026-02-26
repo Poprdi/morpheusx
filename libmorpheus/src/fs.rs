@@ -477,7 +477,7 @@ pub struct DirEntry {
 impl DirEntry {
     /// The file/directory name (last path component).
     pub fn name(&self) -> &str {
-        let len = self.name_len as usize;
+        let len = (self.name_len as usize).min(self.name_buf.len());
         core::str::from_utf8(&self.name_buf[..len]).unwrap_or("")
     }
 

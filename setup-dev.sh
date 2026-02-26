@@ -251,6 +251,7 @@ do_build() {
 # Add new apps here; they will be built and deployed automatically.
 USER_APPS=(
     "syscall-e2e,/bin/syscall-e2e"
+    "msh,/bin/msh"
 )
 
 do_build_user_apps() {
