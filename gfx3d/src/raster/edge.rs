@@ -181,6 +181,15 @@ pub fn rasterize_triangle_to_spans(
     let y_start = (short.y_start.max(0) as u32).min(viewport_h);
     let y_mid = (short.y_end.max(0) as u32).min(viewport_h);
 
+    while short.y_start < y_start as i32 && short.y_start < short.y_end {
+        short.step();
+        short.y_start += 1;
+    }
+    while long_edge.y_start < y_start as i32 && long_edge.y_start < long_edge.y_end {
+        long_edge.step();
+        long_edge.y_start += 1;
+    }
+
     for y in y_start..y_mid {
         if count >= spans.len() { break; }
         spans[count] = if long_on_right {
@@ -204,6 +213,10 @@ pub fn rasterize_triangle_to_spans(
     while (long_edge.y_start as u32) < y_mid2 && long_edge.y_start < long_edge.y_end {
         long_edge.step();
         long_edge.y_start += 1;
+    }
+    while short.y_start < y_mid2 as i32 && short.y_start < short.y_end {
+        short.step();
+        short.y_start += 1;
     }
 
     for y in y_mid2..y_end {

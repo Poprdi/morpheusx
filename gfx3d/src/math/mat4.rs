@@ -170,7 +170,7 @@ impl Mat4 {
         let (sin_fov, cos_fov) = (bhaskara_sin_inline(half_fov), bhaskara_cos_inline(half_fov));
         if sin_fov.abs() < 1e-10 { return Self::IDENTITY; }
         let cot = cos_fov / sin_fov;
-        let inv_range = super::fast::fast_recip(near - far);
+        let inv_range = 1.0 / (near - far);
 
         // Reversed-Z: z_ndc = near / (far - near) * z_eye + far*near / (far - near)
         Self::from_cols(
@@ -183,9 +183,9 @@ impl Mat4 {
 
     /// Orthographic projection.
     pub fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let inv_w = super::fast::fast_recip(right - left);
-        let inv_h = super::fast::fast_recip(top - bottom);
-        let inv_d = super::fast::fast_recip(far - near);
+        let inv_w = 1.0 / (right - left);
+        let inv_h = 1.0 / (top - bottom);
+        let inv_d = 1.0 / (far - near);
         Self::from_cols(
             [2.0 * inv_w, 0.0, 0.0, 0.0],
             [0.0, 2.0 * inv_h, 0.0, 0.0],

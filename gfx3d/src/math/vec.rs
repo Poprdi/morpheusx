@@ -190,7 +190,7 @@ impl Vec4 {
     #[inline]
     pub fn perspective_div(self) -> Vec3 {
         if self.w == 0.0 { return Vec3::ZERO; }
-        let inv_w = super::fast::fast_recip(self.w);
+        let inv_w = 1.0 / self.w;
         Vec3 { x: self.x * inv_w, y: self.y * inv_w, z: self.z * inv_w }
     }
 
