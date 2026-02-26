@@ -51,7 +51,12 @@ impl TrigTable {
     /// sin and cos in one call (avoids redundant index math).
     #[inline]
     pub fn sin_cos(&self, radians: f32) -> (f32, f32) {
-        let turn = radians.rem_euclid(2.0 * core::f32::consts::PI) * INV_TABLE;
+        let two_pi = 2.0 * core::f32::consts::PI;
+        let mut angle = radians % two_pi;
+        if angle < 0.0 {
+            angle += two_pi;
+        }
+        let turn = angle * INV_TABLE;
         let base = turn as usize;
         let frac = turn - base as f32;
 
@@ -138,6 +143,17 @@ mod tests {
             let expected = bhaskara_sin_reference(a);
             let err = (got - expected).abs();
             assert!(err < 0.01, "sin({a}) = {got}, expected {expected}, err {err}");
+        }
+    }
+
+    #[test]
+    fn sin_cos_is_unit_circle() {
+        let table = TrigTable::new();
+        for i in 0..1024 {
+            let a = (i as f32) * 0.01;
+            let (s, c) = table.sin_cos(a);
+            let n = s * s + c * c;
+            assert!((n - 1.0).abs() < 0.002, "angle={a} s2+c2={n}");
         }
     }
 
