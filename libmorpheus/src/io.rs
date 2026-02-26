@@ -626,4 +626,3 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
         total += n as u64;
     }
 }
-

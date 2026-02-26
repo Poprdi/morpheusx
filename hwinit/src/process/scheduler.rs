@@ -28,7 +28,6 @@ use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
 use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
 use crate::serial::{put_hex32, put_hex64, puts};
 use core::sync::atomic::{AtomicU32, Ordering};
-
 // GLOBAL STATE
 
 /// The flat process table.  Index == PID.
@@ -124,6 +123,7 @@ impl Scheduler {
     ///
     /// Fills `out` with up to `out.len()` entries and returns how many were
     /// written.  No allocation.
+    /// This broke me, fuck this schedular but somehow it "works"
     pub fn snapshot_processes(&self, out: &mut [ProcessInfo]) -> usize {
         let mut n = 0;
         unsafe {
@@ -202,7 +202,12 @@ impl Scheduler {
             return Err("send_signal: process already terminated");
         }
 
-        // SIGKILL and SIGSTOP are delivered immediately without process consent.
+        // SIGKILL and SIGSTOP are delivered immediately without process consent bc i do not fuck arround.
+        // no but bc its an exokernel and my mindset for this is absolute controll and zero hidden state thus
+        // i will not allow a process to live after the kernel said it should die.
+        // THERE is no blocking io or whatever the kernel kills a process frees its pages and cleans up after it.
+        // the process is self responsible if it makes the kernel want to kill it its its own fault and morpheus wont wait.
+        // TODO: Clean up after dead process :)
         match sig {
             Signal::SIGKILL => {
                 puts("[SCHED] SIGKILL → PID ");
@@ -251,14 +256,12 @@ impl Scheduler {
     }
 }
 
-// INIT
-
 /// Initialize the scheduler and create PID 0 (the kernel process).
 ///
 /// Must be called once, after MemoryRegistry, GDT, IDT, and heap are ready.
 ///
 /// # Safety
-/// Single-threaded init; not reentrant.
+/// Single-threaded init; not reentrant(for now).
 pub unsafe fn init_scheduler() {
     if SCHEDULER_READY {
         puts("[SCHED] already initialized\n");
@@ -288,14 +291,12 @@ pub unsafe fn init_scheduler() {
     puts("[SCHED] initialized — kernel is PID 0\n");
 }
 
-// SPAWN
-
 /// Spawn a new kernel-mode thread at `entry_fn`.
 ///
 /// Returns the new PID, or `Err` if the table is full or setup fails.
 ///
 /// # Safety
-/// Scheduler must be initialized.  `entry_fn` must be a valid function
+/// Scheduler must be initialized!(dont be like me and debug for hours until you find out the schedular isnt setup).  `entry_fn` must be a valid function
 /// that runs in Ring 0 and eventually calls `exit_process()`.
 pub unsafe fn spawn_kernel_thread(
     name: &str,
@@ -355,17 +356,16 @@ pub unsafe fn spawn_kernel_thread(
     Ok(pid)
 }
 
-// EXIT
-
 /// Terminate the calling process with the given exit code.
 ///
 /// Transitions the current process to `Zombie` and yields to the scheduler.
 /// The scheduler will pick another ready process.
 ///
 /// # Safety
-/// Must be called from within a process context (not the timer ISR itself).
+/// Must be called from within a process context (not the timer ISR itself xD).
 pub unsafe fn exit_process(code: i32) -> ! {
     let pid = CURRENT_PID.load(Ordering::Relaxed);
+
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
         terminate_process_inner(proc, code);
     }
@@ -435,7 +435,8 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     // Wake any processes whose sleep deadline has expired.
     wake_expired_sleepers();
 
-    // Pick next runnable process (round-robin, priority-weighted in future).
+    // Pick next runnable process (round-robin, priority-weighted in "future").
+    // TODO: implement priority-weighted scheduling instead of pure round-robin.
     let next_pid = pick_next(cur_pid);
     CURRENT_PID.store(next_pid as u32, Ordering::SeqCst);
 
@@ -475,6 +476,8 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 ///
 /// The caller must provide a valid, mapped user stack.  Use SYS_MMAP to
 /// allocate one before calling this.
+///
+/// I had fun with this.
 ///
 /// Returns the new thread's PID (which also serves as the TID).
 pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<u32, &'static str> {
@@ -516,7 +519,11 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
 
     let tid = slot_idx as u32;
 
-    let mut thread = Process::empty();
+    PROCESS_TABLE[slot_idx] = Some(Process::empty());
+    let thread = PROCESS_TABLE[slot_idx]
+        .as_mut()
+        .ok_or("failed to initialize thread slot")?;
+
     thread.pid = tid;
     thread.set_name("thread");
     thread.parent_pid = parent_pid;
@@ -529,12 +536,19 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     thread.cwd_len = parent_cwd_len;
 
     // Own kernel stack for interrupt/syscall entry from Ring 3.
-    thread.alloc_kernel_stack()?;
+    if let Err(e) = thread.alloc_kernel_stack() {
+        PROCESS_TABLE[slot_idx] = None;
+        return Err(e);
+    }
 
-    // Ring 3 entry: rip=entry, rsp=stack_top, rdi=arg.
+    // Ring 3 entry: rip=entry, rsp=stack_top-8, rdi=arg.
+    //
+    // SysV x86-64 ABI requires RSP ≡ 8 (mod 16) at function entry
+    // (as if a `call` pushed the return address).  `iretq` doesn't
+    // push a return address, so we pre-adjust RSP by -8.
     thread.context = CpuContext {
         rip: entry,
-        rsp: stack_top,
+        rsp: stack_top - 8,
         rdi: arg,
         rflags: 0x202, // IF=1
         cs: USER_CS as u64,
@@ -542,15 +556,12 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
         ..CpuContext::empty()
     };
 
-    puts("[SCHED] spawned thread TID ");
+    puts("[SCHED] spawned TID ");
     put_hex32(tid);
-    puts(" in group ");
+    puts(" group=");
     put_hex32(group_leader);
-    puts(" entry=");
-    put_hex64(entry);
     puts("\n");
 
-    PROCESS_TABLE[slot_idx] = Some(thread);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     Ok(tid)
 }
@@ -757,6 +768,7 @@ unsafe fn reap_child(pid: u32) -> u64 {
         let code = child.exit_code.unwrap_or(-1);
 
         free_process_resources(child);
+
         child.state = ProcessState::Terminated;
 
         puts("[SCHED] reaped PID ");
