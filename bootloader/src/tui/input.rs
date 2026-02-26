@@ -21,13 +21,15 @@ extern "win64" {
     /// Read PS/2 status register (port 0x64).
     fn asm_ps2_read_status() -> u8;
     /// Write command to controller (port 0x64), waits IBF=0.
-    fn asm_ps2_write_cmd(cmd: u8);
+    pub fn asm_ps2_write_cmd(cmd: u8);
     /// Write data byte to controller (port 0x60), waits IBF=0.
-    fn asm_ps2_write_data(data: u8);
+    pub fn asm_ps2_write_data(data: u8);
     /// Non-blocking poll: 0 = empty, 0x1xx = keyboard byte xx.
     fn asm_ps2_poll() -> u32;
+    /// Non-blocking poll any: 0 = empty, 0x1xx = keyboard xx, 0x3xx = mouse xx.
+    pub fn asm_ps2_poll_any() -> u32;
     /// Drain output buffer (up to 256 reads).
-    fn asm_ps2_flush();
+    pub fn asm_ps2_flush();
 }
 
 // PUBLIC KEY TYPE
