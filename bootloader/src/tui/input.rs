@@ -18,24 +18,17 @@
 // ASM BINDINGS — from bootloader/asm/keyboard/ps2.s
 
 extern "win64" {
-    /// Read PS/2 status register (port 0x64).
     fn asm_ps2_read_status() -> u8;
-    /// Write command to controller (port 0x64), waits IBF=0.
     pub fn asm_ps2_write_cmd(cmd: u8);
-    /// Write data byte to controller (port 0x60), waits IBF=0.
     pub fn asm_ps2_write_data(data: u8);
-    /// Non-blocking poll: 0 = empty, 0x1xx = keyboard byte xx.
     fn asm_ps2_poll() -> u32;
-    /// Non-blocking poll any: 0 = empty, 0x1xx = keyboard xx, 0x3xx = mouse xx.
+    /// 0=empty, 0x1xx=keyboard byte, 0x3xx=mouse byte
     pub fn asm_ps2_poll_any() -> u32;
-    /// Drain output buffer (up to 256 reads).
     pub fn asm_ps2_flush();
 }
 
 // PUBLIC KEY TYPE
 
-/// Key event. scan_code != 0 for special keys, unicode_char != 0 for ASCII.
-/// Both can be set simultaneously (e.g. Enter = scan_code 0, unicode_char 0x0D).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct InputKey {
@@ -366,58 +359,34 @@ impl Keyboard {
     unsafe fn init_controller(&mut self) {
         use morpheus_hwinit::serial::puts;
 
-        // OVMF has already configured the 8042 correctly — we must NOT send
-        // 0xAA (controller self-test) or 0xFF (keyboard reset) here.
-        //
-        // 0xAA resets the Configuration Byte, which clears bit 6 (Translation).
-        // Translation is what makes the 8042 convert scan-code-set-2 bytes
-        // (what the keyboard natively sends) into set-1 (what our tables
-        // decode). If translation is cleared and we then fail to set native
-        // set-1 on the keyboard, raw set-2 bytes arrive and decode completely
-        // wrong — every key produces garbage.
-        //
-        // Strategy: read-modify-write the config byte so we preserve OVMF's
-        // state, guarantee translation is on, and disable IRQs (we poll).
-        // Then enable scanning. That's it.
+        // OVMF already configured the 8042 — don't send 0xAA/0xFF as they clear
+        // Translation (bit 6), causing set-2 bytes to arrive instead of set-1.
+        // RMW the config byte: keep translation on, disable IRQs (we poll).
 
-        // 1. Flush stale bytes from OVMF
         asm_ps2_flush();
 
-        // 2. Disable port 1 scanning while we touch the config
-        asm_ps2_write_cmd(0xAD);
+        asm_ps2_write_cmd(0xAD);    // disable port 1 scanning
         Self::io_delay();
         asm_ps2_flush();
 
-        // 3. Read current Configuration Byte (cmd 0x20 → byte on data port)
-        asm_ps2_write_cmd(0x20);
+        asm_ps2_write_cmd(0x20);    // read config byte
         let config = Self::wait_response(50_000).unwrap_or(0x45);
-        // Bit layout:
-        //   bit 0 — port-1 IRQ enabled   (we clear: polling only)
-        //   bit 1 — port-2 IRQ enabled   (we clear)
-        //   bit 4 — port-1 clock disable (leave as-is)
-        //   bit 5 — port-2 clock disable (leave as-is)
-        //   bit 6 — Translation enabled  (we SET: 8042 converts set-2 → set-1)
-        let new_config = (config | 0x40) & !0x03;
+        let new_config = (config | 0x40) & !0x03;  // set translation, clear IRQs
 
-        // 4. Write modified config byte (cmd 0x60, then data byte)
-        asm_ps2_write_cmd(0x60);
+        asm_ps2_write_cmd(0x60);    // write config byte
         asm_ps2_write_data(new_config);
         Self::io_delay();
 
-        // 5. Re-enable port 1
-        asm_ps2_write_cmd(0xAE);
+        asm_ps2_write_cmd(0xAE);    // re-enable port 1
         Self::io_delay();
 
-        // 6. Tell the keyboard to enable scanning (0xF4 → expects 0xFA ACK)
-        //    This is the ONLY command we send to the keyboard device itself.
-        asm_ps2_write_data(0xF4);
+        asm_ps2_write_data(0xF4);   // enable scanning
         let _ = Self::wait_response(50_000);
 
-        // 7. Final flush — discard any ACK noise
         asm_ps2_flush();
 
         self.initialized = true;
-        puts("[KBD] PS/2 keyboard ready (8042 translation, set-1 tables)\n");
+        puts("[KBD] PS/2 keyboard ready\n");
     }
 
     /// Spin-wait for a response byte from port 0x60, with bounded timeout.
@@ -451,9 +420,14 @@ impl Keyboard {
     pub fn read_key(&mut self) -> Option<InputKey> {
         let raw = unsafe { asm_ps2_poll() };
         if raw & 0x100 == 0 {
-            return None; // OBF empty
+            return None;
         }
         let byte = (raw & 0xFF) as u8;
+        self.decode(byte)
+    }
+
+    /// Feed a raw scan code byte (from asm_ps2_poll_any) through the decoder.
+    pub fn feed_raw(&mut self, byte: u8) -> Option<InputKey> {
         self.decode(byte)
     }
 

@@ -143,38 +143,55 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     // Drop the ELF data — msh is loaded into its own address space now
     drop(elf_data);
 
-    puts("[KERNEL] entering keyboard forwarding loop\n");
+    puts("[KERNEL] entering input forwarding loop\n");
 
-    // Main kernel loop: poll PS/2 keyboard and feed to stdin ring buffer.
-    // msh owns the framebuffer directly via SYS_FB_MAP; the kernel never
-    // touches the display again after this point.
+    let mut mouse = super::mouse::Mouse::new();
+
+    // Main kernel loop: poll PS/2 keyboard + mouse, feed to consumers.
     loop {
-        let input = match keyboard.poll_key_with_delay() {
-            Some(i) => i,
-            None => continue,
-        };
+        let raw = unsafe { super::input::asm_ps2_poll_any() };
+        if raw == 0 {
+            // Nothing available — brief spin then retry
+            for _ in 0..4_000 {
+                core::hint::spin_loop();
+            }
+            continue;
+        }
 
-        if input.unicode_char > 0 && input.unicode_char < 128 {
-            let ch = input.unicode_char as u8;
+        let device = (raw >> 8) & 0xFF;
+        let byte = (raw & 0xFF) as u8;
 
-            if ch == 0x03 {
-                // Ctrl+C — deliver SIGINT to the foreground process
-                let fg = morpheus_hwinit::stdin::foreground_pid();
-                if fg != 0 {
-                    unsafe {
-                        let _ = morpheus_hwinit::process::SCHEDULER
-                            .send_signal(fg, morpheus_hwinit::process::signals::Signal::SIGINT);
+        if device == 0x03 {
+            // Mouse byte
+            if let Some(pkt) = mouse.feed(byte) {
+                morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
+            }
+            continue;
+        }
+
+        // Keyboard byte — feed through the decoder
+        if let Some(input) = keyboard.feed_raw(byte) {
+            if input.unicode_char > 0 && input.unicode_char < 128 {
+                let ch = input.unicode_char as u8;
+
+                if ch == 0x03 {
+                    let fg = morpheus_hwinit::stdin::foreground_pid();
+                    if fg != 0 {
+                        unsafe {
+                            let _ = morpheus_hwinit::process::SCHEDULER
+                                .send_signal(fg, morpheus_hwinit::process::signals::Signal::SIGINT);
+                        }
+                    } else {
+                        morpheus_hwinit::stdin::push(ch);
+                        unsafe {
+                            morpheus_hwinit::process::wake_stdin_waiters();
+                        }
                     }
                 } else {
                     morpheus_hwinit::stdin::push(ch);
                     unsafe {
                         morpheus_hwinit::process::wake_stdin_waiters();
                     }
-                }
-            } else {
-                morpheus_hwinit::stdin::push(ch);
-                unsafe {
-                    morpheus_hwinit::process::wake_stdin_waiters();
                 }
             }
         }
