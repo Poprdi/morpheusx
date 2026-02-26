@@ -1,42 +1,35 @@
 # MorpheusX Syscall ABI Reference
 
-> **Version**: 2.0 — Full exokernel ABI  
-> **Date**: 2026-02-23  
-> **Status**: Stable — numbers 0-72 are allocated; 38-41 reserved. Breaking changes require a version bump.
+> **Version**: 2.1 — Full exokernel ABI  
+> **Date**: 2026-02-26  
+> **Status**: Stable — syscall numbers 0-82 are allocated and implemented.
 
 ---
 
 ## Audit Summary
 
-| Category               | Working | Buggy | Stubs | Total |
-|------------------------|---------|-------|-------|-------|
-| Core (0-9)             | 10      | 0     | 0     | 10    |
-| HelixFS (10-21)        | 12      | 0     | 0     | 12    |
-| System (22-31)         | 8       | 2     | 0     | 10    |
-| Raw NIC (32-37)        | 6       | 0     | 0     | 6     |
-| Reserved (38-41)       | 0       | 0     | 4     | 4     |
-| Device (42-45)         | 4       | 0     | 0     | 4     |
-| Persistence (46-51)    | 6       | 0     | 0     | 6     |
-| Hardware I/O (52-62)   | 11      | 0     | 0     | 11    |
-| Display (63-64)        | 2       | 0     | 0     | 2     |
-| Process Mgmt (65-68)   | 4       | 0     | 0     | 4     |
-| CPU / Diag (69-72)     | 4       | 0     | 0     | 4     |
-| **TOTAL**              | **67**  | **2** | **4** | **73**|
+| Category                 | Implemented | Total |
+|--------------------------|-------------|-------|
+| Core (0-9)               | 10          | 10    |
+| HelixFS (10-21)          | 12          | 12    |
+| System (22-31)           | 10          | 10    |
+| Networking (32-41)       | 10          | 10    |
+| Device / Mount (42-45)   | 4           | 4     |
+| Persistence (46-51)      | 6           | 6     |
+| Hardware I/O (52-62)     | 11          | 11    |
+| Display (63-64)          | 2           | 2     |
+| Process Mgmt (65-68)     | 4           | 4     |
+| CPU / Diagnostics (69-72)| 4           | 4     |
+| Memory / IPC (73-79)     | 7           | 7     |
+| Threading (80-82)        | 3           | 3     |
+| **TOTAL**                | **83**      | **83**|
 
-Legend: **Working** = handler implemented and functional. **Buggy** = handler
-exists but contains known correctness or safety issues. **Stubs** = returns
-`-ENOSYS`, no backend exists.
+Legend: **Implemented** = handler is present in the syscall dispatcher and backend.
 
-### Known Bugs (must fix before first userspace release)
+### Known Bugs
 
-| Nr | Syscall   | Bug | Severity |
-|----|-----------|-----|----------|
-| 1  | `WRITE`   | Data buffer `ptr` not passed through `validate_user_buf()` — a malicious/buggy user can crash the kernel by passing a kernel-space pointer | HIGH |
-| 2  | `READ`    | Same as WRITE — data buffer not range-checked against USER_ADDR_LIMIT | HIGH |
-| 13 | `STAT`    | `stat_buf` pointer checked for `!= 0` but not validated with `validate_user_buf()` | HIGH |
-| 14 | `READDIR` | `buf_ptr` not validated — copies DirEntry array to arbitrary address | HIGH |
-| 26 | `MMAP`    | For kernel PID 0 (cr3=0), `mmap_brk` lazy-inits to `USER_MMAP_BASE` and tries to map into a nonexistent per-process page table. Also zeroes memory via direct physical pointer (works only because identity-mapped). | MEDIUM |
-| 27 | `MUNMAP`  | Uses `kunmap_4k()` which operates on the **kernel** page table, not the per-process one. Does NOT free physical memory (no reverse mapping). `pages_allocated` counter decremented but pages are leaked. | MEDIUM |
+No currently tracked ABI-level correctness issues in this file's scope.
+For current defects, rely on repository issues and test output (e.g. syscall-e2e).
 
 ---
 
@@ -93,8 +86,8 @@ Use `libmorpheus::is_error(ret)` to check: returns `true` when `ret > 0xFFFF_FFF
 | Nr | Name       | Args                        | Return          | Status |
 |----|------------|-----------------------------|-----------------|--------|
 | 0  | `EXIT`     | `(code: i32)`               | never returns   | ✅     |
-| 1  | `WRITE`    | `(fd, ptr, len)`            | bytes written   | ⚠️ ptr not validated |
-| 2  | `READ`     | `(fd, ptr, len)`            | bytes read      | ⚠️ ptr not validated |
+| 1  | `WRITE`    | `(fd, ptr, len)`            | bytes written   | ✅     |
+| 2  | `READ`     | `(fd, ptr, len)`            | bytes read      | ✅     |
 | 3  | `YIELD`    | `()`                        | 0               | ✅     |
 | 4  | `ALLOC`    | `(pages)`                   | phys_base       | ✅     |
 | 5  | `FREE`     | `(phys_base, pages)`        | 0               | ✅     |
@@ -113,15 +106,14 @@ the exit status. If the parent is blocked on `WAIT`, it is woken. Resources
   - UTF-8 strings go through `puts()`; raw bytes fall back to `putc()`.
 - fd ≥ 3: writes to a VFS file descriptor via `vfs_write()`.
 - Max `len`: 1 MiB.
-- **BUG**: does not call `validate_user_buf()` on `ptr` — kernel will
-  blindly dereference any address the user passes.
+- User pointer is validated with `validate_user_buf()`.
 
 #### `READ` (2)
 - fd 0 (stdin): reads from the kernel keyboard ring buffer (256-byte SPSC).
   Returns immediately with however many bytes are available (non-blocking).
 - fd ≥ 3: reads from a VFS file descriptor via `vfs_read()`.
 - Max `len`: 1 MiB.
-- **BUG**: same as WRITE — `ptr` not validated.
+- User pointer is validated with `validate_user_buf()`.
 
 #### `YIELD` (3)
 Executes `sti; hlt; cli` — atomic relinquish of CPU until the next timer
@@ -167,8 +159,8 @@ If TSC is not calibrated, returns 0 immediately (no-op).
 | 10 | `OPEN`     | `(path_ptr, path_len, flags)`     | fd          | ✅     |
 | 11 | `CLOSE`    | `(fd)`                            | 0           | ✅     |
 | 12 | `SEEK`     | `(fd, offset, whence)`            | new_offset  | ✅     |
-| 13 | `STAT`     | `(path_ptr, path_len, stat_buf)`  | 0           | ⚠️ stat_buf not validated |
-| 14 | `READDIR`  | `(path_ptr, path_len, buf_ptr)`   | count       | ⚠️ buf_ptr not validated |
+| 13 | `STAT`     | `(path_ptr, path_len, stat_buf)`  | 0           | ✅     |
+| 14 | `READDIR`  | `(path_ptr, path_len, buf_ptr)`   | count       | ✅     |
 | 15 | `MKDIR`    | `(path_ptr, path_len)`            | 0           | ✅     |
 | 16 | `UNLINK`   | `(path_ptr, path_len)`            | 0           | ✅     |
 | 17 | `RENAME`   | `(old_ptr, old_len, new_ptr, new_len)` | 0      | ✅     |
@@ -204,8 +196,7 @@ fd 0/1/2 are reserved for stdin/stdout/stderr.
 | 2     | SEEK_END |
 
 #### `STAT` (13)
-Fills a `FileStat` struct at `stat_buf`. **BUG**: `stat_buf` is only
-checked for `!= 0`, not validated with `validate_user_buf()`.
+Fills a `FileStat` struct at `stat_buf` after validating the output buffer.
 ```rust
 #[repr(C)]
 pub struct FileStat {
@@ -218,7 +209,7 @@ pub struct FileStat {
 
 #### `READDIR` (14)
 Returns the number of directory entries. Copies `DirEntry` structs to
-`buf_ptr`. **BUG**: `buf_ptr` is only checked for `!= 0`, not validated.
+`buf_ptr` after validating the output buffer range.
 
 #### `TRUNCATE` (18)
 Truncates a file at `path` to `new_size` bytes. Implemented as
@@ -244,8 +235,8 @@ is not built. Graceful no-op — no error returned.
 | 23 | `SYSINFO`  | `(buf_ptr)`             | 0           | ✅ validated |
 | 24 | `GETPPID`  | `()`                    | parent_pid  | ✅     |
 | 25 | `SPAWN`    | `(path_ptr, path_len)`  | child_pid   | ✅ untested e2e |
-| 26 | `MMAP`     | `(pages)`               | virt_addr   | ⚠️ buggy for PID 0 |
-| 27 | `MUNMAP`   | `(vaddr, pages)`        | 0           | ⚠️ wrong page table, leaks phys mem |
+| 26 | `MMAP`     | `(pages)`               | virt_addr   | ✅     |
+| 27 | `MUNMAP`   | `(vaddr, pages)`        | 0           | ✅     |
 | 28 | `DUP`      | `(old_fd)`              | new_fd      | ✅     |
 | 29 | `SYSLOG`   | `(ptr, len)`            | len         | ✅ validated |
 | 30 | `GETCWD`   | `(buf_ptr, buf_len)`    | cwd_len     | ✅ validated |
@@ -277,7 +268,8 @@ Reads an ELF binary from the VFS and spawns it as a new user process.
 Max ELF size: 4 MiB. Child inherits no file descriptors.
 
 #### `MMAP` (26) / `MUNMAP` (27)
-See Known Bugs section above.
+`MMAP` maps user pages in the caller's address space and records VMAs.
+`MUNMAP` unmaps by VMA and frees owned physical pages.
 
 #### `DUP` (28)
 Duplicates a file descriptor.
@@ -335,16 +327,16 @@ Replenishes RX descriptor ring.
 
 ---
 
-### Reserved (38-41)
+### Network Control (38-41)
 
-| Nr | Name           | Return   | Status |
-|----|----------------|----------|--------|
-| 38 | `NET_RSVD38`   | -ENOSYS  | 🚫     |
-| 39 | `NET_RSVD39`   | -ENOSYS  | 🚫     |
-| 40 | `NET_RSVD40`   | -ENOSYS  | 🚫     |
-| 41 | `NET_RSVD41`   | -ENOSYS  | 🚫     |
+| Nr | Name       | Args                    | Return | Status |
+|----|------------|-------------------------|--------|--------|
+| 38 | `NET`      | `(subcmd, a2, a3, a4)`  | result | ✅     |
+| 39 | `DNS`      | `(subcmd, a2, a3)`      | result | ✅     |
+| 40 | `NET_CFG`  | `(subcmd, a2, a3, a4)`  | result | ✅     |
+| 41 | `NET_POLL` | `(subcmd, a2)`          | result | ✅     |
 
-Reserved for future network-layer syscalls (ARP table, routing, etc.).
+These are active multiplexed networking syscalls (not stubs).
 
 ---
 
@@ -533,15 +525,31 @@ pub struct MemmapEntry { pub base: u64, pub pages: u64, pub mem_type: u32, pub _
 
 ---
 
+### Memory / IPC / Threading (73-82)
+
+| Nr | Name            | Args                              | Return      | Status |
+|----|-----------------|-----------------------------------|-------------|--------|
+| 73 | `SHM_GRANT`     | `(pid, vaddr, pages, flags)`      | target_vaddr| ✅     |
+| 74 | `MPROTECT`      | `(vaddr, pages, prot)`            | 0           | ✅     |
+| 75 | `PIPE`          | `(result_ptr)`                    | 0           | ✅     |
+| 76 | `DUP2`          | `(old_fd, new_fd)`                | new_fd      | ✅     |
+| 77 | `SET_FG`        | `(pid)`                           | 0           | ✅     |
+| 78 | `GETARGS`       | `(buf_ptr, buf_len)`              | argc        | ✅     |
+| 79 | `FUTEX`         | `(addr, op, val, timeout_ms)`     | result      | ✅     |
+| 80 | `THREAD_CREATE` | `(entry, stack_top, arg)`         | tid         | ✅     |
+| 81 | `THREAD_EXIT`   | `(code)`                          | never       | ✅     |
+| 82 | `THREAD_JOIN`   | `(tid)`                           | exit_code   | ✅     |
+
+---
+
 ## User Pointer Validation
 
 `validate_user_buf(ptr, len)` checks: `ptr != 0`, `len != 0`,
 no overflow, `ptr + len <= 0x0000_8000_0000_0000`.
 
-**Validated**: SYSINFO, SYSLOG, GETCWD, PERSIST_*, PE_INFO, NIC_INFO,
-NIC_TX, NIC_RX, NIC_MAC, FB_INFO, PS, CPUID, RDTSC, BOOT_LOG, MEMMAP.
-
-**NOT validated**: WRITE, READ, STAT, READDIR.
+**Validated (representative)**: WRITE, READ, STAT, READDIR, SYSINFO, SYSLOG,
+GETCWD, PERSIST_*, PE_INFO, NIC_INFO, NIC_TX, NIC_RX, NIC_MAC, FB_INFO,
+PS, CPUID, RDTSC, BOOT_LOG, MEMMAP.
 
 ---
 

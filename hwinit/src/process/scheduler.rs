@@ -937,6 +937,11 @@ unsafe fn deliver_pending_signals(pid: u32) {
         None => return,
     };
 
+    // Don't deliver new signals while already inside a signal handler.
+    if proc.in_signal_handler {
+        return;
+    }
+
     while let Some(sig) = proc.pending_signals.take_next() {
         let handler = proc
             .signal_handlers
@@ -947,7 +952,23 @@ unsafe fn deliver_pending_signals(pid: u32) {
             // SIG_IGN — ignore this signal.
             continue;
         }
-        // handler == 0 (SIG_DFL) or >1 (custom — not yet dispatched, use default).
+        if handler > 1 {
+            // User-registered handler — redirect execution.
+            // Save the current context so SYS_SIGRETURN can restore it.
+            proc.saved_signal_context = proc.context;
+            proc.in_signal_handler = true;
+
+            // SysV x86-64 ABI: RSP must be 16-byte aligned, then -8 for
+            // the missing return address (as if `call` had pushed it).
+            // Push 0 as return address — handler MUST call sigreturn().
+            let aligned_rsp = (proc.context.rsp & !0xF) - 8;
+            proc.context.rip = handler;
+            proc.context.rdi = sig as u8 as u64;
+            proc.context.rsp = aligned_rsp;
+
+            return; // One signal at a time; rest stay pending.
+        }
+        // handler == 0 (SIG_DFL)
         match sig.default_action() {
             super::signals::SignalAction::Terminate => {
                 puts("[SCHED] signal → PID ");

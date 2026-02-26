@@ -167,6 +167,12 @@ pub struct Process {
     // futex timeout
     /// TSC deadline for futex wait timeout. 0 = wait forever.
     pub futex_deadline: u64,
+
+    // signal delivery
+    /// Saved context before signal handler dispatch. Restored by SYS_SIGRETURN.
+    pub saved_signal_context: CpuContext,
+    /// True while executing a user signal handler (prevents nested delivery).
+    pub in_signal_handler: bool,
 }
 
 impl Process {
@@ -200,6 +206,8 @@ impl Process {
             argc: 0,
             thread_group_leader: 0,
             futex_deadline: 0,
+            saved_signal_context: CpuContext::empty(),
+            in_signal_handler: false,
         }
     }
 
