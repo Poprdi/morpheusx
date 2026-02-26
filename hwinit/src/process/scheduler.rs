@@ -689,6 +689,14 @@ pub unsafe fn spawn_user_process(
         ..CpuContext::empty()
     };
 
+    // Register ELF segments (code + data + stack) in VMA table so that
+    // free_process_resources can free all owned physical pages without
+    // walking leaf page-table entries (which may include MMIO addresses).
+    for seg in &image.segments {
+        let pages = seg.memsz / PAGE_SIZE;
+        let _ = proc.vma_table.insert(seg.vaddr, seg.phys, pages, true);
+    }
+
     // Tally allocated pages.
     let total_pages: u64 = image.segments.iter().map(|s| s.memsz / 4096).sum();
     proc.pages_allocated = total_pages;
@@ -800,9 +808,9 @@ unsafe fn reap_child(pid: u32) -> u64 {
 
 /// Release physical resources held by a process.
 ///
-/// Frees the kernel stack and records the deallocation.
-/// User-space page tables and mapped physical frames are freed by walking
-/// the PML4 hierarchy (only for non-kernel processes with cr3 ≠ kernel cr3).
+/// Frees the kernel stack, then all owned physical pages tracked in the VMA
+/// table, then walks the page-table hierarchy to free intermediate table
+/// pages only (never leaf pages — those are handled by the VMA loop above).
 unsafe fn free_process_resources(proc: &mut Process) {
     // free kernel stack
     if proc.kernel_stack_base != 0 && is_registry_initialized() {
@@ -813,27 +821,46 @@ unsafe fn free_process_resources(proc: &mut Process) {
         proc.kernel_stack_top = 0;
     }
 
+    // Free all owned physical pages via VMA table.
+    // This covers ELF code/data segments, the user stack, and any
+    // SYS_MMAP allocations that were not munmap'd before exit.
+    // Non-owned VMAs (MAP_PHYS / FB_MAP) are skipped — their physical
+    // addresses are MMIO or shared memory, not buddy-allocator RAM.
+    if is_registry_initialized() {
+        let registry = global_registry_mut();
+        for (_, vma) in proc.vma_table.iter() {
+            if vma.owns_phys {
+                let _ = registry.free_pages(vma.phys, vma.pages);
+            }
+        }
+    }
+
     // free user page tables (if this isn't the kernel process and not a thread)
     // Threads share their leader's CR3 — freeing it would nuke the parent.
     if proc.cr3 != 0 && proc.pid != 0 && proc.thread_group_leader == 0 {
-        // Read the kernel's CR3 so we don't accidentally free the kernel PML4.
         let kernel_cr3: u64;
         core::arch::asm!("mov {}, cr3", out(reg) kernel_cr3, options(nostack, nomem));
         let kernel_cr3 = kernel_cr3 & 0x000F_FFFF_FFFF_F000;
 
         if proc.cr3 != kernel_cr3 {
-            free_user_page_tables(proc.cr3, kernel_cr3);
+            free_user_page_tables(proc.cr3);
             proc.cr3 = 0;
         }
     }
 }
 
-/// Walk a PML4 and free all non-kernel page table pages and physical frames.
+/// Walk a PML4 and free all user-owned **intermediate page-table pages**.
 ///
-/// We only free entries in the *lower half* of the address space (indices 0..255
-/// of the PML4), which is the user region.  The upper half (256..511) belongs
-/// to the kernel and is shared across all processes — we must not free those.
-unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
+/// Only the lower half (PML4 indices 0..256) is walked — upper half is kernel.
+/// At every level, only entries with the USER bit are ours (allocated by
+/// `ensure_user_table`).
+///
+/// **Leaf physical pages are NOT freed here.**  They are freed separately
+/// via the VMA table in `free_process_resources`.  This avoids the entire
+/// class of bugs where MMIO or shared-memory physical addresses (from
+/// MAP_PHYS / FB_MAP) are fed into the buddy allocator and corrupt its
+/// free lists.
+unsafe fn free_user_page_tables(pml4_phys: u64) {
     if !is_registry_initialized() {
         return;
     }
@@ -841,62 +868,49 @@ unsafe fn free_user_page_tables(pml4_phys: u64, _kernel_cr3: u64) {
 
     let pml4 = pml4_phys as *const u64;
 
-    // Walk PML4 entries 0..256 (user half).
+    const PRESENT: u64 = 1 << 0;
+    const USER: u64 = 1 << 2;
+    const HUGE: u64 = 1 << 7;
+    const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+
     for pml4_idx in 0..256usize {
         let pml4e = *pml4.add(pml4_idx);
-        if pml4e & 1 == 0 {
+        if pml4e & PRESENT == 0 || pml4e & USER == 0 {
             continue;
-        } // not present
-        let pdpt_phys = pml4e & 0x000F_FFFF_FFFF_F000;
+        }
+        let pdpt_phys = pml4e & ADDR_MASK;
         let pdpt = pdpt_phys as *const u64;
 
         for pdpt_idx in 0..512usize {
             let pdpte = *pdpt.add(pdpt_idx);
-            if pdpte & 1 == 0 {
+            if pdpte & PRESENT == 0 || pdpte & USER == 0 {
                 continue;
             }
-            if pdpte & (1 << 7) != 0 {
-                // 1 GiB huge page — free the physical frame.
-                let frame = pdpte & 0x000F_FFFF_FFFF_F000;
-                let _ = registry.free_pages(frame, 1 << 18); // 1 GiB = 262144 pages
+            if pdpte & HUGE != 0 {
+                // 1 GiB huge leaf — skip (freed via VMA table)
                 continue;
             }
-            let pd_phys = pdpte & 0x000F_FFFF_FFFF_F000;
+            let pd_phys = pdpte & ADDR_MASK;
             let pd = pd_phys as *const u64;
 
             for pd_idx in 0..512usize {
                 let pde = *pd.add(pd_idx);
-                if pde & 1 == 0 {
+                if pde & PRESENT == 0 || pde & USER == 0 {
                     continue;
                 }
-                if pde & (1 << 7) != 0 {
-                    // 2 MiB huge page.
-                    let frame = pde & 0x000F_FFFF_FFFF_F000;
-                    let _ = registry.free_pages(frame, 512); // 2 MiB = 512 pages
+                if pde & HUGE != 0 {
+                    // 2 MiB huge leaf — skip (freed via VMA table)
                     continue;
                 }
-                let pt_phys = pde & 0x000F_FFFF_FFFF_F000;
-                let pt = pt_phys as *const u64;
-
-                for pt_idx in 0..512usize {
-                    let pte = *pt.add(pt_idx);
-                    if pte & 1 == 0 {
-                        continue;
-                    }
-                    // 4 KiB page.
-                    let frame = pte & 0x000F_FFFF_FFFF_F000;
-                    let _ = registry.free_pages(frame, 1);
-                }
-                // Free the PT itself.
+                let pt_phys = pde & ADDR_MASK;
+                // Do NOT iterate PT leaf entries — all leaf physical pages
+                // are freed via the VMA table.  Only free the PT page itself.
                 let _ = registry.free_pages(pt_phys, 1);
             }
-            // Free the PD itself.
             let _ = registry.free_pages(pd_phys, 1);
         }
-        // Free the PDPT itself.
         let _ = registry.free_pages(pdpt_phys, 1);
     }
-    // Free the PML4 itself.
     let _ = registry.free_pages(pml4_phys, 1);
 }
 
