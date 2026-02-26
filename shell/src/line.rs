@@ -5,6 +5,9 @@ use alloc::vec::Vec;
 
 use libmorpheus::io;
 
+use crate::console::Console;
+use crate::fb::Framebuffer;
+
 const MAX_LINE: usize = 1024;
 const MAX_HISTORY: usize = 128;
 
@@ -111,5 +114,73 @@ impl LineEditor {
             self.history.remove(0);
         }
         self.history.push(String::from(trimmed));
+    }
+}
+
+/// Read a line using the framebuffer console.
+pub fn read_line_fb(
+    fb: &Framebuffer,
+    con: &mut Console,
+    prompt_col: u32,
+    interrupted: &dyn Fn() -> bool,
+) -> Option<String> {
+    let mut buf = [0u8; MAX_LINE];
+    let mut len: usize = 0;
+    let mut byte = [0u8; 1];
+
+    loop {
+        if interrupted() {
+            return None;
+        }
+
+        let n = io::read_stdin(&mut byte);
+        if n == 0 {
+            continue;
+        }
+
+        if interrupted() {
+            return None;
+        }
+
+        match byte[0] {
+            b'\r' | b'\n' => {
+                let s = core::str::from_utf8(&buf[..len]).unwrap_or("");
+                return Some(String::from(s));
+            }
+            0x08 | 0x7F => {
+                if len > 0 {
+                    len -= 1;
+                    con.backspace(fb);
+                }
+            }
+            0x03 => return None,
+            0x0C => {
+                con.clear(fb);
+                return Some(String::from("\x0c"));
+            }
+            0x15 => {
+                len = 0;
+                con.kill_to_start(fb, prompt_col);
+            }
+            0x17 => {
+                // Ctrl+W: kill word
+                while len > 0 && buf[len - 1] == b' ' {
+                    len -= 1;
+                    con.backspace(fb);
+                }
+                while len > 0 && buf[len - 1] != b' ' {
+                    len -= 1;
+                    con.backspace(fb);
+                }
+            }
+            c if c >= 0x20 && c < 0x7F => {
+                if len < MAX_LINE {
+                    buf[len] = c;
+                    len += 1;
+                    con.write_char(fb, c as char);
+                }
+            }
+            _ => {}
+        }
     }
 }

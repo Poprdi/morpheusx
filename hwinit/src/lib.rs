@@ -97,6 +97,7 @@ pub mod platform;
 pub mod process;
 pub mod serial;
 pub mod stdin;
+pub mod stdout;
 pub mod sync;
 pub mod syscall;
 

@@ -31,11 +31,12 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     match fd {
         1 | 2 => {
             let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+            // Capture output for the desktop shell widget
+            crate::stdout::push(bytes);
             if let Ok(s) = core::str::from_utf8(bytes) {
                 puts(s);
                 len
             } else {
-                // Write raw bytes to serial one at a time.
                 for &b in bytes {
                     crate::serial::putc(b);
                 }
@@ -1776,17 +1777,17 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             if arg != 0 && validate_user_buf(arg, 8) {
                 let (rows, cols, xpix, ypix) = match FB_REGISTERED {
                     Some(fb) => {
-                        let c = fb.width / 8;   // 8px font width
-                        let r = fb.height / 16;  // 16px font height
+                        let c = fb.width / 8; // 8px font width
+                        let r = fb.height / 16; // 16px font height
                         (r as u16, c as u16, fb.width as u16, fb.height as u16)
                     }
                     None => (25, 80, 0, 0),
                 };
                 let buf = arg as *mut u16;
-                *buf = rows;         // ws_row
-                *buf.add(1) = cols;  // ws_col
-                *buf.add(2) = xpix;  // ws_xpixel
-                *buf.add(3) = ypix;  // ws_ypixel
+                *buf = rows; // ws_row
+                *buf.add(1) = cols; // ws_col
+                *buf.add(2) = xpix; // ws_xpixel
+                *buf.add(3) = ypix; // ws_ypixel
             }
             0
         }

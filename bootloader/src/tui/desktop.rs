@@ -173,7 +173,22 @@ pub fn run_desktop(display_info: &FramebufferInfo) -> ! {
 
     puts("[DESKTOP] entering event loop\n");
 
+    // Enable stdout capture so user-process output flows to the shell widget
+    morpheus_hwinit::stdout::enable();
+
+    let mut stdout_tmp = [0u8; 4096];
+
     loop {
+        // Drain any pending process stdout into the shell widget
+        let n = morpheus_hwinit::stdout::drain(&mut stdout_tmp);
+        if n > 0 {
+            if let Ok(s) = core::str::from_utf8(&stdout_tmp[..n]) {
+                shell.push_output(s);
+                render_shell(&mut shell, &mut wm, shell_id, &theme);
+                wm.compose(&mut fb_canvas, &theme);
+            }
+        }
+
         let input = match keyboard.poll_key_with_delay() {
             Some(i) => i,
             None => {

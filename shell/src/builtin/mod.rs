@@ -4,8 +4,11 @@ mod proc_cmds;
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::String;
 
+use crate::console::Console;
+use crate::fb::Framebuffer;
 use crate::path;
 
 pub const EXIT_SENTINEL: i32 = i32::MIN;
@@ -55,6 +58,59 @@ pub fn dispatch(argv: &[String], cwd: &str) -> Option<i32> {
     }
 }
 
+pub fn dispatch_fb(
+    argv: &[String],
+    cwd: &str,
+    fb: &Framebuffer,
+    con: &mut Console,
+) -> Option<i32> {
+    if argv.is_empty() {
+        return None;
+    }
+
+    let cmd = argv[0].as_str();
+    let args = &argv[1..];
+
+    if has_help_flag(args) {
+        if let Some(text) = help::usage(cmd) {
+            con.write_str(fb, text);
+            return Some(0);
+        }
+    }
+
+    match cmd {
+        "exit" | "quit" => Some(exit_cmd(args)),
+        "cd" => Some(cd_cmd_fb(args, cwd, fb, con)),
+        "pwd" => Some(pwd_cmd_fb(fb, con)),
+        "echo" => Some(echo_cmd_fb(args, fb, con)),
+        "clear" => {
+            con.clear(fb);
+            Some(0)
+        }
+        "true" => Some(0),
+        "false" => Some(1),
+        "help" => Some(help_cmd_fb(args, fb, con)),
+
+        "ls" => Some(fs_cmds::ls_fb(args, cwd, fb, con)),
+        "cat" => Some(fs_cmds::cat_fb(args, cwd, fb, con)),
+        "mkdir" => Some(fs_cmds::mkdir_fb(args, cwd, fb, con)),
+        "rm" => Some(fs_cmds::rm_fb(args, cwd, fb, con)),
+        "mv" => Some(fs_cmds::mv_fb(args, cwd, fb, con)),
+        "cp" => Some(fs_cmds::cp_fb(args, cwd, fb, con)),
+        "touch" => Some(fs_cmds::touch_fb(args, cwd, fb, con)),
+        "stat" => Some(fs_cmds::stat_fb(args, cwd, fb, con)),
+        "write" => Some(fs_cmds::write_fb(args, cwd, fb, con)),
+        "sync" => Some(fs_cmds::sync_cmd_fb(fb, con)),
+
+        "ps" => Some(proc_cmds::ps_fb(fb, con)),
+        "kill" => Some(proc_cmds::kill_fb(args, fb, con)),
+        "sysinfo" => Some(proc_cmds::sysinfo_fb(fb, con)),
+        "sleep" => Some(proc_cmds::sleep_fb(args, fb, con)),
+
+        _ => None,
+    }
+}
+
 fn has_help_flag(args: &[String]) -> bool {
     args.iter().any(|a| a == "--help" || a == "-h")
 }
@@ -90,6 +146,20 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
     }
 }
 
+fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
+    let target = match args.first() {
+        Some(p) => path::resolve(cwd, p),
+        None => String::from("/"),
+    };
+    match libmorpheus::env::set_current_dir(&target) {
+        Ok(()) => 0,
+        Err(e) => {
+            con.write_colored(fb, &format!("cd: {}: {}\n", target, e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 fn pwd_cmd() -> i32 {
     match libmorpheus::env::current_dir() {
         Ok(cwd) => {
@@ -103,6 +173,20 @@ fn pwd_cmd() -> i32 {
     }
 }
 
+fn pwd_cmd_fb(fb: &Framebuffer, con: &mut Console) -> i32 {
+    match libmorpheus::env::current_dir() {
+        Ok(cwd) => {
+            con.write_str(fb, &cwd);
+            con.write_str(fb, "\n");
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("pwd: {}\n", e), (170, 0, 0));
+            1
+        }
+    }
+}
+
 fn echo_cmd(args: &[String]) -> i32 {
     for (i, arg) in args.iter().enumerate() {
         if i > 0 {
@@ -111,6 +195,17 @@ fn echo_cmd(args: &[String]) -> i32 {
         libmorpheus::io::print(arg);
     }
     libmorpheus::io::print("\n");
+    0
+}
+
+fn echo_cmd_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            con.write_str(fb, " ");
+        }
+        con.write_str(fb, arg);
+    }
+    con.write_str(fb, "\n");
     0
 }
 
@@ -133,52 +228,80 @@ fn help_cmd(args: &[String]) -> i32 {
         }
     }
 
-    libmorpheus::io::print(concat!(
-        "msh — MorpheusX Shell\n",
-        "\n",
-        "Builtins:\n",
-        "  cd [path]       Change directory\n",
-        "  pwd             Print working directory\n",
-        "  echo [args]     Print arguments\n",
-        "  clear           Clear screen\n",
-        "  exit [code]     Exit shell\n",
-        "  help [cmd]      Show help (for a command)\n",
-        "\n",
-        "Filesystem:\n",
-        "  ls [-l] [path]  List directory\n",
-        "  cat <file>      Display file\n",
-        "  mkdir <path>    Create directory\n",
-        "  rm <path>       Remove file\n",
-        "  mv <src> <dst>  Rename/move\n",
-        "  cp <src> <dst>  Copy file\n",
-        "  touch <path>    Create empty file\n",
-        "  stat <path>     File metadata\n",
-        "  write <p> <t>   Write text to file\n",
-        "  sync            Flush journal\n",
-        "\n",
-        "Process:\n",
-        "  ps              List processes\n",
-        "  kill <pid> [s]  Send signal (default: 15)\n",
-        "  sysinfo         System information\n",
-        "  sleep <ms>      Sleep milliseconds\n",
-        "\n",
-        "Operators:\n",
-        "  cmd1 | cmd2     Pipeline\n",
-        "  cmd < file      Redirect stdin\n",
-        "  cmd > file      Redirect stdout\n",
-        "  cmd >> file     Append stdout\n",
-        "\n",
-        "Use 'help <cmd>' or '<cmd> --help' for details.\n",
-    ));
+    libmorpheus::io::print(HELP_TEXT);
     0
 }
+
+fn help_cmd_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
+    if let Some(cmd) = args.first() {
+        match help::usage(cmd.as_str()) {
+            Some(text) => {
+                con.write_str(fb, text);
+                return 0;
+            }
+            None => {
+                con.write_colored(
+                    fb,
+                    &format!("help: unknown command: {}\n", cmd),
+                    (170, 0, 0),
+                );
+                return 1;
+            }
+        }
+    }
+
+    con.write_str(fb, HELP_TEXT);
+    0
+}
+
+const HELP_TEXT: &str = concat!(
+    "msh - MorpheusX Shell\n",
+    "\n",
+    "Builtins:\n",
+    "  cd [path]       Change directory\n",
+    "  pwd             Print working directory\n",
+    "  echo [args]     Print arguments\n",
+    "  clear           Clear screen\n",
+    "  exit [code]     Exit shell\n",
+    "  help [cmd]      Show help (for a command)\n",
+    "\n",
+    "Filesystem:\n",
+    "  ls [-l] [path]  List directory\n",
+    "  cat <file>      Display file\n",
+    "  mkdir <path>    Create directory\n",
+    "  rm <path>       Remove file\n",
+    "  mv <src> <dst>  Rename/move\n",
+    "  cp <src> <dst>  Copy file\n",
+    "  touch <path>    Create empty file\n",
+    "  stat <path>     File metadata\n",
+    "  write <p> <t>   Write text to file\n",
+    "  sync            Flush journal\n",
+    "\n",
+    "Process:\n",
+    "  ps              List processes\n",
+    "  kill <pid> [s]  Send signal (default: 15)\n",
+    "  sysinfo         System information\n",
+    "  sleep <ms>      Sleep milliseconds\n",
+    "\n",
+    "Operators:\n",
+    "  cmd1 | cmd2     Pipeline\n",
+    "  cmd < file      Redirect stdin\n",
+    "  cmd > file      Redirect stdout\n",
+    "  cmd >> file     Append stdout\n",
+    "\n",
+    "Use 'help <cmd>' or '<cmd> --help' for details.\n",
+);
 
 fn parse_i32(s: &str) -> Option<i32> {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
         return None;
     }
-    let (neg, start) = if bytes[0] == b'-' { (true, 1) } else { (false, 0) };
+    let (neg, start) = if bytes[0] == b'-' {
+        (true, 1)
+    } else {
+        (false, 0)
+    };
     if start >= bytes.len() {
         return None;
     }
