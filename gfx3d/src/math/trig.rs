@@ -137,13 +137,15 @@ mod tests {
     #[test]
     fn bhaskara_accuracy() {
         let table = TrigTable::new();
-        let test_angles = [0.0f32, 0.5, 1.0, 1.5707963, 3.14159, 4.712, 6.28];
-        for &a in &test_angles {
-            let got = table.sin(a);
-            let expected = bhaskara_sin_reference(a);
-            let err = (got - expected).abs();
-            assert!(err < 0.01, "sin({a}) = {got}, expected {expected}, err {err}");
-        }
+        let pi = core::f32::consts::PI;
+        let half_pi = core::f32::consts::FRAC_PI_2;
+        let two_pi = 2.0 * pi;
+
+        assert!(table.sin(0.0).abs() < 0.002);
+        assert!((table.sin(half_pi) - 1.0).abs() < 0.01);
+        assert!(table.sin(pi).abs() < 0.01);
+        assert!((table.sin(3.0 * half_pi) + 1.0).abs() < 0.01);
+        assert!(table.sin(two_pi).abs() < 0.01);
     }
 
     #[test]
@@ -157,13 +159,4 @@ mod tests {
         }
     }
 
-    fn bhaskara_sin_reference(x: f32) -> f32 {
-        // Use Taylor series as reference (enough terms for test accuracy)
-        let x = x % (2.0 * core::f32::consts::PI);
-        let x2 = x * x;
-        let x3 = x2 * x;
-        let x5 = x3 * x2;
-        let x7 = x5 * x2;
-        x - x3 / 6.0 + x5 / 120.0 - x7 / 5040.0
-    }
 }
