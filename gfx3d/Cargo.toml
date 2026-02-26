@@ -1,0 +1,12 @@
+[package]
+name = "morpheus-gfx3d"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Quake-class software 3D rasterizer for bare metal — zero dependencies, SSE2-optimized, no_std"
+
+[features]
+default = []
+
+[dependencies]
