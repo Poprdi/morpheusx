@@ -97,22 +97,11 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
     match fd {
         0 => {
-            // stdin — blocking read from kernel keyboard ring buffer.
+            // stdin — non-blocking read from kernel keyboard ring buffer.
+            // Returns 0 immediately if no data is available; callers that
+            // need blocking behaviour must poll in their own loop.
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-            loop {
-                let n = crate::stdin::read(buf);
-                if n > 0 {
-                    return n as u64;
-                }
-                // No data yet — block until keyboard pushes something.
-                {
-                    let proc = SCHEDULER.current_process_mut();
-                    proc.state = crate::process::ProcessState::Blocked(
-                        crate::process::BlockReason::StdinRead,
-                    );
-                }
-                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
-            }
+            crate::stdin::read(buf) as u64
         }
         fd if fd >= 3 => {
             // Check if this fd is actually a pipe read end.
@@ -3808,6 +3797,7 @@ pub unsafe fn sys_sigreturn() -> u64 {
         return EINVAL;
     }
     proc.context = proc.saved_signal_context;
+    proc.fpu_state = proc.saved_signal_fpu;
     proc.in_signal_handler = false;
     // Return the RAX value from the saved context so syscall return
     // doesn't clobber whatever the interrupted code was doing.

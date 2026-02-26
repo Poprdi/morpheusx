@@ -267,8 +267,29 @@ fn restore_fd(saved: Option<u32>, target: u32) {
 fn is_builtin(name: &str) -> bool {
     matches!(
         name,
-        "exit" | "quit" | "cd" | "pwd" | "echo" | "clear" | "true" | "false" | "help"
-        | "ls" | "cat" | "mkdir" | "rm" | "rmdir" | "mv" | "cp" | "touch" | "stat" | "write" | "sync"
-        | "ps" | "kill" | "sysinfo" | "sleep"
+        "exit"
+            | "quit"
+            | "cd"
+            | "pwd"
+            | "echo"
+            | "clear"
+            | "true"
+            | "false"
+            | "help"
+            | "ls"
+            | "cat"
+            | "mkdir"
+            | "rm"
+            | "rmdir"
+            | "mv"
+            | "cp"
+            | "touch"
+            | "stat"
+            | "write"
+            | "sync"
+            | "ps"
+            | "kill"
+            | "sysinfo"
+            | "sleep"
     )
 }

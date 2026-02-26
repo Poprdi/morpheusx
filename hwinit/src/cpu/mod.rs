@@ -20,4 +20,5 @@ pub mod idt;
 pub mod mmio;
 pub mod pic;
 pub mod pio;
+pub mod sse;
 pub mod tsc;
