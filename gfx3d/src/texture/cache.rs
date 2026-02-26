@@ -16,6 +16,7 @@ use alloc::vec::Vec;
 /// Each cache entry stores:
 /// - `key`: hash of (texture_id, lightmap_id, surface_rect) for fast lookup
 /// - `pixels`: pre-lit, pre-filtered RGBA data ready to blit
+#[allow(dead_code)]
 pub struct SurfaceCache {
     entries: Vec<CacheEntry>,
     capacity: usize,
@@ -23,6 +24,7 @@ pub struct SurfaceCache {
     generation: u32,
 }
 
+#[allow(dead_code)]
 struct CacheEntry {
     key: u64,
     gen: u32,
