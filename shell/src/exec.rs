@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use libmorpheus::fs;
 use libmorpheus::process;
 
+use crate::builtin;
 use crate::parse::{Pipeline, SimpleCommand};
 use crate::path;
 
@@ -18,6 +19,40 @@ pub fn run(pipeline: &Pipeline, cwd: &str) -> i32 {
 }
 
 fn run_single(cmd: &SimpleCommand, cwd: &str) -> i32 {
+    let has_redirect = cmd.stdout_file.is_some() || cmd.stdin_file.is_some();
+
+    // If there are redirects, try running via builtin with fd-level I/O
+    // (the serial dispatch uses fd 1, so redirects work naturally)
+    if has_redirect {
+        if let Some(first) = cmd.argv.first() {
+            // Check if it's a builtin before doing path lookup
+            if is_builtin(first) {
+                let saved_in = save_fd(0);
+                let saved_out = save_fd(1);
+
+                if let Err(code) = setup_redirects(cmd, cwd) {
+                    restore_fd(saved_in, 0);
+                    restore_fd(saved_out, 1);
+                    return code;
+                }
+
+                let result = builtin::dispatch(&cmd.argv, cwd).unwrap_or(1);
+
+                restore_fd(saved_in, 0);
+                restore_fd(saved_out, 1);
+
+                if result == builtin::EXIT_SENTINEL {
+                    return result;
+                }
+
+                if cmd.stdout_file.is_some() && result == 0 {
+                    let _ = libmorpheus::fs::sync();
+                }
+                return result;
+            }
+        }
+    }
+
     let binary = match path::which(&cmd.argv[0], cwd) {
         Some(p) => p,
         None => {
@@ -26,7 +61,6 @@ fn run_single(cmd: &SimpleCommand, cwd: &str) -> i32 {
         }
     };
 
-    let has_redirect = cmd.stdout_file.is_some();
     let saved_in = save_fd(0);
     let saved_out = save_fd(1);
 
@@ -71,14 +105,6 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
     let mut children: Vec<u32> = Vec::with_capacity(n);
 
     for (i, cmd) in commands.iter().enumerate() {
-        let binary = match path::which(&cmd.argv[0], cwd) {
-            Some(p) => p,
-            None => {
-                libmorpheus::eprintln!("msh: command not found: {}", cmd.argv[0]);
-                continue;
-            }
-        };
-
         // Wire stdin from previous pipe
         if i > 0 {
             let _ = process::dup2(pipes[i - 1].0, 0);
@@ -89,7 +115,6 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
             let _ = process::dup2(pipes[i].1, 1);
         } else {
             // Last command: restore original stdout
-            restore_fd(save_fd(1), 1);
             if let Some(ref saved) = saved_out {
                 let _ = process::dup2(*saved, 1);
             }
@@ -98,9 +123,29 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
         // Handle per-command redirects
         let _ = setup_redirects(cmd, cwd);
 
-        match spawn_child(&binary, &cmd.argv) {
-            Some(pid) => children.push(pid),
-            None => {}
+        // Try builtin first — serial dispatch writes to fd 1, so pipe redirects work
+        if let Some(_code) = builtin::dispatch(&cmd.argv, cwd) {
+            // Builtin ran, output went through fd 1 into the pipe
+        } else {
+            let binary = match path::which(&cmd.argv[0], cwd) {
+                Some(p) => p,
+                None => {
+                    libmorpheus::eprintln!("msh: command not found: {}", cmd.argv[0]);
+                    // Restore fds before continuing
+                    if let Some(ref s) = saved_in {
+                        let _ = process::dup2(*s, 0);
+                    }
+                    if let Some(ref s) = saved_out {
+                        let _ = process::dup2(*s, 1);
+                    }
+                    continue;
+                }
+            };
+
+            match spawn_child(&binary, &cmd.argv) {
+                Some(pid) => children.push(pid),
+                None => {}
+            }
         }
 
         // Restore shell's own fds for next iteration
@@ -217,4 +262,13 @@ fn restore_fd(saved: Option<u32>, target: u32) {
         let _ = process::dup2(fd, target);
         let _ = fs::close(fd as usize);
     }
+}
+
+fn is_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "exit" | "quit" | "cd" | "pwd" | "echo" | "clear" | "true" | "false" | "help"
+        | "ls" | "cat" | "mkdir" | "rm" | "mv" | "cp" | "touch" | "stat" | "write" | "sync"
+        | "ps" | "kill" | "sysinfo" | "sleep"
+    )
 }

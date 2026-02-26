@@ -82,14 +82,20 @@ fn main() -> i32 {
         };
 
         if pipeline.commands.len() == 1 {
-            if let Some(code) =
-                builtin::dispatch_fb(&pipeline.commands[0].argv, &cwd, &framebuffer, &mut con)
-            {
-                if code == builtin::EXIT_SENTINEL {
-                    return builtin::exit_code();
+            let cmd = &pipeline.commands[0];
+            let has_redirects = cmd.stdin_file.is_some() || cmd.stdout_file.is_some();
+
+            // If there are redirects, always go through exec (handles fd-level I/O)
+            if !has_redirects {
+                if let Some(code) =
+                    builtin::dispatch_fb(&cmd.argv, &cwd, &framebuffer, &mut con)
+                {
+                    if code == builtin::EXIT_SENTINEL {
+                        return builtin::exit_code();
+                    }
+                    last_status = code;
+                    continue;
                 }
-                last_status = code;
-                continue;
             }
         }
 
