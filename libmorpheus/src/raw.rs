@@ -120,6 +120,9 @@ pub const SYS_THREAD_JOIN: u64 = 82;
 // signal return (83)
 pub const SYS_SIGRETURN: u64 = 83;
 
+// input (84)
+pub const SYS_MOUSE_READ: u64 = 84;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;
