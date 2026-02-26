@@ -160,7 +160,7 @@ pub fn exit_code() -> i32 {
 
 fn cd_cmd(args: &[String], cwd: &str) -> i32 {
     let target = match args.first().map(|s| s.as_str()) {
-        None => String::from("/"),
+        None => path::resolve(cwd, ".."),
         Some("-") => match get_prev_dir() {
             Some(p) => {
                 libmorpheus::println!("{}", p);
@@ -200,7 +200,7 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
 
 fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
     let target = match args.first().map(|s| s.as_str()) {
-        None => String::from("/"),
+        None => path::resolve(cwd, ".."),
         Some("-") => match get_prev_dir() {
             Some(p) => {
                 con.write_str(fb, &p);
