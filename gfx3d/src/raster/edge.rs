@@ -2,6 +2,13 @@ use crate::math::fixed::Fx16;
 use super::span::Span;
 use super::triangle::Vertex;
 
+/// no_std ceil for f32.
+#[inline(always)]
+fn float_ceil(x: f32) -> i32 {
+    let i = x as i32;
+    if (i as f32) < x { i + 1 } else { i }
+}
+
 /// DDA edge stepper for triangle rasterization.
 ///
 /// Digital Differential Analyzer: steps an edge from vertex A to vertex B
@@ -38,8 +45,8 @@ impl Edge {
     /// Pre-computes per-scanline stepping increments for all attributes.
     /// Uses a single fixed-point reciprocal of dy to compute all steps.
     pub fn new(a: &Vertex, b: &Vertex) -> Self {
-        let y_start = a.pos.y.ceil() as i32;
-        let y_end = b.pos.y.ceil() as i32;
+        let y_start = float_ceil(a.pos.y);
+        let y_end = float_ceil(b.pos.y);
         let dy_f = b.pos.y - a.pos.y;
 
         if dy_f.abs() < 0.001 || y_start >= y_end {

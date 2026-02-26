@@ -16,7 +16,7 @@ pub struct Vec3 {
 }
 
 /// 4D homogeneous vector (clip space, transformed vertices).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C, align(16))]
 pub struct Vec4 {
     pub x: f32,

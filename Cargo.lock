@@ -215,6 +215,10 @@ name = "morpheus-display"
 version = "0.1.0"
 
 [[package]]
+name = "morpheus-gfx3d"
+version = "1.0.1"
+
+[[package]]
 name = "morpheus-helix"
 version = "1.0.1"
 dependencies = [
