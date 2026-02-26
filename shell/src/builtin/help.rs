@@ -9,9 +9,9 @@ pub fn usage(cmd: &str) -> Option<&'static str> {
             "\n",
             "USAGE\n",
             "  cd [path]\n",
+            "  cd          Go up one directory (same as cd ..)\n",
             "  cd -        Return to previous directory\n",
             "\n",
-            "With no argument, changes to /.\n",
             "Supports relative paths, . and .. components.\n",
         ),
         "pwd" => concat!(

@@ -400,6 +400,7 @@ impl OpenOptions {
 ///
 /// Layout must match kernel's `morpheus_helix::types::FileStat`.
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct Metadata {
     /// Full path hash.
     pub key: u64,
