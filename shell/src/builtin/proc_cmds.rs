@@ -79,26 +79,39 @@ pub fn ps_fb(fb: &Framebuffer, con: &mut Console) -> i32 {
     0
 }
 
-pub fn kill(args: &[String]) -> i32 {
-    let Some(pid_str) = args.first() else {
-        libmorpheus::eprintln!("kill: need <pid> [signal]");
-        return 1;
-    };
-    let Some(pid) = parse_u32(pid_str) else {
-        libmorpheus::eprintln!("kill: invalid pid: {}", pid_str);
-        return 1;
-    };
-
-    let sig: u8 = if let Some(s) = args.get(1) {
-        match parse_u32(s) {
-            Some(n) if n <= 255 => n as u8,
-            _ => {
-                libmorpheus::eprintln!("kill: invalid signal: {}", s);
-                return 1;
+fn parse_kill_args(args: &[String]) -> Option<(u32, u8)> {
+    if args.is_empty() {
+        return None;
+    }
+    let first = &args[0];
+    // `kill -9 <pid>` syntax: first arg starts with '-' and rest is a number
+    if first.starts_with('-') && first.len() > 1 {
+        if let Some(sig) = parse_u32(&first[1..]) {
+            if sig <= 255 {
+                if let Some(pid_str) = args.get(1) {
+                    if let Some(pid) = parse_u32(pid_str) {
+                        return Some((pid, sig as u8));
+                    }
+                }
             }
         }
+    }
+    // `kill <pid> [signal]` syntax
+    let pid = parse_u32(first)?;
+    let sig = if let Some(s) = args.get(1) {
+        let n = parse_u32(s)?;
+        if n > 255 { return None; }
+        n as u8
     } else {
         process::signal::SIGTERM
+    };
+    Some((pid, sig))
+}
+
+pub fn kill(args: &[String]) -> i32 {
+    let Some((pid, sig)) = parse_kill_args(args) else {
+        libmorpheus::eprintln!("kill: usage: kill [-signal] <pid>");
+        return 1;
     };
 
     match process::kill(pid, sig) {
@@ -111,33 +124,9 @@ pub fn kill(args: &[String]) -> i32 {
 }
 
 pub fn kill_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
-    let Some(pid_str) = args.first() else {
-        con.write_colored(fb, "kill: need <pid> [signal]\n", (170, 0, 0));
+    let Some((pid, sig)) = parse_kill_args(args) else {
+        con.write_colored(fb, "kill: usage: kill [-signal] <pid>\n", (170, 0, 0));
         return 1;
-    };
-    let Some(pid) = parse_u32(pid_str) else {
-        con.write_colored(
-            fb,
-            &format!("kill: invalid pid: {}\n", pid_str),
-            (170, 0, 0),
-        );
-        return 1;
-    };
-
-    let sig: u8 = if let Some(s) = args.get(1) {
-        match parse_u32(s) {
-            Some(n) if n <= 255 => n as u8,
-            _ => {
-                con.write_colored(
-                    fb,
-                    &format!("kill: invalid signal: {}\n", s),
-                    (170, 0, 0),
-                );
-                return 1;
-            }
-        }
-    } else {
-        process::signal::SIGTERM
     };
 
     match process::kill(pid, sig) {
