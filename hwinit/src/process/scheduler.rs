@@ -393,6 +393,8 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
     let child_pid = proc.pid;
     let parent_pid = proc.parent_pid;
 
+    crate::syscall::handler::release_fb_lock_if_holder(child_pid);
+
     proc.state = ProcessState::Zombie;
     proc.exit_code = Some(code);
     LIVE_COUNT.fetch_sub(1, Ordering::Relaxed);

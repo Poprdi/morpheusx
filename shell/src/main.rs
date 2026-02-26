@@ -115,10 +115,5 @@ fn main() -> i32 {
 }
 
 fn install_signals() {
-    extern "C" fn sigint_handler(_sig: u64) {
-        INTERRUPTED.store(true, Ordering::Release);
-        process::sigreturn();
-    }
-
-    let _ = process::sigaction(process::signal::SIGINT, sigint_handler as *const () as u64);
+    let _ = process::sigaction(process::signal::SIGINT, 1);
 }

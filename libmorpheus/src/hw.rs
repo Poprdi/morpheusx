@@ -287,6 +287,40 @@ pub fn fb_map() -> Result<u64, u64> {
     }
 }
 
+/// Acquire exclusive framebuffer access.
+///
+/// While locked, other well-behaved processes should skip framebuffer writes.
+/// Only one process can hold the lock at a time. Returns Ok(()) on success,
+/// Err(EBUSY) if another process already holds the lock.
+pub fn fb_lock() -> Result<(), u64> {
+    let ret = unsafe { syscall0(SYS_FB_LOCK) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Release exclusive framebuffer access.
+///
+/// Only the lock holder can unlock. Returns Ok(()) on success,
+/// Err(EPERM) if the caller doesn't hold the lock.
+pub fn fb_unlock() -> Result<(), u64> {
+    let ret = unsafe { syscall0(SYS_FB_UNLOCK) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Check if the framebuffer is locked by another process.
+///
+/// Returns 0 if unlocked, or the PID of the lock holder.
+pub fn fb_is_locked() -> u32 {
+    unsafe { syscall0(SYS_FB_IS_LOCKED) as u32 }
+}
+
 // mouse
 
 /// Relative mouse state returned by `mouse_read()`.

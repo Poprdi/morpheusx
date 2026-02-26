@@ -209,6 +209,11 @@ pub const SYS_SIGRETURN: u64 = 83;
 // input (84)
 pub const SYS_MOUSE_READ: u64 = 84;
 
+// framebuffer exclusive access (85-87)
+pub const SYS_FB_LOCK: u64 = 85;
+pub const SYS_FB_UNLOCK: u64 = 86;
+pub const SYS_FB_IS_LOCKED: u64 = 87;
+
 // EXTERN ASM FUNCTIONS
 
 extern "C" {
@@ -332,6 +337,9 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_THREAD_JOIN => sys_thread_join(a1),
         SYS_SIGRETURN => sys_sigreturn(),
         SYS_MOUSE_READ => sys_mouse_read(),
+        SYS_FB_LOCK => sys_fb_lock(),
+        SYS_FB_UNLOCK => sys_fb_unlock(),
+        SYS_FB_IS_LOCKED => fb_lock_holder() as u64,
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);

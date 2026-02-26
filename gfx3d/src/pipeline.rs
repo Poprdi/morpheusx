@@ -272,12 +272,12 @@ impl Pipeline {
                 let format = target.pixel_format();
                 let stride = target.stride();
                 let vp_w = self.viewport_w;
-                let color_buf = target.color_buffer_mut();
+                let (color_buf, depth_buf) = target.buffers_mut();
 
                 for s in 0..span_count {
                     self.stats.pixels_written += fill_span(
                         &self.spans[s], material, &self.fog, &self.fog_color,
-                        self.sample_mode, format, stride, vp_w, color_buf,
+                        self.sample_mode, format, stride, vp_w, color_buf, depth_buf,
                     );
                 }
             }
@@ -301,7 +301,7 @@ fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     let clip_w = v.pos.w;
     if clip_w.abs() < 1e-6 { return *v; }
 
-    let inv_w = fast::fast_recip(clip_w);
+    let inv_w = 1.0 / clip_w;
     let ndc_x = v.pos.x * inv_w;
     let ndc_y = v.pos.y * inv_w;
     let ndc_z = v.pos.z * inv_w;
@@ -361,6 +361,7 @@ fn fill_span(
     stride: u32,
     vp_w: u32,
     color_buf: &mut [u32],
+    depth_buf: &mut [u32],
 ) -> u32 {
     let grads = SpanGradients::from_span(span);
     let x_start = span.x_left.ceil().max(0) as u32;
@@ -376,6 +377,7 @@ fn fill_span(
     let mut cb = span.b_left + grads.b_step.mul(prestep_fx);
     let mut tu = span.u_left + grads.u_step.mul(prestep_fx);
     let mut tv = span.v_left + grads.v_step.mul(prestep_fx);
+    let mut z = span.z_left + grads.z_step.mul(prestep_fx);
     let mut fog_val = span.fog_left + grads.fog_step.mul(prestep_fx);
 
     let row_offset = (span.y * stride) as usize;
@@ -383,7 +385,21 @@ fn fill_span(
 
     for x in x_start..x_end {
         let buf_idx = row_offset + x as usize;
-        if buf_idx >= color_buf.len() { break; }
+        if buf_idx >= color_buf.len() || buf_idx >= depth_buf.len() { break; }
+
+        let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
+        if depth >= depth_buf[buf_idx] {
+            inv_w += grads.inv_w_step;
+            cr += grads.r_step;
+            cg += grads.g_step;
+            cb += grads.b_step;
+            tu += grads.u_step;
+            tv += grads.v_step;
+            z += grads.z_step;
+            fog_val += grads.fog_step;
+            continue;
+        }
+        depth_buf[buf_idx] = depth;
 
         let w = if inv_w.0 != 0 {
             Fx16::ONE.div(inv_w)
@@ -439,6 +455,7 @@ fn fill_span(
         cb += grads.b_step;
         tu += grads.u_step;
         tv += grads.v_step;
+        z += grads.z_step;
         fog_val += grads.fog_step;
     }
 
