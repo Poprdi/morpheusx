@@ -83,12 +83,7 @@ pub fn dispatch(argv: &[String], cwd: &str) -> Option<i32> {
     }
 }
 
-pub fn dispatch_fb(
-    argv: &[String],
-    cwd: &str,
-    fb: &Framebuffer,
-    con: &mut Console,
-) -> Option<i32> {
+pub fn dispatch_fb(argv: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> Option<i32> {
     if argv.is_empty() {
         return None;
     }
@@ -219,12 +214,20 @@ fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         match libmorpheus::fs::metadata(&target) {
             Ok(m) => {
                 if !m.is_dir() {
-                    con.write_colored(fb, &format!("cd: {}: Not a directory\n", target), (170, 0, 0));
+                    con.write_colored(
+                        fb,
+                        &format!("cd: {}: Not a directory\n", target),
+                        (170, 0, 0),
+                    );
                     return 1;
                 }
             }
             Err(_) => {
-                con.write_colored(fb, &format!("cd: {}: No such directory\n", target), (170, 0, 0));
+                con.write_colored(
+                    fb,
+                    &format!("cd: {}: No such directory\n", target),
+                    (170, 0, 0),
+                );
                 return 1;
             }
         }

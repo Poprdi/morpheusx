@@ -248,7 +248,11 @@ pub fn mkdir_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console)
     let p = path::resolve(cwd, arg);
     if let Ok(m) = libmorpheus::fs::metadata(&p) {
         if m.is_dir() {
-            con.write_colored(fb, &format!("mkdir: {}: Directory already exists\n", p), (170, 0, 0));
+            con.write_colored(
+                fb,
+                &format!("mkdir: {}: Directory already exists\n", p),
+                (170, 0, 0),
+            );
         } else {
             con.write_colored(fb, &format!("mkdir: {}: File exists\n", p), (170, 0, 0));
         }

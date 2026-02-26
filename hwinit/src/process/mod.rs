@@ -30,7 +30,7 @@ pub mod scheduler;
 pub mod signals;
 pub mod vma;
 
-pub use context::CpuContext;
+pub use context::{CpuContext, FpuState};
 pub use scheduler::{
     block_sleep, exit_process, init_scheduler, scheduler_tick, set_tsc_frequency,
     spawn_kernel_thread, spawn_user_thread, tsc_frequency, wait_for_child, wake_futex_waiters,
@@ -119,6 +119,12 @@ pub struct Process {
     /// Saved register state (populated on every context switch away).
     pub context: CpuContext,
 
+    // FPU / SSE
+    /// FXSAVE area — saved/restored by the timer ISR on every context switch.
+    pub fpu_state: FpuState,
+    /// Saved FPU state before signal handler dispatch (restored by SYS_SIGRETURN).
+    pub saved_signal_fpu: FpuState,
+
     // memory
     /// Virtual address range of the user heap: `(base, size_bytes)`.
     pub heap_region: (u64, u64),
@@ -190,6 +196,8 @@ impl Process {
             kernel_stack_top: 0,
             kernel_stack_base: 0,
             context: CpuContext::empty(),
+            fpu_state: FpuState::new(),
+            saved_signal_fpu: FpuState::new(),
             heap_region: (0, 0),
             pages_allocated: 0,
             priority: 128,

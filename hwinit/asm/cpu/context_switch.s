@@ -6,9 +6,9 @@
 ;
 ; Exports:
 ;   irq_timer_isr   — installed in IDT vector 0x20 (PIT IRQ 0).
-;                     Saves the current CpuContext, calls scheduler_tick()
-;                     (Rust, MS x64), patches the iretq frame with the
-;                     returned next-process context, and resumes.
+;                     Saves the current CpuContext + FPU/SSE state,
+;                     calls scheduler_tick() (Rust, MS x64), restores
+;                     the next process's state, and resumes via iretq.
 ;
 ; CpuContext field layout (must match hwinit/src/process/context.rs):
 ;   0x00  rax
@@ -33,6 +33,11 @@
 ;   0x98  ss
 ;   Total: 0xA0 (160) bytes
 ;
+; FPU/SSE state (FpuState):
+;   Saved/restored via FXSAVE/FXRSTOR through `current_fpu_ptr`.
+;   512 bytes, 16-byte aligned, stored per-process in PROCESS_TABLE.
+;   The pointer is updated by scheduler_tick() when it picks the next process.
+;
 ; iretq frame layout pushed by CPU at ISR entry (all 8-byte slots):
 ;   [rsp+0x00]  RIP      (return address in interrupted code)
 ;   [rsp+0x08]  CS       (code segment selector, zero-extended)
@@ -45,16 +50,25 @@
 bits 64
 default rel
 
-; ── Data: CR3 of the next process (written by scheduler_tick in Rust) ─────
+; ── Data ──────────────────────────────────────────────────────────────────
 section .data
+
 align 8
 global next_cr3
 next_cr3: dq 0
 
+; Pointer to the FpuState of the currently-running process.
+; Written by scheduler_tick() on every switch; read by this ISR for
+; FXSAVE (outgoing) and FXRSTOR (incoming).  NULL during early boot
+; before the scheduler is initialized — guarded by a null check.
+align 16
+global current_fpu_ptr
+current_fpu_ptr: dq 0
+
 section .text
 
 global irq_timer_isr
-extern scheduler_tick           ; Rust fn: unsafe extern "sysv64" / MS x64
+extern scheduler_tick           ; Rust fn: unsafe extern "C" (MS x64 ABI)
 
 ; ───────────────────────────────────────────────────────────────────────────
 ; irq_timer_isr — PIT timer interrupt handler (vector 0x20)
@@ -103,6 +117,15 @@ irq_timer_isr:
     mov     rax, [rsp + 0xA0 + 0x20]   ; SS
     mov     [rsp + 0x98], rax
 
+    ; ── Save outgoing process FPU/SSE state (FXSAVE) ─────────────────────
+    ; current_fpu_ptr → &proc.fpu_state of the process being preempted.
+    ; Must happen BEFORE calling Rust (scheduler_tick may use XMM regs).
+    mov     rbx, [rel current_fpu_ptr]
+    test    rbx, rbx
+    jz      .skip_fxsave
+    fxsave  [rbx]
+.skip_fxsave:
+
     ; ── ACK PIT (send EOI to master PIC before calling Rust) ─────────────
     mov     al, 0x20
     out     0x20, al
@@ -117,6 +140,18 @@ irq_timer_isr:
     add     rsp, 32                     ; remove shadow space
 
     ; RAX = *const CpuContext of next process (points into PROCESS_TABLE).
+    ; scheduler_tick has updated current_fpu_ptr to point to the incoming
+    ; process's FpuState.
+
+    ; ── Restore incoming process FPU/SSE state (FXRSTOR) ──────────────────
+    ; Must happen AFTER scheduler_tick (which updated the pointer) and
+    ; BEFORE restoring GPRs (FXRSTOR clobbers no GPRs, but we use RBX as
+    ; scratch — RBX will be properly restored from the next context below).
+    mov     rbx, [rel current_fpu_ptr]
+    test    rbx, rbx
+    jz      .skip_fxrstor
+    fxrstor [rbx]
+.skip_fxrstor:
 
     ; ── Switch CR3 if process address spaces differ ───────────────────────
     ; next_cr3 is written by scheduler_tick() before returning.

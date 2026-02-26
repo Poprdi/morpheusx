@@ -131,6 +131,8 @@ pub unsafe fn syscall0(nr: u64) -> u64 {
         out("r8") _,
         out("r9") _,
         out("r10") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),
     );
     ret
@@ -148,6 +150,8 @@ pub unsafe fn syscall1(nr: u64, a1: u64) -> u64 {
         out("r8") _,
         out("r9") _,
         out("r10") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),
     );
     ret
@@ -166,6 +170,8 @@ pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64 {
         out("r8") _,
         out("r9") _,
         out("r10") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),
     );
     ret
@@ -185,6 +191,8 @@ pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         out("r8") _,
         out("r9") _,
         out("r10") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),
     );
     ret
@@ -204,6 +212,8 @@ pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         out("r11") _,
         out("r8") _,
         out("r9") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),
     );
     ret
@@ -223,6 +233,8 @@ pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> 
         out("rcx") _,
         out("r11") _,
         out("r9") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),
     );
     ret

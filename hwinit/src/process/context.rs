@@ -30,6 +30,39 @@
 //! ```
 //!
 //! Total size: 0xA0 = 160 bytes.
+//!
+//! ## FPU / SSE state (`FpuState`)
+//!
+//! Saved and restored separately via FXSAVE/FXRSTOR in the timer ISR.
+//! 512 bytes, 16-byte aligned — stored per-process, NOT inside CpuContext.
+
+/// FXSAVE/FXRSTOR area — holds x87, MMX, and SSE register state.
+///
+/// 512 bytes, 16-byte aligned as required by the FXSAVE instruction.
+/// Each process owns one; the timer ISR saves/restores it on context switch.
+#[derive(Clone, Copy)]
+#[repr(C, align(16))]
+pub struct FpuState {
+    pub data: [u8; 512],
+}
+
+impl FpuState {
+    /// Clean initial FPU state for a new process.
+    ///
+    /// - x87 FCW = 0x037F  (all x87 exceptions masked, 64-bit precision)
+    /// - MXCSR   = 0x1F80  (all SSE exceptions masked, round-to-nearest)
+    /// - All XMM registers = 0
+    pub const fn new() -> Self {
+        let mut data = [0u8; 512];
+        // Bytes 0-1: x87 FPU Control Word
+        data[0] = 0x7F;
+        data[1] = 0x03;
+        // Bytes 24-27: MXCSR (little-endian u32)
+        data[24] = 0x80;
+        data[25] = 0x1F;
+        Self { data }
+    }
+}
 
 /// Full CPU register state saved at a context switch or interrupt boundary.
 #[derive(Clone, Copy, Default)]

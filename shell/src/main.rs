@@ -87,9 +87,7 @@ fn main() -> i32 {
 
             // If there are redirects, always go through exec (handles fd-level I/O)
             if !has_redirects {
-                if let Some(code) =
-                    builtin::dispatch_fb(&cmd.argv, &cwd, &framebuffer, &mut con)
-                {
+                if let Some(code) = builtin::dispatch_fb(&cmd.argv, &cwd, &framebuffer, &mut con) {
                     if code == builtin::EXIT_SENTINEL {
                         return builtin::exit_code();
                     }
@@ -99,7 +97,20 @@ fn main() -> i32 {
             }
         }
 
-        last_status = exec::run(&pipeline, &cwd);
+        let status = exec::run(&pipeline, &cwd);
+        if status == 127 {
+            let cmd_name = pipeline
+                .commands
+                .first()
+                .and_then(|c| c.argv.first())
+                .map(|s| s.as_str())
+                .unwrap_or("(unknown)");
+            con.write_colored(&framebuffer, cmd_name, (255, 85, 85));
+            con.write_str(&framebuffer, ": not a known command\n");
+            last_status = 0;
+        } else {
+            last_status = status;
+        }
     }
 }
 

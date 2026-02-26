@@ -9,6 +9,7 @@
 use crate::cpu::gdt::init_gdt;
 use crate::cpu::idt::{init_idt, set_interrupt_handler};
 use crate::cpu::pic::init_pic;
+use crate::cpu::sse::enable_sse;
 use crate::cpu::tsc::calibrate_tsc_pit;
 use crate::dma::DmaRegion;
 use crate::heap::init_heap;
@@ -165,6 +166,8 @@ pub unsafe fn platform_init_selfcontained(
     init_gdt(kernel_stack_top);
 
     init_idt();
+
+    enable_sse();
 
     // phase 3: interrupts
     puts("[HWINIT] Phase 3: PIC\n");
