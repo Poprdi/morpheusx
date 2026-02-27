@@ -2303,52 +2303,77 @@ pub unsafe fn sys_fb_map() -> u64 {
     };
 
     // Allocate back + shadow buffers on first call.
+    //
+    // IMPORTANT: switch to the kernel CR3 for the allocation + VRAM copy.
+    // The buddy allocator stores free-list nodes at their physical addresses
+    // and traverses them via identity mapping.  User process page tables
+    // remap low virtual addresses (e.g. 0x400000) for ELF segments, which
+    // breaks the identity mapping for those physical addresses.  Running
+    // the allocator in a user CR3 can read ELF code bytes as free-list
+    // pointers → #GP.
     if FB_BACK_PHYS == 0 {
-        let pages = info.size.div_ceil(4096);
-        let registry = crate::memory::global_registry_mut();
+        let saved_cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) saved_cr3, options(nostack, nomem));
+        let kcr3 = crate::process::scheduler::get_kernel_cr3();
+        if kcr3 != 0 {
+            core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
+        }
 
-        let back_phys = match registry.allocate_pages(
-            crate::memory::AllocateType::AnyPages,
-            crate::memory::MemoryType::Allocated,
-            pages,
-        ) {
-            Ok(p) => p,
-            Err(_) => return ENOMEM,
-        };
+        let alloc_result = fb_map_alloc_buffers(&info);
 
-        let shadow_phys = match registry.allocate_pages(
-            crate::memory::AllocateType::AnyPages,
-            crate::memory::MemoryType::Allocated,
-            pages,
-        ) {
-            Ok(p) => p,
-            Err(_) => {
-                let _ = registry.free_pages(back_phys, pages);
-                return ENOMEM;
-            }
-        };
+        core::arch::asm!("mov cr3, {}", in(reg) saved_cr3, options(nostack, nomem));
 
-        // Snapshot current VRAM into both buffers so the first delta
-        // sees the existing screen content (bootloader TUI, etc.)
-        // instead of flashing black.
-        core::ptr::copy_nonoverlapping(
-            info.base as *const u8,
-            back_phys as *mut u8,
-            info.size as usize,
-        );
-        core::ptr::copy_nonoverlapping(
-            info.base as *const u8,
-            shadow_phys as *mut u8,
-            info.size as usize,
-        );
-
-        FB_BACK_PHYS = back_phys;
-        FB_SHADOW_PHYS = shadow_phys;
-        FB_BACK_PAGES = pages;
+        if let Err(e) = alloc_result {
+            return e;
+        }
     }
 
     // Map back buffer as writable cacheable (flag 0x01 = writable, no 0x02 uncacheable).
     sys_map_phys(FB_BACK_PHYS, FB_BACK_PAGES, 0x01)
+}
+
+/// Allocate back + shadow buffers, copy VRAM content into both.
+/// Must be called under the kernel's CR3 (identity mapping intact).
+unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
+    let pages = info.size.div_ceil(4096);
+    let registry = crate::memory::global_registry_mut();
+
+    let back_phys = registry.allocate_pages(
+        crate::memory::AllocateType::AnyPages,
+        crate::memory::MemoryType::Allocated,
+        pages,
+    ).map_err(|_| ENOMEM)?;
+
+    let shadow_phys = match registry.allocate_pages(
+        crate::memory::AllocateType::AnyPages,
+        crate::memory::MemoryType::Allocated,
+        pages,
+    ) {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = registry.free_pages(back_phys, pages);
+            return Err(ENOMEM);
+        }
+    };
+
+    // Snapshot current VRAM into both buffers so the first delta
+    // sees the existing screen content (bootloader TUI, etc.)
+    // instead of flashing black.
+    core::ptr::copy_nonoverlapping(
+        info.base as *const u8,
+        back_phys as *mut u8,
+        info.size as usize,
+    );
+    core::ptr::copy_nonoverlapping(
+        info.base as *const u8,
+        shadow_phys as *mut u8,
+        info.size as usize,
+    );
+
+    FB_BACK_PHYS = back_phys;
+    FB_SHADOW_PHYS = shadow_phys;
+    FB_BACK_PAGES = pages;
+    Ok(())
 }
 
 /// Kernel-internal: push back-buffer delta to VRAM.
@@ -2365,6 +2390,15 @@ pub unsafe fn fb_present_tick() {
         None => return,
     };
 
+    // Switch to kernel CR3 so identity-mapped buffer accesses hit the
+    // correct physical pages (user CR3 may remap low virtual addresses).
+    let saved_cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) saved_cr3, options(nostack, nomem));
+    let kcr3 = crate::process::scheduler::get_kernel_cr3();
+    if kcr3 != 0 {
+        core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
+    }
+
     let stride_pixels = info.stride / 4;
 
     #[cfg(target_arch = "x86_64")]
@@ -2376,6 +2410,8 @@ pub unsafe fn fb_present_tick() {
         info.height as u64,
         stride_pixels as u64,
     );
+
+    core::arch::asm!("mov cr3, {}", in(reg) saved_cr3, options(nostack, nomem));
 }
 
 // SYS_PS (65) — list all processes
