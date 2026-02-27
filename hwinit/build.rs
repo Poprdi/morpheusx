@@ -26,6 +26,10 @@ const ASM_PCI: &[&str] = &[
     "asm/pci/virtio_cap.s",
 ];
 
+const ASM_FB: &[&str] = &[
+    "asm/fb/present.s",
+];
+
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -58,7 +62,7 @@ fn main() {
 
     let mut objects = Vec::new();
 
-    for files in [ASM_CPU, ASM_PCI] {
+    for files in [ASM_CPU, ASM_PCI, ASM_FB] {
         for path in files.iter() {
             if Path::new(path).exists() {
                 println!("cargo:rerun-if-changed={}", path);
