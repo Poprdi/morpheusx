@@ -90,6 +90,79 @@ impl RenderTarget for SoftwareTarget {
     fn stride(&self) -> u32 { self.width }
 }
 
+/// Render target that writes directly into an externally-owned pixel buffer
+/// (e.g. a memory-mapped framebuffer back buffer).
+///
+/// Eliminates the intermediate copy that `SoftwareTarget` requires.
+/// The depth buffer is still heap-allocated since there's no hardware
+/// equivalent to share.
+pub struct DirectTarget {
+    ptr: *mut u32,
+    width: u32,
+    height: u32,
+    stride_px: u32,
+    len: usize,
+    depth: Vec<u32>,
+    format: TargetPixelFormat,
+}
+
+impl DirectTarget {
+    /// Wrap an externally-owned pixel buffer as a render target.
+    ///
+    /// `ptr` must point to at least `stride_px * height` u32 pixels.
+    /// `stride_px` is measured in pixels (not bytes).
+    pub unsafe fn new(
+        ptr: *mut u32,
+        width: u32,
+        height: u32,
+        stride_px: u32,
+        format: TargetPixelFormat,
+    ) -> Self {
+        let len = (stride_px as usize) * (height as usize);
+        Self {
+            ptr,
+            width,
+            height,
+            stride_px,
+            len,
+            depth: alloc::vec![0xFFFF_FFFFu32; len],
+            format,
+        }
+    }
+
+    pub fn clear(&mut self, clear_color: u32) {
+        let buf = unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) };
+        buf.fill(clear_color);
+        self.depth.fill(0xFFFF_FFFF);
+    }
+
+    pub fn clear_depth(&mut self) {
+        self.depth.fill(0xFFFF_FFFF);
+    }
+}
+
+impl RenderTarget for DirectTarget {
+    #[inline(always)]
+    fn width(&self) -> u32 { self.width }
+    #[inline(always)]
+    fn height(&self) -> u32 { self.height }
+    #[inline(always)]
+    fn color_buffer_mut(&mut self) -> &mut [u32] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+    #[inline(always)]
+    fn depth_buffer_mut(&mut self) -> &mut [u32] { &mut self.depth }
+    #[inline(always)]
+    fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]) {
+        let color = unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) };
+        (color, &mut self.depth)
+    }
+    #[inline(always)]
+    fn pixel_format(&self) -> TargetPixelFormat { self.format }
+    #[inline(always)]
+    fn stride(&self) -> u32 { self.stride_px }
+}
+
 /// Convert internal RGBA (0xRRGGBBAA) to target pixel format.
 #[inline(always)]
 pub fn convert_pixel(rgba: u32, format: TargetPixelFormat) -> u32 {

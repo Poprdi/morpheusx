@@ -383,10 +383,15 @@ impl MemoryRegistry {
 
         let order = pages_to_order(pages);
 
-        let addr = match alloc_type {
-            AllocateType::AnyPages => self.buddy_alloc(order)?,
-            AllocateType::MaxAddress(limit) => self.buddy_alloc_below(order, limit)?,
-            AllocateType::Address(want) => self.buddy_alloc_at(want, pages)?,
+        // Buddy free-list nodes live at identity-mapped physical addresses.
+        // Under a user CR3 those VAs may be remapped — switch to kernel CR3.
+        let addr = {
+            let _guard = unsafe { KernelCr3Guard::enter() };
+            match alloc_type {
+                AllocateType::AnyPages => self.buddy_alloc(order)?,
+                AllocateType::MaxAddress(limit) => self.buddy_alloc_below(order, limit)?,
+                AllocateType::Address(want) => self.buddy_alloc_at(want, pages)?,
+            }
         };
 
         self.map_snapshot_add(addr, pages, mem_type);
@@ -402,20 +407,21 @@ impl MemoryRegistry {
 
         self.map_snapshot_remove(addr, pages);
 
-        // Decompose [addr, addr+pages*PAGE_SIZE) into naturally-aligned
-        // power-of-two blocks and return each to the buddy system.
-        let mut base = addr;
-        let end = addr + pages * PAGE_SIZE;
-        while base < end {
-            let remaining_pages = (end - base) / PAGE_SIZE;
-            let align_order = (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
-            let size_order = usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
-            let order = align_order.min(size_order).min(MAX_ORDER);
-            // SAFETY: addr came from allocate_pages; identity-mapped.
-            unsafe {
-                self.buddy_free(base, order);
+        // Switch to kernel CR3 for buddy free-list manipulation.
+        {
+            let _guard = unsafe { KernelCr3Guard::enter() };
+            let mut base = addr;
+            let end = addr + pages * PAGE_SIZE;
+            while base < end {
+                let remaining_pages = (end - base) / PAGE_SIZE;
+                let align_order = (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
+                let size_order = usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
+                let order = align_order.min(size_order).min(MAX_ORDER);
+                unsafe {
+                    self.buddy_free(base, order);
+                }
+                base += (1u64 << order) * PAGE_SIZE;
             }
-            base += (1u64 << order) * PAGE_SIZE;
         }
 
         self.map_key += 1;
@@ -830,6 +836,66 @@ impl MemoryRegistry {
         puts("MB regions=");
         put_hex32(self.map_count as u32);
         puts("\n");
+    }
+}
+
+// CR3 GUARD
+
+/// Validate a CR3 candidate: page-aligned, non-zero, within physical address
+/// space (< 2^52).
+#[inline]
+pub fn is_valid_cr3(cr3: u64) -> bool {
+    cr3 != 0 && cr3 & 0xFFF == 0 && cr3 < (1u64 << 52)
+}
+
+/// RAII guard that switches to the kernel's CR3 on creation and restores
+/// the previous CR3 on drop.  Ensures buddy allocator free-list traversals
+/// see identity-mapped physical pages even when called from a user process
+/// context.
+///
+/// If the kernel CR3 is not yet available (pre-scheduler init) or we're
+/// already running under it, this is a no-op.
+pub(crate) struct KernelCr3Guard {
+    saved_cr3: u64,
+    switched: bool,
+}
+
+impl KernelCr3Guard {
+    #[inline]
+    #[cfg(target_arch = "x86_64")]
+    pub unsafe fn enter() -> Self {
+        let kcr3 = crate::process::scheduler::get_kernel_cr3();
+        if kcr3 == 0 {
+            return Self { saved_cr3: 0, switched: false };
+        }
+        if !is_valid_cr3(kcr3) {
+            return Self { saved_cr3: 0, switched: false };
+        }
+        let saved: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) saved, options(nostack, nomem));
+        if saved == kcr3 {
+            return Self { saved_cr3: saved, switched: false };
+        }
+        core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
+        Self { saved_cr3: saved, switched: true }
+    }
+
+    #[inline]
+    #[cfg(not(target_arch = "x86_64"))]
+    pub unsafe fn enter() -> Self {
+        Self { saved_cr3: 0, switched: false }
+    }
+}
+
+impl Drop for KernelCr3Guard {
+    #[inline]
+    fn drop(&mut self) {
+        if self.switched {
+            unsafe {
+                #[cfg(target_arch = "x86_64")]
+                core::arch::asm!("mov cr3, {}", in(reg) self.saved_cr3, options(nostack, nomem));
+            }
+        }
     }
 }
 

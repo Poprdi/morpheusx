@@ -13,7 +13,7 @@ use crate::texture::sample::{self, SampleMode};
 use crate::light::{LightEnv, FogMode};
 use crate::scene::mesh::Mesh;
 use crate::scene::frustum::{Frustum, CullResult};
-use crate::target::{RenderTarget, TargetPixelFormat, convert_pixel};
+use crate::target::{RenderTarget, TargetPixelFormat};
 use crate::arena::Arena;
 use crate::camera::Camera;
 use crate::math::trig::TrigTable;
@@ -361,10 +361,269 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
     (c0 & c1 & c2) != 0
 }
 
-/// Inner pixel loop — process one span (horizontal scanline segment).
-///
-/// Extracted as a free function to avoid borrow conflicts with Pipeline fields.
+/// Dispatch to the optimal fill_span variant based on material and fog.
 fn fill_span(
+    span: &Span,
+    grads: &SpanGradients,
+    material: &Material,
+    fog: &FogMode,
+    fog_color: &[f32; 3],
+    sample_mode: SampleMode,
+    format: TargetPixelFormat,
+    stride: u32,
+    vp_w: u32,
+    color_buf: &mut [u32],
+    depth_buf: &mut [u32],
+) -> u32 {
+    let is_solid = material.texture.is_none();
+    let no_fog = matches!(fog, FogMode::None);
+
+    if is_solid && no_fog {
+        fill_span_solid(span, grads, material, format, stride, vp_w, color_buf, depth_buf)
+    } else if !is_solid && no_fog {
+        fill_span_textured(span, grads, material, sample_mode, format, stride, vp_w, color_buf, depth_buf)
+    } else {
+        fill_span_full(span, grads, material, fog, fog_color, sample_mode, format, stride, vp_w, color_buf, depth_buf)
+    }
+}
+
+/// Pack (r8, g8, b8) directly to the target pixel format — no intermediate.
+#[inline(always)]
+fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
+    match format {
+        TargetPixelFormat::Bgrx => (b as u32) | ((g as u32) << 8) | ((r as u32) << 16),
+        TargetPixelFormat::Rgbx => (r as u32) | ((g as u32) << 8) | ((b as u32) << 16),
+        TargetPixelFormat::InternalRgba => ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xFF,
+    }
+}
+
+/// Fast path: solid-color, no texture, no fog.
+///
+/// Skips the per-pixel perspective divide entirely. Colors are interpolated
+/// linearly in screen space (the error vs perspective-correct is invisible
+/// for Gouraud-shaded solid polygons). Everything stays in 16.16 fixed-point,
+/// no f32 in the inner loop.
+fn fill_span_solid(
+    span: &Span,
+    grads: &SpanGradients,
+    material: &Material,
+    format: TargetPixelFormat,
+    stride: u32,
+    vp_w: u32,
+    color_buf: &mut [u32],
+    depth_buf: &mut [u32],
+) -> u32 {
+    let x_start = span.x_left.ceil().max(0) as u32;
+    let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
+    if x_start >= x_end { return 0; }
+
+    let x_start_fx = Fx16::from_i32(x_start as i32);
+    let prestep_fx = x_start_fx - span.x_left;
+
+    // Pre-compute base color as 8.8 fixed point (avoid per-pixel f32→int)
+    let base_r = (material.base_color[0] * 256.0) as i32;
+    let base_g = (material.base_color[1] * 256.0) as i32;
+    let base_b = (material.base_color[2] * 256.0) as i32;
+
+    // Recover true color at x_start by dividing out inv_w once
+    let inv_w_start = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
+    let w_start = if inv_w_start.0 != 0 { Fx16::ONE.div(inv_w_start) } else { Fx16::ONE };
+
+    let cr_start = (span.r_left + grads.r_step.mul(prestep_fx)).mul(w_start);
+    let cg_start = (span.g_left + grads.g_step.mul(prestep_fx)).mul(w_start);
+    let cb_start = (span.b_left + grads.b_step.mul(prestep_fx)).mul(w_start);
+
+    // Recover true color at x_end by dividing out inv_w once
+    let span_len_fx = Fx16::from_i32((x_end - x_start) as i32);
+    let inv_w_end = inv_w_start + grads.inv_w_step.mul(span_len_fx);
+    let w_end = if inv_w_end.0 != 0 { Fx16::ONE.div(inv_w_end) } else { Fx16::ONE };
+
+    let cr_end = (span.r_left + grads.r_step.mul(prestep_fx + span_len_fx)).mul(w_end);
+    let cg_end = (span.g_left + grads.g_step.mul(prestep_fx + span_len_fx)).mul(w_end);
+    let cb_end = (span.b_left + grads.b_step.mul(prestep_fx + span_len_fx)).mul(w_end);
+
+    // Linear steps in screen-space color (2 divisions for the whole span)
+    let len = (x_end - x_start) as i32;
+    let len_fx = Fx16::from_i32(len.max(1));
+    let r_step = (cr_end - cr_start).div(len_fx);
+    let g_step = (cg_end - cg_start).div(len_fx);
+    let b_step = (cb_end - cb_start).div(len_fx);
+
+    let mut cr = cr_start;
+    let mut cg = cg_start;
+    let mut cb = cb_start;
+    let mut z = span.z_left + grads.z_step.mul(prestep_fx);
+
+    let row_offset = (span.y * stride) as usize;
+    let buf_end = color_buf.len().min(depth_buf.len());
+    let mut pixels_written = 0u32;
+
+    for x in x_start..x_end {
+        let buf_idx = row_offset + x as usize;
+        if buf_idx >= buf_end { break; }
+
+        let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
+        if depth >= depth_buf[buf_idx] {
+            cr += r_step;
+            cg += g_step;
+            cb += b_step;
+            z += grads.z_step;
+            continue;
+        }
+        depth_buf[buf_idx] = depth;
+
+        // Color: Fx16 (0..1 range) × base_color(8.8) → 24.8, >> 8 → u8
+        let pr = fast::clamp_u8((cr.0 * base_r) >> 24);
+        let pg = fast::clamp_u8((cg.0 * base_g) >> 24);
+        let pb = fast::clamp_u8((cb.0 * base_b) >> 24);
+        color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
+        pixels_written += 1;
+
+        cr += r_step;
+        cg += g_step;
+        cb += b_step;
+        z += grads.z_step;
+    }
+
+    pixels_written
+}
+
+/// Affine subdivision step for perspective-correct texture mapping.
+const AFFINE_STEP: u32 = 8;
+
+/// Textured path with affine subdivision — no fog.
+///
+/// Perspective divide every AFFINE_STEP pixels, linear UV interpolation
+/// between. Classic Quake/Unreal technique: 87.5% fewer divisions.
+fn fill_span_textured(
+    span: &Span,
+    grads: &SpanGradients,
+    material: &Material,
+    sample_mode: SampleMode,
+    format: TargetPixelFormat,
+    stride: u32,
+    vp_w: u32,
+    color_buf: &mut [u32],
+    depth_buf: &mut [u32],
+) -> u32 {
+    let x_start = span.x_left.ceil().max(0) as u32;
+    let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
+    if x_start >= x_end { return 0; }
+
+    let mip = match material.texture {
+        Some(m) => m,
+        None => return 0,
+    };
+    let tex = mip.level(0);
+
+    let x_start_fx = Fx16::from_i32(x_start as i32);
+    let prestep_fx = x_start_fx - span.x_left;
+
+    let mut inv_w = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
+    let mut cr_iw = span.r_left + grads.r_step.mul(prestep_fx);
+    let mut cg_iw = span.g_left + grads.g_step.mul(prestep_fx);
+    let mut cb_iw = span.b_left + grads.b_step.mul(prestep_fx);
+    let mut tu_iw = span.u_left + grads.u_step.mul(prestep_fx);
+    let mut tv_iw = span.v_left + grads.v_step.mul(prestep_fx);
+    let mut z = span.z_left + grads.z_step.mul(prestep_fx);
+
+    let row_offset = (span.y * stride) as usize;
+    let buf_end = color_buf.len().min(depth_buf.len());
+    let mut pixels_written = 0u32;
+
+    let mut x = x_start;
+    while x < x_end {
+        let chunk_end = (x + AFFINE_STEP).min(x_end);
+        let chunk_len = chunk_end - x;
+
+        // Perspective divide at chunk start
+        let w0 = if inv_w.0 != 0 { Fx16::ONE.div(inv_w) } else { Fx16::ONE };
+        let u0 = tu_iw.mul(w0);
+        let v0 = tv_iw.mul(w0);
+        let r0 = cr_iw.mul(w0);
+        let g0 = cg_iw.mul(w0);
+        let b0 = cb_iw.mul(w0);
+
+        // Perspective divide at chunk end
+        let inv_w_next = inv_w + Fx16(grads.inv_w_step.0 * chunk_len as i32);
+        let w1 = if inv_w_next.0 != 0 { Fx16::ONE.div(inv_w_next) } else { Fx16::ONE };
+        let tu_next = tu_iw + Fx16(grads.u_step.0 * chunk_len as i32);
+        let tv_next = tv_iw + Fx16(grads.v_step.0 * chunk_len as i32);
+        let u1 = tu_next.mul(w1);
+        let v1 = tv_next.mul(w1);
+        let cr_next = cr_iw + Fx16(grads.r_step.0 * chunk_len as i32);
+        let cg_next = cg_iw + Fx16(grads.g_step.0 * chunk_len as i32);
+        let cb_next = cb_iw + Fx16(grads.b_step.0 * chunk_len as i32);
+        let r1 = cr_next.mul(w1);
+        let g1 = cg_next.mul(w1);
+        let b1 = cb_next.mul(w1);
+
+        // Linear steps within chunk
+        let inv_len = Fx16::from_i32((chunk_len as i32).max(1));
+        let du = (u1 - u0).div(inv_len);
+        let dv = (v1 - v0).div(inv_len);
+        let dr = (r1 - r0).div(inv_len);
+        let dg = (g1 - g0).div(inv_len);
+        let db = (b1 - b0).div(inv_len);
+
+        let mut u_cur = u0;
+        let mut v_cur = v0;
+        let mut r_cur = r0;
+        let mut g_cur = g0;
+        let mut b_cur = b0;
+
+        for px in x..chunk_end {
+            let buf_idx = row_offset + px as usize;
+            if buf_idx >= buf_end { break; }
+
+            let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
+            if depth >= depth_buf[buf_idx] {
+                u_cur += du;
+                v_cur += dv;
+                r_cur += dr;
+                g_cur += dg;
+                b_cur += db;
+                z += grads.z_step;
+                continue;
+            }
+            depth_buf[buf_idx] = depth;
+
+            let texel = match sample_mode {
+                SampleMode::Nearest => sample::sample_nearest(tex, u_cur.0, v_cur.0),
+                SampleMode::Bilinear => sample::sample_bilinear(tex, u_cur.0, v_cur.0),
+            };
+            let (tr, tg, tb, _ta) = Texture::unpack(texel);
+
+            // Color × texel in integer: Fx16(0..1) × u8 → i32, >> 16 → u8
+            let pr = fast::clamp_u8((r_cur.0 * tr as i32) >> 16);
+            let pg = fast::clamp_u8((g_cur.0 * tg as i32) >> 16);
+            let pb = fast::clamp_u8((b_cur.0 * tb as i32) >> 16);
+            color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
+            pixels_written += 1;
+
+            u_cur += du;
+            v_cur += dv;
+            r_cur += dr;
+            g_cur += dg;
+            b_cur += db;
+            z += grads.z_step;
+        }
+
+        // Advance interpolants by chunk
+        inv_w += Fx16(grads.inv_w_step.0 * chunk_len as i32);
+        cr_iw += Fx16(grads.r_step.0 * chunk_len as i32);
+        cg_iw += Fx16(grads.g_step.0 * chunk_len as i32);
+        cb_iw += Fx16(grads.b_step.0 * chunk_len as i32);
+        tu_iw += Fx16(grads.u_step.0 * chunk_len as i32);
+        tv_iw += Fx16(grads.v_step.0 * chunk_len as i32);
+        x = chunk_end;
+    }
+
+    pixels_written
+}
+
+/// Full path: textured + fog (general fallback).
+fn fill_span_full(
     span: &Span,
     grads: &SpanGradients,
     material: &Material,
@@ -394,11 +653,12 @@ fn fill_span(
     let mut fog_val = span.fog_left + grads.fog_step.mul(prestep_fx);
 
     let row_offset = (span.y * stride) as usize;
+    let buf_end = color_buf.len().min(depth_buf.len());
     let mut pixels_written = 0u32;
 
     for x in x_start..x_end {
         let buf_idx = row_offset + x as usize;
-        if buf_idx >= color_buf.len() || buf_idx >= depth_buf.len() { break; }
+        if buf_idx >= buf_end { break; }
 
         let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
         if depth >= depth_buf[buf_idx] {
@@ -427,13 +687,10 @@ fn fill_span(
         let (tex_r, tex_g, tex_b) = if let Some(mip) = material.texture {
             let u_px = tu.mul(w);
             let v_px = tv.mul(w);
-            let level = 0usize;
-            let tex = mip.level(level);
-            let u_fx = u_px.0;
-            let v_fx = v_px.0;
+            let tex = mip.level(0);
             let texel = match sample_mode {
-                SampleMode::Nearest => sample::sample_nearest(tex, u_fx, v_fx),
-                SampleMode::Bilinear => sample::sample_bilinear(tex, u_fx, v_fx),
+                SampleMode::Nearest => sample::sample_nearest(tex, u_px.0, v_px.0),
+                SampleMode::Bilinear => sample::sample_bilinear(tex, u_px.0, v_px.0),
             };
             let (tr, tg, tb, _ta) = Texture::unpack(texel);
             (tr as f32 / 255.0, tg as f32 / 255.0, tb as f32 / 255.0)
@@ -458,8 +715,7 @@ fn fill_span(
         let pr = fast::clamp_u8((out_r * 255.0) as i32);
         let pg = fast::clamp_u8((out_g * 255.0) as i32);
         let pb = fast::clamp_u8((out_b * 255.0) as i32);
-        let internal = Texture::pack(pr, pg, pb, 255);
-        color_buf[buf_idx] = convert_pixel(internal, format);
+        color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
         pixels_written += 1;
 
         inv_w += grads.inv_w_step;
