@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
+use alloc::boxed::Box;
 
 mod font;
 mod state;
@@ -26,6 +27,68 @@ use layout::ProcessLayout;
 
 entry!(main);
 
+struct OrbitCam {
+    yaw: f32,
+    pitch: f32,
+    dist: f32,
+    focus: Vec3,
+    yaw_vel: f32,
+    pitch_vel: f32,
+    dist_vel: f32,
+}
+
+impl OrbitCam {
+    fn new() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.35,
+            dist: 16.0,
+            focus: Vec3::new(0.0, -1.0, 0.0),
+            yaw_vel: 0.0,
+            pitch_vel: 0.0,
+            dist_vel: 0.0,
+        }
+    }
+
+    fn update(&mut self, dt: f32) {
+        let decay = clamp(1.0 - fast_exp(-8.0 * dt), 0.0, 1.0);
+        self.yaw += self.yaw_vel * dt;
+        self.pitch += self.pitch_vel * dt;
+        self.dist += self.dist_vel * dt;
+
+        self.yaw_vel *= 1.0 - decay;
+        self.pitch_vel *= 1.0 - decay;
+        self.dist_vel *= 1.0 - decay;
+
+        let two_pi = 2.0 * core::f32::consts::PI;
+        while self.yaw < 0.0 { self.yaw += two_pi; }
+        while self.yaw >= two_pi { self.yaw -= two_pi; }
+        self.pitch = clamp(self.pitch, -1.4, 1.4);
+        self.dist = clamp(self.dist, 3.0, 60.0);
+    }
+
+    fn apply(&self, camera: &mut Camera) {
+        let cp = fast_cos(self.pitch);
+        let sp = fast_sin(self.pitch);
+        let cy = fast_cos(self.yaw);
+        let sy = fast_sin(self.yaw);
+
+        camera.position = Vec3::new(
+            self.focus.x + self.dist * cp * sy,
+            self.focus.y + self.dist * sp,
+            self.focus.z + self.dist * cp * cy,
+        );
+
+        let dx = self.focus.x - camera.position.x;
+        let dy = self.focus.y - camera.position.y;
+        let dz = self.focus.z - camera.position.z;
+        let xz_len = fast_sqrt(dx * dx + dz * dz).max(0.0001);
+
+        camera.yaw = fast_atan2(-dx, -dz);
+        camera.pitch = fast_atan2(dy, xz_len);
+    }
+}
+
 fn main() -> i32 {
     let info = match fb_info() {
         Ok(i) => i,
@@ -50,33 +113,30 @@ fn main() -> i32 {
         return 1;
     }
 
-    let cloud_assets = cloud::CloudAssets::new();
+    let cloud_assets = Box::new(cloud::CloudAssets::new());
 
     let mut target = unsafe {
         DirectTarget::new(fb_vaddr as *mut u32, fb_w, fb_h, fb_stride, fb_format)
     };
 
-    let mut pipeline = Pipeline::new(fb_w, fb_h);
+    let mut pipeline = Box::new(Pipeline::new(fb_w, fb_h));
     pipeline.backface_cull = true;
     pipeline.wireframe = false;
     pipeline.sample_mode = morpheus_gfx3d::texture::sample::SampleMode::Nearest;
 
     let mut lights = LightEnv::new();
-    lights.ambient = [0.25, 0.28, 0.25];
+    lights.ambient = [0.18, 0.20, 0.22];
     lights.dir_lights.push(DirLight {
-        direction: Vec3::new(0.4, 0.8, -0.4).normalize(),
-        color: [0.7, 0.75, 0.8],
+        direction: Vec3::new(0.4, 0.9, -0.3).normalize(),
+        color: [0.85, 0.90, 1.0],
     });
     lights.dir_lights.push(DirLight {
-        direction: Vec3::new(-0.5, 0.3, 0.7).normalize(),
-        color: [0.2, 0.25, 0.2],
+        direction: Vec3::new(-0.6, 0.2, 0.7).normalize(),
+        color: [0.25, 0.15, 0.35],
     });
 
     let aspect = fb_w as f32 / fb_h.max(1) as f32;
     let mut camera = Camera::new(aspect);
-    camera.position = Vec3::new(0.0, 2.0, 14.0);
-    camera.yaw = 0.0;
-    camera.pitch = -0.15;
     camera.fov_y = 0.9;
 
     let fb = Framebuf {
@@ -86,76 +146,84 @@ fn main() -> i32 {
         stride: fb_stride,
     };
 
-    let mut sys_state = SystemState::new();
+    let mut sys_state = Box::new(SystemState::new());
     let mut input = InputState::new();
-    let mut proc_layout = ProcessLayout::new();
+    let mut proc_layout = Box::new(ProcessLayout::new());
+    let mut orbit = OrbitCam::new();
 
     let mut selected: Option<usize> = None;
     let mut paused = false;
     let mut show_hud = true;
+    let mut slow_motion = false;
+    let mut pinned = false;
 
     let mut fps_count = 0u32;
     let mut fps_window_start = time::clock_gettime();
     let mut fps_display = 0u32;
     let mut prev_frame_ns = time::clock_gettime();
 
-    let rotate_speed = 0.04f32;
-    let zoom_speed = 0.5f32;
-    let mouse_sensitivity = 0.003f32;
+    let orbit_accel = 4.0f32;
+    let zoom_accel = 12.0f32;
+    let mouse_sensitivity = 0.004f32;
 
     sys_state.poll();
 
     loop {
         let now = time::clock_gettime();
-        let dt_ns = now.saturating_sub(prev_frame_ns).max(1);
-        let dt = (dt_ns as f32) / 1_000_000_000.0;
+        let raw_dt_ns = now.saturating_sub(prev_frame_ns).max(1);
+        let dt = if slow_motion {
+            (raw_dt_ns as f32) / 16_000_000_000.0
+        } else {
+            (raw_dt_ns as f32) / 1_000_000_000.0
+        };
         prev_frame_ns = now;
 
-        // Input
         input.poll();
 
         if input.has(Action::Quit) {
             break;
         }
-
         if input.has(Action::TogglePause) {
             paused = !paused;
         }
         if input.has(Action::ToggleHud) {
             show_hud = !show_hud;
         }
-
-        // Camera
-        for &action in input.iter_actions() {
-            match action {
-                Action::RotateLeft => camera.yaw -= rotate_speed,
-                Action::RotateRight => camera.yaw += rotate_speed,
-                Action::RotateUp => camera.pitch += rotate_speed,
-                Action::RotateDown => camera.pitch -= rotate_speed,
-                Action::ZoomIn => {
-                    let trig = pipeline.trig();
-                    camera.translate(zoom_speed, 0.0, 0.0, trig);
-                }
-                Action::ZoomOut => {
-                    let trig = pipeline.trig();
-                    camera.translate(-zoom_speed, 0.0, 0.0, trig);
-                }
-                _ => {}
-            }
+        if input.has(Action::ToggleSlow) {
+            slow_motion = !slow_motion;
+        }
+        if input.has(Action::ResetView) {
+            orbit.focus = Vec3::new(0.0, -1.0, 0.0);
+            orbit.dist = 16.0;
+            orbit.yaw = 0.0;
+            orbit.pitch = 0.35;
+            orbit.yaw_vel = 0.0;
+            orbit.pitch_vel = 0.0;
+            orbit.dist_vel = 0.0;
+            pinned = false;
+        }
+        if input.has(Action::TogglePin) {
+            pinned = !pinned;
         }
 
-        // Mouse look
+        if (input.held & input::HELD_A) != 0 { orbit.yaw_vel -= orbit_accel * dt; }
+        if (input.held & input::HELD_D) != 0 { orbit.yaw_vel += orbit_accel * dt; }
+        if (input.held & input::HELD_W) != 0 { orbit.pitch_vel += orbit_accel * dt * 0.7; }
+        if (input.held & input::HELD_S) != 0 { orbit.pitch_vel -= orbit_accel * dt * 0.7; }
+        if (input.held & input::HELD_Z) != 0 { orbit.dist_vel -= zoom_accel * dt; }
+        if (input.held & input::HELD_X) != 0 { orbit.dist_vel += zoom_accel * dt; }
+
         if input.mouse_left {
-            camera.yaw += input.mouse_dx * mouse_sensitivity;
-            camera.pitch -= input.mouse_dy * mouse_sensitivity;
+            orbit.yaw_vel += input.mouse_dx * mouse_sensitivity;
+            orbit.pitch_vel -= input.mouse_dy * mouse_sensitivity;
+        }
+        if input.mouse_right {
+            orbit.dist_vel -= input.mouse_dy * 0.1;
         }
 
-        // Clamp pitch
-        let max_pitch = 1.5;
-        if camera.pitch > max_pitch { camera.pitch = max_pitch; }
-        if camera.pitch < -max_pitch { camera.pitch = -max_pitch; }
+        orbit.update(dt);
+        orbit.apply(&mut camera);
 
-        // Selection
         if input.has(Action::SelectNext) {
             selected = Some(match selected {
                 Some(s) if s + 1 < sys_state.proc_count => s + 1,
@@ -177,31 +245,61 @@ fn main() -> i32 {
             }
         }
 
+        let digit_actions = [
+            (Action::SelectDigit1, 1u32), (Action::SelectDigit2, 2),
+            (Action::SelectDigit3, 3), (Action::SelectDigit4, 4),
+            (Action::SelectDigit5, 5), (Action::SelectDigit6, 6),
+            (Action::SelectDigit7, 7), (Action::SelectDigit8, 8),
+            (Action::SelectDigit9, 9),
+        ];
+        for &(act, digit) in &digit_actions {
+            if input.has(act) {
+                if let Some(idx) = sys_state.find_index_by_pid(digit) {
+                    selected = Some(idx);
+                } else {
+                    let d = digit as usize;
+                    if d > 0 && d <= sys_state.proc_count {
+                        selected = Some(d - 1);
+                    }
+                }
+            }
+        }
+
         if input.has(Action::Focus) {
             if let Some(idx) = selected {
                 let pos = proc_layout.smoothed(idx);
-                camera.position = Vec3::new(pos.x, pos.y + 1.5, pos.z + 4.0);
+                orbit.focus = pos;
+                orbit.dist = 5.0;
+                pinned = true;
             }
         }
 
         if input.has(Action::Unfocus) {
-            camera.position = Vec3::new(0.0, 2.0, 14.0);
-            camera.yaw = 0.0;
-            camera.pitch = -0.15;
+            orbit.focus = Vec3::new(0.0, -1.0, 0.0);
+            orbit.dist = 16.0;
+            orbit.yaw = 0.0;
+            orbit.pitch = 0.35;
+            orbit.yaw_vel = 0.0;
+            orbit.pitch_vel = 0.0;
+            orbit.dist_vel = 0.0;
+            pinned = false;
         }
 
-        // System state
+        if pinned {
+            if let Some(idx) = selected {
+                orbit.focus = proc_layout.smoothed(idx);
+            }
+        }
+
         if !paused && sys_state.should_poll(now) {
             sys_state.poll();
         }
 
-        // Layout
         if !paused {
             proc_layout.update(&sys_state, dt);
         }
 
-        // Render 3D
-        target.clear(0x00080C10);
+        target.clear(0x00060A0E);
         pipeline.begin_frame();
         pipeline.set_camera(&camera);
 
@@ -216,10 +314,10 @@ fn main() -> i32 {
             now,
         );
 
-        // Render 2D HUD
         if show_hud {
             hud::draw_system_panel(&fb, &sys_state);
             hud::draw_process_panel(&fb, &sys_state, selected);
+            hud::draw_state_bar(&fb, &sys_state);
             hud::draw_load_graph(&fb, &sys_state);
             hud::draw_controls(&fb);
 
@@ -230,7 +328,8 @@ fn main() -> i32 {
             }
         }
 
-        // FPS
+        hud::draw_status_flags(&fb, paused, slow_motion, pinned);
+
         fps_count = fps_count.saturating_add(1);
         let fps_elapsed = now.saturating_sub(fps_window_start);
         if fps_elapsed >= 1_000_000_000 {
@@ -239,11 +338,59 @@ fn main() -> i32 {
             fps_window_start = now;
         }
 
-        let latency_ms = (dt_ns / 1_000_000).min(999) as u32;
+        let latency_ms = (raw_dt_ns / 1_000_000).min(999) as u32;
         hud::draw_fps(&fb, fps_display, latency_ms);
 
         let _ = fb_blit();
     }
 
     0
+}
+
+fn fast_sin(x: f32) -> f32 {
+    let pi = core::f32::consts::PI;
+    let mut t = x % (2.0 * pi);
+    if t < 0.0 { t += 2.0 * pi; }
+    let sign = if t > pi { t -= pi; -1.0 } else { 1.0 };
+    let y = t * (pi - t);
+    sign * (16.0 * y) / (5.0 * pi * pi - 4.0 * y)
+}
+
+fn fast_cos(x: f32) -> f32 {
+    fast_sin(x + core::f32::consts::FRAC_PI_2)
+}
+
+fn fast_sqrt(x: f32) -> f32 {
+    if x <= 0.0 { return 0.0; }
+    let i = f32::to_bits(x);
+    let i = (i >> 1) + 0x1FC00000;
+    let y = f32::from_bits(i);
+    0.5 * (y + x / y)
+}
+
+fn fast_atan2(y: f32, x: f32) -> f32 {
+    let pi = core::f32::consts::PI;
+    if x == 0.0 && y == 0.0 { return 0.0; }
+    let ax = if x < 0.0 { -x } else { x };
+    let ay = if y < 0.0 { -y } else { y };
+    let (mn, mx) = if ax < ay { (ax, ay) } else { (ay, ax) };
+    let a = mn / mx;
+    let s = a * a;
+    let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
+    let r = if ax < ay { 1.5707963 - r } else { r };
+    let r = if x < 0.0 { pi - r } else { r };
+    if y < 0.0 { -r } else { r }
+}
+
+fn fast_exp(x: f32) -> f32 {
+    if x > 20.0 { return f32::MAX; }
+    if x < -20.0 { return 0.0; }
+    let t = 1.0 + x / 256.0;
+    let mut r = t;
+    for _ in 0..8 { r = r * r; }
+    r
+}
+
+fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
+    if v < lo { lo } else if v > hi { hi } else { v }
 }

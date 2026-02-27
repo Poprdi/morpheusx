@@ -2,6 +2,8 @@ use morpheus_gfx3d::math::vec::Vec3;
 use crate::state::SystemState;
 
 const MAX_PROCS: usize = 64;
+const REPULSION_ITERS: usize = 3;
+const MIN_SEP: f32 = 1.8;
 
 pub struct ProcessLayout {
     pub positions: [Vec3; MAX_PROCS],
@@ -33,7 +35,6 @@ impl ProcessLayout {
         let mut order = [0usize; MAX_PROCS];
         let mut order_len = 0usize;
 
-        // BFS from root
         let mut queue = [0usize; MAX_PROCS];
         let mut qh = 0usize;
         let mut qt = 0usize;
@@ -63,7 +64,6 @@ impl ProcessLayout {
             }
         }
 
-        // Any processes not reached by BFS (orphans)
         for i in 0..n {
             if !order[..order_len].contains(&i) {
                 if order_len < MAX_PROCS {
@@ -74,8 +74,6 @@ impl ProcessLayout {
             }
         }
 
-        // Compute siblings per depth level and assign angular position
-        let _max_depth = depth[..n].iter().copied().max().unwrap_or(0) as usize;
         let mut level_count = [0u32; 16];
         let mut level_idx = [0u32; MAX_PROCS];
 
@@ -89,19 +87,21 @@ impl ProcessLayout {
 
         for i in 0..n {
             let d = depth[i] as usize;
-            let ring_radius = if d == 0 { 0.0 } else { 2.5 + (d as f32 - 1.0) * 3.0 };
-            let count_at_depth = level_count[d.min(15)] as f32;
+            let siblings = level_count[d.min(15)].max(1) as f32;
+            let min_ring = siblings * MIN_SEP / two_pi;
+            let base_ring = 3.5 + (d as f32 - 1.0) * 4.0;
+            let ring_radius = if d == 0 { 0.0 } else if base_ring < min_ring { min_ring } else { base_ring };
             let idx_at_depth = level_idx[i] as f32;
 
-            let angle = if count_at_depth > 0.0 {
-                (idx_at_depth / count_at_depth) * two_pi + 0.3
+            let angle = if siblings > 0.0 {
+                (idx_at_depth / siblings) * two_pi + 0.3
             } else {
                 0.0
             };
 
             let x = ring_radius * fast_sin(angle);
             let z = ring_radius * fast_cos(angle);
-            let y = -(d as f32) * 1.2;
+            let y = -(d as f32) * 1.5;
 
             self.positions[i] = Vec3::new(x, y, z);
 
@@ -110,7 +110,31 @@ impl ProcessLayout {
                 None => continue,
             };
             let mem_scale = fast_ln(proc.pages_alloc.max(1) as f32) * 0.15;
-            self.radii[i] = 0.2 + clamp(mem_scale, 0.0, 0.8);
+            self.radii[i] = 0.25 + clamp(mem_scale, 0.0, 0.75);
+        }
+
+        for _ in 0..REPULSION_ITERS {
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let a = self.positions[i];
+                    let b = self.positions[j];
+                    let dx = b.x - a.x;
+                    let dy = b.y - a.y;
+                    let dz = b.z - a.z;
+                    let dist_sq = dx * dx + dy * dy + dz * dz;
+                    let min_d = self.radii[i] + self.radii[j] + 0.6;
+                    let min_sq = min_d * min_d;
+                    if dist_sq < min_sq && dist_sq > 0.0001 {
+                        let dist = fast_sqrt(dist_sq);
+                        let overlap = (min_d - dist) * 0.5;
+                        let inv = overlap / dist;
+                        self.positions[i].x -= dx * inv;
+                        self.positions[i].z -= dz * inv;
+                        self.positions[j].x += dx * inv;
+                        self.positions[j].z += dz * inv;
+                    }
+                }
+            }
         }
 
         let lerp_rate = clamp(1.0 - fast_exp(-6.0 * dt), 0.0, 1.0);
@@ -151,7 +175,6 @@ fn build_child_map(state: &SystemState) -> ChildMap {
 
 fn find_root(state: &SystemState) -> Option<usize> {
     let procs = state.processes();
-    // PID 1 or lowest PID
     procs.iter().position(|p| p.pid == 1)
         .or_else(|| {
             if procs.is_empty() { None }
@@ -170,6 +193,14 @@ fn fast_sin(x: f32) -> f32 {
 
 fn fast_cos(x: f32) -> f32 {
     fast_sin(x + core::f32::consts::FRAC_PI_2)
+}
+
+fn fast_sqrt(x: f32) -> f32 {
+    if x <= 0.0 { return 0.0; }
+    let i = f32::to_bits(x);
+    let i = (i >> 1) + 0x1FC00000;
+    let y = f32::from_bits(i);
+    0.5 * (y + x / y)
 }
 
 fn vec3_lerp(a: Vec3, b: Vec3, t: f32) -> Vec3 {

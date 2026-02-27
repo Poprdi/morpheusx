@@ -19,7 +19,7 @@ pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
 
-pub const USER_STACK_PAGES: u64 = 8;
+pub const USER_STACK_PAGES: u64 = 32;
 pub const USER_STACK_SIZE: u64 = USER_STACK_PAGES * PAGE_SIZE;
 pub const USER_STACK_TOP: u64 = 0x0000_007F_FFFF_F000;
 

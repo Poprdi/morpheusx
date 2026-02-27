@@ -7,7 +7,7 @@ authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "sysvis"
+name = "system-visualizer"
 path = "src/main.rs"
 
 [dependencies]

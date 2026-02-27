@@ -356,39 +356,89 @@ Click on hardware element → drill-in panel shows:
 
 ---
 
-## New Syscalls Needed for Hardware Info
+## Syscall Audit & Implementation Strategy
 
-Already available from CPUID / MSR:
-- `SYS_CPUID` (69) — processor family, core count, frequencies, cache sizes, thermal info
-- `SYS_RDTSC` — cycle counter (implies clock frequency)
+### What We Already Have (No New Syscalls Needed)
 
-New syscalls to add:
-1. `SYS_HW_INFO` (new)
+| Syscall | ID | Exposed Data |
+|---------|-----|-----------|
+| `SYS_PS` | 65 | PID, PPID, state, priority, cpu_ticks, pages_alloc, name |
+| `SYS_SYSINFO` | 23 | total/free mem, proc count, uptime, TSC freq, heap stats |
+| `SYS_CPUID` | 69 | CPU model, core count, cache sizes, features, thermal leaf |
+| `SYS_RDTSC` | 70 | Cycle counter + calibrated frequency |
+| `SYS_MEMMAP` | 72 | Physical memory map (phys_start, num_pages, mem_type) |
+| `SYS_BOOT_LOG` | 71 | Kernel boot log — contains device enum, IRQ setup, driver init |
+| `SYS_NIC_INFO` | 32 | MAC address, link up/down, NIC presence |
+| `SYS_NIC_LINK` | 35 | Link state |
+| `SYS_PCI_CFG_READ` | 54 | Read any PCI config register (vendor, device, class, BARs) |
+| `SYS_PORT_IN` | 52 | Read I/O ports — can probe CMOS RTC, PIT, etc. |
+| `SYS_IRQ_ATTACH` | 60 | Attach to IRQ line |
+| `SYS_SHM_GRANT` | 73 | Shared memory between processes |
+
+### What Can Be Built Without New Syscalls
+
+**Hardware Topology (Phase 4 — Layer 11):**
+- **CPU:** CPUID leaf 0x80000002-4 (model string), leaf 0x1/0xB (core count), leaf 0x4/0x8 (cache), leaf 0x16 (freq), leaf 0x6 (thermal). ✅ No new syscall.
+- **Memory:** SYS_MEMMAP gives physical map, SYS_SYSINFO gives used/free. ✅ No new syscall.
+- **PCI Devices:** SYS_PCI_CFG_READ — enumerate bus 0-255, dev 0-31, func 0-7, read vendor/device/class. ✅ No new syscall.
+- **Network:** SYS_NIC_INFO gives MAC + link. ✅ No new syscall.
+- **Storage:** Parse boot log for disk detection, or PCI enumerate for AHCI/NVMe class codes. ✅ No new syscall.
+
+**Memory Visualization (Phase 1 — Layer 3):**
+- Physical map via SYS_MEMMAP. Process-level pages_alloc from SYS_PS. Kernel heap from SYS_SYSINFO. ✅ No new syscall.
+
+**Boot Log Analysis (for exception/IRQ history):**
+- SYS_BOOT_LOG returns full kernel log text — parse for exception traces, IRQ info, driver events. ✅ No new syscall.
+
+### What Genuinely Needs New Syscalls
+
+| Feature | Why Existing Can't Do It | Required Syscall |
+|---------|-------------------------|------------------|
+| **Live IPC graph** (Layer 4) | SYS_PS lacks blocked_on_pid, message queues | Extend PsEntry OR add SYS_IPC_STATE |
+| **Live exception events** (Layer 5) | Boot log is write-once history, not real-time | SYS_EXCEPTION_LOG (ring buffer) |
+| **Live IRQ counters** (Layer 6) | Can attach via SYS_IRQ_ATTACH but can't read counters | SYS_IRQ_STATS |
+| **Per-process heap map** (Layer 3 detail) | SYS_SYSINFO only gives kernel heap | SYS_HEAP_MAP |
+| **Instruction profiling** (Layer 10) | No PMC access exposed | SYS_PERF_SAMPLE |
+
+### Recommended Approach
+
+**Implement now (highest ROI):**
+1. **Hardware topology visualization:** Use CPUID + SYS_PCI_CFG_READ + SYS_NIC_INFO to render Layer 11 (CPU cores, memory, storage, NIC, thermal). **Zero kernel changes.**
+2. **Boot log parser:** Extract exception/IRQ history from SYS_BOOT_LOG for Layer 5/6 background. **Zero kernel changes.**
+3. **Extend PsEntry** (low-effort kernel change): Add `blocked_on_pid: u32`, `context_switches: u32`. Enables Layer 4 (IPC graph) + improved Layer 1 visualization.
+
+**Defer (Phase 3+):**
+- Exception ring buffer, IRQ counters, heap map, perf sampling — kernel-deep changes requiring new syscalls.
+
+---
+
+## New Syscalls Needed for Hardware Info (Future)
+
+If we decide to fully instrument hardware monitoring:
+
+1. `SYS_HW_INFO` (future)
    - Query hardware topology: CPU cores, memory banks, PCI devices, storage
-   - Returns struct with hardware inventory
+   - Returns struct with hardware inventory (can be derived from existing syscalls)
 
-2. `SYS_CPU_FREQ` (new)
+2. `SYS_CPU_FREQ` (future)
    - Current frequency per core
    - Base / boost frequencies
-   - Thermal state
+   - Thermal state (can read from CPUID + CMOS)
 
-3. `SYS_MEMORY_STAT` (new)
+3. `SYS_MEMORY_STAT` (future)
    - Per-bank statistics: capacity, populated, temperature
-   - Total memory pressure
+   - Total memory pressure (can derive from SYS_MEMMAP + SYS_SYSINFO)
 
-4. `SYS_STORAGE_STAT` (new)
-   - Per-drive: capacity, used, I/O stats, SMART status
-   - Latency samples
+4. `SYS_EXCEPTION_LOG` (future - recommended priority)
+   - Returns recent exceptions: (timestamp, type, pid, address)
+   - Types: PageFault, DivByZero, IllegalInstr, GPFault, etc.
 
-5. `SYS_NIC_STAT` (new)
-   - Per-NIC: link speed, RX/TX counters, errors
+5. `SYS_IRQ_STATS` (future - recommended priority)
+   - Returns per-IRQ statistics: (irq_num, count, total_cycles)
+   - Allows visualizing interrupt frequency
 
-6. `SYS_POWER_STAT` (new)
-   - Voltage on each rail, current draw, total power
-   - Power efficiency
-
-7. `SYS_THERMAL_STAT` (new)
-   - Per-zone: temperature, throttle status, margin to limit
+6. `SYS_PERF_SAMPLE` (future)
+   - Returns instruction frequency data (which x86 opcodes executed most)
 
 ---
 
