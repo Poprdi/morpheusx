@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use libmorpheus::entry;
-use libmorpheus::hw::{fb_info, fb_lock, fb_map};
+use libmorpheus::hw::{fb_info, fb_lock, fb_map, fb_blit};
 use libmorpheus::time;
 use morpheus_gfx3d::pipeline::Pipeline;
 use morpheus_gfx3d::scene::mesh::Mesh;
@@ -12,7 +12,7 @@ use morpheus_gfx3d::math::vec::Vec3;
 use morpheus_gfx3d::math::trig::TrigTable;
 use morpheus_gfx3d::light::{LightEnv, DirLight};
 use morpheus_gfx3d::camera::Camera;
-use morpheus_gfx3d::target::{TargetPixelFormat, SoftwareTarget};
+use morpheus_gfx3d::target::{TargetPixelFormat, DirectTarget};
 use morpheus_gfx3d::pipeline::Material;
 
 entry!(main);
@@ -47,8 +47,13 @@ fn main() -> i32 {
     // ── Clear framebuffer to black ──
     clear_framebuffer(fb_vaddr, fb_width, fb_height, fb_stride, 0x00000000);
 
-    // ── Create software render target (intermediate buffer) ──
-    let mut target = SoftwareTarget::new(fb_width, fb_height, fb_format);
+    // ── Create render target backed directly by the mapped back buffer ──
+    // No intermediate copy — the 3D pipeline writes pixels straight into
+    // the kernel-visible back buffer.  fb_present() then diffs against
+    // the shadow and pushes only changed spans to VRAM.
+    let mut target = unsafe {
+        DirectTarget::new(fb_vaddr as *mut u32, fb_width, fb_height, fb_stride, fb_format)
+    };
 
     // ── Initialize 3D pipeline ──
     let mut pipeline = Pipeline::new(fb_width, fb_height);
@@ -194,9 +199,6 @@ fn main() -> i32 {
             pipeline.draw_mesh(&cylinder, &model, &material, &lights, &mut target);
         }
 
-        // Copy render target to framebuffer (kernel auto-presents delta to VRAM)
-        blit_to_hardware(&target, fb_vaddr, fb_width, fb_height, fb_stride, fb_format);
-
         // Update and draw HUD stats
         let frame_end_ns = time::clock_gettime();
         let frame_ns = frame_end_ns.saturating_sub(frame_start_ns);
@@ -220,6 +222,9 @@ fn main() -> i32 {
             pipeline.stats.triangles_drawn,
             pipeline.stats.pixels_written,
         );
+
+        // Push completed frame to VRAM (full memcpy — faster than delta for 3D)
+        let _ = fb_blit();
     }
 
     #[allow(unreachable_code)]
@@ -228,34 +233,6 @@ fn main() -> i32 {
     }
 }
 
-
-/// Blit the software render target into the framebuffer.
-fn blit_to_hardware(
-    target: &SoftwareTarget,
-    fb_vaddr: u64,
-    fb_width: u32,
-    fb_height: u32,
-    fb_stride: u32,
-    _fb_format: TargetPixelFormat,
-) {
-    let fb_ptr = fb_vaddr as *mut u32;
-
-    for y in 0..fb_height {
-        let src_row = y as usize * fb_width as usize;
-        let dst_row = y as usize * fb_stride as usize;
-
-        unsafe {
-            for x in 0..fb_width {
-                let src_idx = src_row + x as usize;
-                let dst_idx = dst_row + x as usize;
-
-                if src_idx < target.color.len() {
-                    *fb_ptr.add(dst_idx) = target.color[src_idx];
-                }
-            }
-        }
-    }
-}
 
 /// Clear the hardware framebuffer to a solid color.
 fn clear_framebuffer(fb_vaddr: u64, fb_width: u32, fb_height: u32, fb_stride: u32, color: u32) {

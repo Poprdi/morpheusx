@@ -322,6 +322,35 @@ pub fn fb_is_locked() -> u32 {
     unsafe { syscall0(SYS_FB_IS_LOCKED) as u32 }
 }
 
+/// Request immediate framebuffer present.
+///
+/// Runs the delta presenter synchronously: diffs the back buffer against
+/// the shadow buffer and writes only changed pixel spans to real VRAM.
+/// Call this after finishing a frame for maximum FPS instead of waiting
+/// for the kernel's periodic 100 Hz timer-driven present.
+pub fn fb_present() -> Result<(), u64> {
+    let ret = unsafe { syscall0(SYS_FB_PRESENT) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Full-screen framebuffer blit (no delta scan).
+///
+/// Copies the entire back buffer to VRAM in one memcpy.  Faster than
+/// `fb_present()` when most pixels change every frame (e.g. 3D rendering)
+/// because it skips the per-pixel comparison against the shadow buffer.
+pub fn fb_blit() -> Result<(), u64> {
+    let ret = unsafe { syscall0(SYS_FB_BLIT) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
 // mouse
 
 /// Relative mouse state returned by `mouse_read()`.
