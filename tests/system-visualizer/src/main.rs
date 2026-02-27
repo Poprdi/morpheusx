@@ -9,6 +9,7 @@ mod input;
 mod hud;
 mod layout;
 mod cloud;
+mod backdrop;
 
 use libmorpheus::entry;
 use libmorpheus::hw::{fb_info, fb_lock, fb_map, fb_blit};
@@ -114,6 +115,8 @@ fn main() -> i32 {
     }
 
     let cloud_assets = Box::new(cloud::CloudAssets::new());
+    let backdrop_stars = Box::new(backdrop::Backdrop::new());
+    let galaxy_assets = Box::new(backdrop::GalaxyAssets::new());
 
     let mut target = unsafe {
         DirectTarget::new(fb_vaddr as *mut u32, fb_w, fb_h, fb_stride, fb_format)
@@ -162,9 +165,10 @@ fn main() -> i32 {
     let mut fps_display = 0u32;
     let mut prev_frame_ns = time::clock_gettime();
 
-    let orbit_accel = 4.0f32;
+    let orbit_accel = 6.0f32;       // base rotation acceleration (scaled by speed_mult)
     let zoom_accel = 12.0f32;
     let mouse_sensitivity = 0.004f32;
+    let mut speed_mult = 1.0f32;    // adjustable via [ and ]
 
     sys_state.poll();
 
@@ -205,13 +209,19 @@ fn main() -> i32 {
         if input.has(Action::TogglePin) {
             pinned = !pinned;
         }
+        if input.has(Action::SpeedUp) {
+            speed_mult = (speed_mult + 0.25).min(3.0);
+        }
+        if input.has(Action::SpeedDown) {
+            speed_mult = (speed_mult - 0.25).max(0.25);
+        }
 
-        if (input.held & input::HELD_A) != 0 { orbit.yaw_vel -= orbit_accel * dt; }
-        if (input.held & input::HELD_D) != 0 { orbit.yaw_vel += orbit_accel * dt; }
-        if (input.held & input::HELD_W) != 0 { orbit.pitch_vel += orbit_accel * dt * 0.7; }
-        if (input.held & input::HELD_S) != 0 { orbit.pitch_vel -= orbit_accel * dt * 0.7; }
-        if (input.held & input::HELD_Z) != 0 { orbit.dist_vel -= zoom_accel * dt; }
-        if (input.held & input::HELD_X) != 0 { orbit.dist_vel += zoom_accel * dt; }
+        if (input.held & input::HELD_A) != 0 { orbit.yaw_vel   -= orbit_accel * speed_mult * dt; }
+        if (input.held & input::HELD_D) != 0 { orbit.yaw_vel   += orbit_accel * speed_mult * dt; }
+        if (input.held & input::HELD_W) != 0 { orbit.pitch_vel += orbit_accel * speed_mult * dt * 0.7; }
+        if (input.held & input::HELD_S) != 0 { orbit.pitch_vel -= orbit_accel * speed_mult * dt * 0.7; }
+        if (input.held & input::HELD_Z) != 0 { orbit.dist_vel  -= zoom_accel * speed_mult * dt; }
+        if (input.held & input::HELD_X) != 0 { orbit.dist_vel  += zoom_accel * speed_mult * dt; }
 
         if input.mouse_left {
             orbit.yaw_vel += input.mouse_dx * mouse_sensitivity;
@@ -303,6 +313,29 @@ fn main() -> i32 {
         pipeline.begin_frame();
         pipeline.set_camera(&camera);
 
+        // Backdrop: stars (2D) + galaxy (3D) — rendered behind process cloud
+        backdrop::render_stars(
+            &fb,
+            &backdrop_stars,
+            camera.position,
+            camera.yaw,
+            camera.pitch,
+            camera.fov_y,
+            now,
+        );
+        backdrop::render_galaxy(
+            &mut pipeline,
+            &mut target,
+            &lights,
+            &galaxy_assets,
+            now,
+            sys_state.total_cpu_pct,
+        );
+
+        // Clear depth after galaxy so its torus rings can never occlude process
+        // spheres — galaxy is a pure background element regardless of camera angle.
+        target.clear_depth();
+
         cloud::render_cloud(
             &mut pipeline,
             &mut target,
@@ -339,7 +372,7 @@ fn main() -> i32 {
         }
 
         let latency_ms = (raw_dt_ns / 1_000_000).min(999) as u32;
-        hud::draw_fps(&fb, fps_display, latency_ms);
+        hud::draw_fps(&fb, fps_display, latency_ms, speed_mult);
 
         let _ = fb_blit();
     }

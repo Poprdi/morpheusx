@@ -5,6 +5,9 @@ const MAX_PROCS: usize = 64;
 const REPULSION_ITERS: usize = 3;
 const MIN_SEP: f32 = 1.8;
 
+// Kernel (PID 0) is positioned at the galaxy location for thematic unity
+const KERNEL_GALAXY_POS: Vec3 = Vec3 { x: 0.0, y: -15.0, z: -35.0 };
+
 pub struct ProcessLayout {
     pub positions: [Vec3; MAX_PROCS],
     pub radii: [f32; MAX_PROCS],
@@ -78,6 +81,8 @@ impl ProcessLayout {
         let mut level_idx = [0u32; MAX_PROCS];
 
         for i in 0..n {
+            // Kernel lives at the galaxy position; exclude from ring layout counts
+            if let Some(p) = state.process(i) { if p.pid == 0 { continue; } }
             let d = (depth[i] as usize).min(15);
             level_idx[i] = level_count[d];
             level_count[d] += 1;
@@ -86,6 +91,19 @@ impl ProcessLayout {
         let two_pi = 2.0 * core::f32::consts::PI;
 
         for i in 0..n {
+            let proc = match state.process(i) {
+                Some(p) => p,
+                None => continue,
+            };
+            
+            // Kernel (PID 0) is positioned at the galaxy center
+            if proc.pid == 0 {
+                self.positions[i] = KERNEL_GALAXY_POS;
+                // Kernel gets a generous radius to make it prominent
+                self.radii[i] = 1.2;
+                continue;
+            }
+            
             let d = depth[i] as usize;
             let siblings = level_count[d.min(15)].max(1) as f32;
             let min_ring = siblings * MIN_SEP / two_pi;
@@ -99,22 +117,30 @@ impl ProcessLayout {
                 0.0
             };
 
-            let x = ring_radius * fast_sin(angle);
-            let z = ring_radius * fast_cos(angle);
-            let y = -(d as f32) * 1.5;
+            // --- 3-D scatter ---
+            // Base Y is deeper per depth level (was 1.5, now 2.5 for more
+            // vertical separation between hierarchy levels).
+            // Within a ring, offset Y sinusoidally so same-depth siblings
+            // form a loose helix rather than a flat disk.
+            // Alternate the ring radius slightly so adjacent siblings aren't
+            // all at the exact same distance from center.
+            let depth_y      = -(d as f32) * 2.5;
+            let helix_y      = fast_sin(angle * 1.7) * 1.2;
+            let radius_nudge = if (level_idx[i] & 1) == 0 { 0.0 } else { 0.5 };
+            let x = (ring_radius + radius_nudge) * fast_sin(angle);
+            let z = (ring_radius + radius_nudge) * fast_cos(angle);
+            let y = depth_y + helix_y;
 
             self.positions[i] = Vec3::new(x, y, z);
-
-            let proc = match state.process(i) {
-                Some(p) => p,
-                None => continue,
-            };
             let mem_scale = fast_ln(proc.pages_alloc.max(1) as f32) * 0.15;
             self.radii[i] = 0.25 + clamp(mem_scale, 0.0, 0.75);
         }
 
         for _ in 0..REPULSION_ITERS {
             for i in 0..n {
+                // Skip kernel entry at galaxy position — its radius would
+                // create phantom repulsion far from the process cloud.
+                if let Some(p) = state.process(i) { if p.pid == 0 { continue; } }
                 for j in (i + 1)..n {
                     let a = self.positions[i];
                     let b = self.positions[j];

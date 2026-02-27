@@ -14,6 +14,8 @@ pub enum Action {
     ToggleSlow,
     ResetView,
     TogglePin,
+    SpeedUp,
+    SpeedDown,
     SelectDigit1,
     SelectDigit2,
     SelectDigit3,
@@ -101,6 +103,8 @@ impl InputState {
                 b'o' | b'O' => Action::ToggleSlow,
                 b'r' | b'R' => Action::ResetView,
                 b'f' | b'F' => Action::TogglePin,
+                0x18 => Action::SpeedDown,   // Ctrl+X
+                0x19 => Action::SpeedUp,     // Ctrl+Y
                 b'1' => Action::SelectDigit1,
                 b'2' => Action::SelectDigit2,
                 b'3' => Action::SelectDigit3,
