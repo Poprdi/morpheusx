@@ -140,7 +140,7 @@ asm_fb_present_delta:
     ; Span length in dwords
     mov     rcx, rax
     sub     rcx, rdx                ; rcx = span_len
-    pop     rax, rdx 
+
     ; 1. Copy back[span] → vram[span]
     lea     rsi, [r9  + rdx*4]     ; src = back_row[span_start]
     lea     rdi, [r11 + rdx*4]     ; dst = vram_row[span_start]
