@@ -430,6 +430,9 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
 pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static CpuContext {
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 
+    // Auto-present: push back-buffer delta to VRAM on every tick.
+    crate::syscall::handler::fb_present_tick();
+
     let cur_pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
 
     // Save context of currently running process.
