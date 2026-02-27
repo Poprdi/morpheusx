@@ -472,10 +472,10 @@ fn fill_span_solid(
         }
         depth_buf[buf_idx] = depth;
 
-        // Color: Fx16 (0..1 range) × base_color(8.8) → 24.8, >> 8 → u8
-        let pr = fast::clamp_u8((cr.0 * base_r) >> 24);
-        let pg = fast::clamp_u8((cg.0 * base_g) >> 24);
-        let pb = fast::clamp_u8((cb.0 * base_b) >> 24);
+        // Color: Fx16 (0..1 range, ×65536) × base(×256) = ×2^24, >> 16 → [0,256]
+        let pr = fast::clamp_u8((cr.0 * base_r) >> 16);
+        let pg = fast::clamp_u8((cg.0 * base_g) >> 16);
+        let pb = fast::clamp_u8((cb.0 * base_b) >> 16);
         color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
         pixels_written += 1;
 
