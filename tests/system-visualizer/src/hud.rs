@@ -74,14 +74,14 @@ impl Framebuf {
     }
 }
 
-const COL_BG: u32 = 0x00101418;
-const COL_PANEL: u32 = 0x00181C22;
-const COL_BORDER: u32 = 0x00303840;
-const COL_TEXT: u32 = 0x00C8E0D0;
-const COL_DIM: u32 = 0x00607868;
-const COL_ACCENT: u32 = 0x0040C080;
-const COL_WARN: u32 = 0x00E08040;
-const COL_CRIT: u32 = 0x00E04040;
+const COL_BG: u32 = 0x000A0E12;
+const COL_PANEL: u32 = 0x00141A22;
+const COL_BORDER: u32 = 0x00385060;
+const COL_TEXT: u32 = 0x00D8F0E8;
+const COL_DIM: u32 = 0x00508878;
+const COL_ACCENT: u32 = 0x0020F098;
+const COL_WARN: u32 = 0x00FF9030;
+const COL_CRIT: u32 = 0x00FF3838;
 
 pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
     let px = 8u32;
@@ -212,12 +212,12 @@ pub fn draw_controls(fb: &Framebuf) {
     hline(fb, px, py, pw);
 
     let lines: [&str; 6] = [
-        "WASD:ROTATE  ZX:ZOOM",
-        "TAB:SELECT  K:KILL",
-        "ENTER:FOCUS  ESC:BACK",
-        "SPACE:PAUSE  H:HUD",
-        "P:PREV  Q:QUIT",
-        "MOUSE:LOOK",
+        "WASD:ORBIT  ZX:ZOOM",
+        "TAB/1-9:SEL  K:KILL",
+        "ENTER:FOCUS  F:PIN",
+        "ESC:BACK  R:RESET",
+        "SPACE:PAUSE  O:SLOW",
+        "H:HUD  P:PREV  Q:QUIT",
     ];
     for (i, &line) in lines.iter().enumerate() {
         fb.draw_str(px + 4, py + 4 + i as u32 * (font::CELL_H + 1), line, COL_DIM);
@@ -258,9 +258,9 @@ pub fn draw_selected_detail(fb: &Framebuf, proc: &ProcessInfo) {
 
 pub fn draw_load_graph(fb: &Framebuf, state: &SystemState) {
     let gx = 8u32;
-    let gy = fb.h.saturating_sub(80);
+    let gy = fb.h.saturating_sub(110);
     let gw = 120u32;
-    let gh = 32u32;
+    let gh = 28u32;
 
     fb.fill_rect(gx, gy, gw, gh + font::CELL_H + 2, COL_PANEL);
     hline(fb, gx, gy, gw);
@@ -277,6 +277,66 @@ pub fn draw_load_graph(fb: &Framebuf, state: &SystemState) {
             fb.put(x, plot_y + gh - 1 - dy, col);
         }
     }
+
+    let cy = plot_y + gh + 4;
+    fb.fill_rect(gx, cy, gw, gh + font::CELL_H + 2, COL_PANEL);
+    hline(fb, gx, cy, gw);
+    fb.draw_str(gx + 2, cy + 2, "CPU LOAD", COL_DIM);
+
+    let cplot_y = cy + font::CELL_H + 2;
+    for i in 0..samples {
+        let pct = state.cpu_history_sample(samples - 1 - i) as u32;
+        let bar_h = (gh * pct) / 100;
+        let x = gx + i as u32;
+        let col = if pct > 80 { COL_CRIT } else if pct > 50 { COL_WARN } else { 0x002090E0 };
+        for dy in 0..bar_h {
+            fb.put(x, cplot_y + gh - 1 - dy, col);
+        }
+    }
+}
+
+pub fn draw_state_bar(fb: &Framebuf, state: &SystemState) {
+    let px = 8u32;
+    let py = fb.h.saturating_sub(110) - 22;
+    let pw = 120u32;
+    let ph = 18u32;
+
+    fb.fill_rect(px, py, pw, ph, COL_PANEL);
+    hline(fb, px, py, pw);
+
+    let total = state.proc_count.max(1) as u32;
+    let rw = (pw * state.ready_count) / total;
+    let nw = (pw * state.run_count) / total;
+    let bw = (pw * state.blocked_count) / total;
+
+    let y = py + 2;
+    fb.fill_rect(px, y, rw, 6, 0x00FFE820);
+    fb.fill_rect(px + rw, y, nw, 6, 0x0020FF60);
+    fb.fill_rect(px + rw + nw, y, bw, 6, 0x002090FF);
+
+    let ty = y + 8;
+    fb.draw_str(px, ty, "R:", COL_DIM);
+    fb.draw_u32(px + 12, ty, state.ready_count, 2, 0x00FFE820);
+    fb.draw_str(px + 28, ty, "N:", COL_DIM);
+    fb.draw_u32(px + 40, ty, state.run_count, 2, 0x0020FF60);
+    fb.draw_str(px + 56, ty, "B:", COL_DIM);
+    fb.draw_u32(px + 68, ty, state.blocked_count, 2, 0x002090FF);
+}
+
+pub fn draw_status_flags(fb: &Framebuf, paused: bool, slow_motion: bool, pinned: bool) {
+    let mut cx = fb.w / 2 - 60;
+    let y = 4u32;
+    if paused {
+        fb.draw_str(cx, y, "PAUSED", COL_WARN);
+        cx += 48;
+    }
+    if slow_motion {
+        fb.draw_str(cx, y, "SLOW 16x", COL_ACCENT);
+        cx += 60;
+    }
+    if pinned {
+        fb.draw_str(cx, y, "PINNED", 0x0060C0FF);
+    }
 }
 
 fn hline(fb: &Framebuf, x: u32, y: u32, w: u32) {
@@ -287,11 +347,11 @@ fn hline(fb: &Framebuf, x: u32, y: u32, w: u32) {
 
 fn state_color(state: u32) -> u32 {
     match state {
-        0 => 0x00E0E040,
-        1 => 0x0040E040,
-        2 => 0x004080E0,
-        3 => 0x00808080,
-        4 => 0x00404040,
+        0 => 0x00FFE820,
+        1 => 0x0020FF60,
+        2 => 0x002090FF,
+        3 => 0x00909090,
+        4 => 0x00505050,
         _ => COL_TEXT,
     }
 }
