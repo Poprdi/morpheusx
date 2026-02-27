@@ -2303,27 +2303,10 @@ pub unsafe fn sys_fb_map() -> u64 {
     };
 
     // Allocate back + shadow buffers on first call.
-    //
-    // IMPORTANT: switch to the kernel CR3 for the allocation + VRAM copy.
-    // The buddy allocator stores free-list nodes at their physical addresses
-    // and traverses them via identity mapping.  User process page tables
-    // remap low virtual addresses (e.g. 0x400000) for ELF segments, which
-    // breaks the identity mapping for those physical addresses.  Running
-    // the allocator in a user CR3 can read ELF code bytes as free-list
-    // pointers → #GP.
+    // allocate_pages internally switches to kernel CR3 for buddy operations.
+    // fb_map_alloc_buffers uses KernelCr3Guard for the VRAM copy.
     if FB_BACK_PHYS == 0 {
-        let saved_cr3: u64;
-        core::arch::asm!("mov {}, cr3", out(reg) saved_cr3, options(nostack, nomem));
-        let kcr3 = crate::process::scheduler::get_kernel_cr3();
-        if kcr3 != 0 {
-            core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
-        }
-
-        let alloc_result = fb_map_alloc_buffers(&info);
-
-        core::arch::asm!("mov cr3, {}", in(reg) saved_cr3, options(nostack, nomem));
-
-        if let Err(e) = alloc_result {
+        if let Err(e) = fb_map_alloc_buffers(&info) {
             return e;
         }
     }
@@ -2333,11 +2316,11 @@ pub unsafe fn sys_fb_map() -> u64 {
 }
 
 /// Allocate back + shadow buffers, copy VRAM content into both.
-/// Must be called under the kernel's CR3 (identity mapping intact).
 unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
     let pages = info.size.div_ceil(4096);
     let registry = crate::memory::global_registry_mut();
 
+    // allocate_pages handles CR3 switching internally.
     let back_phys = registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,
         crate::memory::MemoryType::Allocated,
@@ -2356,19 +2339,21 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
         }
     };
 
-    // Snapshot current VRAM into both buffers so the first delta
-    // sees the existing screen content (bootloader TUI, etc.)
-    // instead of flashing black.
-    core::ptr::copy_nonoverlapping(
-        info.base as *const u8,
-        back_phys as *mut u8,
-        info.size as usize,
-    );
-    core::ptr::copy_nonoverlapping(
-        info.base as *const u8,
-        shadow_phys as *mut u8,
-        info.size as usize,
-    );
+    // VRAM and allocated buffers are at physical addresses accessed via
+    // identity mapping — need kernel CR3.
+    {
+        let _guard = crate::memory::KernelCr3Guard::enter();
+        core::ptr::copy_nonoverlapping(
+            info.base as *const u8,
+            back_phys as *mut u8,
+            info.size as usize,
+        );
+        core::ptr::copy_nonoverlapping(
+            info.base as *const u8,
+            shadow_phys as *mut u8,
+            info.size as usize,
+        );
+    }
 
     FB_BACK_PHYS = back_phys;
     FB_SHADOW_PHYS = shadow_phys;
@@ -2385,19 +2370,49 @@ pub unsafe fn fb_present_tick() {
     if FB_BACK_PHYS == 0 || FB_SHADOW_PHYS == 0 {
         return;
     }
+    // If a process holds the FB lock it manages presents itself via
+    // SYS_FB_PRESENT — skip the automatic timer-driven present to
+    // avoid redundant full-screen scans.
+    if FB_LOCK_PID != 0 {
+        return;
+    }
     let info = match FB_REGISTERED {
         Some(i) => i,
         None => return,
     };
 
-    // Switch to kernel CR3 so identity-mapped buffer accesses hit the
-    // correct physical pages (user CR3 may remap low virtual addresses).
-    let saved_cr3: u64;
-    core::arch::asm!("mov {}, cr3", out(reg) saved_cr3, options(nostack, nomem));
-    let kcr3 = crate::process::scheduler::get_kernel_cr3();
-    if kcr3 != 0 {
-        core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
+    // Buffers are at identity-mapped physical addresses — need kernel CR3.
+    let _guard = crate::memory::KernelCr3Guard::enter();
+
+    let stride_pixels = info.stride / 4;
+
+    #[cfg(target_arch = "x86_64")]
+    asm_fb_present_delta(
+        FB_BACK_PHYS,
+        FB_SHADOW_PHYS,
+        info.base,
+        info.width as u64,
+        info.height as u64,
+        stride_pixels as u64,
+    );
+}
+
+/// SYS_FB_PRESENT (88) — on-demand framebuffer present.
+///
+/// Runs the delta presenter synchronously on the caller's stack: diffs
+/// the back buffer against the shadow and writes only changed pixel spans
+/// to real VRAM.  Returns 0 on success, ENODEV if no framebuffer is
+/// registered or back buffer hasn't been mapped yet.
+pub unsafe fn sys_fb_present() -> u64 {
+    if FB_BACK_PHYS == 0 || FB_SHADOW_PHYS == 0 {
+        return ENODEV;
     }
+    let info = match FB_REGISTERED {
+        Some(i) => i,
+        None => return ENODEV,
+    };
+
+    let _guard = crate::memory::KernelCr3Guard::enter();
 
     let stride_pixels = info.stride / 4;
 
@@ -2411,7 +2426,41 @@ pub unsafe fn fb_present_tick() {
         stride_pixels as u64,
     );
 
-    core::arch::asm!("mov cr3, {}", in(reg) saved_cr3, options(nostack, nomem));
+    0
+}
+
+/// SYS_FB_BLIT (89) — full-screen memcpy present (no delta).
+///
+/// Copies the entire back buffer directly to VRAM in one shot.
+/// Faster than `sys_fb_present` when most/all pixels change per frame
+/// (e.g. full-screen 3D rendering) because it avoids the scan + shadow
+/// overhead.  Also updates the shadow buffer so a subsequent delta
+/// present still works correctly.
+pub unsafe fn sys_fb_blit() -> u64 {
+    if FB_BACK_PHYS == 0 {
+        return ENODEV;
+    }
+    let info = match FB_REGISTERED {
+        Some(i) => i,
+        None => return ENODEV,
+    };
+
+    let _guard = crate::memory::KernelCr3Guard::enter();
+
+    let bytes = info.size as usize;
+    let back = FB_BACK_PHYS as *const u8;
+    let vram = info.base as *mut u8;
+
+    core::ptr::copy_nonoverlapping(back, vram, bytes);
+
+    // Keep shadow in sync so delta presents (e.g. after app releases
+    // the fb lock) don't see stale data and over-copy.
+    if FB_SHADOW_PHYS != 0 {
+        let shadow = FB_SHADOW_PHYS as *mut u8;
+        core::ptr::copy_nonoverlapping(back, shadow, bytes);
+    }
+
+    0
 }
 
 // SYS_PS (65) — list all processes

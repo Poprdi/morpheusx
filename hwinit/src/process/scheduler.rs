@@ -480,7 +480,9 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         }
 
         // Tell the ISR ASM which CR3 to load before iretq.
-        next_cr3 = next.cr3;
+        if crate::memory::is_valid_cr3(next.cr3) {
+            next_cr3 = next.cr3;
+        }
 
         // Point the ISR's FXRSTOR at the incoming process's FPU area.
         current_fpu_ptr = &mut next.fpu_state as *mut super::context::FpuState as u64;

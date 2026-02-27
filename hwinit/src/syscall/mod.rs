@@ -86,6 +86,10 @@
 /// | 80     | SYS_THREAD_CREATE|(entry, stack_top, arg)            | tid           |
 /// | 81     | SYS_THREAD_EXIT | (code)                            | never         |
 /// | 82     | SYS_THREAD_JOIN | (tid)                             | exit_code     |
+/// | 85     | SYS_FB_LOCK     | ()                                | 0             |
+/// | 86     | SYS_FB_UNLOCK   | ()                                | 0             |
+/// | 87     | SYS_FB_IS_LOCKED| ()                                | holder_pid    |
+/// | 88     | SYS_FB_PRESENT  | ()                                | 0             |
 pub mod handler;
 
 use crate::serial::puts;
@@ -209,10 +213,12 @@ pub const SYS_SIGRETURN: u64 = 83;
 // input (84)
 pub const SYS_MOUSE_READ: u64 = 84;
 
-// framebuffer exclusive access (85-87)
+// framebuffer control (85-89)
 pub const SYS_FB_LOCK: u64 = 85;
 pub const SYS_FB_UNLOCK: u64 = 86;
 pub const SYS_FB_IS_LOCKED: u64 = 87;
+pub const SYS_FB_PRESENT: u64 = 88;
+pub const SYS_FB_BLIT: u64 = 89;
 
 // EXTERN ASM FUNCTIONS
 
@@ -340,6 +346,8 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_FB_LOCK => sys_fb_lock(),
         SYS_FB_UNLOCK => sys_fb_unlock(),
         SYS_FB_IS_LOCKED => fb_lock_holder() as u64,
+        SYS_FB_PRESENT => sys_fb_present(),
+        SYS_FB_BLIT => sys_fb_blit(),
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);
