@@ -17,6 +17,7 @@ members = [
     "gfx3d",
     "tests/syscall-e2e",
     "tests/spinning-cube",
+    "tests/system-visualizer",
 ]
 
 [workspace.package]
