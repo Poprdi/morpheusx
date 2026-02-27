@@ -277,7 +277,8 @@ pub fn fb_info() -> Result<FbInfo, u64> {
 /// Map the framebuffer into the process's virtual address space.
 ///
 /// Returns the virtual address of the mapped framebuffer.
-/// The mapping is writable and uncacheable.
+/// The kernel transparently double-buffers writes and pushes only
+/// changed pixels to real VRAM on each timer tick.
 pub fn fb_map() -> Result<u64, u64> {
     let ret = unsafe { syscall0(SYS_FB_MAP) };
     if crate::is_error(ret) {

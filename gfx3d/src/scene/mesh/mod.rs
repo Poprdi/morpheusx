@@ -1,6 +1,13 @@
 use alloc::vec::Vec;
 use crate::math::vec::{Vec2, Vec3};
 
+pub mod cube;
+pub mod sphere;
+pub mod torus;
+pub mod pyramid;
+pub mod plane;
+pub mod cylinder;
+
 /// A vertex in a mesh (model-space).
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -41,58 +48,32 @@ impl Mesh {
 
     /// Generate a unit cube centered at origin.
     pub fn cube() -> Self {
-        let v = |x: f32, y: f32, z: f32, nx: f32, ny: f32, nz: f32, u: f32, v: f32| {
-            MeshVertex {
-                position: Vec3::new(x, y, z),
-                normal: Vec3::new(nx, ny, nz),
-                uv: Vec2::new(u, v),
-                color: [255, 255, 255, 255],
-            }
-        };
+        cube::cube()
+    }
 
-        let vertices = alloc::vec![
-            // Front face
-            v(-0.5, -0.5,  0.5,  0.0,  0.0,  1.0, 0.0, 0.0),
-            v( 0.5, -0.5,  0.5,  0.0,  0.0,  1.0, 1.0, 0.0),
-            v( 0.5,  0.5,  0.5,  0.0,  0.0,  1.0, 1.0, 1.0),
-            v(-0.5,  0.5,  0.5,  0.0,  0.0,  1.0, 0.0, 1.0),
-            // Back face
-            v( 0.5, -0.5, -0.5,  0.0,  0.0, -1.0, 0.0, 0.0),
-            v(-0.5, -0.5, -0.5,  0.0,  0.0, -1.0, 1.0, 0.0),
-            v(-0.5,  0.5, -0.5,  0.0,  0.0, -1.0, 1.0, 1.0),
-            v( 0.5,  0.5, -0.5,  0.0,  0.0, -1.0, 0.0, 1.0),
-            // Top face
-            v(-0.5,  0.5,  0.5,  0.0,  1.0,  0.0, 0.0, 0.0),
-            v( 0.5,  0.5,  0.5,  0.0,  1.0,  0.0, 1.0, 0.0),
-            v( 0.5,  0.5, -0.5,  0.0,  1.0,  0.0, 1.0, 1.0),
-            v(-0.5,  0.5, -0.5,  0.0,  1.0,  0.0, 0.0, 1.0),
-            // Bottom face
-            v(-0.5, -0.5, -0.5,  0.0, -1.0,  0.0, 0.0, 0.0),
-            v( 0.5, -0.5, -0.5,  0.0, -1.0,  0.0, 1.0, 0.0),
-            v( 0.5, -0.5,  0.5,  0.0, -1.0,  0.0, 1.0, 1.0),
-            v(-0.5, -0.5,  0.5,  0.0, -1.0,  0.0, 0.0, 1.0),
-            // Right face
-            v( 0.5, -0.5,  0.5,  1.0,  0.0,  0.0, 0.0, 0.0),
-            v( 0.5, -0.5, -0.5,  1.0,  0.0,  0.0, 1.0, 0.0),
-            v( 0.5,  0.5, -0.5,  1.0,  0.0,  0.0, 1.0, 1.0),
-            v( 0.5,  0.5,  0.5,  1.0,  0.0,  0.0, 0.0, 1.0),
-            // Left face
-            v(-0.5, -0.5, -0.5, -1.0,  0.0,  0.0, 0.0, 0.0),
-            v(-0.5, -0.5,  0.5, -1.0,  0.0,  0.0, 1.0, 0.0),
-            v(-0.5,  0.5,  0.5, -1.0,  0.0,  0.0, 1.0, 1.0),
-            v(-0.5,  0.5, -0.5, -1.0,  0.0,  0.0, 0.0, 1.0),
-        ];
+    /// Generate a UV sphere (latitude-longitude).
+    pub fn sphere(stacks: usize, slices: usize) -> Self {
+        sphere::sphere(stacks, slices)
+    }
 
-        let indices = alloc::vec![
-            0,  1,  2,  0,  2,  3,   // front
-            4,  5,  6,  4,  6,  7,   // back
-            8,  9,  10, 8,  10, 11,  // top
-            12, 13, 14, 12, 14, 15,  // bottom
-            16, 17, 18, 16, 18, 19,  // right
-            20, 21, 22, 20, 22, 23,  // left
-        ];
+    /// Generate a torus (donut shape).
+    pub fn torus(major_radius: f32, minor_radius: f32, major_segments: usize, minor_segments: usize) -> Self {
+        torus::torus(major_radius, minor_radius, major_segments, minor_segments)
+    }
 
-        Self::new(vertices, indices)
+    /// Generate a square pyramid.
+    pub fn pyramid() -> Self {
+        pyramid::pyramid()
+    }
+
+    /// Generate a flat plane.
+    pub fn plane(width: f32, height: f32, segments_x: usize, segments_z: usize) -> Self {
+        plane::plane(width, height, segments_x, segments_z)
+    }
+
+    /// Generate a capped cylinder.
+    pub fn cylinder(radius: f32, height: f32, segments: usize) -> Self {
+        cylinder::cylinder(radius, height, segments)
     }
 
     /// Recompute bounding sphere (call after modifying vertices).
@@ -107,7 +88,7 @@ impl Mesh {
 ///
 /// Not optimal but O(n) and within 5% of optimal radius in practice.
 /// Good enough for coarse frustum culling.
-fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
+pub fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
     if verts.is_empty() { return (Vec3::ZERO, 0.0); }
 
     // Start with AABB center

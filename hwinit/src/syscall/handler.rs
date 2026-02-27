@@ -1625,6 +1625,22 @@ pub unsafe fn register_framebuffer(info: FbInfo) {
     FB_REGISTERED = Some(info);
 }
 
+// DOUBLE BUFFER — kernel-owned back buffer + shadow for delta presentation
+
+#[cfg(target_arch = "x86_64")]
+extern "win64" {
+    /// Diff back vs shadow, write changed pixel spans to VRAM, update shadow.
+    /// All three buffers use the same stride (pixels per row).
+    fn asm_fb_present_delta(back: u64, shadow: u64, vram: u64, width: u64, height: u64, stride: u64);
+}
+
+/// Physical address of the kernel-allocated back buffer (zero = unallocated).
+static mut FB_BACK_PHYS: u64 = 0;
+/// Physical address of the kernel-allocated shadow buffer.
+static mut FB_SHADOW_PHYS: u64 = 0;
+/// Number of physical pages allocated for each of the two buffers.
+static mut FB_BACK_PAGES: u64 = 0;
+
 // SYS_NIC_INFO (32) — get NIC information
 
 const ENODEV: u64 = u64::MAX - 19;
@@ -2264,22 +2280,102 @@ pub fn fb_lock_holder() -> u32 {
     unsafe { FB_LOCK_PID }
 }
 
-// SYS_FB_MAP (64) — map framebuffer into process virtual address space
+// SYS_FB_MAP (64) — map the back buffer into user virtual address space
 
 /// `SYS_FB_MAP() → virt_addr`
 ///
-/// Maps the physical framebuffer into the calling process's address space
-/// as writable + uncacheable (write-combining would be better but requires
-/// PAT setup).  Returns the virtual address of the mapped framebuffer.
+/// Allocates a kernel-owned back buffer and shadow buffer in normal
+/// cacheable RAM (same layout as the hardware framebuffer, including
+/// stride padding).  Maps the back buffer into the calling process's
+/// address space as writable cacheable memory and returns its virtual
+/// address.
+///
+/// To userspace this looks like a normal framebuffer — write pixels,
+/// done.  The kernel's timer ISR automatically diffs versus the shadow
+/// and pushes only changed spans to real VRAM.
+///
+/// Calling `fb_map` a second time from any process simply re-maps the
+/// same already-allocated back buffer.
 pub unsafe fn sys_fb_map() -> u64 {
     let info = match FB_REGISTERED {
         Some(i) => i,
         None => return ENODEV,
     };
 
-    let pages = info.size.div_ceil(4096);
-    // Use MAP_PHYS with writable + uncacheable flags.
-    sys_map_phys(info.base, pages, 0x03) // flags: writable(1) | uncacheable(2)
+    // Allocate back + shadow buffers on first call.
+    if FB_BACK_PHYS == 0 {
+        let pages = info.size.div_ceil(4096);
+        let registry = crate::memory::global_registry_mut();
+
+        let back_phys = match registry.allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages,
+        ) {
+            Ok(p) => p,
+            Err(_) => return ENOMEM,
+        };
+
+        let shadow_phys = match registry.allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages,
+        ) {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = registry.free_pages(back_phys, pages);
+                return ENOMEM;
+            }
+        };
+
+        // Snapshot current VRAM into both buffers so the first delta
+        // sees the existing screen content (bootloader TUI, etc.)
+        // instead of flashing black.
+        core::ptr::copy_nonoverlapping(
+            info.base as *const u8,
+            back_phys as *mut u8,
+            info.size as usize,
+        );
+        core::ptr::copy_nonoverlapping(
+            info.base as *const u8,
+            shadow_phys as *mut u8,
+            info.size as usize,
+        );
+
+        FB_BACK_PHYS = back_phys;
+        FB_SHADOW_PHYS = shadow_phys;
+        FB_BACK_PAGES = pages;
+    }
+
+    // Map back buffer as writable cacheable (flag 0x01 = writable, no 0x02 uncacheable).
+    sys_map_phys(FB_BACK_PHYS, FB_BACK_PAGES, 0x01)
+}
+
+/// Kernel-internal: push back-buffer delta to VRAM.
+///
+/// Called from the timer ISR (`scheduler_tick`).  Compares the back buffer
+/// against the shadow and writes only changed pixel spans to real VRAM.
+/// Transparent to userspace — no syscall required.
+pub unsafe fn fb_present_tick() {
+    if FB_BACK_PHYS == 0 || FB_SHADOW_PHYS == 0 {
+        return;
+    }
+    let info = match FB_REGISTERED {
+        Some(i) => i,
+        None => return,
+    };
+
+    let stride_pixels = info.stride / 4;
+
+    #[cfg(target_arch = "x86_64")]
+    asm_fb_present_delta(
+        FB_BACK_PHYS,
+        FB_SHADOW_PHYS,
+        info.base,
+        info.width as u64,
+        info.height as u64,
+        stride_pixels as u64,
+    );
 }
 
 // SYS_PS (65) — list all processes
