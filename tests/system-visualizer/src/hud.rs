@@ -97,17 +97,33 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
     fb.draw_str(px + 4, y0, "MORPHEUSX MONITOR", COL_ACCENT);
 
     let y1 = y0 + font::CELL_H + 2;
-    fb.draw_str(px + 4, y1, "MEM:", COL_DIM);
-    fb.draw_u32(px + 30, y1, state.mem_used_mb(), 4, COL_TEXT);
-    fb.draw_char(px + 54, y1, b'/', COL_DIM);
-    fb.draw_u32(px + 60, y1, state.mem_total_mb(), 4, COL_TEXT);
-    fb.draw_str(px + 84, y1, "MB", COL_DIM);
+    fb.draw_str(px + 4,  y1, "MEM:", COL_DIM);
+    // Auto-convert to GB if >= 1024 MB
+    let (mem_used_display, mem_total_display, unit) = if state.mem_used_mb() >= 1024 {
+        let used_gb = state.mem_used_mb() as f32 / 1024.0;
+        let total_gb = state.mem_total_mb() as f32 / 1024.0;
+        let used_int = used_gb as u32;
+        let used_frac = ((used_gb - used_int as f32) * 100.0 + 0.5) as u32;
+        let total_int = total_gb as u32;
+        let total_frac = ((total_gb - total_int as f32) * 100.0 + 0.5) as u32;
+        ((used_int, used_frac), (total_int, total_frac), "GB")
+    } else {
+        ((state.mem_used_mb().min(99999), 0), (state.mem_total_mb().min(99999), 0), "MB")
+    };
+    fb.draw_u32(px + 30, y1, mem_used_display.0, 2, COL_TEXT);
+    fb.draw_char(px + 42, y1, b',', COL_DIM);
+    fb.draw_u32(px + 48, y1, mem_used_display.1, 2, COL_TEXT);
+    fb.draw_char(px + 60, y1, b'/', COL_DIM);
+    fb.draw_u32(px + 66, y1, mem_total_display.0, 2, COL_TEXT);
+    fb.draw_char(px + 78, y1, b',', COL_DIM);
+    fb.draw_u32(px + 84, y1, mem_total_display.1, 2, COL_TEXT);
+    fb.draw_str(px + 96, y1, unit, COL_DIM);
 
     let mem_pct = if state.total_mem > 0 {
         ((state.total_mem - state.free_mem) * 100 / state.total_mem) as u32
     } else { 0 };
     let bar_color = if mem_pct > 90 { COL_CRIT } else if mem_pct > 70 { COL_WARN } else { COL_ACCENT };
-    fb.draw_bar(px + 106, y1, 86, font::GLYPH_H, mem_pct, bar_color, COL_BG);
+    fb.draw_bar(px + 112, y1, 80, font::GLYPH_H, mem_pct, bar_color, COL_BG);
 
     let y2 = y1 + font::CELL_H + 1;
     fb.draw_str(px + 4, y2, "PROCS:", COL_DIM);
@@ -125,9 +141,13 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let y3 = y2 + font::CELL_H + 1;
     fb.draw_str(px + 4, y3, "HEAP:", COL_DIM);
-    let heap_kb = (state.heap_used / 1024) as u32;
-    fb.draw_u32(px + 36, y3, heap_kb, 5, COL_TEXT);
-    fb.draw_str(px + 66, y3, "KB", COL_DIM);
+    // Show kernel heap used / total in KB (heap is 4MB = 4096KB max → 4 digits)
+    let heap_used_kb  = (state.heap_used  / 1024).min(9999) as u32;
+    let heap_total_kb = (state.heap_total / 1024).min(9999) as u32;
+    fb.draw_u32(px + 36, y3, heap_used_kb,  4, COL_TEXT);
+    fb.draw_char(px + 60, y3, b'/', COL_DIM);
+    fb.draw_u32(px + 66, y3, heap_total_kb, 4, COL_TEXT);
+    fb.draw_str(px + 90, y3, "KB", COL_DIM);
 }
 
 pub fn draw_process_panel(
@@ -272,9 +292,9 @@ pub fn draw_selected_detail(fb: &Framebuf, proc: &ProcessInfo) {
         let y3 = y2 + font::CELL_H + 3;
         fb.draw_str(px + 4, y3, "[!] THIS IS THE KERNEL", COL_WARN);
         let y4 = y3 + font::CELL_H + 1;
-        fb.draw_str(px + 4, y4, "PRESS K. I DARE YOU.", COL_CRIT);
+        fb.draw_str(px + 4, y4, "YOU CAN KILL IT...", COL_CRIT);
         let y5 = y4 + font::CELL_H + 1;
-        fb.draw_str(px + 4, y5, "IT WONT END WELL  :)", COL_DIM);
+        fb.draw_str(px + 4, y5, "ITS A FEATURE NOT A BUG! :)", COL_DIM);
     }
 }
 

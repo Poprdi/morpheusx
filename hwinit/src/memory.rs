@@ -249,6 +249,10 @@ pub struct MemoryRegistry {
     /// UEFI snapshot. only for type queries and E820 export, not allocation.
     map: [MemoryDescriptor; MAX_MAP],
     map_count: usize,
+
+    /// PE-image exclusion zone saved from initial import — used by reclaim pass.
+    excl_start: u64,
+    excl_end: u64,
 }
 
 // no SMP, bare-metal, identity-mapped. these are fine.
@@ -267,6 +271,8 @@ impl MemoryRegistry {
             map_key: 0,
             map: [MemoryDescriptor::empty(); MAX_MAP],
             map_count: 0,
+            excl_start: 0,
+            excl_end: 0,
         }
     }
 
@@ -292,6 +298,8 @@ impl MemoryRegistry {
     ) {
         let excl_start = exclude_base;
         let excl_end = exclude_base + exclude_pages * PAGE_SIZE;
+        self.excl_start = excl_start;
+        self.excl_end   = excl_end;
         let entry_count = map_size / descriptor_size;
 
         for i in 0..entry_count {
@@ -460,6 +468,71 @@ impl MemoryRegistry {
     pub fn free_memory(&self) -> u64 {
         self.free_pages.saturating_mul(PAGE_SIZE)
     }
+
+    /// Reclaim UEFI BootServices memory into the buddy allocator.
+    ///
+    /// Call once, well after ExitBootServices — after GDT/IDT/PIC/heap/TSC/
+    /// paging/scheduler init so that UEFI boot-time services are truly gone.
+    /// Immediately call `reserve_page_table_pages()` after this to re-lock
+    /// any page-table pages that were in BootServices address space.
+    ///
+    /// Applies the same first-1MiB skip and PE-image exclusion as the initial
+    /// import, so the bootloader image is never corrupted.
+    ///
+    /// # Safety
+    /// - `import_uefi_map` must have been called first.
+    /// - No UEFI boot services may be invoked after this returns.
+    /// - Single-threaded context only.
+    pub unsafe fn reclaim_boot_services(&mut self) {
+        let excl_start = self.excl_start;
+        let excl_end   = self.excl_end;
+        let mut reclaimed_pages: u64 = 0;
+
+        for i in 0..self.map_count {
+            let d = &self.map[i];
+            if !matches!(d.mem_type,
+                MemoryType::BootServicesCode | MemoryType::BootServicesData)
+            {
+                continue;
+            }
+
+            let phys  = d.physical_start;
+            let pages = d.number_of_pages;
+            if pages == 0 { continue; }
+
+            let region_end = phys + pages * PAGE_SIZE;
+
+            // Skip first 1 MiB (BIOS land, VGA, ROM shadows).
+            let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
+            if start >= region_end { continue; }
+
+            // Apply the same PE-image exclusion zone as the initial import.
+            if excl_end > excl_start && start < excl_end && region_end > excl_start {
+                if start < excl_start {
+                    let added = (excl_start - start) / PAGE_SIZE;
+                    self.buddy_add_range(start, excl_start);
+                    reclaimed_pages += added;
+                }
+                if region_end > excl_end {
+                    let added = (region_end - excl_end) / PAGE_SIZE;
+                    self.buddy_add_range(excl_end, region_end);
+                    reclaimed_pages += added;
+                }
+            } else {
+                let added = (region_end - start) / PAGE_SIZE;
+                self.buddy_add_range(start, region_end);
+                reclaimed_pages += added;
+            }
+        }
+
+        let reclaimed_mb = (reclaimed_pages * PAGE_SIZE) >> 20;
+        puts("[MEM] reclaim_boot_services: freed ");
+        put_hex32(reclaimed_mb as u32);
+        puts(" MB  free_total=");
+        put_hex32((self.free_pages * PAGE_SIZE >> 20) as u32);
+        puts(" MB\n");
+    }
+
     pub fn allocated_memory(&self) -> u64 {
         self.allocated_pages.saturating_mul(PAGE_SIZE)
     }
