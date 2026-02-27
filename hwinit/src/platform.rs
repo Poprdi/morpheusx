@@ -251,6 +251,22 @@ pub unsafe fn platform_init_selfcontained(
     use crate::cpu::idt::enable_interrupts;
     enable_interrupts(); // here we go
 
+    // phase 10.5: reclaim UEFI BootServices RAM
+    //
+    // BootServices{Code,Data} pages are legally free after ExitBootServices.
+    // We deferred adding them to the buddy until now (well after GDT/IDT/PIC/
+    // heap/TSC/paging/scheduler) to let UEFI's boot-time state wind down.
+    // Immediately re-reserve active page-table pages so we don't hand out
+    // memory that the live PML4/PDPT/PD/PT tree sits in.
+    puts("[HWINIT] Phase 10.5: Reclaiming UEFI BootServices RAM\n");
+    {
+        let reg = global_registry_mut();
+        reg.reclaim_boot_services();
+    }
+    // Re-lock page-table pages that are now in the buddy (they lived in
+    // BootServices address space and were just freed above).
+    crate::paging::reserve_page_table_pages();
+
     // phase 11: filesystem
     puts("[HWINIT] Phase 11: HelixFS\n");
 
