@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use libmorpheus::process::{self, PsEntry};
 use libmorpheus::sys::{self, SysInfo};
 use libmorpheus::time;
@@ -57,7 +58,12 @@ pub struct SystemState {
     last_poll_ns: u64,
     prev_poll_ns: u64,
     pub load_history: [u8; HISTORY_LEN],
+    pub cpu_history: [u8; HISTORY_LEN],
     load_head: usize,
+    pub ready_count: u32,
+    pub run_count: u32,
+    pub blocked_count: u32,
+    pub total_cpu_pct: f32,
 }
 
 impl SystemState {
@@ -76,7 +82,12 @@ impl SystemState {
             last_poll_ns: 0,
             prev_poll_ns: 0,
             load_history: [0; HISTORY_LEN],
+            cpu_history: [0; HISTORY_LEN],
             load_head: 0,
+            ready_count: 0,
+            run_count: 0,
+            blocked_count: 0,
+            total_cpu_pct: 0.0,
         }
     }
 
@@ -98,8 +109,8 @@ impl SystemState {
         self.uptime_ms = info.uptime_ms();
         self.tsc_freq = info.tsc_freq;
 
-        let mut raw = [const { PsEntry::zeroed() }; MAX_PROCS];
-        let count = process::ps(&mut raw).min(MAX_PROCS);
+        let mut raw = Box::new([const { PsEntry::zeroed() }; MAX_PROCS]);
+        let count = process::ps(&mut *raw).min(MAX_PROCS);
 
         let mut total_delta: u64 = 0;
 
@@ -138,12 +149,31 @@ impl SystemState {
         self.prev_poll_ns = self.last_poll_ns;
         self.last_poll_ns = now;
 
+        let mut ready = 0u32;
+        let mut run = 0u32;
+        let mut blocked = 0u32;
+        let mut cpu_sum = 0.0f32;
+        for i in 0..count {
+            match self.procs[i].state {
+                0 => ready += 1,
+                1 => run += 1,
+                2 => blocked += 1,
+                _ => {}
+            }
+            cpu_sum += self.procs[i].cpu_pct;
+        }
+        self.ready_count = ready;
+        self.run_count = run;
+        self.blocked_count = blocked;
+        self.total_cpu_pct = cpu_sum.min(100.0);
+
         let used_pct = if self.total_mem > 0 {
             ((self.total_mem - self.free_mem) * 100 / self.total_mem).min(100) as u8
         } else {
             0
         };
         self.load_history[self.load_head % HISTORY_LEN] = used_pct;
+        self.cpu_history[self.load_head % HISTORY_LEN] = (self.total_cpu_pct as u8).min(100);
         self.load_head = self.load_head.wrapping_add(1);
     }
 
@@ -176,6 +206,12 @@ impl SystemState {
         if age >= HISTORY_LEN { return 0; }
         let idx = (self.load_head.wrapping_sub(1).wrapping_sub(age)) % HISTORY_LEN;
         self.load_history[idx]
+    }
+
+    pub fn cpu_history_sample(&self, age: usize) -> u8 {
+        if age >= HISTORY_LEN { return 0; }
+        let idx = (self.load_head.wrapping_sub(1).wrapping_sub(age)) % HISTORY_LEN;
+        self.cpu_history[idx]
     }
 
     pub fn mem_used_mb(&self) -> u32 {

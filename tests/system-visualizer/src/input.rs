@@ -4,12 +4,6 @@ use libmorpheus::io;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     None,
-    RotateLeft,
-    RotateRight,
-    RotateUp,
-    RotateDown,
-    ZoomIn,
-    ZoomOut,
     SelectNext,
     SelectPrev,
     KillSelected,
@@ -17,6 +11,18 @@ pub enum Action {
     Unfocus,
     TogglePause,
     ToggleHud,
+    ToggleSlow,
+    ResetView,
+    TogglePin,
+    SelectDigit1,
+    SelectDigit2,
+    SelectDigit3,
+    SelectDigit4,
+    SelectDigit5,
+    SelectDigit6,
+    SelectDigit7,
+    SelectDigit8,
+    SelectDigit9,
     Quit,
 }
 
@@ -29,7 +35,15 @@ pub struct InputState {
     pub mouse_dy: f32,
     pub mouse_left: bool,
     pub mouse_right: bool,
+    pub held: u16,
 }
+
+pub const HELD_W: u16     = 1 << 0;
+pub const HELD_A: u16     = 1 << 1;
+pub const HELD_S: u16     = 1 << 2;
+pub const HELD_D: u16     = 1 << 3;
+pub const HELD_Z: u16     = 1 << 4;
+pub const HELD_X: u16     = 1 << 5;
 
 impl InputState {
     pub fn new() -> Self {
@@ -40,6 +54,7 @@ impl InputState {
             mouse_dy: 0.0,
             mouse_left: false,
             mouse_right: false,
+            held: 0,
         }
     }
 
@@ -47,6 +62,7 @@ impl InputState {
         self.count = 0;
         self.mouse_dx = 0.0;
         self.mouse_dy = 0.0;
+        self.held = 0;
 
         let mouse = hw::mouse_read();
         self.mouse_dx = mouse.dx as f32;
@@ -64,13 +80,17 @@ impl InputState {
         let n = io::read_stdin(&mut buf[..to_read]);
 
         for i in 0..n {
+            match buf[i] {
+                b'w' | b'W' => self.held |= HELD_W,
+                b'a' | b'A' => self.held |= HELD_A,
+                b's' | b'S' => self.held |= HELD_S,
+                b'd' | b'D' => self.held |= HELD_D,
+                b'z' | b'Z' | b'=' | b'+' => self.held |= HELD_Z,
+                b'x' | b'X' | b'-' => self.held |= HELD_X,
+                _ => {}
+            }
+
             let action = match buf[i] {
-                b'a' | b'A' => Action::RotateLeft,
-                b'd' | b'D' => Action::RotateRight,
-                b'w' | b'W' => Action::RotateUp,
-                b's' | b'S' => Action::RotateDown,
-                b'z' | b'Z' | b'=' | b'+' => Action::ZoomIn,
-                b'x' | b'X' | b'-' => Action::ZoomOut,
                 b'\t' | b'n' | b'N' => Action::SelectNext,
                 b'p' | b'P' => Action::SelectPrev,
                 b'k' | b'K' => Action::KillSelected,
@@ -78,6 +98,18 @@ impl InputState {
                 0x1B => Action::Unfocus,
                 b' ' => Action::TogglePause,
                 b'h' | b'H' => Action::ToggleHud,
+                b'o' | b'O' => Action::ToggleSlow,
+                b'r' | b'R' => Action::ResetView,
+                b'f' | b'F' => Action::TogglePin,
+                b'1' => Action::SelectDigit1,
+                b'2' => Action::SelectDigit2,
+                b'3' => Action::SelectDigit3,
+                b'4' => Action::SelectDigit4,
+                b'5' => Action::SelectDigit5,
+                b'6' => Action::SelectDigit6,
+                b'7' => Action::SelectDigit7,
+                b'8' => Action::SelectDigit8,
+                b'9' => Action::SelectDigit9,
                 b'q' | b'Q' => Action::Quit,
                 _ => Action::None,
             };
@@ -90,9 +122,5 @@ impl InputState {
 
     pub fn has(&self, action: Action) -> bool {
         self.actions[..self.count].iter().any(|&a| a == action)
-    }
-
-    pub fn iter_actions(&self) -> &[Action] {
-        &self.actions[..self.count]
     }
 }
