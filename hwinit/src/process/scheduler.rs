@@ -49,6 +49,17 @@ static LIVE_COUNT: AtomicU32 = AtomicU32::new(0);
 /// True once `init_scheduler()` has been called.
 static mut SCHEDULER_READY: bool = false;
 
+/// Kernel CR3 (PML4 physical address).  Set once during `init_scheduler()`.
+/// Needed so syscall/ISR handlers can switch to kernel page tables when
+/// the buddy allocator must traverse identity-mapped physical addresses
+/// that may overlap with user-space virtual mappings.
+static mut KERNEL_CR3: u64 = 0;
+
+/// Return the kernel's CR3 (PML4 physical address).  0 before scheduler init.
+pub fn get_kernel_cr3() -> u64 {
+    unsafe { KERNEL_CR3 }
+}
+
 /// TSC frequency in Hz — set by `set_tsc_frequency()` during platform init.
 /// Used to convert millisecond sleep durations to TSC deadlines.
 static mut TSC_FREQUENCY: u64 = 0;
@@ -283,6 +294,7 @@ pub unsafe fn init_scheduler() {
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
     kernel_proc.cr3 = cr3 & 0x000F_FFFF_FFFF_F000;
+    KERNEL_CR3 = kernel_proc.cr3;
 
     // PID 0's kernel stack is the one already in use — we don't allocate a
     // new one; just leave kernel_stack_top as 0 (unused for the running proc).
