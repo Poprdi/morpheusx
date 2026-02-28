@@ -93,13 +93,142 @@ pub enum InitError {
 pub unsafe fn platform_init_selfcontained(
     config: SelfContainedConfig,
 ) -> Result<PlatformInit, InitError> {
+    // Belt-and-suspenders: ensure IF=0 before we touch any memory.
+    // enter_baremetal already does `cli` after ExitBootServices, but if
+    // anyone ever calls this entry from a different path, we're covered.
+    core::arch::asm!("cli", options(nomem, nostack));
+
+    // Clear CR0.WP (Write Protect) BEFORE any buddy operations.
+    // UEFI marks page-table pages and some BootServicesCode as read-only
+    // (R/W=0 in the PTE).  With WP=1, even Ring 0 code faults when
+    // writing to those pages.  The buddy's `list_push` writes FreeNode
+    // structs at physical addresses — if a split spare lands on one of
+    // these read-only pages, we get #PF.  Clear WP once, early, forever.
+    {
+        let cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+        if cr0 & (1u64 << 16) != 0 {
+            core::arch::asm!(
+                "mov cr0, {}",
+                in(reg) cr0 & !(1u64 << 16),
+                options(nomem, nostack),
+            );
+        }
+    }
+
     puts("[HWINIT] === TAKING OWNERSHIP ===\n");
 
     // phase 1: memory
     puts("[HWINIT] Phase 1: Memory\n");
 
-    // exclude PE image from buddy or it'll scribble FreeNode into our .bss
-    // (ask me how many hours THAT took to debug)
+    // ── Collect every page the CPU is actively using ──────────────
+    //
+    // The buddy allocator writes a 16-byte FreeNode header at the base
+    // of each free block — including "spare" halves produced by
+    // carve_block splits.  If ANY of those addresses is a live page-
+    // table page, the write overwrites PTE entries 0-1, corrupting the
+    // identity mapping.  Subsequent reads through the broken PTE return
+    // garbage → #GP / #PF.
+    //
+    // Fix: collect PT/GDT/IDT/stack pages BEFORE populating the buddy,
+    // and pass them as a sorted hole-punch array to import_uefi_map.
+    // The buddy will never touch those addresses — not during initial
+    // import, not during any later carve_block split.
+
+    // 1) Page-table pages (PML4, PDPT, PD, PT)
+    let (mut hw_holes, mut hw_count) = crate::paging::collect_page_table_pages();
+
+    puts("[MEM] collected ");
+    put_hex32(hw_count as u32);
+    puts(" page-table pages\n");
+
+    // 2) GDT page(s)
+    {
+        let mut buf = [0u8; 10];
+        core::arch::asm!("sgdt [{}]", in(reg) buf.as_mut_ptr(), options(nostack));
+        let limit = u16::from_le_bytes([buf[0], buf[1]]) as u64;
+        let base  = u64::from_le_bytes([
+            buf[2], buf[3], buf[4], buf[5],
+            buf[6], buf[7], buf[8], buf[9],
+        ]);
+        let page_start = base & !0xFFF;
+        let page_end   = (base + limit + 0xFFF) & !0xFFF;
+        let mut p = page_start;
+        while p < page_end && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+        puts("[MEM] GDT at ");
+        put_hex64(page_start);
+        puts("\n");
+    }
+
+    // 3) IDT page(s)
+    {
+        let mut buf = [0u8; 10];
+        core::arch::asm!("sidt [{}]", in(reg) buf.as_mut_ptr(), options(nostack));
+        let limit = u16::from_le_bytes([buf[0], buf[1]]) as u64;
+        let base  = u64::from_le_bytes([
+            buf[2], buf[3], buf[4], buf[5],
+            buf[6], buf[7], buf[8], buf[9],
+        ]);
+        let page_start = base & !0xFFF;
+        let page_end   = (base + limit + 0xFFF) & !0xFFF;
+        let mut p = page_start;
+        while p < page_end && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+        puts("[MEM] IDT at ");
+        put_hex64(page_start);
+        puts("\n");
+    }
+
+    // 4) Boot stack pages (current RSP ± safety margin)
+    let boot_stack_base;
+    let boot_stack_top;
+    {
+        let rsp: u64;
+        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
+        boot_stack_base = (rsp & !0xFFF).saturating_sub(128 * 1024);
+        boot_stack_top  = (rsp & !0xFFF) + 32 * 1024;
+        let mut p = boot_stack_base;
+        while p < boot_stack_top && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+    }
+
+    // Deduplicate and sort (insertion sort — hw_count is typically < 100).
+    for i in 1..hw_count {
+        let key = hw_holes[i];
+        let mut j = i;
+        while j > 0 && hw_holes[j - 1] > key {
+            hw_holes[j] = hw_holes[j - 1];
+            j -= 1;
+        }
+        hw_holes[j] = key;
+    }
+    // Deduplicate in-place.
+    if hw_count > 1 {
+        let mut w = 1usize;
+        for r in 1..hw_count {
+            if hw_holes[r] != hw_holes[w - 1] {
+                hw_holes[w] = hw_holes[r];
+                w += 1;
+            }
+        }
+        hw_count = w;
+    }
+
+    puts("[MEM] ");
+    put_hex32(hw_count as u32);
+    puts(" hw-hole pages (PT+GDT+IDT+stack)\n");
+
+    // ── Populate the buddy allocator ─────────────────────────────
     init_global_registry(
         config.memory_map_ptr,
         config.memory_map_size,
@@ -107,43 +236,32 @@ pub unsafe fn platform_init_selfcontained(
         config.descriptor_version,
         config.image_base,
         config.image_pages,
+        &hw_holes[..hw_count],
     );
 
     if config.image_pages > 0 {
-        puts("[MEM] excluded PE image from buddy: ");
+        puts("[MEM] excluded PE image: ");
         put_hex64(config.image_base);
         puts(" (");
         put_hex32(config.image_pages as u32);
         puts(" pages)\n");
     }
 
-    // reserve page-table pages. UEFI marks them BootServicesData ("free"),
-    // but allocating over live PML4 entries is... educational.
-    crate::paging::reserve_page_table_pages();
-
-    // reserve the boot stack from the buddy allocator.
-    // PID 0 runs on the original UEFI boot stack for its entire lifetime.
-    // If the boot stack falls in a Conventional/LoaderData region the buddy
-    // will happily hand those pages out, silently corrupting PID 0's live
-    // stack frame with page-table entries or kernel-stack ISR frames.
+    // Validate free-list integrity after import.
     {
-        let rsp: u64;
-        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
-        // 128 KiB below RSP (for deep call chains) + 32 KiB above (caller
-        // frames and locals living above the current SP in run_desktop).
-        let base = (rsp & !0xFFF).saturating_sub(128 * 1024);
-        let top = (rsp & !0xFFF) + 32 * 1024;
-        let pages = (top - base) / 4096;
         let reg = global_registry_mut();
-        reg.reserve_range(base, pages);
-        puts("[MEM] reserved boot stack: ");
-        put_hex64(base);
-        puts(" .. ");
-        put_hex64(top);
-        puts(" (");
-        put_hex32(pages as u32);
-        puts(" pages)\n");
+        let corrupt = reg.validate_free_lists();
+        if corrupt > 0 {
+            puts("[MEM] WARNING: dumping map for triage\n");
+            reg.dump_map();
+        }
     }
+
+    puts("[MEM] boot stack: ");
+    put_hex64(boot_stack_base);
+    puts(" .. ");
+    put_hex64(boot_stack_top);
+    puts("\n");
 
     let registry = global_registry_mut();
 
@@ -256,15 +374,38 @@ pub unsafe fn platform_init_selfcontained(
     // BootServices{Code,Data} pages are legally free after ExitBootServices.
     // We deferred adding them to the buddy until now (well after GDT/IDT/PIC/
     // heap/TSC/paging/scheduler) to let UEFI's boot-time state wind down.
-    // Immediately re-reserve active page-table pages so we don't hand out
-    // memory that the live PML4/PDPT/PD/PT tree sits in.
+    //
+    // CRITICAL: page-table pages live in BootServicesData.  We must NOT
+    // write FreeNode into them — doing so corrupts the live PML4/PDPT/PD/PT
+    // and the very next instruction that triggers a TLB miss will #GP or #PF.
+    // Collect them first, sort, and pass as an exclusion set.
     puts("[HWINIT] Phase 10.5: Reclaiming UEFI BootServices RAM\n");
     {
+        let (mut pt_pages, pt_count) = crate::paging::collect_page_table_pages();
+
+        // Simple insertion sort — pt_count is typically < 50.
+        for i in 1..pt_count {
+            let key = pt_pages[i];
+            let mut j = i;
+            while j > 0 && pt_pages[j - 1] > key {
+                pt_pages[j] = pt_pages[j - 1];
+                j -= 1;
+            }
+            pt_pages[j] = key;
+        }
+
         let reg = global_registry_mut();
-        reg.reclaim_boot_services();
+        reg.reclaim_boot_services(&pt_pages[..pt_count]);
     }
-    // Re-lock page-table pages that are now in the buddy (they lived in
-    // BootServices address space and were just freed above).
+    // Re-lock page-table pages that lived in BootServices address space.
+    // reclaim_boot_services already excluded them via hw_holes, so this
+    // is purely belt-and-suspenders — carve_block will no-op for pages
+    // that were never added to the buddy.
+    //
+    // NOTE: reserve_page_table_pages uses allocate_pages(Address(...))
+    // which calls carve_block.  This is SAFE because we already cleared
+    // CR0.WP in Phase 1 and the PT pages were hole-punched during both
+    // import and reclaim.  Splits won't produce spares at PT addresses.
     crate::paging::reserve_page_table_pages();
 
     // phase 11: filesystem

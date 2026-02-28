@@ -3,7 +3,7 @@
 //! MAX_ORDER = 26 → 256 GiB max block. change one constant for more.
 //! No bitmap, no per-page array, ~13 KiB BSS. the dream.
 
-use crate::serial::{put_hex32, puts};
+use crate::serial::{put_hex32, put_hex64, puts};
 
 pub const PAGE_SIZE: u64 = 4096;
 pub const PAGE_SHIFT: u32 = 12;
@@ -287,6 +287,10 @@ impl MemoryRegistry {
     /// `map_ptr` must point to a valid UEFI memory map of `map_size` bytes
     /// with entries spaced `descriptor_size` bytes apart.
     /// Must be called exactly once, single-threaded, before any allocation.
+    /// `hw_holes` is a **sorted** slice of page-aligned physical addresses
+    /// that must never be added to the buddy.  Typically: live page-table
+    /// pages, GDT page, IDT pages.  Writing FreeNode into any of these
+    /// corrupts the corresponding CPU structure — instant #GP or #PF.
     pub unsafe fn import_uefi_map(
         &mut self,
         map_ptr: *const u8,
@@ -295,6 +299,7 @@ impl MemoryRegistry {
         _descriptor_version: u32,
         exclude_base: u64,
         exclude_pages: u64,
+        hw_holes: &[u64],
     ) {
         let excl_start = exclude_base;
         let excl_end = exclude_base + exclude_pages * PAGE_SIZE;
@@ -345,18 +350,18 @@ impl MemoryRegistry {
                 let region_end = phys + pages * PAGE_SIZE;
                 let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
                 if start < region_end {
-                    // clip around PE image so we don't write FreeNode into our own code
+                    // First clip around PE image, then hole-punch hw_holes
+                    // (page-table pages, GDT, IDT) so the buddy never
+                    // writes FreeNode into live CPU structures.
                     if excl_end > excl_start && start < excl_end && region_end > excl_start {
-                        // Part before the exclusion zone.
                         if start < excl_start {
-                            self.buddy_add_range(start, excl_start);
+                            self.add_range_punching_holes(start, excl_start, hw_holes);
                         }
-                        // Part after the exclusion zone.
                         if region_end > excl_end {
-                            self.buddy_add_range(excl_end, region_end);
+                            self.add_range_punching_holes(excl_end, region_end, hw_holes);
                         }
                     } else {
-                        self.buddy_add_range(start, region_end);
+                        self.add_range_punching_holes(start, region_end, hw_holes);
                     }
                 }
             }
@@ -479,11 +484,16 @@ impl MemoryRegistry {
     /// Applies the same first-1MiB skip and PE-image exclusion as the initial
     /// import, so the bootloader image is never corrupted.
     ///
+    /// `cpu_excl` is a **sorted** array of page-aligned physical addresses
+    /// that must NOT be added to the buddy — live page-table pages, GDT,
+    /// IDT, etc.  Writing FreeNode into these would corrupt the active
+    /// PML4 / PDPT / PD / PT / GDT / IDT — instant #GP or #PF.
+    ///
     /// # Safety
     /// - `import_uefi_map` must have been called first.
     /// - No UEFI boot services may be invoked after this returns.
     /// - Single-threaded context only.
-    pub unsafe fn reclaim_boot_services(&mut self) {
+    pub unsafe fn reclaim_boot_services(&mut self, cpu_excl: &[u64]) {
         let excl_start = self.excl_start;
         let excl_end   = self.excl_end;
         let mut reclaimed_pages: u64 = 0;
@@ -506,22 +516,29 @@ impl MemoryRegistry {
             let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
             if start >= region_end { continue; }
 
-            // Apply the same PE-image exclusion zone as the initial import.
+            // Apply PE-image exclusion, then cpu_excl hole-punch.
+            // Build a list of safe sub-ranges after PE exclusion,
+            // then hole-punch each one for cpu_excl pages.
+            let mut subs: [(u64, u64); 2] = [(0, 0); 2];
+            let mut nsub = 0usize;
+
             if excl_end > excl_start && start < excl_end && region_end > excl_start {
                 if start < excl_start {
-                    let added = (excl_start - start) / PAGE_SIZE;
-                    self.buddy_add_range(start, excl_start);
-                    reclaimed_pages += added;
+                    subs[nsub] = (start, excl_start);
+                    nsub += 1;
                 }
                 if region_end > excl_end {
-                    let added = (region_end - excl_end) / PAGE_SIZE;
-                    self.buddy_add_range(excl_end, region_end);
-                    reclaimed_pages += added;
+                    subs[nsub] = (excl_end, region_end);
+                    nsub += 1;
                 }
             } else {
-                let added = (region_end - start) / PAGE_SIZE;
-                self.buddy_add_range(start, region_end);
-                reclaimed_pages += added;
+                subs[0] = (start, region_end);
+                nsub = 1;
+            }
+
+            for s in 0..nsub {
+                let (s_start, s_end) = subs[s];
+                reclaimed_pages += self.add_range_punching_holes(s_start, s_end, cpu_excl);
             }
         }
 
@@ -531,6 +548,44 @@ impl MemoryRegistry {
         puts(" MB  free_total=");
         put_hex32((self.free_pages * PAGE_SIZE >> 20) as u32);
         puts(" MB\n");
+    }
+
+    /// Add range [start, end) to the buddy, skipping any pages in `holes`.
+    /// `holes` must be sorted ascending.  Returns number of pages added.
+    unsafe fn add_range_punching_holes(
+        &mut self,
+        start: u64,
+        end: u64,
+        holes: &[u64],
+    ) -> u64 {
+        let mut added = 0u64;
+        let mut cur = start;
+
+        for &hole in holes {
+            if hole >= end {
+                break;
+            }
+            if hole < cur {
+                continue;
+            }
+            // Add [cur, hole)
+            if cur < hole {
+                let pages = (hole - cur) / PAGE_SIZE;
+                self.buddy_add_range(cur, hole);
+                added += pages;
+            }
+            // Skip the hole page
+            cur = hole + PAGE_SIZE;
+        }
+
+        // Remainder after all holes
+        if cur < end {
+            let pages = (end - cur) / PAGE_SIZE;
+            self.buddy_add_range(cur, end);
+            added += pages;
+        }
+
+        added
     }
 
     pub fn allocated_memory(&self) -> u64 {
@@ -613,12 +668,37 @@ impl MemoryRegistry {
 
     // buddy internals
 
+    /// Check if a pointer is a canonical x86-64 address.
+    /// Non-canonical addresses (bits 48–63 not sign-extended from bit 47)
+    /// trigger #GP on dereference. Detects OVMF 0xAFAFAFAF scrub poison.
+    #[inline]
+    fn is_canonical(ptr: *mut FreeNode) -> bool {
+        if ptr.is_null() {
+            return true; // null is fine, callers check it separately
+        }
+        let addr = ptr as u64;
+        let top17 = addr >> 47;
+        top17 == 0 || top17 == 0x1FFFF
+    }
+
     /// Push a block at `addr` onto free_lists[order].
     ///
     /// # Safety: addr must be 4-KiB aligned and physically mapped.
     unsafe fn list_push(&mut self, addr: u64, order: usize) {
         let node = addr as *mut FreeNode;
         let old_head = self.free_lists[order];
+        if !Self::is_canonical(old_head) {
+            puts("[MEM] CORRUPT list_push: head=");
+            put_hex64(old_head as u64);
+            puts(" order=");
+            put_hex32(order as u32);
+            puts(" — starting fresh chain\n");
+            self.free_lists[order] = node;
+            (*node).next = core::ptr::null_mut();
+            (*node).prev = core::ptr::null_mut();
+            self.free_at_order[order] = 1;
+            return;
+        }
         (*node).next = old_head;
         (*node).prev = core::ptr::null_mut();
         if !old_head.is_null() {
@@ -637,6 +717,22 @@ impl MemoryRegistry {
             if cur == target {
                 let prev = (*cur).prev;
                 let next = (*cur).next;
+                // Validate pointers before unlinking.
+                if !Self::is_canonical(prev) || !Self::is_canonical(next) {
+                    puts("[MEM] CORRUPT list_remove unlink: node=");
+                    put_hex64(cur as u64);
+                    puts(" prev=");
+                    put_hex64(prev as u64);
+                    puts(" next=");
+                    put_hex64(next as u64);
+                    puts(" order=");
+                    put_hex32(order as u32);
+                    puts("\n");
+                    // Sever the chain at this node.
+                    self.free_lists[order] = core::ptr::null_mut();
+                    self.free_at_order[order] = 0;
+                    return true;
+                }
                 if !prev.is_null() {
                     (*prev).next = next;
                 } else {
@@ -648,7 +744,22 @@ impl MemoryRegistry {
                 self.free_at_order[order] -= 1;
                 return true;
             }
-            cur = (*cur).next;
+            let next = (*cur).next;
+            if !Self::is_canonical(next) {
+                puts("[MEM] CORRUPT list_remove walk: node=");
+                put_hex64(cur as u64);
+                puts(" next=");
+                put_hex64(next as u64);
+                puts(" order=");
+                put_hex32(order as u32);
+                puts(" target=");
+                put_hex64(addr);
+                puts("\n");
+                // Terminate the corrupted chain here.
+                (*cur).next = core::ptr::null_mut();
+                break;
+            }
+            cur = next;
         }
         false
     }
@@ -659,7 +770,29 @@ impl MemoryRegistry {
         if head.is_null() {
             return None;
         }
+        if !Self::is_canonical(head) {
+            puts("[MEM] CORRUPT list_pop: head=");
+            put_hex64(head as u64);
+            puts(" order=");
+            put_hex32(order as u32);
+            puts("\n");
+            self.free_lists[order] = core::ptr::null_mut();
+            self.free_at_order[order] = 0;
+            return None;
+        }
         let next = (*head).next;
+        if !Self::is_canonical(next) {
+            puts("[MEM] CORRUPT list_pop next: head=");
+            put_hex64(head as u64);
+            puts(" next=");
+            put_hex64(next as u64);
+            puts(" order=");
+            put_hex32(order as u32);
+            puts("\n");
+            self.free_lists[order] = core::ptr::null_mut();
+            self.free_at_order[order] = 0;
+            return Some(head as u64);
+        }
         self.free_lists[order] = next;
         if !next.is_null() {
             (*next).prev = core::ptr::null_mut();
@@ -899,6 +1032,86 @@ impl MemoryRegistry {
 
     // diagnostics
 
+    /// Walk every free-list chain and verify pointer integrity.
+    /// Returns the number of corrupted pointers found.
+    /// Called after `import_uefi_map` and before first allocation to catch
+    /// scrub-poison or interrupt-race corruption early.
+    pub fn validate_free_lists(&self) -> usize {
+        let mut corrupt = 0usize;
+        for order in 0..=MAX_ORDER {
+            let mut cur = self.free_lists[order];
+            let mut idx = 0u64;
+            while !cur.is_null() {
+                if !Self::is_canonical(cur) {
+                    puts("[MEM] VALIDATE: corrupt ptr in free_lists[");
+                    put_hex32(order as u32);
+                    puts("] at node #");
+                    put_hex32(idx as u32);
+                    puts(": ptr=");
+                    put_hex64(cur as u64);
+                    puts("\n");
+                    corrupt += 1;
+                    break;
+                }
+                idx += 1;
+                if idx > 0x800_000 {
+                    // More than 8M nodes → infinite loop or circular chain.
+                    puts("[MEM] VALIDATE: probable loop in free_lists[");
+                    put_hex32(order as u32);
+                    puts("]\n");
+                    corrupt += 1;
+                    break;
+                }
+                unsafe {
+                    let next = (*cur).next;
+                    if !next.is_null() && !Self::is_canonical(next) {
+                        puts("[MEM] VALIDATE: corrupt next at node ");
+                        put_hex64(cur as u64);
+                        puts(" → ");
+                        put_hex64(next as u64);
+                        puts(" order=");
+                        put_hex32(order as u32);
+                        puts("\n");
+                        corrupt += 1;
+                        break;
+                    }
+                    cur = next;
+                }
+            }
+        }
+        if corrupt == 0 {
+            puts("[MEM] free-list validation: OK\n");
+        } else {
+            puts("[MEM] free-list validation: ");
+            put_hex32(corrupt as u32);
+            puts(" corrupted chains!\n");
+        }
+        corrupt
+    }
+
+    /// Dump the UEFI memory map snapshot to serial for offline analysis.
+    pub fn dump_map(&self) {
+        puts("[MEM] ---- UEFI memory map (");
+        put_hex32(self.map_count as u32);
+        puts(" entries) ----\n");
+        for i in 0..self.map_count {
+            let d = &self.map[i];
+            let ty = d.mem_type as u32;
+            puts("  [");
+            put_hex32(i as u32);
+            puts("] type=");
+            put_hex32(ty);
+            puts(" phys=");
+            put_hex64(d.physical_start);
+            puts(" pages=");
+            put_hex32(d.number_of_pages as u32);
+            puts(" attr=");
+            put_hex64(d.attribute.0);
+            puts("\n");
+        }
+        puts("[MEM] ---- end map ----\n");
+    }
+
     fn print_summary(&self) {
         let total_mb = (self.total_pages * PAGE_SIZE) >> 20;
         let free_mb = (self.free_pages * PAGE_SIZE) >> 20;
@@ -993,6 +1206,8 @@ static mut REGISTRY_INITIALIZED: bool = false;
 ///
 /// # Safety
 /// Call exactly once, immediately after `ExitBootServices`, single-threaded.
+/// `hw_holes`: sorted slice of page-aligned physical addresses that must be
+/// excluded from the buddy (live page-table pages, GDT, IDT, etc.).
 pub unsafe fn init_global_registry(
     map_ptr: *const u8,
     map_size: usize,
@@ -1000,6 +1215,7 @@ pub unsafe fn init_global_registry(
     descriptor_version: u32,
     exclude_base: u64,
     exclude_pages: u64,
+    hw_holes: &[u64],
 ) {
     if REGISTRY_INITIALIZED {
         puts("[MEM] WARNING: registry already initialized!\n");
@@ -1012,6 +1228,7 @@ pub unsafe fn init_global_registry(
         descriptor_version,
         exclude_base,
         exclude_pages,
+        hw_holes,
     );
     REGISTRY_INITIALIZED = true;
 }
@@ -1085,7 +1302,7 @@ pub unsafe fn parse_uefi_memory_map(
     desc_size: usize,
 ) -> MemoryRegistry {
     let mut r = MemoryRegistry::new();
-    r.import_uefi_map(map_ptr, map_size, desc_size, 1, 0, 0);
+    r.import_uefi_map(map_ptr, map_size, desc_size, 1, 0, 0, &[]);
     r
 }
 
