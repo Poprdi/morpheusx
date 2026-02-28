@@ -212,6 +212,14 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     }
 
     // UEFI IS DEAD. WE OWN THE MACHINE.
+    //
+    // Immediately disable interrupts. UEFI's PIC/APIC timer is still armed
+    // and IF may be set. The UEFI IDT points into BootServicesCode which
+    // ExitBootServices just freed (and OVMF DEBUG scrubs with 0xAF).
+    // A single timer tick here vectors into 0xAFAFAF garbage, corrupts
+    // whatever RDI points at, and poisons buddy FreeNode chains → #GP.
+    // We'll re-enable interrupts in Phase 10 after our own GDT/IDT/PIC.
+    core::arch::asm!("cli", options(nomem, nostack));
 
     BAREMETAL_MODE.store(true, Ordering::SeqCst);
 
