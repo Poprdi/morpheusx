@@ -63,12 +63,15 @@ impl Framebuffer {
         let y1 = y.min(self.height);
         let x2 = (x.saturating_add(w)).min(self.width);
         let y2 = (y.saturating_add(h)).min(self.height);
+        let cols = (x2 - x1) as usize;
+        if cols == 0 {
+            return;
+        }
         for row in y1..y2 {
-            let row_base = (row * self.stride_px + x1) as usize;
-            for col in 0..(x2 - x1) {
-                unsafe {
-                    self.base.add(row_base + col as usize).write_volatile(px);
-                }
+            let row_ptr = unsafe { self.base.add((row * self.stride_px + x1) as usize) };
+            unsafe {
+                let slice = core::slice::from_raw_parts_mut(row_ptr, cols);
+                slice.fill(px);
             }
         }
     }
@@ -121,18 +124,14 @@ impl Framebuffer {
             self.clear(bg_r, bg_g, bg_b);
             return;
         }
-        // Copy rows upward
+        let w = self.width as usize;
         for y in 0..(self.height - rows_px) {
             let dst_off = (y * self.stride_px) as usize;
             let src_off = ((y + rows_px) * self.stride_px) as usize;
-            for x in 0..self.width as usize {
-                unsafe {
-                    let val = self.base.add(src_off + x).read_volatile();
-                    self.base.add(dst_off + x).write_volatile(val);
-                }
+            unsafe {
+                core::ptr::copy(self.base.add(src_off), self.base.add(dst_off), w);
             }
         }
-        // Clear the vacated bottom region
         let clear_y = self.height - rows_px;
         self.fill_rect(0, clear_y, self.width, rows_px, bg_r, bg_g, bg_b);
     }

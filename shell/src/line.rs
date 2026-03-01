@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use libmorpheus::io;
+use libmorpheus::process;
 
 use crate::console::Console;
 use crate::fb::Framebuffer;
@@ -37,6 +38,7 @@ impl LineEditor {
 
             let n = io::read_stdin(&mut byte);
             if n == 0 {
+                process::yield_cpu();
                 continue;
             }
 
@@ -135,6 +137,7 @@ pub fn read_line_fb(
 
         let n = io::read_stdin(&mut byte);
         if n == 0 {
+            process::yield_cpu();
             continue;
         }
 
