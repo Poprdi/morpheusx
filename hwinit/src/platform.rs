@@ -147,12 +147,11 @@ pub unsafe fn platform_init_selfcontained(
         let mut buf = [0u8; 10];
         core::arch::asm!("sgdt [{}]", in(reg) buf.as_mut_ptr(), options(nostack));
         let limit = u16::from_le_bytes([buf[0], buf[1]]) as u64;
-        let base  = u64::from_le_bytes([
-            buf[2], buf[3], buf[4], buf[5],
-            buf[6], buf[7], buf[8], buf[9],
+        let base = u64::from_le_bytes([
+            buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9],
         ]);
         let page_start = base & !0xFFF;
-        let page_end   = (base + limit + 0xFFF) & !0xFFF;
+        let page_end = (base + limit + 0xFFF) & !0xFFF;
         let mut p = page_start;
         while p < page_end && hw_count < hw_holes.len() {
             hw_holes[hw_count] = p;
@@ -169,12 +168,11 @@ pub unsafe fn platform_init_selfcontained(
         let mut buf = [0u8; 10];
         core::arch::asm!("sidt [{}]", in(reg) buf.as_mut_ptr(), options(nostack));
         let limit = u16::from_le_bytes([buf[0], buf[1]]) as u64;
-        let base  = u64::from_le_bytes([
-            buf[2], buf[3], buf[4], buf[5],
-            buf[6], buf[7], buf[8], buf[9],
+        let base = u64::from_le_bytes([
+            buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9],
         ]);
         let page_start = base & !0xFFF;
-        let page_end   = (base + limit + 0xFFF) & !0xFFF;
+        let page_end = (base + limit + 0xFFF) & !0xFFF;
         let mut p = page_start;
         while p < page_end && hw_count < hw_holes.len() {
             hw_holes[hw_count] = p;
@@ -193,7 +191,7 @@ pub unsafe fn platform_init_selfcontained(
         let rsp: u64;
         core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
         boot_stack_base = (rsp & !0xFFF).saturating_sub(128 * 1024);
-        boot_stack_top  = (rsp & !0xFFF) + 32 * 1024;
+        boot_stack_top = (rsp & !0xFFF) + 32 * 1024;
         let mut p = boot_stack_base;
         while p < boot_stack_top && hw_count < hw_holes.len() {
             hw_holes[hw_count] = p;

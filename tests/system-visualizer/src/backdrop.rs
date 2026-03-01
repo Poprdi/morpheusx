@@ -1,14 +1,18 @@
-use morpheus_gfx3d::pipeline::{Pipeline, Material};
+use morpheus_gfx3d::light::LightEnv;
 use morpheus_gfx3d::math::mat4::Mat4;
 use morpheus_gfx3d::math::vec::Vec3;
+use morpheus_gfx3d::pipeline::{Material, Pipeline};
 use morpheus_gfx3d::scene::mesh::Mesh;
-use morpheus_gfx3d::light::LightEnv;
 use morpheus_gfx3d::target::RenderTarget;
 
 use crate::hud::Framebuf;
 
 const MAX_STARS: usize = 270;
-const GALAXY_POS: Vec3 = Vec3 { x: 0.0, y: -15.0, z: -35.0 };
+const GALAXY_POS: Vec3 = Vec3 {
+    x: 0.0,
+    y: -15.0,
+    z: -35.0,
+};
 
 #[derive(Clone, Copy)]
 struct Star {
@@ -20,7 +24,13 @@ struct Star {
 }
 
 impl Star {
-    const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0, bright: 0, size: 1 };
+    const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        bright: 0,
+        size: 1,
+    };
 }
 
 pub struct Backdrop {
@@ -43,17 +53,23 @@ impl Backdrop {
         let mut count = 0usize;
 
         for _ in 0..40 {
-            if count >= MAX_STARS { break; }
+            if count >= MAX_STARS {
+                break;
+            }
             stars[count] = gen_star(&mut rng, 35.0, 55.0, 180, 255, 2);
             count += 1;
         }
         for _ in 0..80 {
-            if count >= MAX_STARS { break; }
+            if count >= MAX_STARS {
+                break;
+            }
             stars[count] = gen_star(&mut rng, 70.0, 120.0, 100, 170, 1);
             count += 1;
         }
         for _ in 0..150 {
-            if count >= MAX_STARS { break; }
+            if count >= MAX_STARS {
+                break;
+            }
             stars[count] = gen_star(&mut rng, 140.0, 250.0, 40, 90, 1);
             count += 1;
         }
@@ -113,7 +129,9 @@ pub fn render_stars(
         let dz = s.z - cam_pos.z;
 
         let d_fwd = dx * fwd_x + dy * fwd_y + dz * fwd_z;
-        if d_fwd <= 0.5 { continue; }
+        if d_fwd <= 0.5 {
+            continue;
+        }
 
         let d_right = dx * right_x + dz * right_z;
         let d_up = dx * up_x + dy * up_y + dz * up_z;
@@ -122,7 +140,9 @@ pub fn render_stars(
         let sx = (d_right * inv_d + cx) as i32;
         let sy_px = (-d_up * inv_d + cy_scr) as i32;
 
-        if sx < 0 || sy_px < 0 || sx >= fb.w as i32 || sy_px >= fb.h as i32 { continue; }
+        if sx < 0 || sy_px < 0 || sx >= fb.w as i32 || sy_px >= fb.h as i32 {
+            continue;
+        }
 
         let flicker = {
             let t = (twinkle_phase.wrapping_add(i as u32 * 7919)) % 100;
@@ -142,9 +162,15 @@ pub fn render_stars(
         if s.size >= 2 {
             let sx1 = sx as u32 + 1;
             let sy1 = sy_px as u32 + 1;
-            if sx1 < fb.w { fb.put(sx1, sy_px as u32, color); }
-            if sy1 < fb.h { fb.put(sx as u32, sy1, color); }
-            if sx1 < fb.w && sy1 < fb.h { fb.put(sx1, sy1, color); }
+            if sx1 < fb.w {
+                fb.put(sx1, sy_px as u32, color);
+            }
+            if sy1 < fb.h {
+                fb.put(sx as u32, sy1, color);
+            }
+            if sx1 < fb.w && sy1 < fb.h {
+                fb.put(sx1, sy1, color);
+            }
         }
     }
 }
@@ -225,7 +251,13 @@ fn gen_star(rng: &mut u32, min_dist: f32, max_dist: f32, min_b: u8, max_b: u8, s
             let s = dist / r;
             let range = (max_b as u32).saturating_sub(min_b as u32).max(1);
             let b = min_b.saturating_add((xorshift32(rng) % range) as u8);
-            return Star { x: x * s, y: y * s, z: z * s, bright: b, size };
+            return Star {
+                x: x * s,
+                y: y * s,
+                z: z * s,
+                bright: b,
+                size,
+            };
         }
     }
 }
@@ -246,8 +278,15 @@ fn rand_f32(state: &mut u32) -> f32 {
 fn fast_sin(x: f32) -> f32 {
     let pi = core::f32::consts::PI;
     let mut t = x % (2.0 * pi);
-    if t < 0.0 { t += 2.0 * pi; }
-    let sign = if t > pi { t -= pi; -1.0 } else { 1.0 };
+    if t < 0.0 {
+        t += 2.0 * pi;
+    }
+    let sign = if t > pi {
+        t -= pi;
+        -1.0
+    } else {
+        1.0
+    };
     let y = t * (pi - t);
     sign * (16.0 * y) / (5.0 * pi * pi - 4.0 * y)
 }
@@ -258,12 +297,16 @@ fn fast_cos(x: f32) -> f32 {
 
 fn fast_tan(x: f32) -> f32 {
     let c = fast_cos(x);
-    if c > -0.0001 && c < 0.0001 { return 1000.0; }
+    if c > -0.0001 && c < 0.0001 {
+        return 1000.0;
+    }
     fast_sin(x) / c
 }
 
 fn fast_sqrt(x: f32) -> f32 {
-    if x <= 0.0 { return 0.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
     let i = f32::to_bits(x);
     let i = (i >> 1) + 0x1FC00000;
     let y = f32::from_bits(i);

@@ -10,9 +10,9 @@ pub struct Texture {
     pub pixels: Vec<u32>,
     pub width: u32,
     pub height: u32,
-    pub width_mask: u32,   // width - 1 (for power-of-two wrap)
-    pub height_mask: u32,  // height - 1
-    pub width_shift: u32,  // log2(width) for y*width = y << shift
+    pub width_mask: u32,  // width - 1 (for power-of-two wrap)
+    pub height_mask: u32, // height - 1
+    pub width_shift: u32, // log2(width) for y*width = y << shift
 }
 
 impl Texture {
@@ -52,7 +52,11 @@ impl Texture {
         let v = v & self.height_mask;
         let idx = (v << self.width_shift) | u;
         // Safety: mask guarantees in-bounds, but we still bounds-check for correctness
-        if let Some(&px) = self.pixels.get(idx as usize) { px } else { 0 }
+        if let Some(&px) = self.pixels.get(idx as usize) {
+            px
+        } else {
+            0
+        }
     }
 
     /// Extract RGBA channels from packed u32.
@@ -98,7 +102,9 @@ impl MipChain {
             let h = current.height;
             levels.push(current);
 
-            if w == 1 && h == 1 { break; }
+            if w == 1 && h == 1 {
+                break;
+            }
 
             let nw = (w >> 1).max(1);
             let nh = (h >> 1).max(1);
@@ -129,7 +135,9 @@ impl MipChain {
     /// level = log2(texel_per_pixel), clamped to valid range.
     #[inline]
     pub fn select_level(&self, texels_per_pixel: f32) -> usize {
-        if texels_per_pixel <= 1.0 { return 0; }
+        if texels_per_pixel <= 1.0 {
+            return 0;
+        }
         let level = crate::math::fast::fast_log2(texels_per_pixel) as usize;
         level.min(self.levels.len() - 1)
     }
@@ -155,7 +163,12 @@ fn avg4(a: u32, b: u32, c: u32, d: u32) -> u32 {
     // Mask for G and A channels: 0xGG__AA__  (shifted down by 8)
 
     let rb = ((a & RB_MASK) + (b & RB_MASK) + (c & RB_MASK) + (d & RB_MASK) + 0x00020002) >> 2;
-    let ga = (((a >> 8) & RB_MASK) + ((b >> 8) & RB_MASK) + ((c >> 8) & RB_MASK) + ((d >> 8) & RB_MASK) + 0x00020002) >> 2;
+    let ga = (((a >> 8) & RB_MASK)
+        + ((b >> 8) & RB_MASK)
+        + ((c >> 8) & RB_MASK)
+        + ((d >> 8) & RB_MASK)
+        + 0x00020002)
+        >> 2;
 
     (rb & RB_MASK) | ((ga & RB_MASK) << 8)
 }

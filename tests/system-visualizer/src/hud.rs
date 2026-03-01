@@ -26,7 +26,9 @@ impl Framebuf {
         for py in y1..y2 {
             let row = py as usize * self.stride as usize;
             for px in x1..x2 {
-                unsafe { *self.ptr.add(row + px as usize) = color; }
+                unsafe {
+                    *self.ptr.add(row + px as usize) = color;
+                }
             }
         }
     }
@@ -35,13 +37,19 @@ impl Framebuf {
         let bits = font::glyph(ch);
         for (row, &b) in bits.iter().enumerate() {
             let py = y + row as u32;
-            if py >= self.h { break; }
+            if py >= self.h {
+                break;
+            }
             let base = py as usize * self.stride as usize;
             for col in 0..5u32 {
                 let px = x + col;
-                if px >= self.w { break; }
+                if px >= self.w {
+                    break;
+                }
                 if (b & (1 << (4 - col))) != 0 {
-                    unsafe { *self.ptr.add(base + px as usize) = color; }
+                    unsafe {
+                        *self.ptr.add(base + px as usize) = color;
+                    }
                 }
             }
         }
@@ -58,7 +66,9 @@ impl Framebuf {
     pub fn draw_u32(&self, x: u32, y: u32, val: u32, digits: u32, color: u32) {
         let mut cx = x;
         let mut div = 1u32;
-        for _ in 1..digits { div *= 10; }
+        for _ in 1..digits {
+            div *= 10;
+        }
         for _ in 0..digits {
             let d = ((val / div) % 10) as u8 + b'0';
             self.draw_char(cx, y, d, color);
@@ -97,7 +107,7 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
     fb.draw_str(px + 4, y0, "MORPHEUSX MONITOR", COL_ACCENT);
 
     let y1 = y0 + font::CELL_H + 2;
-    fb.draw_str(px + 4,  y1, "MEM:", COL_DIM);
+    fb.draw_str(px + 4, y1, "MEM:", COL_DIM);
     // Always show in GB when the machine has >= 1 GB total RAM (avoids
     // 2-digit truncation of large MB values like 12288 → "88").
     let (mem_used_display, mem_total_display, unit) = if state.mem_total_mb() >= 1024 {
@@ -109,7 +119,11 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
         let total_frac = ((total_gb - total_int as f32) * 100.0 + 0.5) as u32;
         ((used_int, used_frac), (total_int, total_frac), "GB")
     } else {
-        ((state.mem_used_mb().min(9999), 0), (state.mem_total_mb().min(9999), 0), "MB")
+        (
+            (state.mem_used_mb().min(9999), 0),
+            (state.mem_total_mb().min(9999), 0),
+            "MB",
+        )
     };
     // used: "UU,uu" (2+2 digits for int+frac)
     fb.draw_u32(px + 30, y1, mem_used_display.0, 2, COL_TEXT);
@@ -124,8 +138,16 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let mem_pct = if state.total_mem > 0 {
         ((state.total_mem - state.free_mem) * 100 / state.total_mem) as u32
-    } else { 0 };
-    let bar_color = if mem_pct > 90 { COL_CRIT } else if mem_pct > 70 { COL_WARN } else { COL_ACCENT };
+    } else {
+        0
+    };
+    let bar_color = if mem_pct > 90 {
+        COL_CRIT
+    } else if mem_pct > 70 {
+        COL_WARN
+    } else {
+        COL_ACCENT
+    };
     fb.draw_bar(px + 120, y1, 76, font::GLYPH_H, mem_pct, bar_color, COL_BG);
 
     let y2 = y1 + font::CELL_H + 1;
@@ -145,19 +167,15 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
     let y3 = y2 + font::CELL_H + 1;
     fb.draw_str(px + 4, y3, "HEAP:", COL_DIM);
     // Show kernel heap used / total in KB (heap is 4MB = 4096KB max → 4 digits)
-    let heap_used_kb  = (state.heap_used  / 1024).min(9999) as u32;
+    let heap_used_kb = (state.heap_used / 1024).min(9999) as u32;
     let heap_total_kb = (state.heap_total / 1024).min(9999) as u32;
-    fb.draw_u32(px + 36, y3, heap_used_kb,  4, COL_TEXT);
+    fb.draw_u32(px + 36, y3, heap_used_kb, 4, COL_TEXT);
     fb.draw_char(px + 60, y3, b'/', COL_DIM);
     fb.draw_u32(px + 66, y3, heap_total_kb, 4, COL_TEXT);
     fb.draw_str(px + 90, y3, "KB", COL_DIM);
 }
 
-pub fn draw_process_panel(
-    fb: &Framebuf,
-    state: &SystemState,
-    selected: Option<usize>,
-) {
+pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<usize>) {
     let px = 8u32;
     let py = 96u32;
     let pw = 200u32;
@@ -200,14 +218,28 @@ pub fn draw_process_panel(
         fb.draw_char(px + 28, ry, state_char(proc.state), st_col);
 
         let cpu_int = (proc.cpu_pct as u32).min(99);
-        fb.draw_u32(px + 40, ry, cpu_int, 2, if cpu_int > 50 { COL_WARN } else { c });
+        fb.draw_u32(
+            px + 40,
+            ry,
+            cpu_int,
+            2,
+            if cpu_int > 50 { COL_WARN } else { c },
+        );
         fb.draw_char(px + 52, ry, b'%', COL_DIM);
 
         let mem_display = (proc.mem_kb as u32).min(9999);
         fb.draw_u32(px + 70, ry, mem_display, 4, c);
 
-        let display_name = if proc.pid == 0 { "MorpheusX" } else { proc.name_str() };
-        let trunc = if display_name.len() > 11 { &display_name[..11] } else { display_name };
+        let display_name = if proc.pid == 0 {
+            "MorpheusX"
+        } else {
+            proc.name_str()
+        };
+        let trunc = if display_name.len() > 11 {
+            &display_name[..11]
+        } else {
+            display_name
+        };
         let name_color = if proc.pid == 0 { 0x00FFD700 } else { c };
         fb.draw_str(px + 112, ry, trunc, name_color);
     }
@@ -220,17 +252,23 @@ pub fn draw_fps(fb: &Framebuf, fps: u32, latency_ms: u32, speed_mult: f32) {
     fb.fill_rect(px, py, 140, 20, COL_PANEL);
     hline(fb, px, py, 140);
 
-    fb.draw_str(px + 4,  py + 4, "FPS:", COL_DIM);
+    fb.draw_str(px + 4, py + 4, "FPS:", COL_DIM);
     fb.draw_u32(px + 30, py + 4, fps.min(999), 3, COL_ACCENT);
-    fb.draw_str(px + 52, py + 4, "MS:",  COL_DIM);
+    fb.draw_str(px + 52, py + 4, "MS:", COL_DIM);
     fb.draw_u32(px + 70, py + 4, latency_ms.min(999), 3, COL_TEXT);
 
     // Speed indicator: "SPD:1.0x" — integral and one decimal, e.g. "1.0" "1.5"
-    let spd_col = if speed_mult > 1.5 { COL_ACCENT } else if speed_mult < 1.0 { COL_DIM } else { COL_TEXT };
+    let spd_col = if speed_mult > 1.5 {
+        COL_ACCENT
+    } else if speed_mult < 1.0 {
+        COL_DIM
+    } else {
+        COL_TEXT
+    };
     fb.draw_str(px + 94, py + 4, "SPD:", COL_DIM);
-    let int_part  = speed_mult as u32;
+    let int_part = speed_mult as u32;
     let frac_part = ((speed_mult - int_part as f32) * 10.0 + 0.5) as u32;
-    fb.draw_u32(px + 118, py + 4, int_part,  1, spd_col);
+    fb.draw_u32(px + 118, py + 4, int_part, 1, spd_col);
     fb.draw_char(px + 124, py + 4, b'.', spd_col);
     fb.draw_u32(px + 130, py + 4, frac_part, 1, spd_col);
     fb.draw_char(px + 136, py + 4, b'x', spd_col);
@@ -254,7 +292,12 @@ pub fn draw_controls(fb: &Framebuf) {
         "^X/Y:SPD  H:HUD  Q:QT",
     ];
     for (i, &line) in lines.iter().enumerate() {
-        fb.draw_str(px + 4, py + 4 + i as u32 * (font::CELL_H + 1), line, COL_DIM);
+        fb.draw_str(
+            px + 4,
+            py + 4 + i as u32 * (font::CELL_H + 1),
+            line,
+            COL_DIM,
+        );
     }
 }
 
@@ -270,7 +313,11 @@ pub fn draw_selected_detail(fb: &Framebuf, proc: &ProcessInfo) {
 
     let y0 = py + 4;
     fb.draw_str(px + 4, y0, "SELECTED:", COL_ACCENT);
-    let display_name = if proc.pid == 0 { "MORPHEUSX" } else { proc.name_str() };
+    let display_name = if proc.pid == 0 {
+        "MORPHEUSX"
+    } else {
+        proc.name_str()
+    };
     let name_color = if proc.pid == 0 { 0x00FFD700 } else { COL_TEXT };
     fb.draw_str(px + 60, y0, display_name, name_color);
 
@@ -317,7 +364,13 @@ pub fn draw_load_graph(fb: &Framebuf, state: &SystemState) {
         let pct = state.load_history_sample(samples - 1 - i) as u32;
         let bar_h = (gh * pct) / 100;
         let x = gx + i as u32;
-        let col = if pct > 90 { COL_CRIT } else if pct > 70 { COL_WARN } else { COL_ACCENT };
+        let col = if pct > 90 {
+            COL_CRIT
+        } else if pct > 70 {
+            COL_WARN
+        } else {
+            COL_ACCENT
+        };
         for dy in 0..bar_h {
             fb.put(x, plot_y + gh - 1 - dy, col);
         }
@@ -333,7 +386,13 @@ pub fn draw_load_graph(fb: &Framebuf, state: &SystemState) {
         let pct = state.cpu_history_sample(samples - 1 - i) as u32;
         let bar_h = (gh * pct) / 100;
         let x = gx + i as u32;
-        let col = if pct > 80 { COL_CRIT } else if pct > 50 { COL_WARN } else { 0x002090E0 };
+        let col = if pct > 80 {
+            COL_CRIT
+        } else if pct > 50 {
+            COL_WARN
+        } else {
+            0x002090E0
+        };
         for dy in 0..bar_h {
             fb.put(x, cplot_y + gh - 1 - dy, col);
         }
@@ -360,16 +419,16 @@ pub fn draw_state_bar(fb: &Framebuf, state: &SystemState) {
     let zw = pw.saturating_sub(used); // zombie/dead remainder
 
     let y = py + 2;
-    fb.fill_rect(px,                   y, rw, 6, 0x00FFE820); // ready  - yellow
-    fb.fill_rect(px + rw,              y, nw, 6, 0x0020FF60); // run    - green
-    fb.fill_rect(px + rw + nw,         y, bw, 6, 0x002090FF); // blocked- blue
-    fb.fill_rect(px + rw + nw + bw,    y, zw, 6, 0x00303030); // zombie - dark
+    fb.fill_rect(px, y, rw, 6, 0x00FFE820); // ready  - yellow
+    fb.fill_rect(px + rw, y, nw, 6, 0x0020FF60); // run    - green
+    fb.fill_rect(px + rw + nw, y, bw, 6, 0x002090FF); // blocked- blue
+    fb.fill_rect(px + rw + nw + bw, y, zw, 6, 0x00303030); // zombie - dark
 
     let ty = y + 8;
-    fb.draw_str(px,      ty, "RD:", COL_DIM);
-    fb.draw_u32(px + 18, ty, state.ready_count,   2, 0x00FFE820);
+    fb.draw_str(px, ty, "RD:", COL_DIM);
+    fb.draw_u32(px + 18, ty, state.ready_count, 2, 0x00FFE820);
     fb.draw_str(px + 34, ty, "RN:", COL_DIM);
-    fb.draw_u32(px + 52, ty, state.run_count,     2, 0x0020FF60);
+    fb.draw_u32(px + 52, ty, state.run_count, 2, 0x0020FF60);
     fb.draw_str(px + 68, ty, "BL:", COL_DIM);
     fb.draw_u32(px + 86, ty, state.blocked_count, 2, 0x002090FF);
 }
@@ -379,10 +438,21 @@ pub fn draw_status_flags(fb: &Framebuf, paused: bool, slow_motion: bool, pinned:
     const GAP: u32 = 8;
     let mut total_w = 0u32;
     let mut count = 0u32;
-    if paused      { total_w += 6 * font::CELL_W; count += 1; }
-    if slow_motion { total_w += 8 * font::CELL_W; count += 1; }
-    if pinned      { total_w += 6 * font::CELL_W; count += 1; }
-    if count == 0  { return; }
+    if paused {
+        total_w += 6 * font::CELL_W;
+        count += 1;
+    }
+    if slow_motion {
+        total_w += 8 * font::CELL_W;
+        count += 1;
+    }
+    if pinned {
+        total_w += 6 * font::CELL_W;
+        count += 1;
+    }
+    if count == 0 {
+        return;
+    }
     total_w += (count - 1) * GAP;
 
     let mut cx = (fb.w / 2).saturating_sub(total_w / 2);

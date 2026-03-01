@@ -133,14 +133,38 @@ impl MatrixRain {
         }
     }
 
-    // Simple busy-wait delay - controls animation speed independently
+    /// Frame pacing delay using TSC for consistent timing.
+    ///
+    /// PERF FIX: Replaced 40M-iteration busy loop with TSC-based delay.
+    /// Old approach burned ~40M iterations of `black_box()` per frame —
+    /// wasting CPU cycles on pure busywork. TSC approach uses `spin_loop()`
+    /// hint which issues PAUSE, reducing power and pipeline contention.
+    /// Targets ~30ms per frame (~33 FPS) for smooth rain animation.
     fn delay(&self) {
-        // Safe busy loop without dangerous volatile reads
-        let mut counter = 0u32;
-        for _ in 0..40000000 {
-            counter = counter.wrapping_add(1);
-            // Prevents optimizer from removing the loop
-            core::hint::black_box(counter);
+        // Use TSC for frame pacing: ~30ms delay for ~33 FPS animation
+        let start: u64;
+        unsafe {
+            core::arch::asm!("rdtsc", out("eax") _, out("edx") _, options(nostack, nomem));
+            let lo: u32;
+            let hi: u32;
+            core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
+            start = ((hi as u64) << 32) | (lo as u64);
+        }
+        // ~30ms at 1 GHz ≈ 30_000_000 cycles; scales with actual CPU frequency.
+        // This is an approximation — exact timing isn't critical for animation.
+        let target_cycles: u64 = 30_000_000;
+        loop {
+            let now: u64;
+            unsafe {
+                let lo: u32;
+                let hi: u32;
+                core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
+                now = ((hi as u64) << 32) | (lo as u64);
+            }
+            if now.wrapping_sub(start) >= target_cycles {
+                break;
+            }
+            core::hint::spin_loop();
         }
     }
 

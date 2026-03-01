@@ -1,5 +1,5 @@
-use crate::math::vec::{Vec3, Vec4};
 use crate::math::mat4::Mat4;
+use crate::math::vec::{Vec3, Vec4};
 
 /// View frustum for fast culling.
 ///
@@ -80,7 +80,11 @@ impl Frustum {
             }
         }
 
-        if all_inside { CullResult::Inside } else { CullResult::Intersect }
+        if all_inside {
+            CullResult::Inside
+        } else {
+            CullResult::Intersect
+        }
     }
 
     /// Test an AABB against the frustum.
@@ -114,7 +118,11 @@ impl Frustum {
             }
         }
 
-        if all_inside { CullResult::Inside } else { CullResult::Intersect }
+        if all_inside {
+            CullResult::Inside
+        } else {
+            CullResult::Intersect
+        }
     }
 }
 

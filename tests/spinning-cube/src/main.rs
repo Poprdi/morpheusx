@@ -3,17 +3,17 @@
 extern crate alloc;
 
 use libmorpheus::entry;
-use libmorpheus::hw::{fb_info, fb_lock, fb_map, fb_blit};
+use libmorpheus::hw::{fb_blit, fb_info, fb_lock, fb_map};
 use libmorpheus::time;
+use morpheus_gfx3d::camera::Camera;
+use morpheus_gfx3d::light::{DirLight, LightEnv};
+use morpheus_gfx3d::math::mat4::Mat4;
+use morpheus_gfx3d::math::trig::TrigTable;
+use morpheus_gfx3d::math::vec::Vec3;
+use morpheus_gfx3d::pipeline::Material;
 use morpheus_gfx3d::pipeline::Pipeline;
 use morpheus_gfx3d::scene::mesh::Mesh;
-use morpheus_gfx3d::math::mat4::Mat4;
-use morpheus_gfx3d::math::vec::Vec3;
-use morpheus_gfx3d::math::trig::TrigTable;
-use morpheus_gfx3d::light::{LightEnv, DirLight};
-use morpheus_gfx3d::camera::Camera;
-use morpheus_gfx3d::target::{TargetPixelFormat, DirectTarget};
-use morpheus_gfx3d::pipeline::Material;
+use morpheus_gfx3d::target::{DirectTarget, TargetPixelFormat};
 
 entry!(main);
 
@@ -52,7 +52,13 @@ fn main() -> i32 {
     // the kernel-visible back buffer.  fb_present() then diffs against
     // the shadow and pushes only changed spans to VRAM.
     let mut target = unsafe {
-        DirectTarget::new(fb_vaddr as *mut u32, fb_width, fb_height, fb_stride, fb_format)
+        DirectTarget::new(
+            fb_vaddr as *mut u32,
+            fb_width,
+            fb_height,
+            fb_stride,
+            fb_format,
+        )
     };
 
     // ── Initialize 3D pipeline ──
@@ -127,16 +133,26 @@ fn main() -> i32 {
         // Draw background lattice (wireframe wall + floor)
         {
             pipeline.wireframe = true;
-            let wall_model = Mat4::translation(0.0, 0.5, -8.5)
-                .mul(&Mat4::rotation_x(1.0, 0.0));
-            let floor_model = Mat4::translation(0.0, -3.6, -1.0)
-                .mul(&Mat4::scale(1.0, 1.0, 1.0));
+            let wall_model = Mat4::translation(0.0, 0.5, -8.5).mul(&Mat4::rotation_x(1.0, 0.0));
+            let floor_model = Mat4::translation(0.0, -3.6, -1.0).mul(&Mat4::scale(1.0, 1.0, 1.0));
 
             let wall_material = Material::solid(0.16, 0.24, 0.16);
             let floor_material = Material::solid(0.14, 0.20, 0.22);
 
-            pipeline.draw_mesh(&lattice_wall, &wall_model, &wall_material, &lights, &mut target);
-            pipeline.draw_mesh(&lattice_floor, &floor_model, &floor_material, &lights, &mut target);
+            pipeline.draw_mesh(
+                &lattice_wall,
+                &wall_model,
+                &wall_material,
+                &lights,
+                &mut target,
+            );
+            pipeline.draw_mesh(
+                &lattice_floor,
+                &floor_model,
+                &floor_material,
+                &lights,
+                &mut target,
+            );
             pipeline.wireframe = false;
         }
 
@@ -155,24 +171,36 @@ fn main() -> i32 {
 
         // Draw sphere (top-center)
         {
-            let model = Mat4::translation(0.0, 2.2, 0.0)
-                .mul(&rot_y.mul(&rot_x).mul(&rot_z).mul(&Mat4::scale(0.90, 0.90, 0.90)));
+            let model = Mat4::translation(0.0, 2.2, 0.0).mul(
+                &rot_y
+                    .mul(&rot_x)
+                    .mul(&rot_z)
+                    .mul(&Mat4::scale(0.90, 0.90, 0.90)),
+            );
             let material = Material::solid(0.3, 0.3, 0.8);
             pipeline.draw_mesh(&sphere, &model, &material, &lights, &mut target);
         }
 
         // Draw torus (top-right)
         {
-            let model = Mat4::translation(3.8, 2.2, -0.8)
-                .mul(&rot_y.mul(&rot_x).mul(&rot_z).mul(&Mat4::scale(0.95, 0.95, 0.95)));
+            let model = Mat4::translation(3.8, 2.2, -0.8).mul(
+                &rot_y
+                    .mul(&rot_x)
+                    .mul(&rot_z)
+                    .mul(&Mat4::scale(0.95, 0.95, 0.95)),
+            );
             let material = Material::solid(0.8, 0.3, 0.3);
             pipeline.draw_mesh(&torus, &model, &material, &lights, &mut target);
         }
 
         // Draw pyramid (bottom-left)
         {
-            let model = Mat4::translation(-3.8, -2.2, -0.4)
-                .mul(&rot_y.mul(&rot_x).mul(&rot_z).mul(&Mat4::scale(1.00, 1.00, 1.00)));
+            let model = Mat4::translation(-3.8, -2.2, -0.4).mul(
+                &rot_y
+                    .mul(&rot_x)
+                    .mul(&rot_z)
+                    .mul(&Mat4::scale(1.00, 1.00, 1.00)),
+            );
             let material = Material::solid(0.8, 0.8, 0.3);
             pipeline.draw_mesh(&pyramid, &model, &material, &lights, &mut target);
         }
@@ -207,7 +235,8 @@ fn main() -> i32 {
         fps_frame_count = fps_frame_count.saturating_add(1);
         let fps_window_ns = frame_end_ns.saturating_sub(fps_window_start_ns);
         if fps_window_ns >= 1_000_000_000 {
-            fps_display = ((fps_frame_count as u64).saturating_mul(1_000_000_000) / fps_window_ns) as u32;
+            fps_display =
+                ((fps_frame_count as u64).saturating_mul(1_000_000_000) / fps_window_ns) as u32;
             fps_frame_count = 0;
             fps_window_start_ns = frame_end_ns;
         }
@@ -232,7 +261,6 @@ fn main() -> i32 {
         0
     }
 }
-
 
 /// Clear the hardware framebuffer to a solid color.
 fn clear_framebuffer(fb_vaddr: u64, fb_width: u32, fb_height: u32, fb_stride: u32, color: u32) {
@@ -264,30 +292,103 @@ fn draw_hud(
     let panel_h = 44u32;
 
     fill_rect(
+        fb_vaddr, fb_width, fb_height, fb_stride, panel_x, panel_y, panel_w, panel_h, 0x00101010,
+    );
+
+    let fg = 0x00E0FFE0;
+    draw_text_5x7(
         fb_vaddr,
         fb_width,
         fb_height,
         fb_stride,
-        panel_x,
-        panel_y,
-        panel_w,
-        panel_h,
-        0x00101010,
+        panel_x + 6,
+        panel_y + 6,
+        "FPS:",
+        fg,
+    );
+    draw_u32_3(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 36,
+        panel_y + 6,
+        fps,
+        fg,
     );
 
-    let fg = 0x00E0FFE0;
-    draw_text_5x7(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 6, panel_y + 6, "FPS:", fg);
-    draw_u32_3(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 36, panel_y + 6, fps, fg);
+    draw_text_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 72,
+        panel_y + 6,
+        "LAT:",
+        fg,
+    );
+    draw_u32_3(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 102,
+        panel_y + 6,
+        latency_ms,
+        fg,
+    );
+    draw_text_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 122,
+        panel_y + 6,
+        "MS",
+        fg,
+    );
 
-    draw_text_5x7(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 72, panel_y + 6, "LAT:", fg);
-    draw_u32_3(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 102, panel_y + 6, latency_ms, fg);
-    draw_text_5x7(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 122, panel_y + 6, "MS", fg);
+    draw_text_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 6,
+        panel_y + 24,
+        "TRI:",
+        fg,
+    );
+    draw_u32_4(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 36,
+        panel_y + 24,
+        tris,
+        fg,
+    );
 
-    draw_text_5x7(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 6, panel_y + 24, "TRI:", fg);
-    draw_u32_4(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 36, panel_y + 24, tris, fg);
-
-    draw_text_5x7(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 72, panel_y + 24, "PIX:", fg);
-    draw_u32_4(fb_vaddr, fb_width, fb_height, fb_stride, panel_x + 102, panel_y + 24, pixels / 100, fg);
+    draw_text_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 72,
+        panel_y + 24,
+        "PIX:",
+        fg,
+    );
+    draw_u32_4(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        panel_x + 102,
+        panel_y + 24,
+        pixels / 100,
+        fg,
+    );
 }
 
 fn fill_rect(
@@ -309,7 +410,9 @@ fn fill_rect(
         let row = py as usize * fb_stride as usize;
         for px in x..x_end {
             let idx = row + px as usize;
-            unsafe { *fb_ptr.add(idx) = color; }
+            unsafe {
+                *fb_ptr.add(idx) = color;
+            }
         }
     }
 }
@@ -346,8 +449,26 @@ fn draw_u32_3(
     let d1 = b'0' + ((v / 10) % 10) as u8;
     let d2 = b'0' + (v % 10) as u8;
     draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x, y, d0, color);
-    draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x + 6, y, d1, color);
-    draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x + 12, y, d2, color);
+    draw_glyph_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        x + 6,
+        y,
+        d1,
+        color,
+    );
+    draw_glyph_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        x + 12,
+        y,
+        d2,
+        color,
+    );
 }
 
 fn draw_u32_4(
@@ -366,9 +487,36 @@ fn draw_u32_4(
     let d2 = b'0' + ((v / 10) % 10) as u8;
     let d3 = b'0' + (v % 10) as u8;
     draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x, y, d0, color);
-    draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x + 6, y, d1, color);
-    draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x + 12, y, d2, color);
-    draw_glyph_5x7(fb_vaddr, fb_width, fb_height, fb_stride, x + 18, y, d3, color);
+    draw_glyph_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        x + 6,
+        y,
+        d1,
+        color,
+    );
+    draw_glyph_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        x + 12,
+        y,
+        d2,
+        color,
+    );
+    draw_glyph_5x7(
+        fb_vaddr,
+        fb_width,
+        fb_height,
+        fb_stride,
+        x + 18,
+        y,
+        d3,
+        color,
+    );
 }
 
 fn draw_glyph_5x7(
@@ -398,7 +546,9 @@ fn draw_glyph_5x7(
             }
             if (bits & (1 << (4 - col))) != 0 {
                 let idx = row_base + px as usize;
-                unsafe { *fb_ptr.add(idx) = color; }
+                unsafe {
+                    *fb_ptr.add(idx) = color;
+                }
             }
         }
     }
@@ -406,26 +556,66 @@ fn draw_glyph_5x7(
 
 fn glyph_5x7(ch: u8) -> [u8; 7] {
     match ch {
-        b'0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
-        b'1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        b'2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
-        b'3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
-        b'4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
-        b'5' => [0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110],
-        b'6' => [0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
-        b'7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
-        b'8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
-        b'9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110],
-        b'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
-        b'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
-        b'S' => [0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110],
-        b'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        b'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        b'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        b'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
-        b'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        b'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        b'X' => [0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b01010, 0b10001],
+        b'0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        b'1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        b'2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        b'3' => [
+            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        b'4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        b'5' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
+        ],
+        b'6' => [
+            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        b'7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        b'8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        b'9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        b'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        b'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        b'S' => [
+            0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110,
+        ],
+        b'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        b'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        b'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        b'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        b'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        b'I' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        b'X' => [
+            0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b01010, 0b10001,
+        ],
         b':' => [0, 0b00100, 0, 0, 0, 0b00100, 0],
         b' ' => [0, 0, 0, 0, 0, 0, 0],
         _ => [0, 0, 0, 0, 0, 0, 0],

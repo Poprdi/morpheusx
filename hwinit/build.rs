@@ -26,9 +26,7 @@ const ASM_PCI: &[&str] = &[
     "asm/pci/virtio_cap.s",
 ];
 
-const ASM_FB: &[&str] = &[
-    "asm/fb/present.s",
-];
+const ASM_FB: &[&str] = &["asm/fb/present.s"];
 
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();

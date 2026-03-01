@@ -1,6 +1,6 @@
-use crate::math::vec::Vec3;
 use crate::math::mat4::Mat4;
 use crate::math::trig::TrigTable;
+use crate::math::vec::Vec3;
 
 /// FPS-style camera with Euler angles (yaw/pitch).
 ///
@@ -8,10 +8,10 @@ use crate::math::trig::TrigTable;
 /// for zero benefit. Quake, Doom, Half-Life — none of them use camera roll.
 pub struct Camera {
     pub position: Vec3,
-    pub yaw: f32,      // radians, 0 = looking along -Z
-    pub pitch: f32,    // radians, clamped to ±89°
-    pub fov_y: f32,    // vertical field of view in radians
-    pub aspect: f32,   // width / height
+    pub yaw: f32,    // radians, 0 = looking along -Z
+    pub pitch: f32,  // radians, clamped to ±89°
+    pub fov_y: f32,  // vertical field of view in radians
+    pub aspect: f32, // width / height
     pub near: f32,
     pub far: f32,
 }
@@ -40,12 +40,20 @@ impl Camera {
 
         // Wrap yaw to [0, 2π)
         let two_pi = 2.0 * core::f32::consts::PI;
-        while self.yaw < 0.0 { self.yaw += two_pi; }
-        while self.yaw >= two_pi { self.yaw -= two_pi; }
+        while self.yaw < 0.0 {
+            self.yaw += two_pi;
+        }
+        while self.yaw >= two_pi {
+            self.yaw -= two_pi;
+        }
 
         // Clamp pitch to prevent gimbal lock
-        if self.pitch > MAX_PITCH { self.pitch = MAX_PITCH; }
-        if self.pitch < -MAX_PITCH { self.pitch = -MAX_PITCH; }
+        if self.pitch > MAX_PITCH {
+            self.pitch = MAX_PITCH;
+        }
+        if self.pitch < -MAX_PITCH {
+            self.pitch = -MAX_PITCH;
+        }
     }
 
     /// Move camera relative to its current facing direction.
@@ -68,11 +76,7 @@ impl Camera {
     pub fn forward(&self, trig: &TrigTable) -> Vec3 {
         let (sin_yaw, cos_yaw) = trig.sin_cos(self.yaw);
         let (sin_pitch, cos_pitch) = trig.sin_cos(self.pitch);
-        Vec3::new(
-            -sin_yaw * cos_pitch,
-            sin_pitch,
-            -cos_yaw * cos_pitch,
-        )
+        Vec3::new(-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch)
     }
 
     /// Build the view matrix.

@@ -45,14 +45,21 @@ impl BlockBitmap {
         let copy_len = data.len().min(byte_count);
         bits[..copy_len].copy_from_slice(&data[..copy_len]);
 
-        // Count allocated bits
+        // PERF FIX: Count allocated bits using byte-level count_ones() (POPCNT).
+        // Old approach iterated bit-by-bit over every block — O(total_blocks).
+        // New approach iterates over bytes — O(total_blocks / 8), and each
+        // count_ones() compiles to a single POPCNT instruction on x86_64.
         let mut alloc_count: u64 = 0;
-        for i in 0..total_blocks {
-            let byte_idx = (i / 8) as usize;
-            let bit_idx = (i % 8) as u32;
-            if bits[byte_idx] & (1 << bit_idx) != 0 {
-                alloc_count += 1;
-            }
+        // Count full bytes
+        let full_bytes = (total_blocks / 8) as usize;
+        for byte in &bits[..full_bytes] {
+            alloc_count += byte.count_ones() as u64;
+        }
+        // Count remaining bits in the last partial byte (if any)
+        let remaining_bits = (total_blocks % 8) as u32;
+        if remaining_bits > 0 && full_bytes < bits.len() {
+            let mask = (1u8 << remaining_bits) - 1;
+            alloc_count += (bits[full_bytes] & mask).count_ones() as u64;
         }
 
         Self {

@@ -1,5 +1,5 @@
-use crate::math::fixed::Fx16;
 use super::triangle::Vertex;
+use crate::math::fixed::Fx16;
 
 /// A horizontal span (scanline segment) produced by the edge walker.
 ///
@@ -32,7 +32,8 @@ pub struct Span {
 impl Span {
     pub const EMPTY: Self = Self {
         y: 0,
-        x_left: Fx16::ZERO, x_right: Fx16::ZERO,
+        x_left: Fx16::ZERO,
+        x_right: Fx16::ZERO,
         inv_w_left: Fx16::ZERO,
         r_left: Fx16::ZERO,
         g_left: Fx16::ZERO,
@@ -76,9 +77,14 @@ impl SpanGradients {
         let area = dx1 * dy2 - dx2 * dy1;
         if area.abs() < 0.0001 {
             return Self {
-                inv_w_step: Fx16::ZERO, r_step: Fx16::ZERO, g_step: Fx16::ZERO,
-                b_step: Fx16::ZERO, u_step: Fx16::ZERO, v_step: Fx16::ZERO,
-                z_step: Fx16::ZERO, fog_step: Fx16::ZERO,
+                inv_w_step: Fx16::ZERO,
+                r_step: Fx16::ZERO,
+                g_step: Fx16::ZERO,
+                b_step: Fx16::ZERO,
+                u_step: Fx16::ZERO,
+                v_step: Fx16::ZERO,
+                z_step: Fx16::ZERO,
+                fog_step: Fx16::ZERO,
             };
         }
 

@@ -356,8 +356,14 @@ asm_ahci_poll_cmd:
     call    asm_tsc_read
     sub     rax, rbx
     cmp     rax, r15
-    jb      .poll_loop
+    jae     .timeout_exit
 
+    ; PERF FIX: pause hint reduces CPU power and pipeline contention
+    ; during AHCI command completion polling (can take milliseconds for disk I/O).
+    pause
+    jmp     .poll_loop
+
+.timeout_exit:
     ; Timeout
     mov     eax, 1
     jmp     .exit

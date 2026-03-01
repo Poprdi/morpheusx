@@ -1,12 +1,16 @@
-use crate::math::fixed::Fx16;
 use super::span::Span;
 use super::triangle::Vertex;
+use crate::math::fixed::Fx16;
 
 /// no_std ceil for f32.
 #[inline(always)]
 fn float_ceil(x: f32) -> i32 {
     let i = x as i32;
-    if (i as f32) < x { i + 1 } else { i }
+    if (i as f32) < x {
+        i + 1
+    } else {
+        i
+    }
 }
 
 /// DDA edge stepper for triangle rasterization.
@@ -27,16 +31,23 @@ pub struct Edge {
     pub inv_w: Fx16,
     pub inv_w_step: Fx16,
 
-    pub r: Fx16, pub r_step: Fx16,
-    pub g: Fx16, pub g_step: Fx16,
-    pub b: Fx16, pub b_step: Fx16,
+    pub r: Fx16,
+    pub r_step: Fx16,
+    pub g: Fx16,
+    pub g_step: Fx16,
+    pub b: Fx16,
+    pub b_step: Fx16,
 
-    pub u: Fx16, pub u_step: Fx16,
-    pub v: Fx16, pub v_step: Fx16,
+    pub u: Fx16,
+    pub u_step: Fx16,
+    pub v: Fx16,
+    pub v_step: Fx16,
 
-    pub z: Fx16, pub z_step: Fx16,
+    pub z: Fx16,
+    pub z_step: Fx16,
 
-    pub fog: Fx16, pub fog_step: Fx16,
+    pub fog: Fx16,
+    pub fog_step: Fx16,
 }
 
 impl Edge {
@@ -67,7 +78,10 @@ impl Edge {
 
         let lerp_attr = |a_val: f32, b_val: f32| -> (Fx16, Fx16) {
             let step_f = (b_val - a_val) * inv_dy;
-            (Fx16::from_f32(a_val + prestep * step_f), Fx16::from_f32(step_f))
+            (
+                Fx16::from_f32(a_val + prestep * step_f),
+                Fx16::from_f32(step_f),
+            )
         };
 
         let (inv_w, inv_w_step) = lerp_attr(inv_w_a, inv_w_b);
@@ -80,26 +94,51 @@ impl Edge {
         let (fog, fog_step) = lerp_attr(a.world_z, b.world_z);
 
         Self {
-            y_start, y_end, x, x_step,
-            inv_w, inv_w_step,
-            r, r_step, g, g_step, b: b_attr, b_step,
-            u, u_step, v, v_step,
-            z, z_step, fog, fog_step,
+            y_start,
+            y_end,
+            x,
+            x_step,
+            inv_w,
+            inv_w_step,
+            r,
+            r_step,
+            g,
+            g_step,
+            b: b_attr,
+            b_step,
+            u,
+            u_step,
+            v,
+            v_step,
+            z,
+            z_step,
+            fog,
+            fog_step,
         }
     }
 
     fn degenerate(y_start: i32, y_end: i32, v: &Vertex) -> Self {
         Self {
-            y_start, y_end,
-            x: Fx16::from_f32(v.pos.x), x_step: Fx16::ZERO,
-            inv_w: Fx16::from_f32(v.pos.w), inv_w_step: Fx16::ZERO,
-            r: Fx16::from_f32(v.color[0]), r_step: Fx16::ZERO,
-            g: Fx16::from_f32(v.color[1]), g_step: Fx16::ZERO,
-            b: Fx16::from_f32(v.color[2]), b_step: Fx16::ZERO,
-            u: Fx16::from_f32(v.uv.x), u_step: Fx16::ZERO,
-            v: Fx16::from_f32(v.uv.y), v_step: Fx16::ZERO,
-            z: Fx16::from_f32(v.pos.z), z_step: Fx16::ZERO,
-            fog: Fx16::from_f32(v.world_z), fog_step: Fx16::ZERO,
+            y_start,
+            y_end,
+            x: Fx16::from_f32(v.pos.x),
+            x_step: Fx16::ZERO,
+            inv_w: Fx16::from_f32(v.pos.w),
+            inv_w_step: Fx16::ZERO,
+            r: Fx16::from_f32(v.color[0]),
+            r_step: Fx16::ZERO,
+            g: Fx16::from_f32(v.color[1]),
+            g_step: Fx16::ZERO,
+            b: Fx16::from_f32(v.color[2]),
+            b_step: Fx16::ZERO,
+            u: Fx16::from_f32(v.uv.x),
+            u_step: Fx16::ZERO,
+            v: Fx16::from_f32(v.uv.y),
+            v_step: Fx16::ZERO,
+            z: Fx16::from_f32(v.pos.z),
+            z_step: Fx16::ZERO,
+            fog: Fx16::from_f32(v.world_z),
+            fog_step: Fx16::ZERO,
         }
     }
 
@@ -122,7 +161,8 @@ impl Edge {
     pub fn make_span(left: &Edge, right: &Edge, y: u32) -> Span {
         Span {
             y,
-            x_left: left.x, x_right: right.x,
+            x_left: left.x,
+            x_right: right.x,
             inv_w_left: left.inv_w,
             r_left: left.r,
             g_left: left.g,
@@ -155,16 +195,24 @@ pub fn rasterize_triangle_to_spans(
 ) -> usize {
     // Sort by y (insertion sort on 3 elements = branchless-optimal)
     let mut sorted = *tri;
-    if sorted[0].pos.y > sorted[1].pos.y { sorted.swap(0, 1); }
-    if sorted[1].pos.y > sorted[2].pos.y { sorted.swap(1, 2); }
-    if sorted[0].pos.y > sorted[1].pos.y { sorted.swap(0, 1); }
+    if sorted[0].pos.y > sorted[1].pos.y {
+        sorted.swap(0, 1);
+    }
+    if sorted[1].pos.y > sorted[2].pos.y {
+        sorted.swap(1, 2);
+    }
+    if sorted[0].pos.y > sorted[1].pos.y {
+        sorted.swap(0, 1);
+    }
 
     let v0 = &sorted[0]; // top
     let v1 = &sorted[1]; // middle
     let v2 = &sorted[2]; // bottom
 
     let total_height = v2.pos.y - v0.pos.y;
-    if total_height < 0.5 { return 0; }
+    if total_height < 0.5 {
+        return 0;
+    }
 
     // Long edge: v0 → v2
     let mut long_edge = Edge::new(v0, v2);
@@ -191,7 +239,9 @@ pub fn rasterize_triangle_to_spans(
     }
 
     for y in y_start..y_mid {
-        if count >= spans.len() { break; }
+        if count >= spans.len() {
+            break;
+        }
         spans[count] = if long_on_right {
             Edge::make_span(&short, &long_edge, y)
         } else {
@@ -220,7 +270,9 @@ pub fn rasterize_triangle_to_spans(
     }
 
     for y in y_mid2..y_end {
-        if count >= spans.len() { break; }
+        if count >= spans.len() {
+            break;
+        }
         spans[count] = if long_on_right {
             Edge::make_span(&short, &long_edge, y)
         } else {
