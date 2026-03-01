@@ -98,8 +98,9 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let y1 = y0 + font::CELL_H + 2;
     fb.draw_str(px + 4,  y1, "MEM:", COL_DIM);
-    // Auto-convert to GB if >= 1024 MB
-    let (mem_used_display, mem_total_display, unit) = if state.mem_used_mb() >= 1024 {
+    // Always show in GB when the machine has >= 1 GB total RAM (avoids
+    // 2-digit truncation of large MB values like 12288 → "88").
+    let (mem_used_display, mem_total_display, unit) = if state.mem_total_mb() >= 1024 {
         let used_gb = state.mem_used_mb() as f32 / 1024.0;
         let total_gb = state.mem_total_mb() as f32 / 1024.0;
         let used_int = used_gb as u32;
@@ -108,22 +109,24 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
         let total_frac = ((total_gb - total_int as f32) * 100.0 + 0.5) as u32;
         ((used_int, used_frac), (total_int, total_frac), "GB")
     } else {
-        ((state.mem_used_mb().min(99999), 0), (state.mem_total_mb().min(99999), 0), "MB")
+        ((state.mem_used_mb().min(9999), 0), (state.mem_total_mb().min(9999), 0), "MB")
     };
+    // used: "UU,uu" (2+2 digits for int+frac)
     fb.draw_u32(px + 30, y1, mem_used_display.0, 2, COL_TEXT);
-    fb.draw_char(px + 42, y1, b',', COL_DIM);
+    fb.draw_char(px + 42, y1, b'.', COL_DIM);
     fb.draw_u32(px + 48, y1, mem_used_display.1, 2, COL_TEXT);
-    fb.draw_char(px + 60, y1, b'/', COL_DIM);
-    fb.draw_u32(px + 66, y1, mem_total_display.0, 2, COL_TEXT);
-    fb.draw_char(px + 78, y1, b',', COL_DIM);
-    fb.draw_u32(px + 84, y1, mem_total_display.1, 2, COL_TEXT);
-    fb.draw_str(px + 96, y1, unit, COL_DIM);
+    fb.draw_str(px + 60, y1, "/", COL_DIM);
+    // total: "TT,tt" (2+2 digits)
+    fb.draw_u32(px + 72, y1, mem_total_display.0, 2, COL_TEXT);
+    fb.draw_char(px + 84, y1, b'.', COL_DIM);
+    fb.draw_u32(px + 90, y1, mem_total_display.1, 2, COL_TEXT);
+    fb.draw_str(px + 102, y1, unit, COL_DIM);
 
     let mem_pct = if state.total_mem > 0 {
         ((state.total_mem - state.free_mem) * 100 / state.total_mem) as u32
     } else { 0 };
     let bar_color = if mem_pct > 90 { COL_CRIT } else if mem_pct > 70 { COL_WARN } else { COL_ACCENT };
-    fb.draw_bar(px + 112, y1, 80, font::GLYPH_H, mem_pct, bar_color, COL_BG);
+    fb.draw_bar(px + 120, y1, 76, font::GLYPH_H, mem_pct, bar_color, COL_BG);
 
     let y2 = y1 + font::CELL_H + 1;
     fb.draw_str(px + 4, y2, "PROCS:", COL_DIM);
