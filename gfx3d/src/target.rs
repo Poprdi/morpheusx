@@ -63,15 +63,17 @@ impl SoftwareTarget {
         }
     }
 
-    /// Clear both buffers.
     pub fn clear(&mut self, clear_color: u32) {
         self.color.fill(clear_color);
-        self.depth.fill(0xFFFF_FFFF);
+        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
     }
 
-    /// Clear only the depth buffer (for multi-pass rendering).
+    pub fn clear_color(&mut self, clear_color: u32) {
+        self.color.fill(clear_color);
+    }
+
     pub fn clear_depth(&mut self) {
-        self.depth.fill(0xFFFF_FFFF);
+        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
     }
 }
 
@@ -149,11 +151,16 @@ impl DirectTarget {
     pub fn clear(&mut self, clear_color: u32) {
         let buf = unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) };
         buf.fill(clear_color);
-        self.depth.fill(0xFFFF_FFFF);
+        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
+    }
+
+    pub fn clear_color(&mut self, clear_color: u32) {
+        let buf = unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) };
+        buf.fill(clear_color);
     }
 
     pub fn clear_depth(&mut self) {
-        self.depth.fill(0xFFFF_FFFF);
+        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
     }
 }
 
