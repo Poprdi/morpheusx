@@ -39,7 +39,9 @@ pub struct Pipeline {
     arena: Arena,
     spans: Vec<Span>,
 
-    // Cached per-frame state
+    clip_verts: Vec<Vec4>,
+    lit_colors: Vec<[f32; 3]>,
+
     view: Mat4,
     proj: Mat4,
     view_proj: Mat4,
@@ -50,14 +52,13 @@ pub struct Pipeline {
     half_w: f32,
     half_h: f32,
 
-    // Rendering modes
     pub fog: FogMode,
     pub fog_color: [f32; 3],
     pub sample_mode: SampleMode,
     pub wireframe: bool,
     pub backface_cull: bool,
+    pub depth_write: bool,
 
-    // Stats
     pub stats: FrameStats,
 }
 
@@ -98,12 +99,14 @@ impl<'a> Material<'a> {
 
 impl Pipeline {
     pub fn new(viewport_w: u32, viewport_h: u32) -> Self {
-        let max_spans = viewport_h as usize; // max spans per triangle = viewport height
+        let max_spans = viewport_h as usize;
         Self {
             trig: TrigTable::new(),
             clipper: Clipper::new(),
-            arena: Arena::new(4 * 1024 * 1024), // 4MB per-frame scratch
+            arena: Arena::new(4 * 1024 * 1024),
             spans: alloc::vec![Span::EMPTY; max_spans],
+            clip_verts: Vec::with_capacity(256),
+            lit_colors: Vec::with_capacity(256),
             view: Mat4::IDENTITY,
             proj: Mat4::IDENTITY,
             view_proj: Mat4::IDENTITY,
@@ -120,6 +123,7 @@ impl Pipeline {
             sample_mode: SampleMode::Bilinear,
             wireframe: false,
             backface_cull: true,
+            depth_write: true,
             stats: FrameStats::default(),
         }
     }
@@ -209,11 +213,17 @@ impl Pipeline {
 
         // ── 3. Transform + light all vertices ──
         let vert_count = mesh.vertices.len();
-        let mut clip_verts = Vec::with_capacity(vert_count);
-        let mut lit_colors = Vec::with_capacity(vert_count);
+        self.clip_verts.clear();
+        self.lit_colors.clear();
+        if self.clip_verts.capacity() < vert_count {
+            self.clip_verts.reserve(vert_count - self.clip_verts.capacity());
+        }
+        if self.lit_colors.capacity() < vert_count {
+            self.lit_colors.reserve(vert_count - self.lit_colors.capacity());
+        }
 
         for mv in mesh.vertices.iter() {
-            clip_verts.push(mvp.transform_point(mv.position));
+            self.clip_verts.push(mvp.transform_point(mv.position));
 
             let world_pos = model.transform_point(mv.position).xyz();
             let world_normal = model.transform_dir(mv.normal).normalize();
@@ -223,7 +233,7 @@ impl Pipeline {
                 mv.color[1] as f32 / 255.0,
                 mv.color[2] as f32 / 255.0,
             ];
-            lit_colors.push(lights.evaluate(
+            self.lit_colors.push(lights.evaluate(
                 world_pos,
                 world_normal,
                 view_dir,
@@ -247,18 +257,18 @@ impl Pipeline {
                 continue;
             }
 
-            let clip_tri = [clip_verts[i0], clip_verts[i1], clip_verts[i2]];
+            let clip_tri = [self.clip_verts[i0], self.clip_verts[i1], self.clip_verts[i2]];
 
             if trivial_reject(&clip_tri) {
                 self.stats.triangles_culled += 1;
                 continue;
             }
 
-            let build_vert = |vi: usize, clip: Vec4| -> Vertex {
+            let build_vert = |vi: usize, clip: Vec4, cv: &[[f32; 3]]| -> Vertex {
                 let mv = &mesh.vertices[vi];
                 Vertex {
                     pos: clip,
-                    color: lit_colors[vi],
+                    color: cv[vi],
                     uv: mv.uv,
                     normal: mv.normal,
                     world_z: {
@@ -269,9 +279,9 @@ impl Pipeline {
             };
 
             let tri_verts = [
-                build_vert(i0, clip_tri[0]),
-                build_vert(i1, clip_tri[1]),
-                build_vert(i2, clip_tri[2]),
+                build_vert(i0, clip_tri[0], &self.lit_colors),
+                build_vert(i1, clip_tri[1], &self.lit_colors),
+                build_vert(i2, clip_tri[2], &self.lit_colors),
             ];
 
             // ── 5. Clip against frustum ──
@@ -315,6 +325,7 @@ impl Pipeline {
                 let format = target.pixel_format();
                 let stride = target.stride();
                 let vp_w = self.viewport_w;
+                let dw = self.depth_write;
                 let (color_buf, depth_buf) = target.buffers_mut();
 
                 for s in 0..span_count {
@@ -328,6 +339,7 @@ impl Pipeline {
                         format,
                         stride,
                         vp_w,
+                        dw,
                         color_buf,
                         depth_buf,
                     );
@@ -430,6 +442,7 @@ fn fill_span(
     format: TargetPixelFormat,
     stride: u32,
     vp_w: u32,
+    depth_write: bool,
     color_buf: &mut [u32],
     depth_buf: &mut [u32],
 ) -> u32 {
@@ -438,7 +451,7 @@ fn fill_span(
 
     if is_solid && no_fog {
         fill_span_solid(
-            span, grads, material, format, stride, vp_w, color_buf, depth_buf,
+            span, grads, material, format, stride, vp_w, depth_write, color_buf, depth_buf,
         )
     } else if !is_solid && no_fog {
         fill_span_textured(
@@ -449,6 +462,7 @@ fn fill_span(
             format,
             stride,
             vp_w,
+            depth_write,
             color_buf,
             depth_buf,
         )
@@ -463,6 +477,7 @@ fn fill_span(
             format,
             stride,
             vp_w,
+            depth_write,
             color_buf,
             depth_buf,
         )
@@ -494,6 +509,7 @@ fn fill_span_solid(
     format: TargetPixelFormat,
     stride: u32,
     vp_w: u32,
+    depth_write: bool,
     color_buf: &mut [u32],
     depth_buf: &mut [u32],
 ) -> u32 {
@@ -566,9 +582,8 @@ fn fill_span_solid(
             z += grads.z_step;
             continue;
         }
-        depth_buf[buf_idx] = depth;
+        if depth_write { depth_buf[buf_idx] = depth; }
 
-        // Color: Fx16 (0..1 range, ×65536) × base(×256) = ×2^24, >> 16 → [0,256]
         let pr = fast::clamp_u8((cr.0 * base_r) >> 16);
         let pg = fast::clamp_u8((cg.0 * base_g) >> 16);
         let pb = fast::clamp_u8((cb.0 * base_b) >> 16);
@@ -599,6 +614,7 @@ fn fill_span_textured(
     format: TargetPixelFormat,
     stride: u32,
     vp_w: u32,
+    depth_write: bool,
     color_buf: &mut [u32],
     depth_buf: &mut [u32],
 ) -> u32 {
@@ -694,7 +710,7 @@ fn fill_span_textured(
                 z += grads.z_step;
                 continue;
             }
-            depth_buf[buf_idx] = depth;
+            if depth_write { depth_buf[buf_idx] = depth; }
 
             let texel = match sample_mode {
                 SampleMode::Nearest => sample::sample_nearest(tex, u_cur.0, v_cur.0),
@@ -741,6 +757,7 @@ fn fill_span_full(
     format: TargetPixelFormat,
     stride: u32,
     vp_w: u32,
+    depth_write: bool,
     color_buf: &mut [u32],
     depth_buf: &mut [u32],
 ) -> u32 {
@@ -784,7 +801,7 @@ fn fill_span_full(
             fog_val += grads.fog_step;
             continue;
         }
-        depth_buf[buf_idx] = depth;
+        if depth_write { depth_buf[buf_idx] = depth; }
 
         let w = if inv_w.0 != 0 {
             Fx16::ONE.div(inv_w)

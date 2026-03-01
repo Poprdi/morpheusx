@@ -328,11 +328,11 @@ fn main() -> i32 {
             proc_layout.update(&sys_state, dt);
         }
 
-        target.clear(0x00060A0E);
+        target.clear_color(0x00060A0E);
+        target.clear_depth();
         pipeline.begin_frame();
         pipeline.set_camera(&camera);
 
-        // Backdrop: stars (2D) + galaxy (3D) — rendered behind process cloud
         backdrop::render_stars(
             &fb,
             &backdrop_stars,
@@ -342,6 +342,8 @@ fn main() -> i32 {
             camera.fov_y,
             now,
         );
+
+        pipeline.depth_write = false;
         backdrop::render_galaxy(
             &mut pipeline,
             &mut target,
@@ -350,10 +352,7 @@ fn main() -> i32 {
             now,
             sys_state.total_cpu_pct,
         );
-
-        // Clear depth after galaxy so its torus rings can never occlude process
-        // spheres — galaxy is a pure background element regardless of camera angle.
-        target.clear_depth();
+        pipeline.depth_write = true;
 
         cloud::render_cloud(
             &mut pipeline,
@@ -364,6 +363,7 @@ fn main() -> i32 {
             &proc_layout,
             selected,
             now,
+            camera.position,
         );
 
         if show_hud {
@@ -394,6 +394,16 @@ fn main() -> i32 {
         hud::draw_fps(&fb, fps_display, latency_ms, speed_mult);
 
         let _ = fb_blit();
+
+        let frame_end = time::clock_gettime();
+        let frame_ns = frame_end.saturating_sub(now);
+        const TARGET_NS: u64 = 16_666_666; // ~60 FPS
+        if frame_ns < TARGET_NS {
+            let sleep_ms = (TARGET_NS - frame_ns) / 1_000_000;
+            if sleep_ms > 0 {
+                libmorpheus::process::sleep(sleep_ms);
+            }
+        }
     }
 
     0
