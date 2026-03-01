@@ -164,7 +164,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     if status != 0 {
         puts("[FATAL] allocate_pages failed\n");
         loop {
-            core::hint::spin_loop();
+            unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
         }
     }
     let stack_top = stack_base + STACK_SIZE as u64;
@@ -190,7 +190,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     );
     if status != 0 {
         loop {
-            core::hint::spin_loop();
+            unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
         }
     }
 
@@ -207,7 +207,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         morpheus_hwinit::serial::put_hex64(status as u64);
         puts("\n");
         loop {
-            core::hint::spin_loop();
+            unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
         }
     }
 
@@ -282,7 +282,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
             }
             puts("\n");
             loop {
-                core::hint::spin_loop();
+                unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
             }
         }
     };
@@ -298,7 +298,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     if fb_info.base == 0 || fb_info.width == 0 {
         puts("[FATAL] no framebuffer\n");
         loop {
-            core::hint::spin_loop();
+            unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
         }
     }
 

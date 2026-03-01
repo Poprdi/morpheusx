@@ -98,6 +98,7 @@ pub fn read_line(buf: &mut [u8]) -> usize {
     loop {
         let n = read_stdin(&mut ch);
         if n == 0 {
+            crate::process::yield_cpu();
             continue;
         }
         match ch[0] {

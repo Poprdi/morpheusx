@@ -213,6 +213,6 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     loop {
-        core::hint::spin_loop();
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
     }
 }
