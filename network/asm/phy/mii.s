@@ -269,8 +269,14 @@ asm_mii_reset_phy:
     
     ; Check if reset bit cleared
     test    ax, BMCR_RESET
-    jnz     .poll_loop
-    
+    jz      .reset_done
+
+    ; PERF FIX: pause hint before retry — PHY reset can take 500ms,
+    ; reduce pipeline contention during this long polling loop.
+    pause
+    jmp     .poll_loop
+
+.reset_done:
     xor     eax, eax
     jmp     .done
     

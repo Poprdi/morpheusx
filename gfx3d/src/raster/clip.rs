@@ -50,22 +50,30 @@ impl Clipper {
         macro_rules! clip_plane {
             ($dist_fn:expr) => {{
                 let (src, dst) = if src_a {
-                    (&self.buf_a as &[Vertex; 12], &mut self.buf_b as &mut [Vertex; 12])
+                    (
+                        &self.buf_a as &[Vertex; 12],
+                        &mut self.buf_b as &mut [Vertex; 12],
+                    )
                 } else {
-                    (&self.buf_b as &[Vertex; 12], &mut self.buf_a as &mut [Vertex; 12])
+                    (
+                        &self.buf_b as &[Vertex; 12],
+                        &mut self.buf_a as &mut [Vertex; 12],
+                    )
                 };
                 count = clip_polygon_against_plane(src, count, dst, $dist_fn);
-                if count == 0 { return &[]; }
+                if count == 0 {
+                    return &[];
+                }
                 src_a = !src_a;
             }};
         }
 
-        clip_plane!(|v: &Vec4| v.x + v.w);  // left
-        clip_plane!(|v: &Vec4| v.w - v.x);  // right
-        clip_plane!(|v: &Vec4| v.y + v.w);  // bottom
-        clip_plane!(|v: &Vec4| v.w - v.y);  // top
-        clip_plane!(|v: &Vec4| v.z);         // near
-        clip_plane!(|v: &Vec4| v.w - v.z);  // far
+        clip_plane!(|v: &Vec4| v.x + v.w); // left
+        clip_plane!(|v: &Vec4| v.w - v.x); // right
+        clip_plane!(|v: &Vec4| v.y + v.w); // bottom
+        clip_plane!(|v: &Vec4| v.w - v.y); // top
+        clip_plane!(|v: &Vec4| v.z); // near
+        clip_plane!(|v: &Vec4| v.w - v.z); // far
 
         if src_a {
             &self.buf_a[..count]
@@ -87,7 +95,9 @@ fn clip_polygon_against_plane<F>(
 where
     F: Fn(&Vec4) -> f32,
 {
-    if in_count == 0 { return 0; }
+    if in_count == 0 {
+        return 0;
+    }
     let mut out_count = 0usize;
 
     let mut prev_idx = in_count - 1;
@@ -100,7 +110,10 @@ where
             // Previous vertex is inside
             if curr_dist >= 0.0 {
                 // Both inside: emit current
-                if out_count < 12 { output[out_count] = input[curr_idx]; out_count += 1; }
+                if out_count < 12 {
+                    output[out_count] = input[curr_idx];
+                    out_count += 1;
+                }
             } else {
                 // Crossing out: emit intersection
                 let t = prev_dist / (prev_dist - curr_dist);
@@ -118,7 +131,10 @@ where
                     output[out_count] = input[prev_idx].lerp(&input[curr_idx], t);
                     out_count += 1;
                 }
-                if out_count < 12 { output[out_count] = input[curr_idx]; out_count += 1; }
+                if out_count < 12 {
+                    output[out_count] = input[curr_idx];
+                    out_count += 1;
+                }
             }
             // Both outside: emit nothing
         }

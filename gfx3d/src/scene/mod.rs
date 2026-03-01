@@ -1,9 +1,9 @@
 pub mod bsp;
-pub mod pvs;
-pub mod mesh;
 pub mod frustum;
+pub mod mesh;
+pub mod pvs;
 
 pub use bsp::BspTree;
-pub use pvs::PvsTable;
-pub use mesh::{Mesh, MeshVertex};
 pub use frustum::Frustum;
+pub use mesh::{Mesh, MeshVertex};
+pub use pvs::PvsTable;

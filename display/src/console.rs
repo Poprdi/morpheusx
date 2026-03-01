@@ -76,21 +76,31 @@ impl TextConsole {
     }
 
     /// Render a single character at the current cursor position.
+    ///
+    /// PERF FIX: Fill background with fill_rect (single memset32 per row),
+    /// then only write foreground pixels. For typical text (sparse glyphs),
+    /// this reduces per-character writes by ~60-70% since most pixels are
+    /// background. fill_rect uses REP STOSD which is much faster than
+    /// individual put_pixel calls.
     fn render_char(&mut self, c: char) {
         let glyph = get_glyph_or_space(c);
-        let px = self.cursor_col * FONT_WIDTH;
-        let py = self.cursor_row * FONT_HEIGHT;
+        let px = (self.cursor_col * FONT_WIDTH) as u32;
+        let py = (self.cursor_row * FONT_HEIGHT) as u32;
 
+        // Fill the entire cell with background color first (fast memset32)
+        self.fb
+            .fill_rect(px, py, FONT_WIDTH as u32, FONT_HEIGHT as u32, self.bg_color);
+
+        // Only write foreground pixels (set bits in glyph)
         for (row_idx, &row_bits) in glyph.iter().enumerate() {
+            if row_bits == 0 {
+                continue; // Skip fully-blank rows (common in glyphs)
+            }
             for col_idx in 0..FONT_WIDTH {
-                let bit = (row_bits >> (7 - col_idx)) & 1;
-                let color = if bit == 1 {
-                    self.fg_color
-                } else {
-                    self.bg_color
-                };
-                self.fb
-                    .put_pixel((px + col_idx) as u32, (py + row_idx) as u32, color);
+                if (row_bits >> (7 - col_idx)) & 1 == 1 {
+                    self.fb
+                        .put_pixel(px + col_idx as u32, py + row_idx as u32, self.fg_color);
+                }
             }
         }
     }

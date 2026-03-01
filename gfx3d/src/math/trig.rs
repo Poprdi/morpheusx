@@ -1,3 +1,4 @@
+use super::fast;
 /// Pre-computed sin/cos lookup table.
 ///
 /// Instead of calling libm sin/cos (which we don't have in no_std anyway),
@@ -6,9 +7,7 @@
 ///
 /// Table is indexed by angle × 4096 / (2π), so 4096 entries = full revolution.
 /// This gives 0.088° angular resolution — far beyond what 1024×768 pixels can show.
-
 use alloc::boxed::Box;
-use super::fast;
 
 const TABLE_SIZE: usize = 4096;
 const TABLE_MASK: usize = TABLE_SIZE - 1;
@@ -86,7 +85,9 @@ impl TrigTable {
     /// Atan2 approximation (useful for angle-based effects, not in hot render path).
     /// Max error ~0.28° — uses the 7th-order polynomial from NVIDIA's GPU gems.
     pub fn atan2(y: f32, x: f32) -> f32 {
-        if x == 0.0 && y == 0.0 { return 0.0; }
+        if x == 0.0 && y == 0.0 {
+            return 0.0;
+        }
         let ax = if x < 0.0 { -x } else { x };
         let ay = if y < 0.0 { -y } else { y };
         let (mn, mx) = if ax < ay { (ax, ay) } else { (ay, ax) };
@@ -95,8 +96,16 @@ impl TrigTable {
         let s = a * a;
         let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
         let r = if ay > ax { 1.5707963 - r } else { r };
-        let r = if x < 0.0 { core::f32::consts::PI - r } else { r };
-        if y < 0.0 { -r } else { r }
+        let r = if x < 0.0 {
+            core::f32::consts::PI - r
+        } else {
+            r
+        };
+        if y < 0.0 {
+            -r
+        } else {
+            r
+        }
     }
 }
 
@@ -110,7 +119,9 @@ fn bhaskara_sin(theta: f32) -> f32 {
 
     // Normalize to [0, 2π)
     let mut t = theta % two_pi;
-    if t < 0.0 { t += two_pi; }
+    if t < 0.0 {
+        t += two_pi;
+    }
 
     let (t_local, sign) = if t > pi {
         (t - pi, -1.0f32)
@@ -158,5 +169,4 @@ mod tests {
             assert!((n - 1.0).abs() < 0.002, "angle={a} s2+c2={n}");
         }
     }
-
 }

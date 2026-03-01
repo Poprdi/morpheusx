@@ -1,6 +1,6 @@
 use super::{Mesh, MeshVertex};
-use crate::math::vec::{Vec2, Vec3};
 use crate::math::trig::TrigTable;
+use crate::math::vec::{Vec2, Vec3};
 
 /// Generate a UV sphere (latitude-longitude).
 ///
@@ -11,7 +11,7 @@ use crate::math::trig::TrigTable;
 pub fn sphere(stacks: usize, slices: usize) -> Mesh {
     let stacks = stacks.max(3);
     let slices = slices.max(3);
-    
+
     let trig = TrigTable::new();
     let mut vertices = alloc::vec![];
     let mut indices = alloc::vec![];

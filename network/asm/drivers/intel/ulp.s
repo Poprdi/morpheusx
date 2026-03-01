@@ -160,8 +160,13 @@ asm_intel_disable_ulp:
     call    asm_tsc_read
     sub     rax, r15
     cmp     rax, r14
-    jb      .wait_ulp_done
+    jae     .ulp_timeout
 
+    ; PERF FIX: pause hint during ULP disable polling (can take 2.5 seconds)
+    pause
+    jmp     .wait_ulp_done
+
+.ulp_timeout:
     ; Timeout - try software disable as fallback
     jmp     .sw_ulp_disable
 
@@ -284,6 +289,7 @@ asm_intel_toggle_lanphypc:
     mov     r14, rax
 
 .wait_power_off:
+    pause                       ; PERF FIX: reduce power during PHY power-off wait
     call    asm_tsc_read
     sub     rax, r15
     cmp     rax, r14
@@ -339,8 +345,12 @@ asm_intel_toggle_lanphypc:
     call    asm_tsc_read
     sub     rax, r15
     cmp     rax, r14
-    jb      .wait_lpcd
+    jae     .lpcd_timeout
 
+    pause                       ; PERF FIX: reduce power during LPCD wait
+    jmp     .wait_lpcd
+
+.lpcd_timeout:
     ; Timeout - continue anyway
     jmp     .lanphypc_cleanup
 
@@ -376,6 +386,7 @@ asm_intel_toggle_lanphypc:
     mov     r14, rax
 
 .wait_stabilize:
+    pause                       ; PERF FIX: reduce power during PHY stabilization wait
     call    asm_tsc_read
     sub     rax, r15
     cmp     rax, r14
@@ -458,8 +469,12 @@ asm_intel_phy_is_accessible:
     sub     rax, rbx
     cmp     rax, r14
     pop     rax
-    jb      .wait_id1
+    jae     .id1_timeout
 
+    pause                       ; PERF FIX: reduce power during PHY ID1 wait
+    jmp     .wait_id1
+
+.id1_timeout:
     ; Timeout - not accessible
     jmp     .not_accessible
 
@@ -541,8 +556,13 @@ asm_intel_acquire_swflag:
     call    asm_tsc_read
     sub     rax, rbx
     cmp     rax, r14
-    jb      .acquire_loop
+    jae     .acquire_timeout
 
+    ; PERF FIX: pause hint during semaphore acquisition (can take up to 1 second)
+    pause
+    jmp     .acquire_loop
+
+.acquire_timeout:
     ; Timeout
     mov     eax, 1
     jmp     .exit

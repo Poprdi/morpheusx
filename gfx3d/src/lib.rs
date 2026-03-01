@@ -3,12 +3,12 @@
 
 extern crate alloc;
 
-pub mod math;
-pub mod raster;
-pub mod texture;
-pub mod scene;
-pub mod light;
-pub mod camera;
-pub mod target;
 pub mod arena;
+pub mod camera;
+pub mod light;
+pub mod math;
 pub mod pipeline;
+pub mod raster;
+pub mod scene;
+pub mod target;
+pub mod texture;

@@ -450,6 +450,19 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     // Save context of currently running process.
     if let Some(Some(cur)) = PROCESS_TABLE.get_mut(cur_pid) {
         cur.context = *current_ctx;
+
+        // Fix SS RPL after saving user-mode context.
+        //
+        // SYSRET loads SS = STAR[63:48]+8 = 0x18 (raw selector WITHOUT
+        // RPL=3).  The CPU internally runs at CPL=3 but the visible SS
+        // selector has RPL=0.  When a timer interrupt saves that value
+        // in the iret frame and we later try to iretq back to ring 3,
+        // the CPU checks RPL(SS) == target CPL and faults with #GP(0x18)
+        // because 0 ≠ 3.  Normalize it here so iretq always succeeds.
+        if cur.context.cs & 3 == 3 {
+            cur.context.ss |= 3;
+        }
+
         cur.cpu_ticks += 1;
         if cur.state == ProcessState::Running {
             cur.state = ProcessState::Ready;

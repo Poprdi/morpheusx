@@ -31,13 +31,19 @@ impl Vec2 {
     pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
 
     #[inline(always)]
-    pub const fn new(x: f32, y: f32) -> Self { Self { x, y } }
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
 
     #[inline]
-    pub fn dot(self, rhs: Self) -> f32 { self.x * rhs.x + self.y * rhs.y }
+    pub fn dot(self, rhs: Self) -> f32 {
+        self.x * rhs.x + self.y * rhs.y
+    }
 
     #[inline]
-    pub fn length_sq(self) -> f32 { self.dot(self) }
+    pub fn length_sq(self) -> f32 {
+        self.dot(self)
+    }
 
     #[inline]
     pub fn lerp(self, other: Self, t: f32) -> Self {
@@ -51,14 +57,36 @@ impl Vec2 {
 // ── Vec3 ──
 
 impl Vec3 {
-    pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0 };
-    pub const ONE: Self = Self { x: 1.0, y: 1.0, z: 1.0 };
-    pub const UP: Self = Self { x: 0.0, y: 1.0, z: 0.0 };
-    pub const FORWARD: Self = Self { x: 0.0, y: 0.0, z: -1.0 };
-    pub const RIGHT: Self = Self { x: 1.0, y: 0.0, z: 0.0 };
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    pub const ONE: Self = Self {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    };
+    pub const UP: Self = Self {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
+    pub const FORWARD: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: -1.0,
+    };
+    pub const RIGHT: Self = Self {
+        x: 1.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     #[inline(always)]
-    pub const fn new(x: f32, y: f32, z: f32) -> Self { Self { x, y, z } }
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
 
     #[inline]
     pub fn dot(self, rhs: Self) -> f32 {
@@ -75,12 +103,16 @@ impl Vec3 {
     }
 
     #[inline]
-    pub fn length_sq(self) -> f32 { self.dot(self) }
+    pub fn length_sq(self) -> f32 {
+        self.dot(self)
+    }
 
     #[inline]
     pub fn length(self) -> f32 {
         let sq = self.length_sq();
-        if sq == 0.0 { return 0.0; }
+        if sq == 0.0 {
+            return 0.0;
+        }
         sq * super::fast::inv_sqrt(sq)
     }
 
@@ -88,7 +120,9 @@ impl Vec3 {
     #[inline]
     pub fn normalize(self) -> Self {
         let sq = self.length_sq();
-        if sq < 1e-12 { return Self::ZERO; }
+        if sq < 1e-12 {
+            return Self::ZERO;
+        }
         let inv = super::fast::inv_sqrt(sq);
         self * inv
     }
@@ -130,7 +164,12 @@ impl Vec3 {
 
     #[inline(always)]
     pub fn to_vec4(self, w: f32) -> Vec4 {
-        Vec4 { x: self.x, y: self.y, z: self.z, w }
+        Vec4 {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+            w,
+        }
     }
 }
 
@@ -138,7 +177,11 @@ impl core::ops::Add for Vec3 {
     type Output = Self;
     #[inline(always)]
     fn add(self, rhs: Self) -> Self {
-        Self { x: self.x + rhs.x, y: self.y + rhs.y, z: self.z + rhs.z }
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z,
+        }
     }
 }
 
@@ -146,7 +189,11 @@ impl core::ops::Sub for Vec3 {
     type Output = Self;
     #[inline(always)]
     fn sub(self, rhs: Self) -> Self {
-        Self { x: self.x - rhs.x, y: self.y - rhs.y, z: self.z - rhs.z }
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+            z: self.z - rhs.z,
+        }
     }
 }
 
@@ -154,7 +201,11 @@ impl core::ops::Mul<f32> for Vec3 {
     type Output = Self;
     #[inline(always)]
     fn mul(self, s: f32) -> Self {
-        Self { x: self.x * s, y: self.y * s, z: self.z * s }
+        Self {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+        }
     }
 }
 
@@ -162,24 +213,37 @@ impl core::ops::Neg for Vec3 {
     type Output = Self;
     #[inline(always)]
     fn neg(self) -> Self {
-        Self { x: -self.x, y: -self.y, z: -self.z }
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+        }
     }
 }
 
 impl core::ops::AddAssign for Vec3 {
     #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
-        self.x += rhs.x; self.y += rhs.y; self.z += rhs.z;
+        self.x += rhs.x;
+        self.y += rhs.y;
+        self.z += rhs.z;
     }
 }
 
 // ── Vec4 ──
 
 impl Vec4 {
-    pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0, w: 0.0 };
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 0.0,
+    };
 
     #[inline(always)]
-    pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self { Self { x, y, z, w } }
+    pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
+        Self { x, y, z, w }
+    }
 
     #[inline]
     pub fn dot(self, rhs: Self) -> f32 {
@@ -189,14 +253,24 @@ impl Vec4 {
     /// Perspective divide: project from clip space to NDC.
     #[inline]
     pub fn perspective_div(self) -> Vec3 {
-        if self.w == 0.0 { return Vec3::ZERO; }
+        if self.w == 0.0 {
+            return Vec3::ZERO;
+        }
         let inv_w = 1.0 / self.w;
-        Vec3 { x: self.x * inv_w, y: self.y * inv_w, z: self.z * inv_w }
+        Vec3 {
+            x: self.x * inv_w,
+            y: self.y * inv_w,
+            z: self.z * inv_w,
+        }
     }
 
     #[inline(always)]
     pub fn xyz(self) -> Vec3 {
-        Vec3 { x: self.x, y: self.y, z: self.z }
+        Vec3 {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+        }
     }
 
     #[inline]
@@ -214,7 +288,12 @@ impl core::ops::Add for Vec4 {
     type Output = Self;
     #[inline(always)]
     fn add(self, rhs: Self) -> Self {
-        Self { x: self.x + rhs.x, y: self.y + rhs.y, z: self.z + rhs.z, w: self.w + rhs.w }
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z,
+            w: self.w + rhs.w,
+        }
     }
 }
 
@@ -222,7 +301,12 @@ impl core::ops::Sub for Vec4 {
     type Output = Self;
     #[inline(always)]
     fn sub(self, rhs: Self) -> Self {
-        Self { x: self.x - rhs.x, y: self.y - rhs.y, z: self.z - rhs.z, w: self.w - rhs.w }
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+            z: self.z - rhs.z,
+            w: self.w - rhs.w,
+        }
     }
 }
 
@@ -230,7 +314,12 @@ impl core::ops::Mul<f32> for Vec4 {
     type Output = Self;
     #[inline(always)]
     fn mul(self, s: f32) -> Self {
-        Self { x: self.x * s, y: self.y * s, z: self.z * s, w: self.w * s }
+        Self {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+            w: self.w * s,
+        }
     }
 }
 
