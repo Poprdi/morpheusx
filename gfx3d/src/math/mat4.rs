@@ -26,11 +26,15 @@ impl Mat4 {
         ],
     };
 
-    pub const ZERO: Self = Self { cols: [[0.0; 4]; 4] };
+    pub const ZERO: Self = Self {
+        cols: [[0.0; 4]; 4],
+    };
 
     #[inline]
     pub const fn from_cols(c0: [f32; 4], c1: [f32; 4], c2: [f32; 4], c3: [f32; 4]) -> Self {
-        Self { cols: [c0, c1, c2, c3] }
+        Self {
+            cols: [c0, c1, c2, c3],
+        }
     }
 
     /// Access element at (row, col).
@@ -49,10 +53,22 @@ impl Mat4 {
     #[inline]
     pub fn transform(&self, v: Vec4) -> Vec4 {
         Vec4 {
-            x: self.cols[0][0] * v.x + self.cols[1][0] * v.y + self.cols[2][0] * v.z + self.cols[3][0] * v.w,
-            y: self.cols[0][1] * v.x + self.cols[1][1] * v.y + self.cols[2][1] * v.z + self.cols[3][1] * v.w,
-            z: self.cols[0][2] * v.x + self.cols[1][2] * v.y + self.cols[2][2] * v.z + self.cols[3][2] * v.w,
-            w: self.cols[0][3] * v.x + self.cols[1][3] * v.y + self.cols[2][3] * v.z + self.cols[3][3] * v.w,
+            x: self.cols[0][0] * v.x
+                + self.cols[1][0] * v.y
+                + self.cols[2][0] * v.z
+                + self.cols[3][0] * v.w,
+            y: self.cols[0][1] * v.x
+                + self.cols[1][1] * v.y
+                + self.cols[2][1] * v.z
+                + self.cols[3][1] * v.w,
+            z: self.cols[0][2] * v.x
+                + self.cols[1][2] * v.y
+                + self.cols[2][2] * v.z
+                + self.cols[3][2] * v.w,
+            w: self.cols[0][3] * v.x
+                + self.cols[1][3] * v.y
+                + self.cols[2][3] * v.z
+                + self.cols[3][3] * v.w,
         }
     }
 
@@ -82,11 +98,10 @@ impl Mat4 {
         let mut out = Mat4::ZERO;
         for c in 0..4 {
             for r in 0..4 {
-                out.cols[c][r] =
-                    self.cols[0][r] * rhs.cols[c][0] +
-                    self.cols[1][r] * rhs.cols[c][1] +
-                    self.cols[2][r] * rhs.cols[c][2] +
-                    self.cols[3][r] * rhs.cols[c][3];
+                out.cols[c][r] = self.cols[0][r] * rhs.cols[c][0]
+                    + self.cols[1][r] * rhs.cols[c][1]
+                    + self.cols[2][r] * rhs.cols[c][2]
+                    + self.cols[3][r] * rhs.cols[c][3];
             }
         }
         out
@@ -99,7 +114,7 @@ impl Mat4 {
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
-            [tx,  ty,  tz,  1.0],
+            [tx, ty, tz, 1.0],
         )
     }
 
@@ -107,9 +122,9 @@ impl Mat4 {
     #[inline]
     pub fn scale(sx: f32, sy: f32, sz: f32) -> Self {
         Self::from_cols(
-            [sx,  0.0, 0.0, 0.0],
-            [0.0, sy,  0.0, 0.0],
-            [0.0, 0.0, sz,  0.0],
+            [sx, 0.0, 0.0, 0.0],
+            [0.0, sy, 0.0, 0.0],
+            [0.0, 0.0, sz, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         )
     }
@@ -130,9 +145,9 @@ impl Mat4 {
     pub fn rotation_y(sin: f32, cos: f32) -> Self {
         Self::from_cols(
             [cos, 0.0, -sin, 0.0],
-            [0.0, 1.0, 0.0,  0.0],
-            [sin, 0.0, cos,  0.0],
-            [0.0, 0.0, 0.0,  1.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [sin, 0.0, cos, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
         )
     }
 
@@ -140,10 +155,10 @@ impl Mat4 {
     #[inline]
     pub fn rotation_z(sin: f32, cos: f32) -> Self {
         Self::from_cols(
-            [cos,  sin, 0.0, 0.0],
+            [cos, sin, 0.0, 0.0],
             [-sin, cos, 0.0, 0.0],
-            [0.0,  0.0, 1.0, 0.0],
-            [0.0,  0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
         )
     }
 
@@ -152,10 +167,25 @@ impl Mat4 {
         let a = axis.normalize();
         let omc = 1.0 - cos; // one minus cos
         Self::from_cols(
-            [cos + a.x * a.x * omc,       a.y * a.x * omc + a.z * sin,  a.z * a.x * omc - a.y * sin, 0.0],
-            [a.x * a.y * omc - a.z * sin,  cos + a.y * a.y * omc,       a.z * a.y * omc + a.x * sin, 0.0],
-            [a.x * a.z * omc + a.y * sin,  a.y * a.z * omc - a.x * sin, cos + a.z * a.z * omc,       0.0],
-            [0.0,                           0.0,                          0.0,                          1.0],
+            [
+                cos + a.x * a.x * omc,
+                a.y * a.x * omc + a.z * sin,
+                a.z * a.x * omc - a.y * sin,
+                0.0,
+            ],
+            [
+                a.x * a.y * omc - a.z * sin,
+                cos + a.y * a.y * omc,
+                a.z * a.y * omc + a.x * sin,
+                0.0,
+            ],
+            [
+                a.x * a.z * omc + a.y * sin,
+                a.y * a.z * omc - a.x * sin,
+                cos + a.z * a.z * omc,
+                0.0,
+            ],
+            [0.0, 0.0, 0.0, 1.0],
         )
     }
 
@@ -168,16 +198,18 @@ impl Mat4 {
         let half_fov = fov_y_rad * 0.5;
         // Use TrigTable's sin_cos in real code; here we use Bhaskara inline
         let (sin_fov, cos_fov) = (bhaskara_sin_inline(half_fov), bhaskara_cos_inline(half_fov));
-        if sin_fov.abs() < 1e-10 { return Self::IDENTITY; }
+        if sin_fov.abs() < 1e-10 {
+            return Self::IDENTITY;
+        }
         let cot = cos_fov / sin_fov;
         let inv_range = 1.0 / (near - far);
 
         // Reversed-Z: z_ndc = near / (far - near) * z_eye + far*near / (far - near)
         Self::from_cols(
-            [cot / aspect, 0.0, 0.0,  0.0],
-            [0.0,          cot, 0.0,  0.0],
-            [0.0,          0.0, far * inv_range, -1.0],
-            [0.0,          0.0, near * far * inv_range, 0.0],
+            [cot / aspect, 0.0, 0.0, 0.0],
+            [0.0, cot, 0.0, 0.0],
+            [0.0, 0.0, far * inv_range, -1.0],
+            [0.0, 0.0, near * far * inv_range, 0.0],
         )
     }
 
@@ -190,20 +222,25 @@ impl Mat4 {
             [2.0 * inv_w, 0.0, 0.0, 0.0],
             [0.0, 2.0 * inv_h, 0.0, 0.0],
             [0.0, 0.0, -inv_d, 0.0],
-            [-(right + left) * inv_w, -(top + bottom) * inv_h, -near * inv_d, 1.0],
+            [
+                -(right + left) * inv_w,
+                -(top + bottom) * inv_h,
+                -near * inv_d,
+                1.0,
+            ],
         )
     }
 
     /// Look-at view matrix (right-handed, camera at `eye` looking at `target`).
     pub fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Self {
         let f = (target - eye).normalize(); // forward
-        let r = f.cross(up).normalize();    // right
-        let u = r.cross(f);                 // true up
+        let r = f.cross(up).normalize(); // right
+        let u = r.cross(f); // true up
 
         Self::from_cols(
-            [r.x,     u.x,    -f.x,    0.0],
-            [r.y,     u.y,    -f.y,    0.0],
-            [r.z,     u.z,    -f.z,    0.0],
+            [r.x, u.x, -f.x, 0.0],
+            [r.y, u.y, -f.y, 0.0],
+            [r.z, u.z, -f.z, 0.0],
             [-r.dot(eye), -u.dot(eye), f.dot(eye), 1.0],
         )
     }
@@ -211,10 +248,30 @@ impl Mat4 {
     /// Transpose (useful for normal matrix when no non-uniform scale).
     pub fn transpose(&self) -> Self {
         Self::from_cols(
-            [self.cols[0][0], self.cols[1][0], self.cols[2][0], self.cols[3][0]],
-            [self.cols[0][1], self.cols[1][1], self.cols[2][1], self.cols[3][1]],
-            [self.cols[0][2], self.cols[1][2], self.cols[2][2], self.cols[3][2]],
-            [self.cols[0][3], self.cols[1][3], self.cols[2][3], self.cols[3][3]],
+            [
+                self.cols[0][0],
+                self.cols[1][0],
+                self.cols[2][0],
+                self.cols[3][0],
+            ],
+            [
+                self.cols[0][1],
+                self.cols[1][1],
+                self.cols[2][1],
+                self.cols[3][1],
+            ],
+            [
+                self.cols[0][2],
+                self.cols[1][2],
+                self.cols[2][2],
+                self.cols[3][2],
+            ],
+            [
+                self.cols[0][3],
+                self.cols[1][3],
+                self.cols[2][3],
+                self.cols[3][3],
+            ],
         )
     }
 
@@ -225,18 +282,29 @@ impl Mat4 {
     /// is recomputed as -R^T × t.
     pub fn inverse_affine(&self) -> Self {
         // Transpose the 3×3 rotation part
-        let r00 = self.cols[0][0]; let r01 = self.cols[1][0]; let r02 = self.cols[2][0];
-        let r10 = self.cols[0][1]; let r11 = self.cols[1][1]; let r12 = self.cols[2][1];
-        let r20 = self.cols[0][2]; let r21 = self.cols[1][2]; let r22 = self.cols[2][2];
-        let tx = self.cols[3][0]; let ty = self.cols[3][1]; let tz = self.cols[3][2];
+        let r00 = self.cols[0][0];
+        let r01 = self.cols[1][0];
+        let r02 = self.cols[2][0];
+        let r10 = self.cols[0][1];
+        let r11 = self.cols[1][1];
+        let r12 = self.cols[2][1];
+        let r20 = self.cols[0][2];
+        let r21 = self.cols[1][2];
+        let r22 = self.cols[2][2];
+        let tx = self.cols[3][0];
+        let ty = self.cols[3][1];
+        let tz = self.cols[3][2];
 
         Self::from_cols(
             [r00, r01, r02, 0.0],
             [r10, r11, r12, 0.0],
             [r20, r21, r22, 0.0],
-            [-(r00*tx + r01*ty + r02*tz),
-             -(r10*tx + r11*ty + r12*tz),
-             -(r20*tx + r21*ty + r22*tz), 1.0],
+            [
+                -(r00 * tx + r01 * ty + r02 * tz),
+                -(r10 * tx + r11 * ty + r12 * tz),
+                -(r20 * tx + r21 * ty + r22 * tz),
+                1.0,
+            ],
         )
     }
 
@@ -309,12 +377,20 @@ fn bhaskara_sin_inline(theta: f32) -> f32 {
     let pi = core::f32::consts::PI;
     let two_pi = 2.0 * pi;
     let mut t = theta % two_pi;
-    if t < 0.0 { t += two_pi; }
-    let (t_local, sign) = if t > pi { (t - pi, -1.0f32) } else { (t, 1.0f32) };
+    if t < 0.0 {
+        t += two_pi;
+    }
+    let (t_local, sign) = if t > pi {
+        (t - pi, -1.0f32)
+    } else {
+        (t, 1.0f32)
+    };
     let c = pi - t_local;
     let p = t_local * c;
     let denom = 5.0 * pi * pi - 4.0 * p;
-    if denom.abs() < 1e-10 { return 0.0; }
+    if denom.abs() < 1e-10 {
+        return 0.0;
+    }
     sign * 16.0 * p / denom
 }
 
@@ -324,8 +400,8 @@ fn bhaskara_cos_inline(theta: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::vec::Vec3;
+    use super::*;
 
     #[test]
     fn identity_transform() {
@@ -359,8 +435,11 @@ mod tests {
         for c in 0..4 {
             for r in 0..4 {
                 let expected = if r == c { 1.0 } else { 0.0 };
-                assert!((identity.cols[c][r] - expected).abs() < 0.01,
-                    "at [{r}][{c}]: {} != {expected}", identity.cols[c][r]);
+                assert!(
+                    (identity.cols[c][r] - expected).abs() < 0.01,
+                    "at [{r}][{c}]: {} != {expected}",
+                    identity.cols[c][r]
+                );
             }
         }
     }
@@ -373,8 +452,11 @@ mod tests {
         for c in 0..4 {
             for r in 0..4 {
                 let expected = if r == c { 1.0 } else { 0.0 };
-                assert!((check.cols[c][r] - expected).abs() < 0.02,
-                    "at [{r}][{c}]: {} != {expected}", check.cols[c][r]);
+                assert!(
+                    (check.cols[c][r] - expected).abs() < 0.02,
+                    "at [{r}][{c}]: {} != {expected}",
+                    check.cols[c][r]
+                );
             }
         }
     }

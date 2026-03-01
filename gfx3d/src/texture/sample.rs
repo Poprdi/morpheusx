@@ -37,8 +37,8 @@ pub fn sample_bilinear(tex: &Texture, u_fx: i32, v_fx: i32) -> u32 {
     let u1 = u0.wrapping_add(1);
     let v1 = v0.wrapping_add(1);
 
-    let fu = ((u_fx >> 8) & 0xFF) as u8;  // fractional U [0, 255]
-    let fv = ((v_fx >> 8) & 0xFF) as u8;  // fractional V [0, 255]
+    let fu = ((u_fx >> 8) & 0xFF) as u8; // fractional U [0, 255]
+    let fv = ((v_fx >> 8) & 0xFF) as u8; // fractional V [0, 255]
 
     let p00 = tex.fetch(u0, v0);
     let p10 = tex.fetch(u1, v0);
@@ -57,8 +57,12 @@ pub fn sample_bilinear(tex: &Texture, u_fx: i32, v_fx: i32) -> u32 {
 /// Same technique used in Intel's Mesa software rasterizer (swrast).
 #[inline(always)]
 fn lerp_packed(a: u32, b: u32, t: u8) -> u32 {
-    if t == 0 { return a; }
-    if t == 255 { return b; }
+    if t == 0 {
+        return a;
+    }
+    if t == 255 {
+        return b;
+    }
 
     let t32 = t as u32;
     let inv_t = 255 - t32;

@@ -84,7 +84,11 @@ impl Fx16 {
 
     #[inline(always)]
     pub const fn abs(self) -> Self {
-        if self.0 < 0 { Self(-self.0) } else { self }
+        if self.0 < 0 {
+            Self(-self.0)
+        } else {
+            self
+        }
     }
 
     /// Linear interpolation: self + (other - self) * t, where t is Fx16 in [0, 1].
@@ -98,41 +102,55 @@ impl Fx16 {
 impl core::ops::Add for Fx16 {
     type Output = Self;
     #[inline(always)]
-    fn add(self, rhs: Self) -> Self { Self(self.0 + rhs.0) }
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
 }
 
 impl core::ops::Sub for Fx16 {
     type Output = Self;
     #[inline(always)]
-    fn sub(self, rhs: Self) -> Self { Self(self.0 - rhs.0) }
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 - rhs.0)
+    }
 }
 
 impl core::ops::Neg for Fx16 {
     type Output = Self;
     #[inline(always)]
-    fn neg(self) -> Self { Self(-self.0) }
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
 }
 
 impl core::ops::AddAssign for Fx16 {
     #[inline(always)]
-    fn add_assign(&mut self, rhs: Self) { self.0 += rhs.0; }
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
 }
 
 impl core::ops::SubAssign for Fx16 {
     #[inline(always)]
-    fn sub_assign(&mut self, rhs: Self) { self.0 -= rhs.0; }
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
 }
 
 impl core::ops::Shr<u32> for Fx16 {
     type Output = Self;
     #[inline(always)]
-    fn shr(self, rhs: u32) -> Self { Self(self.0 >> rhs) }
+    fn shr(self, rhs: u32) -> Self {
+        Self(self.0 >> rhs)
+    }
 }
 
 impl core::ops::Shl<u32> for Fx16 {
     type Output = Self;
     #[inline(always)]
-    fn shl(self, rhs: u32) -> Self { Self(self.0 << rhs) }
+    fn shl(self, rhs: u32) -> Self {
+        Self(self.0 << rhs)
+    }
 }
 
 #[cfg(test)]

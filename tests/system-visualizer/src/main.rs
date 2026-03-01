@@ -3,28 +3,28 @@
 extern crate alloc;
 use alloc::boxed::Box;
 
-mod font;
-mod state;
-mod input;
-mod hud;
-mod layout;
-mod cloud;
 mod backdrop;
+mod cloud;
+mod font;
+mod hud;
+mod input;
+mod layout;
+mod state;
 
 use libmorpheus::entry;
-use libmorpheus::hw::{fb_info, fb_lock, fb_map, fb_blit};
+use libmorpheus::hw::{fb_blit, fb_info, fb_lock, fb_map};
 use libmorpheus::process;
 use libmorpheus::time;
-use morpheus_gfx3d::pipeline::Pipeline;
-use morpheus_gfx3d::math::vec::Vec3;
-use morpheus_gfx3d::light::{LightEnv, DirLight};
 use morpheus_gfx3d::camera::Camera;
-use morpheus_gfx3d::target::{TargetPixelFormat, DirectTarget};
+use morpheus_gfx3d::light::{DirLight, LightEnv};
+use morpheus_gfx3d::math::vec::Vec3;
+use morpheus_gfx3d::pipeline::Pipeline;
+use morpheus_gfx3d::target::{DirectTarget, TargetPixelFormat};
 
-use state::SystemState;
-use input::{InputState, Action};
 use hud::Framebuf;
+use input::{Action, InputState};
 use layout::ProcessLayout;
+use state::SystemState;
 
 entry!(main);
 
@@ -62,8 +62,12 @@ impl OrbitCam {
         self.dist_vel *= 1.0 - decay;
 
         let two_pi = 2.0 * core::f32::consts::PI;
-        while self.yaw < 0.0 { self.yaw += two_pi; }
-        while self.yaw >= two_pi { self.yaw -= two_pi; }
+        while self.yaw < 0.0 {
+            self.yaw += two_pi;
+        }
+        while self.yaw >= two_pi {
+            self.yaw -= two_pi;
+        }
         self.pitch = clamp(self.pitch, -1.4, 1.4);
         self.dist = clamp(self.dist, 3.0, 60.0);
     }
@@ -118,9 +122,8 @@ fn main() -> i32 {
     let backdrop_stars = Box::new(backdrop::Backdrop::new());
     let galaxy_assets = Box::new(backdrop::GalaxyAssets::new());
 
-    let mut target = unsafe {
-        DirectTarget::new(fb_vaddr as *mut u32, fb_w, fb_h, fb_stride, fb_format)
-    };
+    let mut target =
+        unsafe { DirectTarget::new(fb_vaddr as *mut u32, fb_w, fb_h, fb_stride, fb_format) };
 
     let mut pipeline = Box::new(Pipeline::new(fb_w, fb_h));
     pipeline.backface_cull = true;
@@ -165,10 +168,10 @@ fn main() -> i32 {
     let mut fps_display = 0u32;
     let mut prev_frame_ns = time::clock_gettime();
 
-    let orbit_accel = 6.0f32;       // base rotation acceleration (scaled by speed_mult)
+    let orbit_accel = 6.0f32; // base rotation acceleration (scaled by speed_mult)
     let zoom_accel = 12.0f32;
     let mouse_sensitivity = 0.004f32;
-    let mut speed_mult = 1.0f32;    // adjustable via [ and ]
+    let mut speed_mult = 1.0f32; // adjustable via [ and ]
 
     sys_state.poll();
 
@@ -216,12 +219,24 @@ fn main() -> i32 {
             speed_mult = (speed_mult - 0.25).max(0.25);
         }
 
-        if (input.held & input::HELD_A) != 0 { orbit.yaw_vel   -= orbit_accel * speed_mult * dt; }
-        if (input.held & input::HELD_D) != 0 { orbit.yaw_vel   += orbit_accel * speed_mult * dt; }
-        if (input.held & input::HELD_W) != 0 { orbit.pitch_vel += orbit_accel * speed_mult * dt * 0.7; }
-        if (input.held & input::HELD_S) != 0 { orbit.pitch_vel -= orbit_accel * speed_mult * dt * 0.7; }
-        if (input.held & input::HELD_Z) != 0 { orbit.dist_vel  -= zoom_accel * speed_mult * dt; }
-        if (input.held & input::HELD_X) != 0 { orbit.dist_vel  += zoom_accel * speed_mult * dt; }
+        if (input.held & input::HELD_A) != 0 {
+            orbit.yaw_vel -= orbit_accel * speed_mult * dt;
+        }
+        if (input.held & input::HELD_D) != 0 {
+            orbit.yaw_vel += orbit_accel * speed_mult * dt;
+        }
+        if (input.held & input::HELD_W) != 0 {
+            orbit.pitch_vel += orbit_accel * speed_mult * dt * 0.7;
+        }
+        if (input.held & input::HELD_S) != 0 {
+            orbit.pitch_vel -= orbit_accel * speed_mult * dt * 0.7;
+        }
+        if (input.held & input::HELD_Z) != 0 {
+            orbit.dist_vel -= zoom_accel * speed_mult * dt;
+        }
+        if (input.held & input::HELD_X) != 0 {
+            orbit.dist_vel += zoom_accel * speed_mult * dt;
+        }
 
         if input.mouse_left {
             orbit.yaw_vel += input.mouse_dx * mouse_sensitivity;
@@ -256,10 +271,14 @@ fn main() -> i32 {
         }
 
         let digit_actions = [
-            (Action::SelectDigit1, 1u32), (Action::SelectDigit2, 2),
-            (Action::SelectDigit3, 3), (Action::SelectDigit4, 4),
-            (Action::SelectDigit5, 5), (Action::SelectDigit6, 6),
-            (Action::SelectDigit7, 7), (Action::SelectDigit8, 8),
+            (Action::SelectDigit1, 1u32),
+            (Action::SelectDigit2, 2),
+            (Action::SelectDigit3, 3),
+            (Action::SelectDigit4, 4),
+            (Action::SelectDigit5, 5),
+            (Action::SelectDigit6, 6),
+            (Action::SelectDigit7, 7),
+            (Action::SelectDigit8, 8),
             (Action::SelectDigit9, 9),
         ];
         for &(act, digit) in &digit_actions {
@@ -383,8 +402,15 @@ fn main() -> i32 {
 fn fast_sin(x: f32) -> f32 {
     let pi = core::f32::consts::PI;
     let mut t = x % (2.0 * pi);
-    if t < 0.0 { t += 2.0 * pi; }
-    let sign = if t > pi { t -= pi; -1.0 } else { 1.0 };
+    if t < 0.0 {
+        t += 2.0 * pi;
+    }
+    let sign = if t > pi {
+        t -= pi;
+        -1.0
+    } else {
+        1.0
+    };
     let y = t * (pi - t);
     sign * (16.0 * y) / (5.0 * pi * pi - 4.0 * y)
 }
@@ -394,7 +420,9 @@ fn fast_cos(x: f32) -> f32 {
 }
 
 fn fast_sqrt(x: f32) -> f32 {
-    if x <= 0.0 { return 0.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
     let i = f32::to_bits(x);
     let i = (i >> 1) + 0x1FC00000;
     let y = f32::from_bits(i);
@@ -403,7 +431,9 @@ fn fast_sqrt(x: f32) -> f32 {
 
 fn fast_atan2(y: f32, x: f32) -> f32 {
     let pi = core::f32::consts::PI;
-    if x == 0.0 && y == 0.0 { return 0.0; }
+    if x == 0.0 && y == 0.0 {
+        return 0.0;
+    }
     let ax = if x < 0.0 { -x } else { x };
     let ay = if y < 0.0 { -y } else { y };
     let (mn, mx) = if ax < ay { (ax, ay) } else { (ay, ax) };
@@ -412,18 +442,34 @@ fn fast_atan2(y: f32, x: f32) -> f32 {
     let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
     let r = if ax < ay { 1.5707963 - r } else { r };
     let r = if x < 0.0 { pi - r } else { r };
-    if y < 0.0 { -r } else { r }
+    if y < 0.0 {
+        -r
+    } else {
+        r
+    }
 }
 
 fn fast_exp(x: f32) -> f32 {
-    if x > 20.0 { return f32::MAX; }
-    if x < -20.0 { return 0.0; }
+    if x > 20.0 {
+        return f32::MAX;
+    }
+    if x < -20.0 {
+        return 0.0;
+    }
     let t = 1.0 + x / 256.0;
     let mut r = t;
-    for _ in 0..8 { r = r * r; }
+    for _ in 0..8 {
+        r = r * r;
+    }
     r
 }
 
 fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
-    if v < lo { lo } else if v > hi { hi } else { v }
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }

@@ -275,6 +275,7 @@ asm_mdio_read_c45:
 .wait_addr:
     dec     ebx
     jz      .timeout
+    pause                       ; PERF FIX: reduce pipeline contention in MMIO poll
     mov     eax, [r12]
     test    eax, 0x10000000
     jz      .wait_addr
@@ -295,6 +296,7 @@ asm_mdio_read_c45:
 .wait_data:
     dec     ebx
     jz      .timeout
+    pause                       ; PERF FIX: reduce pipeline contention in MMIO poll
     mov     eax, [r12]
     test    eax, 0x10000000
     jz      .wait_data
@@ -357,6 +359,7 @@ asm_mdio_write_c45:
 .wait_addr:
     dec     ebx
     jz      .timeout
+    pause                       ; PERF FIX: reduce pipeline contention
     mov     eax, [r12]
     test    eax, 0x10000000
     jz      .wait_addr
@@ -377,6 +380,7 @@ asm_mdio_write_c45:
 .wait_data:
     dec     ebx
     jz      .timeout
+    pause                       ; PERF FIX: reduce pipeline contention
     mov     eax, [r12]
     test    eax, 0x10000000
     jz      .wait_data

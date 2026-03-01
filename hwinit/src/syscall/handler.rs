@@ -1631,7 +1631,14 @@ pub unsafe fn register_framebuffer(info: FbInfo) {
 extern "win64" {
     /// Diff back vs shadow, write changed pixel spans to VRAM, update shadow.
     /// All three buffers use the same stride (pixels per row).
-    fn asm_fb_present_delta(back: u64, shadow: u64, vram: u64, width: u64, height: u64, stride: u64);
+    fn asm_fb_present_delta(
+        back: u64,
+        shadow: u64,
+        vram: u64,
+        width: u64,
+        height: u64,
+        stride: u64,
+    );
 }
 
 /// Physical address of the kernel-allocated back buffer (zero = unallocated).
@@ -2321,11 +2328,13 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
     let registry = crate::memory::global_registry_mut();
 
     // allocate_pages handles CR3 switching internally.
-    let back_phys = registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        crate::memory::MemoryType::Allocated,
-        pages,
-    ).map_err(|_| ENOMEM)?;
+    let back_phys = registry
+        .allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages,
+        )
+        .map_err(|_| ENOMEM)?;
 
     let shadow_phys = match registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,

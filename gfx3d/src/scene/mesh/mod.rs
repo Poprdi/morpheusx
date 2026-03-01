@@ -1,12 +1,12 @@
-use alloc::vec::Vec;
 use crate::math::vec::{Vec2, Vec3};
+use alloc::vec::Vec;
 
 pub mod cube;
+pub mod cylinder;
+pub mod plane;
+pub mod pyramid;
 pub mod sphere;
 pub mod torus;
-pub mod pyramid;
-pub mod plane;
-pub mod cylinder;
 
 /// A vertex in a mesh (model-space).
 #[derive(Debug, Clone, Copy)]
@@ -39,7 +39,12 @@ pub struct Mesh {
 impl Mesh {
     pub fn new(vertices: Vec<MeshVertex>, indices: Vec<u16>) -> Self {
         let (center, radius) = compute_bounding_sphere(&vertices);
-        Self { vertices, indices, bound_center: center, bound_radius: radius }
+        Self {
+            vertices,
+            indices,
+            bound_center: center,
+            bound_radius: radius,
+        }
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -57,7 +62,12 @@ impl Mesh {
     }
 
     /// Generate a torus (donut shape).
-    pub fn torus(major_radius: f32, minor_radius: f32, major_segments: usize, minor_segments: usize) -> Self {
+    pub fn torus(
+        major_radius: f32,
+        minor_radius: f32,
+        major_segments: usize,
+        minor_segments: usize,
+    ) -> Self {
         torus::torus(major_radius, minor_radius, major_segments, minor_segments)
     }
 
@@ -89,7 +99,9 @@ impl Mesh {
 /// Not optimal but O(n) and within 5% of optimal radius in practice.
 /// Good enough for coarse frustum culling.
 pub fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
-    if verts.is_empty() { return (Vec3::ZERO, 0.0); }
+    if verts.is_empty() {
+        return (Vec3::ZERO, 0.0);
+    }
 
     // Start with AABB center
     let mut min = verts[0].position;
@@ -105,7 +117,9 @@ pub fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
     for v in verts {
         let diff = v.position - center;
         let dist_sq = diff.length_sq();
-        if dist_sq > max_dist_sq { max_dist_sq = dist_sq; }
+        if dist_sq > max_dist_sq {
+            max_dist_sq = dist_sq;
+        }
     }
 
     let radius = if max_dist_sq > 0.0 {

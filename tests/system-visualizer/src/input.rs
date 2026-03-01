@@ -40,12 +40,12 @@ pub struct InputState {
     pub held: u16,
 }
 
-pub const HELD_W: u16     = 1 << 0;
-pub const HELD_A: u16     = 1 << 1;
-pub const HELD_S: u16     = 1 << 2;
-pub const HELD_D: u16     = 1 << 3;
-pub const HELD_Z: u16     = 1 << 4;
-pub const HELD_X: u16     = 1 << 5;
+pub const HELD_W: u16 = 1 << 0;
+pub const HELD_A: u16 = 1 << 1;
+pub const HELD_S: u16 = 1 << 2;
+pub const HELD_D: u16 = 1 << 3;
+pub const HELD_Z: u16 = 1 << 4;
+pub const HELD_X: u16 = 1 << 5;
 
 impl InputState {
     pub fn new() -> Self {
@@ -103,8 +103,8 @@ impl InputState {
                 b'o' | b'O' => Action::ToggleSlow,
                 b'r' | b'R' => Action::ResetView,
                 b'f' | b'F' => Action::TogglePin,
-                0x18 => Action::SpeedDown,   // Ctrl+X
-                0x19 => Action::SpeedUp,     // Ctrl+Y
+                0x18 => Action::SpeedDown, // Ctrl+X
+                0x19 => Action::SpeedUp,   // Ctrl+Y
                 b'1' => Action::SelectDigit1,
                 b'2' => Action::SelectDigit2,
                 b'3' => Action::SelectDigit3,

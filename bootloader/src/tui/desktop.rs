@@ -151,9 +151,12 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     loop {
         let raw = unsafe { super::input::asm_ps2_poll_any() };
         if raw == 0 {
-            // Nothing available — brief spin then retry
-            for _ in 0..4_000 {
-                core::hint::spin_loop();
+            // Nothing available — halt CPU until next interrupt (timer/keyboard/mouse).
+            // PERF FIX: Replaced 4000-iteration spin_loop with HLT instruction.
+            // HLT puts CPU into C1 sleep state, waking on any interrupt.
+            // Saves significant power and reduces thermal output vs busy-spinning.
+            unsafe {
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }
             continue;
         }

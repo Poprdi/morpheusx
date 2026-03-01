@@ -22,7 +22,9 @@ pub trait RenderTarget {
     fn pixel_format(&self) -> TargetPixelFormat;
 
     /// Stride in pixels (may differ from width for hardware framebuffers).
-    fn stride(&self) -> u32 { self.width() }
+    fn stride(&self) -> u32 {
+        self.width()
+    }
 }
 
 /// The consumer's framebuffer pixel format.
@@ -75,19 +77,33 @@ impl SoftwareTarget {
 
 impl RenderTarget for SoftwareTarget {
     #[inline(always)]
-    fn width(&self) -> u32 { self.width }
+    fn width(&self) -> u32 {
+        self.width
+    }
     #[inline(always)]
-    fn height(&self) -> u32 { self.height }
+    fn height(&self) -> u32 {
+        self.height
+    }
     #[inline(always)]
-    fn color_buffer_mut(&mut self) -> &mut [u32] { &mut self.color }
+    fn color_buffer_mut(&mut self) -> &mut [u32] {
+        &mut self.color
+    }
     #[inline(always)]
-    fn depth_buffer_mut(&mut self) -> &mut [u32] { &mut self.depth }
+    fn depth_buffer_mut(&mut self) -> &mut [u32] {
+        &mut self.depth
+    }
     #[inline(always)]
-    fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]) { (&mut self.color, &mut self.depth) }
+    fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]) {
+        (&mut self.color, &mut self.depth)
+    }
     #[inline(always)]
-    fn pixel_format(&self) -> TargetPixelFormat { self.format }
+    fn pixel_format(&self) -> TargetPixelFormat {
+        self.format
+    }
     #[inline(always)]
-    fn stride(&self) -> u32 { self.width }
+    fn stride(&self) -> u32 {
+        self.width
+    }
 }
 
 /// Render target that writes directly into an externally-owned pixel buffer
@@ -143,24 +159,34 @@ impl DirectTarget {
 
 impl RenderTarget for DirectTarget {
     #[inline(always)]
-    fn width(&self) -> u32 { self.width }
+    fn width(&self) -> u32 {
+        self.width
+    }
     #[inline(always)]
-    fn height(&self) -> u32 { self.height }
+    fn height(&self) -> u32 {
+        self.height
+    }
     #[inline(always)]
     fn color_buffer_mut(&mut self) -> &mut [u32] {
         unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
     #[inline(always)]
-    fn depth_buffer_mut(&mut self) -> &mut [u32] { &mut self.depth }
+    fn depth_buffer_mut(&mut self) -> &mut [u32] {
+        &mut self.depth
+    }
     #[inline(always)]
     fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]) {
         let color = unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) };
         (color, &mut self.depth)
     }
     #[inline(always)]
-    fn pixel_format(&self) -> TargetPixelFormat { self.format }
+    fn pixel_format(&self) -> TargetPixelFormat {
+        self.format
+    }
     #[inline(always)]
-    fn stride(&self) -> u32 { self.stride_px }
+    fn stride(&self) -> u32 {
+        self.stride_px
+    }
 }
 
 /// Convert internal RGBA (0xRRGGBBAA) to target pixel format.

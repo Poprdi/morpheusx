@@ -12,11 +12,11 @@ use crate::math::vec::{Vec2, Vec3, Vec4};
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Vertex {
-    pub pos: Vec4,      // screen-space: x, y are pixel coords; z is depth [0,1]; w = 1/clip_w
+    pub pos: Vec4, // screen-space: x, y are pixel coords; z is depth [0,1]; w = 1/clip_w
     pub color: [f32; 3], // vertex color (Gouraud lighting result), pre-divided by clip_w
-    pub uv: Vec2,        // texture coords, pre-divided by clip_w
-    pub normal: Vec3,    // world-space normal (for per-pixel effects if budget allows)
-    pub world_z: f32,    // world-space distance from camera (for fog)
+    pub uv: Vec2,  // texture coords, pre-divided by clip_w
+    pub normal: Vec3, // world-space normal (for per-pixel effects if budget allows)
+    pub world_z: f32, // world-space distance from camera (for fog)
 }
 
 impl Vertex {
@@ -83,6 +83,10 @@ impl Triangle {
         let x1 = ((max_x as i32) + 1).max(0).min(vp_w as i32) as u32;
         let y1 = ((max_y as i32) + 1).max(0).min(vp_h as i32) as u32;
 
-        if x0 >= x1 || y0 >= y1 { None } else { Some((x0, y0, x1, y1)) }
+        if x0 >= x1 || y0 >= y1 {
+            None
+        } else {
+            Some((x0, y0, x1, y1))
+        }
     }
 }

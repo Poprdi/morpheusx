@@ -1,18 +1,18 @@
-use morpheus_gfx3d::pipeline::{Pipeline, Material};
+use morpheus_gfx3d::light::LightEnv;
 use morpheus_gfx3d::math::mat4::Mat4;
 use morpheus_gfx3d::math::vec::Vec3;
+use morpheus_gfx3d::pipeline::{Material, Pipeline};
 use morpheus_gfx3d::scene::mesh::Mesh;
-use morpheus_gfx3d::light::LightEnv;
 use morpheus_gfx3d::target::RenderTarget;
 
-use crate::state::SystemState;
 use crate::layout::ProcessLayout;
+use crate::state::SystemState;
 
 pub struct CloudAssets {
     pub sphere_lo: Mesh,
     pub sphere_hi: Mesh,
     pub ring: Mesh,
-//    pub connector: Mesh,
+    //    pub connector: Mesh,
 }
 
 impl CloudAssets {
@@ -21,7 +21,7 @@ impl CloudAssets {
             sphere_lo: Mesh::sphere(6, 12),
             sphere_hi: Mesh::sphere(10, 20),
             ring: Mesh::torus(1.0, 0.03, 24, 6),
-//            connector: Mesh::cylinder(0.02, 1.0, 4),
+            //            connector: Mesh::cylinder(0.02, 1.0, 4),
         }
     }
 }
@@ -68,7 +68,11 @@ pub fn render_cloud<T: RenderTarget>(
         let model = Mat4::translation(pos.x, pos.y, pos.z).mul(&scale);
         let material = Material::solid(r, g, b);
 
-        let mesh = if is_sel || radius > 0.5 { &assets.sphere_hi } else { &assets.sphere_lo };
+        let mesh = if is_sel || radius > 0.5 {
+            &assets.sphere_hi
+        } else {
+            &assets.sphere_lo
+        };
         pipeline.draw_mesh(mesh, &model, &material, lights, target);
 
         if is_sel {
@@ -76,7 +80,6 @@ pub fn render_cloud<T: RenderTarget>(
         }
     }
 }
-
 
 fn draw_selection_ring<T: RenderTarget>(
     pipeline: &mut Pipeline,
@@ -91,39 +94,45 @@ fn draw_selection_ring<T: RenderTarget>(
     let pulse = 1.0 + 0.15 * fast_sin(phase * 6.2832);
     let ring_radius = radius * 1.3 * pulse;
 
-    let model = Mat4::translation(pos.x, pos.y, pos.z)
-        .mul(&Mat4::scale(ring_radius, radius, ring_radius));
+    let model =
+        Mat4::translation(pos.x, pos.y, pos.z).mul(&Mat4::scale(ring_radius, radius, ring_radius));
     let material = Material::solid(0.2, 1.0, 0.5);
     pipeline.draw_mesh(&assets.ring, &model, &material, lights, target);
 }
-
 
 fn process_color(state: u32, cpu_pct: f32) -> (f32, f32, f32) {
     match state {
         1 => {
             let intensity = cpu_pct / 100.0;
             match intensity {
-                i if i < 0.25 => (0.1, 0.3, 0.1),        // dark green
-                i if i < 0.5 => (0.2, 0.6, 0.2),         // light green
-                i if i < 0.65 => (0.6, 0.8, 0.1),        // yellow-green
-                i if i < 0.8 => (0.9, 0.7, 0.1),         // yellow-orange
-                i if i < 0.9 => (0.95, 0.5, 0.1),        // orange
-                _ => (0.8, 0.1, 0.1),                     // dark red
+                i if i < 0.25 => (0.1, 0.3, 0.1), // dark green
+                i if i < 0.5 => (0.2, 0.6, 0.2),  // light green
+                i if i < 0.65 => (0.6, 0.8, 0.1), // yellow-green
+                i if i < 0.8 => (0.9, 0.7, 0.1),  // yellow-orange
+                i if i < 0.9 => (0.95, 0.5, 0.1), // orange
+                _ => (0.8, 0.1, 0.1),             // dark red
             }
         }
-        0 => (0.3, 0.2, 0.1),      // idle: dark brown
-        2 => (0.2, 0.4, 0.8),      // sleeping: blue
-        3 => (0.4, 0.4, 0.4),      // stopped: gray
-        4 => (0.2, 0.2, 0.2),      // zombie: dark gray
-        _ => (0.5, 0.5, 0.5),      // unknown: neutral gray
+        0 => (0.3, 0.2, 0.1), // idle: dark brown
+        2 => (0.2, 0.4, 0.8), // sleeping: blue
+        3 => (0.4, 0.4, 0.4), // stopped: gray
+        4 => (0.2, 0.2, 0.2), // zombie: dark gray
+        _ => (0.5, 0.5, 0.5), // unknown: neutral gray
     }
 }
 
 fn fast_sin(x: f32) -> f32 {
     let pi = core::f32::consts::PI;
     let mut t = x % (2.0 * pi);
-    if t < 0.0 { t += 2.0 * pi; }
-    let sign = if t > pi { t -= pi; -1.0 } else { 1.0 };
+    if t < 0.0 {
+        t += 2.0 * pi;
+    }
+    let sign = if t > pi {
+        t -= pi;
+        -1.0
+    } else {
+        1.0
+    };
     let y = t * (pi - t);
     sign * (16.0 * y) / (5.0 * pi * pi - 4.0 * y)
 }

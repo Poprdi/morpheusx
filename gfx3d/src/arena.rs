@@ -43,7 +43,9 @@ impl Arena {
         let byte_size = count * core::mem::size_of::<T>();
         let new_offset = aligned_offset + byte_size;
 
-        if new_offset > self.data.len() { return None; }
+        if new_offset > self.data.len() {
+            return None;
+        }
 
         let ptr = self.data[aligned_offset..].as_mut_ptr() as *mut T;
         self.offset = new_offset;

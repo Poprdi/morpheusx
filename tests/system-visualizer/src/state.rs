@@ -22,9 +22,15 @@ pub struct ProcessInfo {
 
 impl ProcessInfo {
     const ZEROED: Self = Self {
-        pid: 0, ppid: 0, state: 0, priority: 0,
-        cpu_ticks: 0, pages_alloc: 0, name: [0; 32],
-        cpu_pct: 0.0, mem_kb: 0,
+        pid: 0,
+        ppid: 0,
+        state: 0,
+        priority: 0,
+        cpu_ticks: 0,
+        pages_alloc: 0,
+        name: [0; 32],
+        cpu_pct: 0.0,
+        mem_kb: 0,
     };
 
     pub fn name_str(&self) -> &str {
@@ -190,7 +196,9 @@ impl SystemState {
     }
 
     pub fn find_index_by_pid(&self, pid: u32) -> Option<usize> {
-        self.procs[..self.proc_count].iter().position(|p| p.pid == pid)
+        self.procs[..self.proc_count]
+            .iter()
+            .position(|p| p.pid == pid)
     }
 
     fn find_prev_ticks(&self, pid: u32) -> u64 {
@@ -203,13 +211,17 @@ impl SystemState {
     }
 
     pub fn load_history_sample(&self, age: usize) -> u8 {
-        if age >= HISTORY_LEN { return 0; }
+        if age >= HISTORY_LEN {
+            return 0;
+        }
         let idx = (self.load_head.wrapping_sub(1).wrapping_sub(age)) % HISTORY_LEN;
         self.load_history[idx]
     }
 
     pub fn cpu_history_sample(&self, age: usize) -> u8 {
-        if age >= HISTORY_LEN { return 0; }
+        if age >= HISTORY_LEN {
+            return 0;
+        }
         let idx = (self.load_head.wrapping_sub(1).wrapping_sub(age)) % HISTORY_LEN;
         self.cpu_history[idx]
     }

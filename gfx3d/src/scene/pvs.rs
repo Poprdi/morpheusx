@@ -54,7 +54,9 @@ impl PvsTable {
 
     /// Mark cluster `to` as visible from cluster `from`.
     pub fn set_visible(&mut self, from: u32, to: u32) {
-        if from >= self.num_clusters || to >= self.num_clusters { return; }
+        if from >= self.num_clusters || to >= self.num_clusters {
+            return;
+        }
         let byte_idx = (from * self.bytes_per_row + to / 8) as usize;
         let bit = 1u8 << (to & 7);
         if let Some(b) = self.data.get_mut(byte_idx) {
@@ -65,7 +67,9 @@ impl PvsTable {
     /// Check if cluster `to` is visible from cluster `from`.
     #[inline]
     pub fn is_visible(&self, from: u32, to: u32) -> bool {
-        if from >= self.num_clusters || to >= self.num_clusters { return false; }
+        if from >= self.num_clusters || to >= self.num_clusters {
+            return false;
+        }
         let byte_idx = (from * self.bytes_per_row + to / 8) as usize;
         let bit = 1u8 << (to & 7);
         match self.data.get(byte_idx) {
@@ -94,7 +98,9 @@ impl PvsTable {
         }
     }
 
-    pub fn num_clusters(&self) -> u32 { self.num_clusters }
+    pub fn num_clusters(&self) -> u32 {
+        self.num_clusters
+    }
 }
 
 pub struct PvsIterator<'a> {
@@ -128,7 +134,9 @@ impl<'a> Iterator for PvsIterator<'a> {
                 self.byte_idx += 1;
                 self.base_cluster += 8 - self.bit_offset;
                 self.bit_offset = 0;
-                if self.byte_idx >= self.end { return None; }
+                if self.byte_idx >= self.end {
+                    return None;
+                }
                 self.current_byte = self.data[self.byte_idx];
             }
 
@@ -139,7 +147,9 @@ impl<'a> Iterator for PvsIterator<'a> {
                 self.byte_idx += 1;
                 self.base_cluster += 8 - self.bit_offset;
                 self.bit_offset = 0;
-                if self.byte_idx >= self.end { return None; }
+                if self.byte_idx >= self.end {
+                    return None;
+                }
                 self.current_byte = self.data[self.byte_idx];
                 continue;
             }

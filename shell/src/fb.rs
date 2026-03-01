@@ -41,7 +41,9 @@ impl Framebuffer {
 
     #[inline]
     pub fn put_pixel(&self, x: u32, y: u32, r: u8, g: u8, b: u8) {
-        if self.is_locked() { return; }
+        if self.is_locked() {
+            return;
+        }
         if x >= self.width || y >= self.height {
             return;
         }
@@ -53,7 +55,9 @@ impl Framebuffer {
     }
 
     pub fn fill_rect(&self, x: u32, y: u32, w: u32, h: u32, r: u8, g: u8, b: u8) {
-        if self.is_locked() { return; }
+        if self.is_locked() {
+            return;
+        }
         let px = self.pack(r, g, b);
         let x1 = x.min(self.width);
         let y1 = y.min(self.height);
@@ -81,7 +85,9 @@ impl Framebuffer {
         fg: (u8, u8, u8),
         bg: (u8, u8, u8),
     ) {
-        if self.is_locked() { return; }
+        if self.is_locked() {
+            return;
+        }
         let fg_px = self.pack(fg.0, fg.1, fg.2);
         let bg_px = self.pack(bg.0, bg.1, bg.2);
 
@@ -108,7 +114,9 @@ impl Framebuffer {
     }
 
     pub fn scroll_up(&self, rows_px: u32, bg_r: u8, bg_g: u8, bg_b: u8) {
-        if self.is_locked() { return; }
+        if self.is_locked() {
+            return;
+        }
         if rows_px == 0 || rows_px >= self.height {
             self.clear(bg_r, bg_g, bg_b);
             return;

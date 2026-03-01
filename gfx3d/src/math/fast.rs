@@ -10,7 +10,9 @@
 /// One iteration gives ~0.175% which is fine for normals but not for lighting.
 #[inline(always)]
 pub fn inv_sqrt(x: f32) -> f32 {
-    if x <= 0.0 { return 0.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
     let half = 0.5 * x;
     let i = f32::to_bits(x);
     let i = 0x5f37_59df - (i >> 1); // magic constant (Chris Lomont's optimized)
@@ -26,7 +28,9 @@ pub fn inv_sqrt(x: f32) -> f32 {
 /// Instead, use the IEEE-754 bit trick directly.
 #[inline(always)]
 pub fn fast_recip(x: f32) -> f32 {
-    if x == 0.0 { return 0.0; }
+    if x == 0.0 {
+        return 0.0;
+    }
     let i = f32::to_bits(x.abs());
     // Newton-Raphson: start with IEEE-754 trick for initial estimate
     let est = f32::from_bits(0x7ef0_0000 - i);
@@ -41,7 +45,11 @@ pub fn fast_recip(x: f32) -> f32 {
 #[inline(always)]
 pub fn fast_floor(x: f32) -> i32 {
     let i = x as i32;
-    if (i as f32) > x { i - 1 } else { i }
+    if (i as f32) > x {
+        i - 1
+    } else {
+        i
+    }
 }
 
 /// Fast approximate log2 using IEEE-754 exponent extraction.
@@ -50,7 +58,9 @@ pub fn fast_floor(x: f32) -> i32 {
 /// Error: ±0.08 (more than enough for LOD selection).
 #[inline(always)]
 pub fn fast_log2(x: f32) -> f32 {
-    if x <= 0.0 { return -127.0; }
+    if x <= 0.0 {
+        return -127.0;
+    }
     let bits = f32::to_bits(x);
     let exp = ((bits >> 23) & 0xFF) as f32 - 127.0;
     let mantissa = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
@@ -64,8 +74,12 @@ pub fn fast_log2(x: f32) -> f32 {
 /// Used for fog density curves: `fog = 2^(-density * dist)`.
 #[inline(always)]
 pub fn fast_exp2(x: f32) -> f32 {
-    if x < -126.0 { return 0.0; }
-    if x > 128.0 { return f32::MAX; }
+    if x < -126.0 {
+        return 0.0;
+    }
+    if x > 128.0 {
+        return f32::MAX;
+    }
     let floor = fast_floor(x);
     let frac = x - floor as f32;
     // Polynomial approximation for 2^frac in [0, 1):
@@ -77,13 +91,23 @@ pub fn fast_exp2(x: f32) -> f32 {
 #[inline(always)]
 pub fn saturate(x: f32) -> f32 {
     let x = if x < 0.0 { 0.0 } else { x };
-    if x > 1.0 { 1.0 } else { x }
+    if x > 1.0 {
+        1.0
+    } else {
+        x
+    }
 }
 
 /// Clamp i32 to u8 range.
 #[inline(always)]
 pub fn clamp_u8(x: i32) -> u8 {
-    if x < 0 { 0 } else if x > 255 { 255 } else { x as u8 }
+    if x < 0 {
+        0
+    } else if x > 255 {
+        255
+    } else {
+        x as u8
+    }
 }
 
 /// Integer lerp for color channels: a + (b - a) * t / 256, where t is [0, 255].
@@ -106,7 +130,10 @@ mod tests {
             let expected = 1.0 / (v as f64).sqrt();
             let got = inv_sqrt(v) as f64;
             let err = ((got - expected) / expected).abs();
-            assert!(err < 0.001, "inv_sqrt({v}) = {got}, expected {expected}, err {err}");
+            assert!(
+                err < 0.001,
+                "inv_sqrt({v}) = {got}, expected {expected}, err {err}"
+            );
         }
     }
 
@@ -116,7 +143,10 @@ mod tests {
             let expected = 1.0f64 / v as f64;
             let got = fast_recip(v) as f64;
             let err = ((got - expected) / expected).abs();
-            assert!(err < 0.001, "fast_recip({v}) = {got}, expected {expected}, err {err}");
+            assert!(
+                err < 0.001,
+                "fast_recip({v}) = {got}, expected {expected}, err {err}"
+            );
         }
     }
 
@@ -126,7 +156,10 @@ mod tests {
             let expected = (v as f64).log2();
             let got = fast_log2(v) as f64;
             let err = (got - expected).abs();
-            assert!(err < 0.15, "fast_log2({v}) = {got}, expected {expected}, err {err}");
+            assert!(
+                err < 0.15,
+                "fast_log2({v}) = {got}, expected {expected}, err {err}"
+            );
         }
     }
 
@@ -136,7 +169,10 @@ mod tests {
             let expected = (v as f64).exp2();
             let got = fast_exp2(v) as f64;
             let err = ((got - expected) / expected).abs();
-            assert!(err < 0.02, "fast_exp2({v}) = {got}, expected {expected}, err {err}");
+            assert!(
+                err < 0.02,
+                "fast_exp2({v}) = {got}, expected {expected}, err {err}"
+            );
         }
     }
 }

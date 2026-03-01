@@ -304,7 +304,7 @@ impl MemoryRegistry {
         let excl_start = exclude_base;
         let excl_end = exclude_base + exclude_pages * PAGE_SIZE;
         self.excl_start = excl_start;
-        self.excl_end   = excl_end;
+        self.excl_end = excl_end;
         let entry_count = map_size / descriptor_size;
 
         for i in 0..entry_count {
@@ -414,6 +414,7 @@ impl MemoryRegistry {
 
     /// free_pages. decomposes into aligned buddy blocks, coalesces automatically.
     pub fn free_pages(&mut self, addr: u64, pages: u64) -> Result<(), MemoryError> {
+        // Note: free_pages counter is now tracked entirely by list_push/remove/pop.
         if addr & (PAGE_SIZE - 1) != 0 || pages == 0 {
             return Err(MemoryError::InvalidParameter);
         }
@@ -427,8 +428,10 @@ impl MemoryRegistry {
             let end = addr + pages * PAGE_SIZE;
             while base < end {
                 let remaining_pages = (end - base) / PAGE_SIZE;
-                let align_order = (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
-                let size_order = usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
+                let align_order =
+                    (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
+                let size_order =
+                    usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
                 let order = align_order.min(size_order).min(MAX_ORDER);
                 unsafe {
                     self.buddy_free(base, order);
@@ -495,26 +498,31 @@ impl MemoryRegistry {
     /// - Single-threaded context only.
     pub unsafe fn reclaim_boot_services(&mut self, cpu_excl: &[u64]) {
         let excl_start = self.excl_start;
-        let excl_end   = self.excl_end;
+        let excl_end = self.excl_end;
         let mut reclaimed_pages: u64 = 0;
 
         for i in 0..self.map_count {
             let d = &self.map[i];
-            if !matches!(d.mem_type,
-                MemoryType::BootServicesCode | MemoryType::BootServicesData)
-            {
+            if !matches!(
+                d.mem_type,
+                MemoryType::BootServicesCode | MemoryType::BootServicesData
+            ) {
                 continue;
             }
 
-            let phys  = d.physical_start;
+            let phys = d.physical_start;
             let pages = d.number_of_pages;
-            if pages == 0 { continue; }
+            if pages == 0 {
+                continue;
+            }
 
             let region_end = phys + pages * PAGE_SIZE;
 
             // Skip first 1 MiB (BIOS land, VGA, ROM shadows).
             let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
-            if start >= region_end { continue; }
+            if start >= region_end {
+                continue;
+            }
 
             // Apply PE-image exclusion, then cpu_excl hole-punch.
             // Build a list of safe sub-ranges after PE exclusion,
@@ -552,12 +560,7 @@ impl MemoryRegistry {
 
     /// Add range [start, end) to the buddy, skipping any pages in `holes`.
     /// `holes` must be sorted ascending.  Returns number of pages added.
-    unsafe fn add_range_punching_holes(
-        &mut self,
-        start: u64,
-        end: u64,
-        holes: &[u64],
-    ) -> u64 {
+    unsafe fn add_range_punching_holes(&mut self, start: u64, end: u64, holes: &[u64]) -> u64 {
         let mut added = 0u64;
         let mut cur = start;
 
@@ -697,6 +700,7 @@ impl MemoryRegistry {
             (*node).next = core::ptr::null_mut();
             (*node).prev = core::ptr::null_mut();
             self.free_at_order[order] = 1;
+            self.free_pages += 1u64 << order;
             return;
         }
         (*node).next = old_head;
@@ -706,6 +710,7 @@ impl MemoryRegistry {
         }
         self.free_lists[order] = node;
         self.free_at_order[order] += 1;
+        self.free_pages += 1u64 << order;
     }
 
     /// Remove the specific block at `addr` from free_lists[order].
@@ -731,6 +736,7 @@ impl MemoryRegistry {
                     // Sever the chain at this node.
                     self.free_lists[order] = core::ptr::null_mut();
                     self.free_at_order[order] = 0;
+                    // Don't adjust free_pages here — chain state is unknown.
                     return true;
                 }
                 if !prev.is_null() {
@@ -742,6 +748,7 @@ impl MemoryRegistry {
                     (*next).prev = prev;
                 }
                 self.free_at_order[order] -= 1;
+                self.free_pages = self.free_pages.saturating_sub(1u64 << order);
                 return true;
             }
             let next = (*cur).next;
@@ -778,6 +785,7 @@ impl MemoryRegistry {
             puts("\n");
             self.free_lists[order] = core::ptr::null_mut();
             self.free_at_order[order] = 0;
+            // Don't adjust free_pages — chain state is unknown.
             return None;
         }
         let next = (*head).next;
@@ -791,6 +799,8 @@ impl MemoryRegistry {
             puts("\n");
             self.free_lists[order] = core::ptr::null_mut();
             self.free_at_order[order] = 0;
+            // Deduct just this one block since we're returning it.
+            self.free_pages = self.free_pages.saturating_sub(1u64 << order);
             return Some(head as u64);
         }
         self.free_lists[order] = next;
@@ -798,6 +808,7 @@ impl MemoryRegistry {
             (*next).prev = core::ptr::null_mut();
         }
         self.free_at_order[order] -= 1;
+        self.free_pages = self.free_pages.saturating_sub(1u64 << order);
         Some(head as u64)
     }
 
@@ -817,6 +828,8 @@ impl MemoryRegistry {
         let addr = unsafe { self.list_pop(top).unwrap() };
 
         // Split from `top` down to `order`, pushing spare halves back.
+        // list_pop already decremented free_pages by 1<<top;
+        // list_push will increment it for each spare → net -1<<order. No manual adj.
         let cur = addr;
         let mut cur_k = top;
         while cur_k > order {
@@ -828,7 +841,6 @@ impl MemoryRegistry {
         }
 
         self.allocated_pages += 1u64 << order;
-        self.free_pages = self.free_pages.saturating_sub(1u64 << order);
         Ok(cur)
     }
 
@@ -847,12 +859,11 @@ impl MemoryRegistry {
                     && base_end <= limit.saturating_add(1)
                 {
                     // Carve `order` pages from this block.
+                    // list_remove decrements free_pages by 1<<k;
+                    // list_push increments it for each spare → net -1<<order.
                     unsafe {
                         self.list_remove(base, k);
                     }
-                    // Temporarily credit these pages as free so split
-                    // list_pushes don't over-subtract.
-                    self.free_pages += 1u64 << k;
 
                     let current = base;
                     let mut current_k = k;
@@ -862,13 +873,8 @@ impl MemoryRegistry {
                         unsafe {
                             self.list_push(spare, current_k);
                         }
-                        self.free_pages += 1u64 << current_k; // list_push doesn't track
                     }
 
-                    // Net: allocated = base block - all spares
-                    let spares_pages = (1u64 << k) - (1u64 << order);
-                    self.free_pages = self.free_pages.saturating_sub(1u64 << k);
-                    self.free_pages += spares_pages;
                     self.allocated_pages += 1u64 << order;
                     return Ok(current);
                 }
@@ -897,7 +903,7 @@ impl MemoryRegistry {
                 self.carve_block(base, order);
             }
             self.allocated_pages += 1u64 << order;
-            self.free_pages = self.free_pages.saturating_sub(1u64 << order);
+            // carve_block handles free_pages via list_remove/push.
             base += (1u64 << order) * PAGE_SIZE;
         }
         Ok(addr)
@@ -914,12 +920,14 @@ impl MemoryRegistry {
         }
 
         // Slow path: find the smallest enclosing free block and split down.
+        // list_remove decrements free_pages by 1<<k for the container;
+        // list_push increments for each spare → net -(1<<order) for the carved block.
+        // The caller (buddy_alloc_at / buddy_remove_page) does NOT need to
+        // adjust free_pages separately for carve_block's work.
         for k in (order + 1)..=MAX_ORDER {
             let k_bytes = (1u64 << k) * PAGE_SIZE;
             let container = addr & !(k_bytes - 1);
             if self.list_remove(container, k) {
-                self.free_pages += 1u64 << k; // will be consumed by list_pushes below
-
                 let mut current = container;
                 let mut current_k = k;
                 while current_k > order {
@@ -928,14 +936,11 @@ impl MemoryRegistry {
                     let spare = current + half_bytes;
                     if addr >= spare {
                         self.list_push(current, current_k);
-                        self.free_pages += 1u64 << current_k;
                         current = spare;
                     } else {
                         self.list_push(spare, current_k);
-                        self.free_pages += 1u64 << current_k;
                     }
                 }
-                self.free_pages = self.free_pages.saturating_sub(1u64 << k);
                 return;
             }
         }
@@ -949,6 +954,9 @@ impl MemoryRegistry {
         let mut current = addr;
         let mut current_k = order;
 
+        // list_remove decrements free_pages for each merged buddy;
+        // list_push at the end increments for the coalesced block.
+        // Net = +1<<order (only the newly freed block's pages).
         while current_k < MAX_ORDER {
             let buddy = Self::buddy_of(current, current_k);
             if self.list_remove(buddy, current_k) {
@@ -961,10 +969,6 @@ impl MemoryRegistry {
         }
 
         self.list_push(current, current_k);
-        self.free_pages += 1u64 << current_k;
-        // The coalesced free_pages from list_remove (buddy) calls were already
-        // subtracted by list_remove not tracking free_pages — we only track
-        // the final net addition here.
     }
 
     /// Decompose physical range [base, end) into natural buddy blocks and add
@@ -982,8 +986,8 @@ impl MemoryRegistry {
             let size_order = (usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize)
                 .min(MAX_ORDER);
             let order = align_order.min(size_order);
+            // list_push now tracks free_pages automatically.
             self.list_push(cur, order);
-            self.free_pages += 1u64 << order;
             cur += (1u64 << order) * PAGE_SIZE;
         }
     }
@@ -991,8 +995,8 @@ impl MemoryRegistry {
     /// Remove a single order-0 page at `addr` from the buddy free lists,
     /// carving it out of a larger block if needed.
     unsafe fn buddy_remove_page(&mut self, addr: u64) {
+        // carve_block now tracks free_pages via list_remove/push; no manual adj.
         self.carve_block(addr, 0);
-        self.free_pages = self.free_pages.saturating_sub(1);
     }
 
     // snapshot bookkeeping (E820 + type queries only)
@@ -1152,24 +1156,39 @@ impl KernelCr3Guard {
     pub unsafe fn enter() -> Self {
         let kcr3 = crate::process::scheduler::get_kernel_cr3();
         if kcr3 == 0 {
-            return Self { saved_cr3: 0, switched: false };
+            return Self {
+                saved_cr3: 0,
+                switched: false,
+            };
         }
         if !is_valid_cr3(kcr3) {
-            return Self { saved_cr3: 0, switched: false };
+            return Self {
+                saved_cr3: 0,
+                switched: false,
+            };
         }
         let saved: u64;
         core::arch::asm!("mov {}, cr3", out(reg) saved, options(nostack, nomem));
         if saved == kcr3 {
-            return Self { saved_cr3: saved, switched: false };
+            return Self {
+                saved_cr3: saved,
+                switched: false,
+            };
         }
         core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
-        Self { saved_cr3: saved, switched: true }
+        Self {
+            saved_cr3: saved,
+            switched: true,
+        }
     }
 
     #[inline]
     #[cfg(not(target_arch = "x86_64"))]
     pub unsafe fn enter() -> Self {
-        Self { saved_cr3: 0, switched: false }
+        Self {
+            saved_cr3: 0,
+            switched: false,
+        }
     }
 }
 

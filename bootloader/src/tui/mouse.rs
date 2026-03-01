@@ -17,7 +17,10 @@ pub struct Mouse {
 
 impl Mouse {
     pub fn new() -> Self {
-        let mut m = Self { buf: [0; 3], fill: 0 };
+        let mut m = Self {
+            buf: [0; 3],
+            fill: 0,
+        };
         unsafe { m.init() };
         m
     }
@@ -81,10 +84,14 @@ impl Mouse {
 
         // 9-bit sign extension: bit 4 of status = X sign, bit 5 = Y sign
         let mut dx = self.buf[1] as i16;
-        if status & 0x10 != 0 { dx |= !0xFF; }
+        if status & 0x10 != 0 {
+            dx |= !0xFF;
+        }
 
         let mut dy = self.buf[2] as i16;
-        if status & 0x20 != 0 { dy |= !0xFF; }
+        if status & 0x20 != 0 {
+            dy |= !0xFF;
+        }
 
         Some(MousePacket {
             dx,
@@ -118,7 +125,9 @@ unsafe fn wait_data(max_spins: u32) -> u8 {
 unsafe fn drain(max_spins: u32) {
     for _ in 0..max_spins {
         let r = asm_ps2_poll_any();
-        if r == 0 { break; }
+        if r == 0 {
+            break;
+        }
         core::hint::spin_loop();
     }
 }

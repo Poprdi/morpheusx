@@ -1,6 +1,6 @@
 use super::{Mesh, MeshVertex};
-use crate::math::vec::{Vec2, Vec3};
 use crate::math::trig::TrigTable;
+use crate::math::vec::{Vec2, Vec3};
 
 /// Generate a capped cylinder.
 ///

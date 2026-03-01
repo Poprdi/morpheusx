@@ -1,6 +1,6 @@
 use super::{Mesh, MeshVertex};
-use crate::math::vec::{Vec2, Vec3};
 use crate::math::trig::TrigTable;
+use crate::math::vec::{Vec2, Vec3};
 
 /// Generate a torus (donut shape).
 ///
@@ -8,7 +8,12 @@ use crate::math::trig::TrigTable;
 /// `minor_radius`: radius of the tube itself
 /// `major_segments`: number of segments around the major ring
 /// `minor_segments`: number of segments around the minor circle
-pub fn torus(major_radius: f32, minor_radius: f32, major_segments: usize, minor_segments: usize) -> Mesh {
+pub fn torus(
+    major_radius: f32,
+    minor_radius: f32,
+    major_segments: usize,
+    minor_segments: usize,
+) -> Mesh {
     let major_segments = major_segments.max(3);
     let minor_segments = minor_segments.max(3);
 

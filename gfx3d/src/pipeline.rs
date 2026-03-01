@@ -1,22 +1,22 @@
 use alloc::vec::Vec;
 
-use crate::math::vec::{Vec3, Vec4};
-use crate::math::mat4::Mat4;
-use crate::math::fixed::Fx16;
-use crate::math::fast;
-use crate::raster::triangle::Vertex;
-use crate::raster::clip::Clipper;
-use crate::raster::span::{Span, SpanGradients};
-use crate::raster::edge::rasterize_triangle_to_spans;
-use crate::texture::mipmap::{Texture, MipChain};
-use crate::texture::sample::{self, SampleMode};
-use crate::light::{LightEnv, FogMode};
-use crate::scene::mesh::Mesh;
-use crate::scene::frustum::{Frustum, CullResult};
-use crate::target::{RenderTarget, TargetPixelFormat};
 use crate::arena::Arena;
 use crate::camera::Camera;
+use crate::light::{FogMode, LightEnv};
+use crate::math::fast;
+use crate::math::fixed::Fx16;
+use crate::math::mat4::Mat4;
 use crate::math::trig::TrigTable;
+use crate::math::vec::{Vec3, Vec4};
+use crate::raster::clip::Clipper;
+use crate::raster::edge::rasterize_triangle_to_spans;
+use crate::raster::span::{Span, SpanGradients};
+use crate::raster::triangle::Vertex;
+use crate::scene::frustum::{CullResult, Frustum};
+use crate::scene::mesh::Mesh;
+use crate::target::{RenderTarget, TargetPixelFormat};
+use crate::texture::mipmap::{MipChain, Texture};
+use crate::texture::sample::{self, SampleMode};
 
 /// The rendering pipeline — Quake-class software renderer.
 ///
@@ -80,11 +80,19 @@ pub struct Material<'a> {
 
 impl<'a> Material<'a> {
     pub fn solid(r: f32, g: f32, b: f32) -> Self {
-        Self { texture: None, specular_power: 0.0, base_color: [r, g, b] }
+        Self {
+            texture: None,
+            specular_power: 0.0,
+            base_color: [r, g, b],
+        }
     }
 
     pub fn textured(mip: &'a MipChain) -> Self {
-        Self { texture: Some(mip), specular_power: 16.0, base_color: [1.0, 1.0, 1.0] }
+        Self {
+            texture: Some(mip),
+            specular_power: 16.0,
+            base_color: [1.0, 1.0, 1.0],
+        }
     }
 }
 
@@ -99,7 +107,9 @@ impl Pipeline {
             view: Mat4::IDENTITY,
             proj: Mat4::IDENTITY,
             view_proj: Mat4::IDENTITY,
-            frustum: Frustum { planes: [Vec4::ZERO; 6] },
+            frustum: Frustum {
+                planes: [Vec4::ZERO; 6],
+            },
             camera_pos: Vec3::ZERO,
             viewport_w,
             viewport_h,
@@ -125,7 +135,9 @@ impl Pipeline {
         }
     }
 
-    pub fn trig(&self) -> &TrigTable { &self.trig }
+    pub fn trig(&self) -> &TrigTable {
+        &self.trig
+    }
 
     pub fn begin_frame(&mut self) {
         self.arena.reset();
@@ -155,13 +167,31 @@ impl Pipeline {
         // ── 1. Frustum cull (bounding sphere in world space) ──
         let world_center = model.transform_point(mesh.bound_center).xyz();
         let scale_approx = {
-            let sx2 = model.cols[0][0] * model.cols[0][0] + model.cols[0][1] * model.cols[0][1] + model.cols[0][2] * model.cols[0][2];
-            let sy2 = model.cols[1][0] * model.cols[1][0] + model.cols[1][1] * model.cols[1][1] + model.cols[1][2] * model.cols[1][2];
-            let sz2 = model.cols[2][0] * model.cols[2][0] + model.cols[2][1] * model.cols[2][1] + model.cols[2][2] * model.cols[2][2];
+            let sx2 = model.cols[0][0] * model.cols[0][0]
+                + model.cols[0][1] * model.cols[0][1]
+                + model.cols[0][2] * model.cols[0][2];
+            let sy2 = model.cols[1][0] * model.cols[1][0]
+                + model.cols[1][1] * model.cols[1][1]
+                + model.cols[1][2] * model.cols[1][2];
+            let sz2 = model.cols[2][0] * model.cols[2][0]
+                + model.cols[2][1] * model.cols[2][1]
+                + model.cols[2][2] * model.cols[2][2];
 
-            let sx = if sx2 > 0.0 { sx2 * fast::inv_sqrt(sx2) } else { 0.0 };
-            let sy = if sy2 > 0.0 { sy2 * fast::inv_sqrt(sy2) } else { 0.0 };
-            let sz = if sz2 > 0.0 { sz2 * fast::inv_sqrt(sz2) } else { 0.0 };
+            let sx = if sx2 > 0.0 {
+                sx2 * fast::inv_sqrt(sx2)
+            } else {
+                0.0
+            };
+            let sy = if sy2 > 0.0 {
+                sy2 * fast::inv_sqrt(sy2)
+            } else {
+                0.0
+            };
+            let sz = if sz2 > 0.0 {
+                sz2 * fast::inv_sqrt(sz2)
+            } else {
+                0.0
+            };
 
             sx.max(sy).max(sz)
         };
@@ -194,8 +224,11 @@ impl Pipeline {
                 mv.color[2] as f32 / 255.0,
             ];
             lit_colors.push(lights.evaluate(
-                world_pos, world_normal, view_dir,
-                material.specular_power, vc,
+                world_pos,
+                world_normal,
+                view_dir,
+                material.specular_power,
+                vc,
             ));
         }
 
@@ -210,7 +243,9 @@ impl Pipeline {
             let i1 = idx[t * 3 + 1] as usize;
             let i2 = idx[t * 3 + 2] as usize;
 
-            if i0 >= vert_count || i1 >= vert_count || i2 >= vert_count { continue; }
+            if i0 >= vert_count || i1 >= vert_count || i2 >= vert_count {
+                continue;
+            }
 
             let clip_tri = [clip_verts[i0], clip_verts[i1], clip_verts[i2]];
 
@@ -245,7 +280,9 @@ impl Pipeline {
                 self.stats.triangles_culled += 1;
                 continue;
             }
-            if clipped.len() > 3 { self.stats.triangles_clipped += 1; }
+            if clipped.len() > 3 {
+                self.stats.triangles_clipped += 1;
+            }
 
             // Copy clipped verts out so we can release the clipper borrow
             let clipped_count = clipped.len();
@@ -270,11 +307,8 @@ impl Pipeline {
 
                 self.stats.triangles_drawn += 1;
 
-                let span_count = rasterize_triangle_to_spans(
-                    &[v0, v1, v2],
-                    &mut self.spans,
-                    self.viewport_h,
-                );
+                let span_count =
+                    rasterize_triangle_to_spans(&[v0, v1, v2], &mut self.spans, self.viewport_h);
 
                 let grads = SpanGradients::from_triangle(&v0, &v1, &v2);
 
@@ -285,8 +319,17 @@ impl Pipeline {
 
                 for s in 0..span_count {
                     self.stats.pixels_written += fill_span(
-                        &self.spans[s], &grads, material, &self.fog, &self.fog_color,
-                        self.sample_mode, format, stride, vp_w, color_buf, depth_buf,
+                        &self.spans[s],
+                        &grads,
+                        material,
+                        &self.fog,
+                        &self.fog_color,
+                        self.sample_mode,
+                        format,
+                        stride,
+                        vp_w,
+                        color_buf,
+                        depth_buf,
                     );
                 }
             }
@@ -309,7 +352,11 @@ impl Pipeline {
 fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     let clip_w = v.pos.w;
     let safe_w = if clip_w.abs() < 1e-6 {
-        if clip_w.is_sign_negative() { -1e-6 } else { 1e-6 }
+        if clip_w.is_sign_negative() {
+            -1e-6
+        } else {
+            1e-6
+        }
     } else {
         clip_w
     };
@@ -336,8 +383,7 @@ fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
 /// Signed area × 2 of screen-space triangle (for back-face culling).
 #[inline]
 fn screen_area_2x(v0: &Vertex, v1: &Vertex, v2: &Vertex) -> f32 {
-    (v1.pos.x - v0.pos.x) * (v2.pos.y - v0.pos.y) -
-    (v1.pos.y - v0.pos.y) * (v2.pos.x - v0.pos.x)
+    (v1.pos.x - v0.pos.x) * (v2.pos.y - v0.pos.y) - (v1.pos.y - v0.pos.y) * (v2.pos.x - v0.pos.x)
 }
 
 /// Trivial reject: true if all 3 vertices are outside the same clip plane.
@@ -347,12 +393,24 @@ fn screen_area_2x(v0: &Vertex, v1: &Vertex, v2: &Vertex) -> f32 {
 fn trivial_reject(tri: &[Vec4; 3]) -> bool {
     let outcode = |v: &Vec4| -> u8 {
         let mut c = 0u8;
-        if v.x < -v.w { c |= 1; }
-        if v.x >  v.w { c |= 2; }
-        if v.y < -v.w { c |= 4; }
-        if v.y >  v.w { c |= 8; }
-        if v.z <  0.0 { c |= 16; } // near (reversed-Z)
-        if v.z >  v.w { c |= 32; } // far
+        if v.x < -v.w {
+            c |= 1;
+        }
+        if v.x > v.w {
+            c |= 2;
+        }
+        if v.y < -v.w {
+            c |= 4;
+        }
+        if v.y > v.w {
+            c |= 8;
+        }
+        if v.z < 0.0 {
+            c |= 16;
+        } // near (reversed-Z)
+        if v.z > v.w {
+            c |= 32;
+        } // far
         c
     };
     let c0 = outcode(&tri[0]);
@@ -379,11 +437,35 @@ fn fill_span(
     let no_fog = matches!(fog, FogMode::None);
 
     if is_solid && no_fog {
-        fill_span_solid(span, grads, material, format, stride, vp_w, color_buf, depth_buf)
+        fill_span_solid(
+            span, grads, material, format, stride, vp_w, color_buf, depth_buf,
+        )
     } else if !is_solid && no_fog {
-        fill_span_textured(span, grads, material, sample_mode, format, stride, vp_w, color_buf, depth_buf)
+        fill_span_textured(
+            span,
+            grads,
+            material,
+            sample_mode,
+            format,
+            stride,
+            vp_w,
+            color_buf,
+            depth_buf,
+        )
     } else {
-        fill_span_full(span, grads, material, fog, fog_color, sample_mode, format, stride, vp_w, color_buf, depth_buf)
+        fill_span_full(
+            span,
+            grads,
+            material,
+            fog,
+            fog_color,
+            sample_mode,
+            format,
+            stride,
+            vp_w,
+            color_buf,
+            depth_buf,
+        )
     }
 }
 
@@ -393,7 +475,9 @@ fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
     match format {
         TargetPixelFormat::Bgrx => (b as u32) | ((g as u32) << 8) | ((r as u32) << 16),
         TargetPixelFormat::Rgbx => (r as u32) | ((g as u32) << 8) | ((b as u32) << 16),
-        TargetPixelFormat::InternalRgba => ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xFF,
+        TargetPixelFormat::InternalRgba => {
+            ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xFF
+        }
     }
 }
 
@@ -415,7 +499,9 @@ fn fill_span_solid(
 ) -> u32 {
     let x_start = span.x_left.ceil().max(0) as u32;
     let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
-    if x_start >= x_end { return 0; }
+    if x_start >= x_end {
+        return 0;
+    }
 
     let x_start_fx = Fx16::from_i32(x_start as i32);
     let prestep_fx = x_start_fx - span.x_left;
@@ -427,7 +513,11 @@ fn fill_span_solid(
 
     // Recover true color at x_start by dividing out inv_w once
     let inv_w_start = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
-    let w_start = if inv_w_start.0 != 0 { Fx16::ONE.div(inv_w_start) } else { Fx16::ONE };
+    let w_start = if inv_w_start.0 != 0 {
+        Fx16::ONE.div(inv_w_start)
+    } else {
+        Fx16::ONE
+    };
 
     let cr_start = (span.r_left + grads.r_step.mul(prestep_fx)).mul(w_start);
     let cg_start = (span.g_left + grads.g_step.mul(prestep_fx)).mul(w_start);
@@ -436,7 +526,11 @@ fn fill_span_solid(
     // Recover true color at x_end by dividing out inv_w once
     let span_len_fx = Fx16::from_i32((x_end - x_start) as i32);
     let inv_w_end = inv_w_start + grads.inv_w_step.mul(span_len_fx);
-    let w_end = if inv_w_end.0 != 0 { Fx16::ONE.div(inv_w_end) } else { Fx16::ONE };
+    let w_end = if inv_w_end.0 != 0 {
+        Fx16::ONE.div(inv_w_end)
+    } else {
+        Fx16::ONE
+    };
 
     let cr_end = (span.r_left + grads.r_step.mul(prestep_fx + span_len_fx)).mul(w_end);
     let cg_end = (span.g_left + grads.g_step.mul(prestep_fx + span_len_fx)).mul(w_end);
@@ -460,7 +554,9 @@ fn fill_span_solid(
 
     for x in x_start..x_end {
         let buf_idx = row_offset + x as usize;
-        if buf_idx >= buf_end { break; }
+        if buf_idx >= buf_end {
+            break;
+        }
 
         let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
         if depth >= depth_buf[buf_idx] {
@@ -508,7 +604,9 @@ fn fill_span_textured(
 ) -> u32 {
     let x_start = span.x_left.ceil().max(0) as u32;
     let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
-    if x_start >= x_end { return 0; }
+    if x_start >= x_end {
+        return 0;
+    }
 
     let mip = match material.texture {
         Some(m) => m,
@@ -537,7 +635,11 @@ fn fill_span_textured(
         let chunk_len = chunk_end - x;
 
         // Perspective divide at chunk start
-        let w0 = if inv_w.0 != 0 { Fx16::ONE.div(inv_w) } else { Fx16::ONE };
+        let w0 = if inv_w.0 != 0 {
+            Fx16::ONE.div(inv_w)
+        } else {
+            Fx16::ONE
+        };
         let u0 = tu_iw.mul(w0);
         let v0 = tv_iw.mul(w0);
         let r0 = cr_iw.mul(w0);
@@ -546,7 +648,11 @@ fn fill_span_textured(
 
         // Perspective divide at chunk end
         let inv_w_next = inv_w + Fx16(grads.inv_w_step.0 * chunk_len as i32);
-        let w1 = if inv_w_next.0 != 0 { Fx16::ONE.div(inv_w_next) } else { Fx16::ONE };
+        let w1 = if inv_w_next.0 != 0 {
+            Fx16::ONE.div(inv_w_next)
+        } else {
+            Fx16::ONE
+        };
         let tu_next = tu_iw + Fx16(grads.u_step.0 * chunk_len as i32);
         let tv_next = tv_iw + Fx16(grads.v_step.0 * chunk_len as i32);
         let u1 = tu_next.mul(w1);
@@ -574,7 +680,9 @@ fn fill_span_textured(
 
         for px in x..chunk_end {
             let buf_idx = row_offset + px as usize;
-            if buf_idx >= buf_end { break; }
+            if buf_idx >= buf_end {
+                break;
+            }
 
             let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
             if depth >= depth_buf[buf_idx] {
@@ -638,7 +746,9 @@ fn fill_span_full(
 ) -> u32 {
     let x_start = span.x_left.ceil().max(0) as u32;
     let x_end = span.x_right.ceil().min(vp_w as i32).max(0) as u32;
-    if x_start >= x_end { return 0; }
+    if x_start >= x_end {
+        return 0;
+    }
 
     let x_start_fx = Fx16::from_i32(x_start as i32);
     let prestep_fx = x_start_fx - span.x_left;
@@ -658,7 +768,9 @@ fn fill_span_full(
 
     for x in x_start..x_end {
         let buf_idx = row_offset + x as usize;
-        if buf_idx >= buf_end { break; }
+        if buf_idx >= buf_end {
+            break;
+        }
 
         let depth = if z.0 < 0 { 0 } else { z.0 as u32 };
         if depth >= depth_buf[buf_idx] {
@@ -695,7 +807,11 @@ fn fill_span_full(
             let (tr, tg, tb, _ta) = Texture::unpack(texel);
             (tr as f32 / 255.0, tg as f32 / 255.0, tb as f32 / 255.0)
         } else {
-            (material.base_color[0], material.base_color[1], material.base_color[2])
+            (
+                material.base_color[0],
+                material.base_color[1],
+                material.base_color[2],
+            )
         };
 
         let mut out_r = r_f.to_f32() * tex_r;

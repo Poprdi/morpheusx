@@ -1,5 +1,5 @@
-use crate::math::vec::Vec3;
 use crate::math::fast::saturate;
+use crate::math::vec::Vec3;
 use alloc::vec::Vec;
 
 /// Quake-style lighting: per-vertex Gouraud with Phong-like specular approximation.
@@ -23,8 +23,8 @@ pub struct DirLight {
 pub struct PointLight {
     pub position: Vec3,
     pub color: [f32; 3],
-    pub radius: f32,      // attenuation distance (light = 0 beyond radius)
-    pub inv_radius: f32,  // pre-computed 1/radius for fast attenuation
+    pub radius: f32,     // attenuation distance (light = 0 beyond radius)
+    pub inv_radius: f32, // pre-computed 1/radius for fast attenuation
 }
 
 impl PointLight {
@@ -76,7 +76,7 @@ impl LightEnv {
         &self,
         world_pos: Vec3,
         normal: Vec3,
-        view_dir: Vec3,     // normalized direction from vertex to camera
+        view_dir: Vec3,      // normalized direction from vertex to camera
         specular_power: f32, // 0 = no specular, 16-64 for glossy surfaces
         vertex_color: [f32; 3],
     ) -> [f32; 3] {
@@ -87,7 +87,9 @@ impl LightEnv {
         // Directional lights
         for dl in &self.dir_lights {
             let n_dot_l = normal.dot(dl.direction);
-            if n_dot_l <= 0.0 { continue; }
+            if n_dot_l <= 0.0 {
+                continue;
+            }
             let diff = saturate(n_dot_l);
 
             r += dl.color[0] * diff;
@@ -153,7 +155,9 @@ impl LightEnv {
             let light_dir = to_light * inv_dist;
 
             let n_dot_l = normal.dot(light_dir);
-            if n_dot_l <= 0.0 { continue; }
+            if n_dot_l <= 0.0 {
+                continue;
+            }
 
             // Smooth quadratic attenuation: 1 - (dist/radius)²
             // Carmack used this in Doom 3 — looks better than 1/d² (no harsh cutoff).
@@ -176,7 +180,11 @@ impl LightEnv {
         }
 
         // Modulate by vertex color (baked AO, tinting)
-        [r * vertex_color[0], g * vertex_color[1], b * vertex_color[2]]
+        [
+            r * vertex_color[0],
+            g * vertex_color[1],
+            b * vertex_color[2],
+        ]
     }
 }
 
@@ -188,8 +196,12 @@ impl LightEnv {
 /// For typical specular powers (8, 16, 32, 64), this is 3-6 multiplies
 /// vs. the Taylor series (10+ multiplies) or a log-exp pair.
 fn pow_approx(base: f32, exp: f32) -> f32 {
-    if base <= 0.0 { return 0.0; }
-    if exp <= 0.0 { return 1.0; }
+    if base <= 0.0 {
+        return 0.0;
+    }
+    if exp <= 0.0 {
+        return 1.0;
+    }
 
     // Use 2^(exp * log2(base)) via fast_log2 and fast_exp2
     crate::math::fast::fast_exp2(exp * crate::math::fast::fast_log2(base))

@@ -1,5 +1,5 @@
-use alloc::vec::Vec;
 use crate::math::vec::Vec3;
+use alloc::vec::Vec;
 
 /// Binary Space Partition tree for indoor scene rendering.
 ///
@@ -42,8 +42,8 @@ pub struct BspNode {
 /// Child reference: either another node or a leaf (sector).
 #[derive(Debug, Clone, Copy)]
 pub enum BspChild {
-    Node(u32),    // index into BspTree::nodes
-    Leaf(u32),    // index into BspTree::leaves
+    Node(u32), // index into BspTree::nodes
+    Leaf(u32), // index into BspTree::leaves
     Empty,
 }
 
@@ -81,7 +81,9 @@ impl BspTree {
     /// O(log n) traversal, cache-friendly because nodes are small and
     /// accessed in a predictable pattern.
     pub fn find_leaf(&self, point: Vec3) -> Option<u32> {
-        if self.nodes.is_empty() { return None; }
+        if self.nodes.is_empty() {
+            return None;
+        }
         let mut child = BspChild::Node(0);
 
         loop {
@@ -96,7 +98,11 @@ impl BspTree {
                         1 => point.y,
                         _ => point.z,
                     };
-                    child = if coord >= node.split { node.front } else { node.back };
+                    child = if coord >= node.split {
+                        node.front
+                    } else {
+                        node.back
+                    };
                 }
                 BspChild::Leaf(idx) => return Some(idx),
                 BspChild::Empty => return None,
@@ -116,7 +122,9 @@ impl BspTree {
     where
         F: FnMut(u32) -> bool,
     {
-        if self.nodes.is_empty() { return; }
+        if self.nodes.is_empty() {
+            return;
+        }
         self.traverse_recursive(BspChild::Node(0), camera_pos, &mut callback);
     }
 
@@ -144,7 +152,9 @@ impl BspTree {
                 self.traverse_recursive(first, camera_pos, callback);
                 self.traverse_recursive(second, camera_pos, callback);
             }
-            BspChild::Leaf(idx) => { callback(idx); }
+            BspChild::Leaf(idx) => {
+                callback(idx);
+            }
             BspChild::Empty => {}
         }
     }
@@ -154,14 +164,23 @@ impl BspTree {
     /// Traces a ray from `origin` in `direction`, returns the parametric t
     /// of the first solid surface hit, and the leaf it hit in.
     pub fn trace_ray(&self, origin: Vec3, direction: Vec3, max_t: f32) -> Option<(f32, u32)> {
-        if self.nodes.is_empty() { return None; }
+        if self.nodes.is_empty() {
+            return None;
+        }
         self.trace_recursive(BspChild::Node(0), origin, direction, 0.0, max_t)
     }
 
     fn trace_recursive(
-        &self, child: BspChild, origin: Vec3, dir: Vec3, t_min: f32, t_max: f32,
+        &self,
+        child: BspChild,
+        origin: Vec3,
+        dir: Vec3,
+        t_min: f32,
+        t_max: f32,
     ) -> Option<(f32, u32)> {
-        if t_min > t_max { return None; }
+        if t_min > t_max {
+            return None;
+        }
 
         match child {
             BspChild::Node(idx) => {
@@ -180,7 +199,11 @@ impl BspTree {
 
                 if d_coord.abs() < 1e-10 {
                     // Ray parallel to split plane
-                    let child = if o_coord >= node.split { node.front } else { node.back };
+                    let child = if o_coord >= node.split {
+                        node.front
+                    } else {
+                        node.back
+                    };
                     return self.trace_recursive(child, origin, dir, t_min, t_max);
                 }
 
@@ -198,7 +221,9 @@ impl BspTree {
                     self.trace_recursive(near, origin, dir, t_min, t_max)
                 } else {
                     let hit = self.trace_recursive(near, origin, dir, t_min, t_split);
-                    if hit.is_some() { return hit; }
+                    if hit.is_some() {
+                        return hit;
+                    }
                     self.trace_recursive(far, origin, dir, t_split, t_max)
                 }
             }

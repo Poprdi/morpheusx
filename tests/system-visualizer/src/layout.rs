@@ -1,12 +1,16 @@
-use morpheus_gfx3d::math::vec::Vec3;
 use crate::state::SystemState;
+use morpheus_gfx3d::math::vec::Vec3;
 
 const MAX_PROCS: usize = 64;
 const REPULSION_ITERS: usize = 3;
 const MIN_SEP: f32 = 1.8;
 
 // Kernel (PID 0) is positioned at the galaxy location for thematic unity
-const KERNEL_GALAXY_POS: Vec3 = Vec3 { x: 0.0, y: -15.0, z: -35.0 };
+const KERNEL_GALAXY_POS: Vec3 = Vec3 {
+    x: 0.0,
+    y: -15.0,
+    z: -35.0,
+};
 
 pub struct ProcessLayout {
     pub positions: [Vec3; MAX_PROCS],
@@ -29,7 +33,9 @@ impl ProcessLayout {
         let n = state.proc_count;
         self.count = n;
 
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
 
         let children = build_child_map(state);
         let root = find_root(state);
@@ -82,7 +88,11 @@ impl ProcessLayout {
 
         for i in 0..n {
             // Kernel lives at the galaxy position; exclude from ring layout counts
-            if let Some(p) = state.process(i) { if p.pid == 0 { continue; } }
+            if let Some(p) = state.process(i) {
+                if p.pid == 0 {
+                    continue;
+                }
+            }
             let d = (depth[i] as usize).min(15);
             level_idx[i] = level_count[d];
             level_count[d] += 1;
@@ -95,7 +105,7 @@ impl ProcessLayout {
                 Some(p) => p,
                 None => continue,
             };
-            
+
             // Kernel (PID 0) is positioned at the galaxy center
             if proc.pid == 0 {
                 self.positions[i] = KERNEL_GALAXY_POS;
@@ -103,12 +113,18 @@ impl ProcessLayout {
                 self.radii[i] = 1.2;
                 continue;
             }
-            
+
             let d = depth[i] as usize;
             let siblings = level_count[d.min(15)].max(1) as f32;
             let min_ring = siblings * MIN_SEP / two_pi;
             let base_ring = 3.5 + (d as f32 - 1.0) * 4.0;
-            let ring_radius = if d == 0 { 0.0 } else if base_ring < min_ring { min_ring } else { base_ring };
+            let ring_radius = if d == 0 {
+                0.0
+            } else if base_ring < min_ring {
+                min_ring
+            } else {
+                base_ring
+            };
             let idx_at_depth = level_idx[i] as f32;
 
             let angle = if siblings > 0.0 {
@@ -124,8 +140,8 @@ impl ProcessLayout {
             // form a loose helix rather than a flat disk.
             // Alternate the ring radius slightly so adjacent siblings aren't
             // all at the exact same distance from center.
-            let depth_y      = -(d as f32) * 2.5;
-            let helix_y      = fast_sin(angle * 1.7) * 1.2;
+            let depth_y = -(d as f32) * 2.5;
+            let helix_y = fast_sin(angle * 1.7) * 1.2;
             let radius_nudge = if (level_idx[i] & 1) == 0 { 0.0 } else { 0.5 };
             let x = (ring_radius + radius_nudge) * fast_sin(angle);
             let z = (ring_radius + radius_nudge) * fast_cos(angle);
@@ -140,7 +156,11 @@ impl ProcessLayout {
             for i in 0..n {
                 // Skip kernel entry at galaxy position — its radius would
                 // create phantom repulsion far from the process cloud.
-                if let Some(p) = state.process(i) { if p.pid == 0 { continue; } }
+                if let Some(p) = state.process(i) {
+                    if p.pid == 0 {
+                        continue;
+                    }
+                }
                 for j in (i + 1)..n {
                     let a = self.positions[i];
                     let b = self.positions[j];
@@ -170,7 +190,11 @@ impl ProcessLayout {
     }
 
     pub fn smoothed(&self, idx: usize) -> Vec3 {
-        if idx < self.count { self.smooth[idx] } else { Vec3::ZERO }
+        if idx < self.count {
+            self.smooth[idx]
+        } else {
+            Vec3::ZERO
+        }
     }
 }
 
@@ -201,18 +225,34 @@ fn build_child_map(state: &SystemState) -> ChildMap {
 
 fn find_root(state: &SystemState) -> Option<usize> {
     let procs = state.processes();
-    procs.iter().position(|p| p.pid == 1)
-        .or_else(|| {
-            if procs.is_empty() { None }
-            else { Some(procs.iter().enumerate().min_by_key(|(_, p)| p.pid).map(|(i, _)| i).unwrap_or(0)) }
-        })
+    procs.iter().position(|p| p.pid == 1).or_else(|| {
+        if procs.is_empty() {
+            None
+        } else {
+            Some(
+                procs
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, p)| p.pid)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0),
+            )
+        }
+    })
 }
 
 fn fast_sin(x: f32) -> f32 {
     let pi = core::f32::consts::PI;
     let mut t = x % (2.0 * pi);
-    if t < 0.0 { t += 2.0 * pi; }
-    let sign = if t > pi { t -= pi; -1.0 } else { 1.0 };
+    if t < 0.0 {
+        t += 2.0 * pi;
+    }
+    let sign = if t > pi {
+        t -= pi;
+        -1.0
+    } else {
+        1.0
+    };
     let y = t * (pi - t);
     sign * (16.0 * y) / (5.0 * pi * pi - 4.0 * y)
 }
@@ -222,7 +262,9 @@ fn fast_cos(x: f32) -> f32 {
 }
 
 fn fast_sqrt(x: f32) -> f32 {
-    if x <= 0.0 { return 0.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
     let i = f32::to_bits(x);
     let i = (i >> 1) + 0x1FC00000;
     let y = f32::from_bits(i);
@@ -246,14 +288,26 @@ fn fast_ln(x: f32) -> f32 {
 }
 
 fn fast_exp(x: f32) -> f32 {
-    if x > 20.0 { return f32::MAX; }
-    if x < -20.0 { return 0.0; }
+    if x > 20.0 {
+        return f32::MAX;
+    }
+    if x < -20.0 {
+        return 0.0;
+    }
     let t = 1.0 + x / 256.0;
     let mut r = t;
-    for _ in 0..8 { r = r * r; }
+    for _ in 0..8 {
+        r = r * r;
+    }
     r
 }
 
 fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
-    if v < lo { lo } else if v > hi { hi } else { v }
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
