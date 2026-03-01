@@ -7,6 +7,10 @@ readonly PROJECT_ROOT="${SCRIPT_DIR}"
 readonly TESTING_DIR="${PROJECT_ROOT}/testing"
 readonly ESP_DIR="${TESTING_DIR}/esp"
 readonly VERSION="2.0.0"
+# Pinned nightly for user-space (x86_64-morpheus JSON target).
+# Must match the nightly in rust-toolchain.toml comments.
+# To update: change both here and in rust-toolchain.toml, then rebuild.
+readonly PINNED_NIGHTLY="nightly-2026-02-22"
 
 readonly C_RED='\033[0;31m'
 readonly C_GREEN='\033[0;32m'
@@ -176,19 +180,34 @@ do_install_packages() {
 
 do_install_rust() {
     log_step "Rust Toolchain"
-    
+
     if ! has_cmd rustc; then
         log_info "Installing Rust..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
         source "$HOME/.cargo/env" 2>/dev/null || export PATH="$HOME/.cargo/bin:$PATH"
     fi
-    
+
+    # rust-toolchain.toml pins the stable version — rustup picks it up automatically.
+    # Explicitly install targets for the pinned stable so fresh clones work.
     if ! rustup target list 2>/dev/null | grep -q "x86_64-unknown-uefi (installed)"; then
         log_info "Adding UEFI target..."
         rustup target add x86_64-unknown-uefi
     fi
-    
-    log_success "Rust: $(rustc --version | cut -d' ' -f2)"
+
+    # Install the pinned nightly for user-space (x86_64-morpheus JSON target).
+    if ! rustup toolchain list 2>/dev/null | grep -q "^${PINNED_NIGHTLY}"; then
+        log_info "Installing pinned nightly (${PINNED_NIGHTLY})..."
+        rustup toolchain install "${PINNED_NIGHTLY}" --component rust-src
+    fi
+
+    # The pinned nightly also needs rust-src for build-std.
+    if ! rustup component list --toolchain "${PINNED_NIGHTLY}" 2>/dev/null | grep -q 'rust-src (installed)'; then
+        log_info "Adding rust-src to ${PINNED_NIGHTLY}..."
+        rustup component add rust-src --toolchain "${PINNED_NIGHTLY}"
+    fi
+
+    log_success "Stable: $(rustc --version | cut -d' ' -f2)"
+    log_success "Nightly: $(rustup run "${PINNED_NIGHTLY}" rustc --version 2>/dev/null | cut -d' ' -f2 || echo 'not installed')"
 }
 
 do_configure_ovmf() {
@@ -259,10 +278,10 @@ USER_APPS=(
 do_build_user_apps() {
     log_step "Building User-Space Apps"
 
-    # Verify nightly is available (required for build-std + custom JSON target)
-    if ! rustup toolchain list 2>/dev/null | grep -q '^nightly'; then
-        log_warn "Nightly Rust not found — skipping user app build"
-        log_warn "Install with: rustup toolchain add nightly"
+    # Verify the pinned nightly is available (required for build-std + custom JSON target).
+    if ! rustup toolchain list 2>/dev/null | grep -q "^${PINNED_NIGHTLY}"; then
+        log_warn "Pinned nightly (${PINNED_NIGHTLY}) not found — skipping user app build"
+        log_warn "Install with: rustup toolchain install ${PINNED_NIGHTLY} --component rust-src"
         return 0
     fi
 
@@ -276,8 +295,8 @@ do_build_user_apps() {
             continue
         fi
 
-        log_info "Building ${pkg} (x86_64-morpheus, nightly)..."
-        cargo +nightly build --release \
+        log_info "Building ${pkg} (x86_64-morpheus, ${PINNED_NIGHTLY})..."
+        cargo +"${PINNED_NIGHTLY}" build --release \
             --target x86_64-morpheus.json \
             -p "${pkg}" \
             -Z build-std=core,alloc \
