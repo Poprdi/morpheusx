@@ -315,12 +315,13 @@ do_build_user_apps() {
 do_inject_apps() {
     log_step "Deploying Apps to HelixFS"
 
-    local data_disk="${TESTING_DIR}/helix-data.img"
-
-    # Create a fresh sparse data disk if it doesn't exist yet
-    if [[ ! -f "$data_disk" ]]; then
-        log_info "Creating HelixFS data disk (256MB sparse)..."
-        dd if=/dev/zero of="$data_disk" bs=1 count=0 seek=256M status=none 2>/dev/null || true
+    local disk_img="${TESTING_DIR}/test-disk-50g.img"
+    
+    # If disk doesn't exist, create it first
+    if [[ ! -f "$disk_img" ]]; then
+        log_warn "Test disk not found, creating it..."
+        FORCE_MODE=true
+        do_create_disk
     fi
 
     # Build morpheus-cli on the host (fast, native target)
@@ -338,14 +339,14 @@ do_inject_apps() {
             continue
         fi
 
-        log_info "Injecting ${pkg} → ${dest} ..."
-        cargo run --release -p morpheus-cli -- inject "$data_disk" "$elf" --dest "$dest" 2>&1 \
+        log_info "Injecting ${pkg} → ${dest} (main disk HelixFS)..."
+        cargo run --release -p morpheus-cli -- inject "$disk_img" "$elf" --dest "$dest" 2>&1 \
             || { log_error "Inject failed for ${pkg}"; return 1; }
         injected=$((injected + 1))
     done
 
     [[ $injected -gt 0 ]] \
-        && log_success "${injected} app(s) deployed — boot MorpheusX and run 'exec <name>'" \
+        && log_success "${injected} app(s) deployed to HelixFS — boot MorpheusX and run 'exec <name>'" \
         || log_warn "No apps injected"
 }
 
@@ -363,20 +364,20 @@ do_create_disk() {
     rm -f "$disk_img"
     qemu-img create -f raw "$disk_img" 50G >/dev/null
     
-    log_info "Creating GPT partition table with ESP only..."
+    log_info "Creating GPT partition table with ESP + HelixFS..."
     parted -s "$disk_img" mklabel gpt
     parted -s "$disk_img" mkpart ESP fat32 1MiB 4GiB
     parted -s "$disk_img" set 1 esp on
-    # Leave remaining space FREE for bootloader to create ISO partitions dynamically
+    parted -s "$disk_img" mkpart HelixFS ext4 4GiB 50GiB
     
-    log_info "Setting up ESP partition..."
+    log_info "Setting up ESP and HelixFS partitions..."
     local loop_dev
     loop_dev=$(sudo losetup -fP --show "$disk_img")
     
     trap "sudo losetup -d '$loop_dev' 2>/dev/null || true" EXIT
     
     sudo mkfs.vfat -F 32 -n "ESP" "${loop_dev}p1" >/dev/null
-    # No second partition - bootloader creates ISO partitions on-demand
+    sudo mkfs.ext4 -F -L "helix" "${loop_dev}p2" >/dev/null
     
     local mnt
     mnt=$(mktemp -d)
@@ -386,7 +387,7 @@ do_create_disk() {
     
     [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
     
-    log_info "Disk ready - use network downloader in bootloader TUI to fetch distributions"
+    log_info "Disk ready — HelixFS partition available for app injection"
     
     sudo umount "$mnt"
     rmdir "$mnt"
@@ -418,13 +419,6 @@ do_launch_qemu() {
     local disk="${TESTING_DIR}/test-disk-50g.img"
     [[ -f "$disk" ]] || disk="${ESP_DIR}"
     
-    # Create HelixFS data disk if it doesn't exist (256MB sparse — grows on write)
-    local data_disk="${TESTING_DIR}/helix-data.img"
-    if [[ ! -f "$data_disk" ]]; then
-        log_info "Creating HelixFS data disk (256MB sparse)..."
-        dd if=/dev/zero of="$data_disk" bs=1 count=0 seek=256M status=none 2>/dev/null || true
-    fi
-    
     log_info "Starting MorpheusX..."
     log_info "Press Ctrl+A X to exit QEMU"
     printf "\n"
@@ -438,8 +432,6 @@ do_launch_qemu() {
             -object iothread,id=iothread0 \
             -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
-            -drive file="$data_disk",format=raw,if=none,id=disk1,cache=writeback \
-            -device virtio-blk-pci,drive=disk1,disable-legacy=on \
             -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
@@ -469,8 +461,6 @@ do_launch_qemu() {
             -object iothread,id=iothread0 \
             -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
-            -drive file="$data_disk",format=raw,if=none,id=disk1,cache=writeback \
-            -device virtio-blk-pci,drive=disk1,disable-legacy=on \
             -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
@@ -722,6 +712,19 @@ cmd_thinkpad() {
     log_info "ThinkPad T450s Hardware Test Mode"
     log_info "Testing unified device layer with real hardware emulation"
     printf "\n"
+    
+    # Ensure test disk exists
+    if ! check_disk_50g; then
+        log_info "Creating test disk for ThinkPad mode..."
+        FORCE_MODE=true
+        do_create_disk
+    fi
+    
+    # Build and deploy user apps
+    log_info "Building and deploying user-space apps (AHCI hardware)..."
+    FORCE_MODE=true
+    do_build_user_apps
+    do_inject_apps
     
     do_launch_thinkpad
 }
