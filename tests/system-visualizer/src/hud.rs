@@ -23,13 +23,12 @@ impl Framebuf {
         let y1 = y.min(self.h);
         let x2 = x.saturating_add(w).min(self.w);
         let y2 = y.saturating_add(h).min(self.h);
+        let cols = (x2 - x1) as usize;
+        if cols == 0 { return; }
         for py in y1..y2 {
-            let row = py as usize * self.stride as usize;
-            for px in x1..x2 {
-                unsafe {
-                    *self.ptr.add(row + px as usize) = color;
-                }
-            }
+            let off = py as usize * self.stride as usize + x1 as usize;
+            let row = unsafe { core::slice::from_raw_parts_mut(self.ptr.add(off), cols) };
+            row.fill(color);
         }
     }
 
@@ -471,9 +470,14 @@ pub fn draw_status_flags(fb: &Framebuf, paused: bool, slow_motion: bool, pinned:
 }
 
 fn hline(fb: &Framebuf, x: u32, y: u32, w: u32) {
-    for dx in 0..w {
-        fb.put(x + dx, y, COL_BORDER);
-    }
+    if y >= fb.h { return; }
+    let x1 = x.min(fb.w) as usize;
+    let x2 = x.saturating_add(w).min(fb.w) as usize;
+    let cols = x2 - x1;
+    if cols == 0 { return; }
+    let off = y as usize * fb.stride as usize + x1;
+    let row = unsafe { core::slice::from_raw_parts_mut(fb.ptr.add(off), cols) };
+    row.fill(COL_BORDER);
 }
 
 fn state_color(state: u32) -> u32 {

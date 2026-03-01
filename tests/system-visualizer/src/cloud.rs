@@ -35,23 +35,9 @@ pub fn render_cloud<T: RenderTarget>(
     layout: &ProcessLayout,
     selected: Option<usize>,
     time_ns: u64,
+    cam_pos: Vec3,
 ) {
     let n = layout.count.min(state.proc_count);
-
-    // Parent-child connectors
-    for i in 0..n {
-        let proc = match state.process(i) {
-            Some(p) => p,
-            None => continue,
-        };
-        if let Some(pi) = state.find_index_by_pid(proc.ppid) {
-            if pi != i && pi < n {
-                let a = layout.smoothed(pi);
-                let b = layout.smoothed(i);
-                //draw_connector(pipeline, target, lights, assets, a, b);
-            }
-        }
-    }
 
     // Process spheres
     for i in 0..n {
@@ -68,11 +54,13 @@ pub fn render_cloud<T: RenderTarget>(
         let model = Mat4::translation(pos.x, pos.y, pos.z).mul(&scale);
         let material = Material::solid(r, g, b);
 
-        let mesh = if is_sel || radius > 0.5 {
-            &assets.sphere_hi
-        } else {
-            &assets.sphere_lo
-        };
+        let dx = pos.x - cam_pos.x;
+        let dy = pos.y - cam_pos.y;
+        let dz = pos.z - cam_pos.z;
+        let dist_sq = dx * dx + dy * dy + dz * dz;
+        let screen_size = radius / (dist_sq.max(1.0) * fast_inv_sqrt(dist_sq.max(1.0)));
+
+        let mesh = if is_sel { &assets.sphere_hi } else if screen_size > 0.08 { &assets.sphere_hi } else { &assets.sphere_lo };
         pipeline.draw_mesh(mesh, &model, &material, lights, target);
 
         if is_sel {
