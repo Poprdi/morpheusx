@@ -164,6 +164,10 @@ impl NamespaceIndex {
     }
 
     /// Insert or update an entry.
+    ///
+    /// After the update, tombstones are compacted if they account for more
+    /// than half the index.  This bounds memory growth from deleted entries
+    /// without triggering an O(n) compact on every single write.
     pub fn upsert(&mut self, entry: IndexEntry) {
         let path_b = path_bytes(&entry.path);
         match self.find_pos(entry.key, path_b) {
@@ -175,6 +179,14 @@ impl NamespaceIndex {
                 // Insert at sorted position.
                 self.entries.insert(idx, entry);
             }
+        }
+
+        // Compact tombstones when they outnumber live entries and the index
+        // is large enough to make the memcpy worthwhile.
+        let total = self.entries.len();
+        let live = self.live_count();
+        if total >= 512 && total > live.saturating_mul(2) {
+            self.compact();
         }
     }
 

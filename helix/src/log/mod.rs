@@ -93,6 +93,21 @@ impl LogEngine {
         self.tail_segment
     }
 
+    /// Log utilization as a percentage (0–100).
+    ///
+    /// Counts live segments (tail → head inclusive) divided by total segments.
+    /// Returns 100 when the log is full.  Call this from mount / sync paths
+    /// and warn the user when it approaches 80 — GC will be needed before 100.
+    pub fn log_utilization_pct(&self) -> u32 {
+        let n = self.segment_count.max(1);
+        let used = if self.head_segment >= self.tail_segment {
+            self.head_segment - self.tail_segment + 1
+        } else {
+            n - self.tail_segment + self.head_segment + 1
+        };
+        ((used * 100) / n) as u32
+    }
+
     /// Space remaining in the current segment.
     fn segment_remaining(&self) -> u32 {
         LOG_SEGMENT_BYTES as u32 - self.head_offset
@@ -202,16 +217,15 @@ impl LogEngine {
         }
 
         // Compute CRC over header + payload.
+        // Zero-allocation CRC: crc32c_two runs over header+payload without
+        // allocating a Vec — header.record_crc32c is 0 at this point.
         let hdr_bytes = unsafe {
             core::slice::from_raw_parts(
                 &header as *const _ as *const u8,
                 core::mem::size_of::<LogRecordHeader>(),
             )
         };
-        let mut crc_data = Vec::with_capacity(hdr_bytes.len() + payload.len());
-        crc_data.extend_from_slice(hdr_bytes);
-        crc_data.extend_from_slice(payload);
-        header.record_crc32c = crc32c(&crc_data);
+        header.record_crc32c = crc32c_two(hdr_bytes, payload);
 
         // Write header to buffer.
         let off = self.head_offset as usize;
@@ -291,16 +305,24 @@ impl LogEngine {
             .read_blocks(lba, &mut buf)
             .map_err(|_| HelixError::IoReadFailed)?;
 
-        // Parse header.
+        // Parse header — handle the rare case where it straddles a block boundary.
         let hdr_size = core::mem::size_of::<LogRecordHeader>();
-        if block_off + hdr_size > BLOCK_SIZE as usize {
-            // Header spans blocks — simplified: return error for now.
-            // A production impl would read across block boundaries.
-            return Err(HelixError::LogSegmentCorrupt);
-        }
-
-        let header: LogRecordHeader = unsafe {
-            core::ptr::read_unaligned(buf[block_off..].as_ptr() as *const LogRecordHeader)
+        let header: LogRecordHeader = if block_off + hdr_size <= BLOCK_SIZE as usize {
+            // Common path: header fully within one block.
+            unsafe { core::ptr::read_unaligned(buf[block_off..].as_ptr() as *const LogRecordHeader) }
+        } else {
+            // Header straddles the block boundary: assemble into a temporary
+            // 64-byte buffer from the tail of block N and head of block N+1.
+            let first_part = BLOCK_SIZE as usize - block_off;
+            let mut tmp = [0u8; 64]; // size_of::<LogRecordHeader>() == 64
+            tmp[..first_part].copy_from_slice(&buf[block_off..]);
+            let mut buf2 = vec![0u8; BLOCK_SIZE as usize];
+            let lba2 = self.abs_lba(seg_block + block_idx + 1);
+            block_io
+                .read_blocks(lba2, &mut buf2)
+                .map_err(|_| HelixError::IoReadFailed)?;
+            tmp[first_part..hdr_size].copy_from_slice(&buf2[..hdr_size - first_part]);
+            unsafe { core::ptr::read_unaligned(tmp.as_ptr() as *const LogRecordHeader) }
         };
 
         // Validate op code.
