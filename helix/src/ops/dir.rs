@@ -136,21 +136,34 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
 /// Unlink (delete) a file or empty directory.
 ///
 /// For directories, the directory must be empty.
+/// For non-inline files, the data blocks are freed in the bitmap immediately.
+/// For fragmented files only the first extent is freed here; full
+/// extent-tree reclamation is deferred to the GC pass (the log still
+/// holds the complete extent list).
 pub fn unlink(
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
+    bitmap: &mut crate::bitmap::BlockBitmap,
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
     // Use flexible lookup: paths may or may not have trailing '/'.
-    let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
-
-    if entry.flags & entry_flags::IS_DELETED != 0 {
-        return Err(HelixError::NotFound);
-    }
+    // Capture extent info before any mutable borrow of `index`.
+    let (extent_root, size, is_inline, is_dir) = {
+        let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
+        if entry.flags & entry_flags::IS_DELETED != 0 {
+            return Err(HelixError::NotFound);
+        }
+        (
+            entry.extent_root,
+            entry.size,
+            entry.flags & entry_flags::IS_INLINE != 0,
+            entry.flags & entry_flags::IS_DIR != 0,
+        )
+    };
 
     // If this is a directory, verify it's empty.
-    if entry.flags & entry_flags::IS_DIR != 0 {
+    if is_dir {
         let normalized = if path.ends_with('/') {
             String::from(path)
         } else {
@@ -182,6 +195,15 @@ pub fn unlink(
     payload.extend_from_slice(del_bytes);
     let lsn = log.append(LogOp::Delete, hash, &payload, timestamp_ns)?;
     index.mark_deleted(&actual_path)?;
+
+    // Free data blocks.  Skip inline data (stored in the index entry, no
+    // disk allocation) and directories (never allocate data blocks).
+    // Note: for fragmented files `extent_root` holds only the first extent;
+    // the bitmap for additional extents is reclaimed lazily by the GC pass.
+    if !is_inline && !is_dir && extent_root != crate::types::BLOCK_NULL {
+        let blocks = size.div_ceil(crate::types::BLOCK_SIZE as u64);
+        let _ = bitmap.free_range(extent_root, blocks);
+    }
 
     Ok(lsn)
 }

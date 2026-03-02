@@ -104,8 +104,10 @@ pub fn write_file<B: BlockIo>(
     };
 
     // Write data blocks to disk.
+    // On any I/O failure roll back the bitmap allocation to avoid orphaned blocks.
     let scale = BLOCK_SIZE as u64 / device_block_size as u64;
     let mut write_offset = 0usize;
+    let mut io_failed = false;
     for i in 0..blocks_needed {
         let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
         let chunk = (data.len() - write_offset).min(BLOCK_SIZE as usize);
@@ -114,9 +116,14 @@ pub fn write_file<B: BlockIo>(
 
         let abs_block = data_start_block + data_start_relative + i;
         let lba = Lba(partition_lba_start + abs_block * scale);
-        block_io
-            .write_blocks(lba, &block_buf)
-            .map_err(|_| HelixError::IoWriteFailed)?;
+        if block_io.write_blocks(lba, &block_buf).is_err() {
+            io_failed = true;
+            break;
+        }
+    }
+    if io_failed {
+        let _ = bitmap.free_range(data_start_relative, blocks_needed);
+        return Err(HelixError::IoWriteFailed);
     }
 
     // Encode extent as payload: [logical_block: u64, physical_block: u64, count: u32, _pad: u32]
@@ -136,7 +143,14 @@ pub fn write_file<B: BlockIo>(
     full_payload.push(0xFF); // IS_EXTENT marker
     full_payload.extend_from_slice(&file_size_bytes);
     full_payload.extend_from_slice(&extent_payload);
-    let lsn = log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns)?;
+    let lsn = match log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns) {
+        Ok(l) => l,
+        Err(e) => {
+            // Log full or I/O error — roll back allocated blocks to avoid leak.
+            let _ = bitmap.free_range(data_start_relative, blocks_needed);
+            return Err(e);
+        }
+    };
 
     // Update index.
     let is_update = index.lookup(path).is_some();
@@ -199,9 +213,11 @@ fn write_file_fragmented<B: BlockIo>(
     }
 
     // Write data blocks to disk at their allocated positions.
+    // On any I/O failure roll back ALL allocated extents to avoid orphaned blocks.
     let scale = BLOCK_SIZE as u64 / device_block_size as u64;
     let mut write_offset = 0usize;
-    for (_, physical, count) in &extents {
+    let mut io_failed = false;
+    'write_loop: for (_, physical, count) in &extents {
         for j in 0..*count as u64 {
             let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
             let chunk = (data.len() - write_offset).min(BLOCK_SIZE as usize);
@@ -210,10 +226,17 @@ fn write_file_fragmented<B: BlockIo>(
 
             let abs_block = data_start_block + physical + j;
             let lba = Lba(partition_lba_start + abs_block * scale);
-            block_io
-                .write_blocks(lba, &block_buf)
-                .map_err(|_| HelixError::IoWriteFailed)?;
+            if block_io.write_blocks(lba, &block_buf).is_err() {
+                io_failed = true;
+                break 'write_loop;
+            }
         }
+    }
+    if io_failed {
+        for (_, physical, count) in &extents {
+            let _ = bitmap.free_range(*physical, *count as u64);
+        }
+        return Err(HelixError::IoWriteFailed);
     }
 
     // Encode all extents as payload.
@@ -234,7 +257,16 @@ fn write_file_fragmented<B: BlockIo>(
     full_payload.push(0xFF); // IS_EXTENT marker
     full_payload.extend_from_slice(&file_size_bytes);
     full_payload.extend_from_slice(&extent_payload);
-    let lsn = log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns)?;
+    let lsn = match log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns) {
+        Ok(l) => l,
+        Err(e) => {
+            // Log full or I/O error — roll back all allocated extents.
+            for (_, physical, count) in &extents {
+                let _ = bitmap.free_range(*physical, *count as u64);
+            }
+            return Err(e);
+        }
+    };
 
     let first_block = extents.first().map(|e| e.1).unwrap_or(BLOCK_NULL);
 
