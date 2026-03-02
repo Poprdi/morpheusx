@@ -136,6 +136,13 @@ pub struct Process {
     pub priority: u8,
     /// Accumulated CPU ticks (for the task manager display).
     pub cpu_ticks: u64,
+    /// Accumulated TSC cycles this process was *actively* running (not in HLT).
+    /// Use this with the wall-clock TSC delta from `SysInfo::uptime_ticks` to
+    /// compute a true absolute CPU utilization percentage per process.
+    pub cpu_tsc: u64,
+    /// TSC value recorded when this process last began a scheduler quantum.
+    /// Written by `scheduler_tick`; used to split active/idle time.
+    pub run_start_tsc: u64,
 
     // signals
     pub pending_signals: signals::SignalSet,
@@ -202,6 +209,8 @@ impl Process {
             pages_allocated: 0,
             priority: 128,
             cpu_ticks: 0,
+            cpu_tsc: 0,
+            run_start_tsc: 0,
             pending_signals: signals::SignalSet::empty(),
             signal_handlers: [0u64; 32],
             fd_table: morpheus_helix::vfs::FdTable::new(),

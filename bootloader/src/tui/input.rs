@@ -453,10 +453,9 @@ impl Keyboard {
 
     /// Poll with ~16ms delay for animation loops (~60Hz frame pacing).
     ///
-    /// PERF FIX: Replaced 400K spin_loop iterations with TSC-based delay.
-    /// Old approach burned ~400K PAUSE instructions per poll. TSC-based
-    /// timing is more accurate across different CPU frequencies and still
-    /// uses PAUSE hint in the inner loop.
+    /// PERF FIX: Replaced TSC spin_loop with HLT-based idle.
+    /// CPU enters C1 sleep between timer interrupts, re-checking TSC on each
+    /// wakeup.  Near-zero power draw during the delay window.
     pub fn poll_key_with_delay(&mut self) -> Option<InputKey> {
         let key = self.read_key();
         // TSC-based ~16ms delay for consistent ~60Hz frame pacing.
@@ -478,7 +477,10 @@ impl Keyboard {
             if now.wrapping_sub(start) >= target_cycles {
                 break;
             }
-            core::hint::spin_loop();
+            // PERF: HLT instead of spin_loop — sleep until next interrupt.
+            unsafe {
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+            }
         }
         key
     }
