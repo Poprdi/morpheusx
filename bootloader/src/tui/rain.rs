@@ -137,14 +137,14 @@ impl MatrixRain {
     ///
     /// PERF FIX: Replaced 40M-iteration busy loop with TSC-based delay.
     /// Old approach burned ~40M iterations of `black_box()` per frame —
-    /// wasting CPU cycles on pure busywork. TSC approach uses `spin_loop()`
-    /// hint which issues PAUSE, reducing power and pipeline contention.
+    /// wasting CPU cycles on pure busywork. Uses HLT-based idle with TSC
+    /// exit condition so the core enters C1 sleep between timer interrupts
+    /// instead of spinning at full speed.
     /// Targets ~30ms per frame (~33 FPS) for smooth rain animation.
     fn delay(&self) {
         // Use TSC for frame pacing: ~30ms delay for ~33 FPS animation
         let start: u64;
         unsafe {
-            core::arch::asm!("rdtsc", out("eax") _, out("edx") _, options(nostack, nomem));
             let lo: u32;
             let hi: u32;
             core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
@@ -164,7 +164,11 @@ impl MatrixRain {
             if now.wrapping_sub(start) >= target_cycles {
                 break;
             }
-            core::hint::spin_loop();
+            // PERF FIX: HLT instead of spin_loop(). CPU enters C1 sleep,
+            // wakes on the next interrupt (PIT/UEFI timer), then re-checks TSC.
+            unsafe {
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+            }
         }
     }
 

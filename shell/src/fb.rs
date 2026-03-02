@@ -74,6 +74,7 @@ impl Framebuffer {
                 slice.fill(px);
             }
         }
+        hw::fb_mark_dirty();
     }
 
     pub fn clear(&self, r: u8, g: u8, b: u8) {
@@ -114,6 +115,7 @@ impl Framebuffer {
                 }
             }
         }
+        hw::fb_mark_dirty();
     }
 
     pub fn scroll_up(&self, rows_px: u32, bg_r: u8, bg_g: u8, bg_b: u8) {
@@ -134,5 +136,6 @@ impl Framebuffer {
         }
         let clear_y = self.height - rows_px;
         self.fill_rect(0, clear_y, self.width, rows_px, bg_r, bg_g, bg_b);
+        hw::fb_mark_dirty();
     }
 }

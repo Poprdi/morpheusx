@@ -359,55 +359,16 @@ do_create_disk() {
     fi
     
     local disk_img="${TESTING_DIR}/test-disk-50g.img"
-    
-    log_info "Creating 50GB sparse disk image..."
+
+    # Create a raw sparse image — no partition table.
+    # The kernel's storage layer skips GPT/MBR disks as "boot disks", so the
+    # HelixFS data disk must be partition-table-free.  morpheus-cli inject will
+    # format HelixFS on first write; no pre-formatting needed.
+    log_info "Creating 50GB sparse HelixFS data disk..."
     rm -f "$disk_img"
-    qemu-img create -f raw "$disk_img" 50G >/dev/null
-    
-    log_info "Creating GPT partition table with ESP + HelixFS..."
-    parted -s "$disk_img" mklabel gpt
-    parted -s "$disk_img" mkpart ESP fat32 1MiB 4GiB
-    parted -s "$disk_img" set 1 esp on
-    parted -s "$disk_img" mkpart HelixFS ext4 4GiB 50GiB
-    
-    log_info "Setting up ESP and HelixFS partitions..."
-    local loop_dev
-    loop_dev=$(sudo losetup -fP --show "$disk_img")
-    
-    trap "sudo losetup -d '$loop_dev' 2>/dev/null || true" EXIT
-    
-    sudo mkfs.vfat -F 32 -n "ESP" "${loop_dev}p1" >/dev/null
-    sudo mkfs.ext4 -F -L "helix" "${loop_dev}p2" >/dev/null
-    
-    local mnt
-    mnt=$(mktemp -d)
-    sudo mount "${loop_dev}p1" "$mnt"
-    
-    sudo mkdir -p "$mnt/EFI/BOOT"
-    
-    [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
-    
-    log_info "Disk ready — HelixFS partition available for app injection"
-    
-    sudo umount "$mnt"
-    rmdir "$mnt"
-    
-    # Force filesystem sync and ensure loop device is fully detached
-    sync
-    sleep 1
-    
-    sudo losetup -d "$loop_dev" 2>/dev/null || {
-        log_warn "Failed to detach loop device, trying harder..."
-        sleep 2
-        sudo losetup -d "$loop_dev" 2>/dev/null || true
-    }
-    trap - EXIT
-    
-    # Final sync before QEMU uses the disk
-    sync
-    sleep 2
-    
-    log_success "Test disk ready: $(du -h "$disk_img" | cut -f1) (sparse)"
+    truncate -s 50G "$disk_img"
+
+    log_success "Test disk ready (50GB sparse, will be formatted by inject)"
 }
 
 do_launch_qemu() {
@@ -424,14 +385,35 @@ do_launch_qemu() {
     printf "\n"
     
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
+        # Build/refresh the boot ESP image that UEFI will load BOOTX64.EFI from.
+        # The data disk (test-disk-50g.img) is raw HelixFS with no partition table
+        # so the kernel won't mistake it for the boot disk.
+        local esp_img="${TESTING_DIR}/esp-temp.img"
+        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" -nt "$esp_img" ]] || [[ "${FORCE_MODE}" == "true" ]]; then
+            log_info "Refreshing boot ESP image..."
+            local esp_size
+            esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
+            dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
+            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
+            local mnt
+            mnt=$(mktemp -d)
+            sudo mount -o loop "$esp_img" "$mnt"
+            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
+            sudo umount "$mnt"
+            rmdir "$mnt"
+        fi
+        # Disk 0 (virtio): ESP FAT32 image  — UEFI boots BOOTX64.EFI from here
+        # Disk 1 (virtio): raw HelixFS image — kernel mounts this as data storage
         qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm \
             -cpu host \
             -bios "$ovmf_path" \
             -object iothread,id=iothread0 \
-            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
-            -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
+            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
+            -device virtio-blk-pci,drive=disk0,disable-legacy=on,bootindex=1 \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk1,cache=writeback \
+            -device virtio-blk-pci,drive=disk1,disable-legacy=on,iothread=iothread0 \
             -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \

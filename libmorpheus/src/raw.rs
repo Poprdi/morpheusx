@@ -129,6 +129,7 @@ pub const SYS_FB_UNLOCK: u64 = 86;
 pub const SYS_FB_IS_LOCKED: u64 = 87;
 pub const SYS_FB_PRESENT: u64 = 88;
 pub const SYS_FB_BLIT: u64 = 89;
+pub const SYS_FB_MARK_DIRTY: u64 = 90;
 
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {

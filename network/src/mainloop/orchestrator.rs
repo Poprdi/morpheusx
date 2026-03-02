@@ -157,7 +157,11 @@ pub fn download_with_config<D: NetworkDriver>(
         current_state = next_state;
 
         match result {
-            StepResult::Continue => {}
+            StepResult::Continue => {
+                // No forward progress — hint the CPU to reduce power and yield
+                // execution resources to a sibling hyperthread.
+                core::hint::spin_loop();
+            }
             StepResult::Transition => {
                 serial::print("State: ");
                 serial::println(current_state.name());

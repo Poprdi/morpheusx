@@ -351,6 +351,17 @@ pub fn fb_blit() -> Result<(), u64> {
     }
 }
 
+/// Tell the kernel that the back buffer has new content.
+///
+/// The kernel's timer ISR auto-presents (delta scan) only when the dirty
+/// flag is set.  Call this after writing pixels to ensure they reach VRAM
+/// on the next tick.  Costs ~one syscall, avoids a full-screen scan every
+/// tick when the display is idle.
+#[inline]
+pub fn fb_mark_dirty() {
+    unsafe { syscall0(SYS_FB_MARK_DIRTY); }
+}
+
 // mouse
 
 /// Relative mouse state returned by `mouse_read()`.

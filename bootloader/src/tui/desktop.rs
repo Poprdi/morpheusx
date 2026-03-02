@@ -152,9 +152,10 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
         let raw = unsafe { super::input::asm_ps2_poll_any() };
         if raw == 0 {
             // Nothing available — halt CPU until next interrupt (timer/keyboard/mouse).
-            // PERF FIX: Replaced 4000-iteration spin_loop with HLT instruction.
-            // HLT puts CPU into C1 sleep state, waking on any interrupt.
-            // Saves significant power and reduces thermal output vs busy-spinning.
+            // Record the TSC at this moment so the scheduler can split our quantum
+            // into active work time (before this point) and HLT idle time (after).
+            // This gives sysvis accurate absolute CPU% instead of a relative share.
+            morpheus_hwinit::process::scheduler::mark_kernel_hlt();
             unsafe {
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }

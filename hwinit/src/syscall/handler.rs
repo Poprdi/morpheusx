@@ -86,7 +86,7 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
 
 /// `SYS_READ(fd, ptr, len)` — read bytes.
 ///
-/// fd 0 (stdin): not yet implemented.
+/// fd 0 (stdin): blocking read — parks the process until data arrives.
 /// fd >= 3: VFS file read.
 pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
@@ -97,11 +97,38 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
     match fd {
         0 => {
-            // stdin — non-blocking read from kernel keyboard ring buffer.
-            // Returns 0 immediately if no data is available; callers that
-            // need blocking behaviour must poll in their own loop.
+            // stdin — blocking read from kernel keyboard ring buffer.
+            // First try a non-blocking read; if no data, park the process
+            // with BlockReason::StdinRead.  The keyboard ISR wakes us via
+            // wake_stdin_waiters() when new bytes arrive.
+            //
+            // If a signal is pending (e.g. SIGINT from Ctrl+C), return 0
+            // immediately instead of blocking — this lets userspace signal
+            // handlers run and the shell to check its interrupted flag.
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-            crate::stdin::read(buf) as u64
+            loop {
+                let n = crate::stdin::read(buf);
+                if n > 0 {
+                    return n as u64;
+                }
+                // If a signal is pending, return 0 so the process can
+                // handle it (EINTR semantics without negative errno).
+                {
+                    let proc = SCHEDULER.current_process_mut();
+                    if !proc.pending_signals.is_empty() {
+                        return 0;
+                    }
+                }
+                // Park until keyboard input arrives.
+                {
+                    let proc = SCHEDULER.current_process_mut();
+                    proc.state = crate::process::ProcessState::Blocked(
+                        crate::process::BlockReason::StdinRead,
+                    );
+                }
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+                // Woken by wake_stdin_waiters() or send_signal() — loop back.
+            }
         }
         fd if fd >= 3 => {
             // Check if this fd is actually a pipe read end.
@@ -571,6 +598,12 @@ pub struct SysInfo {
     pub heap_total: u64,
     pub heap_used: u64,
     pub heap_free: u64,
+    /// Total scheduler timer ticks since boot.
+    pub sched_ticks: u64,
+    /// Total TSC cycles the kernel has spent halted in HLT idle since boot.
+    /// Use with `uptime_ticks` delta to compute true system-wide idle fraction:
+    ///   idle_pct = (idle_tsc_delta / uptime_ticks_delta) * 100
+    pub idle_tsc: u64,
 }
 
 /// `SYS_SYSINFO(buf_ptr) → 0`
@@ -596,6 +629,8 @@ pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
         heap_total: heap_total as u64,
         heap_used: heap_used as u64,
         heap_free: heap_free as u64,
+        sched_ticks: SCHEDULER.tick_count() as u64,
+        idle_tsc: crate::process::scheduler::idle_tsc_total(),
     };
 
     let dst = buf_ptr as *mut SysInfo;
@@ -1648,6 +1683,18 @@ static mut FB_SHADOW_PHYS: u64 = 0;
 /// Number of physical pages allocated for each of the two buffers.
 static mut FB_BACK_PAGES: u64 = 0;
 
+/// Dirty flag: set by `SYS_FB_PRESENT`, `SYS_FB_BLIT`, and `fb_mark_dirty()`.
+/// Cleared by `fb_present_tick()` after a successful delta present.
+/// When false, `fb_present_tick()` skips the full-screen scan entirely.
+static mut FB_DIRTY: bool = false;
+
+/// Mark the framebuffer back buffer as dirty (needs present).
+/// Called by syscalls that write to the back buffer.
+#[inline]
+pub fn fb_mark_dirty() {
+    unsafe { FB_DIRTY = true; }
+}
+
 // SYS_NIC_INFO (32) — get NIC information
 
 const ENODEV: u64 = u64::MAX - 19;
@@ -1930,14 +1977,26 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
         }
     }
 
-    // If nothing is ready yet and timeout > 0, sleep and recheck.
+    // If nothing is ready yet and timeout > 0, sleep in small chunks and
+    // re-check until something is ready or the timeout expires.
+    // PERF FIX: removed 100ms cap — now uses full requested timeout,
+    // sleeping in 10ms increments to balance latency and CPU usage.
     if ready == 0 && timeout_ms > 0 {
-        let _ = sys_sleep(timeout_ms.min(100));
-        // Re-check stdin after sleeping.
-        for pfd in fds.iter_mut() {
-            if pfd.fd == 0 && pfd.events & POLLIN != 0 && crate::stdin::available() > 0 {
-                pfd.revents |= POLLIN;
-                ready += 1;
+        let mut remaining_ms = timeout_ms;
+        while remaining_ms > 0 {
+            let chunk = remaining_ms.min(10);
+            let _ = sys_sleep(chunk);
+            remaining_ms = remaining_ms.saturating_sub(chunk);
+
+            // Re-check all fds after each sleep chunk.
+            for pfd in fds.iter_mut() {
+                if pfd.fd == 0 && pfd.events & POLLIN != 0 && crate::stdin::available() > 0 {
+                    pfd.revents |= POLLIN;
+                    ready += 1;
+                }
+            }
+            if ready > 0 {
+                break;
             }
         }
     }
@@ -2375,6 +2434,11 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
 /// Called from the timer ISR (`scheduler_tick`).  Compares the back buffer
 /// against the shadow and writes only changed pixel spans to real VRAM.
 /// Transparent to userspace — no syscall required.
+///
+/// PERF: Gated by `FB_DIRTY` flag.  When nothing has been written to the
+/// back buffer since the last present, this function returns immediately
+/// without touching any framebuffer memory.  This eliminates ~1.6 GB/s
+/// of wasted memory bandwidth at idle (1920×1080 @ 100 Hz).
 pub unsafe fn fb_present_tick() {
     if FB_BACK_PHYS == 0 || FB_SHADOW_PHYS == 0 {
         return;
@@ -2385,6 +2449,12 @@ pub unsafe fn fb_present_tick() {
     if FB_LOCK_PID != 0 {
         return;
     }
+    // PERF: Skip the full-screen delta scan if nothing was written.
+    if !FB_DIRTY {
+        return;
+    }
+    FB_DIRTY = false;
+
     let info = match FB_REGISTERED {
         Some(i) => i,
         None => return,
@@ -2483,6 +2553,8 @@ pub struct PsEntry {
     pub state: u32, // 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated
     pub priority: u32,
     pub cpu_ticks: u64,
+    /// Accumulated TSC cycles actively running (HLT idle excluded for PID 0).
+    pub cpu_tsc: u64,
     pub pages_alloc: u64,
     pub name: [u8; 32], // NUL-terminated
 }
@@ -2521,6 +2593,7 @@ pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
             state: state_u32,
             priority: pi.priority as u32,
             cpu_ticks: pi.cpu_ticks,
+            cpu_tsc: pi.cpu_tsc,
             pages_alloc: pi.pages_alloc,
             name: [0u8; 32],
         };
@@ -3946,6 +4019,7 @@ pub unsafe fn sys_futex(addr: u64, op: u64, val: u64, timeout_ms: u64) -> u64 {
                         let deadline = crate::cpu::tsc::read_tsc()
                             .saturating_add(timeout_ms.saturating_mul(ticks_per_ms));
                         proc.futex_deadline = deadline;
+                        crate::process::scheduler::inc_timed_block_count();
                     }
                 }
             }

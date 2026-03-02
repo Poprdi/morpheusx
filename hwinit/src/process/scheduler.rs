@@ -27,7 +27,7 @@ use super::{BlockReason, Process, ProcessState, MAX_PROCESSES, PROCESS_KERNEL_ST
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
 use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
 use crate::serial::{put_hex32, put_hex64, puts};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 // GLOBAL STATE
 
 /// The flat process table.  Index == PID.
@@ -45,6 +45,19 @@ static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Total number of live processes (including PID 0).
 static LIVE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Number of processes with a TSC-based deadline (Sleep or FutexWait with timeout).
+/// Used to skip the `wake_expired_sleepers` scan when no deadlines are active.
+static TIMED_BLOCK_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// TSC value at the moment the kernel (PID 0) called `mark_kernel_hlt()` — i.e.
+/// when it entered the idle HLT path.  Zero = kernel is not currently in HLT.
+/// Written by the kernel event loop; read+cleared by the timer ISR.
+static KERNEL_HLT_ENTRY_TSC: AtomicU64 = AtomicU64::new(0);
+
+/// Monotonically-increasing total TSC cycles the kernel has spent in HLT idle.
+/// Exposed via `SysInfo::idle_tsc` so userspace can compute absolute CPU%.
+static IDLE_TSC_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// True once `init_scheduler()` has been called.
 static mut SCHEDULER_READY: bool = false;
@@ -84,6 +97,8 @@ pub struct ProcessInfo {
     pub name: [u8; 32],
     pub state: ProcessState,
     pub cpu_ticks: u64,
+    /// Accumulated TSC cycles this process was actively running (excluding HLT idle).
+    pub cpu_tsc: u64,
     pub pages_alloc: u64,
     pub priority: u8,
 }
@@ -96,6 +111,7 @@ impl ProcessInfo {
             name: [0u8; 32],
             state: ProcessState::Ready,
             cpu_ticks: 0,
+            cpu_tsc: 0,
             pages_alloc: 0,
             priority: 0,
         }
@@ -133,6 +149,31 @@ pub fn tsc_frequency() -> u64 {
     unsafe { TSC_FREQUENCY }
 }
 
+/// Record the TSC at the instant the kernel enters the HLT idle path.
+///
+/// Call immediately BEFORE the `sti; hlt; cli` sequence in the kernel event
+/// loop whenever the PS/2 poll returns nothing.  The timer ISR will split the
+/// kernel's scheduler quantum into active work time and HLT idle time so that
+/// `SysInfo::cpu_tsc` reflects true CPU utilization, not relative shares.
+pub fn mark_kernel_hlt() {
+    KERNEL_HLT_ENTRY_TSC.store(
+        crate::cpu::tsc::read_tsc(),
+        Ordering::Relaxed,
+    );
+}
+
+/// Total TSC cycles the kernel has spent halted in HLT idle since boot.
+/// Exposed via `SysInfo::idle_tsc`.
+pub fn idle_tsc_total() -> u64 {
+    IDLE_TSC_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Increment the timed-block counter (called when a process enters sleep or
+/// futex-wait with a deadline).
+pub fn inc_timed_block_count() {
+    TIMED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
 impl Scheduler {
     /// Snapshot the process table for display (e.g. task manager).
     ///
@@ -153,6 +194,7 @@ impl Scheduler {
                             name: p.name,
                             state: p.state,
                             cpu_ticks: p.cpu_ticks,
+                            cpu_tsc: p.cpu_tsc,
                             pages_alloc: p.pages_allocated,
                             priority: p.priority,
                         };
@@ -240,6 +282,12 @@ impl Scheduler {
             }
             other => {
                 slot.pending_signals.raise(other);
+                // Unblock the process if it's waiting on stdin so the
+                // signal can be delivered promptly (e.g. Ctrl+C → SIGINT
+                // should interrupt a blocking read immediately).
+                if matches!(slot.state, ProcessState::Blocked(BlockReason::StdinRead)) {
+                    slot.state = ProcessState::Ready;
+                }
             }
         }
         Ok(())
@@ -442,6 +490,9 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
 pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static CpuContext {
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 
+    // Sample TSC once for the entire tick — used for run-time accounting.
+    let now_tsc = crate::cpu::tsc::read_tsc();
+
     // Auto-present: push back-buffer delta to VRAM on every tick.
     crate::syscall::handler::fb_present_tick();
 
@@ -464,6 +515,24 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         }
 
         cur.cpu_ticks += 1;
+
+        // TSC-based active CPU time.  When the kernel (PID 0) was in HLT we
+        // split the quantum at the HLT entry point so idle time is excluded:
+        //   active_tsc = hlt_entry - run_start_tsc   (real work before HLT)
+        //   idle_tsc   = now_tsc   - hlt_entry       (halted, waiting for IRQ)
+        // All other processes receive the full quantum as active time.
+        let hlt_entry = KERNEL_HLT_ENTRY_TSC.swap(0, Ordering::Relaxed);
+        if cur_pid == 0 && hlt_entry != 0 {
+            let active_tsc = hlt_entry.saturating_sub(cur.run_start_tsc);
+            let idle_tsc_q = now_tsc.saturating_sub(hlt_entry);
+            cur.cpu_tsc = cur.cpu_tsc.saturating_add(active_tsc);
+            IDLE_TSC_TOTAL.fetch_add(idle_tsc_q, Ordering::Relaxed);
+        } else {
+            cur.cpu_tsc = cur.cpu_tsc.saturating_add(
+                now_tsc.saturating_sub(cur.run_start_tsc)
+            );
+        }
+
         if cur.state == ProcessState::Running {
             cur.state = ProcessState::Ready;
         }
@@ -482,6 +551,8 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
         next.state = ProcessState::Running;
+        // Record when this quantum began so scheduler_tick can compute active TSC time.
+        next.run_start_tsc = now_tsc;
 
         // Update kernel stack pointers for Ring 3 → Ring 0 transitions.
         if next.kernel_stack_top != 0 {
@@ -761,6 +832,7 @@ pub unsafe fn block_sleep(deadline: u64) -> u64 {
     let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid) {
         proc.state = ProcessState::Blocked(BlockReason::Sleep(deadline));
+        TIMED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
     }
 
     // STI + HLT is atomic on x86: no interrupt window between them.
@@ -951,19 +1023,25 @@ unsafe fn free_user_page_tables(pml4_phys: u64) {
 /// Unblock any processes whose sleep deadline has been reached.
 ///
 /// Called from `scheduler_tick` on every timer interrupt — must be fast.
+/// PERF: Early-exits if no processes have active deadlines.
 unsafe fn wake_expired_sleepers() {
+    if TIMED_BLOCK_COUNT.load(Ordering::Relaxed) == 0 {
+        return;
+    }
     let now = crate::cpu::tsc::read_tsc();
     for proc in PROCESS_TABLE.iter_mut().flatten() {
         match proc.state {
             ProcessState::Blocked(BlockReason::Sleep(deadline)) => {
                 if now >= deadline {
                     proc.state = ProcessState::Ready;
+                    TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
                 }
             }
             ProcessState::Blocked(BlockReason::FutexWait(_)) => {
                 if proc.futex_deadline != 0 && now >= proc.futex_deadline {
                     proc.state = ProcessState::Ready;
                     proc.futex_deadline = 0;
+                    TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
                 }
             }
             _ => {}
@@ -1092,6 +1170,12 @@ pub unsafe fn wake_futex_waiters(addr: u64, count: u32) -> u32 {
         }
         if let ProcessState::Blocked(BlockReason::FutexWait(wait_addr)) = proc.state {
             if wait_addr == addr {
+                // If this waiter had a deadline, decrement the timed-block counter
+                // since wake_expired_sleepers will no longer need to expire it.
+                if proc.futex_deadline != 0 {
+                    proc.futex_deadline = 0;
+                    TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
+                }
                 proc.state = ProcessState::Ready;
                 woken += 1;
             }

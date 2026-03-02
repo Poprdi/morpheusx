@@ -482,10 +482,9 @@ pub fn dns_resolve(hostname: &str) -> Result<u32, u64> {
         match dns_poll(query)? {
             Some(ip) => return Ok(ip),
             None => {
-                // Yield to let the network stack process packets
-                unsafe {
-                    syscall0(SYS_YIELD);
-                }
+                // PERF FIX: sleep(1) instead of yield to avoid spinning
+                // when this is the only runnable process.
+                crate::process::sleep(1);
             }
         }
     }
@@ -928,9 +927,10 @@ impl TcpStream {
             match self.state()? {
                 TcpState::Established => return Ok(()),
                 TcpState::Closed => return Err(Error::new(ErrorKind::ConnectionRefused)),
-                _ => unsafe {
-                    syscall0(SYS_YIELD);
-                },
+                _ => {
+                    // PERF FIX: sleep(1) instead of yield
+                    crate::process::sleep(1);
+                }
             }
         }
     }
@@ -943,9 +943,10 @@ impl TcpStream {
                 Ok(0) => {
                     // Check if connection is still alive.
                     match self.state()? {
-                        TcpState::Established | TcpState::CloseWait => unsafe {
-                            syscall0(SYS_YIELD);
-                        },
+                        TcpState::Established | TcpState::CloseWait => {
+                            // PERF FIX: sleep(1) instead of yield
+                            crate::process::sleep(1);
+                        }
                         _ => return Err(Error::new(ErrorKind::BrokenPipe)),
                     }
                 }
@@ -963,9 +964,10 @@ impl TcpStream {
             match tcp_recv(self.handle, buf) {
                 Ok(0) => {
                     match self.state()? {
-                        TcpState::Established | TcpState::SynSent | TcpState::SynReceived => unsafe {
-                            syscall0(SYS_YIELD);
-                        },
+                        TcpState::Established | TcpState::SynSent | TcpState::SynReceived => {
+                            // PERF FIX: sleep(1) instead of yield
+                            crate::process::sleep(1);
+                        }
                         _ => return Ok(0), // EOF
                     }
                 }
@@ -1048,9 +1050,10 @@ impl TcpListener {
         loop {
             match self.accept() {
                 Ok(stream) => return Ok(stream),
-                Err(e) if e.kind() == ErrorKind::WouldBlock => unsafe {
-                    syscall0(SYS_YIELD);
-                },
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    // PERF FIX: sleep(1) instead of yield
+                    crate::process::sleep(1);
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -1114,9 +1117,10 @@ impl UdpSocket {
         loop {
             net_poll_drive(0);
             match udp_recv_from(self.handle, buf) {
-                Ok((0, _, _)) => unsafe {
-                    syscall0(SYS_YIELD);
-                },
+                Ok((0, _, _)) => {
+                    // PERF FIX: sleep(1) instead of yield
+                    crate::process::sleep(1);
+                }
                 Ok((n, ip_nbo, port)) => {
                     return Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port));
                 }
