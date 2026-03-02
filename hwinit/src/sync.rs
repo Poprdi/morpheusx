@@ -15,9 +15,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::cpu::idt::{disable_interrupts, enable_interrupts, interrupts_enabled};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SPINLOCK
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// A simple spinlock.
 ///
@@ -47,12 +45,11 @@ impl<T> SpinLock<T> {
         disable_interrupts();
 
         // Spin until we acquire the lock
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             // Spin hint
             core::hint::spin_loop();
         }
@@ -68,12 +65,11 @@ impl<T> SpinLock<T> {
         let interrupts_were_enabled = interrupts_enabled();
         disable_interrupts();
 
-        if self.locked.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             Some(SpinLockGuard {
                 lock: self,
                 interrupts_were_enabled,
@@ -96,6 +92,7 @@ impl<T> SpinLock<T> {
     ///
     /// # Safety
     /// Caller must ensure exclusive access.
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_unchecked(&self) -> &mut T {
         &mut *self.data.get()
     }
@@ -132,9 +129,7 @@ impl<T> Drop for SpinLockGuard<'_, T> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // RAW SPINLOCK (no interrupt disable, for when you manage it yourself)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Raw spinlock without interrupt management.
 ///
@@ -152,12 +147,11 @@ impl RawSpinLock {
     }
 
     pub fn lock(&self) {
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             core::hint::spin_loop();
         }
     }
@@ -167,18 +161,13 @@ impl RawSpinLock {
     }
 
     pub fn try_lock(&self) -> bool {
-        self.locked.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok()
+        self.locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ONCE (run-once initialization)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Run-once initialization primitive.
 pub struct Once {
@@ -203,12 +192,16 @@ impl Once {
         }
 
         // Try to become the runner
-        if self.state.compare_exchange(
-            ONCE_INCOMPLETE,
-            ONCE_RUNNING,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .state
+            .compare_exchange(
+                ONCE_INCOMPLETE,
+                ONCE_RUNNING,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             f();
             self.state.store(ONCE_COMPLETE, Ordering::Release);
         } else {
@@ -225,9 +218,7 @@ impl Once {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // LAZY (lazily initialized value)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Lazily initialized value.
 pub struct Lazy<T, F = fn() -> T> {
@@ -251,7 +242,9 @@ impl<T, F: FnOnce() -> T> Lazy<T, F> {
         self.once.call_once(|| {
             let init = unsafe { (*self.init.get()).take().unwrap() };
             let value = init();
-            unsafe { *self.value.get() = Some(value); }
+            unsafe {
+                *self.value.get() = Some(value);
+            }
         });
 
         unsafe { (*self.value.get()).as_ref().unwrap() }
@@ -266,9 +259,7 @@ impl<T, F: FnOnce() -> T> Deref for Lazy<T, F> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INTERRUPT GUARD
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// RAII guard that disables interrupts and restores on drop.
 pub struct InterruptGuard {

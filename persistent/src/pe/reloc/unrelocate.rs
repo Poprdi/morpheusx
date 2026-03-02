@@ -1,6 +1,11 @@
 use super::super::{PeError, PeResult};
 use super::types::*;
 
+/// # Safety
+///
+/// - `image_data` must be a valid PE image buffer.
+/// - `reloc_rva` and `reloc_size` must describe a valid `.reloc` section.
+/// - `delta` is the signed offset between current and preferred image base.
 pub unsafe fn unrelocate_image(
     image_data: &mut [u8],
     reloc_rva: u32,

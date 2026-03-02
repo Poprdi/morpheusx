@@ -66,7 +66,10 @@ impl<D: NetworkDriver> State<D> for ConnectState {
         let timeout_ticks = ctx.timeouts.tcp_connect();
         if elapsed_ticks > timeout_ticks {
             serial::println("[TCP] ERROR: Connection timeout");
-            return (Box::new(FailedState::new("TCP timeout")), StepResult::Failed("TCP timeout"));
+            return (
+                Box::new(FailedState::new("TCP timeout")),
+                StepResult::Failed("TCP timeout"),
+            );
         }
 
         let endpoint = match self.target {
@@ -76,7 +79,10 @@ impl<D: NetworkDriver> State<D> for ConnectState {
                     Some(ip) => ip,
                     None => {
                         serial::println("[TCP] ERROR: No resolved IP");
-                        return (Box::new(FailedState::new("no IP")), StepResult::Failed("no IP"));
+                        return (
+                            Box::new(FailedState::new("no IP")),
+                            StepResult::Failed("no IP"),
+                        );
                     }
                 };
                 IpEndpoint::new(ip, ctx.resolved_port)
@@ -88,7 +94,10 @@ impl<D: NetworkDriver> State<D> for ConnectState {
             Some(h) => h,
             None => {
                 serial::println("[TCP] ERROR: No TCP socket");
-                return (Box::new(FailedState::new("no TCP socket")), StepResult::Failed("no socket"));
+                return (
+                    Box::new(FailedState::new("no TCP socket")),
+                    StepResult::Failed("no socket"),
+                );
             }
         };
 
@@ -96,6 +105,7 @@ impl<D: NetworkDriver> State<D> for ConnectState {
 
         if !self.connect_started {
             serial::print("[TCP] Connecting to ");
+            #[allow(irrefutable_let_patterns)]
             if let IpAddress::Ipv4(ip) = endpoint.addr {
                 serial::print_ipv4(&ip.0);
             }
@@ -105,9 +115,15 @@ impl<D: NetworkDriver> State<D> for ConnectState {
 
             let local_port = 49152 + ((tsc & 0xFFFF) as u16 % 16384);
 
-            if socket.connect(iface.context(), endpoint, local_port).is_err() {
+            if socket
+                .connect(iface.context(), endpoint, local_port)
+                .is_err()
+            {
                 serial::println("[TCP] ERROR: Connect failed");
-                return (Box::new(FailedState::new("connect failed")), StepResult::Failed("connect"));
+                return (
+                    Box::new(FailedState::new("connect failed")),
+                    StepResult::Failed("connect"),
+                );
             }
             self.connect_started = true;
             return (self, StepResult::Continue);
@@ -128,7 +144,10 @@ impl<D: NetworkDriver> State<D> for ConnectState {
             TcpState::SynSent | TcpState::SynReceived => {}
             TcpState::Closed | TcpState::TimeWait => {
                 serial::println("[TCP] ERROR: Connection closed/reset");
-                return (Box::new(FailedState::new("connection closed")), StepResult::Failed("closed"));
+                return (
+                    Box::new(FailedState::new("connection closed")),
+                    StepResult::Failed("closed"),
+                );
             }
             _ => {}
         }

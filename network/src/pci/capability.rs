@@ -203,47 +203,121 @@ pub fn parse_virtio_cap(addr: PciAddr, cap_offset: u8) -> Option<VirtioCapInfo> 
     }
 }
 
-/// Read a BAR base address.
+/// Read a BAR base address (ASM version).
 pub fn read_bar(addr: PciAddr, bar_idx: u8) -> u64 {
     unsafe { asm_virtio_pci_read_bar(addr.bus, addr.device, addr.function, bar_idx) }
 }
 
+/// Read a BAR base address in pure Rust (no ASM dependency).
+///
+/// Handles 32-bit and 64-bit memory BARs, I/O BARs, and type bit masking.
+fn read_bar_rust(addr: PciAddr, bar_idx: u8) -> u64 {
+    if bar_idx > 5 {
+        return 0;
+    }
+    // BAR0 is at PCI config offset 0x10, each BAR is 4 bytes
+    let bar_offset = 0x10u8 + bar_idx * 4;
+    let bar_low = pci_cfg_read32(addr, bar_offset);
+
+    if bar_low == 0 {
+        return 0;
+    }
+
+    // Bit 0: 0 = memory, 1 = I/O
+    if bar_low & 0x01 != 0 {
+        // I/O BAR — mask type bits (low 2 bits)
+        return (bar_low & 0xFFFF_FFFC) as u64;
+    }
+
+    // Memory BAR — bits 2:1 encode type (00=32-bit, 10=64-bit)
+    let bar_type = (bar_low >> 1) & 0x03;
+    let base_low = (bar_low & 0xFFFF_FFF0) as u64;
+
+    if bar_type == 0x02 && bar_idx < 5 {
+        // 64-bit BAR: high dword is in the next BAR slot
+        let bar_high = pci_cfg_read32(addr, bar_offset + 4);
+        return ((bar_high as u64) << 32) | base_low;
+    }
+
+    base_low
+}
+
 /// Probe all VirtIO capabilities for a device.
 ///
-/// This is the main entry point for VirtIO PCI device discovery.
+/// Pure Rust implementation using `walk_capabilities_rust()` and
+/// `pci_cfg_read*` — bypasses broken ASM cap-chain walker entirely.
+///
+/// # VirtIO PCI capability layout (VirtIO spec §4.1.4)
+/// ```text
+/// offset+0:  cap_vndr  (u8)  = 0x09
+/// offset+1:  cap_next  (u8)
+/// offset+2:  cap_len   (u8)
+/// offset+3:  cfg_type  (u8)  — 1=common, 2=notify, 3=isr, 4=device, 5=pci_cfg
+/// offset+4:  bar       (u8)  — BAR index 0-5
+/// offset+5:  id        (u8)
+/// offset+6:  padding   (u16)
+/// offset+8:  offset    (u32) — offset within BAR
+/// offset+12: length    (u32) — region length
+/// For notify (cfg_type=2) only:
+/// offset+16: notify_off_multiplier (u32)
+/// ```
 pub fn probe_virtio_caps(addr: PciAddr) -> VirtioPciCaps {
     let mut caps = VirtioPciCaps::default();
 
-    // Array to receive capability info (5 caps * 24 bytes each)
-    let mut cap_array = [VirtioCapInfo::default(); 5];
+    for (cap_offset, cap_id) in walk_capabilities_rust(addr) {
+        if cap_id != PCI_CAP_ID_VNDR {
+            continue;
+        }
 
-    // Probe via ASM
-    let found = unsafe {
-        asm_virtio_pci_probe_caps(addr.bus, addr.device, addr.function, cap_array.as_mut_ptr())
-    };
+        let cfg_type = pci_cfg_read8(addr, cap_offset + 3);
+        let bar = pci_cfg_read8(addr, cap_offset + 4);
+        let bar_offset = pci_cfg_read32(addr, cap_offset + 8);
+        let length = pci_cfg_read32(addr, cap_offset + 12);
+        let notify_off_multiplier = if cfg_type == VIRTIO_PCI_CAP_NOTIFY {
+            pci_cfg_read32(addr, cap_offset + 16)
+        } else {
+            0
+        };
 
-    caps.found_mask = found as u8;
+        let info = VirtioCapInfo {
+            cfg_type,
+            bar,
+            _pad: [0; 2],
+            offset: bar_offset,
+            length,
+            notify_off_multiplier,
+            cap_offset,
+            _pad2: [0; 7],
+        };
 
-    // Map results to struct
-    if found & (1 << 0) != 0 {
-        caps.common = Some(cap_array[0]);
-    }
-    if found & (1 << 1) != 0 {
-        caps.notify = Some(cap_array[1]);
-    }
-    if found & (1 << 2) != 0 {
-        caps.isr = Some(cap_array[2]);
-    }
-    if found & (1 << 3) != 0 {
-        caps.device = Some(cap_array[3]);
-    }
-    if found & (1 << 4) != 0 {
-        caps.pci_cfg = Some(cap_array[4]);
+        match cfg_type {
+            VIRTIO_PCI_CAP_COMMON => {
+                caps.common = Some(info);
+                caps.found_mask |= 1 << 0;
+            }
+            VIRTIO_PCI_CAP_NOTIFY => {
+                caps.notify = Some(info);
+                caps.found_mask |= 1 << 1;
+            }
+            VIRTIO_PCI_CAP_ISR => {
+                caps.isr = Some(info);
+                caps.found_mask |= 1 << 2;
+            }
+            VIRTIO_PCI_CAP_DEVICE => {
+                caps.device = Some(info);
+                caps.found_mask |= 1 << 3;
+            }
+            VIRTIO_PCI_CAP_PCI_CFG => {
+                caps.pci_cfg = Some(info);
+                caps.found_mask |= 1 << 4;
+            }
+            _ => {}
+        }
     }
 
-    // Read all BAR addresses
-    for i in 0..6 {
-        caps.bar_addrs[i] = read_bar(addr, i as u8);
+    // Read all BAR addresses in pure Rust
+    for i in 0..6u8 {
+        caps.bar_addrs[i as usize] = read_bar_rust(addr, i);
     }
 
     caps

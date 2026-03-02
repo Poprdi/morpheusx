@@ -182,8 +182,13 @@ asm_intel_reset:
     call    asm_tsc_read
     sub     rax, rbx            ; elapsed = now - start
     cmp     rax, r14
-    jb      .wait_reset
+    jae     .reset_timeout
 
+    ; PERF FIX: pause hint during device reset wait (up to 100ms)
+    pause
+    jmp     .wait_reset
+
+.reset_timeout:
     ; Timeout
     mov     eax, 1
     jmp     .exit

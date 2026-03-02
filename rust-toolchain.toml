@@ -1,0 +1,13 @@
+[toolchain]
+# Exact stable version used to build the bootloader (hwinit, platform, memory).
+# Changing this will change binary layout → re-run testing/build.sh (two-pass
+# reloc extraction) on the new toolchain before committing embedded_reloc_data.rs.
+channel = "1.92.0"
+targets = ["x86_64-unknown-uefi", "x86_64-unknown-linux-gnu"]
+components = ["rustfmt", "clippy", "rust-src"]
+
+# NOTE: User-space apps (x86_64-morpheus JSON target) are built with:
+#   cargo +nightly-2026-02-22 build ...
+# Install that nightly via:
+#   rustup toolchain install nightly-2026-02-22
+# setup-dev.sh handles this automatically.

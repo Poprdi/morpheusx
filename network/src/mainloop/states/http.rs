@@ -10,9 +10,9 @@ use smoltcp::time::Instant;
 use crate::driver::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
+use crate::mainloop::disk_writer::DiskWriter;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
-use crate::mainloop::disk_writer::DiskWriter;
 
 use super::{DoneState, FailedState, ManifestState};
 
@@ -36,22 +36,22 @@ pub struct HttpState {
     phase: HttpPhase,
     start_tsc: u64,
     last_activity_tsc: u64,
-    
+
     /// Request components (for standalone use)
     method: &'static str,
     path: Option<&'static str>,
     host: Option<&'static str>,
-    
+
     /// Response parsing state
     headers_complete: bool,
     content_length: Option<u64>,
     chunked: bool,
     bytes_received: u64,
-    
+
     /// Header parsing buffer
     header_buf: [u8; 2048],
     header_len: usize,
-    
+
     /// Disk writer for streaming to disk
     disk_writer: Option<DiskWriter>,
 }
@@ -160,7 +160,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
         let idle_timeout = ctx.timeouts.http_idle();
         if idle_ticks > idle_timeout {
             serial::println("[HTTP] ERROR: Idle timeout");
-            return (Box::new(FailedState::new("HTTP idle timeout")), StepResult::Failed("idle timeout"));
+            return (
+                Box::new(FailedState::new("HTTP idle timeout")),
+                StepResult::Failed("idle timeout"),
+            );
         }
 
         let socket = sockets.get_mut::<TcpSocket>(self.tcp_handle);
@@ -180,7 +183,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
 
                 if req_len == 0 {
                     serial::println("[HTTP] ERROR: Request too large");
-                    return (Box::new(FailedState::new("request too large")), StepResult::Failed("request"));
+                    return (
+                        Box::new(FailedState::new("request too large")),
+                        StepResult::Failed("request"),
+                    );
                 }
 
                 serial::print("[HTTP] Sending ");
@@ -190,7 +196,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
 
                 if socket.send_slice(&req_buf[..req_len]).is_err() {
                     serial::println("[HTTP] ERROR: Send failed");
-                    return (Box::new(FailedState::new("send failed")), StepResult::Failed("send"));
+                    return (
+                        Box::new(FailedState::new("send failed")),
+                        StepResult::Failed("send"),
+                    );
                 }
 
                 self.phase = HttpPhase::ReceiveHeaders;
@@ -201,7 +210,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
                 if !socket.may_recv() {
                     if socket.state() != smoltcp::socket::tcp::State::Established {
                         serial::println("[HTTP] ERROR: Connection closed during headers");
-                        return (Box::new(FailedState::new("connection closed")), StepResult::Failed("closed"));
+                        return (
+                            Box::new(FailedState::new("connection closed")),
+                            StepResult::Failed("closed"),
+                        );
                     }
                     return (self, StepResult::Continue);
                 }
@@ -210,7 +222,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
                 let space = self.header_buf.len() - self.header_len;
                 if space == 0 {
                     serial::println("[HTTP] ERROR: Headers too large");
-                    return (Box::new(FailedState::new("headers too large")), StepResult::Failed("headers"));
+                    return (
+                        Box::new(FailedState::new("headers too large")),
+                        StepResult::Failed("headers"),
+                    );
                 }
 
                 match socket.recv_slice(&mut self.header_buf[self.header_len..]) {
@@ -222,17 +237,21 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         // Look for end of headers
                         if let Some(end) = find_header_end(&self.header_buf[..self.header_len]) {
                             // Parse headers
-                            let header_str = core::str::from_utf8(&self.header_buf[..end])
-                                .unwrap_or("");
+                            let header_str =
+                                core::str::from_utf8(&self.header_buf[..end]).unwrap_or("");
 
                             // Check status
-                            if !header_str.starts_with("HTTP/1.1 200") 
-                                && !header_str.starts_with("HTTP/1.0 200") {
+                            if !header_str.starts_with("HTTP/1.1 200")
+                                && !header_str.starts_with("HTTP/1.0 200")
+                            {
                                 serial::print("[HTTP] ERROR: Bad status: ");
                                 if let Some(line_end) = header_str.find('\r') {
                                     serial::println(&header_str[..line_end]);
                                 }
-                                return (Box::new(FailedState::new("bad HTTP status")), StepResult::Failed("status"));
+                                return (
+                                    Box::new(FailedState::new("bad HTTP status")),
+                                    StepResult::Failed("status"),
+                                );
                             }
 
                             serial::println("[HTTP] Got 200 OK");
@@ -247,7 +266,8 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             }
 
                             // Check for chunked encoding
-                            self.chunked = contains_ignore_case(header_str, "transfer-encoding: chunked");
+                            self.chunked =
+                                contains_ignore_case(header_str, "transfer-encoding: chunked");
 
                             // Move body data to start of buffer
                             let body_start = end + 4; // Skip \r\n\r\n
@@ -256,11 +276,13 @@ impl<D: NetworkDriver> State<D> for HttpState {
                                 // Process initial body data
                                 self.bytes_received += body_len as u64;
                                 ctx.bytes_downloaded = self.bytes_received;
-                                
+
                                 // Write initial body data to disk if enabled
-                                if let (Some(ref mut writer), Some(ref mut blk)) = 
-                                    (&mut self.disk_writer, &mut ctx.blk_device) {
-                                    let written = writer.write(blk, &self.header_buf[body_start..self.header_len]);
+                                if let (Some(ref mut writer), Some(ref mut blk)) =
+                                    (&mut self.disk_writer, &mut ctx.blk_device)
+                                {
+                                    let written = writer
+                                        .write(blk, &self.header_buf[body_start..self.header_len]);
                                     ctx.bytes_written += written as u64;
                                 }
                             }
@@ -279,18 +301,25 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     if let Some(expected) = self.content_length {
                         if self.bytes_received >= expected {
                             // Flush disk buffer
-                            if let (Some(ref mut writer), Some(ref mut blk)) = 
-                                (&mut self.disk_writer, &mut ctx.blk_device) {
+                            if let (Some(ref mut writer), Some(ref mut blk)) =
+                                (&mut self.disk_writer, &mut ctx.blk_device)
+                            {
                                 if !writer.flush(blk) {
                                     serial::println("[HTTP] ERROR: Disk flush failed");
-                                    return (Box::new(FailedState::new("disk flush")), StepResult::Failed("flush"));
+                                    return (
+                                        Box::new(FailedState::new("disk flush")),
+                                        StepResult::Failed("flush"),
+                                    );
                                 }
                                 ctx.bytes_written = writer.bytes_written();
                             }
                             serial::println("[HTTP] Download complete");
                             self.phase = HttpPhase::Complete;
                             ctx.bytes_downloaded = self.bytes_received;
-                            return (Box::new(ManifestState::from_context(ctx)), StepResult::Transition);
+                            return (
+                                Box::new(ManifestState::from_context(ctx)),
+                                StepResult::Transition,
+                            );
                         }
                     }
 
@@ -299,17 +328,24 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         if self.content_length.is_none() {
                             // No Content-Length, connection close = end
                             // Flush disk buffer
-                            if let (Some(ref mut writer), Some(ref mut blk)) = 
-                                (&mut self.disk_writer, &mut ctx.blk_device) {
+                            if let (Some(ref mut writer), Some(ref mut blk)) =
+                                (&mut self.disk_writer, &mut ctx.blk_device)
+                            {
                                 writer.flush(blk);
                                 ctx.bytes_written = writer.bytes_written();
                             }
                             serial::println("[HTTP] Download complete (connection closed)");
                             ctx.bytes_downloaded = self.bytes_received;
-                            return (Box::new(ManifestState::from_context(ctx)), StepResult::Transition);
+                            return (
+                                Box::new(ManifestState::from_context(ctx)),
+                                StepResult::Transition,
+                            );
                         }
                         serial::println("[HTTP] ERROR: Premature connection close");
-                        return (Box::new(FailedState::new("premature close")), StepResult::Failed("close"));
+                        return (
+                            Box::new(FailedState::new("premature close")),
+                            StepResult::Failed("close"),
+                        );
                     }
                     return (self, StepResult::Continue);
                 }
@@ -337,8 +373,9 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         }
 
                         // Write to disk if enabled
-                        if let (Some(ref mut writer), Some(ref mut blk)) = 
-                            (&mut self.disk_writer, &mut ctx.blk_device) {
+                        if let (Some(ref mut writer), Some(ref mut blk)) =
+                            (&mut self.disk_writer, &mut ctx.blk_device)
+                        {
                             let written = writer.write(blk, &buf[..n]);
                             ctx.bytes_written += written as u64;
                         }
@@ -350,17 +387,24 @@ impl<D: NetworkDriver> State<D> for HttpState {
                 if let Some(expected) = self.content_length {
                     if self.bytes_received >= expected {
                         // Flush remaining disk buffer
-                        if let (Some(ref mut writer), Some(ref mut blk)) = 
-                            (&mut self.disk_writer, &mut ctx.blk_device) {
+                        if let (Some(ref mut writer), Some(ref mut blk)) =
+                            (&mut self.disk_writer, &mut ctx.blk_device)
+                        {
                             if !writer.flush(blk) {
                                 serial::println("[HTTP] ERROR: Final disk flush failed");
-                                return (Box::new(FailedState::new("disk flush")), StepResult::Failed("flush"));
+                                return (
+                                    Box::new(FailedState::new("disk flush")),
+                                    StepResult::Failed("flush"),
+                                );
                             }
                             ctx.bytes_written = writer.bytes_written();
                         }
                         serial::println("[HTTP] Download complete");
                         ctx.bytes_downloaded = self.bytes_received;
-                        return (Box::new(ManifestState::from_context(ctx)), StepResult::Transition);
+                        return (
+                            Box::new(ManifestState::from_context(ctx)),
+                            StepResult::Transition,
+                        );
                     }
                 }
             }
@@ -407,12 +451,7 @@ fn format_http_request(buf: &mut [u8], method: &str, path: &str, host: &str) -> 
 
 /// Find end of HTTP headers (double CRLF).
 fn find_header_end(data: &[u8]) -> Option<usize> {
-    for i in 0..data.len().saturating_sub(3) {
-        if &data[i..i + 4] == b"\r\n\r\n" {
-            return Some(i);
-        }
-    }
-    None
+    (0..data.len().saturating_sub(3)).find(|&i| &data[i..i + 4] == b"\r\n\r\n")
 }
 
 /// Parse Content-Length from headers (case-insensitive).

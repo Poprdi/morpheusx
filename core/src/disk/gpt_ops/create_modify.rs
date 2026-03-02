@@ -23,7 +23,7 @@ fn write_gpt_both<B: BlockIo>(
         .map_err(|_| GptError::IoError)?;
 
     // Create secondary header (swap my_lba and alternate_lba)
-    let mut secondary_header = header.clone();
+    let mut secondary_header = *header;
     let primary_lba = header.my_lba;
     let alternate_lba = header.alternate_lba;
 

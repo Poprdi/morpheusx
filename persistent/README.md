@@ -99,29 +99,6 @@ unsafe {
 }
 ```
 
-## Multi-Layer Persistence
-
-Different persistence layers serve different purposes:
-
-| Layer | Backend | Purpose | Size | Retrieval |
-|-------|---------|---------|------|-----------|
-| 0 | ESP | Primary bootable storage | Full binary | UEFI auto-loads |
-| 1 | TPM | Attestation & integrity | 20-32 bytes (hash) | Verify on boot |
-| 2 | CMOS | Emergency recovery | 128-512 bytes | Fallback chainloader |
-| 3 | HVRAM | Stealth/anti-forensics | Full binary | Hypercall |
-
-### Layer 0: ESP (Implemented)
-Standard UEFI boot path. Writes `/EFI/BOOT/BOOTX64.EFI` to FAT32.
-
-### Layer 1: TPM (TODO)
-Store SHA-256 hash of bootloader in TPM PCR. Verify integrity on boot.
-
-### Layer 2: CMOS (TODO)
-Tiny stub in UEFI NVRAM variables. If ESP corrupted, chainload from network or recovery partition.
-
-### Layer 3: HVRAM (TODO - Research)
-If running under hypervisor, hide full bootloader in hypervisor-accessible RAM. Retrieve via hypercall.
-
 ## Implementation Status
 
 - [x] Architecture defined
@@ -143,7 +120,10 @@ If running under hypervisor, hide full bootloader in hypervisor-accessible RAM. 
 
 ## Why This Matters
 
-This is the **first permanent architectural divergence** between platforms. Every decision here affects:
+This is the **first permanent architectural divergence** between platforms. Every decision here affects
+**Status**: Architecture complete, ready for implementation  
+**Next Step**: Implement Phase 1 (core PE parser)
+:
 
 - Code maintainability forever
 - Cross-platform compatibility
@@ -154,6 +134,3 @@ This is the **first permanent architectural divergence** between platforms. Ever
 We're designing this right the first time with proper trait abstractions to avoid refactoring hell later.
 
 ---
-
-**Status**: Architecture complete, ready for implementation  
-**Next Step**: Implement Phase 1 (core PE parser)

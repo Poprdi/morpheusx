@@ -69,7 +69,7 @@ impl From<BlockError> for DiskWriterError {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Pending write request.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct PendingWrite {
     /// Request ID (unique per write).
     request_id: u32,
@@ -81,18 +81,6 @@ struct PendingWrite {
     bytes: u32,
     /// Whether this request is active.
     active: bool,
-}
-
-impl Default for PendingWrite {
-    fn default() -> Self {
-        Self {
-            request_id: 0,
-            sector: 0,
-            num_sectors: 0,
-            bytes: 0,
-            active: false,
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -299,8 +287,10 @@ impl DiskWriterState {
         // Check disk capacity if total size known
         if self.config.total_bytes > 0 {
             let info = driver.info();
-            let required_sectors = (self.config.total_bytes + self.config.sector_size as u64 - 1)
-                / self.config.sector_size as u64;
+            let required_sectors = self
+                .config
+                .total_bytes
+                .div_ceil(self.config.sector_size as u64);
             let available_sectors = info.total_sectors.saturating_sub(self.config.start_sector);
 
             if required_sectors > available_sectors {
@@ -357,7 +347,7 @@ impl DiskWriterState {
 
         // Calculate sectors
         let sector_size = self.config.sector_size as usize;
-        let num_sectors = ((len + sector_size - 1) / sector_size) as u32;
+        let num_sectors = len.div_ceil(sector_size) as u32;
 
         // Find free pending slot
         let slot = self.find_free_slot().ok_or(DiskWriterError::QueueFull)?;

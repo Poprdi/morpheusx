@@ -65,7 +65,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
         let timeout = ctx.timeouts.dns();
         if elapsed > timeout {
             serial::println("[DNS] ERROR: Timeout");
-            return (Box::new(FailedState::new("DNS timeout")), StepResult::Failed("DNS timeout"));
+            return (
+                Box::new(FailedState::new("DNS timeout")),
+                StepResult::Failed("DNS timeout"),
+            );
         }
 
         let hostname = ctx.url_host;
@@ -89,7 +92,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
             Some(IpAddress::Ipv4(ip)) => ip,
             _ => {
                 serial::println("[DNS] ERROR: No DNS server from DHCP");
-                return (Box::new(FailedState::new("no DNS server")), StepResult::Failed("no DNS"));
+                return (
+                    Box::new(FailedState::new("no DNS server")),
+                    StepResult::Failed("no DNS"),
+                );
             }
         };
 
@@ -110,7 +116,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
             Some(h) => h,
             None => {
                 serial::println("[DNS] ERROR: No DNS socket");
-                return (Box::new(FailedState::new("no DNS socket")), StepResult::Failed("no socket"));
+                return (
+                    Box::new(FailedState::new("no DNS socket")),
+                    StepResult::Failed("no socket"),
+                );
             }
         };
 
@@ -124,7 +133,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
                 }
                 Err(_) => {
                     serial::println("[DNS] ERROR: Query start failed");
-                    return (Box::new(FailedState::new("DNS query failed")), StepResult::Failed("query"));
+                    return (
+                        Box::new(FailedState::new("DNS query failed")),
+                        StepResult::Failed("query"),
+                    );
                 }
             }
             return (self, StepResult::Continue);
@@ -137,6 +149,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
             Ok(addrs) => {
                 // Find first IPv4 address
                 for addr in addrs {
+                    #[allow(irrefutable_let_patterns)]
                     if let IpAddress::Ipv4(ip) = addr {
                         serial::print("[DNS] Resolved: ");
                         serial::print_ipv4(&ip.0);
@@ -147,7 +160,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
                     }
                 }
                 serial::println("[DNS] ERROR: No IPv4 in response");
-                (Box::new(FailedState::new("no IPv4")), StepResult::Failed("no IPv4"))
+                (
+                    Box::new(FailedState::new("no IPv4")),
+                    StepResult::Failed("no IPv4"),
+                )
             }
             Err(GetQueryResultError::Pending) => {
                 // Still waiting
@@ -155,7 +171,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
             }
             Err(GetQueryResultError::Failed) => {
                 serial::println("[DNS] ERROR: Query failed");
-                (Box::new(FailedState::new("DNS failed")), StepResult::Failed("DNS failed"))
+                (
+                    Box::new(FailedState::new("DNS failed")),
+                    StepResult::Failed("DNS failed"),
+                )
             }
         }
     }
