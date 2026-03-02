@@ -242,6 +242,18 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
         let name_color = if proc.pid == 0 { 0x00FFD700 } else { c };
         fb.draw_str(px + 112, ry, trunc, name_color);
     }
+
+    // IDLE row — shown below the process list.
+    // idle_pct = fraction of wall-clock time the CPU spent in HLT.
+    // Together with per-process cpu_pct values they account for all 100%.
+    let idle_row_y = base_y + count as u32 * row_h + 2;
+    let idle_int = (state.idle_pct as u32).min(100);
+    let idle_col = if idle_int > 80 { 0x0040FF80 } else { 0x00406060 };
+    fb.draw_str(px + 4, idle_row_y, "---", COL_DIM);
+    fb.draw_char(px + 28, idle_row_y, b'Z', 0x00406060);
+    fb.draw_u32(px + 40, idle_row_y, idle_int, 2, idle_col);
+    fb.draw_char(px + 52, idle_row_y, b'%', COL_DIM);
+    fb.draw_str(px + 112, idle_row_y, "idle", 0x00406060);
 }
 
 pub fn draw_fps(fb: &Framebuf, fps: u32, latency_ms: u32, speed_mult: f32) {

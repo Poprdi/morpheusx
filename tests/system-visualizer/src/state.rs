@@ -76,9 +76,13 @@ pub struct SystemState {
     pub run_count: u32,
     pub blocked_count: u32,
     pub total_cpu_pct: f32,
+    /// Idle percentage (0-100): fraction of wall-clock time the CPU spent in HLT.
+    pub idle_pct: f32,
     /// `uptime_ticks` (raw TSC) from the previous poll — wall-clock denominator
     /// for converting `cpu_tsc` deltas into absolute CPU utilization %.
     prev_uptime_ticks: u64,
+    /// `idle_tsc` from the previous poll — to compute per-window idle delta.
+    prev_idle_tsc: u64,
 
     // --- 1-second averaging window ---
     /// Per-PID accumulated `cpu_tsc` deltas for the current 1-second window.
@@ -92,6 +96,8 @@ pub struct SystemState {
     acc_wall_tsc: u64,
     /// How many polls have been folded into the current window (0..POLLS_PER_SEC).
     acc_polls: u32,
+    /// Accumulated `idle_tsc` delta for the current 1-second window.
+    acc_idle_tsc: u64,
 }
 
 impl SystemState {
@@ -116,12 +122,15 @@ impl SystemState {
             run_count: 0,
             blocked_count: 0,
             total_cpu_pct: 0.0,
+            idle_pct: 0.0,
             prev_uptime_ticks: 0,
+            prev_idle_tsc: 0,
             acc_cpu_tsc: [0; MAX_PROCS],
             acc_pids: [0; MAX_PROCS],
             acc_count: 0,
             acc_wall_tsc: 0,
             acc_polls: 0,
+            acc_idle_tsc: 0,
         }
     }
 
@@ -144,27 +153,32 @@ impl SystemState {
         self.tsc_freq = info.tsc_freq;
 
         let wall_tsc_delta = info.uptime_ticks.wrapping_sub(self.prev_uptime_ticks);
+        let idle_tsc_delta = info.idle_tsc.wrapping_sub(self.prev_idle_tsc);
 
         let mut raw = Box::new([const { PsEntry::zeroed() }; MAX_PROCS]);
         let count = process::ps(&mut *raw).min(MAX_PROCS);
 
-        // -- accumulate this poll's cpu_tsc deltas into the 1-second window --
+        // -- accumulate this poll's deltas into the 1-second window --
         for i in 0..count {
             let r = &raw[i];
             let prev_tsc = self.find_prev_cpu_tsc(r.pid);
             let delta_tsc = r.cpu_tsc.wrapping_sub(prev_tsc);
-
-            // Find or create a slot for this PID in the accumulator.
             let slot = self.acc_slot_for_pid(r.pid);
             self.acc_cpu_tsc[slot] = self.acc_cpu_tsc[slot].saturating_add(delta_tsc);
         }
         self.acc_wall_tsc = self.acc_wall_tsc.saturating_add(wall_tsc_delta);
+        self.acc_idle_tsc = self.acc_idle_tsc.saturating_add(idle_tsc_delta);
         self.acc_polls += 1;
 
         // Update raw proc list (state, memory, etc.) every poll so the UI
         // stays current, but only re-compute cpu_pct when the 1-second
         // window is complete.
         let compute_pct = self.acc_polls >= POLLS_PER_SEC;
+
+        if compute_pct && self.acc_wall_tsc > 0 {
+            self.idle_pct = ((self.acc_idle_tsc as f32 / self.acc_wall_tsc as f32) * 100.0)
+                .min(100.0);
+        }
 
         for i in 0..count {
             let r = &raw[i];
@@ -197,6 +211,7 @@ impl SystemState {
         }
 
         self.prev_uptime_ticks = info.uptime_ticks;
+        self.prev_idle_tsc = info.idle_tsc;
         self.proc_count = count;
         self.prev_poll_ns = self.last_poll_ns;
         self.last_poll_ns = now;
@@ -208,6 +223,7 @@ impl SystemState {
             self.acc_count = 0;
             self.acc_wall_tsc = 0;
             self.acc_polls = 0;
+            self.acc_idle_tsc = 0;
         }
 
         let mut ready = 0u32;

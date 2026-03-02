@@ -59,6 +59,15 @@ static KERNEL_HLT_ENTRY_TSC: AtomicU64 = AtomicU64::new(0);
 /// Exposed via `SysInfo::idle_tsc` so userspace can compute absolute CPU%.
 static IDLE_TSC_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+/// True while every PID-0 quantum has ended in HLT (kernel has no real work).
+/// Stays true across multiple user-process quanta; cleared only when PID 0
+/// completes a full quantum WITHOUT calling `mark_kernel_hlt()` (i.e. real
+/// work arrived — keyboard event, signal, etc.).
+/// `pick_next` uses this to skip PID 0 for as long as the kernel is idle,
+/// giving user processes consecutive quanta instead of the forced 50/50 split.
+static KERNEL_LAST_WAS_IDLE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 /// True once `init_scheduler()` has been called.
 static mut SCHEDULER_READY: bool = false;
 
@@ -498,6 +507,18 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     let cur_pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
 
+    // Was PID 0 in HLT during this quantum?  Read+clear the entry TSC now
+    // so both the accounting block and pick_next can use the result.
+    let hlt_entry = KERNEL_HLT_ENTRY_TSC.swap(0, Ordering::Relaxed);
+    let kernel_was_idle = cur_pid == 0 && hlt_entry != 0;
+
+    // Update the sticky idle flag whenever PID 0 just ran.
+    // • kernel HLT'd  → flag = true  (stays true until kernel does real work)
+    // • kernel active → flag = false (real work arrived; resume fair scheduling)
+    if cur_pid == 0 {
+        KERNEL_LAST_WAS_IDLE.store(kernel_was_idle, Ordering::Relaxed);
+    }
+
     // Save context of currently running process.
     if let Some(Some(cur)) = PROCESS_TABLE.get_mut(cur_pid) {
         cur.context = *current_ctx;
@@ -521,8 +542,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         //   active_tsc = hlt_entry - run_start_tsc   (real work before HLT)
         //   idle_tsc   = now_tsc   - hlt_entry       (halted, waiting for IRQ)
         // All other processes receive the full quantum as active time.
-        let hlt_entry = KERNEL_HLT_ENTRY_TSC.swap(0, Ordering::Relaxed);
-        if cur_pid == 0 && hlt_entry != 0 {
+        if kernel_was_idle {
             let active_tsc = hlt_entry.saturating_sub(cur.run_start_tsc);
             let idle_tsc_q = now_tsc.saturating_sub(hlt_entry);
             cur.cpu_tsc = cur.cpu_tsc.saturating_add(active_tsc);
@@ -544,9 +564,12 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     // Wake any processes whose sleep deadline has expired.
     wake_expired_sleepers();
 
-    // Pick next runnable process (round-robin, priority-weighted in "future").
-    // TODO: implement priority-weighted scheduling instead of pure round-robin.
-    let next_pid = pick_next(cur_pid);
+    // Pick next runnable process.
+    // Use the sticky flag: PID 0 is skipped for as long as its last quantum
+    // ended in HLT.  The flag resets only when PID 0 runs a full non-HLT
+    // quantum (real work arrived), breaking the forced 50/50 alternation.
+    let skip_kernel = KERNEL_LAST_WAS_IDLE.load(Ordering::Relaxed);
+    let next_pid = pick_next(cur_pid, skip_kernel);
     CURRENT_PID.store(next_pid as u32, Ordering::SeqCst);
 
     if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
@@ -1051,8 +1074,27 @@ unsafe fn wake_expired_sleepers() {
 
 /// Round-robin: scan PROCESS_TABLE from `(current+1)..MAX` then wrap.
 /// Returns current if nothing else is runnable.
-unsafe fn pick_next(current: usize) -> usize {
+///
+/// When `skip_kernel` is true (kernel just HLT'd), PID 0 is excluded from the
+/// first pass so user processes receive consecutive quanta while the kernel has
+/// nothing to do.  PID 0 remains the hard fallback if no other process is ready.
+unsafe fn pick_next(current: usize, skip_kernel: bool) -> usize {
     let n = MAX_PROCESSES;
+
+    // First pass: find any ready process, skipping PID 0 if kernel was idle.
+    for delta in 1..=n {
+        let candidate = (current + delta) % n;
+        if skip_kernel && candidate == 0 {
+            continue;
+        }
+        if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {
+            if p.state == ProcessState::Ready {
+                return candidate;
+            }
+        }
+    }
+
+    // Second pass (fallback): include PID 0 — nothing else was runnable.
     for delta in 1..=n {
         let candidate = (current + delta) % n;
         if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {
@@ -1061,7 +1103,8 @@ unsafe fn pick_next(current: usize) -> usize {
             }
         }
     }
-    // Nothing else runnable — stay on current (or fall back to PID 0).
+
+    // Nothing else runnable — stay on current.
     if let Some(Some(p)) = PROCESS_TABLE.get(current) {
         if p.state.is_runnable() {
             return current;
