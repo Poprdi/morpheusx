@@ -8,9 +8,7 @@
 
 use super::config::{pci_cfg_read16, pci_cfg_read8, PciAddr};
 
-// ═══════════════════════════════════════════════════════════════════════════
 // ASM BINDINGS
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -44,9 +42,7 @@ extern "win64" {
         -> u32;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// PCI capability ID: Vendor-specific (used by VirtIO).
 pub const PCI_CAP_ID_VNDR: u8 = 0x09;
@@ -66,9 +62,7 @@ pub const VIRTIO_PCI_CAP_DEVICE: u8 = 4;
 /// VirtIO PCI capability type: PCI config access alternative.
 pub const VIRTIO_PCI_CAP_PCI_CFG: u8 = 5;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TYPES
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Parsed VirtIO PCI capability information.
 ///
@@ -152,9 +146,7 @@ impl VirtioPciCaps {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC API
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Check if a PCI device supports capability list.
 pub fn has_capabilities(addr: PciAddr) -> bool {
@@ -250,9 +242,7 @@ pub fn probe_virtio_caps(addr: PciAddr) -> VirtioPciCaps {
     caps
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PURE RUST FALLBACK (for capability walking without ASM)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Walk capability chain in pure Rust (fallback).
 pub fn walk_capabilities_rust(addr: PciAddr) -> impl Iterator<Item = (u8, u8)> {
@@ -305,12 +295,11 @@ impl Iterator for WalkCaps {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // DEBUG / SERIAL LOG HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Dump all capabilities to serial (uses crate's serial_println if available).
-#[cfg(feature = "serial_debug")]
+#[allow(unexpected_cfgs)]
+#[cfg(feature = "serial-debug")]
 pub fn dump_capabilities(addr: PciAddr) {
     use crate::mainloop::bare_metal::{serial_print, serial_print_hex, serial_println};
 

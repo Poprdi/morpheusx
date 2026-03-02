@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRICATED!!!
 # Setup Tails ISO for bootloader testing
 #
 # This script:

@@ -141,7 +141,7 @@ impl Fat32Formatter {
         // Microsoft formula for FAT32 FAT size calculation
         let tmp1 = total_sectors - reserved as u32;
         let tmp2 = (256 * spc as u32) + 2;
-        (tmp1 + tmp2 - 1) / tmp2
+        tmp1.div_ceil(tmp2)
     }
 
     /// Build FAT32 boot sector

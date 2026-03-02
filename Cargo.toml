@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "bootloader",
+    "cli",
     "core",
     "persistent",
     "updater",
@@ -9,6 +10,14 @@ members = [
     "iso9660",
     "display",
     "hwinit",
+    "ui",
+    "helix",
+    "libmorpheus",
+    "shell",
+    "gfx3d",
+    "tests/syscall-e2e",
+    "tests/spinning-cube",
+    "tests/system-visualizer",
 ]
 
 [workspace.package]
@@ -24,10 +33,12 @@ morpheus-core = { path = "core" }
 morpheus-persistent = { path = "persistent" }
 morpheus-updater = { path = "updater" }
 morpheus-network = { path = "network" }
-morpheus-display = { path = "display" }
+morpheus-display = { path = "display", features = ["framebuffer-backend"] }
 morpheus-hwinit = { path = "hwinit" }
 # Keep dependency name `iso9660` for code imports, while the package is published as `iso9660-rs`
 iso9660 = { path = "iso9660", package = "iso9660-rs" }
+morpheus-ui = { path = "ui" }
+morpheus-helix = { path = "helix" }
 
 [profile.release]
 opt-level = "z"      # Optimize for size

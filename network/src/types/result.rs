@@ -5,9 +5,10 @@
 
 /// Result from ASM function calls.
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AsmResult {
     /// Success.
+    #[default]
     Ok = 0,
     /// Queue is full.
     QueueFull = 1,
@@ -52,11 +53,5 @@ impl AsmResult {
 impl From<u32> for AsmResult {
     fn from(val: u32) -> Self {
         Self::from_u32(val)
-    }
-}
-
-impl Default for AsmResult {
-    fn default() -> Self {
-        AsmResult::Ok
     }
 }
