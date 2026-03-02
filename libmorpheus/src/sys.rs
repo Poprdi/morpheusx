@@ -26,6 +26,12 @@ pub struct SysInfo {
     pub heap_used: u64,
     /// Kernel heap: free bytes.
     pub heap_free: u64,
+    /// Total scheduler timer ticks since boot.
+    pub sched_ticks: u64,
+    /// Total TSC cycles the kernel has spent halted in HLT idle since boot.
+    /// Compute the inter-poll delta and divide by the `uptime_ticks` delta to
+    /// get the idle fraction; subtract from 1.0 for true CPU utilization.
+    pub idle_tsc: u64,
 }
 
 impl SysInfo {
@@ -41,6 +47,8 @@ impl SysInfo {
             heap_total: 0,
             heap_used: 0,
             heap_free: 0,
+            sched_ticks: 0,
+            idle_tsc: 0,
         }
     }
 

@@ -5,6 +5,8 @@ use libmorpheus::time;
 
 const MAX_PROCS: usize = 64;
 const POLL_INTERVAL_NS: u64 = 250_000_000;
+/// Number of 250 ms polls that make up one 1-second averaging window.
+const POLLS_PER_SEC: u32 = 4;
 const HISTORY_LEN: usize = 120;
 
 #[derive(Clone, Copy)]
@@ -14,6 +16,8 @@ pub struct ProcessInfo {
     pub state: u32,
     pub priority: u32,
     pub cpu_ticks: u64,
+    /// Kernel-reported active TSC cycles (HLT idle excluded for PID 0).
+    pub cpu_tsc: u64,
     pub pages_alloc: u64,
     pub name: [u8; 32],
     pub cpu_pct: f32,
@@ -27,6 +31,7 @@ impl ProcessInfo {
         state: 0,
         priority: 0,
         cpu_ticks: 0,
+        cpu_tsc: 0,
         pages_alloc: 0,
         name: [0; 32],
         cpu_pct: 0.0,
@@ -52,7 +57,8 @@ impl ProcessInfo {
 
 pub struct SystemState {
     procs: [ProcessInfo; MAX_PROCS],
-    prev_ticks: [u64; MAX_PROCS],
+    /// Previous poll's `cpu_tsc` per process slot (indexed by proc order, PID-matched).
+    prev_cpu_tsc: [u64; MAX_PROCS],
     pub proc_count: usize,
     pub total_mem: u64,
     pub free_mem: u64,
@@ -70,13 +76,29 @@ pub struct SystemState {
     pub run_count: u32,
     pub blocked_count: u32,
     pub total_cpu_pct: f32,
+    /// `uptime_ticks` (raw TSC) from the previous poll — wall-clock denominator
+    /// for converting `cpu_tsc` deltas into absolute CPU utilization %.
+    prev_uptime_ticks: u64,
+
+    // --- 1-second averaging window ---
+    /// Per-PID accumulated `cpu_tsc` deltas for the current 1-second window.
+    /// Matched by `acc_pids`; reset every `POLLS_PER_SEC` polls.
+    acc_cpu_tsc: [u64; MAX_PROCS],
+    /// PIDs occupying each accumulator slot.  0 = empty.
+    acc_pids: [u32; MAX_PROCS],
+    /// Number of active PID slots in the accumulator.
+    acc_count: usize,
+    /// Total wall-clock TSC cycles accumulated so far in this window.
+    acc_wall_tsc: u64,
+    /// How many polls have been folded into the current window (0..POLLS_PER_SEC).
+    acc_polls: u32,
 }
 
 impl SystemState {
     pub fn new() -> Self {
         Self {
             procs: [ProcessInfo::ZEROED; MAX_PROCS],
-            prev_ticks: [0; MAX_PROCS],
+            prev_cpu_tsc: [0; MAX_PROCS],
             proc_count: 0,
             total_mem: 0,
             free_mem: 0,
@@ -94,6 +116,12 @@ impl SystemState {
             run_count: 0,
             blocked_count: 0,
             total_cpu_pct: 0.0,
+            prev_uptime_ticks: 0,
+            acc_cpu_tsc: [0; MAX_PROCS],
+            acc_pids: [0; MAX_PROCS],
+            acc_count: 0,
+            acc_wall_tsc: 0,
+            acc_polls: 0,
         }
     }
 
@@ -115,16 +143,40 @@ impl SystemState {
         self.uptime_ms = info.uptime_ms();
         self.tsc_freq = info.tsc_freq;
 
+        let wall_tsc_delta = info.uptime_ticks.wrapping_sub(self.prev_uptime_ticks);
+
         let mut raw = Box::new([const { PsEntry::zeroed() }; MAX_PROCS]);
         let count = process::ps(&mut *raw).min(MAX_PROCS);
 
-        let mut total_delta: u64 = 0;
+        // -- accumulate this poll's cpu_tsc deltas into the 1-second window --
+        for i in 0..count {
+            let r = &raw[i];
+            let prev_tsc = self.find_prev_cpu_tsc(r.pid);
+            let delta_tsc = r.cpu_tsc.wrapping_sub(prev_tsc);
+
+            // Find or create a slot for this PID in the accumulator.
+            let slot = self.acc_slot_for_pid(r.pid);
+            self.acc_cpu_tsc[slot] = self.acc_cpu_tsc[slot].saturating_add(delta_tsc);
+        }
+        self.acc_wall_tsc = self.acc_wall_tsc.saturating_add(wall_tsc_delta);
+        self.acc_polls += 1;
+
+        // Update raw proc list (state, memory, etc.) every poll so the UI
+        // stays current, but only re-compute cpu_pct when the 1-second
+        // window is complete.
+        let compute_pct = self.acc_polls >= POLLS_PER_SEC;
 
         for i in 0..count {
             let r = &raw[i];
-            let prev = self.find_prev_ticks(r.pid);
-            let delta = r.cpu_ticks.saturating_sub(prev);
-            total_delta = total_delta.saturating_add(delta);
+
+            let cpu_pct = if compute_pct && self.acc_wall_tsc > 0 {
+                let slot = self.acc_slot_for_pid(r.pid);
+                ((self.acc_cpu_tsc[slot] as f32 / self.acc_wall_tsc as f32) * 100.0)
+                    .min(100.0)
+            } else {
+                // Keep the previously displayed value between windows.
+                self.find_prev_cpu_pct(r.pid)
+            };
 
             self.procs[i] = ProcessInfo {
                 pid: r.pid,
@@ -132,28 +184,31 @@ impl SystemState {
                 state: r.state,
                 priority: r.priority,
                 cpu_ticks: r.cpu_ticks,
+                cpu_tsc: r.cpu_tsc,
                 pages_alloc: r.pages_alloc,
                 name: r.name,
-                cpu_pct: 0.0,
+                cpu_pct,
                 mem_kb: r.pages_alloc * 4,
             };
         }
 
-        if total_delta > 0 {
-            for i in 0..count {
-                let prev = self.find_prev_ticks(self.procs[i].pid);
-                let delta = self.procs[i].cpu_ticks.saturating_sub(prev);
-                self.procs[i].cpu_pct = (delta as f32 / total_delta as f32) * 100.0;
-            }
-        }
-
         for i in 0..count {
-            self.prev_ticks[i] = self.procs[i].cpu_ticks;
+            self.prev_cpu_tsc[i] = self.procs[i].cpu_tsc;
         }
 
+        self.prev_uptime_ticks = info.uptime_ticks;
         self.proc_count = count;
         self.prev_poll_ns = self.last_poll_ns;
         self.last_poll_ns = now;
+
+        // Reset the accumulator once the window has been applied.
+        if compute_pct {
+            self.acc_cpu_tsc = [0; MAX_PROCS];
+            self.acc_pids = [0; MAX_PROCS];
+            self.acc_count = 0;
+            self.acc_wall_tsc = 0;
+            self.acc_polls = 0;
+        }
 
         let mut ready = 0u32;
         let mut run = 0u32;
@@ -201,13 +256,45 @@ impl SystemState {
             .position(|p| p.pid == pid)
     }
 
-    fn find_prev_ticks(&self, pid: u32) -> u64 {
+    fn find_prev_cpu_tsc(&self, pid: u32) -> u64 {
         for i in 0..self.proc_count {
             if self.procs[i].pid == pid {
-                return self.prev_ticks[i];
+                return self.prev_cpu_tsc[i];
             }
         }
         0
+    }
+
+    /// Find or allocate an accumulator slot for `pid`.
+    fn acc_slot_for_pid(&mut self, pid: u32) -> usize {
+        // Search existing slots.
+        for i in 0..self.acc_count {
+            if self.acc_pids[i] == pid {
+                return i;
+            }
+        }
+        // Allocate a new slot (bounded by MAX_PROCS).
+        let slot = if self.acc_count < MAX_PROCS {
+            let s = self.acc_count;
+            self.acc_pids[s] = pid;
+            self.acc_count += 1;
+            s
+        } else {
+            // Safety overflow: reuse slot 0.
+            0
+        };
+        slot
+    }
+
+    /// Return the last displayed `cpu_pct` for a given PID (used to keep
+    /// values stable in the 3 polls between window computations).
+    fn find_prev_cpu_pct(&self, pid: u32) -> f32 {
+        for i in 0..self.proc_count {
+            if self.procs[i].pid == pid {
+                return self.procs[i].cpu_pct;
+            }
+        }
+        0.0
     }
 
     pub fn load_history_sample(&self, age: usize) -> u8 {

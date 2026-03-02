@@ -219,6 +219,7 @@ pub const SYS_FB_UNLOCK: u64 = 86;
 pub const SYS_FB_IS_LOCKED: u64 = 87;
 pub const SYS_FB_PRESENT: u64 = 88;
 pub const SYS_FB_BLIT: u64 = 89;
+pub const SYS_FB_MARK_DIRTY: u64 = 90;
 
 // EXTERN ASM FUNCTIONS
 
@@ -348,6 +349,10 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_FB_IS_LOCKED => fb_lock_holder() as u64,
         SYS_FB_PRESENT => sys_fb_present(),
         SYS_FB_BLIT => sys_fb_blit(),
+        SYS_FB_MARK_DIRTY => {
+            fb_mark_dirty();
+            0
+        }
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);

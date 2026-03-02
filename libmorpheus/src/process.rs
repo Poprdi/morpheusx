@@ -107,6 +107,11 @@ pub struct PsEntry {
     pub state: u32,
     pub priority: u32,
     pub cpu_ticks: u64,
+    /// Accumulated TSC cycles this process was actively running.
+    /// For PID 0 (kernel), HLT idle time is excluded — use this as the
+    /// numerator and `SysInfo::uptime_ticks` delta as denominator for
+    /// absolute CPU utilization %.
+    pub cpu_tsc: u64,
     pub pages_alloc: u64,
     /// NUL-terminated process name.
     pub name: [u8; 32],
@@ -120,6 +125,7 @@ impl PsEntry {
             state: 0,
             priority: 0,
             cpu_ticks: 0,
+            cpu_tsc: 0,
             pages_alloc: 0,
             name: [0u8; 32],
         }

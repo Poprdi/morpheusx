@@ -4,6 +4,7 @@ extern crate alloc;
 
 use libmorpheus::entry;
 use libmorpheus::hw::{fb_blit, fb_info, fb_lock, fb_map};
+use libmorpheus::process;
 use libmorpheus::time;
 use morpheus_gfx3d::camera::Camera;
 use morpheus_gfx3d::light::{DirLight, LightEnv};
@@ -254,6 +255,18 @@ fn main() -> i32 {
 
         // Push completed frame to VRAM (full memcpy — faster than delta for 3D)
         let _ = fb_blit();
+
+        // Frame pacing — cap at ~60 FPS, sleep the remainder so we don't
+        // burn 100 % CPU on a render-bound demo.
+        let frame_end_ns = time::clock_gettime();
+        let frame_ns = frame_end_ns.saturating_sub(frame_start_ns);
+        const TARGET_NS: u64 = 16_666_666; // ~60 FPS
+        if frame_ns < TARGET_NS {
+            let sleep_ms = (TARGET_NS - frame_ns) / 1_000_000;
+            if sleep_ms > 0 {
+                process::sleep(sleep_ms);
+            }
+        }
     }
 
     #[allow(unreachable_code)]
