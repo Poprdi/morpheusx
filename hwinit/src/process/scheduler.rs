@@ -68,6 +68,16 @@ static IDLE_TSC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static KERNEL_LAST_WAS_IDLE: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
+/// How many consecutive quanta PID 0 has been skipped by the idle-donation
+/// logic.  When this reaches `MAX_KERNEL_SKIP` the reservation overrides the
+/// skip, forcing PID 0 to run — guaranteeing a kernel CPU floor.
+static KERNEL_SKIP_STREAK: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Kernel is guaranteed at least 1 quantum per (MAX_KERNEL_SKIP + 1).
+/// 7 → kernel floor ≈ 12.5 %.  Raise to lower the floor; lower to raise it.
+const MAX_KERNEL_SKIP: u32 = 7;
+
 /// True once `init_scheduler()` has been called.
 static mut SCHEDULER_READY: bool = false;
 
@@ -1078,10 +1088,25 @@ unsafe fn wake_expired_sleepers() {
 /// When `skip_kernel` is true (kernel just HLT'd), PID 0 is excluded from the
 /// first pass so user processes receive consecutive quanta while the kernel has
 /// nothing to do.  PID 0 remains the hard fallback if no other process is ready.
+///
+/// Hard floor: even when `skip_kernel` is true, PID 0 is forced to run once
+/// every `MAX_KERNEL_SKIP + 1` quanta via `KERNEL_SKIP_STREAK`.  This prevents
+/// CPU-hungry user processes from starving the kernel entirely.
 unsafe fn pick_next(current: usize, skip_kernel: bool) -> usize {
     let n = MAX_PROCESSES;
 
-    // First pass: find any ready process, skipping PID 0 if kernel was idle.
+    // Enforce the kernel floor: if we have been skipping PID 0 for too long,
+    // override the skip flag and let PID 0 run unconditionally this quantum.
+    let streak = KERNEL_SKIP_STREAK.load(Ordering::Relaxed);
+    let skip_kernel = if skip_kernel && streak >= MAX_KERNEL_SKIP {
+        KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
+        false // floor hit — must give PID 0 a turn
+    } else {
+        skip_kernel
+    };
+
+    // First pass: find any ready process, skipping PID 0 if kernel was idle
+    // AND the floor has not yet been reached.
     for delta in 1..=n {
         let candidate = (current + delta) % n;
         if skip_kernel && candidate == 0 {
@@ -1089,12 +1114,20 @@ unsafe fn pick_next(current: usize, skip_kernel: bool) -> usize {
         }
         if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {
             if p.state == ProcessState::Ready {
+                if candidate == 0 {
+                    // PID 0 selected — reset streak.
+                    KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
+                } else if skip_kernel {
+                    // A user process is taking this quantum; PID 0 is being skipped.
+                    KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
+                }
                 return candidate;
             }
         }
     }
 
     // Second pass (fallback): include PID 0 — nothing else was runnable.
+    KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
     for delta in 1..=n {
         let candidate = (current + delta) % n;
         if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {

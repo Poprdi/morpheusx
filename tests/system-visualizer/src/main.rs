@@ -395,15 +395,9 @@ fn main() -> i32 {
 
         let _ = fb_blit();
 
-        let frame_end = time::clock_gettime();
-        let frame_ns = frame_end.saturating_sub(now);
-        const TARGET_NS: u64 = 16_666_666; // ~60 FPS
-        if frame_ns < TARGET_NS {
-            let sleep_ms = (TARGET_NS - frame_ns) / 1_000_000;
-            if sleep_ms > 0 {
-                libmorpheus::process::sleep(sleep_ms);
-            }
-        }
+        // No artificial frame cap — sysvis runs at full throughput.
+        // A sleep here blocks the process, handing quanta back to the kernel
+        // which immediately HLTs — producing ~40 % false idle.
     }
 
     0
