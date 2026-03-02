@@ -63,7 +63,7 @@ impl IsoWriter {
     /// Create new writer for ISO of given size
     pub fn new(iso_name: &str, total_size: u64) -> Self {
         let mut name = [0u8; 64];
-        let len = iso_name.as_bytes().len().min(63);
+        let len = iso_name.len().min(63);
         name[..len].copy_from_slice(&iso_name.as_bytes()[..len]);
 
         Self {
@@ -110,7 +110,7 @@ impl IsoWriter {
         }
 
         // Calculate number of chunks needed
-        let num_chunks = ((self.total_size + self.chunk_size - 1) / self.chunk_size) as usize;
+        let num_chunks = self.total_size.div_ceil(self.chunk_size) as usize;
         if num_chunks > MAX_CHUNK_PARTITIONS {
             return Err(DiskError::InvalidSize);
         }

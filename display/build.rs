@@ -33,7 +33,7 @@ fn main() {
             let obj_path = out_dir.join(format!("{}.o", obj_name));
 
             let status = Command::new("nasm")
-                .args(&["-f", obj_format, "-o", obj_path.to_str().unwrap(), asm_path])
+                .args(["-f", obj_format, "-o", obj_path.to_str().unwrap(), asm_path])
                 .status()
                 .expect("Failed to run nasm");
 

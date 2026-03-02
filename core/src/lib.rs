@@ -19,6 +19,8 @@
 #![allow(clippy::result_unit_err)]
 #![allow(clippy::op_ref)]
 #![allow(clippy::manual_div_ceil)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 
 pub mod disk;
 pub mod fs;

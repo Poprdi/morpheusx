@@ -51,6 +51,13 @@
 #![no_std]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+#![allow(static_mut_refs)]
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::fn_to_numeric_cast)]
+#![allow(clippy::result_unit_err)]
+#![allow(clippy::new_without_default)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::large_enum_variant)]
 // Allow never_loop - our poll-based state machines intentionally return
 // from loops early (single-threaded cooperative polling pattern)
 #![allow(clippy::never_loop)]
@@ -119,10 +126,15 @@ pub use driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitErro
 pub use driver::block_io_adapter::{BlockIoError, VirtioBlkBlockIo};
 pub use driver::unified_block_io::{GenericBlockIo, UnifiedBlockIo, UnifiedBlockIoError};
 
+// Re-export gpt_disk_io types so consumers don't need a direct dep
+pub use gpt_disk_io::BlockIo as GptBlockIo;
+pub use gpt_disk_types::{BlockSize as GptBlockSize, Lba as GptLba};
+
 // Block probe
 pub use boot::block_probe::{
-    detect_block_device_type, probe_and_create_block_driver, probe_unified_block_device,
-    BlockDeviceType, BlockDmaConfig, BlockProbeError, BlockProbeResult,
+    create_unified_from_detected, detect_block_device_type, probe_and_create_block_driver,
+    probe_unified_block_device, scan_all_block_devices, BlockDeviceType, BlockDmaConfig,
+    BlockProbeError, BlockProbeResult, DetectedBlockDevice,
 };
 
 // Client

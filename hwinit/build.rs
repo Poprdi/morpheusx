@@ -14,6 +14,8 @@ const ASM_CPU: &[&str] = &[
     "asm/cpu/pio.s",
     "asm/cpu/cache.s",
     "asm/cpu/delay.s",
+    "asm/cpu/context_switch.s",
+    "asm/cpu/syscall.s",
 ];
 
 const ASM_PCI: &[&str] = &[
@@ -24,6 +26,8 @@ const ASM_PCI: &[&str] = &[
     "asm/pci/virtio_cap.s",
 ];
 
+const ASM_FB: &[&str] = &["asm/fb/present.s"];
+
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -31,7 +35,10 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     if !target.contains("x86_64") {
-        println!("cargo:warning=Skipping ASM for non-x86_64 target: {}", target);
+        println!(
+            "cargo:warning=Skipping ASM for non-x86_64 target: {}",
+            target
+        );
         return;
     }
 
@@ -46,11 +53,14 @@ fn main() {
         "elf64"
     };
 
-    println!("cargo:warning=Building hwinit ASM for: {} ({})", target, obj_format);
+    println!(
+        "cargo:warning=Building hwinit ASM for: {} ({})",
+        target, obj_format
+    );
 
     let mut objects = Vec::new();
 
-    for files in [ASM_CPU, ASM_PCI] {
+    for files in [ASM_CPU, ASM_PCI, ASM_FB] {
         for path in files.iter() {
             if Path::new(path).exists() {
                 println!("cargo:rerun-if-changed={}", path);

@@ -116,11 +116,17 @@ asm_link_poll_up:
     
     ; Check link bit
     test    ax, BMSR_LINK
-    jz      .poll_loop          ; Link down, keep polling
+    jz      .no_link            ; Link down, keep polling
     
     ; Link up!
     xor     eax, eax
     jmp     .done
+
+.no_link:
+    ; PERF FIX: pause hint before retry reduces pipeline contention
+    ; and power consumption during link polling (can run for seconds).
+    pause
+    jmp     .poll_loop
     
 .timeout:
     mov     eax, 1

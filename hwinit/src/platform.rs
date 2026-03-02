@@ -1,87 +1,41 @@
 //! Platform initialization orchestrator.
 //!
 //! Self-contained hardware init. No UEFI trust after entry.
+//! Phases: Memory → GDT/TSS → IDT → PIC → Heap → TSC → DMA → PCI.
 //! After this runs, the machine is SANE and drivers can do their work.
 //!
-//! # What This Does
-//!
-//! ```text
-//! UEFI hands off memory map
-//!        │
-//!        ▼
-//! ┌──────────────────────────────────────────────────────────────┐
-//! │  platform_init_selfcontained()                               │
-//! │                                                              │
-//! │  1. Initialize Memory Registry (we own memory now)           │
-//! │  2. Set up GDT/TSS (proper long mode segments)               │
-//! │  3. Set up IDT (exception handlers ready)                    │
-//! │  4. Remap PIC (IRQs won't collide with exceptions)           │
-//! │  5. Initialize Heap (GlobalAlloc works)                      │
-//! │  6. Calibrate TSC (timing works)                             │
-//! │  7. Allocate DMA region (DMA legal)                          │
-//! │  8. Enable bus mastering on PCI devices                      │
-//! │                                                              │
-//! │  Result: Machine is SANE. Drivers just do driver work.       │
-//! └──────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! # Non-responsibilities
-//!
-//! This module does NOT:
-//! - Classify devices (that's driver layer)
-//! - Initialize specific hardware (that's driver layer)
-//! - Know about virtio, e1000, AHCI, etc. (that's driver layer)
-//!
-//! # Usage
-//!
-//! ```ignore
-//! // After ExitBootServices, call once:
-//! let platform = unsafe { platform_init_selfcontained(SelfContainedConfig {
-//!     memory_map_ptr: map_ptr,
-//!     memory_map_size: map_size,
-//!     descriptor_size: desc_size,
-//!     descriptor_version: desc_version,
-//! })? };
-//!
-//! // Now safe to use:
-//! // - Box, Vec, any heap allocation
-//! // - Spinlocks (interrupt-safe)
-//! // - DMA transfers
-//! // - Device MMIO
-//! //
-//! // Driver layer can now scan PCI and claim devices.
-//! ```
+//! Does NOT classify or initialize specific devices — that's the driver layer.
 
-use crate::dma::DmaRegion;
-use crate::memory::{
-    PhysicalAllocator, fallback_allocator,
-    init_global_registry, global_registry_mut, MemoryType, AllocateType,
-};
-use crate::cpu::tsc::calibrate_tsc_pit;
 use crate::cpu::gdt::init_gdt;
-use crate::cpu::idt::init_idt;
+use crate::cpu::idt::{init_idt, set_interrupt_handler};
 use crate::cpu::pic::init_pic;
+use crate::cpu::sse::enable_sse;
+use crate::cpu::tsc::calibrate_tsc_pit;
+use crate::dma::DmaRegion;
 use crate::heap::init_heap;
-use crate::pci::{pci_cfg_read16, pci_cfg_write16, PciAddr, offset};
-use crate::serial::{puts, put_hex32, put_hex64, newline};
+use crate::memory::{
+    fallback_allocator, global_registry_mut, init_global_registry, AllocateType, MemoryType,
+    PhysicalAllocator,
+};
+use crate::paging::init_kernel_page_table;
+use crate::pci::{offset, pci_cfg_read16, pci_cfg_write16, PciAddr};
+use crate::process::scheduler::init_scheduler;
+use crate::serial::{put_hex32, put_hex64, puts};
+use crate::syscall::init_syscall;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// PCI command register bits
 const CMD_MEM_SPACE: u16 = 1 << 1;
 const CMD_BUS_MASTER: u16 = 1 << 2;
 
 /// Stack sizes for CPU state
-const KERNEL_STACK_SIZE: usize = 64 * 1024;  // 64KB kernel stack
-const IST1_STACK_SIZE: usize = 16 * 1024;    // 16KB IST1 for critical exceptions
-const HEAP_SIZE: usize = 4 * 1024 * 1024;    // 4MB initial heap
-const DMA_SIZE: usize = 2 * 1024 * 1024;     // 2MB DMA region
+const KERNEL_STACK_SIZE: usize = 64 * 1024; // 64KB kernel stack
+                                            // IST1 stack is now a static array in gdt.rs — no heap allocation needed.
+const HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB initial heap
+const DMA_SIZE: usize = 2 * 1024 * 1024; // 2MB DMA region
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TYPES
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Self-contained platform configuration.
 /// Pass just the memory map - we do everything else.
@@ -94,6 +48,13 @@ pub struct SelfContainedConfig {
     pub descriptor_size: usize,
     /// Descriptor version (from UEFI)
     pub descriptor_version: u32,
+    /// Physical base address of the loaded PE image (page-aligned).
+    /// All pages in [image_base, image_base + image_pages * 4096) are
+    /// reserved from the buddy allocator so our .text/.data/.bss are
+    /// never handed out as free memory.
+    pub image_base: u64,
+    /// Number of 4 KiB pages the PE image occupies (derived from SizeOfImage).
+    pub image_pages: u64,
 }
 
 /// Platform configuration input (legacy - externally allocated).
@@ -126,111 +87,211 @@ pub enum InitError {
     MemoryRegistryFailed,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SELF-CONTAINED ENTRY POINT
-// ═══════════════════════════════════════════════════════════════════════════
 
-/// Self-contained platform initialization.
-///
-/// After this returns, the machine is SANE:
-/// - CPU state is ours (GDT/IDT/TSS)
-/// - Memory is ours (registry, heap)
-/// - Interrupts are sane (PIC remapped)
-/// - Bus mastering enabled on PCI devices
-/// - DMA is legal (identity-mapped region allocated)
-///
-/// Drivers can now scan PCI and do their own device detection.
-///
-/// # Safety
-/// - Must be called IMMEDIATELY after ExitBootServices
-/// - Memory map must be valid
-/// - Must be called exactly once
+/// Take ownership of the machine. after this, UEFI is dead to us.
 pub unsafe fn platform_init_selfcontained(
-    config: SelfContainedConfig
+    config: SelfContainedConfig,
 ) -> Result<PlatformInit, InitError> {
-    puts("[HWINIT] ═══════════════════════════════════════════════\n");
-    puts("[HWINIT] FULL PLATFORM INIT - TAKING OWNERSHIP\n");
-    puts("[HWINIT] ═══════════════════════════════════════════════\n");
+    // Belt-and-suspenders: ensure IF=0 before we touch any memory.
+    // enter_baremetal already does `cli` after ExitBootServices, but if
+    // anyone ever calls this entry from a different path, we're covered.
+    core::arch::asm!("cli", options(nomem, nostack));
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 1: MEMORY - Parse UEFI map, we own physical memory now
-    // ─────────────────────────────────────────────────────────────────────
-    puts("[HWINIT] Phase 1: Memory ownership\n");
+    // Clear CR0.WP (Write Protect) BEFORE any buddy operations.
+    // UEFI marks page-table pages and some BootServicesCode as read-only
+    // (R/W=0 in the PTE).  With WP=1, even Ring 0 code faults when
+    // writing to those pages.  The buddy's `list_push` writes FreeNode
+    // structs at physical addresses — if a split spare lands on one of
+    // these read-only pages, we get #PF.  Clear WP once, early, forever.
+    {
+        let cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+        if cr0 & (1u64 << 16) != 0 {
+            core::arch::asm!(
+                "mov cr0, {}",
+                in(reg) cr0 & !(1u64 << 16),
+                options(nomem, nostack),
+            );
+        }
+    }
 
+    puts("[HWINIT] === TAKING OWNERSHIP ===\n");
+
+    // phase 1: memory
+    puts("[HWINIT] Phase 1: Memory\n");
+
+    // ── Collect every page the CPU is actively using ──────────────
+    //
+    // The buddy allocator writes a 16-byte FreeNode header at the base
+    // of each free block — including "spare" halves produced by
+    // carve_block splits.  If ANY of those addresses is a live page-
+    // table page, the write overwrites PTE entries 0-1, corrupting the
+    // identity mapping.  Subsequent reads through the broken PTE return
+    // garbage → #GP / #PF.
+    //
+    // Fix: collect PT/GDT/IDT/stack pages BEFORE populating the buddy,
+    // and pass them as a sorted hole-punch array to import_uefi_map.
+    // The buddy will never touch those addresses — not during initial
+    // import, not during any later carve_block split.
+
+    // 1) Page-table pages (PML4, PDPT, PD, PT)
+    let (mut hw_holes, mut hw_count) = crate::paging::collect_page_table_pages();
+
+    puts("[MEM] collected ");
+    put_hex32(hw_count as u32);
+    puts(" page-table pages\n");
+
+    // 2) GDT page(s)
+    {
+        let mut buf = [0u8; 10];
+        core::arch::asm!("sgdt [{}]", in(reg) buf.as_mut_ptr(), options(nostack));
+        let limit = u16::from_le_bytes([buf[0], buf[1]]) as u64;
+        let base = u64::from_le_bytes([
+            buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9],
+        ]);
+        let page_start = base & !0xFFF;
+        let page_end = (base + limit + 0xFFF) & !0xFFF;
+        let mut p = page_start;
+        while p < page_end && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+        puts("[MEM] GDT at ");
+        put_hex64(page_start);
+        puts("\n");
+    }
+
+    // 3) IDT page(s)
+    {
+        let mut buf = [0u8; 10];
+        core::arch::asm!("sidt [{}]", in(reg) buf.as_mut_ptr(), options(nostack));
+        let limit = u16::from_le_bytes([buf[0], buf[1]]) as u64;
+        let base = u64::from_le_bytes([
+            buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9],
+        ]);
+        let page_start = base & !0xFFF;
+        let page_end = (base + limit + 0xFFF) & !0xFFF;
+        let mut p = page_start;
+        while p < page_end && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+        puts("[MEM] IDT at ");
+        put_hex64(page_start);
+        puts("\n");
+    }
+
+    // 4) Boot stack pages (current RSP ± safety margin)
+    let boot_stack_base;
+    let boot_stack_top;
+    {
+        let rsp: u64;
+        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
+        boot_stack_base = (rsp & !0xFFF).saturating_sub(128 * 1024);
+        boot_stack_top = (rsp & !0xFFF) + 32 * 1024;
+        let mut p = boot_stack_base;
+        while p < boot_stack_top && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+    }
+
+    // Deduplicate and sort (insertion sort — hw_count is typically < 100).
+    for i in 1..hw_count {
+        let key = hw_holes[i];
+        let mut j = i;
+        while j > 0 && hw_holes[j - 1] > key {
+            hw_holes[j] = hw_holes[j - 1];
+            j -= 1;
+        }
+        hw_holes[j] = key;
+    }
+    // Deduplicate in-place.
+    if hw_count > 1 {
+        let mut w = 1usize;
+        for r in 1..hw_count {
+            if hw_holes[r] != hw_holes[w - 1] {
+                hw_holes[w] = hw_holes[r];
+                w += 1;
+            }
+        }
+        hw_count = w;
+    }
+
+    puts("[MEM] ");
+    put_hex32(hw_count as u32);
+    puts(" hw-hole pages (PT+GDT+IDT+stack)\n");
+
+    // ── Populate the buddy allocator ─────────────────────────────
     init_global_registry(
         config.memory_map_ptr,
         config.memory_map_size,
         config.descriptor_size,
         config.descriptor_version,
+        config.image_base,
+        config.image_pages,
+        &hw_holes[..hw_count],
     );
-    
-    puts("[HWINIT]   memory registry initialized\n");
+
+    if config.image_pages > 0 {
+        puts("[MEM] excluded PE image: ");
+        put_hex64(config.image_base);
+        puts(" (");
+        put_hex32(config.image_pages as u32);
+        puts(" pages)\n");
+    }
+
+    // Validate free-list integrity after import.
+    {
+        let reg = global_registry_mut();
+        let corrupt = reg.validate_free_lists();
+        if corrupt > 0 {
+            puts("[MEM] WARNING: dumping map for triage\n");
+            reg.dump_map();
+        }
+    }
+
+    puts("[MEM] boot stack: ");
+    put_hex64(boot_stack_base);
+    puts(" .. ");
+    put_hex64(boot_stack_top);
+    puts("\n");
 
     let registry = global_registry_mut();
-    let total_mb = registry.total_memory() / (1024 * 1024);
-    let free_mb = registry.free_memory() / (1024 * 1024);
-    puts("[HWINIT]   total: ");
-    put_hex32(total_mb as u32);
-    puts(" MB, free: ");
-    put_hex32(free_mb as u32);
-    puts(" MB\n");
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 2: CPU STATE - Our GDT, our IDT, our rules
-    // ─────────────────────────────────────────────────────────────────────
+    // phase 2: cpu
     puts("[HWINIT] Phase 2: CPU state\n");
 
     // Allocate kernel stack
-    let kernel_stack_pages = ((KERNEL_STACK_SIZE + 4095) / 4096) as u64;
-    let kernel_stack_base = registry.allocate_pages(
-        AllocateType::AnyPages,
-        MemoryType::LoaderData,
-        kernel_stack_pages,
-    ).map_err(|_| InitError::NoFreeMemory)?;
+    let kernel_stack_pages = KERNEL_STACK_SIZE.div_ceil(4096) as u64;
+    let kernel_stack_base = registry
+        .allocate_pages(
+            AllocateType::AnyPages,
+            MemoryType::LoaderData,
+            kernel_stack_pages,
+        )
+        .map_err(|_| InitError::NoFreeMemory)?;
     let kernel_stack_top = kernel_stack_base + KERNEL_STACK_SIZE as u64;
 
-    // Allocate IST1 stack (for NMI, double fault, machine check)
-    let ist1_stack_pages = ((IST1_STACK_SIZE + 4095) / 4096) as u64;
-    let ist1_stack_base = registry.allocate_pages(
-        AllocateType::AnyPages,
-        MemoryType::LoaderData,
-        ist1_stack_pages,
-    ).map_err(|_| InitError::NoFreeMemory)?;
-    let ist1_stack_top = ist1_stack_base + IST1_STACK_SIZE as u64;
-
-    puts("[HWINIT]   kernel stack: ");
-    put_hex64(kernel_stack_base);
-    puts(" - ");
-    put_hex64(kernel_stack_top);
-    newline();
-
-    puts("[HWINIT]   IST1 stack: ");
-    put_hex64(ist1_stack_base);
-    puts(" - ");
-    put_hex64(ist1_stack_top);
-    newline();
-
     // Load our GDT with TSS
-    puts("[HWINIT]   calling init_gdt...\n");
-    init_gdt(kernel_stack_top, ist1_stack_top);
-    puts("[HWINIT]   GDT loaded\n");
+    // IST1 lives in BSS. one less thing to allocate.
+    init_gdt(kernel_stack_top);
 
-    // Load our IDT with exception handlers
     init_idt();
-    puts("[HWINIT]   IDT loaded\n");
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 3: INTERRUPTS - PIC remapped, sane vectors
-    // ─────────────────────────────────────────────────────────────────────
-    puts("[HWINIT] Phase 3: Interrupt controller\n");
+    enable_sse();
+
+    // phase 3: interrupts
+    puts("[HWINIT] Phase 3: PIC\n");
 
     init_pic();
-    puts("[HWINIT]   PIC remapped (IRQ0-7 -> 0x20, IRQ8-15 -> 0x28)\n");
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 4: HEAP - GlobalAlloc works after this
-    // ─────────────────────────────────────────────────────────────────────
-    puts("[HWINIT] Phase 4: Heap allocator\n");
+    // phase 4: heap
+    puts("[HWINIT] Phase 4: Heap\n");
 
     // init_heap allocates from registry itself
     if let Err(e) = init_heap(HEAP_SIZE) {
@@ -239,59 +300,148 @@ pub unsafe fn platform_init_selfcontained(
         puts("\n");
         return Err(InitError::NoFreeMemory);
     }
-    puts("[HWINIT]   heap initialized (");
-    put_hex32((HEAP_SIZE / 1024) as u32);
-    puts(" KB)\n");
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 5: TSC - Calibrate for timing
-    // ─────────────────────────────────────────────────────────────────────
-    puts("[HWINIT] Phase 5: TSC calibration\n");
+    // phase 5: tsc
+    puts("[HWINIT] Phase 5: TSC\n");
 
     let tsc_freq = calibrate_tsc_pit();
     if tsc_freq == 0 {
         return Err(InitError::TscCalibrationFailed);
     }
-    puts("[HWINIT]   TSC: ");
-    put_hex64(tsc_freq);
-    puts(" Hz (");
-    put_hex32((tsc_freq / 1_000_000) as u32);
-    puts(" MHz)\n");
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 6: DMA - Allocate identity-mapped region for device DMA
-    // ─────────────────────────────────────────────────────────────────────
-    puts("[HWINIT] Phase 6: DMA region\n");
+    crate::process::scheduler::set_tsc_frequency(tsc_freq);
 
-    let dma_pages = ((DMA_SIZE + 4095) / 4096) as u64;
-    let dma_phys = registry.allocate_pages(
-        AllocateType::MaxAddress(0x100000000), // Under 4GB for 32-bit DMA
-        MemoryType::LoaderData,
-        dma_pages,
-    ).map_err(|_| InitError::NoFreeMemory)?;
+    // phase 6: dma
+    puts("[HWINIT] Phase 6: DMA\n");
 
-    puts("[HWINIT]   DMA: ");
-    put_hex64(dma_phys);
-    puts(" (");
-    put_hex32((DMA_SIZE / 1024) as u32);
-    puts(" KB)\n");
+    let dma_pages = DMA_SIZE.div_ceil(4096) as u64;
+    let dma_phys = registry
+        .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedDma, dma_pages)
+        .map_err(|_| InitError::NoFreeMemory)?;
 
-    // Identity-mapped: CPU address = bus address = physical address
+    // zero DMA region. VirtIO checks avail->idx on enable and garbage there
+    // permanently desyncs the driver. found that one the hard way.
+    core::ptr::write_bytes(dma_phys as *mut u8, 0u8, DMA_SIZE);
+
+    // identity-mapped: VA = PA = bus address
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // PHASE 7: PCI - Enable bus mastering on all devices
-    // ─────────────────────────────────────────────────────────────────────
-    puts("[HWINIT] Phase 7: PCI bus mastering\n");
+    // phase 7: pci
+    puts("[HWINIT] Phase 7: PCI\n");
 
-    let devices_enabled = enable_all_pci_devices();
-    puts("[HWINIT]   enabled ");
-    put_hex32(devices_enabled as u32);
-    puts(" devices\n");
+    enable_all_pci_devices();
 
-    // ─────────────────────────────────────────────────────────────────────
+    // phase 8: paging
+    puts("[HWINIT] Phase 8: Paging\n");
+
+    init_kernel_page_table();
+
+    // phase 9: scheduler
+    puts("[HWINIT] Phase 9: Scheduler\n");
+
+    init_scheduler();
+
+    // phase 10: syscalls
+    puts("[HWINIT] Phase 10: Syscalls\n");
+
+    init_syscall();
+
+    // PIT @ ~100 Hz for preemptive scheduling
+    {
+        use crate::cpu::pio::outb;
+        const PIT_DIVISOR: u32 = 11931; // ~100 Hz
+        outb(0x43, 0x36); // channel 0, lo/hi, mode 3
+        outb(0x40, (PIT_DIVISOR & 0xFF) as u8);
+        outb(0x40, ((PIT_DIVISOR >> 8) & 0xFF) as u8);
+    }
+
+    // timer ISR → IDT vector 0x20 (PIC IRQ 0)
+    extern "C" {
+        fn irq_timer_isr();
+    }
+    set_interrupt_handler(0x20, irq_timer_isr as u64, 0, 0);
+
+    // Enable IRQ 0 (PIT timer) via PIC.
+    use crate::cpu::pic::enable_irq;
+    enable_irq(0); // PIT
+    use crate::cpu::idt::enable_interrupts;
+    enable_interrupts(); // here we go
+
+    // phase 10.5: reclaim UEFI BootServices RAM
+    //
+    // BootServices{Code,Data} pages are legally free after ExitBootServices.
+    // We deferred adding them to the buddy until now (well after GDT/IDT/PIC/
+    // heap/TSC/paging/scheduler) to let UEFI's boot-time state wind down.
+    //
+    // CRITICAL: page-table pages live in BootServicesData.  We must NOT
+    // write FreeNode into them — doing so corrupts the live PML4/PDPT/PD/PT
+    // and the very next instruction that triggers a TLB miss will #GP or #PF.
+    // Collect them first, sort, and pass as an exclusion set.
+    puts("[HWINIT] Phase 10.5: Reclaiming UEFI BootServices RAM\n");
+    {
+        let (mut pt_pages, pt_count) = crate::paging::collect_page_table_pages();
+
+        // Simple insertion sort — pt_count is typically < 50.
+        for i in 1..pt_count {
+            let key = pt_pages[i];
+            let mut j = i;
+            while j > 0 && pt_pages[j - 1] > key {
+                pt_pages[j] = pt_pages[j - 1];
+                j -= 1;
+            }
+            pt_pages[j] = key;
+        }
+
+        let reg = global_registry_mut();
+        reg.reclaim_boot_services(&pt_pages[..pt_count]);
+    }
+    // Re-lock page-table pages that lived in BootServices address space.
+    // reclaim_boot_services already excluded them via hw_holes, so this
+    // is purely belt-and-suspenders — carve_block will no-op for pages
+    // that were never added to the buddy.
+    //
+    // NOTE: reserve_page_table_pages uses allocate_pages(Address(...))
+    // which calls carve_block.  This is SAFE because we already cleared
+    // CR0.WP in Phase 1 and the PT pages were hole-punched during both
+    // import and reclaim.  Splits won't produce spares at PT addresses.
+    crate::paging::reserve_page_table_pages();
+
+    // phase 11: filesystem
+    puts("[HWINIT] Phase 11: HelixFS\n");
+
+    {
+        const ROOT_FS_SIZE: usize = 16 * 1024 * 1024; // 16 MB
+        let root_fs_pages = (ROOT_FS_SIZE / 4096) as u64;
+        let registry = global_registry_mut();
+        let root_fs_base = registry
+            .allocate_pages(
+                AllocateType::AnyPages,
+                MemoryType::LoaderData,
+                root_fs_pages,
+            )
+            .map_err(|_| InitError::NoFreeMemory)?;
+
+        // Zero the region.
+        core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
+
+        match morpheus_helix::vfs::global::init_root_fs(root_fs_base as *mut u8, ROOT_FS_SIZE) {
+            Ok(()) => puts("[HWINIT]   HelixFS mounted at /\n"),
+            Err(_) => {
+                puts("[HWINIT]   WARNING: root FS init failed\n");
+                // Non-fatal — system continues without FS.
+            }
+        }
+    }
+
+    // Set initial kernel_syscall_rsp for PID 0.
+    {
+        extern "C" {
+            static mut kernel_syscall_rsp: u64;
+        }
+        kernel_syscall_rsp = kernel_stack_top;
+    }
+
     // DONE - Machine is sane
-    // ─────────────────────────────────────────────────────────────────────
     puts("[HWINIT] ═══════════════════════════════════════════════\n");
     puts("[HWINIT] PLATFORM READY - Drivers may proceed\n");
     puts("[HWINIT] ═══════════════════════════════════════════════\n");
@@ -306,9 +456,7 @@ pub unsafe fn platform_init_selfcontained(
     })
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // LEGACY ENTRY POINT (External DMA/TSC)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Platform initialization entry point (legacy - external DMA/TSC).
 ///
@@ -320,19 +468,11 @@ pub unsafe fn platform_init_selfcontained(
 /// - DMA region must be valid and identity-mapped
 /// - Must be called exactly once
 pub unsafe fn platform_init(config: PlatformConfig) -> Result<PlatformInit, InitError> {
-    puts("[HWINIT] platform_init (legacy) start\n");
-
     // Validate DMA region
     if config.dma_base.is_null() || config.dma_size < DmaRegion::MIN_SIZE {
         puts("[HWINIT] ERROR: invalid DMA region\n");
         return Err(InitError::InvalidDmaRegion);
     }
-
-    puts("[HWINIT] DMA base=");
-    put_hex64(config.dma_base as u64);
-    puts(" size=");
-    put_hex32(config.dma_size as u32);
-    newline();
 
     let dma_region = DmaRegion::new(config.dma_base, config.dma_bus, config.dma_size);
 
@@ -349,9 +489,7 @@ pub unsafe fn platform_init(config: PlatformConfig) -> Result<PlatformInit, Init
     })
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PCI BUS MASTERING (platform responsibility - NOT device classification)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Enable memory space and bus mastering on ALL PCI devices.
 ///
@@ -364,7 +502,7 @@ unsafe fn enable_all_pci_devices() -> usize {
         for device in 0..32u8 {
             let addr = PciAddr::new(bus, device, 0);
             let vendor = pci_cfg_read16(addr, offset::VENDOR_ID);
-            
+
             if vendor == 0xFFFF || vendor == 0x0000 {
                 continue;
             }
@@ -400,9 +538,7 @@ fn enable_bus_mastering(addr: PciAddr) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // PUBLIC API FOR DRIVERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 impl PlatformInit {
     /// Get DMA region for device transfers.

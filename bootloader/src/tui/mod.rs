@@ -1,13 +1,3 @@
-pub mod boot_sequence;
-pub mod debug;
-pub mod distro_downloader;
-pub mod distro_launcher;
+pub mod desktop;
 pub mod input;
-pub mod installer_menu;
-pub mod iso_manager;
-pub mod logo;
-pub mod main_menu;
-pub mod rain;
-pub mod renderer;
-pub mod storage_manager;
-pub mod widgets;
+pub mod mouse;

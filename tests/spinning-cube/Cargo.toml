@@ -1,0 +1,12 @@
+[package]
+name = "spinning-cube"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spinning-cube"
+path = "src/main.rs"
+
+[dependencies]
+libmorpheus = { path = "../../libmorpheus" }
+morpheus-gfx3d = { path = "../../gfx3d" }

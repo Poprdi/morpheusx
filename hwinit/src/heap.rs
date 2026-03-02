@@ -6,22 +6,14 @@
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                    GlobalAlloc trait                     │
-//! │                   (alloc/dealloc/etc)                    │
-//! └─────────────────────────────────────────────────────────┘
-//!                            │
+//! GlobalAlloc trait
+//! (alloc/dealloc/etc)
 //!                            ▼
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                    HeapAllocator                         │
-//! │              (linked_list_allocator::Heap)               │
-//! └─────────────────────────────────────────────────────────┘
-//!                            │
+//! HeapAllocator
+//! (linked_list_allocator::Heap)
 //!                            ▼
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                   MemoryRegistry                         │
-//! │            (allocate_pages for heap growth)              │
-//! └─────────────────────────────────────────────────────────┘
+//! MemoryRegistry
+//! (allocate_pages for heap growth)
 //! ```
 //!
 //! # Usage
@@ -46,11 +38,9 @@ use core::ptr::{self, NonNull};
 use spin::Mutex;
 
 use crate::memory::{global_registry_mut, is_registry_initialized, MemoryType, PAGE_SIZE};
-use crate::serial::{puts, put_hex64, put_hex32};
+use crate::serial::puts;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Heap metadata
 struct HeapState {
@@ -70,9 +60,7 @@ static HEAP: Mutex<Option<HeapState>> = Mutex::new(None);
 /// Heap initialized flag (for fast path check)
 static mut HEAP_INITIALIZED: bool = false;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP ALLOCATOR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Global heap allocator.
 ///
@@ -106,7 +94,8 @@ unsafe impl GlobalAlloc for HeapAllocator {
                 // Try to grow the heap
                 if try_grow_heap(state, layout.size()) {
                     // Retry allocation
-                    state.heap
+                    state
+                        .heap
                         .allocate_first_fit(layout)
                         .map(|p| p.as_ptr())
                         .unwrap_or(ptr::null_mut())
@@ -147,16 +136,14 @@ unsafe impl GlobalAlloc for HeapAllocator {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // HEAP GROWTH
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Try to grow the heap by at least `needed` bytes.
 ///
 /// Returns true if growth succeeded.
 unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
     // Round up to page size
-    let grow_size = ((needed + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize) * PAGE_SIZE as usize;
+    let grow_size = needed.div_ceil(PAGE_SIZE as usize) * PAGE_SIZE as usize;
 
     // Don't exceed max size
     if state.size + grow_size > state.max_size {
@@ -171,7 +158,7 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
     }
 
     let registry = global_registry_mut();
-    let pages = (grow_size as u64 + PAGE_SIZE - 1) / PAGE_SIZE;
+    let pages = (grow_size as u64).div_ceil(PAGE_SIZE);
 
     // We need contiguous memory, so allocate at a specific address
     // For simplicity, we extend from the current heap end
@@ -187,12 +174,6 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
             state.heap.extend(grow_size);
             state.size += grow_size;
 
-            puts("[HEAP] grew by ");
-            put_hex32(grow_size as u32);
-            puts(" bytes, total ");
-            put_hex32(state.size as u32);
-            puts("\n");
-
             true
         }
         Err(_) => {
@@ -202,9 +183,7 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize the heap allocator.
 ///
@@ -226,15 +205,17 @@ pub unsafe fn init_heap(initial_size: usize) -> Result<(), &'static str> {
     let registry = global_registry_mut();
 
     // Round up to page size
-    let size = ((initial_size + PAGE_SIZE as usize - 1) / PAGE_SIZE as usize) * PAGE_SIZE as usize;
+    let size = initial_size.div_ceil(PAGE_SIZE as usize) * PAGE_SIZE as usize;
     let pages = size as u64 / PAGE_SIZE;
 
     // Allocate heap memory
-    let base = registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        MemoryType::AllocatedHeap,
-        pages,
-    ).map_err(|_| "failed to allocate heap memory")?;
+    let base = registry
+        .allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            MemoryType::AllocatedHeap,
+            pages,
+        )
+        .map_err(|_| "failed to allocate heap memory")?;
 
     // Initialize the linked_list_allocator heap
     let mut heap = linked_list_allocator::Heap::empty();
@@ -249,12 +230,6 @@ pub unsafe fn init_heap(initial_size: usize) -> Result<(), &'static str> {
     });
 
     HEAP_INITIALIZED = true;
-
-    puts("[HEAP] initialized at ");
-    put_hex64(base);
-    puts(", size ");
-    put_hex32(size as u32);
-    puts(" bytes\n");
 
     Ok(())
 }
@@ -287,12 +262,6 @@ pub unsafe fn init_heap_with_buffer(buffer: *mut u8, size: usize) -> Result<(), 
 
     HEAP_INITIALIZED = true;
 
-    puts("[HEAP] initialized with buffer at ");
-    put_hex64(buffer as u64);
-    puts(", size ");
-    put_hex32(size as u32);
-    puts(" bytes\n");
-
     Ok(())
 }
 
@@ -304,7 +273,7 @@ pub fn is_heap_initialized() -> bool {
 /// Get heap statistics.
 pub fn heap_stats() -> Option<(usize, usize, usize)> {
     let guard = HEAP.lock();
-    guard.as_ref().map(|state| {
-        (state.size, state.heap.used(), state.heap.free())
-    })
+    guard
+        .as_ref()
+        .map(|state| (state.size, state.heap.used(), state.heap.free()))
 }

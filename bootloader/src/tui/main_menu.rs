@@ -1,6 +1,6 @@
 use crate::tui::debug::DebugOverlay;
 use crate::tui::input::{InputKey, Keyboard};
-use crate::tui::renderer::{Screen, EFI_BLACK, EFI_CYAN, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
+use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 
 // Smaller header that fits in the box
 const HEADER_ART: &[&str] = &[
@@ -248,8 +248,7 @@ impl MainMenu {
                 1 => MenuAction::DistroDownloader,
                 2 => MenuAction::StorageManager,
                 3 => MenuAction::SystemSettings,
-                4 => MenuAction::AdminFunctions,
-                5 => MenuAction::ExitToFirmware,
+                4 => MenuAction::ExitToFirmware,
                 _ => MenuAction::Navigate,
             };
         }

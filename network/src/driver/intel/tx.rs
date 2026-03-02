@@ -109,7 +109,7 @@ impl TxRing {
         serial_print(" buffer_bus=0x");
         serial_print_hex(self.buffer_bus);
         serial_println("");
-        
+
         // Check if addresses are in valid range for real hardware
         if self.desc_bus > 0xFFFF_FFFF {
             serial_println("  [WARNING] TX desc_bus > 4GB!");
@@ -117,16 +117,16 @@ impl TxRing {
         if self.buffer_bus > 0xFFFF_FFFF {
             serial_println("  [WARNING] TX buffer_bus > 4GB!");
         }
-        
+
         for i in 0..self.queue_size {
             let desc_ptr = self.desc_ptr(i);
             unsafe {
                 asm_intel_tx_init_desc(desc_ptr);
             }
         }
-        
+
         // CRITICAL: SFENCE after writing all descriptors
-        unsafe { sfence(); }
+        sfence();
         serial_println("  [TX-INIT] Descriptors initialized + sfence");
     }
 

@@ -7,6 +7,10 @@ readonly PROJECT_ROOT="${SCRIPT_DIR}"
 readonly TESTING_DIR="${PROJECT_ROOT}/testing"
 readonly ESP_DIR="${TESTING_DIR}/esp"
 readonly VERSION="2.0.0"
+# Pinned nightly for user-space (x86_64-morpheus JSON target).
+# Must match the nightly in rust-toolchain.toml comments.
+# To update: change both here and in rust-toolchain.toml, then rebuild.
+readonly PINNED_NIGHTLY="nightly-2026-02-22"
 
 readonly C_RED='\033[0;31m'
 readonly C_GREEN='\033[0;32m'
@@ -176,19 +180,34 @@ do_install_packages() {
 
 do_install_rust() {
     log_step "Rust Toolchain"
-    
+
     if ! has_cmd rustc; then
         log_info "Installing Rust..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
         source "$HOME/.cargo/env" 2>/dev/null || export PATH="$HOME/.cargo/bin:$PATH"
     fi
-    
+
+    # rust-toolchain.toml pins the stable version — rustup picks it up automatically.
+    # Explicitly install targets for the pinned stable so fresh clones work.
     if ! rustup target list 2>/dev/null | grep -q "x86_64-unknown-uefi (installed)"; then
         log_info "Adding UEFI target..."
         rustup target add x86_64-unknown-uefi
     fi
-    
-    log_success "Rust: $(rustc --version | cut -d' ' -f2)"
+
+    # Install the pinned nightly for user-space (x86_64-morpheus JSON target).
+    if ! rustup toolchain list 2>/dev/null | grep -q "^${PINNED_NIGHTLY}"; then
+        log_info "Installing pinned nightly (${PINNED_NIGHTLY})..."
+        rustup toolchain install "${PINNED_NIGHTLY}" --component rust-src
+    fi
+
+    # The pinned nightly also needs rust-src for build-std.
+    if ! rustup component list --toolchain "${PINNED_NIGHTLY}" 2>/dev/null | grep -q 'rust-src (installed)'; then
+        log_info "Adding rust-src to ${PINNED_NIGHTLY}..."
+        rustup component add rust-src --toolchain "${PINNED_NIGHTLY}"
+    fi
+
+    log_success "Stable: $(rustc --version | cut -d' ' -f2)"
+    log_success "Nightly: $(rustup run "${PINNED_NIGHTLY}" rustc --version 2>/dev/null | cut -d' ' -f2 || echo 'not installed')"
 }
 
 do_configure_ovmf() {
@@ -243,6 +262,94 @@ do_build() {
 
 # do_install_arch removed - use network downloader in bootloader TUI
 
+# ─────────────────────────────────────────────────────────────────────────────
+# User-space app build + HelixFS injection
+# ─────────────────────────────────────────────────────────────────────────────
+
+# List of (package, dest-path) pairs for all user apps to build and inject.
+# Add new apps here; they will be built and deployed automatically.
+USER_APPS=(
+    "syscall-e2e,/bin/syscall-e2e"
+    "msh,/bin/msh"
+    "spinning-cube,/bin/spinning-cube"
+    "system-visualizer,/bin/sysvis"
+)
+
+do_build_user_apps() {
+    log_step "Building User-Space Apps"
+
+    # Verify the pinned nightly is available (required for build-std + custom JSON target).
+    if ! rustup toolchain list 2>/dev/null | grep -q "^${PINNED_NIGHTLY}"; then
+        log_warn "Pinned nightly (${PINNED_NIGHTLY}) not found — skipping user app build"
+        log_warn "Install with: rustup toolchain install ${PINNED_NIGHTLY} --component rust-src"
+        return 0
+    fi
+
+    local built=0
+    for entry in "${USER_APPS[@]}"; do
+        local pkg="${entry%%,*}"
+        local elf="target/x86_64-morpheus/release/${pkg}"
+
+        if [[ -f "$elf" ]] && [[ "${FORCE_MODE}" != "true" ]]; then
+            log_success "${pkg}: already built"
+            continue
+        fi
+
+        log_info "Building ${pkg} (x86_64-morpheus, ${PINNED_NIGHTLY})..."
+        cargo +"${PINNED_NIGHTLY}" build --release \
+            --target x86_64-morpheus.json \
+            -p "${pkg}" \
+            -Z build-std=core,alloc \
+            -Z build-std-features=compiler-builtins-mem \
+            -Z json-target-spec \
+            2>&1 || { log_error "Build failed for ${pkg}"; return 1; }
+
+        [[ -f "$elf" ]] || { log_error "ELF not found after build: $elf"; return 1; }
+        log_success "${pkg}: $(du -h "$elf" | cut -f1)"
+        built=$((built + 1))
+    done
+
+    [[ $built -gt 0 ]] && log_success "User-space build complete" || true
+}
+
+do_inject_apps() {
+    log_step "Deploying Apps to HelixFS"
+
+    local disk_img="${TESTING_DIR}/test-disk-50g.img"
+    
+    # If disk doesn't exist, create it first
+    if [[ ! -f "$disk_img" ]]; then
+        log_warn "Test disk not found, creating it..."
+        FORCE_MODE=true
+        do_create_disk
+    fi
+
+    # Build morpheus-cli on the host (fast, native target)
+    log_info "Building morpheus-cli (host)..."
+    cargo build --release -p morpheus-cli 2>&1 || { log_error "morpheus-cli build failed"; return 1; }
+
+    local injected=0
+    for entry in "${USER_APPS[@]}"; do
+        local pkg="${entry%%,*}"
+        local dest="${entry##*,}"
+        local elf="target/x86_64-morpheus/release/${pkg}"
+
+        if [[ ! -f "$elf" ]]; then
+            log_warn "${pkg}: ELF not found (build first), skipping inject"
+            continue
+        fi
+
+        log_info "Injecting ${pkg} → ${dest} (main disk HelixFS)..."
+        cargo run --release -p morpheus-cli -- inject "$disk_img" "$elf" --dest "$dest" 2>&1 \
+            || { log_error "Inject failed for ${pkg}"; return 1; }
+        injected=$((injected + 1))
+    done
+
+    [[ $injected -gt 0 ]] \
+        && log_success "${injected} app(s) deployed to HelixFS — boot MorpheusX and run 'exec <name>'" \
+        || log_warn "No apps injected"
+}
+
 do_create_disk() {
     log_step "Creating Test Disk"
     
@@ -252,55 +359,16 @@ do_create_disk() {
     fi
     
     local disk_img="${TESTING_DIR}/test-disk-50g.img"
-    
-    log_info "Creating 50GB sparse disk image..."
+
+    # Create a raw sparse image — no partition table.
+    # The kernel's storage layer skips GPT/MBR disks as "boot disks", so the
+    # HelixFS data disk must be partition-table-free.  morpheus-cli inject will
+    # format HelixFS on first write; no pre-formatting needed.
+    log_info "Creating 50GB sparse HelixFS data disk..."
     rm -f "$disk_img"
-    qemu-img create -f raw "$disk_img" 50G >/dev/null
-    
-    log_info "Creating GPT partition table with ESP only..."
-    parted -s "$disk_img" mklabel gpt
-    parted -s "$disk_img" mkpart ESP fat32 1MiB 4GiB
-    parted -s "$disk_img" set 1 esp on
-    # Leave remaining space FREE for bootloader to create ISO partitions dynamically
-    
-    log_info "Setting up ESP partition..."
-    local loop_dev
-    loop_dev=$(sudo losetup -fP --show "$disk_img")
-    
-    trap "sudo losetup -d '$loop_dev' 2>/dev/null || true" EXIT
-    
-    sudo mkfs.vfat -F 32 -n "ESP" "${loop_dev}p1" >/dev/null
-    # No second partition - bootloader creates ISO partitions on-demand
-    
-    local mnt
-    mnt=$(mktemp -d)
-    sudo mount "${loop_dev}p1" "$mnt"
-    
-    sudo mkdir -p "$mnt/EFI/BOOT"
-    
-    [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]] && sudo cp "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" "$mnt/EFI/BOOT/"
-    
-    log_info "Disk ready - use network downloader in bootloader TUI to fetch distributions"
-    
-    sudo umount "$mnt"
-    rmdir "$mnt"
-    
-    # Force filesystem sync and ensure loop device is fully detached
-    sync
-    sleep 1
-    
-    sudo losetup -d "$loop_dev" 2>/dev/null || {
-        log_warn "Failed to detach loop device, trying harder..."
-        sleep 2
-        sudo losetup -d "$loop_dev" 2>/dev/null || true
-    }
-    trap - EXIT
-    
-    # Final sync before QEMU uses the disk
-    sync
-    sleep 2
-    
-    log_success "Test disk ready: $(du -h "$disk_img" | cut -f1) (sparse)"
+    truncate -s 50G "$disk_img"
+
+    log_success "Test disk ready (50GB sparse, will be formatted by inject)"
 }
 
 do_launch_qemu() {
@@ -317,14 +385,35 @@ do_launch_qemu() {
     printf "\n"
     
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
+        # Build/refresh the boot ESP image that UEFI will load BOOTX64.EFI from.
+        # The data disk (test-disk-50g.img) is raw HelixFS with no partition table
+        # so the kernel won't mistake it for the boot disk.
+        local esp_img="${TESTING_DIR}/esp-temp.img"
+        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" -nt "$esp_img" ]] || [[ "${FORCE_MODE}" == "true" ]]; then
+            log_info "Refreshing boot ESP image..."
+            local esp_size
+            esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
+            dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
+            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
+            local mnt
+            mnt=$(mktemp -d)
+            sudo mount -o loop "$esp_img" "$mnt"
+            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
+            sudo umount "$mnt"
+            rmdir "$mnt"
+        fi
+        # Disk 0 (virtio): ESP FAT32 image  — UEFI boots BOOTX64.EFI from here
+        # Disk 1 (virtio): raw HelixFS image — kernel mounts this as data storage
         qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm \
             -cpu host \
             -bios "$ovmf_path" \
             -object iothread,id=iothread0 \
-            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
-            -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
+            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
+            -device virtio-blk-pci,drive=disk0,disable-legacy=on,bootindex=1 \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk1,cache=writeback \
+            -device virtio-blk-pci,drive=disk1,disable-legacy=on,iothread=iothread0 \
             -device virtio-net-pci,netdev=net0,disable-legacy=on \
             -netdev user,id=net0,hostfwd=tcp::2222-:22 \
             -smp 8 \
@@ -392,6 +481,9 @@ run_full_auto() {
     # Distributions are now downloaded via network downloader in bootloader TUI
     
     do_create_disk
+
+    do_build_user_apps
+    do_inject_apps
     
     printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
     
@@ -442,6 +534,12 @@ run_interactive() {
     if ask "Create 50GB test disk with bootloader?"; then
         FORCE_MODE=true
         do_create_disk
+    fi
+
+    if ask "Build & deploy user apps to HelixFS?"; then
+        FORCE_MODE=true
+        do_build_user_apps
+        do_inject_apps
     fi
     
     printf "\n${C_GREEN}${C_BOLD}${SYM_CHECK} Setup complete!${C_RESET}\n\n"
@@ -494,6 +592,15 @@ cmd_run() {
     print_banner
     check_bootloader || die "Bootloader not built. Run: $0 build"
     do_launch_qemu
+}
+
+cmd_deploy() {
+    print_banner
+    check_rust || die "Rust not installed. Run: $0 setup"
+    FORCE_MODE=true
+    do_build_user_apps
+    do_inject_apps
+    log_success "Deploy complete — start QEMU to test"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -588,6 +695,19 @@ cmd_thinkpad() {
     log_info "Testing unified device layer with real hardware emulation"
     printf "\n"
     
+    # Ensure test disk exists
+    if ! check_disk_50g; then
+        log_info "Creating test disk for ThinkPad mode..."
+        FORCE_MODE=true
+        do_create_disk
+    fi
+    
+    # Build and deploy user apps
+    log_info "Building and deploying user-space apps (AHCI hardware)..."
+    FORCE_MODE=true
+    do_build_user_apps
+    do_inject_apps
+    
     do_launch_thinkpad
 }
 
@@ -648,17 +768,22 @@ usage() {
     printf "  ${C_CYAN}disk${C_RESET} [target]      Create disk image (50g|info)\n"
     printf "  ${C_CYAN}run${C_RESET}                Launch QEMU (VirtIO devices)\n"
     printf "  ${C_CYAN}thinkpad${C_RESET}           Launch QEMU with ThinkPad T450s hardware\n"
+    printf "  ${C_CYAN}deploy${C_RESET}             Build & inject user apps into HelixFS\n"
     printf "  ${C_CYAN}status${C_RESET}             Show environment status\n"
     printf "  ${C_CYAN}clean${C_RESET}              Remove artifacts\n"
     
     printf "\n${C_BOLD}Examples:${C_RESET}\n"
-    printf "  ${C_DIM}# Complete auto-setup + launch${C_RESET}\n"
+    printf "  ${C_DIM}# Complete auto-setup + launch (includes user apps)${C_RESET}\n"
     printf "  %s\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Force full rebuild + redeploy everything + launch${C_RESET}\n"
+    printf "  %s -f\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Rebuild & redeploy user apps only (fast iteration)${C_RESET}\n"
+    printf "  %s deploy\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Interactive guided setup${C_RESET}\n"
     printf "  %s --interactive\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Setup without launching QEMU${C_RESET}\n"
     printf "  %s --no-qemu\n\n" "$(basename "$0")"
-    printf "  ${C_DIM}# Just rebuild${C_RESET}\n"
+    printf "  ${C_DIM}# Just rebuild bootloader${C_RESET}\n"
     printf "  %s build\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Test with ThinkPad T450s hardware (AHCI + Intel e1000)${C_RESET}\n"
     printf "  %s thinkpad\n\n" "$(basename "$0")"
@@ -689,6 +814,7 @@ main() {
             ;;
         setup|init)      cmd_setup ;;
         build|compile)   cmd_build ;;
+        deploy)          cmd_deploy ;;
         disk|image)      cmd_disk "${args[@]:-}" ;;
         run|start|qemu)  cmd_run ;;
         thinkpad|t450s)  cmd_thinkpad ;;

@@ -10,31 +10,27 @@
 //! | 0     | 0x00     | Null descriptor    |
 //! | 1     | 0x08     | Kernel code (64)   |
 //! | 2     | 0x10     | Kernel data (64)   |
-//! | 3     | 0x18     | User code (64)     |
-//! | 4     | 0x20     | User data (64)     |
+//! | 3     | 0x18     | User data (64)     |
+//! | 4     | 0x20     | User code (64)     |
 //! | 5     | 0x28     | TSS (16 bytes)     |
 
-use core::mem::size_of;
 use crate::serial::puts;
+use core::mem::size_of;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // SEGMENT SELECTORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Kernel code segment selector
 pub const KERNEL_CS: u16 = 0x08;
 /// Kernel data segment selector
 pub const KERNEL_DS: u16 = 0x10;
-/// User code segment selector (ring 3)
-pub const USER_CS: u16 = 0x18 | 3; // RPL=3
-/// User data segment selector (ring 3)
-pub const USER_DS: u16 = 0x20 | 3; // RPL=3
+/// User data segment selector (ring 3) — at 0x18 for SYSRET compatibility
+pub const USER_DS: u16 = 0x18 | 3; // RPL=3
+/// User code segment selector (ring 3) — at 0x20 for SYSRET compatibility
+pub const USER_CS: u16 = 0x20 | 3; // RPL=3
 /// TSS segment selector
 pub const TSS_SEL: u16 = 0x28;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GDT ENTRY
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// GDT entry (8 bytes for normal, 16 bytes for TSS in long mode)
 #[derive(Clone, Copy)]
@@ -137,9 +133,7 @@ impl TssDescriptor {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // TASK STATE SEGMENT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Task State Segment for long mode
 #[derive(Clone, Copy)]
@@ -177,9 +171,7 @@ impl Tss {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GDT TABLE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Number of normal GDT entries (before TSS)
 const GDT_ENTRY_COUNT: usize = 5;
@@ -198,18 +190,47 @@ pub struct GdtPtr {
     pub base: u64,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL STATE
-// ═══════════════════════════════════════════════════════════════════════════
+
+// STATIC IST1 STACK — baked into .bss, never allocated from the heap.
+//
+// The double-fault handler points at this stack via IST[0].  Because it lives
+// in the binary image, it is valid from the very first instruction and stays
+// valid regardless of what the physical memory allocator does.  This is the
+// ONLY thing that prevents a double fault from cascading into a triple fault
+// (which causes an unconditional CPU/QEMU reset with no BSOD).
+//
+// If the double-fault handler itself were to fault (e.g., heap-allocated stack
+// gets corrupted), the CPU switches to this stack for the double fault, the
+// handler runs, and our BSOD is displayed instead of an invisible reset.
+//
+// Size: 32 KiB — generous enough for the BSOD rendering path.
+
+const IST1_STATIC_STACK_SIZE: usize = 32 * 1024;
+
+/// 16-byte aligned wrapper so RSP stays aligned after the CPU pushes the
+/// exception frame (which is 40 or 48 bytes — both leave RSP 16-aligned).
+#[repr(C, align(16))]
+struct StaticStack([u8; IST1_STATIC_STACK_SIZE]);
+
+/// The actual stack bytes.  Zeroed by the BSS loader; no runtime init needed.
+static mut IST1_STATIC_STACK: StaticStack = StaticStack([0; IST1_STATIC_STACK_SIZE]);
+
+/// Public accessor: returns a pointer to the TOP of the static IST1 stack
+/// (stacks grow downward on x86-64).  Written into TSS.IST[0] once at boot.
+pub fn ist1_static_stack_top() -> u64 {
+    // SAFETY: read-only pointer arithmetic on a static array.
+    unsafe { IST1_STATIC_STACK.0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64 }
+}
 
 /// Our GDT (static, page-aligned for safety)
 static mut GDT: Gdt = Gdt {
     entries: [
-        GdtEntry::null(),       // 0x00: Null
-        GdtEntry::code64(0),    // 0x08: Kernel code
-        GdtEntry::data64(0),    // 0x10: Kernel data
-        GdtEntry::code64(3),    // 0x18: User code
-        GdtEntry::data64(3),    // 0x20: User data
+        GdtEntry::null(),    // 0x00: Null
+        GdtEntry::code64(0), // 0x08: Kernel code
+        GdtEntry::data64(0), // 0x10: Kernel data
+        GdtEntry::data64(3), // 0x18: User data  (SYSRET SS = STAR[63:48]+8)
+        GdtEntry::code64(3), // 0x20: User code  (SYSRET CS = STAR[63:48]+16)
     ],
     tss_desc: TssDescriptor::empty(), // Placeholder, updated at init
 };
@@ -220,36 +241,36 @@ static mut TSS: Tss = Tss::new();
 /// GDT initialized flag
 static mut GDT_INITIALIZED: bool = false;
 
-// ═══════════════════════════════════════════════════════════════════════════
 // INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize GDT and TSS.
 ///
 /// # Arguments
-/// - `kernel_stack`: Stack pointer for ring 0 (used for interrupts from user mode)
-/// - `ist1_stack`: Interrupt stack 1 (for NMI, double fault, etc.)
+/// - `kernel_stack`: Stack pointer for ring 0 (RSP0 — used for interrupts
+///   arriving from user mode when no IST is configured on that vector).
+///
+/// IST[0] (IST1) is always set from `IST1_STATIC_STACK` — it is NEVER
+/// taken from the heap.  This guarantees the double-fault handler can always
+/// run even when the allocator or heap is in an invalid state, preventing the
+/// CPU from silently triple-faulting and resetting.
 ///
 /// # Safety
 /// - Must be called once
-/// - Stacks must be valid and large enough
-pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
+/// - `kernel_stack` must be a valid, mapped stack top
+pub unsafe fn init_gdt(kernel_stack: u64) {
     if GDT_INITIALIZED {
         puts("[GDT] WARNING: already initialized\n");
         return;
     }
 
-    puts("[GDT] setting up TSS...\n");
-
     // Set up TSS
     TSS.rsp0 = kernel_stack;
-    TSS.ist[0] = ist1_stack; // IST1 for critical exceptions
+    // IST1 — static stack baked into BSS.  Always valid; see comment above.
+    TSS.ist[0] = ist1_static_stack_top();
 
     // Update TSS descriptor in GDT
     let tss_addr = &TSS as *const Tss as u64;
     GDT.tss_desc = TssDescriptor::new(tss_addr, size_of::<Tss>() as u16);
-
-    puts("[GDT] loading GDT...\n");
 
     // Load GDT
     let gdt_ptr = GdtPtr {
@@ -257,23 +278,12 @@ pub unsafe fn init_gdt(kernel_stack: u64, ist1_stack: u64) {
         base: &GDT as *const Gdt as u64,
     };
 
-    // Print GDT info for debug
-    crate::serial::puts("[GDT] limit=0x");
-    crate::serial::put_hex32(gdt_ptr.limit as u32);
-    crate::serial::puts(" base=0x");
-    crate::serial::put_hex64(gdt_ptr.base);
-    crate::serial::puts("\n");
-
     load_gdt(&gdt_ptr);
-    puts("[GDT] lgdt done\n");
 
     // Reload segment registers
-    puts("[GDT] reloading segments (CS=0x08, DS=0x10)...\n");
     reload_segments();
-    puts("[GDT] segments reloaded\n");
 
     // Load TSS
-    puts("[GDT] loading TSS...\n");
     load_tss(TSS_SEL);
 
     GDT_INITIALIZED = true;
@@ -298,7 +308,7 @@ unsafe fn reload_segments() {
     // So we need: push CS first, then push RIP
     let code_sel: u64 = KERNEL_CS as u64;
     let data_sel: u64 = KERNEL_DS as u64;
-    
+
     core::arch::asm!(
         // Push CS (will be at RSP+8 after next push)
         "push {code}",

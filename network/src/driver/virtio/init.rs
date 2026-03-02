@@ -216,7 +216,7 @@ unsafe fn setup_queue(
 
     // Get notify offset
     let notify_offset = queue::get_notify_offset(mmio_base);
-    let notify_addr = mmio_base + notify_offset as u64;
+    let notify_addr = mmio_base + notify_offset;
 
     // Create queue state
     Ok(VirtqueueState {

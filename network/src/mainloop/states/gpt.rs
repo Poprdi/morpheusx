@@ -57,7 +57,8 @@ impl GptPrepState {
         };
         let timeout_ticks = 100_000_000u64;
 
-        let mut adapter = match UnifiedBlockIo::new(blk, dma_buffer, dma_buffer_phys, timeout_ticks) {
+        let mut adapter = match UnifiedBlockIo::new(blk, dma_buffer, dma_buffer_phys, timeout_ticks)
+        {
             Ok(a) => a,
             Err(_) => return Err("failed to create BlockIo adapter"),
         };
@@ -104,7 +105,7 @@ impl GptPrepState {
                     serial::println(" GB)");
 
                     // Align to 1MB boundary (2048 sectors)
-                    let aligned_start = ((free_start + 2047) / 2048) * 2048;
+                    let aligned_start = free_start.div_ceil(2048) * 2048;
                     let aligned_end = aligned_start + needed_size - 1;
 
                     serial::print("[GPT] Using aligned range: ");
@@ -178,8 +179,8 @@ impl GptPrepState {
 
                 // Return placeholder GUID
                 Ok([
-                    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
-                    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78,
+                    0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12,
+                    0x34, 0x56, 0x78,
                 ])
             }
             Err(e) => {
@@ -189,8 +190,12 @@ impl GptPrepState {
                     morpheus_core::disk::gpt_ops::GptError::InvalidHeader => "Invalid GPT header",
                     morpheus_core::disk::gpt_ops::GptError::InvalidSize => "Invalid size/range",
                     morpheus_core::disk::gpt_ops::GptError::NoSpace => "No free partition slot",
-                    morpheus_core::disk::gpt_ops::GptError::PartitionNotFound => "Partition not found",
-                    morpheus_core::disk::gpt_ops::GptError::OverlappingPartitions => "Range overlaps",
+                    morpheus_core::disk::gpt_ops::GptError::PartitionNotFound => {
+                        "Partition not found"
+                    }
+                    morpheus_core::disk::gpt_ops::GptError::OverlappingPartitions => {
+                        "Range overlaps"
+                    }
                     morpheus_core::disk::gpt_ops::GptError::AlignmentError => "Alignment error",
                 });
                 Err("partition creation failed")
@@ -255,7 +260,7 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
             } else {
                 8 * 1024 * 1024 * 1024 // Default 8GB max
             };
-            let sectors_needed = (size_bytes + 511) / 512;
+            let sectors_needed = size_bytes.div_ceil(512);
             let requested_end = ctx.config.target_start_sector + sectors_needed - 1;
 
             serial::print("[GPT] Requested end sector: ");
@@ -266,22 +271,20 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
             serial::println(" GB");
 
             // Verify or find space
-            let (actual_start, actual_end) = match self.verify_or_find_space(
-                blk,
-                ctx.config.target_start_sector,
-                requested_end,
-            ) {
-                Ok((s, e)) => (s, e),
-                Err(msg) => {
-                    serial::print("[GPT] ");
-                    serial::println(msg);
-                    serial::println("[GPT] ABORTING: Cannot safely create partition");
-                    return (
-                        Box::new(FailedState::new("gpt prep failed")),
-                        StepResult::Failed("gpt"),
-                    );
-                }
-            };
+            let (actual_start, actual_end) =
+                match self.verify_or_find_space(blk, ctx.config.target_start_sector, requested_end)
+                {
+                    Ok((s, e)) => (s, e),
+                    Err(msg) => {
+                        serial::print("[GPT] ");
+                        serial::println(msg);
+                        serial::println("[GPT] ABORTING: Cannot safely create partition");
+                        return (
+                            Box::new(FailedState::new("gpt prep failed")),
+                            StepResult::Failed("gpt"),
+                        );
+                    }
+                };
 
             // Update context with actual start sector
             ctx.actual_start_sector = actual_start;

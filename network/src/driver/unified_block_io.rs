@@ -264,7 +264,7 @@ impl<'a> BlockIo for UnifiedBlockIo<'a> {
         let info = self.device.info();
         let sector_size = info.sector_size as usize;
 
-        if dst.len() % sector_size != 0 {
+        if !dst.len().is_multiple_of(sector_size) {
             return Err(UnifiedBlockIoError::BufferAlignment);
         }
 
@@ -297,7 +297,7 @@ impl<'a> BlockIo for UnifiedBlockIo<'a> {
         let info = self.device.info();
         let sector_size = info.sector_size as usize;
 
-        if src.len() % sector_size != 0 {
+        if !src.len().is_multiple_of(sector_size) {
             return Err(UnifiedBlockIoError::BufferAlignment);
         }
 
@@ -494,7 +494,7 @@ impl<'a, D: BlockDriver> BlockIo for GenericBlockIo<'a, D> {
         let info = self.driver.info();
         let sector_size = info.sector_size as usize;
 
-        if dst.len() % sector_size != 0 {
+        if !dst.len().is_multiple_of(sector_size) {
             return Err(UnifiedBlockIoError::BufferAlignment);
         }
 
@@ -527,7 +527,7 @@ impl<'a, D: BlockDriver> BlockIo for GenericBlockIo<'a, D> {
         let info = self.driver.info();
         let sector_size = info.sector_size as usize;
 
-        if src.len() % sector_size != 0 {
+        if !src.len().is_multiple_of(sector_size) {
             return Err(UnifiedBlockIoError::BufferAlignment);
         }
 

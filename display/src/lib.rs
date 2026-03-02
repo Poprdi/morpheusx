@@ -40,6 +40,7 @@
 
 #![no_std]
 #![allow(dead_code)]
+#![allow(clippy::missing_safety_doc)]
 
 pub mod colors;
 pub mod types;

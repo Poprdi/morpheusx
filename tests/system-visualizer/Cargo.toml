@@ -1,0 +1,15 @@
+[package]
+name = "system-visualizer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "system-visualizer"
+path = "src/main.rs"
+
+[dependencies]
+libmorpheus = { path = "../../libmorpheus" }
+morpheus-gfx3d = { path = "../../gfx3d" }

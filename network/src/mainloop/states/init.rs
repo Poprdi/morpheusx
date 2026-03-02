@@ -61,14 +61,17 @@ impl<D: NetworkDriver> State<D> for InitState {
                 (7usize, 80u16)
             } else {
                 serial::println("[INIT] ERROR: URL must start with http:// or https://");
-                return (Box::new(super::FailedState::new("invalid URL scheme")), StepResult::Failed("invalid URL"));
+                return (
+                    Box::new(super::FailedState::new("invalid URL scheme")),
+                    StepResult::Failed("invalid URL"),
+                );
             }
         };
 
         // Compute indices for host and path
         let url = ctx.config.url;
         let rest = &url[scheme_end..];
-        
+
         let (host_end, path_start) = match rest.find('/') {
             Some(idx) => (scheme_end + idx, scheme_end + idx),
             None => (url.len(), url.len()),
