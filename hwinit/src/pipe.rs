@@ -139,6 +139,15 @@ pub unsafe fn pipe_readers(idx: u8) -> u8 {
     PIPE_TABLE.get(idx as usize).map(|p| p.readers).unwrap_or(0)
 }
 
+/// Bytes available to read from a pipe (non-blocking check).
+pub unsafe fn pipe_available(idx: u8) -> usize {
+    PIPE_TABLE
+        .get(idx as usize)
+        .filter(|p| p.active)
+        .map(|p| p.available_read())
+        .unwrap_or(0)
+}
+
 /// Close the read end of a pipe.  Frees the pipe if both ends are closed.
 pub unsafe fn pipe_close_reader(idx: u8) {
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {

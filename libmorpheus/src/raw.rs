@@ -131,6 +131,14 @@ pub const SYS_FB_PRESENT: u64 = 88;
 pub const SYS_FB_BLIT: u64 = 89;
 pub const SYS_FB_MARK_DIRTY: u64 = 90;
 
+// compositor (91-95)
+pub const SYS_COMPOSITOR_SET: u64 = 91;
+pub const SYS_WIN_SURFACE_LIST: u64 = 92;
+pub const SYS_WIN_SURFACE_MAP: u64 = 93;
+pub const SYS_MOUSE_FORWARD: u64 = 94;
+pub const SYS_WIN_SURFACE_DIRTY_CLEAR: u64 = 95;
+pub const SYS_TRY_WAIT: u64 = 96;
+
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {
     let ret: u64;

@@ -216,10 +216,12 @@ impl Pipeline {
         self.clip_verts.clear();
         self.lit_colors.clear();
         if self.clip_verts.capacity() < vert_count {
-            self.clip_verts.reserve(vert_count - self.clip_verts.capacity());
+            self.clip_verts
+                .reserve(vert_count - self.clip_verts.capacity());
         }
         if self.lit_colors.capacity() < vert_count {
-            self.lit_colors.reserve(vert_count - self.lit_colors.capacity());
+            self.lit_colors
+                .reserve(vert_count - self.lit_colors.capacity());
         }
 
         for mv in mesh.vertices.iter() {
@@ -257,7 +259,11 @@ impl Pipeline {
                 continue;
             }
 
-            let clip_tri = [self.clip_verts[i0], self.clip_verts[i1], self.clip_verts[i2]];
+            let clip_tri = [
+                self.clip_verts[i0],
+                self.clip_verts[i1],
+                self.clip_verts[i2],
+            ];
 
             if trivial_reject(&clip_tri) {
                 self.stats.triangles_culled += 1;
@@ -451,7 +457,15 @@ fn fill_span(
 
     if is_solid && no_fog {
         fill_span_solid(
-            span, grads, material, format, stride, vp_w, depth_write, color_buf, depth_buf,
+            span,
+            grads,
+            material,
+            format,
+            stride,
+            vp_w,
+            depth_write,
+            color_buf,
+            depth_buf,
         )
     } else if !is_solid && no_fog {
         fill_span_textured(
@@ -582,7 +596,9 @@ fn fill_span_solid(
             z += grads.z_step;
             continue;
         }
-        if depth_write { depth_buf[buf_idx] = depth; }
+        if depth_write {
+            depth_buf[buf_idx] = depth;
+        }
 
         let pr = fast::clamp_u8((cr.0 * base_r) >> 16);
         let pg = fast::clamp_u8((cg.0 * base_g) >> 16);
@@ -710,7 +726,9 @@ fn fill_span_textured(
                 z += grads.z_step;
                 continue;
             }
-            if depth_write { depth_buf[buf_idx] = depth; }
+            if depth_write {
+                depth_buf[buf_idx] = depth;
+            }
 
             let texel = match sample_mode {
                 SampleMode::Nearest => sample::sample_nearest(tex, u_cur.0, v_cur.0),
@@ -801,7 +819,9 @@ fn fill_span_full(
             fog_val += grads.fog_step;
             continue;
         }
-        if depth_write { depth_buf[buf_idx] = depth; }
+        if depth_write {
+            depth_buf[buf_idx] = depth;
+        }
 
         let w = if inv_w.0 != 0 {
             Fx16::ONE.div(inv_w)

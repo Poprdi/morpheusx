@@ -16,6 +16,7 @@
 //! scan_code uses EFI-compatible values so main_menu.rs needs zero changes.
 
 // ASM BINDINGS — from bootloader/asm/keyboard/ps2.s
+morpheusx::hwinit::ps2_mouse!();
 
 extern "win64" {
     fn asm_ps2_read_status() -> u8;
@@ -387,6 +388,11 @@ impl Keyboard {
 
         self.initialized = true;
         puts("[KBD] PS/2 keyboard ready\n");
+
+        // phase 10.1: PS/2 mouse driver
+        // Initialize alongside the keyboard in the bootchain.
+        crate::ps2_mouse::init();
+        puts("[HWINIT]   PS/2 mouse initialized\n");
     }
 
     /// Spin-wait for a response byte from port 0x60, with bounded timeout.
