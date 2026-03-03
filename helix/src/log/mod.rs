@@ -309,7 +309,9 @@ impl LogEngine {
         let hdr_size = core::mem::size_of::<LogRecordHeader>();
         let header: LogRecordHeader = if block_off + hdr_size <= BLOCK_SIZE as usize {
             // Common path: header fully within one block.
-            unsafe { core::ptr::read_unaligned(buf[block_off..].as_ptr() as *const LogRecordHeader) }
+            unsafe {
+                core::ptr::read_unaligned(buf[block_off..].as_ptr() as *const LogRecordHeader)
+            }
         } else {
             // Header straddles the block boundary: assemble into a temporary
             // 64-byte buffer from the tail of block N and head of block N+1.

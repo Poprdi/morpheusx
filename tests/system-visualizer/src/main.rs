@@ -2,6 +2,7 @@
 #![no_main]
 extern crate alloc;
 use alloc::boxed::Box;
+use alloc::vec;
 
 mod backdrop;
 mod cloud;
@@ -12,7 +13,7 @@ mod layout;
 mod state;
 
 use libmorpheus::entry;
-use libmorpheus::hw::{fb_blit, fb_info, fb_lock, fb_map};
+use libmorpheus::hw::{fb_info, fb_map, fb_present};
 use libmorpheus::process;
 use libmorpheus::time;
 use morpheus_gfx3d::camera::Camera;
@@ -114,16 +115,17 @@ fn main() -> i32 {
         Err(_) => return 1,
     };
 
-    if fb_lock().is_err() {
-        return 1;
-    }
+    // Render into a private software back buffer, then copy once per frame
+    // into the mapped framebuffer surface. This avoids compositor sampling
+    // partially-rendered frames and greatly reduces visible blinking.
+    let mut backbuf = vec![0u32; (fb_stride as usize).saturating_mul(fb_h as usize)];
 
     let cloud_assets = Box::new(cloud::CloudAssets::new());
     let backdrop_stars = Box::new(backdrop::Backdrop::new());
     let galaxy_assets = Box::new(backdrop::GalaxyAssets::new());
 
     let mut target =
-        unsafe { DirectTarget::new(fb_vaddr as *mut u32, fb_w, fb_h, fb_stride, fb_format) };
+        unsafe { DirectTarget::new(backbuf.as_mut_ptr(), fb_w, fb_h, fb_stride, fb_format) };
 
     let mut pipeline = Box::new(Pipeline::new(fb_w, fb_h));
     pipeline.backface_cull = true;
@@ -146,7 +148,7 @@ fn main() -> i32 {
     camera.fov_y = 0.9;
 
     let fb = Framebuf {
-        ptr: fb_vaddr as *mut u32,
+        ptr: backbuf.as_mut_ptr(),
         w: fb_w,
         h: fb_h,
         stride: fb_stride,
@@ -393,7 +395,14 @@ fn main() -> i32 {
         let latency_ms = (raw_dt_ns / 1_000_000).min(999) as u32;
         hud::draw_fps(&fb, fps_display, latency_ms, speed_mult);
 
-        let _ = fb_blit();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                backbuf.as_ptr(),
+                fb_vaddr as *mut u32,
+                (fb_stride as usize).saturating_mul(fb_h as usize),
+            );
+        }
+        let _ = fb_present();
 
         // No artificial frame cap — sysvis runs at full throughput.
         // A sleep here blocks the process, handing quanta back to the kernel

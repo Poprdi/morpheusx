@@ -520,7 +520,13 @@ pub fn vfs_unlink(
         return Err(HelixError::ReadOnly);
     }
 
-    ops::dir::unlink(&mut entry.fs.log, &mut entry.fs.index, &mut entry.fs.bitmap, path, timestamp_ns)?;
+    ops::dir::unlink(
+        &mut entry.fs.log,
+        &mut entry.fs.index,
+        &mut entry.fs.bitmap,
+        path,
+        timestamp_ns,
+    )?;
     Ok(())
 }
 

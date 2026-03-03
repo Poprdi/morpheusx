@@ -60,7 +60,13 @@ pub fn render_cloud<T: RenderTarget>(
         let dist_sq = dx * dx + dy * dy + dz * dz;
         let screen_size = radius / (dist_sq.max(1.0) * fast_inv_sqrt(dist_sq.max(1.0)));
 
-        let mesh = if is_sel { &assets.sphere_hi } else if screen_size > 0.08 { &assets.sphere_hi } else { &assets.sphere_lo };
+        let mesh = if is_sel {
+            &assets.sphere_hi
+        } else if screen_size > 0.08 {
+            &assets.sphere_hi
+        } else {
+            &assets.sphere_lo
+        };
         pipeline.draw_mesh(mesh, &model, &material, lights, target);
 
         if is_sel {

@@ -65,7 +65,9 @@ impl SoftwareTarget {
 
     pub fn clear(&mut self, clear_color: u32) {
         self.color.fill(clear_color);
-        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
+        unsafe {
+            core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len());
+        }
     }
 
     pub fn clear_color(&mut self, clear_color: u32) {
@@ -73,7 +75,9 @@ impl SoftwareTarget {
     }
 
     pub fn clear_depth(&mut self) {
-        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
+        unsafe {
+            core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len());
+        }
     }
 }
 
@@ -151,7 +155,9 @@ impl DirectTarget {
     pub fn clear(&mut self, clear_color: u32) {
         let buf = unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) };
         buf.fill(clear_color);
-        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
+        unsafe {
+            core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len());
+        }
     }
 
     pub fn clear_color(&mut self, clear_color: u32) {
@@ -160,7 +166,9 @@ impl DirectTarget {
     }
 
     pub fn clear_depth(&mut self) {
-        unsafe { core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len()); }
+        unsafe {
+            core::ptr::write_bytes(self.depth.as_mut_ptr(), 0xFF, self.depth.len());
+        }
     }
 }
 

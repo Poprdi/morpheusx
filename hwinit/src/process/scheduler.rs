@@ -71,8 +71,7 @@ static KERNEL_LAST_WAS_IDLE: core::sync::atomic::AtomicBool =
 /// How many consecutive quanta PID 0 has been skipped by the idle-donation
 /// logic.  When this reaches `MAX_KERNEL_SKIP` the reservation overrides the
 /// skip, forcing PID 0 to run — guaranteeing a kernel CPU floor.
-static KERNEL_SKIP_STREAK: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
+static KERNEL_SKIP_STREAK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Kernel is guaranteed at least 1 quantum per (MAX_KERNEL_SKIP + 1).
 /// 7 → kernel floor ≈ 12.5 %.  Raise to lower the floor; lower to raise it.
@@ -175,10 +174,7 @@ pub fn tsc_frequency() -> u64 {
 /// kernel's scheduler quantum into active work time and HLT idle time so that
 /// `SysInfo::cpu_tsc` reflects true CPU utilization, not relative shares.
 pub fn mark_kernel_hlt() {
-    KERNEL_HLT_ENTRY_TSC.store(
-        crate::cpu::tsc::read_tsc(),
-        Ordering::Relaxed,
-    );
+    KERNEL_HLT_ENTRY_TSC.store(crate::cpu::tsc::read_tsc(), Ordering::Relaxed);
 }
 
 /// Total TSC cycles the kernel has spent halted in HLT idle since boot.
@@ -515,6 +511,10 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     // Auto-present: push back-buffer delta to VRAM on every tick.
     crate::syscall::handler::fb_present_tick();
 
+    // Poll PS/2 mouse port and accumulate motion into the global mouse state.
+    // This allows mouse input to flow asynchronously without blocking.
+    crate::ps2_mouse::poll();
+
     let cur_pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
 
     // Was PID 0 in HLT during this quantum?  Read+clear the entry TSC now
@@ -558,9 +558,9 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             cur.cpu_tsc = cur.cpu_tsc.saturating_add(active_tsc);
             IDLE_TSC_TOTAL.fetch_add(idle_tsc_q, Ordering::Relaxed);
         } else {
-            cur.cpu_tsc = cur.cpu_tsc.saturating_add(
-                now_tsc.saturating_sub(cur.run_start_tsc)
-            );
+            cur.cpu_tsc = cur
+                .cpu_tsc
+                .saturating_add(now_tsc.saturating_sub(cur.run_start_tsc));
         }
 
         if cur.state == ProcessState::Running {
@@ -924,6 +924,37 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
     reap_child(child_pid)
 }
 
+/// Non-blocking wait: reap if zombie, return EAGAIN if still running.
+///
+/// Returns the exit code if the child was a zombie (reaps it), or
+/// `EAGAIN` (u64::MAX - 11) if the child is still running.
+pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
+    let current = CURRENT_PID.load(Ordering::Relaxed);
+
+    let (child_parent, child_state) = match PROCESS_TABLE
+        .get(child_pid as usize)
+        .and_then(|s| s.as_ref())
+    {
+        Some(p) => (p.parent_pid, p.state),
+        None => return u64::MAX - 3, // ESRCH
+    };
+
+    if child_parent != current {
+        return u64::MAX - 3; // ESRCH
+    }
+
+    if matches!(child_state, ProcessState::Terminated) {
+        return u64::MAX - 10; // ECHILD — already reaped
+    }
+
+    if child_state == ProcessState::Zombie {
+        return reap_child(child_pid);
+    }
+
+    // Still running — return EAGAIN.
+    u64::MAX - 11
+}
+
 /// Reap a Zombie child: extract its exit code, free resources, mark Terminated.
 unsafe fn reap_child(pid: u32) -> u64 {
     if let Some(Some(child)) = PROCESS_TABLE.get_mut(pid as usize) {
@@ -956,6 +987,16 @@ unsafe fn free_process_resources(proc: &mut Process) {
         let _ = registry.free_pages(proc.kernel_stack_base, pages);
         proc.kernel_stack_base = 0;
         proc.kernel_stack_top = 0;
+    }
+
+    // Free per-process compositor FB surface (not tracked in VMA table as
+    // owned, because sys_map_phys records owns_phys=false).
+    if proc.fb_surface_phys != 0 && proc.fb_surface_pages != 0 && is_registry_initialized() {
+        let registry = global_registry_mut();
+        let _ = registry.free_pages(proc.fb_surface_phys, proc.fb_surface_pages);
+        proc.fb_surface_phys = 0;
+        proc.fb_surface_pages = 0;
+        proc.fb_surface_dirty = false;
     }
 
     // Free all owned physical pages via VMA table.

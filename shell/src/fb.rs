@@ -24,6 +24,24 @@ impl Framebuffer {
         })
     }
 
+    /// Raw pointer to the pixel buffer (for compositor blit).
+    #[inline]
+    pub fn as_ptr(&self) -> *mut u32 {
+        self.base
+    }
+
+    /// Stride in pixels (= stride_bytes / 4).
+    #[inline]
+    pub fn stride_px(&self) -> u32 {
+        self.stride_px
+    }
+
+    /// True if pixel format is BGRX (format==1).
+    #[inline]
+    pub fn is_bgrx(&self) -> bool {
+        self.is_bgrx
+    }
+
     /// Returns true if another process holds exclusive framebuffer access.
     #[inline]
     fn is_locked(&self) -> bool {
