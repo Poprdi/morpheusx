@@ -53,10 +53,7 @@ unsafe extern "C" fn thread_trampoline(arg: u64) -> ! {
     syscall1(SYS_THREAD_EXIT, 0);
 
     // Should never reach here, but the compiler needs a diverging type.
-    #[allow(clippy::empty_loop)]
-    loop {
-        core::hint::unreachable_unchecked();
-    }
+    unsafe { core::hint::unreachable_unchecked() }
 }
 
 /// Spawn a new thread that runs `f`.
