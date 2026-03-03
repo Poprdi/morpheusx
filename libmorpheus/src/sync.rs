@@ -319,9 +319,9 @@ impl<T> RwLock<T> {
                 .state
                 .compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
-            {
-                return Some(RwLockReadGuard { lock: self });
-            }
+        {
+            return Some(RwLockReadGuard { lock: self });
+        }
         None
     }
 

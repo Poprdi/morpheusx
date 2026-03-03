@@ -142,7 +142,9 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
                 }
             };
 
-            if let Some(pid) = spawn_child(&binary, &cmd.argv) { children.push(pid) }
+            if let Some(pid) = spawn_child(&binary, &cmd.argv) {
+                children.push(pid)
+            }
         }
 
         // Restore shell's own fds for next iteration
