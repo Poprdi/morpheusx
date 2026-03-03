@@ -85,7 +85,7 @@ fn draw_selection_ring<T: RenderTarget>(
     time_ns: u64,
 ) {
     let phase = (time_ns % 3_000_000_000) as f32 / 3_000_000_000.0;
-    let pulse = 1.0 + 0.15 * fast_sin(phase * 6.2832);
+    let pulse = 1.0 + 0.15 * fast_sin(phase * core::f32::consts::TAU);
     let ring_radius = radius * 1.3 * pulse;
 
     let model =

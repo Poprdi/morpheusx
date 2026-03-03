@@ -1437,7 +1437,7 @@ fn test_async_sleep() {
     // Allow generous timing: 30..500ms (QEMU timer resolution varies).
     check(
         "async(sleep)",
-        elapsed_ms >= 30 && elapsed_ms < 500,
+        (30..500).contains(&elapsed_ms),
         "sleep timing off",
     );
 }

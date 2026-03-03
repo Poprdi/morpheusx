@@ -123,6 +123,12 @@ pub struct Builder {
     stack_pages: u64,
 }
 
+impl Default for Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Builder {
     pub fn new() -> Self {
         Self {
@@ -132,7 +138,7 @@ impl Builder {
 
     /// Set the stack size in bytes.  Rounded up to page boundary.
     pub fn stack_size(mut self, bytes: usize) -> Self {
-        self.stack_pages = ((bytes as u64) + 4095) / 4096;
+        self.stack_pages = (bytes as u64).div_ceil(4096);
         if self.stack_pages == 0 {
             self.stack_pages = 1;
         }

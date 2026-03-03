@@ -603,7 +603,7 @@ fn fill_span_solid(
         let pr = fast::clamp_u8((cr.0 * base_r) >> 16);
         let pg = fast::clamp_u8((cg.0 * base_g) >> 16);
         let pb = fast::clamp_u8((cb.0 * base_b) >> 16);
-        color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
+        color_buf[buf_idx] = pack_rgb_for_format(pr, pg, pb, format);
         pixels_written += 1;
 
         cr += r_step;
@@ -740,7 +740,7 @@ fn fill_span_textured(
             let pr = fast::clamp_u8((r_cur.0 * tr as i32) >> 16);
             let pg = fast::clamp_u8((g_cur.0 * tg as i32) >> 16);
             let pb = fast::clamp_u8((b_cur.0 * tb as i32) >> 16);
-            color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
+            color_buf[buf_idx] = pack_rgb_for_format(pr, pg, pb, format);
             pixels_written += 1;
 
             u_cur += du;
@@ -868,7 +868,7 @@ fn fill_span_full(
         let pr = fast::clamp_u8((out_r * 255.0) as i32);
         let pg = fast::clamp_u8((out_g * 255.0) as i32);
         let pb = fast::clamp_u8((out_b * 255.0) as i32);
-        color_buf[buf_idx] = pack_rgb_for_format(pr as u8, pg as u8, pb as u8, format);
+        color_buf[buf_idx] = pack_rgb_for_format(pr, pg, pb, format);
         pixels_written += 1;
 
         inv_w += grads.inv_w_step;

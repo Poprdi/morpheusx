@@ -289,7 +289,8 @@ impl SystemState {
             }
         }
         // Allocate a new slot (bounded by MAX_PROCS).
-        let slot = if self.acc_count < MAX_PROCS {
+        
+        if self.acc_count < MAX_PROCS {
             let s = self.acc_count;
             self.acc_pids[s] = pid;
             self.acc_count += 1;
@@ -297,8 +298,7 @@ impl SystemState {
         } else {
             // Safety overflow: reuse slot 0.
             0
-        };
-        slot
+        }
     }
 
     /// Return the last displayed `cpu_pct` for a given PID (used to keep

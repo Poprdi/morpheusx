@@ -32,7 +32,7 @@ pub struct PvsTable {
 impl PvsTable {
     /// Create an empty PVS (all clusters visible from all clusters).
     pub fn new_all_visible(num_clusters: u32) -> Self {
-        let bytes_per_row = (num_clusters + 7) / 8;
+        let bytes_per_row = num_clusters.div_ceil(8);
         let total = (num_clusters * bytes_per_row) as usize;
         Self {
             num_clusters,
@@ -43,7 +43,7 @@ impl PvsTable {
 
     /// Create an empty PVS (nothing visible — must be filled in).
     pub fn new_empty(num_clusters: u32) -> Self {
-        let bytes_per_row = (num_clusters + 7) / 8;
+        let bytes_per_row = num_clusters.div_ceil(8);
         let total = (num_clusters * bytes_per_row) as usize;
         Self {
             num_clusters,
