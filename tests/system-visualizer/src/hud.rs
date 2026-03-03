@@ -24,7 +24,9 @@ impl Framebuf {
         let x2 = x.saturating_add(w).min(self.w);
         let y2 = y.saturating_add(h).min(self.h);
         let cols = (x2 - x1) as usize;
-        if cols == 0 { return; }
+        if cols == 0 {
+            return;
+        }
         for py in y1..y2 {
             let off = py as usize * self.stride as usize + x1 as usize;
             let row = unsafe { core::slice::from_raw_parts_mut(self.ptr.add(off), cols) };
@@ -248,7 +250,11 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
     // Together with per-process cpu_pct values they account for all 100%.
     let idle_row_y = base_y + count as u32 * row_h + 2;
     let idle_int = (state.idle_pct as u32).min(100);
-    let idle_col = if idle_int > 80 { 0x0040FF80 } else { 0x00406060 };
+    let idle_col = if idle_int > 80 {
+        0x0040FF80
+    } else {
+        0x00406060
+    };
     fb.draw_str(px + 4, idle_row_y, "---", COL_DIM);
     fb.draw_char(px + 28, idle_row_y, b'Z', 0x00406060);
     fb.draw_u32(px + 40, idle_row_y, idle_int, 2, idle_col);
@@ -482,11 +488,15 @@ pub fn draw_status_flags(fb: &Framebuf, paused: bool, slow_motion: bool, pinned:
 }
 
 fn hline(fb: &Framebuf, x: u32, y: u32, w: u32) {
-    if y >= fb.h { return; }
+    if y >= fb.h {
+        return;
+    }
     let x1 = x.min(fb.w) as usize;
     let x2 = x.saturating_add(w).min(fb.w) as usize;
     let cols = x2 - x1;
-    if cols == 0 { return; }
+    if cols == 0 {
+        return;
+    }
     let off = y as usize * fb.stride as usize + x1;
     let row = unsafe { core::slice::from_raw_parts_mut(fb.ptr.add(off), cols) };
     row.fill(COL_BORDER);

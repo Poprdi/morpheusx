@@ -92,6 +92,7 @@
 /// | 88     | SYS_FB_PRESENT  | ()                                | 0             |
 pub mod handler;
 
+use crate::process::scheduler::SCHEDULER;
 use crate::serial::puts;
 use handler::*;
 
@@ -220,6 +221,14 @@ pub const SYS_FB_IS_LOCKED: u64 = 87;
 pub const SYS_FB_PRESENT: u64 = 88;
 pub const SYS_FB_BLIT: u64 = 89;
 pub const SYS_FB_MARK_DIRTY: u64 = 90;
+
+// compositor (91-94)
+pub const SYS_COMPOSITOR_SET: u64 = 91;
+pub const SYS_WIN_SURFACE_LIST: u64 = 92;
+pub const SYS_WIN_SURFACE_MAP: u64 = 93;
+pub const SYS_MOUSE_FORWARD: u64 = 94;
+pub const SYS_WIN_SURFACE_DIRTY_CLEAR: u64 = 95;
+pub const SYS_TRY_WAIT: u64 = 96;
 
 // EXTERN ASM FUNCTIONS
 
@@ -350,9 +359,20 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_FB_PRESENT => sys_fb_present(),
         SYS_FB_BLIT => sys_fb_blit(),
         SYS_FB_MARK_DIRTY => {
-            fb_mark_dirty();
+            if is_composited_client() {
+                let proc = SCHEDULER.current_process_mut();
+                proc.fb_surface_dirty = true;
+            } else {
+                fb_mark_dirty();
+            }
             0
         }
+        SYS_COMPOSITOR_SET => sys_compositor_set(),
+        SYS_WIN_SURFACE_LIST => sys_win_surface_list(a1, a2),
+        SYS_WIN_SURFACE_MAP => sys_win_surface_map(a1),
+        SYS_MOUSE_FORWARD => sys_mouse_forward(a1, a2),
+        SYS_WIN_SURFACE_DIRTY_CLEAR => sys_win_surface_dirty_clear(a1),
+        SYS_TRY_WAIT => sys_try_wait(a1),
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);

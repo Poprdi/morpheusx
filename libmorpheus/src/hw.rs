@@ -359,7 +359,9 @@ pub fn fb_blit() -> Result<(), u64> {
 /// tick when the display is idle.
 #[inline]
 pub fn fb_mark_dirty() {
-    unsafe { syscall0(SYS_FB_MARK_DIRTY); }
+    unsafe {
+        syscall0(SYS_FB_MARK_DIRTY);
+    }
 }
 
 // mouse

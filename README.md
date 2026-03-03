@@ -1,6 +1,6 @@
 # MorpheusX
 
-A bare-metal x86-64 exokernel written in Rust. MorpheusX boots via UEFI, takes direct control at `ExitBootServices`, and manages hardware with minimal abstraction. No OS underneath. No compat layers. Just syscalls and isolation.
+A bare-metal x86-64 exokernel written in Rust. MorpheusX boots via UEFI, takes direct control at `ExitBootServices`, and manages hardware with minimal abstraction. No OS underneath. No compat layers. Just syscalls and isolation. (and developer tears)
 
 ## What This Is
 
@@ -26,9 +26,6 @@ After boot, applications can spawn user processes, allocate memory, perform I/O,
 
 - **Minimize abstraction**: Hardware is exposed. Page tables, interrupts, CPUs are visible resources.
 - **No hidden state**: All major structures (process table, memory registry, scheduler state) are explicit and audited.
-- **Single-threaded kernel**: One CPU, one scheduler, one event loop. Interrupts are the only preemption source.
-- **Lean syscall interface**: 21 syscalls cover process management, memory, I/O, and HelixFS operations.
-- **Avoid allocation in hot paths**: Scheduler, context switching, and signal delivery never call `malloc()`.
 
 ## Core Components
 
@@ -61,21 +58,6 @@ Requires: Rust 1.75+, `x86_64-unknown-uefi` target, QEMU + OVMF for testing.
 
 Boot messages appear on serial (stdout in QEMU). A 1920x1080 framebuffer displays the shell. Type `help` for commands; `open storage` launches the Storage Manager.
 
-## Testing
-
-The boot chain is audited end-to-end. See [docs/md/BOOT_CHAIN_AUDIT.md](docs/md/BOOT_CHAIN_AUDIT.md) for correctness analysis, buffer budgets, and invariants.
-
----
-
-## Documentation
-
-Detailed docs available in `/docs`:
-
-- **[BOOT_CHAIN_AUDIT.md](docs/md/BOOT_CHAIN_AUDIT.md)** — Full audit of boot sequence, allocator, processes, paging
-- **[HWINIT_EXTRACTION_INVENTORY.md](docs/md/HWINIT_EXTRACTION_INVENTORY.md)** — Hardware init modules and responsibilities
-- **[SDK.md](docs/SDK.md)** — Building applications for MorpheusX
-- **[Architecture & Design](docs/Architecture&Design/)** — Deep dives on subsystems
-
 ---
 
 ## Contributing
@@ -98,12 +80,7 @@ For technical assistance, please contact our [24/7 support team](https://www.nsa
 
 ## License
 
-Licensed under either of:
-
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
-
-at your option.
+Licenced under GPLv3 :) 
 
 ---
 

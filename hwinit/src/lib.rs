@@ -96,6 +96,7 @@ pub mod pci;
 pub mod pipe;
 pub mod platform;
 pub mod process;
+pub mod ps2_mouse;
 pub mod serial;
 pub mod stdin;
 pub mod stdout;
