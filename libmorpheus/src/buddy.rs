@@ -181,10 +181,7 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
                     break;
                 }
             }
-            match refound {
-                Some(k) => k,
-                None => return None, // if this fires, physics is broken
-            }
+            refound?
         }
     };
 
@@ -263,7 +260,7 @@ unsafe impl GlobalAlloc for BuddyHeap {
 
         let order = layout_to_order(layout);
         HEAP.lock();
-        let result = buddy_alloc(&mut *(&raw mut STATE), order);
+        let result = buddy_alloc(&mut STATE, order);
         HEAP.unlock();
         result.unwrap_or(ptr::null_mut())
     }
@@ -274,7 +271,7 @@ unsafe impl GlobalAlloc for BuddyHeap {
         }
         let order = layout_to_order(layout);
         HEAP.lock();
-        buddy_free(&mut *(&raw mut STATE), ptr, order);
+        buddy_free(&mut STATE, ptr, order);
         HEAP.unlock();
     }
 

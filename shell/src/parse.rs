@@ -101,7 +101,7 @@ fn tokenize(s: &str) -> Vec<String> {
             }
             ' ' | '\t' if !in_single && !in_double => {
                 if !current.is_empty() {
-                    tokens.push(core::mem::replace(&mut current, String::new()));
+                    tokens.push(core::mem::take(&mut current));
                 }
             }
             _ => {
@@ -141,8 +141,7 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
                 }
             }
             _ => {
-                if tok.starts_with('>') {
-                    let rest = &tok[1..];
+                if let Some(rest) = tok.strip_prefix('>') {
                     let (append, path_part) = if rest.starts_with('>') {
                         (true, &rest[1..])
                     } else {
@@ -157,8 +156,7 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
                         String::from(path_part)
                     };
                     stdout_file = Some(Redirect { path, append });
-                } else if tok.starts_with('<') {
-                    let rest = &tok[1..];
+                } else if let Some(rest) = tok.strip_prefix('<') {
                     stdin_file = if rest.is_empty() {
                         iter.next()
                     } else {

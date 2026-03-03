@@ -67,6 +67,12 @@ pub struct BspTree {
     pub leaves: Vec<BspLeaf>,
 }
 
+impl Default for BspTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BspTree {
     pub fn new() -> Self {
         Self {
@@ -89,10 +95,7 @@ impl BspTree {
         loop {
             match child {
                 BspChild::Node(idx) => {
-                    let node = match self.nodes.get(idx as usize) {
-                        Some(n) => n,
-                        None => return None,
-                    };
+                    let node = self.nodes.get(idx as usize)?;
                     let coord = match node.axis {
                         0 => point.x,
                         1 => point.y,
@@ -184,10 +187,7 @@ impl BspTree {
 
         match child {
             BspChild::Node(idx) => {
-                let node = match self.nodes.get(idx as usize) {
-                    Some(n) => n,
-                    None => return None,
-                };
+                let node = self.nodes.get(idx as usize)?;
 
                 let (o_coord, d_coord) = match node.axis {
                     0 => (origin.x, dir.x),

@@ -1857,7 +1857,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             let fd_table = SCHEDULER.current_fd_table_mut();
             let avail = if let Ok(desc) = fd_table.get(0) {
                 if desc.flags & O_PIPE_READ != 0 {
-                    crate::pipe::pipe_available(desc.mount_idx) as usize
+                    crate::pipe::pipe_available(desc.mount_idx)
                 } else {
                     crate::stdin::available()
                 }
@@ -2384,12 +2384,10 @@ pub unsafe fn release_fb_lock_if_holder(pid: u32) {
     // operates on the real back buffer — the children's display freezes.
     if COMPOSITOR_PID == pid {
         use crate::process::scheduler::PROCESS_TABLE;
-        for slot in PROCESS_TABLE.iter() {
-            if let Some(proc) = slot {
-                if !proc.is_free() && proc.pid != pid && proc.fb_surface_phys != 0 {
-                    let _ =
-                        SCHEDULER.send_signal(proc.pid, crate::process::signals::Signal::SIGKILL);
-                }
+        for proc in PROCESS_TABLE.iter().flatten() {
+            if !proc.is_free() && proc.pid != pid && proc.fb_surface_phys != 0 {
+                let _ =
+                    SCHEDULER.send_signal(proc.pid, crate::process::signals::Signal::SIGKILL);
             }
         }
         COMPOSITOR_PID = 0;
@@ -4342,14 +4340,12 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
     {
         use crate::process::scheduler::PROCESS_TABLE;
         use crate::process::ProcessState;
-        for slot in PROCESS_TABLE.iter() {
-            if let Some(proc) = slot {
-                if !proc.is_free()
-                    && !matches!(proc.state, ProcessState::Zombie)
-                    && proc.fb_surface_phys != 0
-                {
-                    total += 1;
-                }
+        for proc in PROCESS_TABLE.iter().flatten() {
+            if !proc.is_free()
+                && !matches!(proc.state, ProcessState::Zombie)
+                && proc.fb_surface_phys != 0
+            {
+                total += 1;
             }
         }
     }

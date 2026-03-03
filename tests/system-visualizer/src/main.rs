@@ -452,8 +452,8 @@ fn fast_atan2(y: f32, x: f32) -> f32 {
     let (mn, mx) = if ax < ay { (ax, ay) } else { (ay, ax) };
     let a = mn / mx;
     let s = a * a;
-    let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
-    let r = if ax < ay { 1.5707963 - r } else { r };
+    let r = ((-0.046_496_473 * s + 0.15931422) * s - 0.327_622_77) * s * a + a;
+    let r = if ax < ay { core::f32::consts::FRAC_PI_2 - r } else { r };
     let r = if x < 0.0 { pi - r } else { r };
     if y < 0.0 {
         -r

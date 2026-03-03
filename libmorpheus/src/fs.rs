@@ -337,6 +337,12 @@ pub struct OpenOptions {
     append: bool,
 }
 
+impl Default for OpenOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenOptions {
     pub fn new() -> Self {
         Self {

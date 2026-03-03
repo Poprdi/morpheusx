@@ -54,6 +54,12 @@ pub struct LightEnv {
 /// Quake 2 used exactly 4; Quake 3 used 1 directional + 4 point.
 pub const MAX_POINT_LIGHTS: usize = 4;
 
+impl Default for LightEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LightEnv {
     pub fn new() -> Self {
         Self {

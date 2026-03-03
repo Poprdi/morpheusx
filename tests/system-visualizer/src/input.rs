@@ -125,6 +125,6 @@ impl InputState {
     }
 
     pub fn has(&self, action: Action) -> bool {
-        self.actions[..self.count].iter().any(|&a| a == action)
+        self.actions[..self.count].contains(&action)
     }
 }

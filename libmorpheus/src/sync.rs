@@ -144,6 +144,12 @@ pub struct Condvar {
     seq: AtomicU32,
 }
 
+impl Default for Condvar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Condvar {
     pub const fn new() -> Self {
         Self {
@@ -190,6 +196,12 @@ pub struct OnceLock<T> {
 
 unsafe impl<T: Send + Sync> Send for OnceLock<T> {}
 unsafe impl<T: Send + Sync> Sync for OnceLock<T> {}
+
+impl<T> Default for OnceLock<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl<T> OnceLock<T> {
     pub const fn new() -> Self {
@@ -302,15 +314,14 @@ impl<T> RwLock<T> {
     /// Try to acquire a read lock without blocking.
     pub fn try_read(&self) -> Option<RwLockReadGuard<'_, T>> {
         let s = self.state.load(Ordering::Relaxed);
-        if s != WRITER {
-            if self
+        if s != WRITER
+            && self
                 .state
                 .compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
             {
                 return Some(RwLockReadGuard { lock: self });
             }
-        }
         None
     }
 

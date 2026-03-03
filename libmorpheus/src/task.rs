@@ -479,7 +479,7 @@ impl Future for SleepFuture {
             self.parked = true;
             // Compute remaining ms, round up.
             let remaining_ns = self.deadline_ns.saturating_sub(now);
-            let remaining_ms = (remaining_ns + 999_999) / 1_000_000;
+            let remaining_ms = remaining_ns.div_ceil(1_000_000);
 
             if remaining_ms > 0 {
                 // Park using futex with timeout — the kernel timer ISR will

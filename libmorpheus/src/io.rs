@@ -347,10 +347,7 @@ pub trait BufRead: Read {
     fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> error::Result<usize> {
         let start = buf.len();
         loop {
-            let available = match self.fill_buf() {
-                Ok(b) => b,
-                Err(e) => return Err(e),
-            };
+            let available = self.fill_buf()?;
             if available.is_empty() {
                 return Ok(buf.len() - start);
             }
