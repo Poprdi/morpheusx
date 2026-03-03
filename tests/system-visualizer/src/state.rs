@@ -289,7 +289,7 @@ impl SystemState {
             }
         }
         // Allocate a new slot (bounded by MAX_PROCS).
-        
+
         if self.acc_count < MAX_PROCS {
             let s = self.acc_count;
             self.acc_pids[s] = pid;
