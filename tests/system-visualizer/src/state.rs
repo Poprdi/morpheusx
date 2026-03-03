@@ -176,8 +176,8 @@ impl SystemState {
         let compute_pct = self.acc_polls >= POLLS_PER_SEC;
 
         if compute_pct && self.acc_wall_tsc > 0 {
-            self.idle_pct = ((self.acc_idle_tsc as f32 / self.acc_wall_tsc as f32) * 100.0)
-                .min(100.0);
+            self.idle_pct =
+                ((self.acc_idle_tsc as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0);
         }
 
         for i in 0..count {
@@ -185,8 +185,7 @@ impl SystemState {
 
             let cpu_pct = if compute_pct && self.acc_wall_tsc > 0 {
                 let slot = self.acc_slot_for_pid(r.pid);
-                ((self.acc_cpu_tsc[slot] as f32 / self.acc_wall_tsc as f32) * 100.0)
-                    .min(100.0)
+                ((self.acc_cpu_tsc[slot] as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0)
             } else {
                 // Keep the previously displayed value between windows.
                 self.find_prev_cpu_pct(r.pid)

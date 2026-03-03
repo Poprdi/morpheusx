@@ -186,6 +186,25 @@ pub struct Process {
     pub saved_signal_context: CpuContext,
     /// True while executing a user signal handler (prevents nested delivery).
     pub in_signal_handler: bool,
+
+    // compositor — per-process framebuffer surface
+    /// Physical address of this process's private framebuffer surface.
+    /// Non-zero when the process has called SYS_FB_MAP while a compositor
+    /// is active.  The compositor reads this buffer to composite windows.
+    pub fb_surface_phys: u64,
+    /// Number of physical pages allocated for the surface.
+    pub fb_surface_pages: u64,
+    /// Dirty flag — set by the process (via SYS_FB_BLIT/PRESENT/MARK_DIRTY),
+    /// cleared by the compositor after reading.
+    pub fb_surface_dirty: bool,
+
+    // per-process mouse accumulator (used when compositor is active)
+    /// Accumulated mouse dx (written by compositor via SYS_MOUSE_FORWARD).
+    pub mouse_dx: i32,
+    /// Accumulated mouse dy.
+    pub mouse_dy: i32,
+    /// Current mouse button state.
+    pub mouse_buttons: u8,
 }
 
 impl Process {
@@ -225,6 +244,12 @@ impl Process {
             futex_deadline: 0,
             saved_signal_context: CpuContext::empty(),
             in_signal_handler: false,
+            fb_surface_phys: 0,
+            fb_surface_pages: 0,
+            fb_surface_dirty: false,
+            mouse_dx: 0,
+            mouse_dy: 0,
+            mouse_buttons: 0,
         }
     }
 

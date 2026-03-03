@@ -19,8 +19,11 @@ pub unsafe fn sys_exit(code: u64) -> u64 {
 
 /// `SYS_WRITE(fd, ptr, len)` — write bytes.
 ///
-/// fd 1 (stdout) / fd 2 (stderr): serial console output.
-/// fd >= 3: VFS file write.
+/// For fds 0, 1, 2: if the fd has been redirected via dup2 (e.g. to a pipe
+/// or file), writes to that target.  Otherwise fd 1/2 fall through to the
+/// serial console, and fd 0 returns EBADF.
+///
+/// fd >= 3: pipe write or VFS file write.
 pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
@@ -28,6 +31,45 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     if !validate_user_buf(ptr, len) {
         return EFAULT;
     }
+
+    // For ALL fds (including 0, 1, 2): check the fd_table first.
+    // If the fd has been explicitly opened/redirected (pipe, file), use it.
+    {
+        let fd_table = SCHEDULER.current_fd_table_mut();
+        if let Ok(desc) = fd_table.get(fd as usize) {
+            if desc.flags & O_PIPE_WRITE != 0 {
+                let pipe_idx = desc.mount_idx;
+                let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+                if crate::pipe::pipe_readers(pipe_idx) == 0 {
+                    return EPIPE;
+                }
+                let n = crate::pipe::pipe_write(pipe_idx, data);
+                crate::process::scheduler::wake_pipe_readers(pipe_idx);
+                return n as u64;
+            }
+            // Regular file — fall through to VFS write.
+            let fs = match morpheus_helix::vfs::global::fs_global_mut() {
+                Some(fs) => fs,
+                None => return ENOSYS,
+            };
+            let fd_table = SCHEDULER.current_fd_table_mut();
+            let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+            let ts = crate::cpu::tsc::read_tsc();
+            return match morpheus_helix::vfs::vfs_write(
+                &mut fs.device,
+                &mut fs.mount_table,
+                fd_table,
+                fd as usize,
+                data,
+                ts,
+            ) {
+                Ok(n) => n as u64,
+                Err(e) => helix_err_to_errno(e),
+            };
+        }
+    }
+
+    // fd_table has no entry for this fd — legacy fallback.
     match fd {
         1 | 2 => {
             let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
@@ -43,41 +85,6 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 len
             }
         }
-        fd if fd >= 3 => {
-            // Check if this fd is a pipe write end.
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            if let Ok(desc) = fd_table.get(fd as usize) {
-                if desc.flags & O_PIPE_WRITE != 0 {
-                    let pipe_idx = desc.mount_idx;
-                    let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-                    // Check if anyone is reading the other end.
-                    if crate::pipe::pipe_readers(pipe_idx) == 0 {
-                        return EPIPE;
-                    }
-                    let n = crate::pipe::pipe_write(pipe_idx, data);
-                    crate::process::scheduler::wake_pipe_readers(pipe_idx);
-                    return n as u64;
-                }
-            }
-            let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-                Some(fs) => fs,
-                None => return ENOSYS,
-            };
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-            let ts = crate::cpu::tsc::read_tsc();
-            match morpheus_helix::vfs::vfs_write(
-                &mut fs.device,
-                &mut fs.mount_table,
-                fd_table,
-                fd as usize,
-                data,
-                ts,
-            ) {
-                Ok(n) => n as u64,
-                Err(e) => helix_err_to_errno(e),
-            }
-        }
         _ => EBADF,
     }
 }
@@ -86,8 +93,11 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
 
 /// `SYS_READ(fd, ptr, len)` — read bytes.
 ///
-/// fd 0 (stdin): blocking read — parks the process until data arrives.
-/// fd >= 3: VFS file read.
+/// For fds 0, 1, 2: if the fd has been redirected via dup2 (e.g. to a pipe
+/// or file), reads from that target.  Otherwise fd 0 falls through to the
+/// kernel keyboard ring buffer, and fd 1/2 return EBADF.
+///
+/// fd >= 3: pipe read or VFS file read.
 pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
@@ -95,6 +105,38 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     if !validate_user_buf(ptr, len) {
         return EFAULT;
     }
+
+    // For ALL fds (including 0, 1, 2): check the fd_table first.
+    // If the fd has been explicitly opened/redirected (pipe, file), use it.
+    {
+        let fd_table = SCHEDULER.current_fd_table_mut();
+        if let Ok(desc) = fd_table.get(fd as usize) {
+            if desc.flags & O_PIPE_READ != 0 {
+                let pipe_idx = desc.mount_idx;
+                let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
+                return sys_pipe_read_blocking(pipe_idx, buf);
+            }
+            // Regular file — fall through to VFS read.
+            let fs = match morpheus_helix::vfs::global::fs_global_mut() {
+                Some(fs) => fs,
+                None => return ENOSYS,
+            };
+            let fd_table = SCHEDULER.current_fd_table_mut();
+            let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
+            return match morpheus_helix::vfs::vfs_read(
+                &mut fs.device,
+                &fs.mount_table,
+                fd_table,
+                fd as usize,
+                buf,
+            ) {
+                Ok(n) => n as u64,
+                Err(e) => helix_err_to_errno(e),
+            };
+        }
+    }
+
+    // fd_table has no entry for this fd — legacy fallback.
     match fd {
         0 => {
             // stdin — blocking read from kernel keyboard ring buffer.
@@ -128,33 +170,6 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 }
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
                 // Woken by wake_stdin_waiters() or send_signal() — loop back.
-            }
-        }
-        fd if fd >= 3 => {
-            // Check if this fd is actually a pipe read end.
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            if let Ok(desc) = fd_table.get(fd as usize) {
-                if desc.flags & O_PIPE_READ != 0 {
-                    let pipe_idx = desc.mount_idx;
-                    let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-                    return sys_pipe_read_blocking(pipe_idx, buf);
-                }
-            }
-            let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-                Some(fs) => fs,
-                None => return ENOSYS,
-            };
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-            match morpheus_helix::vfs::vfs_read(
-                &mut fs.device,
-                &fs.mount_table,
-                fd_table,
-                fd as usize,
-                buf,
-            ) {
-                Ok(n) => n as u64,
-                Err(e) => helix_err_to_errno(e),
             }
         }
         _ => EBADF,
@@ -1692,7 +1707,9 @@ static mut FB_DIRTY: bool = false;
 /// Called by syscalls that write to the back buffer.
 #[inline]
 pub fn fb_mark_dirty() {
-    unsafe { FB_DIRTY = true; }
+    unsafe {
+        FB_DIRTY = true;
+    }
 }
 
 // SYS_NIC_INFO (32) — get NIC information
@@ -1834,9 +1851,19 @@ const IOCTL_TIOCGWINSZ: u64 = 0x5413; // get terminal window size
 /// `SYS_IOCTL(fd, cmd, arg) → result`
 pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     match (fd, cmd) {
-        // stdin: check if keyboard data is available
+        // FIONREAD: bytes available on fd without blocking.
         (0, IOCTL_FIONREAD) => {
-            let avail = crate::stdin::available();
+            // If fd 0 is a pipe, check pipe availability.
+            let fd_table = SCHEDULER.current_fd_table_mut();
+            let avail = if let Ok(desc) = fd_table.get(0) {
+                if desc.flags & O_PIPE_READ != 0 {
+                    crate::pipe::pipe_available(desc.mount_idx) as usize
+                } else {
+                    crate::stdin::available()
+                }
+            } else {
+                crate::stdin::available()
+            };
             if arg != 0 && validate_user_buf(arg, 4) {
                 core::ptr::write(arg as *mut u32, avail as u32);
             }
@@ -1945,7 +1972,20 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
         pfd.revents = 0;
         match pfd.fd {
             0 => {
-                // stdin
+                // Check if fd 0 is redirected to a pipe.
+                let fd_table = SCHEDULER.current_fd_table_mut();
+                if let Ok(desc) = fd_table.get(0) {
+                    if desc.flags & O_PIPE_READ != 0 {
+                        if pfd.events & POLLIN != 0
+                            && crate::pipe::pipe_available(desc.mount_idx) > 0
+                        {
+                            pfd.revents |= POLLIN;
+                            ready += 1;
+                        }
+                        continue;
+                    }
+                }
+                // Fallback: kernel ring buffer stdin.
                 if pfd.events & POLLIN != 0 && crate::stdin::available() > 0 {
                     pfd.revents |= POLLIN;
                     ready += 1;
@@ -1990,9 +2030,23 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
 
             // Re-check all fds after each sleep chunk.
             for pfd in fds.iter_mut() {
-                if pfd.fd == 0 && pfd.events & POLLIN != 0 && crate::stdin::available() > 0 {
-                    pfd.revents |= POLLIN;
-                    ready += 1;
+                if pfd.fd == 0 && pfd.events & POLLIN != 0 {
+                    let has_data = {
+                        let fd_table = SCHEDULER.current_fd_table_mut();
+                        if let Ok(desc) = fd_table.get(0) {
+                            if desc.flags & O_PIPE_READ != 0 {
+                                crate::pipe::pipe_available(desc.mount_idx) > 0
+                            } else {
+                                crate::stdin::available() > 0
+                            }
+                        } else {
+                            crate::stdin::available() > 0
+                        }
+                    };
+                    if has_data {
+                        pfd.revents |= POLLIN;
+                        ready += 1;
+                    }
                 }
             }
             if ready > 0 {
@@ -2307,9 +2361,38 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
 /// PID that currently holds exclusive framebuffer access (0 = unlocked).
 static mut FB_LOCK_PID: u32 = 0;
 
+// COMPOSITOR — the compositor PID owns the real back buffer.
+// Non-compositor processes get per-process offscreen surfaces.
+
+/// PID of the registered compositor process (0 = no compositor).
+static mut COMPOSITOR_PID: u32 = 0;
+
+/// Returns true if a compositor is active and the caller is NOT the compositor.
+#[inline]
+pub unsafe fn is_composited_client() -> bool {
+    COMPOSITOR_PID != 0 && SCHEDULER.current_pid() != COMPOSITOR_PID
+}
+
 pub unsafe fn release_fb_lock_if_holder(pid: u32) {
     if FB_LOCK_PID == pid {
         FB_LOCK_PID = 0;
+    }
+    // If the compositor exits, kill all composited children so they don't
+    // continue writing to invisible per-process surfaces.  Without this,
+    // children's already-mapped pointers target their private surface
+    // while sys_fb_present/blit falls through to the legacy path that
+    // operates on the real back buffer — the children's display freezes.
+    if COMPOSITOR_PID == pid {
+        use crate::process::scheduler::PROCESS_TABLE;
+        for slot in PROCESS_TABLE.iter() {
+            if let Some(proc) = slot {
+                if !proc.is_free() && proc.pid != pid && proc.fb_surface_phys != 0 {
+                    let _ =
+                        SCHEDULER.send_signal(proc.pid, crate::process::signals::Signal::SIGKILL);
+                }
+            }
+        }
+        COMPOSITOR_PID = 0;
     }
 }
 
@@ -2317,7 +2400,12 @@ pub unsafe fn release_fb_lock_if_holder(pid: u32) {
 ///
 /// Claim exclusive framebuffer access. Other processes should check
 /// `fb_is_locked()` before writing to the framebuffer.
+/// When a compositor is active, non-compositor processes get a no-op
+/// (they have their own private surface — no contention).
 pub unsafe fn sys_fb_lock() -> u64 {
+    if is_composited_client() {
+        return 0; // no-op: they own their private surface
+    }
     let pid = SCHEDULER.current_pid();
     if FB_LOCK_PID != 0 && FB_LOCK_PID != pid {
         return EBUSY;
@@ -2329,7 +2417,11 @@ pub unsafe fn sys_fb_lock() -> u64 {
 /// `SYS_FB_UNLOCK() → 0`
 ///
 /// Release exclusive framebuffer access. Only the lock holder can unlock.
+/// No-op for composited clients.
 pub unsafe fn sys_fb_unlock() -> u64 {
+    if is_composited_client() {
+        return 0;
+    }
     let pid = SCHEDULER.current_pid();
     if FB_LOCK_PID != pid && FB_LOCK_PID != 0 {
         return EPERM;
@@ -2338,39 +2430,42 @@ pub unsafe fn sys_fb_unlock() -> u64 {
     0
 }
 
-/// `SYS_FB_INFO(buf_ptr) → 0` — also writes lock status into a query-able field.
-///
-/// Other processes can call `fb_info()` and check the lock_pid field to
-/// decide whether to skip rendering.
+/// `SYS_FB_IS_LOCKED()` — returns holder PID.
+/// Composited clients always see 0 (unlocked from their perspective).
 pub fn fb_lock_holder() -> u32 {
-    unsafe { FB_LOCK_PID }
+    unsafe {
+        if COMPOSITOR_PID != 0 && SCHEDULER.current_pid() != COMPOSITOR_PID {
+            return 0;
+        }
+        FB_LOCK_PID
+    }
 }
 
 // SYS_FB_MAP (64) — map the back buffer into user virtual address space
 
 /// `SYS_FB_MAP() → virt_addr`
 ///
-/// Allocates a kernel-owned back buffer and shadow buffer in normal
-/// cacheable RAM (same layout as the hardware framebuffer, including
-/// stride padding).  Maps the back buffer into the calling process's
-/// address space as writable cacheable memory and returns its virtual
-/// address.
+/// When no compositor is active (legacy mode): allocates a shared back buffer
+/// and shadow buffer, maps the back buffer into the caller's address space.
 ///
-/// To userspace this looks like a normal framebuffer — write pixels,
-/// done.  The kernel's timer ISR automatically diffs versus the shadow
-/// and pushes only changed spans to real VRAM.
-///
-/// Calling `fb_map` a second time from any process simply re-maps the
-/// same already-allocated back buffer.
+/// When a compositor IS active:
+///   - Compositor itself → gets the real back buffer (unchanged).
+///   - All other processes → get a private per-process offscreen surface
+///     (same dimensions as the real framebuffer).  The compositor reads
+///     these surfaces to composite windows.
 pub unsafe fn sys_fb_map() -> u64 {
     let info = match FB_REGISTERED {
         Some(i) => i,
         None => return ENODEV,
     };
 
+    // Compositor mode: non-compositor processes get their own surface.
+    if is_composited_client() {
+        return sys_fb_map_surface(&info);
+    }
+
+    // Compositor or legacy mode: map the real back buffer.
     // Allocate back + shadow buffers on first call.
-    // allocate_pages internally switches to kernel CR3 for buddy operations.
-    // fb_map_alloc_buffers uses KernelCr3Guard for the VRAM copy.
     if FB_BACK_PHYS == 0 {
         if let Err(e) = fb_map_alloc_buffers(&info) {
             return e;
@@ -2379,6 +2474,47 @@ pub unsafe fn sys_fb_map() -> u64 {
 
     // Map back buffer as writable cacheable (flag 0x01 = writable, no 0x02 uncacheable).
     sys_map_phys(FB_BACK_PHYS, FB_BACK_PAGES, 0x01)
+}
+
+/// Allocate a per-process framebuffer surface for a composited client.
+/// Same dimensions as the real framebuffer, zeroed.
+unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
+    let proc = SCHEDULER.current_process_mut();
+
+    // If this process already has a surface, just re-map it.
+    if proc.fb_surface_phys != 0 {
+        return sys_map_phys(proc.fb_surface_phys, proc.fb_surface_pages, 0x01);
+    }
+
+    // Allocate physical pages for the surface.
+    let pages = info.size.div_ceil(4096);
+    let registry = crate::memory::global_registry_mut();
+    let phys = match registry.allocate_pages(
+        crate::memory::AllocateType::AnyPages,
+        crate::memory::MemoryType::Allocated,
+        pages,
+    ) {
+        Ok(p) => p,
+        Err(_) => return ENOMEM,
+    };
+
+    // Zero the surface (start with black).
+    {
+        let _guard = crate::memory::KernelCr3Guard::enter();
+        core::ptr::write_bytes(phys as *mut u8, 0, info.size as usize);
+    }
+
+    // Record in process struct. Update pages_allocated for proper cleanup
+    // via free_process_resources which only frees VMA-tracked pages with
+    // owns_phys=true. We track the surface separately and clean it up
+    // explicitly.
+    let proc = SCHEDULER.current_process_mut();
+    proc.fb_surface_phys = phys;
+    proc.fb_surface_pages = pages;
+    proc.fb_surface_dirty = false;
+
+    // Map into the process's address space.
+    sys_map_phys(phys, pages, 0x01)
 }
 
 /// Allocate back + shadow buffers, copy VRAM content into both.
@@ -2478,11 +2614,15 @@ pub unsafe fn fb_present_tick() {
 
 /// SYS_FB_PRESENT (88) — on-demand framebuffer present.
 ///
-/// Runs the delta presenter synchronously on the caller's stack: diffs
-/// the back buffer against the shadow and writes only changed pixel spans
-/// to real VRAM.  Returns 0 on success, ENODEV if no framebuffer is
-/// registered or back buffer hasn't been mapped yet.
+/// Compositor/legacy: runs the delta presenter synchronously.
+/// Composited client: marks the per-process surface as dirty (no VRAM write).
 pub unsafe fn sys_fb_present() -> u64 {
+    if is_composited_client() {
+        let proc = SCHEDULER.current_process_mut();
+        proc.fb_surface_dirty = true;
+        return 0;
+    }
+
     if FB_BACK_PHYS == 0 || FB_SHADOW_PHYS == 0 {
         return ENODEV;
     }
@@ -2510,12 +2650,15 @@ pub unsafe fn sys_fb_present() -> u64 {
 
 /// SYS_FB_BLIT (89) — full-screen memcpy present (no delta).
 ///
-/// Copies the entire back buffer directly to VRAM in one shot.
-/// Faster than `sys_fb_present` when most/all pixels change per frame
-/// (e.g. full-screen 3D rendering) because it avoids the scan + shadow
-/// overhead.  Also updates the shadow buffer so a subsequent delta
-/// present still works correctly.
+/// Compositor/legacy: copies the entire back buffer directly to VRAM.
+/// Composited client: marks the per-process surface as dirty.
 pub unsafe fn sys_fb_blit() -> u64 {
+    if is_composited_client() {
+        let proc = SCHEDULER.current_process_mut();
+        proc.fb_surface_dirty = true;
+        return 0;
+    }
+
     if FB_BACK_PHYS == 0 {
         return ENODEV;
     }
@@ -4117,9 +4260,236 @@ pub unsafe fn sys_sigreturn() -> u64 {
 ///
 /// Returns accumulated relative motion since last call.
 /// Bits [15:0] = dx (i16), [31:16] = dy (i16), [39:32] = buttons.
+///
+/// When a compositor is active:
+///   - Compositor → reads the real hardware mouse accumulator.
+///   - Other processes → reads their per-process mouse accumulator
+///     (populated by the compositor via SYS_MOUSE_FORWARD).
 pub unsafe fn sys_mouse_read() -> u64 {
+    if is_composited_client() {
+        let proc = SCHEDULER.current_process_mut();
+        let dx = proc.mouse_dx;
+        let dy = proc.mouse_dy;
+        let buttons = proc.mouse_buttons;
+        proc.mouse_dx = 0;
+        proc.mouse_dy = 0;
+        let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
+        let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
+        return (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32);
+    }
     let (dx, dy, buttons) = crate::mouse::drain();
     let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
     let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
     (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// COMPOSITOR SYSCALLS (91-95)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Surface entry returned by SYS_WIN_SURFACE_LIST.
+/// Must match `libmorpheus::compositor::SurfaceEntry` exactly.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SurfaceEntry {
+    pub pid: u32,
+    pub _pad: u32,
+    pub phys_addr: u64,
+    pub pages: u64,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub format: u32,
+    pub dirty: u32,
+    pub _pad2: u32,
+}
+
+/// `SYS_COMPOSITOR_SET() → 0`
+///
+/// Register the calling process as the window compositor.  Only one
+/// process can be compositor at a time.  The compositor gets the real
+/// back buffer via SYS_FB_MAP; all other processes get private surfaces.
+/// Returns EBUSY if another compositor is already registered.
+pub unsafe fn sys_compositor_set() -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if COMPOSITOR_PID != 0 && COMPOSITOR_PID != pid {
+        return EBUSY;
+    }
+    COMPOSITOR_PID = pid;
+    0
+}
+
+/// `SYS_WIN_SURFACE_LIST(buf_ptr, max_count) → count`
+///
+/// Returns a list of all active per-process framebuffer surfaces.
+/// Only callable by the compositor process.
+///
+/// Each entry is a `SurfaceEntry` struct.  Returns the number of
+/// surfaces written (or total count if buf_ptr is 0).
+pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if pid != COMPOSITOR_PID {
+        return EPERM;
+    }
+
+    let fb_info = match FB_REGISTERED {
+        Some(i) => i,
+        None => return 0,
+    };
+
+    // Count surfaces (exclude zombies — about to be reaped).
+    let mut total = 0u64;
+    {
+        use crate::process::scheduler::PROCESS_TABLE;
+        use crate::process::ProcessState;
+        for slot in PROCESS_TABLE.iter() {
+            if let Some(proc) = slot {
+                if !proc.is_free()
+                    && !matches!(proc.state, ProcessState::Zombie)
+                    && proc.fb_surface_phys != 0
+                {
+                    total += 1;
+                }
+            }
+        }
+    }
+
+    if buf_ptr == 0 || max_count == 0 {
+        return total;
+    }
+
+    let entry_size = core::mem::size_of::<SurfaceEntry>() as u64;
+    let total_size = max_count.saturating_mul(entry_size);
+    if !validate_user_buf(buf_ptr, total_size) {
+        return EFAULT;
+    }
+
+    let out = core::slice::from_raw_parts_mut(buf_ptr as *mut SurfaceEntry, max_count as usize);
+    let mut written = 0usize;
+
+    {
+        use crate::process::scheduler::PROCESS_TABLE;
+        use crate::process::ProcessState;
+        for slot in PROCESS_TABLE.iter() {
+            if written >= max_count as usize {
+                break;
+            }
+            if let Some(proc) = slot {
+                if !proc.is_free()
+                    && !matches!(proc.state, ProcessState::Zombie)
+                    && proc.fb_surface_phys != 0
+                {
+                    out[written] = SurfaceEntry {
+                        pid: proc.pid,
+                        _pad: 0,
+                        phys_addr: proc.fb_surface_phys,
+                        pages: proc.fb_surface_pages,
+                        width: fb_info.width,
+                        height: fb_info.height,
+                        stride: fb_info.stride,
+                        format: fb_info.format,
+                        dirty: if proc.fb_surface_dirty { 1 } else { 0 },
+                        _pad2: 0,
+                    };
+                    written += 1;
+                }
+            }
+        }
+    }
+
+    written as u64
+}
+
+/// `SYS_WIN_SURFACE_MAP(target_pid) → virt_addr`
+///
+/// Map another process's per-process framebuffer surface into the
+/// compositor's address space (read-only).  Only callable by the compositor.
+///
+/// Returns the virtual address in the compositor's address space, or
+/// EINVAL if the target has no surface, or EPERM if caller isn't compositor.
+pub unsafe fn sys_win_surface_map(target_pid: u64) -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if pid != COMPOSITOR_PID {
+        return EPERM;
+    }
+
+    let target_pid_u32 = target_pid as u32;
+
+    // Find the target's surface physical address and page count.
+    let (phys, pages) = {
+        use crate::process::scheduler::PROCESS_TABLE;
+        match PROCESS_TABLE.get(target_pid_u32 as usize) {
+            Some(Some(proc)) if !proc.is_free() && proc.fb_surface_phys != 0 => {
+                (proc.fb_surface_phys, proc.fb_surface_pages)
+            }
+            _ => return EINVAL,
+        }
+    };
+
+    // Map into compositor's address space (writable so compositor can
+    // potentially clear/init the surface; actual compositing only reads).
+    sys_map_phys(phys, pages, 0x01)
+}
+
+/// `SYS_MOUSE_FORWARD(target_pid, packed_state) → 0`
+///
+/// Forward mouse input to a specific process's per-process accumulator.
+/// Only callable by the compositor.
+///
+/// packed_state: bits [15:0] = dx (i16), [31:16] = dy (i16), [39:32] = buttons.
+pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if pid != COMPOSITOR_PID {
+        return EPERM;
+    }
+
+    let target_pid_u32 = target_pid as u32;
+    let dx = packed as i16 as i32;
+    let dy = (packed >> 16) as i16 as i32;
+    let buttons = (packed >> 32) as u8;
+
+    use crate::process::scheduler::PROCESS_TABLE;
+    match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
+        Some(Some(proc)) if !proc.is_free() => {
+            proc.mouse_dx = proc.mouse_dx.saturating_add(dx);
+            proc.mouse_dy = proc.mouse_dy.saturating_add(dy);
+            proc.mouse_buttons = buttons;
+            0
+        }
+        _ => EINVAL,
+    }
+}
+
+/// `SYS_WIN_SURFACE_DIRTY_CLEAR(target_pid) → 0`
+///
+/// Clear the dirty flag on a target process's surface.
+/// Only callable by the compositor (after it has read the surface).
+pub unsafe fn sys_win_surface_dirty_clear(target_pid: u64) -> u64 {
+    let pid = SCHEDULER.current_pid();
+    if pid != COMPOSITOR_PID {
+        return EPERM;
+    }
+
+    let target_pid_u32 = target_pid as u32;
+
+    use crate::process::scheduler::PROCESS_TABLE;
+    match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
+        Some(Some(proc)) if !proc.is_free() => {
+            proc.fb_surface_dirty = false;
+            0
+        }
+        _ => EINVAL,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// NON-BLOCKING WAIT
+// ═══════════════════════════════════════════════════════════════════════
+
+/// `SYS_TRY_WAIT(pid) → exit_code | EAGAIN | ESRCH`
+///
+/// Non-blocking wait: if the child is a zombie, reap it and return the
+/// exit code.  If the child is still running, return EAGAIN.
+pub unsafe fn sys_try_wait(pid: u64) -> u64 {
+    crate::process::scheduler::try_wait_child(pid as u32)
 }

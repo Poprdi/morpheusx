@@ -59,6 +59,20 @@ pub fn wait(pid: u32) -> Result<i32, u64> {
     }
 }
 
+/// Non-blocking wait.  Returns `Ok(Some(code))` if the child has exited,
+/// `Ok(None)` if the child is still running, or `Err` on error.
+pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
+    let ret = unsafe { syscall1(SYS_TRY_WAIT, pid as u64) };
+    const EAGAIN: u64 = u64::MAX - 11;
+    if ret == EAGAIN {
+        Ok(None)
+    } else if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(Some(ret as i32))
+    }
+}
+
 /// Spawn a child process from an ELF binary path in the filesystem.
 ///
 /// Returns the child PID on success.
