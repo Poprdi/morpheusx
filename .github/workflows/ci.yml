@@ -1,9 +1,13 @@
 # CI Pipeline for MorpheusX
 #
-# Runs on every push/PR to main branch.
-# Jobs: lint → build-host → test-host (cascade, fail-fast)
+# Runs on every push/PR to master branch.
+# Fast feedback: lint → build-host → test-host (cascade, fail-fast)
 #
-# UEFI build and E2E tests are in separate workflows to keep this fast.
+# Separate workflows:
+# - UEFI builds and E2E tests → manual only (uefi-e2e.yml)
+# - Documentation → tags only (cargo-doc.yml)
+# - Security audit → weekly + dependency changes (audit.yml)
+# - Releases → tags only (release.yml)
 #
 # Requirements:
 # - Rust 1.75+ (workspace minimum)
@@ -152,39 +156,3 @@ jobs:
           cargo test --test integration_tests create_test_iso -- --ignored --nocapture || true
         continue-on-error: true
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # BUILD-UEFI: Compile bootloader for UEFI target (compile-only check)
-  # ═══════════════════════════════════════════════════════════════════════════
-  build-uefi-check:
-    name: Build (UEFI Check)
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: x86_64-unknown-uefi
-
-      - name: Install NASM
-        run: sudo apt-get install -y -qq nasm
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-uefi-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-uefi-
-            ${{ runner.os }}-cargo-
-
-      # Single pass build for compile check (no reloc embedding needed for check)
-      - name: Build bootloader (UEFI target)
-        run: |
-          cargo build --target x86_64-unknown-uefi -p morpheus-bootloader --release
