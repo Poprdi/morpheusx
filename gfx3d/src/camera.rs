@@ -24,7 +24,7 @@ impl Camera {
             position: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
-            fov_y: 1.0472, // 60 degrees
+            fov_y: core::f32::consts::FRAC_PI_3, // 60 degrees
             aspect,
             near: 0.1,
             far: 1000.0,

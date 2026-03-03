@@ -19,6 +19,12 @@ pub struct Clipper {
     buf_b: [Vertex; 12],
 }
 
+impl Default for Clipper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clipper {
     pub const fn new() -> Self {
         Self {

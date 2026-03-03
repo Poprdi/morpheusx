@@ -83,7 +83,7 @@ impl LineEditor {
                         io::print("\x08 \x08");
                     }
                 }
-                c if c >= 0x20 && c < 0x7F => {
+                c if (0x20..0x7F).contains(&c) => {
                     if self.len < MAX_LINE {
                         self.buf[self.len] = c;
                         self.len += 1;
@@ -176,7 +176,7 @@ pub fn read_line_fb(
                     con.backspace(fb);
                 }
             }
-            c if c >= 0x20 && c < 0x7F => {
+            c if (0x20..0x7F).contains(&c) => {
                 if len < MAX_LINE {
                     buf[len] = c;
                     len += 1;

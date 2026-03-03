@@ -83,7 +83,7 @@ pub fn fast_exp2(x: f32) -> f32 {
     let floor = fast_floor(x);
     let frac = x - floor as f32;
     // Polynomial approximation for 2^frac in [0, 1):
-    let poly = 1.0 + frac * (0.6931 + frac * (0.2402 + frac * 0.0558));
+    let poly = 1.0 + frac * (core::f32::consts::LN_2 + frac * (0.2402 + frac * 0.0558));
     f32::from_bits(((floor + 127) as u32) << 23) * poly
 }
 

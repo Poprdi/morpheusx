@@ -74,13 +74,12 @@ impl ProcessLayout {
         }
 
         for i in 0..n {
-            if !order[..order_len].contains(&i) {
-                if order_len < MAX_PROCS {
+            if !order[..order_len].contains(&i)
+                && order_len < MAX_PROCS {
                     order[order_len] = i;
                     order_len += 1;
                     depth[i] = 1;
                 }
-            }
         }
 
         let mut level_count = [0u32; 16];
@@ -284,7 +283,7 @@ fn fast_ln(x: f32) -> f32 {
     let exp = ((bits >> 23) & 0xFF) as i32 - 127;
     let mantissa = f32::from_bits((bits & 0x007FFFFF) | 0x3F800000);
     let m = mantissa - 1.0;
-    (exp as f32) * 0.6931472 + m * (1.0 - m * 0.5)
+    (exp as f32) * core::f32::consts::LN_2 + m * (1.0 - m * 0.5)
 }
 
 fn fast_exp(x: f32) -> f32 {

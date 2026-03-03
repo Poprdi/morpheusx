@@ -210,15 +210,13 @@ impl Compositor {
         let count = compsys::surface_list(&mut self.surface_buf);
 
         for entry in &self.surface_buf[..count] {
-            for win_opt in self.windows.iter_mut() {
-                if let Some(win) = win_opt {
-                    if win.pid == entry.pid && !win.mapped {
-                        if let Ok(ptr) = compsys::surface_map(entry.pid) {
-                            win.surface_ptr = ptr as *const u32;
-                            win.surface_vaddr = ptr as u64;
-                            win.surface_pages = entry.pages;
-                            win.mapped = true;
-                        }
+            for win in self.windows.iter_mut().flatten() {
+                if win.pid == entry.pid && !win.mapped {
+                    if let Ok(ptr) = compsys::surface_map(entry.pid) {
+                        win.surface_ptr = ptr as *const u32;
+                        win.surface_vaddr = ptr as u64;
+                        win.surface_pages = entry.pages;
+                        win.mapped = true;
                     }
                 }
             }
@@ -314,10 +312,8 @@ impl Compositor {
         self.draw_cursor(fb_ptr);
 
         // Clear dirty flags for all children.
-        for slot in &self.windows {
-            if let Some(win) = slot {
-                let _ = compsys::surface_dirty_clear(win.pid);
-            }
+        for win in self.windows.iter().flatten() {
+            let _ = compsys::surface_dirty_clear(win.pid);
         }
     }
 
@@ -492,7 +488,7 @@ impl Compositor {
         let fg_px = self.pack(fg.0, fg.1, fg.2);
         let bg_px = self.pack(bg.0, bg.1, bg.2);
         let font_w = 8u32;
-        let font_h = 16u32;
+        let _font_h = 16u32;
 
         for (ci, ch) in text.chars().enumerate() {
             let gx = x + ci as u32 * font_w;

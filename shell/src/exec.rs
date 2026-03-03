@@ -142,10 +142,7 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
                 }
             };
 
-            match spawn_child(&binary, &cmd.argv) {
-                Some(pid) => children.push(pid),
-                None => {}
-            }
+            if let Some(pid) = spawn_child(&binary, &cmd.argv) { children.push(pid) }
         }
 
         // Restore shell's own fds for next iteration
@@ -196,10 +193,7 @@ fn spawn_and_wait(binary: &str, argv: &[String]) -> i32 {
 
     process::set_foreground(pid);
 
-    let status = match process::wait(pid) {
-        Ok(code) => code,
-        Err(_) => 1,
-    };
+    let status = process::wait(pid).unwrap_or(1);
 
     process::set_foreground(my_pid);
     status

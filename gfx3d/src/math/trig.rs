@@ -13,6 +13,7 @@ const TABLE_SIZE: usize = 4096;
 const TABLE_MASK: usize = TABLE_SIZE - 1;
 const INV_TABLE: f32 = TABLE_SIZE as f32 / (2.0 * core::f32::consts::PI);
 const TABLE_TO_RAD: f32 = (2.0 * core::f32::consts::PI) / TABLE_SIZE as f32;
+#[allow(clippy::excessive_precision)] // for the polynomial coefficients
 
 pub struct TrigTable {
     sin_table: Box<[f32; TABLE_SIZE]>,
@@ -95,7 +96,7 @@ impl TrigTable {
         // Polynomial: max error 0.0049 rad = 0.28°
         let s = a * a;
         let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
-        let r = if ay > ax { 1.5707963 - r } else { r };
+        let r = if ay > ax { core::f32::consts::FRAC_PI_2 - r } else { r };
         let r = if x < 0.0 {
             core::f32::consts::PI - r
         } else {

@@ -554,7 +554,7 @@ impl MemoryRegistry {
         puts("[MEM] reclaim_boot_services: freed ");
         put_hex32(reclaimed_mb as u32);
         puts(" MB  free_total=");
-        put_hex32((self.free_pages * PAGE_SIZE >> 20) as u32);
+        put_hex32(((self.free_pages * PAGE_SIZE) >> 20) as u32);
         puts(" MB\n");
     }
 
