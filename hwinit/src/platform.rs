@@ -346,6 +346,11 @@ pub unsafe fn platform_init_selfcontained(
 
     init_syscall();
 
+    // phase 10.1: PS/2 mouse driver
+    // Initialize alongside the keyboard in the bootchain.
+    crate::ps2_mouse::init();
+    puts("[HWINIT]   PS/2 mouse initialized\n");
+
     // PIT @ ~100 Hz for preemptive scheduling
     {
         use crate::cpu::pio::outb;
