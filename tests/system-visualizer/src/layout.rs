@@ -74,12 +74,11 @@ impl ProcessLayout {
         }
 
         for i in 0..n {
-            if !order[..order_len].contains(&i)
-                && order_len < MAX_PROCS {
-                    order[order_len] = i;
-                    order_len += 1;
-                    depth[i] = 1;
-                }
+            if !order[..order_len].contains(&i) && order_len < MAX_PROCS {
+                order[order_len] = i;
+                order_len += 1;
+                depth[i] = 1;
+            }
         }
 
         let mut level_count = [0u32; 16];

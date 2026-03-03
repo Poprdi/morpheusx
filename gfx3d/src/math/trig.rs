@@ -96,7 +96,11 @@ impl TrigTable {
         // Polynomial: max error 0.0049 rad = 0.28°
         let s = a * a;
         let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
-        let r = if ay > ax { core::f32::consts::FRAC_PI_2 - r } else { r };
+        let r = if ay > ax {
+            core::f32::consts::FRAC_PI_2 - r
+        } else {
+            r
+        };
         let r = if x < 0.0 {
             core::f32::consts::PI - r
         } else {

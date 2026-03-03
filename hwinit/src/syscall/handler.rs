@@ -2386,8 +2386,7 @@ pub unsafe fn release_fb_lock_if_holder(pid: u32) {
         use crate::process::scheduler::PROCESS_TABLE;
         for proc in PROCESS_TABLE.iter().flatten() {
             if !proc.is_free() && proc.pid != pid && proc.fb_surface_phys != 0 {
-                let _ =
-                    SCHEDULER.send_signal(proc.pid, crate::process::signals::Signal::SIGKILL);
+                let _ = SCHEDULER.send_signal(proc.pid, crate::process::signals::Signal::SIGKILL);
             }
         }
         COMPOSITOR_PID = 0;
