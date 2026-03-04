@@ -1,8 +1,8 @@
 # MorpheusX Syscall ABI Reference
 
-> **Version**: 2.1 — Full exokernel ABI  
-> **Date**: 2026-02-26  
-> **Status**: Stable — syscall numbers 0-82 are allocated and implemented.
+> **Version**: 2.2 — Full exokernel + compositor ABI  
+> **Date**: 2026-03-04  
+> **Status**: Stable — syscall numbers 0-82, 84, 91-95, 97 allocated and implemented.
 
 ---
 
@@ -22,7 +22,9 @@
 | CPU / Diagnostics (69-72)| 4           | 4     |
 | Memory / IPC (73-79)     | 7           | 7     |
 | Threading (80-82)        | 3           | 3     |
-| **TOTAL**                | **83**      | **83**|
+| Input / Mouse (84)       | 1           | 1     |
+| Compositor (91-95, 97)   | 6           | 6     |
+| **TOTAL**                | **90**      | **90**|
 
 Legend: **Implemented** = handler is present in the syscall dispatcher and backend.
 
@@ -542,6 +544,154 @@ pub struct MemmapEntry { pub base: u64, pub pages: u64, pub mem_type: u32, pub _
 
 ---
 
+### Input / Mouse (84)
+
+| Nr | Name           | Args       | Return     | Status |
+|----|----------------|------------|------------|--------|
+| 84 | `MOUSE_READ`   | `()`       | packed_ms  | ✅     |
+
+#### `MOUSE_READ` (84)
+
+Reads accumulated relative mouse motion since the last call. Returns a packed 64-bit value:
+- Bits [15:0] = `dx` (signed i16 delta in pixels)
+- Bits [31:16] = `dy` (signed i16 delta in pixels)  
+- Bits [39:32] = `buttons` (u8 button mask: bit 0=left, bit 1=right, bit 2=middle)
+
+**Behavior depends on compositor status:**
+
+- **Compositor process**: reads hardware mouse state from the kernel accumulator (which is fed by the PS/2 driver).
+- **Non-compositor process**: reads per-process mouse accumulator (populated by the compositor via `SYS_MOUSE_FORWARD`).
+
+Clears the accumulator after reading (next call returns 0 until new motion occurs).
+
+---
+
+### Compositor Protocol (91-95, 97)
+
+A single process registers as the window compositor via `SYS_COMPOSITOR_SET`. After registration:
+- The compositor receives the real framebuffer via `SYS_FB_MAP`.
+- All other processes receive **private per-process offscreen surfaces** in their address space.
+- The compositor reads those surfaces via `SYS_WIN_SURFACE_LIST` + `SYS_WIN_SURFACE_MAP`, composites them onto the real framebuffer, and presents the result.
+- **Input routing**: the compositor reads all keyboard/mouse input first, makes focus/routing decisions (Alt+Tab, window management), then forwards bytes to the focused child via `SYS_FORWARD_INPUT` / `SYS_MOUSE_FORWARD`. No pipes, no global input queue.
+
+| Nr | Name                    | Args                              | Return     | Status |
+|----|-------------------------|-----------------------------------|------------|--------|
+| 91 | `COMPOSITOR_SET`        | `()`                              | 0          | ✅     |
+| 92 | `WIN_SURFACE_LIST`      | `(buf_ptr, max_count)`            | count      | ✅     |
+| 93 | `WIN_SURFACE_MAP`       | `(target_pid)`                    | virt_addr  | ✅     |
+| 94 | `MOUSE_FORWARD`         | `(target_pid, packed_ms)`         | 0          | ✅     |
+| 95 | `WIN_SURFACE_DIRTY_CLEAR`| `(target_pid)`                    | 0          | ✅     |
+| 97 | `FORWARD_INPUT`         | `(target_pid, ptr, len)`          | bytes_written | ✅  |
+
+#### `COMPOSITOR_SET` (91)
+
+Registers the calling process as the window compositor. Returns 0 on success.
+
+- Only one process can be compositor at a time.
+- Returns `-EBUSY` if another compositor is already registered.
+- After registration, this process can call `SYS_FB_MAP` to get the real framebuffer.
+- All subsequently spawned processes will receive private offscreen surfaces instead of the real framebuffer.
+
+#### `WIN_SURFACE_LIST` (92)
+
+Enumerates all per-process framebuffer surfaces. Only callable by the compositor.
+
+**Signature**: `WIN_SURFACE_LIST(buf_ptr, max_count) → count`
+
+Fills a buffer with up to `max_count` `SurfaceEntry` structs and returns the number written.
+
+```rust
+#[repr(C)]
+pub struct SurfaceEntry {
+    pub pid: u32,           // Process ID
+    pub _pad: u32,          // Reserved
+    pub phys_addr: u64,     // Physical address of the surface
+    pub pages: u64,         // Number of 4 KiB pages
+    pub width: u32,         // Surface width in pixels
+    pub height: u32,        // Surface height in pixels
+    pub stride: u32,        // Stride in **bytes** per scanline
+    pub format: u32,        // Pixel format: 0=RGBX, 1=BGRX
+    pub dirty: u32,         // 1 if surface was written since last `WIN_SURFACE_DIRTY_CLEAR`
+    pub _pad2: u32,         // Reserved
+}
+```
+
+**Validation**: If `buf_ptr == 0` or `max_count == 0`, returns the total count of surfaces (for pre-sizing the buffer).
+
+**Permissions**: Returns `-EPERM` if caller is not the registered compositor.
+
+**Zombie exclusion**: Excludes processes in Zombie state (about to be reaped).
+
+#### `WIN_SURFACE_MAP` (93)
+
+Maps another process's per-process surface into the compositor's address space. Only callable by the compositor.
+
+**Signature**: `WIN_SURFACE_MAP(target_pid) → virt_addr`
+
+Returns the virtual address in the compositor's address space. The returned mapping is writable (compositor can clear/init, though compositing typically only reads). The mapping remains valid until the target process exits.
+
+**Errors**:
+- `-EPERM`: caller is not the compositor.
+- `-EINVAL`: target process has no surface (not spawned via `SYS_FB_MAP` or already exited).
+
+**Bounds**: Maps `entry.pages` 4 KiB pages. Max ~512 pages (2 MiB per child).
+
+#### `MOUSE_FORWARD` (94)
+
+Routes mouse input to a child process's per-process accumulator. Only callable by the compositor.
+
+**Signature**: `MOUSE_FORWARD(target_pid, packed_ms) → 0`
+
+The `packed_ms` argument is the same format as `MOUSE_READ` return value:
+- Bits [15:0] = dx (signed i16)
+- Bits [31:16] = dy (signed i16)
+- Bits [39:32] = buttons (u8)
+
+**Behavior**:
+- Accumulates `(dx, dy, buttons)` into the target process's per-process state.
+- Target can call `MOUSE_READ` to retrieve the accumulated state (which clears it).
+- Does **not** wake the target (mouse is typically polled, not signal-driven).
+
+**Errors**:
+- `-EPERM`: caller is not the compositor.
+- `-EINVAL`: target process not found or already exited.
+
+#### `WIN_SURFACE_DIRTY_CLEAR` (95)
+
+Clears the dirty flag on a target process's surface. Called by the compositor after it has composited/read the surface to mark it as clean.
+
+**Signature**: `WIN_SURFACE_DIRTY_CLEAR(target_pid) → 0`
+
+**Errors**:
+- `-EPERM`: caller is not the compositor.
+- `-EINVAL`: target process not found.
+
+The dirty flag is set by the kernel whenever a process writes to its framebuffer surface (triggered by calls to `SYS_FB_MAP` within the process). The compositor uses this to optimize: only recomposite windows that have changed since the last frame.
+
+#### `FORWARD_INPUT` (97)
+
+Routes keyboard bytes to a child process's per-process input buffer. Only callable by the compositor.
+
+**Signature**: `FORWARD_INPUT(target_pid, ptr, len) → bytes_written`
+
+Pushes up to `len` bytes from `[ptr, ptr+len)` into the target process's 256-byte input ring buffer.
+
+**Implementation**:
+- Per-process input ring: `input_buf[256]` with `input_head` (write) and `input_tail` (read).
+- Bytes are queued into the ring; the target process reads them via `SYS_READ(fd=0)`.
+- If the ring is full, `FORWARD_INPUT` stops writing and returns the number successfully written (may be less than `len`).
+
+**Wake behavior**: If the target is blocked waiting for input (`BlockReason::InputRead`), it is woken immediately.
+
+**Errors**:
+- `-EPERM`: caller is not the compositor.
+- `-EINVAL`: target process not found.
+- `-EFAULT`: `[ptr, ptr+len)` is not a valid user buffer.
+
+**Return value**: Number of bytes actually written (0 to `len`). Non-zero bytes written indicate success (no error even if buffer partially full); zero bytes written on an error is indistinguishable from success, so callers should validate the target PID ahead of time.
+
+---
+
 ## User Pointer Validation
 
 `validate_user_buf(ptr, len)` checks: `ptr != 0`, `len != 0`,
@@ -549,7 +699,7 @@ no overflow, `ptr + len <= 0x0000_8000_0000_0000`.
 
 **Validated (representative)**: WRITE, READ, STAT, READDIR, SYSINFO, SYSLOG,
 GETCWD, PERSIST_*, PE_INFO, NIC_INFO, NIC_TX, NIC_RX, NIC_MAC, FB_INFO,
-PS, CPUID, RDTSC, BOOT_LOG, MEMMAP.
+PS, CPUID, RDTSC, BOOT_LOG, MEMMAP, WIN_SURFACE_LIST, FORWARD_INPUT.
 
 ---
 
@@ -576,14 +726,15 @@ Called by bootloader before desktop entry. Enables SYS_FB_INFO / SYS_FB_MAP.
 
 | Module     | Syscalls wrapped                        |
 |------------|-----------------------------------------|
+| `compositor` | compositor_set, surface_list, surface_map, mouse_forward, surface_dirty_clear, forward_input |
 | `process`  | exit, getpid, getppid, yield, kill, sleep, wait, spawn, ps, sigaction, setpriority, getpriority |
 | `fs`       | open, close, read, write, seek, stat, readdir, mkdir, unlink, rename, sync, dup, getcwd, chdir |
-| `io`       | print, println                          |
+| `io`       | print, println, stdin_available, read_stdin                          |
 | `mem`      | alloc_pages, free_pages, mmap, munmap   |
 | `time`     | clock_gettime, uptime_ms, uptime_us     |
 | `sys`      | sysinfo, syslog                         |
 | `net`      | nic_info, nic_tx, nic_rx, nic_link_up, nic_mac, nic_refill |
-| `hw`       | port I/O, PCI cfg, DMA, MAP_PHYS, IRQ, cache, CPUID, RDTSC, FB, boot_log, memmap |
+| `hw`       | port I/O, PCI cfg, DMA, MAP_PHYS, IRQ, cache, CPUID, RDTSC, FB, boot_log, memmap, mouse_read |
 | `persist`  | persist_put/get/del/list/info, pe_info  |
 | `raw`      | syscall0..syscall5 (inline asm)         |
 | `entry`    | `entry!()` macro, panic handler         |
