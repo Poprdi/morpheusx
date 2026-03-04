@@ -2,6 +2,17 @@
 //! onto the real framebuffer.  Handles input routing, window focus, and
 //! title bar decorations.  Runs as a non-blocking event loop while child
 //! processes are active.
+//!
+//! # Input Architecture (Wayland model)
+//!
+//! The compositor reads ALL input from global stdin first.  It makes routing
+//! decisions (focus management, Alt+Tab, window cycling) then forwards
+//! keyboard bytes to the focused child via `SYS_FORWARD_INPUT`.  Mouse data
+//! is forwarded via `SYS_MOUSE_FORWARD`.  Both write directly into per-process
+//! kernel buffers — no pipes, no indirection, no existential dread.
+//!
+//! Children call `read(fd=0)` as normal.  The kernel transparently routes
+//! composited clients to their per-process input buffer instead of global stdin.
 
 extern crate alloc;
 
@@ -42,8 +53,6 @@ const CURSOR_RGB: (u8, u8, u8) = (255, 255, 255);
 /// Tracks a running child process that may have a framebuffer surface.
 struct ChildWindow {
     pid: u32,
-    /// Write end of the pipe connected to the child's stdin (fd 0).
-    pipe_wfd: u32,
     /// Pointer to the child's surface mapped into our address space.
     /// Null until the surface has been mapped.
     surface_ptr: *const u32,
@@ -100,9 +109,8 @@ impl Compositor {
         }
     }
 
-    /// Register a freshly spawned child.  `pipe_wfd` is the write end of the
-    /// pipe connected to the child's stdin.  `name` populates the title bar.
-    pub fn add_child(&mut self, pid: u32, pipe_wfd: u32, name: &str) {
+    /// Register a freshly spawned child.  `name` populates the title bar.
+    pub fn add_child(&mut self, pid: u32, name: &str) {
         for (i, slot) in self.windows.iter_mut().enumerate() {
             if slot.is_none() {
                 let mut title = [0u8; 64];
@@ -116,7 +124,6 @@ impl Compositor {
 
                 *slot = Some(ChildWindow {
                     pid,
-                    pipe_wfd,
                     surface_ptr: core::ptr::null(),
                     mapped: false,
                     surface_vaddr: 0,
@@ -151,11 +158,14 @@ impl Compositor {
 
     // ── input routing ──────────────────────────────────────────────────
 
-    /// Write raw keyboard bytes to the focused child's stdin pipe.
+    /// Push keyboard bytes to the focused child's per-process input buffer.
+    ///
+    /// Uses `SYS_FORWARD_INPUT` — the kernel writes directly into the
+    /// target's ring buffer and wakes it if blocked.  No pipes, no prayer.
     pub fn forward_keyboard(&self, data: &[u8]) {
         if let Some(idx) = self.focused {
             if let Some(win) = &self.windows[idx] {
-                let _ = io::write_fd(win.pipe_wfd, data);
+                let _ = compsys::forward_input(win.pid, data);
             }
         }
     }
@@ -168,6 +178,13 @@ impl Compositor {
             return;
         }
 
+        libmorpheus::io::print(&alloc::format!(
+            "[COMP-MOUSE] read dx={} dy={} buttons=0x{:02x}\n",
+            ms.dx,
+            ms.dy,
+            ms.buttons
+        ));
+
         self.mouse_x = (self.mouse_x + ms.dx as i32).clamp(0, self.fb_w as i32 - 1);
         self.mouse_y = (self.mouse_y + ms.dy as i32).clamp(0, self.fb_h as i32 - 1);
 
@@ -178,6 +195,10 @@ impl Compositor {
 
         if let Some(idx) = self.focused {
             if let Some(win) = &self.windows[idx] {
+                libmorpheus::io::print(&alloc::format!(
+                    "[COMP-MOUSE] forward to PID {}\n",
+                    win.pid
+                ));
                 let _ = compsys::mouse_forward(win.pid, ms.dx, ms.dy, ms.buttons);
             }
         }
@@ -241,7 +262,6 @@ impl Compositor {
                         if win.mapped && win.surface_vaddr != 0 && win.surface_pages != 0 {
                             let _ = mem::munmap(win.surface_vaddr, win.surface_pages);
                         }
-                        let _ = libmorpheus::fs::close(win.pipe_wfd as usize);
                         if self.focused == Some(i) {
                             focused_exit = Some(code);
                         }
@@ -670,24 +690,38 @@ const fn zeroed_surface_entry() -> compsys::SurfaceEntry {
 /// Returns the exit code of the last focused child to exit.
 pub fn compositor_loop(fb: &Framebuffer, comp: &mut Compositor) -> i32 {
     let mut last_status = 0i32;
+    let mut _heartbeat: u32 = 0;
 
     while comp.has_children() {
+        // Heartbeat every 2000 iterations to confirm the compositor loop is alive.
+        _heartbeat = _heartbeat.wrapping_add(1);
+        if _heartbeat % 50 == 1 {
+            libmorpheus::io::print(&alloc::format!("[COMP-TICK] alive iter={}\n", _heartbeat));
+        }
+
         // 1. Read keyboard (non-blocking).
         //    `read_stdin` parks the process if no data is available, which
         //    would freeze compositing, mouse, and child reaping.  Check
         //    availability first so we only read when bytes are waiting.
         let mut kb = [0u8; 32];
-        let n = if io::stdin_available() > 0 {
+        let avail = io::stdin_available();
+        if avail > 0 {
+            libmorpheus::io::print(&alloc::format!("[COMP-POLL] avail={}\n", avail));
+        } else if _heartbeat % 50 == 1 {
+            libmorpheus::io::print("[COMP-POLL] avail=0\n");
+        }
+        let n = if avail > 0 {
             io::read_stdin(&mut kb)
         } else {
             0
         };
 
         if n > 0 {
+            libmorpheus::io::print(&alloc::format!("[COMP-READ] got {} bytes\n", n));
             // Ctrl+] (0x1D) cycles focus between windows.  All other bytes
-            // are forwarded to the focused child's stdin pipe.  We must not
-            // drop non-trigger bytes that happen to share the same read
-            // buffer, so we forward everything except the trigger itself.
+            // are forwarded to the focused child via SYS_FORWARD_INPUT.
+            // We must not drop non-trigger bytes that happen to share the
+            // same read buffer, so we forward everything except the trigger.
             let mut has_cycle = false;
             for i in 0..n {
                 if kb[i] == 0x1D {
@@ -708,6 +742,10 @@ pub fn compositor_loop(fb: &Framebuffer, comp: &mut Compositor) -> i32 {
                 }
             }
             if fi > 0 {
+                libmorpheus::io::print(&alloc::format!(
+                    "[COMP-FWD] forwarding {} bytes to focused child\n",
+                    fi
+                ));
                 comp.forward_keyboard(&fwd[..fi]);
             }
         }

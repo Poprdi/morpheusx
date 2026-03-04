@@ -34,7 +34,7 @@ pub use context::{CpuContext, FpuState};
 pub use scheduler::{
     block_sleep, exit_process, init_scheduler, scheduler_tick, set_tsc_frequency,
     spawn_kernel_thread, spawn_user_thread, tsc_frequency, wait_for_child, wake_futex_waiters,
-    wake_pipe_readers, wake_stdin_waiters, ProcessInfo, Scheduler, SCHEDULER,
+    wake_input_reader, wake_pipe_readers, wake_stdin_waiters, ProcessInfo, Scheduler, SCHEDULER,
 };
 pub use signals::{Signal, SignalSet};
 pub use vma::{Vma, VmaTable};
@@ -66,6 +66,8 @@ pub enum BlockReason {
     StdinRead,
     /// Waiting for data on a pipe (index into PIPE_TABLE).
     PipeRead(u8),
+    /// Waiting for compositor-forwarded keyboard input.
+    InputRead,
     /// Waiting on a futex word at this user virtual address.
     FutexWait(u64),
 }
@@ -205,6 +207,18 @@ pub struct Process {
     pub mouse_dy: i32,
     /// Current mouse button state.
     pub mouse_buttons: u8,
+
+    // per-process keyboard input buffer (used when compositor is active)
+    //
+    // The compositor writes keyboard bytes here via SYS_FORWARD_INPUT;
+    // the child reads them via the normal SYS_READ(fd=0) path.  No pipes,
+    // no indirection, no existential dread.  Just a ring buffer.
+    /// Ring buffer for compositor-forwarded keyboard input.
+    pub input_buf: [u8; 256],
+    /// Write cursor (compositor advances this).
+    pub input_head: u8,
+    /// Read cursor (child advances this).
+    pub input_tail: u8,
 }
 
 impl Process {
@@ -250,6 +264,9 @@ impl Process {
             mouse_dx: 0,
             mouse_dy: 0,
             mouse_buttons: 0,
+            input_buf: [0u8; 256],
+            input_head: 0,
+            input_tail: 0,
         }
     }
 

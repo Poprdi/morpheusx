@@ -138,6 +138,7 @@ pub const SYS_WIN_SURFACE_MAP: u64 = 93;
 pub const SYS_MOUSE_FORWARD: u64 = 94;
 pub const SYS_WIN_SURFACE_DIRTY_CLEAR: u64 = 95;
 pub const SYS_TRY_WAIT: u64 = 96;
+pub const SYS_FORWARD_INPUT: u64 = 97;
 
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {

@@ -119,9 +119,9 @@ fn main() -> i32 {
             let args: alloc::vec::Vec<&str> = cmd.argv.iter().skip(1).map(|s| s.as_str()).collect();
 
             match exec::spawn_composited(&binary, &args) {
-                Some((pid, pipe_wfd)) => {
+                Some(pid) => {
                     // Track as a compositor child window.
-                    comp.add_child(pid, pipe_wfd, &cmd.argv[0]);
+                    comp.add_child(pid, &cmd.argv[0]);
 
                     // Remember whether any surface was mapped before the loop.
                     // Non-graphical commands (ls, echo, etc.) exit without

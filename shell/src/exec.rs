@@ -214,48 +214,26 @@ fn spawn_child(binary: &str, argv: &[String]) -> Option<u32> {
 
 /// Spawn a child for compositor mode.
 ///
-/// Creates a pipe so the compositor can route keyboard input to the child's
-/// stdin, then spawns the process.  Does NOT call `set_foreground` or `wait` —
-/// the compositor loop handles input routing and child lifecycle.
+/// No pipes.  No dup2 dance.  No refcount nightmares.
 ///
-/// fd 0 is normally **not** in the fd_table for the shell (reads fall through
-/// to the kernel ring buffer).  We temporarily place the pipe read-end there
-/// via `dup2(rfd, 0)` so the child inherits it, then `close(0)` after spawn
-/// to clear the fd_table entry — restoring the shell's ring-buffer stdin.
+/// The child's stdin (`SYS_READ(fd=0)` with no fd_table entry) transparently
+/// reads from its per-process input buffer, populated by the compositor via
+/// `SYS_FORWARD_INPUT`.  The kernel knows the child is a composited client
+/// (because `COMPOSITOR_PID != 0 && pid != COMPOSITOR_PID`) and routes
+/// accordingly.  This is the Wayland model — the compositor IS the input
+/// router, and the kernel provides the plumbing.
 ///
-/// Returns `(pid, pipe_write_fd)` on success.
-pub fn spawn_composited(binary: &str, args: &[&str]) -> Option<(u32, u32)> {
-    // Create pipe: child reads from rfd, compositor writes to wfd.
-    let (rfd, wfd) = match process::pipe() {
-        Ok(p) => p,
-        Err(e) => {
-            libmorpheus::eprintln!("msh: pipe: error 0x{:x}", e);
-            return None;
-        }
-    };
-
-    // Place the pipe read-end at fd 0 for child inheritance.
-    let _ = process::dup2(rfd, 0);
-
+/// Returns `Some(pid)` on success.
+pub fn spawn_composited(binary: &str, args: &[&str]) -> Option<u32> {
     let pid = match process::spawn_with_args(binary, args) {
         Ok(pid) => pid,
         Err(e) => {
-            // Clean up: remove pipe from fd 0, close both pipe ends.
-            let _ = fs::close(0);
-            let _ = fs::close(rfd as usize);
-            let _ = fs::close(wfd as usize);
             libmorpheus::eprintln!("msh: spawn {}: error 0x{:x}", binary, e);
             return None;
         }
     };
 
-    // Remove pipe read-end from our fd 0 — shell reverts to ring-buffer stdin.
-    let _ = fs::close(0);
-
-    // Close the original rfd in our process — the child has it via fd 0.
-    let _ = fs::close(rfd as usize);
-
-    Some((pid, wfd))
+    Some(pid)
 }
 
 fn setup_redirects(cmd: &SimpleCommand, cwd: &str) -> Result<(), i32> {

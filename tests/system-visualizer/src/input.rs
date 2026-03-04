@@ -71,15 +71,27 @@ impl InputState {
         self.mouse_dy = mouse.dy as f32;
         self.mouse_left = (mouse.buttons & 1) != 0;
         self.mouse_right = (mouse.buttons & 2) != 0;
+        if mouse.dx != 0 || mouse.dy != 0 || mouse.buttons != 0 {
+            libmorpheus::io::print(&alloc::format!(
+                "[SYSVIS-MOUSE] dx={} dy={} buttons=0x{:02x}\n",
+                mouse.dx,
+                mouse.dy,
+                mouse.buttons
+            ));
+        }
 
         let avail = io::stdin_available();
         if avail == 0 {
             return;
         }
 
+        libmorpheus::io::print(&alloc::format!("[SYSVIS] stdin_available={}\n", avail));
+
         let mut buf = [0u8; 16];
         let to_read = avail.min(16);
         let n = io::read_stdin(&mut buf[..to_read]);
+
+        libmorpheus::io::print(&alloc::format!("[SYSVIS] read_stdin returned {}\n", n));
 
         for i in 0..n {
             match buf[i] {

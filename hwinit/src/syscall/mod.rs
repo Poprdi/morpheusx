@@ -90,6 +90,7 @@
 /// | 86     | SYS_FB_UNLOCK   | ()                                | 0             |
 /// | 87     | SYS_FB_IS_LOCKED| ()                                | holder_pid    |
 /// | 88     | SYS_FB_PRESENT  | ()                                | 0             |
+/// | 97     | SYS_FORWARD_INPUT|(target_pid, ptr, len)             | bytes_written |
 pub mod handler;
 
 use crate::process::scheduler::SCHEDULER;
@@ -229,6 +230,7 @@ pub const SYS_WIN_SURFACE_MAP: u64 = 93;
 pub const SYS_MOUSE_FORWARD: u64 = 94;
 pub const SYS_WIN_SURFACE_DIRTY_CLEAR: u64 = 95;
 pub const SYS_TRY_WAIT: u64 = 96;
+pub const SYS_FORWARD_INPUT: u64 = 97;
 
 // EXTERN ASM FUNCTIONS
 
@@ -373,6 +375,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_MOUSE_FORWARD => sys_mouse_forward(a1, a2),
         SYS_WIN_SURFACE_DIRTY_CLEAR => sys_win_surface_dirty_clear(a1),
         SYS_TRY_WAIT => sys_try_wait(a1),
+        SYS_FORWARD_INPUT => sys_forward_input(a1, a2, a3),
         unknown => {
             puts("[SYSCALL] unknown nr=");
             crate::serial::put_hex32(unknown as u32);
