@@ -661,6 +661,16 @@ pub extern "C" fn exception_handler(
         explanation_len,
     };
 
+    if is_user_mode {
+        let code = if vector == 14 { -11 } else { -128 - (vector as i32) };
+        puts("[EXC] user fault -> terminating PID ");
+        put_hex32(pid);
+        puts("\n");
+        unsafe {
+            crate::process::scheduler::exit_process(code);
+        }
+    }
+
     unsafe {
         if let Some(hook) = CRASH_HOOK {
             hook(&info);
