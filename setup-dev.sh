@@ -406,7 +406,7 @@ do_launch_qemu() {
         # Disk 1 (virtio): raw HelixFS image — kernel mounts this as data storage
         qemu-system-x86_64 \
             -enable-kvm \
-            -machine q35,accel=kvm \
+            -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
             -bios "$ovmf_path" \
             -object iothread,id=iothread0 \
@@ -419,7 +419,7 @@ do_launch_qemu() {
             -smp 8 \
             -m 12G \
             -vga virtio \
-            -display gtk,gl=on \
+            -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -serial stdio
     else
         # Create a temp ESP image for virtio-blk
@@ -437,7 +437,7 @@ do_launch_qemu() {
         fi
         qemu-system-x86_64 \
             -enable-kvm \
-            -machine q35,accel=kvm \
+            -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
             -bios "$ovmf_path" \
             -object iothread,id=iothread0 \
@@ -448,7 +448,7 @@ do_launch_qemu() {
             -smp 8 \
             -m 12G \
             -vga virtio \
-            -display gtk,gl=on \
+            -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -serial stdio
     fi
 }
@@ -632,7 +632,7 @@ do_launch_thinkpad() {
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
         qemu-system-x86_64 \
             -enable-kvm \
-            -machine q35,accel=kvm \
+            -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
             -bios "$ovmf_path" \
             -smbios type=0,vendor=LENOVO,version=JBET71WW,date=03/01/2019 \
@@ -648,7 +648,7 @@ do_launch_thinkpad() {
             -smp 8 \
             -m 12G \
             -vga virtio \
-            -display gtk,gl=on \
+            -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -serial stdio
     else
         # Create a temp ESP image for AHCI
@@ -666,7 +666,7 @@ do_launch_thinkpad() {
         fi
         qemu-system-x86_64 \
             -enable-kvm \
-            -machine q35,accel=kvm \
+            -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
             -bios "$ovmf_path" \
             -smbios type=0,vendor=LENOVO,version=JBET71WW,date=03/01/2019 \
@@ -682,7 +682,7 @@ do_launch_thinkpad() {
             -smp 8 \
             -m 12G \
             -vga virtio \
-            -display gtk,gl=on \
+            -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -serial stdio
     fi
 }

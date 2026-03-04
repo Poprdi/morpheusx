@@ -108,6 +108,7 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     puts("[KERNEL] preparing to launch /bin/msh\n");
 
     let mut keyboard = Keyboard::new();
+    let mut mouse = super::mouse::Mouse::new();
     show_boot_log_screen(&mut keyboard);
 
     // Load and spawn the userland shell
@@ -144,8 +145,6 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     drop(elf_data);
 
     puts("[KERNEL] entering input forwarding loop\n");
-
-    let mut mouse = super::mouse::Mouse::new();
 
     // Main kernel loop: poll PS/2 keyboard + mouse, feed to consumers.
     //
