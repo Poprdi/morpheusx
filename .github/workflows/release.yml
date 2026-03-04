@@ -1,12 +1,10 @@
 # Release Pipeline for MorpheusX
 #
 # Triggered by version tags (v*.*.*).
-# Builds the UEFI bootloader and creates a GitHub release with artifacts.
-#
-# Artifacts:
-# - morpheusx-bootloader.efi (the main UEFI binary)
-# - BOOTX64.EFI (same file, standard UEFI name)
-# - Source code (automatic by GitHub)
+# Staged artifacts:
+#   1) Bare kernel release artifacts
+#   2) Distro image artifacts (ISO + raw/qcow2)
+#   3) SDK bundle artifacts
 #
 # Tag format: v1.2.3 (semantic versioning)
 
@@ -24,7 +22,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: "1.85"
+  RUST_VERSION: "1.92.0"
+  PINNED_NIGHTLY: "nightly-2026-02-22"
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════
@@ -76,10 +75,10 @@ jobs:
           fi
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # BUILD: Full 2-pass UEFI build
+  # STAGE 1: Bare kernel artifacts
   # ═══════════════════════════════════════════════════════════════════════════
-  build:
-    name: Build Release
+  kernel:
+    name: Stage 1 - Kernel
     runs-on: ubuntu-latest
     needs: validate
     
@@ -121,26 +120,210 @@ jobs:
 
       - name: Prepare release artifacts
         run: |
-          mkdir -p release
+          mkdir -p release/kernel
           
           # Main artifact
           cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi \
-             release/morpheusx-bootloader-${{ needs.validate.outputs.version }}.efi
+             release/kernel/morpheusx-kernel-${{ needs.validate.outputs.version }}.efi
           
           # Standard UEFI name
           cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi \
-             release/BOOTX64.EFI
+             release/kernel/BOOTX64.EFI
+
+          # Kernel source bundles (common formats)
+          git archive --format=tar.gz --prefix=morpheusx-kernel-${{ needs.validate.outputs.version }}/ \
+            -o release/kernel/morpheusx-kernel-${{ needs.validate.outputs.version }}-source.tar.gz HEAD
+          git archive --format=tar --prefix=morpheusx-kernel-${{ needs.validate.outputs.version }}/ HEAD \
+            | xz -T0 -9 > release/kernel/morpheusx-kernel-${{ needs.validate.outputs.version }}-source.tar.xz
+          git archive --format=zip --prefix=morpheusx-kernel-${{ needs.validate.outputs.version }}/ \
+            -o release/kernel/morpheusx-kernel-${{ needs.validate.outputs.version }}-source.zip HEAD
+
+          # ABI snapshot for this release
+          cp docs/md/ABI_REFERENCE.md \
+            release/kernel/KERNEL_ABI_${{ needs.validate.outputs.version }}.md
           
           # Create SHA256 checksums
-          cd release
-          sha256sum *.efi > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          (
+            cd release/kernel
+            sha256sum * > SHA256SUMS-kernel.txt
+            cat SHA256SUMS-kernel.txt
+          )
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ needs.validate.outputs.tag }}
-          path: release/
+          name: release-kernel-${{ needs.validate.outputs.tag }}
+          path: release/kernel/
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # STAGE 2: Distro artifacts (ISO + disk images)
+  # ═══════════════════════════════════════════════════════════════════════════
+  distro:
+    name: Stage 2 - Distro
+    runs-on: ubuntu-latest
+    needs: [validate, kernel]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable + pinned nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-unknown-uefi
+
+      - name: Install pinned nightly
+        run: |
+          rustup toolchain install "${PINNED_NIGHTLY}" --component rust-src
+
+      - name: Install distro build tools
+        run: sudo apt-get install -y -qq nasm qemu-utils dosfstools mtools xorriso zip xz-utils
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-distro-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Download kernel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-kernel-${{ needs.validate.outputs.tag }}
+          path: stage-kernel/
+
+      - name: Build user-space apps
+        run: |
+          APPS=(syscall-e2e msh spinning-cube system-visualizer)
+          for app in "${APPS[@]}"; do
+            cargo +"${PINNED_NIGHTLY}" build --release \
+              --target x86_64-morpheus.json \
+              -p "$app" \
+              -Z build-std=core,alloc \
+              -Z build-std-features=compiler-builtins-mem \
+              -Z json-target-spec
+          done
+
+      - name: Build morpheus-cli
+        run: cargo build --release -p morpheus-cli
+
+      - name: Create distro images and bundles
+        run: |
+          mkdir -p release/distro
+
+          # 1) Raw HelixFS disk image with userland injected
+          RAW_IMG="release/distro/morpheusx-distro-${{ needs.validate.outputs.version }}.img"
+          truncate -s 8G "$RAW_IMG"
+
+          cargo run --release -p morpheus-cli -- inject "$RAW_IMG" target/x86_64-morpheus/release/syscall-e2e --dest /bin/syscall-e2e
+          cargo run --release -p morpheus-cli -- inject "$RAW_IMG" target/x86_64-morpheus/release/msh --dest /bin/msh
+          cargo run --release -p morpheus-cli -- inject "$RAW_IMG" target/x86_64-morpheus/release/spinning-cube --dest /bin/spinning-cube
+          cargo run --release -p morpheus-cli -- inject "$RAW_IMG" target/x86_64-morpheus/release/system-visualizer --dest /bin/sysvis
+
+          # 2) QCOW2 conversion
+          QCOW2="release/distro/morpheusx-distro-${{ needs.validate.outputs.version }}.qcow2"
+          qemu-img convert -f raw -O qcow2 "$RAW_IMG" "$QCOW2"
+
+          # 3) Bootable UEFI ISO (contains BOOTX64.EFI + app binaries)
+          ISO_ROOT="release/distro/iso-root"
+          mkdir -p "$ISO_ROOT/EFI/BOOT" "$ISO_ROOT/apps"
+          cp stage-kernel/BOOTX64.EFI "$ISO_ROOT/EFI/BOOT/BOOTX64.EFI"
+          cp target/x86_64-morpheus/release/msh "$ISO_ROOT/apps/msh"
+          cp target/x86_64-morpheus/release/system-visualizer "$ISO_ROOT/apps/sysvis"
+          cp target/x86_64-morpheus/release/spinning-cube "$ISO_ROOT/apps/spinning-cube"
+          cp target/x86_64-morpheus/release/syscall-e2e "$ISO_ROOT/apps/syscall-e2e"
+
+          ESP_IMG="release/distro/esp-boot.img"
+          dd if=/dev/zero of="$ESP_IMG" bs=1M count=64 status=none
+          mkfs.vfat "$ESP_IMG"
+          mmd -i "$ESP_IMG" ::/EFI ::/EFI/BOOT
+          mcopy -i "$ESP_IMG" stage-kernel/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+          cp "$ESP_IMG" "$ISO_ROOT/esp-boot.img"
+
+          xorriso -as mkisofs \
+            -V "MORPHEUSX_${{ needs.validate.outputs.version }}" \
+            -R -J \
+            -eltorito-alt-boot \
+            -e esp-boot.img \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -o "release/distro/morpheusx-distro-${{ needs.validate.outputs.version }}.iso" \
+            "$ISO_ROOT"
+
+          # Compressed/common distribution variants
+          xz -T0 -9 -k "$RAW_IMG"
+          xz -T0 -9 -k "$QCOW2"
+          zip -j "release/distro/morpheusx-distro-${{ needs.validate.outputs.version }}.iso.zip" \
+            "release/distro/morpheusx-distro-${{ needs.validate.outputs.version }}.iso"
+
+          # Keep release payload compact: publish compressed disk variants.
+          rm -f "$RAW_IMG" "$QCOW2" "$ESP_IMG"
+
+          # Checksums
+          (
+            cd release/distro
+            rm -rf iso-root
+            sha256sum * > SHA256SUMS-distro.txt
+            cat SHA256SUMS-distro.txt
+          )
+
+      - name: Upload distro artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-distro-${{ needs.validate.outputs.tag }}
+          path: release/distro/
+          retention-days: 30
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # STAGE 3: SDK artifacts
+  # ═══════════════════════════════════════════════════════════════════════════
+  sdk:
+    name: Stage 3 - SDK
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assemble SDK bundle
+        run: |
+          mkdir -p release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}
+
+          cp -r libmorpheus release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}/
+          cp -r docs release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}/
+          cp x86_64-morpheus.json release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}/
+          cp Cargo.toml release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}/
+          cp rust-toolchain.toml release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}/
+
+          tar -C release/sdk -czf release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.gz \
+            morpheusx-sdk-${{ needs.validate.outputs.version }}
+          tar -C release/sdk -cJf release/sdk/morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.xz \
+            morpheusx-sdk-${{ needs.validate.outputs.version }}
+          (
+            cd release/sdk
+            zip -r morpheusx-sdk-${{ needs.validate.outputs.version }}.zip \
+              morpheusx-sdk-${{ needs.validate.outputs.version }} >/dev/null
+          )
+
+          (
+            cd release/sdk
+            sha256sum morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.gz \
+                     morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.xz \
+                     morpheusx-sdk-${{ needs.validate.outputs.version }}.zip \
+                     > SHA256SUMS-sdk.txt
+            cat SHA256SUMS-sdk.txt
+          )
+
+      - name: Upload SDK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-sdk-${{ needs.validate.outputs.tag }}
+          path: release/sdk/
           retention-days: 30
 
   # ═══════════════════════════════════════════════════════════════════════════
@@ -149,7 +332,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [validate, build]
+    needs: [validate, kernel, distro, sdk]
     permissions:
       contents: write
     
@@ -157,11 +340,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download kernel artifacts
         uses: actions/download-artifact@v4
         with:
-          name: release-${{ needs.validate.outputs.tag }}
-          path: release/
+          name: release-kernel-${{ needs.validate.outputs.tag }}
+          path: release/kernel/
+
+      - name: Download distro artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-distro-${{ needs.validate.outputs.tag }}
+          path: release/distro/
+
+      - name: Download SDK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-sdk-${{ needs.validate.outputs.tag }}
+          path: release/sdk/
 
       - name: Generate release notes
         id: notes
@@ -169,25 +364,51 @@ jobs:
           cat > release-notes.md << 'EOF'
           ## MorpheusX ${{ needs.validate.outputs.tag }}
           
-          ### Downloads
+          ### Staged Artifacts
+
+          #### Stage 1 — Bare Kernel
           
           | File | Description |
           |------|-------------|
-          | `morpheusx-bootloader-${{ needs.validate.outputs.version }}.efi` | UEFI bootloader |
-          | `BOOTX64.EFI` | Same file, standard UEFI name (copy to `EFI/BOOT/BOOTX64.EFI`) |
-          | `SHA256SUMS.txt` | SHA256 checksums |
+          | `morpheusx-kernel-${{ needs.validate.outputs.version }}.efi` | Bare UEFI kernel binary |
+          | `BOOTX64.EFI` | Standard UEFI boot filename |
+          | `morpheusx-kernel-${{ needs.validate.outputs.version }}-source.tar.gz` | Kernel source bundle (tar.gz) |
+          | `morpheusx-kernel-${{ needs.validate.outputs.version }}-source.tar.xz` | Kernel source bundle (tar.xz) |
+          | `morpheusx-kernel-${{ needs.validate.outputs.version }}-source.zip` | Kernel source bundle (zip) |
+          | `KERNEL_ABI_${{ needs.validate.outputs.version }}.md` | ABI snapshot for this release |
+          | `SHA256SUMS-kernel.txt` | Kernel artifact checksums |
+
+          #### Stage 2 — Distro Images
           
-          ### Installation
+          | File | Description |
+          |------|-------------|
+          | `morpheusx-distro-${{ needs.validate.outputs.version }}.iso` | Bootable UEFI ISO image |
+          | `morpheusx-distro-${{ needs.validate.outputs.version }}.iso.zip` | ISO in zip format |
+          | `morpheusx-distro-${{ needs.validate.outputs.version }}.img.xz` | Raw distro disk image (compressed) |
+          | `morpheusx-distro-${{ needs.validate.outputs.version }}.qcow2.xz` | QEMU qcow2 image (compressed) |
+          | `SHA256SUMS-distro.txt` | Distro artifact checksums |
+
+          #### Stage 3 — SDK
           
-          1. Create a FAT32 partition on your USB drive
-          2. Create the directory `EFI/BOOT/`
-          3. Copy `BOOTX64.EFI` to `EFI/BOOT/BOOTX64.EFI`
-          4. Boot from the USB drive in UEFI mode
+          | File | Description |
+          |------|-------------|
+          | `morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.gz` | SDK bundle (tar.gz) |
+          | `morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.xz` | SDK bundle (tar.xz) |
+          | `morpheusx-sdk-${{ needs.validate.outputs.version }}.zip` | SDK bundle (zip) |
+          | `SHA256SUMS-sdk.txt` | SDK artifact checksums |
+          
+          ### Quick Start
+          
+          1. For bare kernel boot: copy `BOOTX64.EFI` to `EFI/BOOT/BOOTX64.EFI`
+          2. For full distro boot in QEMU: use `morpheusx-distro-${{ needs.validate.outputs.version }}.qcow2.xz`
+          3. For app development: unpack `morpheusx-sdk-${{ needs.validate.outputs.version }}.tar.gz`
           
           ### Verification
           
           ```bash
-          sha256sum -c SHA256SUMS.txt
+          sha256sum -c SHA256SUMS-kernel.txt
+          sha256sum -c SHA256SUMS-distro.txt
+          sha256sum -c SHA256SUMS-sdk.txt
           ```
           
           ### Requirements
@@ -210,8 +431,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(needs.validate.outputs.tag, '-') }}
           files: |
-            release/morpheusx-bootloader-${{ needs.validate.outputs.version }}.efi
-            release/BOOTX64.EFI
-            release/SHA256SUMS.txt
+            release/kernel/*
+            release/distro/*
+            release/sdk/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
