@@ -385,9 +385,6 @@ impl Keyboard {
 
         self.initialized = true;
         puts("[KBD] PS/2 keyboard ready\n");
-
-        // phase 10.1: PS/2 mouse driver
-        // TODO: Fix the fkn mouse driver :)
     }
 
     /// Spin-wait for a response byte from port 0x60, with bounded timeout.
@@ -629,6 +626,22 @@ impl Keyboard {
                 return None;
             }
             _ => {}
+        }
+
+        // Numpad Enter (E0+1C) → same as main Enter key
+        if make == 0x1C {
+            return Some(InputKey {
+                scan_code: SCAN_NULL,
+                unicode_char: KEY_ENTER,
+            });
+        }
+
+        // Numpad / (E0+35) → forward slash
+        if make == 0x35 {
+            return Some(InputKey {
+                scan_code: SCAN_NULL,
+                unicode_char: b'/' as u16,
+            });
         }
 
         // Navigation keys → EFI scan codes

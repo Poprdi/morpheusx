@@ -74,8 +74,9 @@ static KERNEL_LAST_WAS_IDLE: core::sync::atomic::AtomicBool =
 static KERNEL_SKIP_STREAK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Kernel is guaranteed at least 1 quantum per (MAX_KERNEL_SKIP + 1).
-/// 7 → kernel floor ≈ 12.5 %.  Raise to lower the floor; lower to raise it.
-const MAX_KERNEL_SKIP: u32 = 7;
+/// 1 → kernel floor ≈ 50%. This keeps input polling responsive without
+/// starving user processes under the idle-donation path.
+const MAX_KERNEL_SKIP: u32 = 1;
 
 /// True once `init_scheduler()` has been called.
 static mut SCHEDULER_READY: bool = false;
@@ -576,9 +577,14 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     // Pick next runnable process.
     // Use the sticky flag: PID 0 is skipped for as long as its last quantum
-    // ended in HLT.  The flag resets only when PID 0 runs a full non-HLT
-    // quantum (real work arrived), breaking the forced 50/50 alternation.
-    let skip_kernel = KERNEL_LAST_WAS_IDLE.load(Ordering::Relaxed);
+    // ended in HLT.  While compositor mode is active, disable this donation
+    // path so PID 0 keeps a steady cadence for PS/2 polling and wakeups.
+    let compositor_active = crate::syscall::handler::compositor_active();
+    let skip_kernel = if compositor_active {
+        false
+    } else {
+        KERNEL_LAST_WAS_IDLE.load(Ordering::Relaxed)
+    };
     let next_pid = pick_next(cur_pid, skip_kernel);
     CURRENT_PID.store(next_pid as u32, Ordering::SeqCst);
 
@@ -788,15 +794,38 @@ pub unsafe fn spawn_user_process(
         let parent_pid = proc.parent_pid as usize;
         if let Some(Some(parent)) = PROCESS_TABLE.get(parent_pid) {
             proc.fd_table = parent.fd_table;
-            // Increment pipe refcounts for inherited pipe fds.
+            // Increment pipe refcounts for each inherited pipe fd.
+            //
+            // This is needed for SHELL PIPELINE processes only (e.g. `cmd1 | cmd2`).
+            // Previously it also handled compositor-spawned children, which inherited
+            // a pipe read-end at fd 0 for their stdin.  That pipe-based stdin path
+            // was replaced by per-process input buffers (SYS_FORWARD_INPUT), so
+            // composited clients no longer have any pipes in their inherited fd_table.
+            // The loop runs but bumps zero refcounts for them — pure no-op overhead.
+            //
+            // Dedup by (pipe_idx, direction) — if two fds point to the same
+            // pipe reader (e.g. fd 0 and fd 3 both have O_PIPE_READ for
+            // pipe 0), we only bump that refcount once.  But a reader and a
+            // writer for the same pipe ARE distinct refcounts and both must
+            // be bumped.  The old code used a single seen_pipes[idx] bitmap
+            // which silently ate writer bumps when a reader for the same
+            // pipe was already seen.  That was a fun afternoon.
             use morpheus_helix::types::open_flags;
+            let mut seen_readers: [bool; 256] = [false; 256];
+            let mut seen_writers: [bool; 256] = [false; 256];
             for fd_desc in proc.fd_table.fds.iter() {
                 if fd_desc.is_open() {
                     let fl = fd_desc.flags;
-                    if fl & open_flags::O_PIPE_READ != 0 {
-                        crate::pipe::pipe_add_reader(fd_desc.mount_idx);
-                    } else if fl & open_flags::O_PIPE_WRITE != 0 {
-                        crate::pipe::pipe_add_writer(fd_desc.mount_idx);
+                    let idx = fd_desc.mount_idx as usize;
+                    if idx < 256 {
+                        if fl & open_flags::O_PIPE_READ != 0 && !seen_readers[idx] {
+                            crate::pipe::pipe_add_reader(fd_desc.mount_idx);
+                            seen_readers[idx] = true;
+                        }
+                        if fl & open_flags::O_PIPE_WRITE != 0 && !seen_writers[idx] {
+                            crate::pipe::pipe_add_writer(fd_desc.mount_idx);
+                            seen_writers[idx] = true;
+                        }
                     }
                 }
             }
@@ -1272,6 +1301,19 @@ pub unsafe fn wake_pipe_readers(pipe_idx: u8) {
             if idx == pipe_idx {
                 proc.state = ProcessState::Ready;
             }
+        }
+    }
+}
+
+/// Wake a process blocked on `BlockReason::InputRead` for the given PID.
+///
+/// Called by `SYS_FORWARD_INPUT` after the compositor pushes bytes into a
+/// child's per-process input buffer.  Only wakes the specific target — no
+/// reason to iterate 64 processes when we know exactly who we're after.
+pub unsafe fn wake_input_reader(pid: u32) {
+    if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
+        if matches!(proc.state, ProcessState::Blocked(BlockReason::InputRead)) {
+            proc.state = ProcessState::Ready;
         }
     }
 }

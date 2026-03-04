@@ -84,6 +84,35 @@ pub fn mouse_forward(pid: u32, dx: i16, dy: i16, buttons: u8) -> Result<(), u64>
     }
 }
 
+/// Forward keyboard bytes to a target process's per-process input buffer.
+///
+/// The compositor calls this after reading from global stdin and deciding
+/// which child gets the input.  The kernel writes the bytes into the
+/// target's `input_buf` ring buffer, where a subsequent `read(fd=0)` by
+/// the child will find them.  Wakes the child if it was blocked.
+///
+/// Returns the number of bytes actually written (may be less than
+/// `data.len()` if the target's buffer is full — maybe they should
+/// read faster).
+pub fn forward_input(pid: u32, data: &[u8]) -> Result<usize, u64> {
+    if data.is_empty() {
+        return Ok(0);
+    }
+    let r = unsafe {
+        syscall3(
+            SYS_FORWARD_INPUT,
+            pid as u64,
+            data.as_ptr() as u64,
+            data.len() as u64,
+        )
+    };
+    if crate::is_error(r) {
+        Err(r)
+    } else {
+        Ok(r as usize)
+    }
+}
+
 /// Clear the dirty flag on a target process's surface.
 ///
 /// Called by the compositor after it has read and composited the surface.

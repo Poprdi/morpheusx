@@ -139,29 +139,54 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     // fd_table has no entry for this fd — legacy fallback.
     match fd {
         0 => {
-            // stdin — blocking read from kernel keyboard ring buffer.
-            // First try a non-blocking read; if no data, park the process
-            // with BlockReason::StdinRead.  The keyboard ISR wakes us via
-            // wake_stdin_waiters() when new bytes arrive.
+            // stdin — where does the data come from?
             //
-            // If a signal is pending (e.g. SIGINT from Ctrl+C), return 0
-            // immediately instead of blocking — this lets userspace signal
-            // handlers run and the shell to check its interrupted flag.
+            // Composited clients: per-process input buffer, populated by
+            // the compositor via SYS_FORWARD_INPUT.  No pipes, no global
+            // ring buffer, no hoping some intermediary remembered to forward
+            // your keystrokes.
+            //
+            // Everyone else: global keyboard ring buffer (stdin), populated
+            // by the PS/2 keyboard ISR.
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
+
+            if is_composited_client() {
+                // Read from per-process input buffer.
+                loop {
+                    let proc = SCHEDULER.current_process_mut();
+                    let mut n = 0usize;
+                    while n < buf.len() && proc.input_tail != proc.input_head {
+                        buf[n] = proc.input_buf[proc.input_tail as usize];
+                        proc.input_tail = proc.input_tail.wrapping_add(1);
+                        n += 1;
+                    }
+                    if n > 0 {
+                        return n as u64;
+                    }
+                    // No data — check for pending signals before blocking.
+                    if !proc.pending_signals.is_empty() {
+                        return 0;
+                    }
+                    // Park until the compositor sends us something.
+                    proc.state = crate::process::ProcessState::Blocked(
+                        crate::process::BlockReason::InputRead,
+                    );
+                    core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+                }
+            }
+
+            // Non-composited: global stdin ring buffer.
             loop {
                 let n = crate::stdin::read(buf);
                 if n > 0 {
                     return n as u64;
                 }
-                // If a signal is pending, return 0 so the process can
-                // handle it (EINTR semantics without negative errno).
                 {
                     let proc = SCHEDULER.current_process_mut();
                     if !proc.pending_signals.is_empty() {
                         return 0;
                     }
                 }
-                // Park until keyboard input arrives.
                 {
                     let proc = SCHEDULER.current_process_mut();
                     proc.state = crate::process::ProcessState::Blocked(
@@ -169,7 +194,6 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                     );
                 }
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
-                // Woken by wake_stdin_waiters() or send_signal() — loop back.
             }
         }
         _ => EBADF,
@@ -1853,17 +1877,55 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     match (fd, cmd) {
         // FIONREAD: bytes available on fd without blocking.
         (0, IOCTL_FIONREAD) => {
-            // If fd 0 is a pipe, check pipe availability.
+            // Where does stdin data live?
+            //
+            // 1. fd 0 has an explicit pipe → pipe_available()
+            // 2. Composited client (no pipe) → per-process input buffer
+            // 3. Everyone else → global stdin ring buffer
+            //
+            // This is the Wayland model: composited clients don't touch the
+            // global stdin.  The compositor reads it, makes routing decisions,
+            // and pushes bytes into the target's input_buf via SYS_FORWARD_INPUT.
             let fd_table = SCHEDULER.current_fd_table_mut();
             let avail = if let Ok(desc) = fd_table.get(0) {
                 if desc.flags & O_PIPE_READ != 0 {
                     crate::pipe::pipe_available(desc.mount_idx)
+                } else if is_composited_client() {
+                    let proc = SCHEDULER.current_process_mut();
+                    proc.input_head.wrapping_sub(proc.input_tail) as usize
                 } else {
                     crate::stdin::available()
                 }
+            } else if is_composited_client() {
+                let proc = SCHEDULER.current_process_mut();
+                proc.input_head.wrapping_sub(proc.input_tail) as usize
             } else {
                 crate::stdin::available()
             };
+            {
+                use crate::serial::{put_hex32, puts};
+                static mut FIONREAD_DBG_TICK: u32 = 0;
+                let pid = SCHEDULER.current_pid();
+
+                if pid == COMPOSITOR_PID {
+                    FIONREAD_DBG_TICK = FIONREAD_DBG_TICK.wrapping_add(1);
+                    if avail > 0 || (FIONREAD_DBG_TICK & 0x3F) == 0 {
+                        puts("[DBG] FIONREAD compositor pid=");
+                        put_hex32(pid);
+                        puts(" avail=");
+                        put_hex32(avail as u32);
+                        puts(" global=");
+                        put_hex32(crate::stdin::available() as u32);
+                        puts("\n");
+                    }
+                } else if avail > 0 && is_composited_client() {
+                    puts("[DBG] FIONREAD client pid=");
+                    put_hex32(pid);
+                    puts(" avail=");
+                    put_hex32(avail as u32);
+                    puts("\n");
+                }
+            }
             if arg != 0 && validate_user_buf(arg, 4) {
                 core::ptr::write(arg as *mut u32, avail as u32);
             }
@@ -2371,6 +2433,12 @@ static mut COMPOSITOR_PID: u32 = 0;
 #[inline]
 pub unsafe fn is_composited_client() -> bool {
     COMPOSITOR_PID != 0 && SCHEDULER.current_pid() != COMPOSITOR_PID
+}
+
+/// Returns true when a compositor process is registered.
+#[inline]
+pub unsafe fn compositor_active() -> bool {
+    COMPOSITOR_PID != 0
 }
 
 pub unsafe fn release_fb_lock_if_holder(pid: u32) {
@@ -4028,13 +4096,23 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
 /// Duplicate `old_fd` into `new_fd`.  If `new_fd` is already open it is
 /// silently closed first.
 pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
+    // POSIX: dup2(a, a) is a safe no-op. We handle it anyway.
+    if old_fd == new_fd {
+        let fd_table = SCHEDULER.current_fd_table_mut();
+        return if fd_table.get(old_fd as usize).is_ok() {
+            new_fd
+        } else {
+            EBADF
+        };
+    }
+
     let fd_table = SCHEDULER.current_fd_table_mut();
     let src = match fd_table.get(old_fd as usize) {
         Ok(d) => *d,
         Err(_) => return EBADF,
     };
 
-    // Close new_fd if it's in use (pipe-aware).
+    // Close new_fd if it's already in use (pipe-aware, everything gets cleaned up).
     if fd_table.get(new_fd as usize).is_ok() {
         sys_fs_close(new_fd);
     }
@@ -4045,10 +4123,12 @@ pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
         return EBADF;
     }
 
-    // Place the duplicated descriptor.
+    // Place the duplicated descriptor (now we have two fds to the same underlying resource).
     fd_table.fds[new_fd as usize] = src;
 
-    // Bump pipe refcounts.
+    // Bump pipe refcounts. If the source is a pipe, we now have an additional
+    // reader/writer for that pipe. Close either one and the pipe stays alive
+    // as long as the other reader/writer exists. You're welcome, POSIX semantics.
     if src.flags & O_PIPE_READ != 0 {
         crate::pipe::pipe_add_reader(src.mount_idx);
     }
@@ -4270,11 +4350,35 @@ pub unsafe fn sys_mouse_read() -> u64 {
         let buttons = proc.mouse_buttons;
         proc.mouse_dx = 0;
         proc.mouse_dy = 0;
+        if dx != 0 || dy != 0 || buttons != 0 {
+            use crate::serial::{put_hex32, puts};
+            puts("[DBG] mouse_read client pid=");
+            put_hex32(SCHEDULER.current_pid());
+            puts(" dx=");
+            put_hex32(dx as u32);
+            puts(" dy=");
+            put_hex32(dy as u32);
+            puts(" btn=");
+            put_hex32(buttons as u32);
+            puts("\n");
+        }
         let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
         let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
         return (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32);
     }
     let (dx, dy, buttons) = crate::mouse::drain();
+    if dx != 0 || dy != 0 || buttons != 0 {
+        use crate::serial::{put_hex32, puts};
+        puts("[DBG] mouse_read hw pid=");
+        put_hex32(SCHEDULER.current_pid());
+        puts(" dx=");
+        put_hex32(dx as u32);
+        puts(" dy=");
+        put_hex32(dy as u32);
+        puts(" btn=");
+        put_hex32(buttons as u32);
+        puts("\n");
+    }
     let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
     let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
     (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32)
@@ -4449,6 +4553,18 @@ pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
             proc.mouse_dx = proc.mouse_dx.saturating_add(dx);
             proc.mouse_dy = proc.mouse_dy.saturating_add(dy);
             proc.mouse_buttons = buttons;
+            if dx != 0 || dy != 0 || buttons != 0 {
+                use crate::serial::{put_hex32, puts};
+                puts("[DBG] mouse_forward pid=");
+                put_hex32(target_pid_u32);
+                puts(" dx=");
+                put_hex32(dx as u32);
+                puts(" dy=");
+                put_hex32(dy as u32);
+                puts(" btn=");
+                put_hex32(buttons as u32);
+                puts("\n");
+            }
             0
         }
         _ => EINVAL,
@@ -4487,4 +4603,71 @@ pub unsafe fn sys_win_surface_dirty_clear(target_pid: u64) -> u64 {
 /// exit code.  If the child is still running, return EAGAIN.
 pub unsafe fn sys_try_wait(pid: u64) -> u64 {
     crate::process::scheduler::try_wait_child(pid as u32)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// COMPOSITOR INPUT FORWARDING (97)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// `SYS_FORWARD_INPUT(target_pid, ptr, len) → bytes_written`
+///
+/// Push keyboard bytes into a target process's per-process input buffer.
+/// Only callable by the compositor.  This is the Wayland model done right:
+/// the compositor sees all input first, makes routing decisions (focus,
+/// window management, Alt+Tab), then forwards the relevant bytes to the
+/// focused child.  No pipes.  No indirection.  No prayer-based IPC.
+///
+/// The target process may be blocked on `BlockReason::InputRead` — if so,
+/// we wake it immediately.  If it's running, the bytes accumulate in the
+/// ring buffer until the next `read(fd=0)`.
+pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
+    // Only the compositor gets to play input router.
+    let pid = SCHEDULER.current_pid();
+    if pid != COMPOSITOR_PID {
+        return EPERM;
+    }
+
+    if len == 0 {
+        return 0;
+    }
+    if !validate_user_buf(ptr, len) {
+        return EFAULT;
+    }
+
+    let target = target_pid as u32;
+    let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+
+    use crate::process::scheduler::PROCESS_TABLE;
+    let written = match PROCESS_TABLE.get_mut(target as usize) {
+        Some(Some(proc)) if !proc.is_free() => {
+            // Write into the per-process input ring buffer.
+            // 256-byte ring, wraps modulo 256 (u8 overflow does this for free).
+            let mut n = 0usize;
+            for &byte in data {
+                let next = proc.input_head.wrapping_add(1);
+                if next == proc.input_tail {
+                    break; // full — compositor is shouting into a mailbox nobody's checking
+                }
+                proc.input_buf[proc.input_head as usize] = byte;
+                proc.input_head = next;
+                n += 1;
+            }
+            n
+        }
+        _ => return EINVAL,
+    };
+
+    // Wake the target if it was politely waiting for input.
+    crate::process::scheduler::wake_input_reader(target);
+
+    if written > 0 {
+        use crate::serial::{put_hex32, puts};
+        puts("[DBG] forward_input: ");
+        put_hex32(written as u32);
+        puts(" bytes -> PID ");
+        put_hex32(target);
+        puts("\n");
+    }
+
+    written as u64
 }

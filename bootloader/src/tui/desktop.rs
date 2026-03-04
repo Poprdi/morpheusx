@@ -148,55 +148,90 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     let mut mouse = super::mouse::Mouse::new();
 
     // Main kernel loop: poll PS/2 keyboard + mouse, feed to consumers.
+    //
+    // DRAIN-ALL: process up to 64 buffered bytes per outer iteration before
+    // considering HLT.  Without this, mouse input lags badly when keyboard
+    // is active because only one byte was serviced before halting.
     loop {
-        let raw = unsafe { super::input::asm_ps2_poll_any() };
-        if raw == 0 {
-            // Nothing available — halt CPU until next interrupt (timer/keyboard/mouse).
-            // Record the TSC at this moment so the scheduler can split our quantum
-            // into active work time (before this point) and HLT idle time (after).
-            // This gives sysvis accurate absolute CPU% instead of a relative share.
-            morpheus_hwinit::process::scheduler::mark_kernel_hlt();
-            unsafe {
-                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+        let mut had_work = false;
+
+        for _ in 0..64 {
+            let raw = unsafe { super::input::asm_ps2_poll_any() };
+            if raw == 0 {
+                break;
             }
-            continue;
-        }
+            had_work = true;
 
-        let device = (raw >> 8) & 0xFF;
-        let byte = (raw & 0xFF) as u8;
+            let device = (raw >> 8) & 0xFF;
+            let byte = (raw & 0xFF) as u8;
 
-        if device == 0x03 {
-            // Mouse byte
-            if let Some(pkt) = mouse.feed(byte) {
-                morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
+            if device == 0x03 {
+                // Mouse byte
+                puts(&alloc::format!("[MOUSE-RAW] byte=0x{:02x}\n", byte));
+                if let Some(pkt) = mouse.feed(byte) {
+                    puts(&alloc::format!(
+                        "[MOUSE-PKT] dx={} dy={} buttons=0x{:02x}\n",
+                        pkt.dx,
+                        pkt.dy,
+                        pkt.buttons
+                    ));
+                    morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
+                }
+                continue;
             }
-            continue;
-        }
 
-        // Keyboard byte — feed through the decoder
-        if let Some(input) = keyboard.feed_raw(byte) {
-            if input.unicode_char > 0 && input.unicode_char < 128 {
-                let ch = input.unicode_char as u8;
+            puts(&alloc::format!(
+                "[KBD-RAW] dev=0x{:02x} byte=0x{:02x}\n",
+                device as u8,
+                byte
+            ));
 
-                if ch == 0x03 {
-                    let fg = morpheus_hwinit::stdin::foreground_pid();
-                    if fg != 0 {
-                        unsafe {
-                            let _ = morpheus_hwinit::process::SCHEDULER
-                                .send_signal(fg, morpheus_hwinit::process::signals::Signal::SIGINT);
+            // Keyboard byte — feed through the decoder
+            if let Some(input) = keyboard.feed_raw(byte) {
+                // Accept any non-zero unicode_char that fits in a u8.
+                // This passes ASCII (1-127) AND Latin-1 chars > 127
+                // (German umlauts ä=0xE4, ö=0xF6, ü=0xFC, ß=0xDF, etc.)
+                if input.unicode_char > 0 && input.unicode_char <= 0xFF {
+                    let ch = input.unicode_char as u8;
+
+                    if ch == 0x03 {
+                        // Ctrl+C → SIGINT to foreground process
+                        let fg = morpheus_hwinit::stdin::foreground_pid();
+                        if fg != 0 {
+                            unsafe {
+                                let _ = morpheus_hwinit::process::SCHEDULER.send_signal(
+                                    fg,
+                                    morpheus_hwinit::process::signals::Signal::SIGINT,
+                                );
+                            }
+                        } else {
+                            puts("[KBD-PUSH] 0x03 (Ctrl+C)\n");
+                            morpheus_hwinit::stdin::push(ch);
+                            unsafe {
+                                morpheus_hwinit::process::wake_stdin_waiters();
+                            }
                         }
                     } else {
+                        let name = if ch >= 32 && ch < 127 {
+                            ch as char
+                        } else {
+                            '.'
+                        };
+                        puts(&alloc::format!("[KBD-PUSH] 0x{:02x} '{}'\n", ch, name));
                         morpheus_hwinit::stdin::push(ch);
                         unsafe {
                             morpheus_hwinit::process::wake_stdin_waiters();
                         }
                     }
-                } else {
-                    morpheus_hwinit::stdin::push(ch);
-                    unsafe {
-                        morpheus_hwinit::process::wake_stdin_waiters();
-                    }
                 }
+            }
+        }
+
+        if !had_work {
+            // Nothing available — halt CPU until next interrupt.
+            morpheus_hwinit::process::scheduler::mark_kernel_hlt();
+            unsafe {
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }
         }
     }
