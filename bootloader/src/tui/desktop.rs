@@ -166,24 +166,11 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
 
             if device == 0x03 {
                 // Mouse byte
-                puts(&alloc::format!("[MOUSE-RAW] byte=0x{:02x}\n", byte));
                 if let Some(pkt) = mouse.feed(byte) {
-                    puts(&alloc::format!(
-                        "[MOUSE-PKT] dx={} dy={} buttons=0x{:02x}\n",
-                        pkt.dx,
-                        pkt.dy,
-                        pkt.buttons
-                    ));
                     morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
                 }
                 continue;
             }
-
-            puts(&alloc::format!(
-                "[KBD-RAW] dev=0x{:02x} byte=0x{:02x}\n",
-                device as u8,
-                byte
-            ));
 
             // Keyboard byte — feed through the decoder
             if let Some(input) = keyboard.feed_raw(byte) {
@@ -204,19 +191,12 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
                                 );
                             }
                         } else {
-                            puts("[KBD-PUSH] 0x03 (Ctrl+C)\n");
                             morpheus_hwinit::stdin::push(ch);
                             unsafe {
                                 morpheus_hwinit::process::wake_stdin_waiters();
                             }
                         }
                     } else {
-                        let name = if ch >= 32 && ch < 127 {
-                            ch as char
-                        } else {
-                            '.'
-                        };
-                        puts(&alloc::format!("[KBD-PUSH] 0x{:02x} '{}'\n", ch, name));
                         morpheus_hwinit::stdin::push(ch);
                         unsafe {
                             morpheus_hwinit::process::wake_stdin_waiters();
