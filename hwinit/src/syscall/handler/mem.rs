@@ -27,7 +27,7 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
         return ENOSYS;
     }
 
-    let proc = SCHEDULER.current_process_mut();
+    let proc = SCHEDULER.current_memory_leader_mut();
 
     // Initialize mmap_brk on first call.
     if proc.mmap_brk == 0 {
@@ -120,7 +120,7 @@ pub unsafe fn sys_munmap(vaddr: u64, pages: u64) -> u64 {
         return ENOSYS;
     }
 
-    let proc = SCHEDULER.current_process_mut();
+    let proc = SCHEDULER.current_memory_leader_mut();
 
     // Find the VMA entry for this address.
     let (idx, vma) = match proc.vma_table.find_exact(vaddr) {

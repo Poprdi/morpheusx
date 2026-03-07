@@ -168,18 +168,6 @@ pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
             proc.mouse_dx = proc.mouse_dx.saturating_add(dx);
             proc.mouse_dy = proc.mouse_dy.saturating_add(dy);
             proc.mouse_buttons = buttons;
-            if dx != 0 || dy != 0 || buttons != 0 {
-                use crate::serial::{put_hex32, puts};
-                puts("[DBG] mouse_forward pid=");
-                put_hex32(target_pid_u32);
-                puts(" dx=");
-                put_hex32(dx as u32);
-                puts(" dy=");
-                put_hex32(dy as u32);
-                puts(" btn=");
-                put_hex32(buttons as u32);
-                puts("\n");
-            }
             0
         }
         _ => EINVAL,
@@ -274,15 +262,6 @@ pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
 
     // Wake the target if it was politely waiting for input.
     crate::process::scheduler::wake_input_reader(target);
-
-    if written > 0 {
-        use crate::serial::{put_hex32, puts};
-        puts("[DBG] forward_input: ");
-        put_hex32(written as u32);
-        puts(" bytes -> PID ");
-        put_hex32(target);
-        puts("\n");
-    }
 
     written as u64
 }

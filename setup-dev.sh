@@ -6,7 +6,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="${SCRIPT_DIR}"
 readonly TESTING_DIR="${PROJECT_ROOT}/testing"
 readonly ESP_DIR="${TESTING_DIR}/esp"
-readonly VERSION="2.0.0"
+readonly VERSION="2.0.4"
 # Pinned nightly for user-space (x86_64-morpheus JSON target).
 # Must match the nightly in rust-toolchain.toml comments.
 # To update: change both here and in rust-toolchain.toml, then rebuild.

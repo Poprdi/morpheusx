@@ -612,7 +612,7 @@ impl MemoryRegistry {
                 }
                 // SAFETY: node was written by list_push; identity-mapped.
                 unsafe {
-                    cur = (*cur).next;
+                    cur = core::ptr::read_volatile(&(*cur).next);
                 }
             }
         }
@@ -697,16 +697,16 @@ impl MemoryRegistry {
             put_hex32(order as u32);
             puts(" — starting fresh chain\n");
             self.free_lists[order] = node;
-            (*node).next = core::ptr::null_mut();
-            (*node).prev = core::ptr::null_mut();
+            core::ptr::write_volatile(&mut (*node).next, core::ptr::null_mut());
+            core::ptr::write_volatile(&mut (*node).prev, core::ptr::null_mut());
             self.free_at_order[order] = 1;
             self.free_pages += 1u64 << order;
             return;
         }
-        (*node).next = old_head;
-        (*node).prev = core::ptr::null_mut();
+        core::ptr::write_volatile(&mut (*node).next, old_head);
+        core::ptr::write_volatile(&mut (*node).prev, core::ptr::null_mut());
         if !old_head.is_null() {
-            (*old_head).prev = node;
+            core::ptr::write_volatile(&mut (*old_head).prev, node);
         }
         self.free_lists[order] = node;
         self.free_at_order[order] += 1;
@@ -720,8 +720,8 @@ impl MemoryRegistry {
         let mut cur = self.free_lists[order];
         while !cur.is_null() {
             if cur == target {
-                let prev = (*cur).prev;
-                let next = (*cur).next;
+                let prev = core::ptr::read_volatile(&(*cur).prev);
+                let next = core::ptr::read_volatile(&(*cur).next);
                 // Validate pointers before unlinking.
                 if !Self::is_canonical(prev) || !Self::is_canonical(next) {
                     puts("[MEM] CORRUPT list_remove unlink: node=");
@@ -740,18 +740,18 @@ impl MemoryRegistry {
                     return true;
                 }
                 if !prev.is_null() {
-                    (*prev).next = next;
+                    core::ptr::write_volatile(&mut (*prev).next, next);
                 } else {
                     self.free_lists[order] = next;
                 }
                 if !next.is_null() {
-                    (*next).prev = prev;
+                    core::ptr::write_volatile(&mut (*next).prev, prev);
                 }
                 self.free_at_order[order] -= 1;
                 self.free_pages = self.free_pages.saturating_sub(1u64 << order);
                 return true;
             }
-            let next = (*cur).next;
+            let next = core::ptr::read_volatile(&(*cur).next);
             if !Self::is_canonical(next) {
                 puts("[MEM] CORRUPT list_remove walk: node=");
                 put_hex64(cur as u64);
@@ -763,7 +763,7 @@ impl MemoryRegistry {
                 put_hex64(addr);
                 puts("\n");
                 // Terminate the corrupted chain here.
-                (*cur).next = core::ptr::null_mut();
+                core::ptr::write_volatile(&mut (*cur).next, core::ptr::null_mut());
                 break;
             }
             cur = next;
@@ -788,7 +788,7 @@ impl MemoryRegistry {
             // Don't adjust free_pages — chain state is unknown.
             return None;
         }
-        let next = (*head).next;
+        let next = core::ptr::read_volatile(&(*head).next);
         if !Self::is_canonical(next) {
             puts("[MEM] CORRUPT list_pop next: head=");
             put_hex64(head as u64);
@@ -805,7 +805,7 @@ impl MemoryRegistry {
         }
         self.free_lists[order] = next;
         if !next.is_null() {
-            (*next).prev = core::ptr::null_mut();
+            core::ptr::write_volatile(&mut (*next).prev, core::ptr::null_mut());
         }
         self.free_at_order[order] -= 1;
         self.free_pages = self.free_pages.saturating_sub(1u64 << order);
@@ -879,7 +879,7 @@ impl MemoryRegistry {
                     return Ok(current);
                 }
                 unsafe {
-                    cur = (*cur).next;
+                    cur = core::ptr::read_volatile(&(*cur).next);
                 }
             }
         }
@@ -986,7 +986,11 @@ impl MemoryRegistry {
             let size_order = (usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize)
                 .min(MAX_ORDER);
             let order = align_order.min(size_order);
-            // list_push now tracks free_pages automatically.
+            // Zero the FreeNode header before pushing — destroys any OVMF
+            // 0xAFAFAFAF poison at this address so list_remove walks stay clean.
+            let node_ptr = cur as *mut u64;
+            core::ptr::write_volatile(node_ptr, 0u64);          // FreeNode::next
+            core::ptr::write_volatile(node_ptr.add(1), 0u64);   // FreeNode::prev
             self.list_push(cur, order);
             cur += (1u64 << order) * PAGE_SIZE;
         }
@@ -1067,7 +1071,7 @@ impl MemoryRegistry {
                     break;
                 }
                 unsafe {
-                    let next = (*cur).next;
+                    let next = core::ptr::read_volatile(&(*cur).next);
                     if !next.is_null() && !Self::is_canonical(next) {
                         puts("[MEM] VALIDATE: corrupt next at node ");
                         put_hex64(cur as u64);

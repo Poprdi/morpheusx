@@ -145,7 +145,7 @@ pub unsafe fn sys_fb_map() -> u64 {
 /// Allocate a per-process framebuffer surface for a composited client.
 /// Same dimensions as the real framebuffer, zeroed.
 unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
-    let proc = SCHEDULER.current_process_mut();
+    let proc = SCHEDULER.current_memory_leader_mut();
 
     // If this process already has a surface, just re-map it.
     if proc.fb_surface_phys != 0 {

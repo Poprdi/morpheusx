@@ -169,7 +169,7 @@ pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
         return ENOSYS;
     }
 
-    let proc = SCHEDULER.current_process_mut();
+    let proc = SCHEDULER.current_memory_leader_mut();
     if proc.mmap_brk == 0 {
         proc.mmap_brk = 0x0000_0040_0000_0000;
     }

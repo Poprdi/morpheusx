@@ -394,6 +394,7 @@ pub unsafe fn platform_init_selfcontained(
 
         let reg = global_registry_mut();
         reg.reclaim_boot_services(&pt_pages[..pt_count]);
+        reg.validate_free_lists();
     }
     // Re-lock page-table pages that lived in BootServices address space.
     // reclaim_boot_services already excluded them via hw_holes, so this
