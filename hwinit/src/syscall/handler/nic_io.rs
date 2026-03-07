@@ -164,30 +164,6 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             } else {
                 crate::stdin::available()
             };
-            {
-                use crate::serial::{put_hex32, puts};
-                static mut FIONREAD_DBG_TICK: u32 = 0;
-                let pid = SCHEDULER.current_pid();
-
-                if pid == COMPOSITOR_PID {
-                    FIONREAD_DBG_TICK = FIONREAD_DBG_TICK.wrapping_add(1);
-                    if avail > 0 || (FIONREAD_DBG_TICK & 0x3F) == 0 {
-                        puts("[DBG] FIONREAD compositor pid=");
-                        put_hex32(pid);
-                        puts(" avail=");
-                        put_hex32(avail as u32);
-                        puts(" global=");
-                        put_hex32(crate::stdin::available() as u32);
-                        puts("\n");
-                    }
-                } else if avail > 0 && is_composited_client() {
-                    puts("[DBG] FIONREAD client pid=");
-                    put_hex32(pid);
-                    puts(" avail=");
-                    put_hex32(avail as u32);
-                    puts("\n");
-                }
-            }
             if arg != 0 && validate_user_buf(arg, 4) {
                 core::ptr::write(arg as *mut u32, avail as u32);
             }

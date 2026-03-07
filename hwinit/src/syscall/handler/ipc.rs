@@ -59,54 +59,44 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     }
 
     // verify source vma in the caller
-    let caller_proc = SCHEDULER.current_process_mut();
-    let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
-        Some(pair) => pair,
-        None => return EINVAL, // not a known mapping
+    let phys = {
+        let caller_proc = SCHEDULER.current_memory_leader_mut();
+        let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
+            Some(pair) => pair,
+            None => return EINVAL, // not a known mapping
+        };
+
+        // Must match exact page count.
+        if src_vma.pages != pages {
+            return EINVAL;
+        }
+
+        // Only owned physical pages can be granted.  We refuse to re-grant
+        // pages that were themselves granted (owns_phys=false), because the
+        // original owner controls their lifetime.
+        if !src_vma.owns_phys {
+            return EPERM;
+        }
+
+        src_vma.phys
     };
 
-    // Must match exact page count.
-    if src_vma.pages != pages {
-        return EINVAL;
-    }
-
-    // Only owned physical pages can be granted.  We refuse to re-grant
-    // pages that were themselves granted (owns_phys=false), because the
-    // original owner controls their lifetime.
-    if !src_vma.owns_phys {
-        return EPERM;
-    }
-
-    let phys = src_vma.phys;
-
-    // validate target process
-    let target_pid_u32 = target_pid as u32;
-    let target_proc = match SCHEDULER.process_by_pid(target_pid_u32) {
+    // compute target virtual address
+    // We need mutable access to the target.  Re-acquire via memory leader
+    // access since we just dropped the caller reference.
+    // SAFETY: single-core, interrupts disabled during syscall.
+    let target_ref = match SCHEDULER.memory_leader_mut_by_pid(target_pid as u32) {
         Some(p) => p,
-        None => return ESRCH, // no such process
+        None => return ESRCH,
     };
 
     // Target must be alive (Ready, Running, or Blocked).
-    if target_proc.is_free() {
+    if target_ref.is_free() {
         return ESRCH;
     }
-    if target_proc.cr3 == 0 {
+    if target_ref.cr3 == 0 {
         return ESRCH; // kernel thread without user page table
     }
-
-    // compute target virtual address
-    // We need mutable access to the target.  Re-acquire via raw table
-    // access since we can't hold two &mut through SCHEDULER.
-    // SAFETY: single-core, interrupts disabled during syscall.
-    let target = {
-        use crate::process::scheduler::PROCESS_TABLE;
-        match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
-            Some(Some(p)) => p as *mut crate::process::Process,
-            _ => return ESRCH,
-        }
-    };
-
-    let target_ref = &mut *target;
 
     if target_ref.mmap_brk == 0 {
         target_ref.mmap_brk = USER_MMAP_BASE;
@@ -215,7 +205,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
         return EPERM;
     }
 
-    let proc = SCHEDULER.current_process_mut();
+    let proc = SCHEDULER.current_memory_leader_mut();
 
     // find the vma
     let (_, vma) = match proc.vma_table.find_exact(vaddr) {

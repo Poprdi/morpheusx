@@ -255,6 +255,35 @@ impl Scheduler {
         PROCESS_TABLE[pid].as_mut().unwrap()
     }
 
+    /// Returns a mutable reference to the memory leader process of the current thread.
+    /// If the current process is a thread, returns the thread group leader. Otherwise,
+    /// returns the current process itself.
+    /// # Safety
+    /// Single-threaded; call only with interrupts disabled.
+    pub unsafe fn current_memory_leader_mut(&self) -> &'static mut Process {
+        let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+        let mut leader_pid = pid;
+        if let Some(p) = PROCESS_TABLE[pid].as_ref() {
+            if p.thread_group_leader != 0 {
+                leader_pid = p.thread_group_leader as usize;
+            }
+        }
+        PROCESS_TABLE[leader_pid].as_mut().unwrap()
+    }
+
+    /// Returns a mutable reference to the memory leader process by PID.
+    /// # Safety
+    /// Single-threaded; call only with interrupts disabled.
+    pub unsafe fn memory_leader_mut_by_pid(&self, pid: u32) -> Option<&'static mut Process> {
+        let p = PROCESS_TABLE.get(pid as usize)?.as_ref()?;
+        let leader_pid = if p.thread_group_leader != 0 {
+            p.thread_group_leader as usize
+        } else {
+            pid as usize
+        };
+        PROCESS_TABLE.get_mut(leader_pid)?.as_mut()
+    }
+
     /// Immutable reference to a process by PID.
     ///
     /// # Safety

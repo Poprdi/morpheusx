@@ -156,35 +156,11 @@ pub unsafe fn sys_mouse_read() -> u64 {
         let buttons = proc.mouse_buttons;
         proc.mouse_dx = 0;
         proc.mouse_dy = 0;
-        if dx != 0 || dy != 0 || buttons != 0 {
-            use crate::serial::{put_hex32, puts};
-            puts("[DBG] mouse_read client pid=");
-            put_hex32(SCHEDULER.current_pid());
-            puts(" dx=");
-            put_hex32(dx as u32);
-            puts(" dy=");
-            put_hex32(dy as u32);
-            puts(" btn=");
-            put_hex32(buttons as u32);
-            puts("\n");
-        }
         let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
         let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
         return (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32);
     }
     let (dx, dy, buttons) = crate::mouse::drain();
-    if dx != 0 || dy != 0 || buttons != 0 {
-        use crate::serial::{put_hex32, puts};
-        puts("[DBG] mouse_read hw pid=");
-        put_hex32(SCHEDULER.current_pid());
-        puts(" dx=");
-        put_hex32(dx as u32);
-        puts(" dy=");
-        put_hex32(dy as u32);
-        puts(" btn=");
-        put_hex32(buttons as u32);
-        puts("\n");
-    }
     let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
     let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
     (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32)
