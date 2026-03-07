@@ -260,6 +260,7 @@ unsafe impl GlobalAlloc for BuddyHeap {
 
         let order = layout_to_order(layout);
         HEAP.lock();
+        #[allow(static_mut_refs)]
         let result = buddy_alloc(&mut STATE, order);
         HEAP.unlock();
         result.unwrap_or(ptr::null_mut())
@@ -271,6 +272,7 @@ unsafe impl GlobalAlloc for BuddyHeap {
         }
         let order = layout_to_order(layout);
         HEAP.lock();
+        #[allow(static_mut_refs)]
         buddy_free(&mut STATE, ptr, order);
         HEAP.unlock();
     }
