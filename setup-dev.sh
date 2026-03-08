@@ -269,6 +269,9 @@ do_build() {
 # List of (package, dest-path) pairs for all user apps to build and inject.
 # Add new apps here; they will be built and deployed automatically.
 USER_APPS=(
+    "init,/bin/init"
+    "compd,/bin/compd"
+    "shelld,/bin/shelld"
     "syscall-e2e,/bin/syscall-e2e"
     "msh,/bin/msh"
     "spinning-cube,/bin/spinning-cube"
