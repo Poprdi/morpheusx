@@ -1,0 +1,17 @@
+[package]
+name    = "shelld"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "shelld"
+path = "src/main.rs"
+
+[dependencies]
+libmorpheus = { path = "../libmorpheus" }
+channel = { path = "../channel" }
+display = { path = "../display", features = ["framebuffer-backend"], package = "morpheus-display" }
+
+[profile.release]
+opt-level = 3
+lto       = true
