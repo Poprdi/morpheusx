@@ -157,7 +157,7 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
         return false;
     }
 
-    let registry = global_registry_mut();
+    let mut registry = global_registry_mut();
     let pages = (grow_size as u64).div_ceil(PAGE_SIZE);
 
     // We need contiguous memory, so allocate at a specific address
@@ -202,7 +202,7 @@ pub unsafe fn init_heap(initial_size: usize) -> Result<(), &'static str> {
         return Err("memory registry not initialized");
     }
 
-    let registry = global_registry_mut();
+    let mut registry = global_registry_mut();
 
     // Round up to page size
     let size = initial_size.div_ceil(PAGE_SIZE as usize) * PAGE_SIZE as usize;

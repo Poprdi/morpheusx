@@ -353,3 +353,77 @@ pub unsafe fn set_kernel_stack(stack: u64) {
 pub fn get_kernel_stack() -> u64 {
     unsafe { TSS.rsp0 }
 }
+
+// ── SMP: per-AP GDT + TSS ───────────────────────────────────────────────
+//
+// Each AP needs its own TSS (RSP0 is per-core) but shares the same segment
+// layout.  We allocate per-AP GDT+TSS pairs from a static array — no heap.
+
+use super::per_cpu::MAX_CPUS;
+
+/// Per-AP GDT.  Index 0 is BSP (uses the static GDT/TSS above).
+static mut AP_TSS: [Tss; MAX_CPUS] = [const { Tss::new() }; MAX_CPUS];
+static mut AP_GDT: [Gdt; MAX_CPUS] = [const {
+    Gdt {
+        entries: [
+            GdtEntry::null(),
+            GdtEntry::code64(0),
+            GdtEntry::data64(0),
+            GdtEntry::data64(3),
+            GdtEntry::code64(3),
+        ],
+        tss_desc: TssDescriptor::empty(),
+    }
+}; MAX_CPUS];
+
+/// Initialize a per-AP GDT + TSS and load them.
+///
+/// `stack_top` is the AP's kernel stack top (for RSP0).
+/// `core_idx` is the sequential core index (1..MAX_CPUS-1).
+///
+/// # Safety
+/// Must be called exactly once per AP, on the AP's own stack, CLI'd.
+pub unsafe fn init_gdt_for_ap(stack_top: u64, core_idx: u32) {
+    let idx = core_idx as usize;
+    assert!(idx < MAX_CPUS);
+
+    // set up this AP's TSS
+    AP_TSS[idx].rsp0 = stack_top;
+    AP_TSS[idx].ist[0] = ist1_static_stack_top(); // share the IST1 stack (double-fault only)
+
+    // point the GDT's TSS descriptor at this AP's TSS
+    let tss_addr = &AP_TSS[idx] as *const Tss as u64;
+    AP_GDT[idx].tss_desc = TssDescriptor::new(tss_addr, size_of::<Tss>() as u16);
+
+    // load this AP's GDT
+    let gdt_ptr = GdtPtr {
+        limit: (size_of::<Gdt>() - 1) as u16,
+        base: &AP_GDT[idx] as *const Gdt as u64,
+    };
+
+    load_gdt(&gdt_ptr);
+    reload_segments();
+    load_tss(TSS_SEL);
+
+    puts("[GDT] AP core ");
+    crate::serial::put_hex32(core_idx);
+    puts(" GDT+TSS loaded, rsp0=");
+    crate::serial::put_hex64(stack_top);
+    puts("\n");
+}
+
+/// Update RSP0 in an AP's TSS.  Called during context switch when the
+/// scheduler picks a new process for this core.
+///
+/// # Safety
+/// `core_idx` must be valid.
+pub unsafe fn set_kernel_stack_for_core(core_idx: u32, stack: u64) {
+    if core_idx == 0 {
+        TSS.rsp0 = stack;
+    } else {
+        let idx = core_idx as usize;
+        if idx < MAX_CPUS {
+            AP_TSS[idx].rsp0 = stack;
+        }
+    }
+}

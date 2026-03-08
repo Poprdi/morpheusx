@@ -387,7 +387,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     let read_size = file_size.min(65536);
     let pages_needed = read_size.div_ceil(4096) as u64;
 
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     let buf_phys = match registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,
         crate::memory::MemoryType::Allocated,
