@@ -394,7 +394,7 @@ unsafe fn sys_alloc(pages: u64) -> u64 {
     if !crate::memory::is_registry_initialized() {
         return u64::MAX; // -ENOMEM
     }
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     registry
         .allocate_pages(
             crate::memory::AllocateType::AnyPages,
@@ -411,7 +411,7 @@ unsafe fn sys_free(phys_base: u64, pages: u64) -> u64 {
     if !crate::memory::is_registry_initialized() {
         return u64::MAX; // -ENOMEM
     }
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     match registry.free_pages(phys_base, pages) {
         Ok(()) => 0,
         Err(_) => u64::MAX, // -EINVAL

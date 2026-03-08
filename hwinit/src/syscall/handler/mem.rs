@@ -37,7 +37,7 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     let vaddr = proc.mmap_brk;
 
     // Allocate physical pages.
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     let phys = match registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,
         crate::memory::MemoryType::Allocated,
@@ -150,7 +150,7 @@ pub unsafe fn sys_munmap(vaddr: u64, pages: u64) -> u64 {
 
     // If we own the physical pages, free them back to the allocator.
     if owns {
-        let registry = crate::memory::global_registry_mut();
+        let mut registry = crate::memory::global_registry_mut();
         let _ = registry.free_pages(phys, pages);
     }
 

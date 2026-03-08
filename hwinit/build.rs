@@ -72,6 +72,30 @@ fn main() {
         }
     }
 
+    // AP trampoline: flat binary for SMP startup (not linked, included via include_bytes!)
+    let trampoline_src = "asm/cpu/ap_trampoline.s";
+    if Path::new(trampoline_src).exists() {
+        println!("cargo:rerun-if-changed={}", trampoline_src);
+
+        let trampoline_bin = out_dir.join("ap_trampoline.bin");
+        let out = Command::new("nasm")
+            .args([
+                "-f", "bin",
+                "-o", trampoline_bin.to_str().unwrap(),
+                trampoline_src,
+            ])
+            .output()
+            .expect("nasm failed for AP trampoline");
+
+        if !out.status.success() {
+            panic!(
+                "AP trampoline assembly failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        println!("cargo:warning=Built AP trampoline ({} bytes)", std::fs::metadata(&trampoline_bin).map(|m| m.len()).unwrap_or(0));
+    }
+
     if objects.is_empty() {
         println!("cargo:warning=No ASM files assembled");
         return;

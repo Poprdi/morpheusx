@@ -56,8 +56,9 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
     // Count surfaces (exclude zombies — about to be reaped).
     let mut total = 0u64;
     {
-        use crate::process::scheduler::PROCESS_TABLE;
+        use crate::process::scheduler::{PROCESS_TABLE, PROCESS_TABLE_LOCK};
         use crate::process::ProcessState;
+        PROCESS_TABLE_LOCK.lock();
         for proc in PROCESS_TABLE.iter().flatten() {
             if !proc.is_free()
                 && !matches!(proc.state, ProcessState::Zombie)
@@ -66,6 +67,7 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
                 total += 1;
             }
         }
+        PROCESS_TABLE_LOCK.unlock();
     }
 
     if buf_ptr == 0 || max_count == 0 {
@@ -82,8 +84,9 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
     let mut written = 0usize;
 
     {
-        use crate::process::scheduler::PROCESS_TABLE;
+        use crate::process::scheduler::{PROCESS_TABLE, PROCESS_TABLE_LOCK};
         use crate::process::ProcessState;
+        PROCESS_TABLE_LOCK.lock();
         for slot in PROCESS_TABLE.iter() {
             if written >= max_count as usize {
                 break;
@@ -109,6 +112,7 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
                 }
             }
         }
+        PROCESS_TABLE_LOCK.unlock();
     }
 
     written as u64
@@ -131,12 +135,18 @@ pub unsafe fn sys_win_surface_map(target_pid: u64) -> u64 {
 
     // Find the target's surface physical address and page count.
     let (phys, pages) = {
-        use crate::process::scheduler::PROCESS_TABLE;
-        match PROCESS_TABLE.get(target_pid_u32 as usize) {
+        use crate::process::scheduler::{PROCESS_TABLE, PROCESS_TABLE_LOCK};
+        PROCESS_TABLE_LOCK.lock();
+        let result = match PROCESS_TABLE.get(target_pid_u32 as usize) {
             Some(Some(proc)) if !proc.is_free() && proc.fb_surface_phys != 0 => {
-                (proc.fb_surface_phys, proc.fb_surface_pages)
+                Some((proc.fb_surface_phys, proc.fb_surface_pages))
             }
-            _ => return EINVAL,
+            _ => None,
+        };
+        PROCESS_TABLE_LOCK.unlock();
+        match result {
+            Some(r) => r,
+            None => return EINVAL,
         }
     };
 
@@ -162,8 +172,9 @@ pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
     let dy = (packed >> 16) as i16 as i32;
     let buttons = (packed >> 32) as u8;
 
-    use crate::process::scheduler::PROCESS_TABLE;
-    match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
+    use crate::process::scheduler::{PROCESS_TABLE, PROCESS_TABLE_LOCK};
+    PROCESS_TABLE_LOCK.lock();
+    let result = match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
         Some(Some(proc)) if !proc.is_free() => {
             proc.mouse_dx = proc.mouse_dx.saturating_add(dx);
             proc.mouse_dy = proc.mouse_dy.saturating_add(dy);
@@ -171,7 +182,9 @@ pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
             0
         }
         _ => EINVAL,
-    }
+    };
+    PROCESS_TABLE_LOCK.unlock();
+    result
 }
 
 /// `SYS_WIN_SURFACE_DIRTY_CLEAR(target_pid) → 0`
@@ -186,14 +199,17 @@ pub unsafe fn sys_win_surface_dirty_clear(target_pid: u64) -> u64 {
 
     let target_pid_u32 = target_pid as u32;
 
-    use crate::process::scheduler::PROCESS_TABLE;
-    match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
+    use crate::process::scheduler::{PROCESS_TABLE, PROCESS_TABLE_LOCK};
+    PROCESS_TABLE_LOCK.lock();
+    let result = match PROCESS_TABLE.get_mut(target_pid_u32 as usize) {
         Some(Some(proc)) if !proc.is_free() => {
             proc.fb_surface_dirty = false;
             0
         }
         _ => EINVAL,
-    }
+    };
+    PROCESS_TABLE_LOCK.unlock();
+    result
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -240,7 +256,8 @@ pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
     let target = target_pid as u32;
     let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
 
-    use crate::process::scheduler::PROCESS_TABLE;
+    use crate::process::scheduler::{PROCESS_TABLE, PROCESS_TABLE_LOCK};
+    PROCESS_TABLE_LOCK.lock();
     let written = match PROCESS_TABLE.get_mut(target as usize) {
         Some(Some(proc)) if !proc.is_free() => {
             // Write into the per-process input ring buffer.
@@ -257,11 +274,18 @@ pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
             }
             n
         }
-        _ => return EINVAL,
+        _ => {
+            PROCESS_TABLE_LOCK.unlock();
+            return EINVAL;
+        }
     };
-
-    // Wake the target if it was politely waiting for input.
-    crate::process::scheduler::wake_input_reader(target);
+    // wake check inline — wake_input_reader would re-acquire lock and deadlock
+    if let Some(Some(proc)) = PROCESS_TABLE.get_mut(target as usize) {
+        if matches!(proc.state, crate::process::ProcessState::Blocked(crate::process::BlockReason::InputRead)) {
+            proc.state = crate::process::ProcessState::Ready;
+        }
+    }
+    PROCESS_TABLE_LOCK.unlock();
 
     written as u64
 }

@@ -878,6 +878,26 @@ pub unsafe fn set_interrupt_handler(vector: u8, handler: u64, ist: u8, dpl: u8) 
     IDT.set_handler(vector, IdtEntry::interrupt_gate(handler, ist, dpl));
 }
 
+/// Load the BSP's IDT on an AP core.
+///
+/// The IDT is a shared static — all cores use the same interrupt handlers.
+/// Each AP just needs to `lidt` the same pointer the BSP already uses.
+///
+/// # Safety
+/// Must be called after BSP's `init_idt()`.  CLI'd.
+pub unsafe fn load_idt_for_ap() {
+    let idt_ptr = IdtPtr {
+        limit: (core::mem::size_of::<Idt>() - 1) as u16,
+        base: &IDT as *const Idt as u64,
+    };
+    core::arch::asm!(
+        "lidt [{}]",
+        in(reg) &idt_ptr,
+        options(nostack, preserves_flags)
+    );
+    crate::serial::puts("[IDT] AP loaded shared IDT\n");
+}
+
 /// Enable interrupts
 #[inline(always)]
 pub fn enable_interrupts() {
