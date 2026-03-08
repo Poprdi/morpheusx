@@ -1,0 +1,18 @@
+[package]
+name    = "compd"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "compd"
+path = "src/main.rs"
+
+[dependencies]
+libmorpheus = { path = "../libmorpheus" }
+morpheus-display = { path = "../display", features = ["framebuffer-backend"] }
+morpheus-gfx3d = { path = "../gfx3d" }
+channel = { path = "../channel" }
+
+[profile.release]
+opt-level = 3
+lto       = true

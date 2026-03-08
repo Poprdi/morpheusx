@@ -105,34 +105,34 @@ fn show_boot_log_screen(keyboard: &mut Keyboard) {
 }
 
 pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
-    puts("[KERNEL] preparing to launch /bin/msh\n");
+    puts("[KERNEL] preparing to launch /bin/init\n");
 
     let mut keyboard = Keyboard::new();
     let mut mouse = super::mouse::Mouse::new();
     show_boot_log_screen(&mut keyboard);
 
-    // Load and spawn the userland shell
-    let elf_data = match load_elf_from_fs("msh") {
+    // Load and spawn the userland init supervisor
+    let elf_data = match load_elf_from_fs("init") {
         Some(data) => data,
         None => {
-            puts("[FATAL] /bin/msh not found — cannot start shell\n");
+            puts("[FATAL] /bin/init not found — cannot start desktop environment\n");
             loop {
                 core::hint::spin_loop();
             }
         }
     };
 
-    let _msh_pid = match unsafe {
-        morpheus_hwinit::process::scheduler::spawn_user_process("msh", &elf_data, &[], 0, false)
+    let _init_pid = match unsafe {
+        morpheus_hwinit::process::scheduler::spawn_user_process("init", &elf_data, &[], 0, false)
     } {
         Ok(pid) => {
-            puts("[KERNEL] msh spawned as PID ");
+            puts("[KERNEL] init spawned as PID ");
             morpheus_hwinit::serial::put_hex32(pid);
             puts("\n");
             pid
         }
         Err(e) => {
-            puts("[FATAL] failed to spawn msh: ");
+            puts("[FATAL] failed to spawn init: ");
             puts(e);
             puts("\n");
             loop {
@@ -141,7 +141,7 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
         }
     };
 
-    // Drop the ELF data — msh is loaded into its own address space now
+    // Drop the ELF data — init is loaded into its own address space now
     drop(elf_data);
 
     puts("[KERNEL] entering input forwarding loop\n");
