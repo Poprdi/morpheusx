@@ -121,8 +121,11 @@ irq_timer_isr:
 .skip_fxsave:
 
     ; ── ACK LAPIC (write 0 to EOI register) ──────────────────────────────
-    xor     eax, eax
-    mov     dword [LAPIC_EOI_ADDR], eax
+    ; 0xFEE000B0 has bit 31 set. [imm32] in 64-bit mode sign-extends to
+    ; 0xFFFFFFFFFEE000B0. load into r11d: zero-extends, gives correct ptr.
+    ; r11 is already saved at [rsp+0x50] so clobbering it here is safe.
+    mov     r11d, LAPIC_EOI_ADDR        ; r11 = 0x00000000FEE000B0
+    mov     dword [r11], 0              ; EOI
 
     ; ── Call scheduler_tick(current_ctx: *const CpuContext) ──────────────
     ; MS x64 ABI: first arg in RCX.  Need 32-byte shadow space on stack.

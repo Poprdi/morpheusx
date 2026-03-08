@@ -30,10 +30,12 @@ ap_start:
     mov     ss, ax
     xor     sp, sp          ; stack at top of segment (wraps to 0xFFFF)
 
-    ; ── load the GDT pointer from the data area ──────────────────────────
-    ; data area is at this_page + 0xF00.  Our segment base = 0x8000.
-    ; so offset within segment = 0xF00 + 0x20 (TD_GDT_PTR within data area)
-    lgdt    [0xF20]         ; 0x8000 + 0xF20 in linear addressing = offset 0xF20 from segment base
+    ; ── load a TEMPORARY GDT that lives inside this trampoline page ──────
+    ; The BSP's GDT is above 4 GB (PE BSS at 0x140xxxxxx).  In 16-bit
+    ; mode, lgdt only reads a 4-byte base → truncated → wrong GDT → #GP.
+    ; We use a temp GDT at a known sub-1MB address for the mode transition,
+    ; then reload the real 64-bit GDT once we're in long mode.
+    lgdt    [0xE38]         ; segment offset → physical 0x8E38 (temp_gdt_ptr_16)
 
     ; ── enter protected mode ──────────────────────────────────────────────
     mov     eax, cr0
@@ -77,8 +79,10 @@ ap_pm32:
     or      eax, (1 << 31)          ; CR0.PG
     mov     cr0, eax
 
-    ; far jump to 64-bit long mode code
-    jmp     dword 0x08:ap_lm64
+    ; far jump to 64-bit long mode code.
+    ; selector 0x18 = temp GDT's 64-bit code descriptor (L=1, D=0).
+    ; NOT 0x08 — that's the 32-bit code descriptor we used to get here.
+    jmp     dword 0x18:ap_lm64
 
 ; ───────────────────────────────────────────────────────────────────────────
 ; 64-bit long mode
@@ -93,6 +97,25 @@ ap_lm64:
     mov     ss, ax
     ; intentionally skip gs — Rust will set GS base via MSR
 
+    ; ── reload the BSP's ACTUAL 64-bit GDT from the data area ────────────
+    ; In 64-bit mode lgdt reads the full 10-byte descriptor (2+8 base).
+    ; The BSP's GDT is in PE BSS above 4 GB — now we can load it properly.
+    lgdt    [0x8F20]        ; TD_GDT_PTR (flat 64-bit address)
+
+    ; reload data segments again with the real GDT's selectors
+    mov     ax, 0x10
+    mov     ds, ax
+    mov     es, ax
+    mov     fs, ax
+    mov     ss, ax
+
+    ; reload CS via a far return trick — push selector:offset, retfq
+    lea     rax, [rel .cs_reloaded]
+    push    0x08            ; kernel code selector from BSP's GDT
+    push    rax
+    retfq
+.cs_reloaded:
+
     ; ── load the per-AP stack from data area ──────────────────────────────
     mov     rsp, qword [0x8F10]     ; TD_STACK
 
@@ -105,8 +128,68 @@ ap_lm64:
     jmp     rax                     ; ap_rust_entry(core_idx, lapic_id) — never returns
 
 ; ───────────────────────────────────────────────────────────────────────────
-; Pad to keep total code well under 0xF00 (data area starts there)
+; TEMP GDT (offset 0xE00) — used for the real→prot→long mode transition.
+;
+; The BSP's GDT lives in PE BSS above 4 GB.  A 16-bit lgdt can only read
+; a 4-byte base, truncating 0x140xxxxxx → garbage.  This temp GDT at
+; physical 0x8E00 is safely below 1 MB.
+;
+; We need TWO code descriptors:
+;   0x08 — 32-bit code (D=1, L=0): for protected mode transition.
+;          D=1 gives 32-bit default operand size so `bits 32` instructions
+;          decode correctly.  If D=0 the CPU interprets `or eax, imm32`
+;          as `or ax, imm16` and the instruction stream desynchronizes.
+;          yes this is what was causing the triple fault. yes it was that dumb.
+;   0x18 — 64-bit code (L=1, D=0): for the far jump into long mode.
+;          Intel requires L=1 D=0 for 64-bit mode.
+;
+; After reaching 64-bit mode we reload the BSP's real GDT (which has its
+; own code64 at selector 0x08) and retfq to it.
 ; ───────────────────────────────────────────────────────────────────────────
+times (0xE00 - ($ - $$)) db 0
+
+; 0xE00: temp GDT entries
+temp_gdt:
+    ; 0x00: null descriptor
+    dq 0
+
+    ; 0x08: 32-bit code (D=1, L=0, P=1, DPL=0, type=exec+read)
+    ;   used ONLY for the real→protected mode transition.
+    dw 0xFFFF       ; limit low (4GB with G=1)
+    dw 0x0000       ; base low
+    db 0x00         ; base mid
+    db 0x9A         ; P=1, DPL=0, S=1, type=0xA (exec/read)
+    db 0xCF         ; G=1, D=1, L=0, AVL=0, limit_hi=0xF
+    db 0x00         ; base high
+
+    ; 0x10: flat data (P=1, DPL=0, writable, G=1, D=1, 4GB limit)
+    dw 0xFFFF       ; limit low
+    dw 0x0000       ; base low
+    db 0x00         ; base mid
+    db 0x92         ; P=1, DPL=0, S=1, type=0x2 (data/write)
+    db 0xCF         ; G=1, D=1, L=0, AVL=0, limit_hi=0xF
+    db 0x00         ; base high
+
+    ; 0x18: 64-bit code (L=1, D=0, P=1, DPL=0, type=exec+read)
+    ;   used for the far jump into long mode after LME+PG are set.
+    dw 0x0000       ; limit low (ignored in 64-bit mode)
+    dw 0x0000       ; base low
+    db 0x00         ; base mid
+    db 0x9A         ; P=1, DPL=0, S=1, type=0xA (exec/read)
+    db 0x20         ; G=0, L=1, D=0, AVL=0, limit_hi=0x0
+    db 0x00         ; base high
+temp_gdt_end:
+
+; padding to 0xE38
+times (0xE38 - ($ - $$)) db 0
+
+; 0xE38: temp GDT pointer for 16-bit lgdt (6 bytes: limit + 32-bit base)
+;   segment offset 0xE38 → physical 0x8E38.  lgdt reads 6 bytes in 16-bit mode.
+temp_gdt_ptr_16:
+    dw (temp_gdt_end - temp_gdt - 1)    ; limit = 31 (4 entries × 8 - 1)
+    dd 0x00008E00                        ; base = physical address of temp_gdt
+
+; pad to 0xF00
 times (0xF00 - ($ - $$)) db 0
 
 ; ───────────────────────────────────────────────────────────────────────────
