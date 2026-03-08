@@ -55,6 +55,12 @@ pub struct SelfContainedConfig {
     pub image_base: u64,
     /// Number of 4 KiB pages the PE image occupies (derived from SizeOfImage).
     pub image_pages: u64,
+    /// Physical base of the boot stack allocated by the bootloader.
+    /// The entire range [stack_base, stack_base + stack_pages * 4096)
+    /// is excluded from the buddy allocator.
+    pub stack_base: u64,
+    /// Number of 4 KiB pages in the boot stack allocation.
+    pub stack_pages: u64,
 }
 
 /// Platform configuration input (legacy - externally allocated).
@@ -184,14 +190,30 @@ pub unsafe fn platform_init_selfcontained(
         puts("\n");
     }
 
-    // 4) Boot stack pages (current RSP ± safety margin)
+    // 4) Boot stack pages — use actual bounds from bootloader, not RSP guess.
+    //    The bootloader passes the exact base + page count it allocated.
+    //    Guessing from RSP missed the bottom of the stack and let the buddy
+    //    write FreeNode headers into live LoaderData pages — OVMF's 0xAF
+    //    scrub then looked like corruption when those nodes were walked.
     let boot_stack_base;
     let boot_stack_top;
-    {
+    if config.stack_base != 0 && config.stack_pages != 0 {
+        boot_stack_base = config.stack_base;
+        boot_stack_top = config.stack_base + config.stack_pages * 4096;
+        let mut p = boot_stack_base;
+        while p < boot_stack_top && hw_count < hw_holes.len() {
+            hw_holes[hw_count] = p;
+            hw_count += 1;
+            p += 4096;
+        }
+    } else {
+        // fallback: RSP-based guess (generous margins)
         let rsp: u64;
-        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
-        boot_stack_base = (rsp & !0xFFF).saturating_sub(128 * 1024);
-        boot_stack_top = (rsp & !0xFFF) + 32 * 1024;
+        unsafe {
+            core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
+        }
+        boot_stack_base = (rsp & !0xFFF).saturating_sub(256 * 1024);
+        boot_stack_top = (rsp + 0xFFF) & !0xFFF;
         let mut p = boot_stack_base;
         while p < boot_stack_top && hw_count < hw_holes.len() {
             hw_holes[hw_count] = p;
@@ -451,6 +473,11 @@ pub unsafe fn platform_init_selfcontained(
     }
     checkpoint("phase10.5-reserve-pt");
     crate::paging::reserve_page_table_pages();
+    // second validation: catch corruption introduced by carve_block splits
+    {
+        let reg = global_registry_mut();
+        reg.validate_free_lists();
+    }
     checkpoint("phase10.5-done");
 
     // phase 11: filesystem

@@ -44,12 +44,6 @@ iso9660 = { path = "iso9660", package = "iso9660-rs" }
 morpheus-ui = { path = "ui" }
 morpheus-helix = { path = "helix" }
 
-[profile.release]
-opt-level = "z"      # Optimize for size
-lto = true           # Link-time optimization
-codegen-units = 1    # Better optimization
-panic = "abort"      # No unwinding
-strip = true         # Strip symbols
 
 [profile.dev]
 panic = "abort"      # No unwinding in dev either
