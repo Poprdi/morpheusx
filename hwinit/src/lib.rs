@@ -166,8 +166,8 @@ pub use dma::DmaRegion;
 // PAGING RE-EXPORTS
 
 pub use paging::{
-    init_kernel_page_table, is_paging_initialized, kensure_4k, kernel_page_table,
-    kernel_page_table_mut, kmap_2m, kmap_4k, kmap_mmio, kmark_uncacheable, kunmap_4k,
+    init_kernel_page_table, is_paging_initialized, kensure_4k, kernel_pml4_phys,
+    kmap_2m, kmap_4k, kmap_mmio, kmark_uncacheable, kunmap_4k,
     kvirt_to_phys, MappedPageSize, PageFlags, PageTable, PageTableEntry, PageTableManager,
     VirtAddr,
 };

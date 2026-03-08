@@ -91,7 +91,7 @@ syscall_init:
     ret
 
 ; ───────────────────────────────────────────────────────────────────────────
-; syscall_entry — fast ring-3 → ring-0 entry
+; syscall_entry — fast ring-3 → ring-0 entry (SMP-safe)
 ;
 ; At entry (set by hardware):
 ;   RCX  = user RIP to return to
@@ -100,39 +100,33 @@ syscall_init:
 ;   RAX  = syscall number
 ;   RDI  = arg1, RSI = arg2, RDX = arg3, R10 = arg4, R8 = arg5, R9 = arg6
 ;   Interrupts are OFF (IF cleared by IA32_FMASK)
+;
+; Per-CPU data via GS segment (PerCpu offsets from per_cpu.rs):
+;   gs:[0x20] = kernel_syscall_rsp
+;   gs:[0x28] = user_rsp_scratch
 ; ───────────────────────────────────────────────────────────────────────────
-
-; Scratch slot for user RSP (single-core, non-reentrant during CLI).
-section .data
-align 8
-global kernel_syscall_rsp
-kernel_syscall_rsp: dq 0
-_user_rsp_scratch:  dq 0
 
 section .text
 syscall_entry:
-    ; ── Switch to kernel stack ────────────────────────────────────────────
-    mov     [rel _user_rsp_scratch], rsp
-    mov     rsp, [rel kernel_syscall_rsp]
+    ; ── SWAPGS: switch from user GS to kernel PerCpu GS ──────────────────
+    ; always needed — SYSCALL is always from ring 3
+    swapgs
+
+    ; ── Switch to kernel stack via per-CPU data ───────────────────────────
+    mov     [gs:0x28], rsp              ; save user RSP → gs:user_rsp_scratch
+    mov     rsp, [gs:0x20]              ; load kernel RSP from gs:kernel_syscall_rsp
 
     ; ── Build a frame for SYSRET restoration ──────────────────────────────
-    push    qword [rel _user_rsp_scratch]   ; user RSP
-    push    rcx                             ; user RIP
-    push    r11                             ; user RFLAGS
+    push    qword [gs:0x28]             ; user RSP
+    push    rcx                         ; user RIP
+    push    r11                         ; user RFLAGS
 
     ; ── Save user argument registers ──────────────────────────────────────
-    ; The kernel runs with MS x64 ABI which freely clobbers these registers.
-    ; Userspace compiled with SYSV convention expects only RCX and R11 to be
-    ; destroyed by the syscall instruction — all other registers (including
-    ; the arg registers RDI/RSI/RDX/R10/R8) must be restored on return.
-    ; Failure to restore these causes hidden return pointers or values that
-    ; the compiler saved in caller-saved registers to be corrupted (e.g.
-    ; RDX holding a Result<> hidden pointer clobbered to 0x480 by sys_pipe).
-    push    r8                              ; user a5
-    push    r10                             ; user a4
-    push    rdi                             ; user a1
-    push    rsi                             ; user a2
-    push    rdx                             ; user a3
+    push    r8                          ; user a5
+    push    r10                         ; user a4
+    push    rdi                         ; user a1
+    push    rsi                         ; user a2
+    push    rdx                         ; user a3
 
     ; ── Save callee-saved (MS x64 ABI for the Rust call) ─────────────────
     push    rbp
@@ -144,11 +138,9 @@ syscall_entry:
     mov     rbp, rsp
 
     ; ── Translate user ABI → MS x64 and call syscall_dispatch ─────────────
-    ;   User:   RAX=nr, RDI=a1, RSI=a2, RDX=a3, R10=a4, R8=a5
-    ;   MS x64: RCX=nr, RDX=a1, R8=a2,  R9=a3,  [rsp+0x20]=a4, [rsp+0x28]=a5
     sub     rsp, 48                 ; 32 shadow + 16 stack args
-    mov     [rsp + 0x28], r8        ; a5  (from original r8, not the saved r8)
-    mov     [rsp + 0x20], r10       ; a4  (from original r10)
+    mov     [rsp + 0x28], r8        ; a5
+    mov     [rsp + 0x20], r10       ; a4
     mov     r9, rdx                 ; a3
     mov     r8, rsi                 ; a2
     mov     rdx, rdi                ; a1
@@ -177,4 +169,7 @@ syscall_entry:
     ; RAX = return value (preserved across all the above)
     mov     rsp, [rsp]              ; load user RSP (top of stack is user RSP)
 
-    o64 sysret                      ; SYSRETQ — back to Ring 3 (NASM: o64 prefix = REX.W)
+    ; ── SWAPGS: switch from kernel PerCpu GS back to user GS ─────────────
+    swapgs
+
+    o64 sysret                      ; SYSRETQ — back to Ring 3

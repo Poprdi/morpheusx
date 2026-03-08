@@ -31,13 +31,24 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 // GLOBAL STATE
 
 /// The flat process table.  Index == PID.
+/// Protected by PROCESS_TABLE_LOCK for SMP safety.
 pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = {
-    // Can't call Process::empty() in a const context with Option::None,
-    // so we use a macro trick: all 64 slots start as None.
     [const { None }; MAX_PROCESSES]
 };
 
-/// PID of the currently executing process.
+/// Spinlock guarding PROCESS_TABLE mutations from concurrent cores.
+/// The timer ISR on every core calls scheduler_tick() which must not
+/// race against itself or syscall handlers modifying the same process.
+/// Not reentrant — never acquire from code that already holds it.
+/// IF must be disabled before acquiring (IA32_FMASK handles this for syscalls,
+/// hardware handles it for ISRs).
+pub(crate) static PROCESS_TABLE_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
+
+/// PID of the currently executing process on core 0 (BSP).
+/// For SMP, each core tracks its own current_pid via gs:[0x0C].
+/// This atomic remains for compatibility with code that reads it
+/// from non-ISR contexts (syscall handlers run on the core that
+/// triggered the syscall, so they use per-CPU reads).
 static CURRENT_PID: AtomicU32 = AtomicU32::new(0);
 
 /// Monotonically increasing counter of scheduler ticks (= timer IRQ count).
@@ -96,15 +107,56 @@ pub fn get_kernel_cr3() -> u64 {
 /// Used to convert millisecond sleep durations to TSC deadlines.
 static mut TSC_FREQUENCY: u64 = 0;
 
-// CR3 of the next process to run.
-// Written by `scheduler_tick()`, read by `irq_timer_isr` in ASM for address
-// space switch.  Defined in `context_switch.s`.
-extern "C" {
-    static mut next_cr3: u64;
-    /// Pointer to the currently-running process's `FpuState`.
-    /// Written here, read by the timer ISR for FXSAVE (outgoing) and
-    /// FXRSTOR (incoming).  Defined in `context_switch.s`.
-    static mut current_fpu_ptr: u64;
+// Per-CPU fields for next_cr3 and current_fpu_ptr are accessed via
+// gs:[0x10] and gs:[0x18] respectively.  See cpu/per_cpu.rs.
+// No more extern "C" globals — those lived in .data and were single-core only.
+
+/// Helper: read this core's current PID from per-CPU data (GS-relative).
+/// Falls back to CURRENT_PID atomic before per-CPU is initialized.
+#[inline(always)]
+unsafe fn this_core_pid() -> u32 {
+    if crate::cpu::per_cpu::AP_ONLINE_COUNT.load(Ordering::Relaxed) > 0 {
+        crate::cpu::per_cpu::current_pid()
+    } else {
+        CURRENT_PID.load(Ordering::Relaxed)
+    }
+}
+
+/// Helper: set this core's current PID.
+#[inline(always)]
+unsafe fn set_this_core_pid(pid: u32) {
+    CURRENT_PID.store(pid, Ordering::SeqCst); // backward compat
+    if crate::cpu::per_cpu::AP_ONLINE_COUNT.load(Ordering::Relaxed) > 0 {
+        crate::cpu::per_cpu::set_current_pid(pid);
+    }
+}
+
+/// Helper: get sequential core index of the calling CPU (0 = BSP).
+#[inline(always)]
+unsafe fn this_core_index() -> u32 {
+    if crate::cpu::per_cpu::AP_ONLINE_COUNT.load(Ordering::Relaxed) > 0 {
+        crate::cpu::per_cpu::current_core_index()
+    } else {
+        0
+    }
+}
+
+/// Helper: write next_cr3 into per-CPU data for the ISR to read.
+#[inline(always)]
+unsafe fn set_percpu_next_cr3(cr3: u64) {
+    if crate::cpu::per_cpu::AP_ONLINE_COUNT.load(Ordering::Relaxed) > 0 {
+        let pcpu = crate::cpu::per_cpu::current();
+        pcpu.next_cr3 = cr3;
+    }
+}
+
+/// Helper: write current_fpu_ptr into per-CPU data for the ISR to read.
+#[inline(always)]
+unsafe fn set_percpu_fpu_ptr(ptr: u64) {
+    if crate::cpu::per_cpu::AP_ONLINE_COUNT.load(Ordering::Relaxed) > 0 {
+        let pcpu = crate::cpu::per_cpu::current();
+        pcpu.current_fpu_ptr = ptr;
+    }
 }
 
 // PUBLIC INFO SNAPSHOT (allocation-free, for the task manager)
@@ -199,6 +251,7 @@ impl Scheduler {
     pub fn snapshot_processes(&self, out: &mut [ProcessInfo]) -> usize {
         let mut n = 0;
         unsafe {
+            PROCESS_TABLE_LOCK.lock();
             for slot in PROCESS_TABLE.iter() {
                 if n >= out.len() {
                     break;
@@ -218,6 +271,7 @@ impl Scheduler {
                     }
                 }
             }
+            PROCESS_TABLE_LOCK.unlock();
         }
         n
     }
@@ -227,9 +281,9 @@ impl Scheduler {
         LIVE_COUNT.load(Ordering::Relaxed)
     }
 
-    /// Current PID.
+    /// Current PID (on the calling core).
     pub fn current_pid(&self) -> u32 {
-        CURRENT_PID.load(Ordering::Relaxed)
+        unsafe { this_core_pid() }
     }
 
     /// Total scheduler ticks since boot.
@@ -240,18 +294,18 @@ impl Scheduler {
     /// Mutable reference to the current process's fd table.
     ///
     /// # Safety
-    /// Single-threaded; call only with interrupts disabled (e.g. from a syscall handler).
+    /// Call only with interrupts disabled (e.g. from a syscall handler).
     pub unsafe fn current_fd_table_mut(&self) -> &'static mut morpheus_helix::vfs::FdTable {
-        let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+        let pid = this_core_pid() as usize;
         &mut PROCESS_TABLE[pid].as_mut().unwrap().fd_table
     }
 
     /// Mutable reference to the current process descriptor.
     ///
     /// # Safety
-    /// Single-threaded; call only with interrupts disabled (e.g. from a syscall handler).
+    /// Call only with interrupts disabled (e.g. from a syscall handler).
     pub unsafe fn current_process_mut(&self) -> &'static mut Process {
-        let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+        let pid = this_core_pid() as usize;
         PROCESS_TABLE[pid].as_mut().unwrap()
     }
 
@@ -259,9 +313,9 @@ impl Scheduler {
     /// If the current process is a thread, returns the thread group leader. Otherwise,
     /// returns the current process itself.
     /// # Safety
-    /// Single-threaded; call only with interrupts disabled.
+    /// Call only with interrupts disabled.
     pub unsafe fn current_memory_leader_mut(&self) -> &'static mut Process {
-        let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+        let pid = this_core_pid() as usize;
         let mut leader_pid = pid;
         if let Some(p) = PROCESS_TABLE[pid].as_ref() {
             if p.thread_group_leader != 0 {
@@ -273,7 +327,7 @@ impl Scheduler {
 
     /// Returns a mutable reference to the memory leader process by PID.
     /// # Safety
-    /// Single-threaded; call only with interrupts disabled.
+    /// Call only with interrupts disabled.
     pub unsafe fn memory_leader_mut_by_pid(&self, pid: u32) -> Option<&'static mut Process> {
         let p = PROCESS_TABLE.get(pid as usize)?.as_ref()?;
         let leader_pid = if p.thread_group_leader != 0 {
@@ -295,10 +349,22 @@ impl Scheduler {
     /// Send a signal to a process by PID.
     /// Returns `Err` if the PID is not found or not alive.
     pub unsafe fn send_signal(&self, pid: u32, sig: Signal) -> Result<(), &'static str> {
-        let slot = PROCESS_TABLE
+        PROCESS_TABLE_LOCK.lock();
+        let result = self.send_signal_inner(pid, sig);
+        PROCESS_TABLE_LOCK.unlock();
+        result
+    }
+
+    /// Inner send_signal — caller must hold PROCESS_TABLE_LOCK.
+    /// Used by paths already holding the lock (e.g. terminate_process_inner).
+    pub(crate) unsafe fn send_signal_inner(&self, pid: u32, sig: Signal) -> Result<(), &'static str> {
+        let slot = match PROCESS_TABLE
             .get_mut(pid as usize)
             .and_then(|s| s.as_mut())
-            .ok_or("send_signal: PID not found")?;
+        {
+            Some(s) => s,
+            None => return Err("send_signal: PID not found"),
+        };
 
         if slot.is_free() {
             return Err("send_signal: process already terminated");
@@ -340,27 +406,46 @@ impl Scheduler {
 
     /// Set the scheduling priority of a process.
     pub unsafe fn set_priority(&self, pid: u32, priority: u8) -> Result<(), &'static str> {
-        let slot = PROCESS_TABLE
+        PROCESS_TABLE_LOCK.lock();
+        let slot = match PROCESS_TABLE
             .get_mut(pid as usize)
             .and_then(|s| s.as_mut())
-            .ok_or("set_priority: PID not found")?;
+        {
+            Some(s) => s,
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return Err("set_priority: PID not found");
+            }
+        };
         if slot.is_free() {
+            PROCESS_TABLE_LOCK.unlock();
             return Err("set_priority: process terminated");
         }
         slot.priority = priority;
+        PROCESS_TABLE_LOCK.unlock();
         Ok(())
     }
 
     /// Get the scheduling priority of a process.
     pub unsafe fn get_priority(&self, pid: u32) -> Result<u8, &'static str> {
-        let slot = PROCESS_TABLE
+        PROCESS_TABLE_LOCK.lock();
+        let slot = match PROCESS_TABLE
             .get(pid as usize)
             .and_then(|s| s.as_ref())
-            .ok_or("get_priority: PID not found")?;
+        {
+            Some(s) => s,
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return Err("get_priority: PID not found");
+            }
+        };
         if slot.is_free() {
+            PROCESS_TABLE_LOCK.unlock();
             return Err("get_priority: process terminated");
         }
-        Ok(slot.priority)
+        let prio = slot.priority;
+        PROCESS_TABLE_LOCK.unlock();
+        Ok(prio)
     }
 }
 
@@ -369,7 +454,7 @@ impl Scheduler {
 /// Must be called once, after MemoryRegistry, GDT, IDT, and heap are ready.
 ///
 /// # Safety
-/// Single-threaded init; not reentrant(for now).
+/// Single-threaded init; not reentrant.
 pub unsafe fn init_scheduler() {
     if SCHEDULER_READY {
         puts("[SCHED] already initialized\n");
@@ -382,6 +467,7 @@ pub unsafe fn init_scheduler() {
     kernel_proc.set_name("kernel");
     kernel_proc.state = ProcessState::Running;
     kernel_proc.priority = 0; // highest priority
+    kernel_proc.running_on = 0; // running on BSP
 
     // Read the current CR3 — the kernel shares the UEFI identity map.
     let cr3: u64;
@@ -389,18 +475,16 @@ pub unsafe fn init_scheduler() {
     kernel_proc.cr3 = cr3 & 0x000F_FFFF_FFFF_F000;
     KERNEL_CR3 = kernel_proc.cr3;
 
-    // PID 0's kernel stack is the one already in use — we don't allocate a
-    // new one; just leave kernel_stack_top as 0 (unused for the running proc).
-
     PROCESS_TABLE[0] = Some(kernel_proc);
     LIVE_COUNT.store(1, Ordering::SeqCst);
-    CURRENT_PID.store(0, Ordering::SeqCst);
+    set_this_core_pid(0);
     SCHEDULER_READY = true;
 
-    // Point the ISR's FPU save/restore at PID 0's FpuState so the very
+    // Point this core's PerCpu FPU pointer at PID 0's FpuState so the very
     // first timer tick FXSAVE's into the right place.
     if let Some(p) = PROCESS_TABLE[0].as_mut() {
-        current_fpu_ptr = &mut p.fpu_state as *mut super::context::FpuState as u64;
+        let fpu_ptr = &mut p.fpu_state as *mut super::context::FpuState as u64;
+        set_percpu_fpu_ptr(fpu_ptr);
     }
 
     puts("[SCHED] initialized — kernel is PID 0\n");
@@ -422,6 +506,8 @@ pub unsafe fn spawn_kernel_thread(
         return Err("scheduler not initialized");
     }
 
+    PROCESS_TABLE_LOCK.lock();
+
     // Find a free slot.
     let slot_idx = (1..MAX_PROCESSES)
         .find(|&i| {
@@ -430,14 +516,17 @@ pub unsafe fn spawn_kernel_thread(
                 .map(|p| p.is_free())
                 .unwrap_or(true)
         })
-        .ok_or("process table full")?;
+        .ok_or_else(|| {
+            PROCESS_TABLE_LOCK.unlock();
+            "process table full"
+        })?;
 
     let pid = slot_idx as u32;
 
     let mut proc = Process::empty();
     proc.pid = pid;
     proc.set_name(name);
-    proc.parent_pid = CURRENT_PID.load(Ordering::Relaxed);
+    proc.parent_pid = this_core_pid();
     proc.priority = priority;
     proc.state = ProcessState::Ready;
 
@@ -447,7 +536,10 @@ pub unsafe fn spawn_kernel_thread(
     proc.cr3 = cr3 & 0x000F_FFFF_FFFF_F000;
 
     // Allocate a private kernel stack.
-    proc.alloc_kernel_stack()?;
+    if let Err(e) = proc.alloc_kernel_stack() {
+        PROCESS_TABLE_LOCK.unlock();
+        return Err(e);
+    }
 
     // Set up the initial context so the scheduler can `iretq` into entry_fn.
     proc.context = CpuContext::new_kernel_thread(
@@ -468,6 +560,7 @@ pub unsafe fn spawn_kernel_thread(
     PROCESS_TABLE[slot_idx] = Some(proc);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
 
+    PROCESS_TABLE_LOCK.unlock();
     Ok(pid)
 }
 
@@ -479,13 +572,14 @@ pub unsafe fn spawn_kernel_thread(
 /// # Safety
 /// Must be called from within a process context (not the timer ISR itself xD).
 pub unsafe fn exit_process(code: i32) -> ! {
-    let pid = CURRENT_PID.load(Ordering::Relaxed);
+    let pid = this_core_pid();
 
+    PROCESS_TABLE_LOCK.lock();
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
         terminate_process_inner(proc, code);
     }
-    // Re-enable interrupts so the timer ISR can fire and the scheduler
-    // switches away.  We are Zombie — the scheduler will never pick us again.
+    PROCESS_TABLE_LOCK.unlock();
+    // lock released before sti — timer ISR on this core can now safely acquire it
     core::arch::asm!("sti", options(nostack, nomem));
     loop {
         core::arch::asm!("hlt", options(nostack, nomem));
@@ -523,11 +617,15 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
 
 // SCHEDULER TICK (called from timer ISR — Phase 4)
 
-/// Called from the timer ISR (ASM, MS x64 ABI) on every tick.
+/// Called from the timer ISR (ASM, MS x64 ABI) on every tick, on EVERY core.
 ///
 /// Saves the outgoing process context from the ISR stack frame and switches
 /// to the next Ready process.  Returns the `CpuContext` of the next process
 /// so the ISR can restore it via the iretq frame patch.
+///
+/// SMP-safe: acquires PROCESS_TABLE_LOCK, uses per-CPU data for current_pid,
+/// next_cr3, current_fpu_ptr.  Each core independently picks a process
+/// to run, skipping any process already running on another core.
 ///
 /// # Safety
 /// Must only be called from the timer ISR with interrupts disabled.
@@ -535,53 +633,41 @@ unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
 pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static CpuContext {
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // Sample TSC once for the entire tick — used for run-time accounting.
     let now_tsc = crate::cpu::tsc::read_tsc();
+    let core_idx = this_core_index();
 
-    // Auto-present: push back-buffer delta to VRAM on every tick.
-    crate::syscall::handler::fb_present_tick();
+    // BSP-only: auto-present framebuffer and poll PS/2 mouse.
+    // these touch hardware that only the BSP should access.
+    if core_idx == 0 {
+        crate::syscall::handler::fb_present_tick();
+        crate::ps2_mouse::poll();
+    }
 
-    // Poll PS/2 mouse port and accumulate motion into the global mouse state.
-    // This allows mouse input to flow asynchronously without blocking.
-    crate::ps2_mouse::poll();
+    // acquire process table lock
+    PROCESS_TABLE_LOCK.lock();
 
-    let cur_pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+    let cur_pid = this_core_pid() as usize;
 
-    // Was PID 0 in HLT during this quantum?  Read+clear the entry TSC now
-    // so both the accounting block and pick_next can use the result.
+    // idle-donation tracking (BSP only, PID 0 only)
     let hlt_entry = KERNEL_HLT_ENTRY_TSC.swap(0, Ordering::Relaxed);
-    let kernel_was_idle = cur_pid == 0 && hlt_entry != 0;
+    let kernel_was_idle = cur_pid == 0 && hlt_entry != 0 && core_idx == 0;
 
-    // Update the sticky idle flag whenever PID 0 just ran.
-    // • kernel HLT'd  → flag = true  (stays true until kernel does real work)
-    // • kernel active → flag = false (real work arrived; resume fair scheduling)
-    if cur_pid == 0 {
+    if cur_pid == 0 && core_idx == 0 {
         KERNEL_LAST_WAS_IDLE.store(kernel_was_idle, Ordering::Relaxed);
     }
 
-    // Save context of currently running process.
+    // save context of currently running process
     if let Some(Some(cur)) = PROCESS_TABLE.get_mut(cur_pid) {
         cur.context = *current_ctx;
 
-        // Fix SS RPL after saving user-mode context.
-        //
-        // SYSRET loads SS = STAR[63:48]+8 = 0x18 (raw selector WITHOUT
-        // RPL=3).  The CPU internally runs at CPL=3 but the visible SS
-        // selector has RPL=0.  When a timer interrupt saves that value
-        // in the iret frame and we later try to iretq back to ring 3,
-        // the CPU checks RPL(SS) == target CPL and faults with #GP(0x18)
-        // because 0 ≠ 3.  Normalize it here so iretq always succeeds.
+        // fix SS RPL for user-mode processes
         if cur.context.cs & 3 == 3 {
             cur.context.ss |= 3;
         }
 
         cur.cpu_ticks += 1;
 
-        // TSC-based active CPU time.  When the kernel (PID 0) was in HLT we
-        // split the quantum at the HLT entry point so idle time is excluded:
-        //   active_tsc = hlt_entry - run_start_tsc   (real work before HLT)
-        //   idle_tsc   = now_tsc   - hlt_entry       (halted, waiting for IRQ)
-        // All other processes receive the full quantum as active time.
+        // TSC-based accounting
         if kernel_was_idle {
             let active_tsc = hlt_entry.saturating_sub(cur.run_start_tsc);
             let idle_tsc_q = now_tsc.saturating_sub(hlt_entry);
@@ -596,60 +682,64 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         if cur.state == ProcessState::Running {
             cur.state = ProcessState::Ready;
         }
+        // clear running_on — this process is being descheduled
+        cur.running_on = u32::MAX;
     }
 
-    // Deliver any pending signals before picking next process.
+    // signal delivery + sleeper wakeup (any core can do this)
     deliver_pending_signals(cur_pid as u32);
-
-    // Wake any processes whose sleep deadline has expired.
     wake_expired_sleepers();
 
-    // Pick next runnable process.
-    // Use the sticky flag: PID 0 is skipped for as long as its last quantum
-    // ended in HLT.  While compositor mode is active, disable this donation
-    // path so PID 0 keeps a steady cadence for PS/2 polling and wakeups.
+    // pick next process for THIS core
     let compositor_active = crate::syscall::handler::compositor_active();
-    let skip_kernel = if compositor_active {
-        false
+    let skip_kernel = if compositor_active || core_idx != 0 {
+        // APs never run PID 0 (kernel). only BSP runs it.
+        // in compositor mode BSP also doesn't skip PID 0.
+        core_idx != 0
     } else {
         KERNEL_LAST_WAS_IDLE.load(Ordering::Relaxed)
     };
-    let next_pid = pick_next(cur_pid, skip_kernel);
-    CURRENT_PID.store(next_pid as u32, Ordering::SeqCst);
+    let next_pid = pick_next(cur_pid, skip_kernel, core_idx);
+    set_this_core_pid(next_pid as u32);
 
-    if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
+    let result = if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
         next.state = ProcessState::Running;
-        // Record when this quantum began so scheduler_tick can compute active TSC time.
         next.run_start_tsc = now_tsc;
+        next.running_on = core_idx;
 
-        // Update kernel stack pointers for Ring 3 → Ring 0 transitions.
+        // update kernel stack pointers for ring 3 → ring 0 transitions
         if next.kernel_stack_top != 0 {
-            crate::cpu::gdt::set_kernel_stack(next.kernel_stack_top);
-            extern "C" {
-                static mut kernel_syscall_rsp: u64;
+            crate::cpu::gdt::set_kernel_stack_for_core(core_idx, next.kernel_stack_top);
+            // update per-CPU kernel_syscall_rsp
+            if crate::cpu::per_cpu::AP_ONLINE_COUNT.load(Ordering::Relaxed) > 0 {
+                let pcpu = crate::cpu::per_cpu::current();
+                pcpu.kernel_syscall_rsp = next.kernel_stack_top;
             }
-            kernel_syscall_rsp = next.kernel_stack_top;
         }
 
-        // Tell the ISR ASM which CR3 to load before iretq.
+        // tell the ISR ASM which CR3 to load
         if crate::memory::is_valid_cr3(next.cr3) {
-            next_cr3 = next.cr3;
+            set_percpu_next_cr3(next.cr3);
         }
 
-        // Point the ISR's FXRSTOR at the incoming process's FPU area.
-        current_fpu_ptr = &mut next.fpu_state as *mut super::context::FpuState as u64;
+        // point the ISR's FXRSTOR at the incoming process's FPU area
+        let fpu_ptr = &mut next.fpu_state as *mut super::context::FpuState as u64;
+        set_percpu_fpu_ptr(fpu_ptr);
 
         &next.context
     } else {
-        // Fallback: restore current (should not happen if PID 0 is always Ready).
+        // fallback: restore current
         if let Some(Some(cur)) = PROCESS_TABLE.get(cur_pid) {
             &cur.context
         } else {
             panic!("scheduler: no runnable process")
         }
-    }
-}
+    };
 
+    PROCESS_TABLE_LOCK.unlock();
+
+    result
+}
 // USER PROCESS SPAWN
 
 /// Spawn a Ring 3 user thread in the caller's address space.
@@ -671,13 +761,18 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
         return Err("scheduler not initialized");
     }
 
-    let parent_pid = CURRENT_PID.load(Ordering::Relaxed);
+    PROCESS_TABLE_LOCK.lock();
+
+    let parent_pid = this_core_pid();
     let parent = match PROCESS_TABLE
         .get(parent_pid as usize)
         .and_then(|s| s.as_ref())
     {
         Some(p) => p,
-        None => return Err("no current process"),
+        None => {
+            PROCESS_TABLE_LOCK.unlock();
+            return Err("no current process");
+        }
     };
     let parent_cr3 = parent.cr3;
     let parent_mmap_brk = parent.mmap_brk;
@@ -699,14 +794,20 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
                 .map(|p| p.is_free())
                 .unwrap_or(true)
         })
-        .ok_or("process table full")?;
+        .ok_or_else(|| {
+            PROCESS_TABLE_LOCK.unlock();
+            "process table full"
+        })?;
 
     let tid = slot_idx as u32;
 
     PROCESS_TABLE[slot_idx] = Some(Process::empty());
     let thread = PROCESS_TABLE[slot_idx]
         .as_mut()
-        .ok_or("failed to initialize thread slot")?;
+        .ok_or_else(|| {
+            PROCESS_TABLE_LOCK.unlock();
+            "failed to initialize thread slot"
+        })?;
 
     thread.pid = tid;
     thread.set_name("thread");
@@ -722,6 +823,7 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     // Own kernel stack for interrupt/syscall entry from Ring 3.
     if let Err(e) = thread.alloc_kernel_stack() {
         PROCESS_TABLE[slot_idx] = None;
+        PROCESS_TABLE_LOCK.unlock();
         return Err(e);
     }
 
@@ -747,6 +849,7 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     puts("\n");
 
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    PROCESS_TABLE_LOCK.unlock();
     Ok(tid)
 }
 
@@ -796,6 +899,9 @@ pub unsafe fn spawn_user_process(
         "ELF load failed"
     })?;
 
+    // elf loaded, pages allocated. now lock the process table for slot search + write.
+    PROCESS_TABLE_LOCK.lock();
+
     let slot_idx = (1..MAX_PROCESSES)
         .find(|&i| {
             PROCESS_TABLE[i]
@@ -803,20 +909,26 @@ pub unsafe fn spawn_user_process(
                 .map(|p| p.is_free())
                 .unwrap_or(true)
         })
-        .ok_or("process table full")?;
+        .ok_or_else(|| {
+            PROCESS_TABLE_LOCK.unlock();
+            "process table full"
+        })?;
 
     let pid = slot_idx as u32;
 
     let mut proc = Process::empty();
     proc.pid = pid;
     proc.set_name(name);
-    proc.parent_pid = CURRENT_PID.load(Ordering::Relaxed);
+    proc.parent_pid = this_core_pid();
     proc.priority = 128;
     proc.state = ProcessState::Ready;
     proc.cr3 = page_table.pml4_phys;
 
     // Allocate a per-process kernel stack (for interrupts from Ring 3).
-    proc.alloc_kernel_stack()?;
+    if let Err(e) = proc.alloc_kernel_stack() {
+        PROCESS_TABLE_LOCK.unlock();
+        return Err(e);
+    }
 
     // fd inheritance
     if inherit_fds {
@@ -907,6 +1019,8 @@ pub unsafe fn spawn_user_process(
 
     PROCESS_TABLE[slot_idx] = Some(proc);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    PROCESS_TABLE_LOCK.unlock();
     Ok(pid)
 }
 
@@ -920,11 +1034,13 @@ pub unsafe fn spawn_user_process(
 /// # Safety
 /// Must be called from a syscall handler with interrupts disabled.
 pub unsafe fn block_sleep(deadline: u64) -> u64 {
-    let pid = CURRENT_PID.load(Ordering::Relaxed) as usize;
+    let pid = this_core_pid() as usize;
+    PROCESS_TABLE_LOCK.lock();
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid) {
         proc.state = ProcessState::Blocked(BlockReason::Sleep(deadline));
         TIMED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
     }
+    PROCESS_TABLE_LOCK.unlock();
 
     // STI + HLT is atomic on x86: no interrupt window between them.
     // The timer ISR saves our context, switches away, and later resumes us
@@ -943,7 +1059,9 @@ pub unsafe fn block_sleep(deadline: u64) -> u64 {
 /// # Safety
 /// Must be called from a syscall handler with interrupts disabled.
 pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
-    let current = CURRENT_PID.load(Ordering::Relaxed);
+    let current = this_core_pid();
+
+    PROCESS_TABLE_LOCK.lock();
 
     // Validate: does the child exist?
     let (child_parent, child_state) = match PROCESS_TABLE
@@ -951,22 +1069,29 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
         .and_then(|s| s.as_ref())
     {
         Some(p) => (p.parent_pid, p.state),
-        None => return u64::MAX - 3, // ESRCH
+        None => {
+            PROCESS_TABLE_LOCK.unlock();
+            return u64::MAX - 3; // ESRCH
+        }
     };
 
     // Validate: is it actually our child?
     if child_parent != current {
+        PROCESS_TABLE_LOCK.unlock();
         return u64::MAX - 3; // ESRCH
     }
 
     // Already reaped?
     if matches!(child_state, ProcessState::Terminated) {
+        PROCESS_TABLE_LOCK.unlock();
         return u64::MAX - 10; // ECHILD
     }
 
-    // Already zombie? Reap now.
+    // Already zombie? Reap now (under lock — reap_child acquires GLOBAL_REGISTRY).
     if child_state == ProcessState::Zombie {
-        return reap_child(child_pid);
+        let result = reap_child(child_pid);
+        PROCESS_TABLE_LOCK.unlock();
+        return result;
     }
 
     // Block until the child exits.
@@ -975,11 +1100,17 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
         proc.state = ProcessState::Blocked(BlockReason::WaitChild(child_pid));
     }
 
+    PROCESS_TABLE_LOCK.unlock();
+
     // Yield — resume when terminate_process_inner unblocks us.
     core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
 
     // Child should now be Zombie (terminate_process_inner set it).
-    reap_child(child_pid)
+    // re-acquire lock for reap
+    PROCESS_TABLE_LOCK.lock();
+    let result = reap_child(child_pid);
+    PROCESS_TABLE_LOCK.unlock();
+    result
 }
 
 /// Non-blocking wait: reap if zombie, return EAGAIN if still running.
@@ -987,29 +1118,39 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
 /// Returns the exit code if the child was a zombie (reaps it), or
 /// `EAGAIN` (u64::MAX - 11) if the child is still running.
 pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
-    let current = CURRENT_PID.load(Ordering::Relaxed);
+    let current = this_core_pid();
+
+    PROCESS_TABLE_LOCK.lock();
 
     let (child_parent, child_state) = match PROCESS_TABLE
         .get(child_pid as usize)
         .and_then(|s| s.as_ref())
     {
         Some(p) => (p.parent_pid, p.state),
-        None => return u64::MAX - 3, // ESRCH
+        None => {
+            PROCESS_TABLE_LOCK.unlock();
+            return u64::MAX - 3; // ESRCH
+        }
     };
 
     if child_parent != current {
+        PROCESS_TABLE_LOCK.unlock();
         return u64::MAX - 3; // ESRCH
     }
 
     if matches!(child_state, ProcessState::Terminated) {
+        PROCESS_TABLE_LOCK.unlock();
         return u64::MAX - 10; // ECHILD — already reaped
     }
 
     if child_state == ProcessState::Zombie {
-        return reap_child(child_pid);
+        let result = reap_child(child_pid);
+        PROCESS_TABLE_LOCK.unlock();
+        return result;
     }
 
     // Still running — return EAGAIN.
+    PROCESS_TABLE_LOCK.unlock();
     u64::MAX - 11
 }
 
@@ -1041,7 +1182,7 @@ unsafe fn free_process_resources(proc: &mut Process) {
     // free kernel stack
     if proc.kernel_stack_base != 0 && is_registry_initialized() {
         let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);
-        let registry = global_registry_mut();
+        let mut registry = global_registry_mut();
         let _ = registry.free_pages(proc.kernel_stack_base, pages);
         proc.kernel_stack_base = 0;
         proc.kernel_stack_top = 0;
@@ -1050,7 +1191,7 @@ unsafe fn free_process_resources(proc: &mut Process) {
     // Free per-process compositor FB surface (not tracked in VMA table as
     // owned, because sys_map_phys records owns_phys=false).
     if proc.fb_surface_phys != 0 && proc.fb_surface_pages != 0 && is_registry_initialized() {
-        let registry = global_registry_mut();
+        let mut registry = global_registry_mut();
         let _ = registry.free_pages(proc.fb_surface_phys, proc.fb_surface_pages);
         proc.fb_surface_phys = 0;
         proc.fb_surface_pages = 0;
@@ -1063,7 +1204,7 @@ unsafe fn free_process_resources(proc: &mut Process) {
     // Non-owned VMAs (MAP_PHYS / FB_MAP) are skipped — their physical
     // addresses are MMIO or shared memory, not buddy-allocator RAM.
     if is_registry_initialized() {
-        let registry = global_registry_mut();
+        let mut registry = global_registry_mut();
         for (_, vma) in proc.vma_table.iter() {
             if vma.owns_phys {
                 let _ = registry.free_pages(vma.phys, vma.pages);
@@ -1100,7 +1241,7 @@ unsafe fn free_user_page_tables(pml4_phys: u64) {
     if !is_registry_initialized() {
         return;
     }
-    let registry = global_registry_mut();
+    let mut registry = global_registry_mut();
 
     let pml4 = pml4_phys as *const u64;
 
@@ -1184,6 +1325,9 @@ unsafe fn wake_expired_sleepers() {
 /// Round-robin: scan PROCESS_TABLE from `(current+1)..MAX` then wrap.
 /// Returns current if nothing else is runnable.
 ///
+/// SMP-aware: skips any process already `running_on` another core.
+/// APs (core_idx != 0) never pick PID 0 — the kernel runs exclusively on BSP.
+///
 /// When `skip_kernel` is true (kernel just HLT'd), PID 0 is excluded from the
 /// first pass so user processes receive consecutive quanta while the kernel has
 /// nothing to do.  PID 0 remains the hard fallback if no other process is ready.
@@ -1191,59 +1335,68 @@ unsafe fn wake_expired_sleepers() {
 /// Hard floor: even when `skip_kernel` is true, PID 0 is forced to run once
 /// every `MAX_KERNEL_SKIP + 1` quanta via `KERNEL_SKIP_STREAK`.  This prevents
 /// CPU-hungry user processes from starving the kernel entirely.
-unsafe fn pick_next(current: usize, skip_kernel: bool) -> usize {
+unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
     let n = MAX_PROCESSES;
+    let is_bsp = core_idx == 0;
 
-    // Enforce the kernel floor: if we have been skipping PID 0 for too long,
-    // override the skip flag and let PID 0 run unconditionally this quantum.
+    // enforce kernel floor (BSP only)
     let streak = KERNEL_SKIP_STREAK.load(Ordering::Relaxed);
-    let skip_kernel = if skip_kernel && streak >= MAX_KERNEL_SKIP {
+    let skip_kernel = if is_bsp && skip_kernel && streak >= MAX_KERNEL_SKIP {
         KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
-        false // floor hit — must give PID 0 a turn
+        false // floor hit — give PID 0 a turn
     } else {
         skip_kernel
     };
 
-    // First pass: find any ready process, skipping PID 0 if kernel was idle
-    // AND the floor has not yet been reached.
+    // first pass: find any ready process not running on another core
     for delta in 1..=n {
         let candidate = (current + delta) % n;
-        if skip_kernel && candidate == 0 {
+        // APs never touch PID 0. BSP skips it when kernel was idle.
+        if candidate == 0 && (!is_bsp || skip_kernel) {
             continue;
         }
         if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {
+            // already running on another core — hands off
+            if p.running_on != u32::MAX {
+                continue;
+            }
             if p.state == ProcessState::Ready {
-                if candidate == 0 {
-                    // PID 0 selected — reset streak.
-                    KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
-                } else if skip_kernel {
-                    // A user process is taking this quantum; PID 0 is being skipped.
-                    KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
+                if is_bsp {
+                    if candidate == 0 {
+                        KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
+                    } else if skip_kernel {
+                        KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 return candidate;
             }
         }
     }
 
-    // Second pass (fallback): include PID 0 — nothing else was runnable.
-    KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
-    for delta in 1..=n {
-        let candidate = (current + delta) % n;
-        if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {
-            if p.state == ProcessState::Ready {
-                return candidate;
+    // second pass (fallback): include PID 0 (BSP only)
+    if is_bsp {
+        KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
+        for delta in 1..=n {
+            let candidate = (current + delta) % n;
+            if let Some(Some(p)) = PROCESS_TABLE.get(candidate) {
+                if p.running_on != u32::MAX {
+                    continue;
+                }
+                if p.state == ProcessState::Ready {
+                    return candidate;
+                }
             }
         }
     }
 
-    // Nothing else runnable — stay on current.
+    // nothing else runnable — stay on current if it's still alive
     if let Some(Some(p)) = PROCESS_TABLE.get(current) {
         if p.state.is_runnable() {
             return current;
         }
     }
-    // Absolute fallback: PID 0 is always alive.
-    0
+    // absolute fallback: BSP → PID 0 (always alive). AP → current (will HLT).
+    if is_bsp { 0 } else { current }
 }
 
 /// Deliver the highest-priority pending signal to the given PID.
@@ -1314,17 +1467,20 @@ unsafe fn deliver_pending_signals(pid: u32) {
 ///
 /// Called by the keyboard input path after pushing bytes to the stdin buffer.
 pub unsafe fn wake_stdin_waiters() {
+    PROCESS_TABLE_LOCK.lock();
     for proc in PROCESS_TABLE.iter_mut().flatten() {
         if matches!(proc.state, ProcessState::Blocked(BlockReason::StdinRead)) {
             proc.state = ProcessState::Ready;
         }
     }
+    PROCESS_TABLE_LOCK.unlock();
 }
 
 /// Wake all processes blocked on `BlockReason::PipeRead(idx)`.
 ///
 /// Called after writing to a pipe so that blocked readers can proceed.
 pub unsafe fn wake_pipe_readers(pipe_idx: u8) {
+    PROCESS_TABLE_LOCK.lock();
     for proc in PROCESS_TABLE.iter_mut().flatten() {
         if let ProcessState::Blocked(BlockReason::PipeRead(idx)) = proc.state {
             if idx == pipe_idx {
@@ -1332,6 +1488,7 @@ pub unsafe fn wake_pipe_readers(pipe_idx: u8) {
             }
         }
     }
+    PROCESS_TABLE_LOCK.unlock();
 }
 
 /// Wake a process blocked on `BlockReason::InputRead` for the given PID.
@@ -1340,17 +1497,20 @@ pub unsafe fn wake_pipe_readers(pipe_idx: u8) {
 /// child's per-process input buffer.  Only wakes the specific target — no
 /// reason to iterate 64 processes when we know exactly who we're after.
 pub unsafe fn wake_input_reader(pid: u32) {
+    PROCESS_TABLE_LOCK.lock();
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
         if matches!(proc.state, ProcessState::Blocked(BlockReason::InputRead)) {
             proc.state = ProcessState::Ready;
         }
     }
+    PROCESS_TABLE_LOCK.unlock();
 }
 
 /// Wake up to `count` processes blocked on `FutexWait(addr)`.
 ///
 /// Returns number actually woken.  If count == u32::MAX, wakes all.
 pub unsafe fn wake_futex_waiters(addr: u64, count: u32) -> u32 {
+    PROCESS_TABLE_LOCK.lock();
     let mut woken = 0u32;
     for proc in PROCESS_TABLE.iter_mut().flatten() {
         if woken >= count {
@@ -1369,5 +1529,6 @@ pub unsafe fn wake_futex_waiters(addr: u64, count: u32) -> u32 {
             }
         }
     }
+    PROCESS_TABLE_LOCK.unlock();
     woken
 }

@@ -133,7 +133,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
 
     // Allocate physical pages for a temporary read buffer.
     let pages_needed = file_size.div_ceil(4096) as u64;
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     let buf_phys = match registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,
         crate::memory::MemoryType::Allocated,

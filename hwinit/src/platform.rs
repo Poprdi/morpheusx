@@ -20,7 +20,7 @@ use crate::memory::{
 use crate::paging::init_kernel_page_table;
 use crate::pci::{offset, pci_cfg_read16, pci_cfg_write16, PciAddr};
 use crate::process::scheduler::init_scheduler;
-use crate::serial::{put_hex32, put_hex64, puts};
+use crate::serial::{checkpoint, put_hex32, put_hex64, puts};
 use crate::syscall::init_syscall;
 
 // CONSTANTS
@@ -261,111 +261,163 @@ pub unsafe fn platform_init_selfcontained(
     put_hex64(boot_stack_top);
     puts("\n");
 
-    let registry = global_registry_mut();
-
     // phase 2: cpu
     puts("[HWINIT] Phase 2: CPU state\n");
+    checkpoint("phase2-begin");
 
-    // Allocate kernel stack
-    let kernel_stack_pages = KERNEL_STACK_SIZE.div_ceil(4096) as u64;
-    let kernel_stack_base = registry
-        .allocate_pages(
-            AllocateType::AnyPages,
-            MemoryType::LoaderData,
-            kernel_stack_pages,
-        )
-        .map_err(|_| InitError::NoFreeMemory)?;
-    let kernel_stack_top = kernel_stack_base + KERNEL_STACK_SIZE as u64;
+    // Allocate kernel stack inside a narrow scope so GLOBAL_REGISTRY
+    // is released before any subsequent init that also calls global_registry_mut().
+    // holding a SpinLock guard across a callsite that re-acquires the same
+    // lock is a guaranteed deadlock.
+    let kernel_stack_top = {
+        let mut registry = global_registry_mut();
+        let kernel_stack_pages = KERNEL_STACK_SIZE.div_ceil(4096) as u64;
+        let kernel_stack_base = registry
+            .allocate_pages(
+                AllocateType::AnyPages,
+                MemoryType::LoaderData,
+                kernel_stack_pages,
+            )
+            .map_err(|_| InitError::NoFreeMemory)?;
+        kernel_stack_base + KERNEL_STACK_SIZE as u64
+    }; // registry dropped here — GLOBAL_REGISTRY unlocked
 
     // Load our GDT with TSS
     // IST1 lives in BSS. one less thing to allocate.
+    checkpoint("phase2-gdt");
     init_gdt(kernel_stack_top);
 
+    checkpoint("phase2-idt");
     init_idt();
 
+    checkpoint("phase2-sse");
     enable_sse();
+
+    // Initialize BSP per-CPU data before anything touches gs:[offset].
+    // Must happen after GDT (for segment state) but before scheduler and
+    // interrupt handlers that rely on GS-relative per-CPU fields.
+    checkpoint("phase2-lapic-probe");
+    {
+        use crate::cpu::{apic, per_cpu};
+
+        // probe the actual LAPIC base from MSR 0x1B. firmware can relocate it.
+        let actual_base = apic::probe_lapic_base();
+
+        // LAPIC MMIO is identity-mapped by UEFI. safe to read before paging init.
+        let bsp_lapic_id = unsafe { apic::read_lapic_id() };
+        checkpoint("phase2-percpu-init");
+        per_cpu::init_bsp(bsp_lapic_id, actual_base);
+        checkpoint("phase2-percpu-done");
+    }
 
     // phase 3: interrupts
     puts("[HWINIT] Phase 3: PIC\n");
+    checkpoint("phase3-pic");
 
     init_pic();
+    checkpoint("phase3-done");
 
     // phase 4: heap
     puts("[HWINIT] Phase 4: Heap\n");
+    checkpoint("phase4-heap-begin");
 
-    // init_heap allocates from registry itself
+    // init_heap allocates from registry itself.
+    // GLOBAL_REGISTRY is NOT held here — the kernel stack was allocated
+    // in a scoped block above and the guard was dropped before this callsite.
     if let Err(e) = init_heap(HEAP_SIZE) {
         puts("[HWINIT] ERROR: heap init failed: ");
         puts(e);
         puts("\n");
         return Err(InitError::NoFreeMemory);
     }
+    checkpoint("phase4-heap-done");
 
     // phase 5: tsc
     puts("[HWINIT] Phase 5: TSC\n");
+    checkpoint("phase5-tsc-calibrate");
 
     let tsc_freq = calibrate_tsc_pit();
     if tsc_freq == 0 {
         return Err(InitError::TscCalibrationFailed);
     }
 
+    checkpoint("phase5-done");
     crate::process::scheduler::set_tsc_frequency(tsc_freq);
 
     // phase 6: dma
     puts("[HWINIT] Phase 6: DMA\n");
+    checkpoint("phase6-dma-alloc");
 
     let dma_pages = DMA_SIZE.div_ceil(4096) as u64;
-    let dma_phys = registry
-        .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedDma, dma_pages)
-        .map_err(|_| InitError::NoFreeMemory)?;
+    let dma_phys = {
+        let mut dma_reg = global_registry_mut();
+        dma_reg
+            .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedDma, dma_pages)
+            .map_err(|_| InitError::NoFreeMemory)?
+    };
 
     // zero DMA region. VirtIO checks avail->idx on enable and garbage there
     // permanently desyncs the driver. found that one the hard way.
     core::ptr::write_bytes(dma_phys as *mut u8, 0u8, DMA_SIZE);
+    checkpoint("phase6-done");
 
     // identity-mapped: VA = PA = bus address
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);
 
     // phase 7: pci
     puts("[HWINIT] Phase 7: PCI\n");
+    checkpoint("phase7-pci-begin");
 
     enable_all_pci_devices();
+    checkpoint("phase7-done");
 
     // phase 8: paging
     puts("[HWINIT] Phase 8: Paging\n");
+    checkpoint("phase8-paging-begin");
 
     init_kernel_page_table();
+    checkpoint("phase8-paging-done");
+
+    // Now that paging is initialized, map LAPIC MMIO as uncacheable
+    // and fully enable the BSP's LAPIC hardware.
+    checkpoint("phase8-lapic-init");
+    crate::cpu::apic::init_bsp();
+    checkpoint("phase8-done");
 
     // phase 9: scheduler
     puts("[HWINIT] Phase 9: Scheduler\n");
+    checkpoint("phase9-scheduler");
 
     init_scheduler();
+    checkpoint("phase9-done");
 
     // phase 10: syscalls
     puts("[HWINIT] Phase 10: Syscalls\n");
+    checkpoint("phase10-syscall");
 
     init_syscall();
+    checkpoint("phase10-syscall-done");
 
-    // PIT @ ~100 Hz for preemptive scheduling
-    {
-        use crate::cpu::pio::outb;
-        const PIT_DIVISOR: u32 = 11931; // ~100 Hz
-        outb(0x43, 0x36); // channel 0, lo/hi, mode 3
-        outb(0x40, (PIT_DIVISOR & 0xFF) as u8);
-        outb(0x40, ((PIT_DIVISOR >> 8) & 0xFF) as u8);
-    }
+    // Disable PIC — all interrupts flow through LAPIC now.
+    checkpoint("phase10-pic-disable");
+    crate::cpu::apic::disable_pic8259();
 
-    // timer ISR → IDT vector 0x20 (PIC IRQ 0)
+    // LAPIC timer @ ~100 Hz for preemptive scheduling.
+    // calibrates against PIT channel 2 (doesn't need PIC IRQ).
+    checkpoint("phase10-lapic-timer");
+    crate::cpu::apic::setup_timer(100);
+    checkpoint("phase10-lapic-timer-done");
+
+    // timer ISR → IDT vector 0x20 (same vector the PIT used, now LAPIC-sourced)
     extern "C" {
         fn irq_timer_isr();
     }
     set_interrupt_handler(0x20, irq_timer_isr as u64, 0, 0);
 
-    // Enable IRQ 0 (PIT timer) via PIC.
-    use crate::cpu::pic::enable_irq;
-    enable_irq(0); // PIT
     use crate::cpu::idt::enable_interrupts;
+    checkpoint("phase10-sti");
     enable_interrupts(); // here we go
+    checkpoint("phase10-done");
 
     // phase 10.5: reclaim UEFI BootServices RAM
     //
@@ -378,6 +430,7 @@ pub unsafe fn platform_init_selfcontained(
     // and the very next instruction that triggers a TLB miss will #GP or #PF.
     // Collect them first, sort, and pass as an exclusion set.
     puts("[HWINIT] Phase 10.5: Reclaiming UEFI BootServices RAM\n");
+    checkpoint("phase10.5-reclaim-begin");
     {
         let (mut pt_pages, pt_count) = crate::paging::collect_page_table_pages();
 
@@ -392,39 +445,33 @@ pub unsafe fn platform_init_selfcontained(
             pt_pages[j] = key;
         }
 
-        let reg = global_registry_mut();
+        let mut reg = global_registry_mut();
         reg.reclaim_boot_services(&pt_pages[..pt_count]);
         reg.validate_free_lists();
     }
-    // Re-lock page-table pages that lived in BootServices address space.
-    // reclaim_boot_services already excluded them via hw_holes, so this
-    // is purely belt-and-suspenders — carve_block will no-op for pages
-    // that were never added to the buddy.
-    //
-    // NOTE: reserve_page_table_pages uses allocate_pages(Address(...))
-    // which calls carve_block.  This is SAFE because we already cleared
-    // CR0.WP in Phase 1 and the PT pages were hole-punched during both
-    // import and reclaim.  Splits won't produce spares at PT addresses.
+    checkpoint("phase10.5-reserve-pt");
     crate::paging::reserve_page_table_pages();
+    checkpoint("phase10.5-done");
 
     // phase 11: filesystem
     puts("[HWINIT] Phase 11: HelixFS\n");
-
+    checkpoint("phase11-fs-alloc");
     {
         const ROOT_FS_SIZE: usize = 16 * 1024 * 1024; // 16 MB
         let root_fs_pages = (ROOT_FS_SIZE / 4096) as u64;
-        let registry = global_registry_mut();
-        let root_fs_base = registry
-            .allocate_pages(
-                AllocateType::AnyPages,
-                MemoryType::LoaderData,
-                root_fs_pages,
-            )
-            .map_err(|_| InitError::NoFreeMemory)?;
-
-        // Zero the region.
+        let root_fs_base = {
+            let mut registry = global_registry_mut();
+            registry
+                .allocate_pages(
+                    AllocateType::AnyPages,
+                    MemoryType::LoaderData,
+                    root_fs_pages,
+                )
+                .map_err(|_| InitError::NoFreeMemory)?
+        };
+        checkpoint("phase11-fs-zero");
         core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
-
+        checkpoint("phase11-fs-mount");
         match morpheus_helix::vfs::global::init_root_fs(root_fs_base as *mut u8, ROOT_FS_SIZE) {
             Ok(()) => puts("[HWINIT]   HelixFS mounted at /\n"),
             Err(_) => {
@@ -433,13 +480,56 @@ pub unsafe fn platform_init_selfcontained(
             }
         }
     }
+    checkpoint("phase11-done");
 
-    // Set initial kernel_syscall_rsp for PID 0.
+    // Set initial kernel_syscall_rsp for PID 0 via per-CPU data.
+    // The syscall entry point reads this from gs:[0x20].
     {
-        extern "C" {
-            static mut kernel_syscall_rsp: u64;
+        let pcpu = crate::cpu::per_cpu::current();
+        pcpu.kernel_syscall_rsp = kernel_stack_top;
+    }
+
+    // phase 12: SMP — bring up Application Processors
+    puts("[HWINIT] Phase 12: SMP\n");
+    checkpoint("phase12-smp-begin");
+
+    {
+        use crate::cpu::{acpi, apic, ap_boot, per_cpu};
+
+        let bsp_lapic_id = apic::read_lapic_id();
+        checkpoint("phase12-madt-scan");
+
+        // try ACPI MADT first — gives us the exact set of enabled LAPIC IDs.
+        // no brute-force, no ghost timeouts, no wasted stacks.
+        let madt_result = acpi::discover_ap_lapic_ids(bsp_lapic_id);
+        checkpoint("phase12-madt-done");
+
+        if madt_result.count > 0 {
+            per_cpu::set_cpu_count(madt_result.count as u32 + 1); // +1 for BSP
+            checkpoint("phase12-start-aps-madt");
+            ap_boot::start_aps_from_list(&madt_result.ids[..madt_result.count]);
+        } else {
+            // fallback: CPUID-based count + brute-force LAPIC ID enumeration.
+            // works but slow on sparse topologies.
+            let cpu_count = apic::detect_cpu_count();
+            per_cpu::set_cpu_count(cpu_count);
+
+            puts("[SMP] CPUID fallback: ");
+            put_hex32(cpu_count);
+            puts(" CPUs\n");
+
+            if cpu_count > 1 {
+                checkpoint("phase12-start-aps-cpuid");
+                ap_boot::start_aps();
+            } else {
+                puts("[SMP] single-core — no APs to start\n");
+            }
         }
-        kernel_syscall_rsp = kernel_stack_top;
+
+        checkpoint("phase12-smp-done");
+        puts("[SMP] ");
+        put_hex32(per_cpu::AP_ONLINE_COUNT.load(core::sync::atomic::Ordering::Relaxed));
+        puts(" cores online\n");
     }
 
     // DONE - Machine is sane

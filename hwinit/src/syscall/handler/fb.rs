@@ -55,7 +55,9 @@ pub unsafe fn release_fb_lock_if_holder(pid: u32) {
         use crate::process::scheduler::PROCESS_TABLE;
         for proc in PROCESS_TABLE.iter().flatten() {
             if !proc.is_free() && proc.pid != pid && proc.fb_surface_phys != 0 {
-                let _ = SCHEDULER.send_signal(proc.pid, crate::process::signals::Signal::SIGKILL);
+                // use send_signal_inner — we're already under PROCESS_TABLE_LOCK
+                // (called from terminate_process_inner which holds the lock)
+                let _ = SCHEDULER.send_signal_inner(proc.pid, crate::process::signals::Signal::SIGKILL);
             }
         }
         COMPOSITOR_PID = 0;
@@ -154,7 +156,7 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
 
     // Allocate physical pages for the surface.
     let pages = info.size.div_ceil(4096);
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     let phys = match registry.allocate_pages(
         crate::memory::AllocateType::AnyPages,
         crate::memory::MemoryType::Allocated,
@@ -186,7 +188,7 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
 /// Allocate back + shadow buffers, copy VRAM content into both.
 unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
     let pages = info.size.div_ceil(4096);
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
 
     // allocate_pages handles CR3 switching internally.
     let back_phys = registry

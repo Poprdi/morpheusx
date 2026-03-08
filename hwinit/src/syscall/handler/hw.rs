@@ -118,7 +118,7 @@ pub unsafe fn sys_dma_alloc(pages: u64) -> u64 {
     if !crate::memory::is_registry_initialized() {
         return ENOMEM;
     }
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     match registry.alloc_dma_pages(pages) {
         Ok(addr) => {
             // Zero the memory for security.
@@ -139,7 +139,7 @@ pub unsafe fn sys_dma_free(phys: u64, pages: u64) -> u64 {
     if !crate::memory::is_registry_initialized() {
         return ENOMEM;
     }
-    let registry = crate::memory::global_registry_mut();
+    let mut registry = crate::memory::global_registry_mut();
     match registry.free_pages(phys, pages) {
         Ok(()) => 0,
         Err(_) => EINVAL,

@@ -1222,8 +1222,11 @@ fn pages_to_order(pages: u64) -> usize {
 
 // GLOBAL REGISTRY
 
-static mut GLOBAL_REGISTRY: MemoryRegistry = MemoryRegistry::new();
-static mut REGISTRY_INITIALIZED: bool = false;
+use crate::sync::{SpinLock, SpinLockGuard};
+
+static GLOBAL_REGISTRY: SpinLock<MemoryRegistry> = SpinLock::new(MemoryRegistry::new());
+static REGISTRY_INITIALIZED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 /// Parse and ingest the UEFI memory map into the global registry.
 ///
@@ -1240,11 +1243,11 @@ pub unsafe fn init_global_registry(
     exclude_pages: u64,
     hw_holes: &[u64],
 ) {
-    if REGISTRY_INITIALIZED {
+    if REGISTRY_INITIALIZED.load(core::sync::atomic::Ordering::Relaxed) {
         puts("[MEM] WARNING: registry already initialized!\n");
         return;
     }
-    GLOBAL_REGISTRY.import_uefi_map(
+    GLOBAL_REGISTRY.lock().import_uefi_map(
         map_ptr,
         map_size,
         descriptor_size,
@@ -1253,20 +1256,22 @@ pub unsafe fn init_global_registry(
         exclude_pages,
         hw_holes,
     );
-    REGISTRY_INITIALIZED = true;
+    REGISTRY_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
 }
 
-/// # Safety: bare-metal, single-threaded.
-pub unsafe fn global_registry() -> &'static MemoryRegistry {
-    &GLOBAL_REGISTRY
+/// Acquire the global memory registry (immutable access through lock guard).
+/// # Safety: lock is held for the lifetime of the returned guard.
+pub unsafe fn global_registry() -> SpinLockGuard<'static, MemoryRegistry> {
+    GLOBAL_REGISTRY.lock()
 }
-/// # Safety: bare-metal, single-threaded.
-pub unsafe fn global_registry_mut() -> &'static mut MemoryRegistry {
-    &mut GLOBAL_REGISTRY
+/// Acquire the global memory registry (mutable access through lock guard).
+/// # Safety: lock is held for the lifetime of the returned guard.
+pub unsafe fn global_registry_mut() -> SpinLockGuard<'static, MemoryRegistry> {
+    GLOBAL_REGISTRY.lock()
 }
 
 pub fn is_registry_initialized() -> bool {
-    unsafe { REGISTRY_INITIALIZED }
+    REGISTRY_INITIALIZED.load(core::sync::atomic::Ordering::Acquire)
 }
 
 // LEGACY COMPATIBILITY SHIMS

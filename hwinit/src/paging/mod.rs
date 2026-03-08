@@ -8,10 +8,12 @@ pub use entry::{PageFlags, PageTable, PageTableEntry};
 pub use table::{MappedPageSize, PageTableManager, VirtAddr};
 
 use crate::serial::puts;
+use crate::sync::SpinLock;
 
-// kernel page table singleton
-static mut KERNEL_PT: Option<PageTableManager> = None;
-static mut PAGING_INITIALIZED: bool = false;
+// kernel page table singleton — SMP-safe via SpinLock
+static KERNEL_PT: SpinLock<Option<PageTableManager>> = SpinLock::new(None);
+static PAGING_INITIALIZED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 /// Initialize the kernel page table manager by reading the current CR3.
 ///
@@ -21,7 +23,7 @@ static mut PAGING_INITIALIZED: bool = false;
 /// - Must run in long mode with paging active.
 /// - Must be called exactly once.
 pub unsafe fn init_kernel_page_table() {
-    if PAGING_INITIALIZED {
+    if PAGING_INITIALIZED.load(core::sync::atomic::Ordering::Relaxed) {
         puts("[PAGING] already initialized — skipping\n");
         return;
     }
@@ -44,44 +46,40 @@ pub unsafe fn init_kernel_page_table() {
         puts("[PAGING] cleared CR0.WP — kernel owns page tables\n");
     }
 
-    KERNEL_PT = Some(mgr);
-    PAGING_INITIALIZED = true;
+    *KERNEL_PT.lock() = Some(mgr);
+    PAGING_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
 }
 
 /// Returns true if the kernel page table has been initialized.
 pub fn is_paging_initialized() -> bool {
-    unsafe { PAGING_INITIALIZED }
+    PAGING_INITIALIZED.load(core::sync::atomic::Ordering::Acquire)
 }
 
-/// Borrow the kernel `PageTableManager` (immutable).
+/// Get the kernel PML4 physical address (for cloning into user page tables).
 ///
 /// # Safety
-/// Must only be called after `init_kernel_page_table()`.
-pub unsafe fn kernel_page_table() -> &'static PageTableManager {
+/// Must be called after init_kernel_page_table().
+pub unsafe fn kernel_pml4_phys() -> u64 {
     KERNEL_PT
+        .lock()
         .as_ref()
         .expect("kernel page table not initialized")
-}
-
-/// Borrow the kernel `PageTableManager` (mutable).
-///
-/// # Safety
-/// Must only be called after `init_kernel_page_table()`.  Caller is
-/// responsible for serializing access (single-threaded kernel is fine).
-pub unsafe fn kernel_page_table_mut() -> &'static mut PageTableManager {
-    KERNEL_PT
-        .as_mut()
-        .expect("kernel page table not initialized")
+        .pml4_phys
 }
 
 // CONVENIENCE WRAPPERS
+// each acquires the KERNEL_PT lock for the duration of the operation
 
 /// Map a single 4 KiB page in the kernel page table.
 ///
 /// # Safety
 /// See [`PageTableManager::map_4k`].
 pub unsafe fn kmap_4k(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'static str> {
-    kernel_page_table_mut().map_4k(virt, phys, flags)
+    KERNEL_PT
+        .lock()
+        .as_mut()
+        .expect("kernel page table not initialized")
+        .map_4k(virt, phys, flags)
 }
 
 /// Map a 2 MiB huge page in the kernel page table.
@@ -89,7 +87,11 @@ pub unsafe fn kmap_4k(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'st
 /// # Safety
 /// See [`PageTableManager::map_2m`].
 pub unsafe fn kmap_2m(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'static str> {
-    kernel_page_table_mut().map_2m(virt, phys, flags)
+    KERNEL_PT
+        .lock()
+        .as_mut()
+        .expect("kernel page table not initialized")
+        .map_2m(virt, phys, flags)
 }
 
 /// Unmap a 4 KiB page from the kernel page table.
@@ -97,7 +99,11 @@ pub unsafe fn kmap_2m(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'st
 /// # Safety
 /// See [`PageTableManager::unmap_4k`].
 pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
-    kernel_page_table_mut().unmap_4k(virt)
+    KERNEL_PT
+        .lock()
+        .as_mut()
+        .expect("kernel page table not initialized")
+        .unmap_4k(virt)
 }
 
 /// Translate a virtual address to physical using the kernel page table.
@@ -107,7 +113,11 @@ pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
 /// # Safety
 /// See [`PageTableManager::translate`].
 pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
-    kernel_page_table().translate(virt)
+    KERNEL_PT
+        .lock()
+        .as_ref()
+        .expect("kernel page table not initialized")
+        .translate(virt)
 }
 
 /// Split any huge pages along the path to `virt` in the kernel page table
@@ -116,7 +126,11 @@ pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
 /// # Safety
 /// See [`PageTableManager::ensure_4k_mappable`].
 pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
-    kernel_page_table_mut().ensure_4k_mappable(virt)
+    KERNEL_PT
+        .lock()
+        .as_mut()
+        .expect("kernel page table not initialized")
+        .ensure_4k_mappable(virt)
 }
 
 /// Identity-map a physical MMIO region with UC flags in the kernel page table.
@@ -127,7 +141,11 @@ pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
 /// # Safety
 /// See [`PageTableManager::map_mmio`].
 pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
-    kernel_page_table_mut().map_mmio(phys, size)
+    KERNEL_PT
+        .lock()
+        .as_mut()
+        .expect("kernel page table not initialized")
+        .map_mmio(phys, size)
 }
 
 /// Mark the leaf page table entry covering `virt` as uncacheable (UC).
@@ -138,7 +156,11 @@ pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
 /// # Safety
 /// See [`PageTableManager::mark_uncacheable`].
 pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
-    kernel_page_table_mut().mark_uncacheable(virt)
+    KERNEL_PT
+        .lock()
+        .as_mut()
+        .expect("kernel page table not initialized")
+        .mark_uncacheable(virt)
 }
 
 // PAGE TABLE RESERVATION
@@ -253,7 +275,7 @@ pub unsafe fn reserve_page_table_pages() -> usize {
 
     let (pt_pages, pt_count) = collect_page_table_pages();
 
-    let registry = global_registry_mut();
+    let mut registry = global_registry_mut();
     let mut reserved = 0usize;
 
     for &phys in pt_pages.iter().take(pt_count) {

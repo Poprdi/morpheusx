@@ -614,7 +614,7 @@ unsafe fn alloc_table() -> Result<u64, &'static str> {
     if !is_registry_initialized() {
         return Err("cannot allocate page table: registry not initialized");
     }
-    let registry = global_registry_mut();
+    let mut registry = global_registry_mut();
     registry
         .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedPageTable, 1)
         .inspect(|&phys| {

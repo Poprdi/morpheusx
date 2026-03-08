@@ -297,8 +297,7 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
 /// This gives the user process visibility of kernel memory (without USER bit),
 /// ensuring interrupts and syscalls work in the user address space.
 unsafe fn clone_kernel_mappings(dst: &mut PageTableManager) -> Result<(), ElfError> {
-    let kernel_pt = crate::paging::kernel_page_table();
-    let src_pml4 = kernel_pt.pml4_phys as *const crate::paging::entry::PageTable;
+    let src_pml4 = crate::paging::kernel_pml4_phys() as *const crate::paging::entry::PageTable;
     let dst_pml4 = dst.pml4_phys as *mut crate::paging::entry::PageTable;
 
     core::ptr::copy_nonoverlapping(

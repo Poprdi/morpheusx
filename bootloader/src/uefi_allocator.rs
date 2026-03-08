@@ -220,7 +220,7 @@ unsafe fn try_init_overflow() -> Option<OverflowState> {
         return None;
     }
 
-    let registry = morpheus_hwinit::global_registry_mut();
+    let mut registry = morpheus_hwinit::global_registry_mut();
     let pages = (OVERFLOW_GROW_CHUNK as u64).div_ceil(morpheus_hwinit::PAGE_SIZE);
 
     match registry.allocate_pages(
@@ -269,7 +269,7 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
     // linked_list_allocator::Heap::extend() can merge them into the free list.
     let extend_addr = state.base + state.size as u64;
 
-    let registry = morpheus_hwinit::global_registry_mut();
+    let mut registry = morpheus_hwinit::global_registry_mut();
     match registry.allocate_pages(
         morpheus_hwinit::AllocateType::Address(extend_addr),
         morpheus_hwinit::MemoryType::AllocatedHeap,

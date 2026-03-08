@@ -219,6 +219,12 @@ pub struct Process {
     pub input_head: u8,
     /// Read cursor (child advances this).
     pub input_tail: u8,
+
+    // SMP: which core is currently executing this process
+    /// Sequential core index (0=BSP) that is currently running this process,
+    /// or u32::MAX if the process is not on any core.  Prevents two cores
+    /// from scheduling the same process simultaneously.
+    pub running_on: u32,
 }
 
 impl Process {
@@ -267,6 +273,7 @@ impl Process {
             input_buf: [0u8; 256],
             input_head: 0,
             input_tail: 0,
+            running_on: u32::MAX, // not running on any core
         }
     }
 
@@ -315,7 +322,7 @@ impl Process {
             return Err("MemoryRegistry not ready");
         }
         let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);
-        let registry = global_registry_mut();
+        let mut registry = global_registry_mut();
         let base = registry
             .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedStack, pages)
             .map_err(|_| "failed to allocate kernel stack")?;
