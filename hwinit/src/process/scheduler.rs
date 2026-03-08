@@ -741,18 +741,6 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     result
 }
 // USER PROCESS SPAWN
-
-/// Spawn a Ring 3 user thread in the caller's address space.
-///
-/// Shares the parent's CR3 (same page tables, same heap, same mmap state).
-/// Gets its own kernel stack, its own slot in PROCESS_TABLE, and starts
-/// execution at `entry` with `rdi = arg` and `rsp = stack_top`.
-///
-/// The caller must provide a valid, mapped user stack.  Use SYS_MMAP to
-/// allocate one before calling this.
-///
-/// I had fun with this.
-///
 /// Returns the new thread's PID (which also serves as the TID).
 pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<u32, &'static str> {
     use crate::cpu::gdt::{USER_CS, USER_DS};

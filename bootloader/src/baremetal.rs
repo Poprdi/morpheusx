@@ -264,6 +264,8 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         descriptor_version: DESC_VER,
         image_base,
         image_pages,
+        stack_base,
+        stack_pages: STACK_PAGES as u64,
     };
 
     let platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {
