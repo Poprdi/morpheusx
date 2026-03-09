@@ -3,7 +3,8 @@
 
 extern crate alloc;
 
-use libmorpheus::{compositor as compsys, entry, hw, process};
+use libmorpheus::{compositor as compsys, entry, hw};
+// process::yield_cpu() intentionally disabled for diagnostics — see end of loop
 
 mod messages;
 mod islands;
@@ -40,6 +41,7 @@ fn main() -> i32 {
         // compose if any surface is mapped (or always, to show desktop)
         islands::renderer::compose(&mut state);
 
-        process::yield_cpu();
+        // DIAGNOSTIC: yield removed. if desktop appears, the bug is a race or context-switch issue.
+        // process::yield_cpu();
     }
 }
