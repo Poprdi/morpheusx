@@ -1,7 +1,6 @@
 use crate::islands::{
-    ShellState, PANEL_H, LAUNCHER_W, LAUNCHER_H, ICON_SIZE,
-    LAUNCHER_BG_RGB, START_RGB, ICON_BG_RGB, ICON_INNER_RGB,
-    raw_fill, draw_text,
+    draw_text, raw_fill, ShellState, ICON_BG_RGB, ICON_INNER_RGB, ICON_SIZE, LAUNCHER_BG_RGB,
+    LAUNCHER_H, LAUNCHER_W, PANEL_H, START_RGB,
 };
 use libmorpheus::{io, process};
 
@@ -17,23 +16,76 @@ pub fn tick(state: &mut ShellState) {
     // launcher background
     let (lr, lg, lb) = LAUNCHER_BG_RGB;
     let launcher_bg = state.pack(lr, lg, lb);
-    raw_fill(state.surface_ptr, state.fb_stride, lx, ly, LAUNCHER_W, LAUNCHER_H, launcher_bg);
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        lx,
+        ly,
+        LAUNCHER_W,
+        LAUNCHER_H,
+        launcher_bg,
+    );
 
     // launcher title bar
     let (sr, sg, sb) = START_RGB;
     let title_bg = state.pack(sr, sg, sb);
-    raw_fill(state.surface_ptr, state.fb_stride, lx, ly, LAUNCHER_W, 24, title_bg);
-    draw_text(state, lx + 8, ly + 4, "Launcher", (255, 255, 255), START_RGB);
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        lx,
+        ly,
+        LAUNCHER_W,
+        24,
+        title_bg,
+    );
+    draw_text(
+        state,
+        lx + 8,
+        ly + 4,
+        "Launcher",
+        (255, 255, 255),
+        START_RGB,
+    );
 
     // shell icon
     let icon_x = lx + 16;
     let icon_y = ly + 40;
     let (ir, ig, ib) = ICON_BG_RGB;
-    raw_fill(state.surface_ptr, state.fb_stride, icon_x, icon_y, ICON_SIZE, ICON_SIZE, state.pack(ir, ig, ib));
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        icon_x,
+        icon_y,
+        ICON_SIZE,
+        ICON_SIZE,
+        state.pack(ir, ig, ib),
+    );
     let (iir, iig, iib) = ICON_INNER_RGB;
-    raw_fill(state.surface_ptr, state.fb_stride, icon_x + 8, icon_y + 10, ICON_SIZE - 16, ICON_SIZE - 20, state.pack(iir, iig, iib));
-    draw_text(state, icon_x + 17, icon_y + 20, ">_", (255, 255, 255), ICON_INNER_RGB);
-    draw_text(state, icon_x, icon_y + ICON_SIZE + 8, "Shell", (230, 230, 230), LAUNCHER_BG_RGB);
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        icon_x + 8,
+        icon_y + 10,
+        ICON_SIZE - 16,
+        ICON_SIZE - 20,
+        state.pack(iir, iig, iib),
+    );
+    draw_text(
+        state,
+        icon_x + 17,
+        icon_y + 20,
+        ">_",
+        (255, 255, 255),
+        ICON_INNER_RGB,
+    );
+    draw_text(
+        state,
+        icon_x,
+        icon_y + ICON_SIZE + 8,
+        "Shell",
+        (230, 230, 230),
+        LAUNCHER_BG_RGB,
+    );
 
     state.launcher_dirty = false;
 }
@@ -44,8 +96,10 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
     let panel_y = state.fb_h.saturating_sub(PANEL_H) as i32;
 
     // check START button click
-    if my >= panel_y && my < panel_y + PANEL_H as i32
-        && mx >= 0 && mx < crate::islands::START_BTN_W as i32
+    if my >= panel_y
+        && my < panel_y + PANEL_H as i32
+        && mx >= 0
+        && mx < crate::islands::START_BTN_W as i32
     {
         state.launcher_open = !state.launcher_open;
         state.launcher_dirty = true;
@@ -64,8 +118,10 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
         let icon_x = lx + 16;
         let icon_y = ly + 40;
 
-        if mx >= icon_x && mx < icon_x + ICON_SIZE as i32
-            && my >= icon_y && my < icon_y + ICON_SIZE as i32 + 24
+        if mx >= icon_x
+            && mx < icon_x + ICON_SIZE as i32
+            && my >= icon_y
+            && my < icon_y + ICON_SIZE as i32 + 24
         {
             // spawn shell
             match process::spawn("/bin/msh") {
@@ -85,9 +141,7 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
         }
 
         // click inside launcher but not on icon — consume it
-        if mx >= lx && mx < lx + LAUNCHER_W as i32
-            && my >= ly && my < ly + LAUNCHER_H as i32
-        {
+        if mx >= lx && mx < lx + LAUNCHER_W as i32 && my >= ly && my < ly + LAUNCHER_H as i32 {
             return true;
         }
 

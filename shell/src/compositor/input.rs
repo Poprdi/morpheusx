@@ -155,7 +155,11 @@ impl Compositor {
                     let outer_w = win.w as i32 + BORDER as i32 * 2;
                     let outer_h = win.h as i32 + TITLE_H as i32 + BORDER as i32 * 2;
 
-                    if mx < outer_x || mx >= outer_x + outer_w || my < outer_y || my >= outer_y + outer_h {
+                    if mx < outer_x
+                        || mx >= outer_x + outer_w
+                        || my < outer_y
+                        || my >= outer_y + outer_h
+                    {
                         continue;
                     }
 

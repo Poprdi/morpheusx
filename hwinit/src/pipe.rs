@@ -80,22 +80,28 @@ impl Pipe {
 }
 
 /// Global pipe table.
-pub static mut PIPE_TABLE: [Pipe; MAX_PIPES] = [const { Pipe::empty() }; MAX_PIPES];
+static mut PIPE_TABLE: [Pipe; MAX_PIPES] = [const { Pipe::empty() }; MAX_PIPES];
+
+// smp: without this, two cores writing to the same pipe corrupt head/tail.
+static PIPE_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
 
 /// Allocate a new pipe.  Returns the pipe index, or None if full.
 ///
 /// # Safety
 /// Must be called with interrupts disabled (syscall context).
 pub unsafe fn pipe_alloc() -> Option<u8> {
+    PIPE_LOCK.lock();
     for (i, pipe) in PIPE_TABLE.iter_mut().enumerate() {
         if !pipe.active {
             *pipe = Pipe::empty();
             pipe.active = true;
             pipe.readers = 1;
             pipe.writers = 1;
+            PIPE_LOCK.unlock();
             return Some(i as u8);
         }
     }
+    PIPE_LOCK.unlock();
     None
 }
 
@@ -104,14 +110,18 @@ pub unsafe fn pipe_alloc() -> Option<u8> {
 /// # Safety
 /// `idx` must be a valid pipe index.
 pub unsafe fn pipe_write(idx: u8, data: &[u8]) -> usize {
-    if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
+    PIPE_LOCK.lock();
+    let n = if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if !pipe.active {
-            return 0;
+            0
+        } else {
+            pipe.write(data)
         }
-        pipe.write(data)
     } else {
         0
-    }
+    };
+    PIPE_LOCK.unlock();
+    n
 }
 
 /// Read from a pipe.
@@ -119,37 +129,51 @@ pub unsafe fn pipe_write(idx: u8, data: &[u8]) -> usize {
 /// # Safety
 /// `idx` must be a valid pipe index.
 pub unsafe fn pipe_read(idx: u8, buf: &mut [u8]) -> usize {
-    if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
+    PIPE_LOCK.lock();
+    let n = if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if !pipe.active {
-            return 0;
+            0
+        } else {
+            pipe.read(buf)
         }
-        pipe.read(buf)
     } else {
         0
-    }
+    };
+    PIPE_LOCK.unlock();
+    n
 }
 
 /// Get the number of open writers for a pipe.
 pub unsafe fn pipe_writers(idx: u8) -> u8 {
-    PIPE_TABLE.get(idx as usize).map(|p| p.writers).unwrap_or(0)
+    PIPE_LOCK.lock();
+    let n = PIPE_TABLE.get(idx as usize).map(|p| p.writers).unwrap_or(0);
+    PIPE_LOCK.unlock();
+    n
 }
 
 /// Get the number of open readers for a pipe.
 pub unsafe fn pipe_readers(idx: u8) -> u8 {
-    PIPE_TABLE.get(idx as usize).map(|p| p.readers).unwrap_or(0)
+    PIPE_LOCK.lock();
+    let n = PIPE_TABLE.get(idx as usize).map(|p| p.readers).unwrap_or(0);
+    PIPE_LOCK.unlock();
+    n
 }
 
 /// Bytes available to read from a pipe (non-blocking check).
 pub unsafe fn pipe_available(idx: u8) -> usize {
-    PIPE_TABLE
+    PIPE_LOCK.lock();
+    let n = PIPE_TABLE
         .get(idx as usize)
         .filter(|p| p.active)
         .map(|p| p.available_read())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    PIPE_LOCK.unlock();
+    n
 }
 
 /// Close the read end of a pipe.  Frees the pipe if both ends are closed.
 pub unsafe fn pipe_close_reader(idx: u8) {
+    PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if pipe.readers > 0 {
             pipe.readers -= 1;
@@ -158,10 +182,12 @@ pub unsafe fn pipe_close_reader(idx: u8) {
             pipe.active = false;
         }
     }
+    PIPE_LOCK.unlock();
 }
 
 /// Close the write end of a pipe.  Frees the pipe if both ends are closed.
 pub unsafe fn pipe_close_writer(idx: u8) {
+    PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if pipe.writers > 0 {
             pipe.writers -= 1;
@@ -170,22 +196,27 @@ pub unsafe fn pipe_close_writer(idx: u8) {
             pipe.active = false;
         }
     }
+    PIPE_LOCK.unlock();
 }
 
 /// Increment the reader refcount (used by fd inheritance / dup).
 pub unsafe fn pipe_add_reader(idx: u8) {
+    PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if pipe.active {
             pipe.readers = pipe.readers.saturating_add(1);
         }
     }
+    PIPE_LOCK.unlock();
 }
 
 /// Increment the writer refcount (used by fd inheritance / dup).
 pub unsafe fn pipe_add_writer(idx: u8) {
+    PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if pipe.active {
             pipe.writers = pipe.writers.saturating_add(1);
         }
     }
+    PIPE_LOCK.unlock();
 }

@@ -48,10 +48,11 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 return n as u64;
             }
             // Regular file — fall through to VFS write.
-            let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-                Some(fs) => fs,
+            let mut _vfs_guard = match vfs_lock() {
+                Some(g) => g,
                 None => return ENOSYS,
             };
+            let fs = &mut *_vfs_guard.fs;
             let fd_table = SCHEDULER.current_fd_table_mut();
             let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
             let ts = crate::cpu::tsc::read_tsc();
@@ -117,10 +118,11 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 return sys_pipe_read_blocking(pipe_idx, buf);
             }
             // Regular file — fall through to VFS read.
-            let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-                Some(fs) => fs,
+            let mut _vfs_guard = match vfs_lock() {
+                Some(g) => g,
                 None => return ENOSYS,
             };
+            let fs = &mut *_vfs_guard.fs;
             let fd_table = SCHEDULER.current_fd_table_mut();
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
             return match morpheus_helix::vfs::vfs_read(

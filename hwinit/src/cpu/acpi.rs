@@ -65,8 +65,8 @@ struct MadtFixed {
 /// MADT entry type 0: Processor Local APIC.
 #[repr(C, packed)]
 struct MadtLocalApic {
-    entry_type: u8,       // 0
-    length: u8,           // 8
+    entry_type: u8, // 0
+    length: u8,     // 8
     acpi_processor_uid: u8,
     apic_id: u8,
     flags: u32,

@@ -1,4 +1,4 @@
-use crate::islands::{ShellState, DESKTOP_RGB, raw_fill};
+use crate::islands::{raw_fill, ShellState, DESKTOP_RGB};
 
 /// wallpaper island. renders a solid color desktop background into the
 /// shell's surface buffer. compd blends it at z-layer 0 (background).
@@ -9,6 +9,14 @@ pub fn tick(state: &mut ShellState) {
     }
     let (r, g, b) = DESKTOP_RGB;
     let px = state.pack(r, g, b);
-    raw_fill(state.surface_ptr, state.fb_stride, 0, 0, state.fb_w, state.fb_h, px);
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        0,
+        0,
+        state.fb_w,
+        state.fb_h,
+        px,
+    );
     state.wallpaper_dirty = false;
 }

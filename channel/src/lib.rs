@@ -9,7 +9,7 @@ use core::{
 /// Single-producer, single-consumer ring buffer.
 /// N MUST be a power of 2. enforced at compile time via const assertion.
 pub struct Channel<T, const N: usize> {
-    buf:  [UnsafeCell<MaybeUninit<T>>; N],
+    buf: [UnsafeCell<MaybeUninit<T>>; N],
     head: AtomicUsize, // producer advances
     tail: AtomicUsize, // consumer advances
 }
@@ -29,10 +29,7 @@ impl<T, const N: usize> Channel<T, N> {
         let _ = Self::ASSERT_POWER_OF_2;
         // SAFETY: MaybeUninit arrays can be zero-initialized.
         Self {
-            buf: unsafe {
-                MaybeUninit::<[UnsafeCell<MaybeUninit<T>>; N]>::zeroed()
-                    .assume_init()
-            },
+            buf: unsafe { MaybeUninit::<[UnsafeCell<MaybeUninit<T>>; N]>::zeroed().assume_init() },
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
         }
@@ -61,9 +58,7 @@ impl<T, const N: usize> Channel<T, N> {
         if tail == head {
             return None;
         }
-        let msg = unsafe {
-            (*self.buf[tail & (N - 1)].get()).assume_init_read()
-        };
+        let msg = unsafe { (*self.buf[tail & (N - 1)].get()).assume_init_read() };
         self.tail.store(tail.wrapping_add(1), Ordering::Release);
         Some(msg)
     }
