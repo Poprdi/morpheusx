@@ -223,10 +223,11 @@ pub unsafe fn sys_umount(path_ptr: u64, path_len: u64) -> u64 {
         None => return EINVAL,
     };
     // Sync all dirty data before "unmounting".
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let _ = morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table);
     0
 }

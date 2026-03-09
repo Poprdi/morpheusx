@@ -4,10 +4,11 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
         Some(p) => p,
         None => return EINVAL,
     };
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = crate::cpu::tsc::read_tsc();
 
@@ -45,10 +46,11 @@ pub unsafe fn sys_fs_close(fd: u64) -> u64 {
 
 /// `SYS_SEEK(fd, offset, whence) → new_offset`
 pub unsafe fn sys_fs_seek(fd: u64, offset: u64, whence: u64) -> u64 {
-    let fs = match morpheus_helix::vfs::global::fs_global() {
-        Some(fs) => fs,
+    let _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &*_vfs_guard.fs;
     let fd_table = SCHEDULER.current_fd_table_mut();
     match morpheus_helix::vfs::vfs_seek(
         &fs.mount_table,
@@ -68,10 +70,11 @@ pub unsafe fn sys_fs_stat(path_ptr: u64, path_len: u64, stat_buf: u64) -> u64 {
         Some(p) => p,
         None => return EINVAL,
     };
-    let fs = match morpheus_helix::vfs::global::fs_global() {
-        Some(fs) => fs,
+    let _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &*_vfs_guard.fs;
     match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
         Ok(stat) => {
             if stat_buf != 0 {
@@ -96,10 +99,11 @@ pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64) -> u64 
         Some(p) => p,
         None => return EINVAL,
     };
-    let fs = match morpheus_helix::vfs::global::fs_global() {
-        Some(fs) => fs,
+    let _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &*_vfs_guard.fs;
     match morpheus_helix::vfs::vfs_readdir(&fs.mount_table, path) {
         Ok(entries) => {
             let count = entries.len();
@@ -126,10 +130,11 @@ pub unsafe fn sys_fs_mkdir(path_ptr: u64, path_len: u64) -> u64 {
         Some(p) => p,
         None => return EINVAL,
     };
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let ts = crate::cpu::tsc::read_tsc();
     match morpheus_helix::vfs::vfs_mkdir(&mut fs.mount_table, path, ts) {
         Ok(()) => 0,
@@ -143,10 +148,11 @@ pub unsafe fn sys_fs_unlink(path_ptr: u64, path_len: u64) -> u64 {
         Some(p) => p,
         None => return EINVAL,
     };
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let ts = crate::cpu::tsc::read_tsc();
     match morpheus_helix::vfs::vfs_unlink(&mut fs.mount_table, path, ts) {
         Ok(()) => 0,
@@ -164,10 +170,11 @@ pub unsafe fn sys_fs_rename(old_ptr: u64, old_len: u64, new_ptr: u64, new_len: u
         Some(p) => p,
         None => return EINVAL,
     };
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let ts = crate::cpu::tsc::read_tsc();
     match morpheus_helix::vfs::vfs_rename(&mut fs.mount_table, old, new, ts) {
         Ok(()) => 0,
@@ -187,10 +194,11 @@ pub unsafe fn sys_fs_truncate(path_ptr: u64, path_len: u64, new_size: u64) -> u6
         None => return EINVAL,
     };
 
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = crate::cpu::tsc::read_tsc();
 
@@ -218,10 +226,11 @@ pub unsafe fn sys_fs_truncate(path_ptr: u64, path_len: u64, new_size: u64) -> u6
 
 /// `SYS_SYNC() → 0`
 pub unsafe fn sys_fs_sync() -> u64 {
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     match morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table) {
         Ok(()) => 0,
         Err(e) => helix_err_to_errno(e),
@@ -237,10 +246,11 @@ pub unsafe fn sys_fs_snapshot(name_ptr: u64, name_len: u64) -> u64 {
     // Validate name (optional, for labeling the snapshot).
     let _name = user_path(name_ptr, name_len);
 
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
 
     // Sync all dirty data to disk.
     if let Err(e) = morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table) {

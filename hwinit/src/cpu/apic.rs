@@ -291,7 +291,11 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
     // INIT deassert — trigger mode MUST be level (bit 15) with level=0.
     // edge-triggered deassert is treated as another INIT assertion by KVM.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT);
+    lapic_write(
+        base,
+        LAPIC_ICR_LO,
+        ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT,
+    );
     wait_icr_idle(base);
 }
 
@@ -302,11 +306,7 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
 pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
     let base = lapic_base();
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(
-        base,
-        LAPIC_ICR_LO,
-        ICR_STARTUP | start_page as u32,
-    );
+    lapic_write(base, LAPIC_ICR_LO, ICR_STARTUP | start_page as u32);
     wait_icr_idle(base);
 }
 

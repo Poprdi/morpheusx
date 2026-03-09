@@ -3,10 +3,10 @@
 
 extern crate alloc;
 
-use libmorpheus::{compositor as compsys, entry, hw, process, io};
+use libmorpheus::{compositor as compsys, entry, hw, io, process};
 
-mod islands;
 mod font;
+mod islands;
 
 entry!(main);
 
@@ -17,8 +17,16 @@ fn main() -> i32 {
     // if this returns u64::MAX, compd isn't up yet. yield and try again like a civilized process.
     loop {
         let mut buf = [compsys::SurfaceEntry {
-            pid: 0, _pad: 0, phys_addr: 0, pages: 0,
-            width: 0, height: 0, stride: 0, format: 0, dirty: 0, _pad2: 0,
+            pid: 0,
+            _pad: 0,
+            phys_addr: 0,
+            pages: 0,
+            width: 0,
+            height: 0,
+            stride: 0,
+            format: 0,
+            dirty: 0,
+            _pad2: 0,
         }; 1];
         let r = compsys::surface_list(&mut buf);
         // surface_list returns usize::MAX when no compositor is registered yet
@@ -45,7 +53,11 @@ fn main() -> i32 {
     io::println("shelld: surface mapped, entering main loop");
 
     let mut state = islands::ShellState::new(
-        surface_ptr, fb_info.width, fb_info.height, fb_stride_px, is_bgrx,
+        surface_ptr,
+        fb_info.width,
+        fb_info.height,
+        fb_stride_px,
+        is_bgrx,
     );
 
     loop {

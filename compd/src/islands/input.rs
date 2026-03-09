@@ -1,8 +1,8 @@
 extern crate alloc;
 
-use libmorpheus::{compositor as compsys, hw, io, process};
-use crate::islands::{CompState, HitRegion, MouseCapture, TITLE_H, BORDER, PANEL_H, MAX_WINDOWS};
+use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, PANEL_H, TITLE_H};
 use crate::messages::InputMsg;
+use libmorpheus::{compositor as compsys, hw, io, process};
 
 const CTRL_BRACKET: u8 = 0x1D; // Ctrl+] — focus cycle scancode
 
@@ -14,8 +14,14 @@ pub fn poll(state: &mut CompState) {
 fn poll_keyboard(state: &mut CompState) {
     let mut kb = [0u8; 32];
     let avail = io::stdin_available();
-    let n = if avail > 0 { io::read_stdin(&mut kb) } else { 0 };
-    if n == 0 { return; }
+    let n = if avail > 0 {
+        io::read_stdin(&mut kb)
+    } else {
+        0
+    };
+    if n == 0 {
+        return;
+    }
 
     let mut has_cycle = false;
     for b in kb.iter_mut().take(n) {
@@ -143,7 +149,13 @@ fn poll_mouse(state: &mut CompState) {
                     }
                     route_to_child = false;
                 }
-                MouseCapture::Resize { idx, start_mx, start_my, start_w, start_h } => {
+                MouseCapture::Resize {
+                    idx,
+                    start_mx,
+                    start_my,
+                    start_w,
+                    start_h,
+                } => {
                     if let Some(ref mut win) = state.windows[idx] {
                         let dx = state.mouse_x - start_mx;
                         let dy = state.mouse_y - start_my;
@@ -204,15 +216,19 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
     for &c in &candidates[..cn] {
         if let Some(idx) = c {
             if let Some(ref win) = state.windows[idx] {
-                if win.z_layer != 1 { continue; }
+                if win.z_layer != 1 {
+                    continue;
+                }
 
                 let outer_x = win.x - BORDER as i32;
                 let outer_y = win.y - TITLE_H as i32 - BORDER as i32;
                 let outer_w = win.w as i32 + BORDER as i32 * 2;
                 let outer_h = win.h as i32 + TITLE_H as i32 + BORDER as i32 * 2;
 
-                if mx < outer_x || mx >= outer_x + outer_w
-                    || my < outer_y || my >= outer_y + outer_h
+                if mx < outer_x
+                    || mx >= outer_x + outer_w
+                    || my < outer_y
+                    || my >= outer_y + outer_h
                 {
                     continue;
                 }
@@ -223,8 +239,10 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
                 let tb_w = win.w as i32;
                 let close_x = tb_x + tb_w - 34;
                 let close_w = 30;
-                if my >= tb_y && my < tb_y + TITLE_H as i32
-                    && mx >= close_x && mx < close_x + close_w
+                if my >= tb_y
+                    && my < tb_y + TITLE_H as i32
+                    && mx >= close_x
+                    && mx < close_x + close_w
                 {
                     return Some((idx, HitRegion::Close));
                 }
@@ -242,8 +260,10 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
                 }
 
                 // content area
-                if mx >= win.x && mx < win.x + win.w as i32
-                    && my >= win.y && my < win.y + win.h as i32
+                if mx >= win.x
+                    && mx < win.x + win.w as i32
+                    && my >= win.y
+                    && my < win.y + win.h as i32
                 {
                     return Some((idx, HitRegion::Content));
                 }

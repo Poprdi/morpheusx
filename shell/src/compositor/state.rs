@@ -32,7 +32,11 @@ pub(super) struct ChildWindow {
 
 #[derive(Clone, Copy)]
 pub(super) enum MouseCapture {
-    Move { idx: usize, off_x: i32, off_y: i32 },
+    Move {
+        idx: usize,
+        off_x: i32,
+        off_y: i32,
+    },
     Resize {
         idx: usize,
         start_mx: i32,
@@ -102,8 +106,10 @@ impl Compositor {
 
                 let step = CASCADE_STEP * (self.cascade_n % 5);
                 let x = (20 + step).clamp(0, (self.fb_w as i32 - w as i32).max(0));
-                let y = (TITLE_H as i32 + 20 + step)
-                    .clamp(TITLE_H as i32, (self.fb_h as i32 - h as i32).max(TITLE_H as i32));
+                let y = (TITLE_H as i32 + 20 + step).clamp(
+                    TITLE_H as i32,
+                    (self.fb_h as i32 - h as i32).max(TITLE_H as i32),
+                );
 
                 *slot = Some(ChildWindow {
                     pid,

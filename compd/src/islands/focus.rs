@@ -10,7 +10,10 @@ pub fn process_msgs(state: &mut CompState) {
             InputMsg::WindowClosed { idx, .. } => {
                 if state.focused == Some(idx as usize) {
                     // refocus next z1 window. desktop (z0) is not focusable.
-                    state.focused = state.windows.iter().enumerate()
+                    state.focused = state
+                        .windows
+                        .iter()
+                        .enumerate()
                         .find(|(_, w)| w.as_ref().map(|w| w.z_layer == 1).unwrap_or(false))
                         .map(|(i, _)| i);
                 }

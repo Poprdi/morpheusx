@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-use libmorpheus::{entry, process, io};
+use libmorpheus::{entry, io, process};
 
 mod islands;
 
@@ -37,7 +37,10 @@ fn main() -> i32 {
     }
 
     // install SIGCHLD handler (signal 17)
-    let _ = process::sigaction(process::signal::SIGCHLD, sigchld_handler as *const () as u64);
+    let _ = process::sigaction(
+        process::signal::SIGCHLD,
+        sigchld_handler as *const () as u64,
+    );
 
     // supervisor loop
     loop {

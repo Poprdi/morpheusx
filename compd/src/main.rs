@@ -5,9 +5,9 @@ extern crate alloc;
 
 use libmorpheus::{compositor as compsys, entry, hw, process};
 
-mod messages;
-mod islands;
 mod font;
+mod islands;
+mod messages;
 
 entry!(main);
 
@@ -27,8 +27,8 @@ fn main() -> i32 {
     let is_bgrx = fb_info.format == 1;
 
     // 4. initialize island state
-    let mut state = islands::CompState::new(fb_ptr, fb_info.width, fb_info.height,
-                                             fb_stride_px, is_bgrx);
+    let mut state =
+        islands::CompState::new(fb_ptr, fb_info.width, fb_info.height, fb_stride_px, is_bgrx);
 
     // 5. enter main vsync loop
     loop {

@@ -95,10 +95,11 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     };
 
     // Open the file.
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
 
     let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = crate::cpu::tsc::read_tsc();

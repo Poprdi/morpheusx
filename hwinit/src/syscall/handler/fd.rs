@@ -88,10 +88,11 @@ pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
     }
 
     // Verify path exists and is a directory via VFS stat.
-    let fs = match morpheus_helix::vfs::global::fs_global() {
-        Some(fs) => fs,
+    let _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &*_vfs_guard.fs;
     match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
         Ok(stat) => {
             if !stat.is_dir {

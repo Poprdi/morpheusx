@@ -1,21 +1,21 @@
-use libmorpheus::{process, compositor as compsys};
+use libmorpheus::{compositor as compsys, process};
 
 // pid table is 64 slots. we stop restarting before we eat them all.
 const MAX_RESTARTS: u32 = 5;
 
 pub struct SupervisorState {
-    pub compd_pid:       Option<u32>,
-    pub shelld_pid:      Option<u32>,
-    pub compd_restarts:  u32,
+    pub compd_pid: Option<u32>,
+    pub shelld_pid: Option<u32>,
+    pub compd_restarts: u32,
     pub shelld_restarts: u32,
 }
 
 impl SupervisorState {
     pub fn new() -> Self {
         Self {
-            compd_pid:       None,
-            shelld_pid:      None,
-            compd_restarts:  0,
+            compd_pid: None,
+            shelld_pid: None,
+            compd_restarts: 0,
             shelld_restarts: 0,
         }
     }
