@@ -423,6 +423,8 @@ do_launch_qemu() {
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
+            -no-reboot \
+            -d cpu_reset,int -D /tmp/qemu-int.log \
             -serial stdio
     else
         # Create a temp ESP image for virtio-blk
@@ -452,6 +454,7 @@ do_launch_qemu() {
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
+            -no-reboot \
             -serial stdio
     fi
 }
@@ -652,6 +655,7 @@ do_launch_thinkpad() {
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
+            -no-reboot \
             -serial stdio
     else
         # Create a temp ESP image for AHCI
@@ -686,6 +690,7 @@ do_launch_thinkpad() {
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
+            -no-reboot \
             -serial stdio
     fi
 }

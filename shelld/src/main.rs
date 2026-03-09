@@ -21,7 +21,7 @@ fn main() -> i32 {
             width: 0, height: 0, stride: 0, format: 0, dirty: 0, _pad2: 0,
         }; 1];
         let r = compsys::surface_list(&mut buf);
-        // surface_list returns usize::MAX when EPERM (compositor not registered)
+        // surface_list returns usize::MAX when no compositor is registered yet
         if r != usize::MAX {
             break;
         }

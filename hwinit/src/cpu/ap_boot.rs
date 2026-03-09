@@ -294,7 +294,7 @@ pub unsafe fn start_aps() {
 /// 4. Enable LAPIC + timer
 /// 5. Enter the idle loop (scheduler will assign work)
 #[no_mangle]
-pub unsafe extern "C" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
+pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     puts("[AP] Rust entry: core=");
     put_hex32(core_idx);
     puts(" lapic=");

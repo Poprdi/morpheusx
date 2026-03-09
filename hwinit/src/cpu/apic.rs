@@ -37,6 +37,7 @@ const ICR_INIT: u32 = 0x500;
 const ICR_STARTUP: u32 = 0x600;
 const ICR_LEVEL_ASSERT: u32 = 0x4000;
 const ICR_LEVEL_DEASSERT: u32 = 0x0000;
+const ICR_TRIGGER_LEVEL: u32 = 1 << 15;
 const ICR_DELIVERY_STATUS: u32 = 1 << 12;
 
 /// Default LAPIC physical base address.
@@ -287,9 +288,10 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
     lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_LEVEL_ASSERT);
     wait_icr_idle(base);
 
-    // INIT deassert
+    // INIT deassert — trigger mode MUST be level (bit 15) with level=0.
+    // edge-triggered deassert is treated as another INIT assertion by KVM.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_LEVEL_DEASSERT);
+    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT);
     wait_icr_idle(base);
 }
 

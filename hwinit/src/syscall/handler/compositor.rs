@@ -27,25 +27,47 @@ pub struct SurfaceEntry {
 /// back buffer via SYS_FB_MAP; all other processes get private surfaces.
 /// Returns EBUSY if another compositor is already registered.
 pub unsafe fn sys_compositor_set() -> u64 {
+    use crate::serial::{puts, put_hex32};
     let pid = SCHEDULER.current_pid();
     if COMPOSITOR_PID != 0 && COMPOSITOR_PID != pid {
+        puts("[COMP] compositor_set EBUSY — already held by pid ");
+        put_hex32(COMPOSITOR_PID);
+        puts("\n");
         return EBUSY;
     }
     COMPOSITOR_PID = pid;
+    puts("[COMP] compositor_set: pid ");
+    put_hex32(pid);
+    puts(" registered\n");
     0
 }
 
 /// `SYS_WIN_SURFACE_LIST(buf_ptr, max_count) → count`
 ///
 /// Returns a list of all active per-process framebuffer surfaces.
-/// Only callable by the compositor process.
+///
+/// - No compositor registered → u64::MAX (shelld polls this to wait for compd)
+/// - Caller is not the compositor → 0 (compositor exists, but you can't enumerate)
+/// - Caller IS the compositor → actual surface list
 ///
 /// Each entry is a `SurfaceEntry` struct.  Returns the number of
 /// surfaces written (or total count if buf_ptr is 0).
 pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
+    use crate::serial::{puts, put_hex32};
+    // no compositor registered yet. u64::MAX = "try again later".
+    if COMPOSITOR_PID == 0 {
+        return u64::MAX;
+    }
+
     let pid = SCHEDULER.current_pid();
     if pid != COMPOSITOR_PID {
-        return EPERM;
+        // compositor is alive but you're not it. return 0 so shelld stops waiting.
+        puts("[COMP] surface_list: pid ");
+        put_hex32(pid);
+        puts(" not compositor (comp=");
+        put_hex32(COMPOSITOR_PID);
+        puts(") → 0\n");
+        return 0;
     }
 
     let fb_info = match FB_REGISTERED {
@@ -108,6 +130,11 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
                         dirty: if proc.fb_surface_dirty { 1 } else { 0 },
                         _pad2: 0,
                     };
+                    put_hex32(proc.pid);
+                    puts(" has surface phys=");
+                    put_hex32((proc.fb_surface_phys >> 32) as u32);
+                    put_hex32(proc.fb_surface_phys as u32);
+                    puts("\n");
                     written += 1;
                 }
             }
@@ -115,6 +142,9 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
         PROCESS_TABLE_LOCK.unlock();
     }
 
+    puts("[COMP] surface_list: ");
+    put_hex32(written as u32);
+    puts(" surfaces found\n");
     written as u64
 }
 
@@ -152,7 +182,19 @@ pub unsafe fn sys_win_surface_map(target_pid: u64) -> u64 {
 
     // Map into compositor's address space (writable so compositor can
     // potentially clear/init the surface; actual compositing only reads).
-    sys_map_phys(phys, pages, 0x01)
+    use crate::serial::{puts, put_hex32};
+    let vaddr = sys_map_phys(phys, pages, 0x01);
+    puts("[COMP] surface_map: pid ");
+    put_hex32(target_pid_u32);
+    puts(" → vaddr ");
+    put_hex32((vaddr >> 32) as u32);
+    put_hex32(vaddr as u32);
+    if vaddr > 0xFFFF_FFFF_FFFF_FF00 {
+        puts(" (ERROR)\n");
+    } else {
+        puts(" (OK)\n");
+    }
+    vaddr
 }
 
 /// `SYS_MOUSE_FORWARD(target_pid, packed_state) → 0`

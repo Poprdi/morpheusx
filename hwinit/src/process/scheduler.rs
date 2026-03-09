@@ -648,6 +648,60 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     let cur_pid = this_core_pid() as usize;
 
+    // ── AP idle fast path ────────────────────────────────────────────────
+    // PID 0 belongs to the BSP. if an AP is idle (cur_pid==0), we must NOT
+    // save/restore PID 0's context — doing so races with the BSP's ISR
+    // and corrupts the BSP's RIP/RSP, teleporting it into the AP's HLT loop.
+    // instead: check for real work, switch if found, otherwise return the
+    // ISR stack frame unchanged so the AP continues its HLT loop.
+    if cur_pid == 0 && core_idx != 0 {
+        deliver_pending_signals(0);
+        wake_expired_sleepers();
+
+        let next_pid = pick_next(0, true, core_idx);
+        if next_pid == 0 {
+            // no user process available — keep idling. null fpu ptr so ISR
+            // skips FXSAVE/FXRSTOR (AP idle loop doesn't use FPU).
+            set_percpu_fpu_ptr(0);
+            set_percpu_next_cr3(0);
+            PROCESS_TABLE_LOCK.unlock();
+            // return the ISR's own stack-saved context. AP wakes up exactly
+            // where it was (hlt loop). PID 0's context is untouched.
+            return core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx);
+        }
+
+        // found a real process — switch AP to it
+        set_this_core_pid(next_pid as u32);
+        let result = if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
+            next.state = ProcessState::Running;
+            next.run_start_tsc = now_tsc;
+            next.running_on = core_idx;
+
+            if next.kernel_stack_top != 0 {
+                crate::cpu::gdt::set_kernel_stack_for_core(core_idx, next.kernel_stack_top);
+                let pcpu = crate::cpu::per_cpu::current();
+                pcpu.kernel_syscall_rsp = next.kernel_stack_top;
+            }
+            if crate::memory::is_valid_cr3(next.cr3) {
+                set_percpu_next_cr3(next.cr3);
+            }
+            let fpu_ptr = &mut next.fpu_state as *mut super::context::FpuState as u64;
+            set_percpu_fpu_ptr(fpu_ptr);
+            &next.context
+        } else {
+            set_percpu_fpu_ptr(0);
+            set_percpu_next_cr3(0);
+            // transmute lifetime — pointer is on ISR stack, used immediately
+            PROCESS_TABLE_LOCK.unlock();
+            return core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx);
+        };
+
+        PROCESS_TABLE_LOCK.unlock();
+        return result;
+    }
+
+    // ── Normal path (BSP, or AP running a real process) ──────────────────
+
     // idle-donation tracking (BSP only, PID 0 only)
     let hlt_entry = KERNEL_HLT_ENTRY_TSC.swap(0, Ordering::Relaxed);
     let kernel_was_idle = cur_pid == 0 && hlt_entry != 0 && core_idx == 0;
@@ -700,6 +754,17 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         KERNEL_LAST_WAS_IDLE.load(Ordering::Relaxed)
     };
     let next_pid = pick_next(cur_pid, skip_kernel, core_idx);
+
+    // AP ran a user process but nothing else is runnable — return to idle.
+    // don't let pick_next's fallback put the AP on PID 0.
+    if next_pid == 0 && core_idx != 0 {
+        set_this_core_pid(0);
+        set_percpu_fpu_ptr(0);
+        set_percpu_next_cr3(0);
+        PROCESS_TABLE_LOCK.unlock();
+        return core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx);
+    }
+
     set_this_core_pid(next_pid as u32);
 
     let result = if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
@@ -1379,12 +1444,12 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
 
     // nothing else runnable — stay on current if it's still alive
     if let Some(Some(p)) = PROCESS_TABLE.get(current) {
-        if p.state.is_runnable() {
+        if p.state.is_runnable() && !(current == 0 && !is_bsp) {
             return current;
         }
     }
-    // absolute fallback: BSP → PID 0 (always alive). AP → current (will HLT).
-    if is_bsp { 0 } else { current }
+    // absolute fallback: BSP → PID 0. AP → 0 (scheduler_tick handles it).
+    0
 }
 
 /// Deliver the highest-priority pending signal to the given PID.
