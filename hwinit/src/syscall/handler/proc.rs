@@ -132,19 +132,23 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     }
 
     // Allocate physical pages for a temporary read buffer.
+    // drop the registry guard before spawn_user_process — load_elf64 needs
+    // GLOBAL_REGISTRY for page table allocation. holding it here deadlocks.
     let pages_needed = file_size.div_ceil(4096) as u64;
-    let mut registry = crate::memory::global_registry_mut();
-    let buf_phys = match registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        crate::memory::MemoryType::Allocated,
-        pages_needed,
-    ) {
-        Ok(addr) => addr,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            return ENOMEM;
+    let buf_phys = {
+        let mut registry = crate::memory::global_registry_mut();
+        match registry.allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages_needed,
+        ) {
+            Ok(addr) => addr,
+            Err(_) => {
+                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                return ENOMEM;
+            }
         }
-    };
+    }; // registry guard dropped here
 
     // Read entire file into the buffer.
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, file_size);
@@ -153,7 +157,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
             Ok(n) => n,
             Err(_) => {
                 let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-                let _ = registry.free_pages(buf_phys, pages_needed);
+                let _ = crate::memory::global_registry_mut().free_pages(buf_phys, pages_needed);
                 return EIO;
             }
         };
@@ -170,7 +174,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     if argc > 0 && argc <= 16 && argv_ptr != 0 {
         let argv_size = argc.saturating_mul(16); // each pair is [u64; 2] = 16 bytes
         if !validate_user_buf(argv_ptr, argv_size) {
-            let _ = registry.free_pages(buf_phys, pages_needed);
+            let _ = crate::memory::global_registry_mut().free_pages(buf_phys, pages_needed);
             return EFAULT;
         }
         let argv = core::slice::from_raw_parts(argv_ptr as *const [u64; 2], argc as usize);
@@ -196,6 +200,8 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     }
 
     // Spawn the process with fd inheritance and arguments.
+    // GLOBAL_REGISTRY is NOT held here — spawn_user_process → load_elf64
+    // needs it for page table allocation.
     let elf_data = &buf[..bytes_read];
     let result = crate::process::scheduler::spawn_user_process(
         name,
@@ -205,8 +211,8 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
         true, // inherit fds from parent
     );
 
-    // Free the temporary buffer.
-    let _ = registry.free_pages(buf_phys, pages_needed);
+    // Free the temporary buffer. re-acquire registry for the free call.
+    let _ = crate::memory::global_registry_mut().free_pages(buf_phys, pages_needed);
 
     match result {
         Ok(pid) => pid as u64,

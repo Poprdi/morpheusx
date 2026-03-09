@@ -11,7 +11,22 @@
 ; DATA AREA at offset 0xF00 within this page is filled by ap_boot.rs
 ; before each AP is woken.  Layout must match the TD_* constants there.
 ;
+; DEBUG: emits '1'..'6','R' to COM1 (0x3F8) at each transition.
+;        if output stops at 'N', the AP faulted between marker N and N+1.
+;
 ; ═══════════════════════════════════════════════════════════════════════════
+
+; ── COM1 debug macro ─────────────────────────────────────────────────────
+; direct port I/O, no LSR check — QEMU's virtual UART is always ready.
+%macro SERIAL_MARKER 1
+    push    ax
+    push    dx
+    mov     dx, 0x3F8
+    mov     al, %1
+    out     dx, al
+    pop     dx
+    pop     ax
+%endmacro
 
 bits 16
 org 0x8000          ; physical load address
@@ -29,6 +44,8 @@ ap_start:
     mov     es, ax
     mov     ss, ax
     xor     sp, sp          ; stack at top of segment (wraps to 0xFFFF)
+
+    SERIAL_MARKER '1'       ; marker 1: real mode entry alive
 
     ; ── load a TEMPORARY GDT that lives inside this trampoline page ──────
     ; The BSP's GDT is above 4 GB (PE BSS at 0x140xxxxxx).  In 16-bit
@@ -51,6 +68,11 @@ ap_start:
 ; ───────────────────────────────────────────────────────────────────────────
 bits 32
 ap_pm32:
+    ; 32-bit mode COM1 marker — can't use the 16-bit macro (push/pop width changed)
+    mov     dx, 0x3F8
+    mov     al, '2'
+    out     dx, al
+
     ; load data segments with kernel data selector (0x10)
     mov     ax, 0x10
     mov     ds, ax
@@ -68,16 +90,27 @@ ap_pm32:
     mov     eax, dword [0x8F00]     ; TD_CR3 low 32 bits (phys address < 4GB)
     mov     cr3, eax
 
-    ; ── enable long mode via IA32_EFER.LME ────────────────────────────────
+    mov     dx, 0x3F8
+    mov     al, '3'
+    out     dx, al          ; marker 3: CR3 loaded, about to set EFER
+
+    ; ── enable long mode via IA32_EFER.LME + NXE ──────────────────────────
+    ; NXE (bit 11) is MANDATORY: the kernel page tables have NX bits (bit 63)
+    ; set on data pages. with NXE=0, bit 63 is reserved → #PF on every
+    ; TLB miss → triple fault → machine reset. ask me how i know.
     mov     ecx, 0xC0000080         ; IA32_EFER
     rdmsr
-    or      eax, (1 << 8)           ; LME = bit 8
+    or      eax, (1 << 8) | (1 << 11) ; LME + NXE
     wrmsr
 
     ; ── enable paging → activates long mode ───────────────────────────────
     mov     eax, cr0
     or      eax, (1 << 31)          ; CR0.PG
     mov     cr0, eax
+
+    mov     dx, 0x3F8
+    mov     al, '4'
+    out     dx, al          ; marker 4: paging on, about to jump to 64-bit
 
     ; far jump to 64-bit long mode code.
     ; selector 0x18 = temp GDT's 64-bit code descriptor (L=1, D=0).
@@ -89,6 +122,11 @@ ap_pm32:
 ; ───────────────────────────────────────────────────────────────────────────
 bits 64
 ap_lm64:
+    ; 64-bit COM1 marker
+    mov     dx, 0x3F8
+    mov     al, '5'
+    out     dx, al
+
     ; reload data segments for 64-bit mode
     mov     ax, 0x10
     mov     ds, ax
@@ -109,6 +147,12 @@ ap_lm64:
     mov     fs, ax
     mov     ss, ax
 
+    ; ── load the per-AP stack BEFORE the retfq trick ────────────────────
+    ; RSP is 0 from the real-mode `xor sp, sp`. push/retfq would write
+    ; to 0xFFFFFFFF_FFFFFFF8 which is unmapped → #PF → triple fault.
+    ; load the real stack first so the retfq has somewhere to push.
+    mov     rsp, qword [0x8F10]     ; TD_STACK
+
     ; reload CS via a far return trick — push selector:offset, retfq
     lea     rax, [rel .cs_reloaded]
     push    0x08            ; kernel code selector from BSP's GDT
@@ -116,14 +160,16 @@ ap_lm64:
     retfq
 .cs_reloaded:
 
-    ; ── load the per-AP stack from data area ──────────────────────────────
-    mov     rsp, qword [0x8F10]     ; TD_STACK
-
     ; ── read core_idx and lapic_id from data area ─────────────────────────
-    mov     ecx, dword [0x8F18]     ; TD_CORE_IDX → RCX (arg1, MS x64)
-    mov     edx, dword [0x8F1C]     ; TD_LAPIC_ID → RDX (arg2, MS x64)
+    ; SysV ABI: arg1=RDI, arg2=RSI. target is x86_64-unknown-none-elf, not windows.
+    mov     edi, dword [0x8F18]     ; TD_CORE_IDX → RDI (arg1, SysV x64)
+    mov     esi, dword [0x8F1C]     ; TD_LAPIC_ID → RSI (arg2, SysV x64)
 
     ; ── jump to Rust entry point ──────────────────────────────────────────
+    mov     dx, 0x3F8
+    mov     al, 'R'
+    out     dx, al          ; marker R: about to enter Rust
+
     mov     rax, qword [0x8F08]     ; TD_ENTRY64
     jmp     rax                     ; ap_rust_entry(core_idx, lapic_id) — never returns
 

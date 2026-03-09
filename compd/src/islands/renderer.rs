@@ -1,12 +1,22 @@
 use libmorpheus::compositor as compsys;
+use libmorpheus::io;
 use crate::islands::*;
 use crate::font;
+use core::sync::atomic::{AtomicBool, Ordering};
+static COMPOSE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// painter's algorithm with z-layers:
 ///   z0: desktop background (shelld wallpaper) — fullscreen, no decorations
 ///   z1: normal app windows — cascaded, decorations, unfocused first + focused last
 ///   z3: panel overlay — re-blit bottom PANEL_H px from desktop surface above everything
 pub fn compose(state: &mut CompState) {
+    if !COMPOSE_LOGGED.swap(true, Ordering::Relaxed) {
+        if state.desktop_idx.is_some() {
+            io::println("compd: first compose WITH desktop");
+        } else {
+            io::println("compd: first compose NO desktop — solid fill");
+        }
+    }
     let fb_ptr = state.fb_ptr;
 
     // --- z-layer 0: desktop background ---

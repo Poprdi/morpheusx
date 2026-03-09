@@ -250,9 +250,10 @@ pub unsafe fn by_lapic_id(lapic_id: u32) -> Option<&'static mut PerCpu> {
 /// Current core's sequential index (0 = BSP).
 #[inline(always)]
 pub unsafe fn current_core_index() -> u32 {
-    let lapic_id: u64;
+    let lapic_id: u32;
     core::arch::asm!(
-        "mov {0}, gs:[0x08]", // cpu_id field (u32 but we read 64-bit for asm reg compat)
+        "mov {0:e}, gs:[0x08]", // cpu_id is u32 at offset 0x08. read 32-bit to avoid
+                                 // bleeding into current_pid at 0x0C.
         out(reg) lapic_id,
         options(nostack, readonly, preserves_flags),
     );
