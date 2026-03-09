@@ -37,17 +37,25 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     let vaddr = proc.mmap_brk;
 
     // Allocate physical pages.
-    let mut registry = crate::memory::global_registry_mut();
-    let phys = match registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        crate::memory::MemoryType::Allocated,
-        pages,
-    ) {
-        Ok(addr) => addr,
-        Err(_) => return ENOMEM,
+    // CRITICAL: registry guard must be dropped BEFORE map_user_page.
+    // map_user_page → ensure_user_table → global_registry_mut() would
+    // self-deadlock on the non-reentrant GLOBAL_REGISTRY spinlock.
+    let phys = {
+        let mut registry = crate::memory::global_registry_mut();
+        match registry.allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages,
+        ) {
+            Ok(addr) => addr,
+            Err(_) => return ENOMEM,
+        }
+        // registry dropped here. lock released.
     };
 
     // Map each page into the process address space.
+    // GLOBAL_REGISTRY is NOT held here. map_user_page can freely allocate
+    // page-table pages via ensure_user_table without deadlocking.
     let flags = crate::paging::entry::PageFlags::PRESENT
         .with(crate::paging::entry::PageFlags::WRITABLE)
         .with(crate::paging::entry::PageFlags::USER)
@@ -61,7 +69,8 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
         let page_virt = vaddr + i * 4096;
         let page_phys = phys + i * 4096;
         if crate::elf::map_user_page(&mut ptm, page_virt, page_phys, flags).is_err() {
-            // On failure, free what we allocated and return error.
+            // On failure, re-acquire registry to free what we allocated.
+            let mut registry = crate::memory::global_registry_mut();
             let _ = registry.free_pages(phys, pages);
             return ENOMEM;
         }
@@ -79,6 +88,7 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
         for i in 0..pages {
             let _ = ptm2.unmap_4k(vaddr + i * 4096);
         }
+        let mut registry = crate::memory::global_registry_mut();
         let _ = registry.free_pages(phys, pages);
         return ENOMEM;
     }

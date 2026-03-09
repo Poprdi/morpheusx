@@ -1341,6 +1341,5 @@ pub unsafe fn parse_uefi_memory_map(
 }
 
 pub fn fallback_allocator() -> PhysicalAllocator {
-    puts("[MEM] WARNING: using fallback allocator (16MB-32MB)\n");
     PhysicalAllocator::new(0x0100_0000, 16 * 1024 * 1024)
 }

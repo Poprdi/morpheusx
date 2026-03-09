@@ -387,14 +387,18 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     let read_size = file_size.min(65536);
     let pages_needed = read_size.div_ceil(4096) as u64;
 
-    let mut registry = crate::memory::global_registry_mut();
-    let buf_phys = match registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        crate::memory::MemoryType::Allocated,
-        pages_needed,
-    ) {
-        Ok(addr) => addr,
-        Err(_) => return ENOMEM,
+    // drop registry before disk I/O — holding it blocks every other core from allocating.
+    let buf_phys = {
+        let mut registry = crate::memory::global_registry_mut();
+        match registry.allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages_needed,
+        ) {
+            Ok(addr) => addr,
+            Err(_) => return ENOMEM,
+        }
+        // registry dropped here. lock released.
     };
 
     let fd_table = SCHEDULER.current_fd_table_mut();
@@ -410,6 +414,8 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     ) {
         Ok(fd) => fd,
         Err(e) => {
+            // re-acquire to free
+            let mut registry = crate::memory::global_registry_mut();
             let _ = registry.free_pages(buf_phys, pages_needed);
             return helix_err_to_errno(e);
         }
@@ -421,6 +427,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
             Ok(n) => n,
             Err(e) => {
                 let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                let mut registry = crate::memory::global_registry_mut();
                 let _ = registry.free_pages(buf_phys, pages_needed);
                 return helix_err_to_errno(e);
             }
@@ -477,7 +484,11 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
         }
     }
 
-    let _ = registry.free_pages(buf_phys, pages_needed);
+    // re-acquire to free temp buffer
+    {
+        let mut registry = crate::memory::global_registry_mut();
+        let _ = registry.free_pages(buf_phys, pages_needed);
+    }
 
     core::ptr::write(info_ptr as *mut BinaryInfo, info);
     0

@@ -1,4 +1,3 @@
-pub const FONT_WIDTH: usize = 8;
 pub const FONT_HEIGHT: usize = 16;
 
 #[inline]
