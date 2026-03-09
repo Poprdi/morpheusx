@@ -989,8 +989,8 @@ impl MemoryRegistry {
             // Zero the FreeNode header before pushing — destroys any OVMF
             // 0xAFAFAFAF poison at this address so list_remove walks stay clean.
             let node_ptr = cur as *mut u64;
-            core::ptr::write_volatile(node_ptr, 0u64);          // FreeNode::next
-            core::ptr::write_volatile(node_ptr.add(1), 0u64);   // FreeNode::prev
+            core::ptr::write_volatile(node_ptr, 0u64); // FreeNode::next
+            core::ptr::write_volatile(node_ptr.add(1), 0u64); // FreeNode::prev
             self.list_push(cur, order);
             cur += (1u64 << order) * PAGE_SIZE;
         }

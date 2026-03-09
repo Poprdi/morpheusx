@@ -1,12 +1,12 @@
-pub mod vsync;
+pub mod focus;
+pub mod input;
 pub mod renderer;
 pub mod surface_mgr;
-pub mod input;
-pub mod focus;
+pub mod vsync;
 
-use libmorpheus::compositor as compsys;
-use channel::Channel;
 use crate::messages::*;
+use channel::Channel;
+use libmorpheus::compositor as compsys;
 
 pub const MAX_WINDOWS: usize = 16;
 pub const TITLE_H: u32 = 22;
@@ -26,26 +26,30 @@ pub const CURSOR_RGB: (u8, u8, u8) = (255, 255, 255);
 pub const PANEL_H: u32 = 30;
 
 pub struct ChildWindow {
-    pub pid:           u32,
-    pub surface_ptr:   *const u32,
-    pub mapped:        bool,
+    pub pid: u32,
+    pub surface_ptr: *const u32,
+    pub mapped: bool,
     pub surface_vaddr: u64,
     pub surface_pages: u64,
-    pub x:             i32,
-    pub y:             i32,
-    pub w:             u32,
-    pub h:             u32,
-    pub src_w:         u32,
-    pub src_h:         u32,
-    pub src_stride:    u32, // in pixels. not bytes. the framebuffer stride IS bytes. yes again.
-    pub title:         [u8; 64],
-    pub title_len:     usize,
-    pub z_layer:       u8,  // 0=desktop background, 1=normal window, 3=overlay
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub src_w: u32,
+    pub src_h: u32,
+    pub src_stride: u32, // in pixels. not bytes. the framebuffer stride IS bytes. yes again.
+    pub title: [u8; 64],
+    pub title_len: usize,
+    pub z_layer: u8, // 0=desktop background, 1=normal window, 3=overlay
 }
 
 #[derive(Clone, Copy)]
 pub enum MouseCapture {
-    Move { idx: usize, off_x: i32, off_y: i32 },
+    Move {
+        idx: usize,
+        off_x: i32,
+        off_y: i32,
+    },
     Resize {
         idx: usize,
         start_mx: i32,
@@ -65,15 +69,15 @@ pub enum HitRegion {
 
 pub struct CompState {
     // --- renderer island owns these ---
-    pub fb_ptr:    *mut u32,
-    pub fb_w:      u32,
-    pub fb_h:      u32,
+    pub fb_ptr: *mut u32,
+    pub fb_w: u32,
+    pub fb_h: u32,
     pub fb_stride: u32, // stride in PIXELS (fb_info.stride / 4). yes confusing. no we can't change it.
-    pub is_bgrx:   bool,
+    pub is_bgrx: bool,
 
     // --- surface_mgr island owns these ---
-    pub windows:     [Option<ChildWindow>; MAX_WINDOWS],
-    pub cascade_n:   i32,
+    pub windows: [Option<ChildWindow>; MAX_WINDOWS],
+    pub cascade_n: i32,
     pub surface_buf: [compsys::SurfaceEntry; MAX_WINDOWS],
     pub desktop_idx: Option<usize>, // slot index of shelld's desktop surface (z_layer 0)
 
@@ -81,10 +85,10 @@ pub struct CompState {
     pub focused: Option<usize>,
 
     // --- input island owns these ---
-    pub mouse_x:      i32,
-    pub mouse_y:      i32,
+    pub mouse_x: i32,
+    pub mouse_y: i32,
     pub last_buttons: u8,
-    pub capture:      Option<MouseCapture>,
+    pub capture: Option<MouseCapture>,
 
     // --- channels (SPSC) ---
     pub ch_input_to_focus: Channel<InputMsg, 16>,
@@ -99,15 +103,15 @@ impl CompState {
             fb_h,
             fb_stride: fb_stride_px,
             is_bgrx,
-            windows:     [NONE; MAX_WINDOWS],
-            cascade_n:   0,
+            windows: [NONE; MAX_WINDOWS],
+            cascade_n: 0,
             surface_buf: [zeroed_surface_entry(); MAX_WINDOWS],
             desktop_idx: None,
-            focused:     None,
-            mouse_x:     (fb_w / 2) as i32,
-            mouse_y:     (fb_h / 2) as i32,
+            focused: None,
+            mouse_x: (fb_w / 2) as i32,
+            mouse_y: (fb_h / 2) as i32,
             last_buttons: 0,
-            capture:      None,
+            capture: None,
             ch_input_to_focus: Channel::new(),
         }
     }

@@ -224,8 +224,12 @@ pub fn checkpoint(label: &str) {
             }
         }
     }
-    for b in b"[CP] ".iter().copied() { emit(b); }
-    for b in label.bytes() { emit(b); }
+    for b in b"[CP] ".iter().copied() {
+        emit(b);
+    }
+    for b in label.bytes() {
+        emit(b);
+    }
     emit(b'\r');
     emit(b'\n');
 }

@@ -662,7 +662,11 @@ pub extern "C" fn exception_handler(
     };
 
     if is_user_mode {
-        let code = if vector == 14 { -11 } else { -128 - (vector as i32) };
+        let code = if vector == 14 {
+            -11
+        } else {
+            -128 - (vector as i32)
+        };
         puts("[EXC] user fault -> terminating PID ");
         put_hex32(pid);
         puts("\n");

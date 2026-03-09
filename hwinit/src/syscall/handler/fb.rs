@@ -22,13 +22,13 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
 // SYS_FB_LOCK (85) / SYS_FB_UNLOCK (86) — exclusive framebuffer access
 
 /// PID that currently holds exclusive framebuffer access (0 = unlocked).
-static mut FB_LOCK_PID: u32 = 0;
+static FB_LOCK_PID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 // COMPOSITOR — the compositor PID owns the real back buffer.
 // Non-compositor processes get per-process offscreen surfaces.
 
 /// PID of the registered compositor process (0 = no compositor).
-static mut COMPOSITOR_PID: u32 = 0;
+static COMPOSITOR_PID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Returns true if a compositor is active and the caller is NOT the compositor.
 #[inline]

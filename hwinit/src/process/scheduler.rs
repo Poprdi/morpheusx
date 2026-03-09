@@ -32,9 +32,8 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// The flat process table.  Index == PID.
 /// Protected by PROCESS_TABLE_LOCK for SMP safety.
-pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = {
-    [const { None }; MAX_PROCESSES]
-};
+pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] =
+    { [const { None }; MAX_PROCESSES] };
 
 /// Spinlock guarding PROCESS_TABLE mutations from concurrent cores.
 /// The timer ISR on every core calls scheduler_tick() which must not
@@ -357,11 +356,12 @@ impl Scheduler {
 
     /// Inner send_signal — caller must hold PROCESS_TABLE_LOCK.
     /// Used by paths already holding the lock (e.g. terminate_process_inner).
-    pub(crate) unsafe fn send_signal_inner(&self, pid: u32, sig: Signal) -> Result<(), &'static str> {
-        let slot = match PROCESS_TABLE
-            .get_mut(pid as usize)
-            .and_then(|s| s.as_mut())
-        {
+    pub(crate) unsafe fn send_signal_inner(
+        &self,
+        pid: u32,
+        sig: Signal,
+    ) -> Result<(), &'static str> {
+        let slot = match PROCESS_TABLE.get_mut(pid as usize).and_then(|s| s.as_mut()) {
             Some(s) => s,
             None => return Err("send_signal: PID not found"),
         };
@@ -407,10 +407,7 @@ impl Scheduler {
     /// Set the scheduling priority of a process.
     pub unsafe fn set_priority(&self, pid: u32, priority: u8) -> Result<(), &'static str> {
         PROCESS_TABLE_LOCK.lock();
-        let slot = match PROCESS_TABLE
-            .get_mut(pid as usize)
-            .and_then(|s| s.as_mut())
-        {
+        let slot = match PROCESS_TABLE.get_mut(pid as usize).and_then(|s| s.as_mut()) {
             Some(s) => s,
             None => {
                 PROCESS_TABLE_LOCK.unlock();
@@ -429,10 +426,7 @@ impl Scheduler {
     /// Get the scheduling priority of a process.
     pub unsafe fn get_priority(&self, pid: u32) -> Result<u8, &'static str> {
         PROCESS_TABLE_LOCK.lock();
-        let slot = match PROCESS_TABLE
-            .get(pid as usize)
-            .and_then(|s| s.as_ref())
-        {
+        let slot = match PROCESS_TABLE.get(pid as usize).and_then(|s| s.as_ref()) {
             Some(s) => s,
             None => {
                 PROCESS_TABLE_LOCK.unlock();
@@ -855,12 +849,10 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     let tid = slot_idx as u32;
 
     PROCESS_TABLE[slot_idx] = Some(Process::empty());
-    let thread = PROCESS_TABLE[slot_idx]
-        .as_mut()
-        .ok_or_else(|| {
-            PROCESS_TABLE_LOCK.unlock();
-            "failed to initialize thread slot"
-        })?;
+    let thread = PROCESS_TABLE[slot_idx].as_mut().ok_or_else(|| {
+        PROCESS_TABLE_LOCK.unlock();
+        "failed to initialize thread slot"
+    })?;
 
     thread.pid = tid;
     thread.set_name("thread");

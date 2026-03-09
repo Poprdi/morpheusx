@@ -1,10 +1,12 @@
+use crate::islands::{ChildWindow, CompState, CASCADE_STEP, MAX_WINDOWS, PANEL_H, TITLE_H};
 use libmorpheus::compositor as compsys;
 use libmorpheus::mem;
-use crate::islands::{CompState, ChildWindow, CASCADE_STEP, TITLE_H, PANEL_H, MAX_WINDOWS};
 
 pub fn update(state: &mut CompState) {
     let count = compsys::surface_list(&mut state.surface_buf);
-    if count == usize::MAX { return; }
+    if count == usize::MAX {
+        return;
+    }
 
     let mut alive_pids = [0u32; MAX_WINDOWS];
     let alive_count = count.min(MAX_WINDOWS);
@@ -13,7 +15,11 @@ pub fn update(state: &mut CompState) {
     }
 
     for i in 0..MAX_WINDOWS {
-        let pid = if let Some(ref w) = state.windows[i] { w.pid } else { continue };
+        let pid = if let Some(ref w) = state.windows[i] {
+            w.pid
+        } else {
+            continue;
+        };
         let still_alive = alive_pids[..alive_count].iter().any(|&p| p == pid);
         if !still_alive {
             if let Some(ref w) = state.windows[i] {
@@ -26,7 +32,11 @@ pub fn update(state: &mut CompState) {
             }
             state.windows[i] = None;
             if state.focused == Some(i) {
-                state.focused = state.windows.iter().enumerate().rev()
+                state.focused = state
+                    .windows
+                    .iter()
+                    .enumerate()
+                    .rev()
                     .find(|(_, w)| w.as_ref().map(|w| w.z_layer > 0).unwrap_or(false))
                     .map(|(idx, _)| idx);
             }
@@ -42,9 +52,10 @@ pub fn update(state: &mut CompState) {
         }
 
         // see if we already track this pid
-        let slot = state.windows.iter().position(|w| {
-            w.as_ref().map(|w| w.pid == pid).unwrap_or(false)
-        });
+        let slot = state
+            .windows
+            .iter()
+            .position(|w| w.as_ref().map(|w| w.pid == pid).unwrap_or(false));
 
         if let Some(idx) = slot {
             if let Some(ref mut win) = state.windows[idx] {
@@ -69,7 +80,9 @@ pub fn update(state: &mut CompState) {
             }
         } else {
             let empty = state.windows.iter().position(|w| w.is_none());
-            let Some(idx) = empty else { continue; };
+            let Some(idx) = empty else {
+                continue;
+            };
 
             let vaddr = match compsys::surface_map(pid) {
                 Ok(ptr) => ptr,
@@ -83,20 +96,20 @@ pub fn update(state: &mut CompState) {
             if is_desktop {
                 state.windows[idx] = Some(ChildWindow {
                     pid,
-                    surface_ptr:   vaddr as *const u32,
-                    mapped:        true,
+                    surface_ptr: vaddr as *const u32,
+                    mapped: true,
                     surface_vaddr: vaddr as u64,
                     surface_pages: entry.pages,
-                    x:             0,
-                    y:             0,
-                    w:             state.fb_w,
-                    h:             state.fb_h,
-                    src_w:         entry.width,
-                    src_h:         entry.height,
-                    src_stride:    (entry.stride / 4).max(entry.width.max(1)),
-                    title:         [0u8; 64],
-                    title_len:     0,
-                    z_layer:       0,
+                    x: 0,
+                    y: 0,
+                    w: state.fb_w,
+                    h: state.fb_h,
+                    src_w: entry.width,
+                    src_h: entry.height,
+                    src_stride: (entry.stride / 4).max(entry.width.max(1)),
+                    title: [0u8; 64],
+                    title_len: 0,
+                    z_layer: 0,
                 });
                 state.desktop_idx = Some(idx);
             } else {
@@ -109,26 +122,28 @@ pub fn update(state: &mut CompState) {
                 let h = h.clamp(220, max_h.max(220));
 
                 let cx = (20 + step).clamp(0, (state.fb_w as i32 - w as i32).max(0));
-                let cy = (TITLE_H as i32 + 20 + step)
-                    .clamp(TITLE_H as i32, (state.fb_h as i32 - h as i32 - PANEL_H as i32).max(TITLE_H as i32));
+                let cy = (TITLE_H as i32 + 20 + step).clamp(
+                    TITLE_H as i32,
+                    (state.fb_h as i32 - h as i32 - PANEL_H as i32).max(TITLE_H as i32),
+                );
                 state.cascade_n += 1;
 
                 state.windows[idx] = Some(ChildWindow {
                     pid,
-                    surface_ptr:   vaddr as *const u32,
-                    mapped:        true,
+                    surface_ptr: vaddr as *const u32,
+                    mapped: true,
                     surface_vaddr: vaddr as u64,
                     surface_pages: entry.pages,
-                    x:             cx,
-                    y:             cy,
+                    x: cx,
+                    y: cy,
                     w,
                     h,
-                    src_w:         entry.width,
-                    src_h:         entry.height,
-                    src_stride:    (entry.stride / 4).max(entry.width.max(1)),
-                    title:         [0u8; 64],
-                    title_len:     0,
-                    z_layer:       1,
+                    src_w: entry.width,
+                    src_h: entry.height,
+                    src_stride: (entry.stride / 4).max(entry.width.max(1)),
+                    title: [0u8; 64],
+                    title_len: 0,
+                    z_layer: 1,
                 });
 
                 state.focused = Some(idx);

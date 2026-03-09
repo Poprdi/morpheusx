@@ -521,7 +521,7 @@ pub unsafe fn platform_init_selfcontained(
     checkpoint("phase12-smp-begin");
 
     {
-        use crate::cpu::{acpi, apic, ap_boot, per_cpu};
+        use crate::cpu::{acpi, ap_boot, apic, per_cpu};
 
         let bsp_lapic_id = apic::read_lapic_id();
         checkpoint("phase12-madt-scan");

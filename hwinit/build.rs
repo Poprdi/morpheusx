@@ -80,8 +80,10 @@ fn main() {
         let trampoline_bin = out_dir.join("ap_trampoline.bin");
         let out = Command::new("nasm")
             .args([
-                "-f", "bin",
-                "-o", trampoline_bin.to_str().unwrap(),
+                "-f",
+                "bin",
+                "-o",
+                trampoline_bin.to_str().unwrap(),
                 trampoline_src,
             ])
             .output()
@@ -93,7 +95,12 @@ fn main() {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
-        println!("cargo:warning=Built AP trampoline ({} bytes)", std::fs::metadata(&trampoline_bin).map(|m| m.len()).unwrap_or(0));
+        println!(
+            "cargo:warning=Built AP trampoline ({} bytes)",
+            std::fs::metadata(&trampoline_bin)
+                .map(|m| m.len())
+                .unwrap_or(0)
+        );
     }
 
     if objects.is_empty() {

@@ -6,7 +6,11 @@ pub fn compositor_loop(fb: &Framebuffer, comp: &mut Compositor) -> i32 {
     while comp.has_children() {
         let mut kb = [0u8; 32];
         let avail = io::stdin_available();
-        let n = if avail > 0 { io::read_stdin(&mut kb) } else { 0 };
+        let n = if avail > 0 {
+            io::read_stdin(&mut kb)
+        } else {
+            0
+        };
 
         if n > 0 {
             let mut has_cycle = false;

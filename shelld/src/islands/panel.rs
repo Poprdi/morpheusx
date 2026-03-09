@@ -1,7 +1,6 @@
 use crate::islands::{
-    ShellState, PANEL_H, START_BTN_W,
-    PANEL_BG_RGB, START_RGB, START_ACTIVE_RGB,
-    raw_fill, draw_text,
+    draw_text, raw_fill, ShellState, PANEL_BG_RGB, PANEL_H, START_ACTIVE_RGB, START_BTN_W,
+    START_RGB,
 };
 use libmorpheus::time;
 
@@ -17,18 +16,49 @@ pub fn tick(state: &mut ShellState) {
     let panel_bg = state.pack(pr, pg, pb);
 
     // panel background bar
-    raw_fill(state.surface_ptr, state.fb_stride, 0, panel_y, state.fb_w, PANEL_H, panel_bg);
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        0,
+        panel_y,
+        state.fb_w,
+        PANEL_H,
+        panel_bg,
+    );
 
     // START button
-    let (sr, sg, sb) = if state.launcher_open { START_ACTIVE_RGB } else { START_RGB };
+    let (sr, sg, sb) = if state.launcher_open {
+        START_ACTIVE_RGB
+    } else {
+        START_RGB
+    };
     let start_bg = state.pack(sr, sg, sb);
-    raw_fill(state.surface_ptr, state.fb_stride, 0, panel_y, START_BTN_W, PANEL_H, start_bg);
+    raw_fill(
+        state.surface_ptr,
+        state.fb_stride,
+        0,
+        panel_y,
+        START_BTN_W,
+        PANEL_H,
+        start_bg,
+    );
     let start_fg = (255u8, 255u8, 255u8);
-    let start_bg_rgb = if state.launcher_open { START_ACTIVE_RGB } else { START_RGB };
+    let start_bg_rgb = if state.launcher_open {
+        START_ACTIVE_RGB
+    } else {
+        START_RGB
+    };
     draw_text(state, 10, panel_y + 7, "START", start_fg, start_bg_rgb);
 
     // status label
-    draw_text(state, START_BTN_W + 12, panel_y + 7, "MorpheusX DE", (200, 200, 210), PANEL_BG_RGB);
+    draw_text(
+        state,
+        START_BTN_W + 12,
+        panel_y + 7,
+        "MorpheusX DE",
+        (200, 200, 210),
+        PANEL_BG_RGB,
+    );
 
     // uptime clock on the right side
     let ns = time::clock_gettime();
@@ -40,7 +70,14 @@ pub fn tick(state: &mut ShellState) {
     if let Ok(clock_str) = core::str::from_utf8(&clock_buf[..clock_len]) {
         let text_w = clock_len as u32 * 8;
         let clock_x = state.fb_w.saturating_sub(text_w + 12);
-        draw_text(state, clock_x, panel_y + 7, clock_str, (180, 220, 180), PANEL_BG_RGB);
+        draw_text(
+            state,
+            clock_x,
+            panel_y + 7,
+            clock_str,
+            (180, 220, 180),
+            PANEL_BG_RGB,
+        );
     }
 
     // panel repaints every tick for the clock

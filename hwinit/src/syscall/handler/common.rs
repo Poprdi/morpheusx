@@ -68,3 +68,31 @@ fn helix_err_to_errno(_e: morpheus_helix::error::HelixError) -> u64 {
     }
 }
 
+// smp: serializes all filesystem operations. without this, two cores get aliased
+// &mut FsGlobal from the static mut and the whole vfs corrupts itself. ask me how i know.
+static VFS_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
+
+// raii guard — unlocks VFS_LOCK on drop so early returns don't leak the lock.
+struct VfsGuard {
+    fs: &'static mut morpheus_helix::vfs::global::FsGlobal,
+}
+
+impl Drop for VfsGuard {
+    fn drop(&mut self) {
+        VFS_LOCK.unlock();
+    }
+}
+
+/// Acquire exclusive vfs access. returns None if fs not initialized.
+/// lock auto-releases when the guard drops — early returns are safe.
+unsafe fn vfs_lock() -> Option<VfsGuard> {
+    VFS_LOCK.lock();
+    match morpheus_helix::vfs::global::fs_global_mut() {
+        Some(fs) => Some(VfsGuard { fs }),
+        None => {
+            VFS_LOCK.unlock();
+            None
+        }
+    }
+}
+

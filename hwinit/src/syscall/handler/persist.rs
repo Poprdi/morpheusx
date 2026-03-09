@@ -57,7 +57,8 @@ unsafe fn persist_path<'a>(key: &str, buf: &'a mut [u8; 272]) -> Option<&'a str>
 
 /// Ensure the `/persist` directory exists. Idempotent — ignores AlreadyExists.
 unsafe fn ensure_persist_dir() {
-    if let Some(fs) = morpheus_helix::vfs::global::fs_global_mut() {
+    if let Some(mut _vfs_guard) = vfs_lock() {
+        let fs = &mut *_vfs_guard.fs;
         let ts = crate::cpu::tsc::read_tsc();
         let _ = morpheus_helix::vfs::vfs_mkdir(&mut fs.mount_table, "/persist", ts);
     }
@@ -92,10 +93,11 @@ pub unsafe fn sys_persist_put(key_ptr: u64, key_len: u64, data_ptr: u64, data_le
 
     ensure_persist_dir();
 
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = crate::cpu::tsc::read_tsc();
 
@@ -157,10 +159,11 @@ pub unsafe fn sys_persist_get(key_ptr: u64, key_len: u64, buf_ptr: u64, buf_len:
         None => return EINVAL,
     };
 
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
 
     // buf_len == 0 → just return file size (stat only).
     if buf_len == 0 {
@@ -218,10 +221,11 @@ pub unsafe fn sys_persist_del(key_ptr: u64, key_len: u64) -> u64 {
         None => return EINVAL,
     };
 
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
     let ts = crate::cpu::tsc::read_tsc();
 
     match morpheus_helix::vfs::vfs_unlink(&mut fs.mount_table, path, ts) {
@@ -245,10 +249,11 @@ pub unsafe fn sys_persist_list(buf_ptr: u64, buf_len: u64, offset: u64) -> u64 {
         return EFAULT;
     }
 
-    let fs = match morpheus_helix::vfs::global::fs_global() {
-        Some(fs) => fs,
+    let _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &*_vfs_guard.fs;
 
     let entries = match morpheus_helix::vfs::vfs_readdir(&fs.mount_table, "/persist") {
         Ok(e) => e,
@@ -304,10 +309,11 @@ pub unsafe fn sys_persist_info(info_ptr: u64) -> u64 {
         return EFAULT;
     }
 
-    let fs = match morpheus_helix::vfs::global::fs_global() {
-        Some(fs) => fs,
+    let _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &*_vfs_guard.fs;
 
     let mut num_keys = 0u64;
     let mut used_bytes = 0u64;
@@ -368,10 +374,11 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
         None => return EINVAL,
     };
 
-    let fs = match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => fs,
+    let mut _vfs_guard = match vfs_lock() {
+        Some(g) => g,
         None => return ENOSYS,
     };
+    let fs = &mut *_vfs_guard.fs;
 
     // Stat to get file size.
     let file_size = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {

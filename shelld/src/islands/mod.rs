@@ -1,6 +1,6 @@
-pub mod wallpaper;
-pub mod panel;
 pub mod launcher;
+pub mod panel;
+pub mod wallpaper;
 
 pub const PANEL_H: u32 = 30;
 pub const START_BTN_W: u32 = 84;
@@ -19,10 +19,10 @@ pub const ICON_INNER_RGB: (u8, u8, u8) = (18, 24, 40);
 pub struct ShellState {
     // surface buffer — private offscreen FB given by kernel because compd owns the real one
     pub surface_ptr: *mut u32,
-    pub fb_w:        u32,
-    pub fb_h:        u32,
-    pub fb_stride:   u32, // stride in PIXELS (fb_info.stride / 4). yes confusing. no we can't change it.
-    pub is_bgrx:     bool,
+    pub fb_w: u32,
+    pub fb_h: u32,
+    pub fb_stride: u32, // stride in PIXELS (fb_info.stride / 4). yes confusing. no we can't change it.
+    pub is_bgrx: bool,
 
     // wallpaper island
     pub wallpaper_dirty: bool,
@@ -41,7 +41,13 @@ pub struct ShellState {
 }
 
 impl ShellState {
-    pub fn new(surface_ptr: *mut u32, fb_w: u32, fb_h: u32, fb_stride_px: u32, is_bgrx: bool) -> Self {
+    pub fn new(
+        surface_ptr: *mut u32,
+        fb_w: u32,
+        fb_h: u32,
+        fb_stride_px: u32,
+        is_bgrx: bool,
+    ) -> Self {
         Self {
             surface_ptr,
             fb_w,
@@ -87,14 +93,20 @@ pub fn raw_fill(buf: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, px: 
 
 #[inline(always)]
 pub fn raw_glyph(
-    buf: *mut u32, stride: u32,
-    gx: u32, gy: u32,
+    buf: *mut u32,
+    stride: u32,
+    gx: u32,
+    gy: u32,
     glyph: &[u8; 16],
-    fg: u32, bg: u32, fb_h: u32,
+    fg: u32,
+    bg: u32,
+    fb_h: u32,
 ) {
     for row in 0u32..16 {
         let py = gy + row;
-        if py >= fb_h { break; }
+        if py >= fb_h {
+            break;
+        }
         let bits = glyph[row as usize];
         let base = (py * stride + gx) as usize;
         for col in 0u32..8 {
@@ -107,15 +119,33 @@ pub fn raw_glyph(
     }
 }
 
-pub fn draw_text(state: &ShellState, x: u32, y: u32, text: &str, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
+pub fn draw_text(
+    state: &ShellState,
+    x: u32,
+    y: u32,
+    text: &str,
+    fg: (u8, u8, u8),
+    bg: (u8, u8, u8),
+) {
     let fg_px = state.pack(fg.0, fg.1, fg.2);
     let bg_px = state.pack(bg.0, bg.1, bg.2);
     let font_w = 8u32;
 
     for (ci, ch) in text.chars().enumerate() {
         let gx = x + ci as u32 * font_w;
-        if gx + font_w > state.fb_w { break; }
+        if gx + font_w > state.fb_w {
+            break;
+        }
         let glyph = crate::font::get_glyph_or_space(ch);
-        raw_glyph(state.surface_ptr, state.fb_stride, gx, y, glyph, fg_px, bg_px, state.fb_h);
+        raw_glyph(
+            state.surface_ptr,
+            state.fb_stride,
+            gx,
+            y,
+            glyph,
+            fg_px,
+            bg_px,
+            state.fb_h,
+        );
     }
 }

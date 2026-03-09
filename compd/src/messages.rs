@@ -14,17 +14,17 @@ pub enum VsyncMsg {
 /// surface_mgr and renderer.
 #[derive(Clone, Copy)]
 pub struct CompositeEntry {
-    pub pid:        u32,
-    pub surface:    *const u32,
-    pub x:          i32,
-    pub y:          i32,
-    pub w:          u32,
-    pub h:          u32,
-    pub src_w:      u32,
-    pub src_h:      u32,
+    pub pid: u32,
+    pub surface: *const u32,
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub src_w: u32,
+    pub src_h: u32,
     pub src_stride: u32, // stride in PIXELS not bytes. the other stride is bytes. welcome to abi hell.
-    pub z_layer:    u8,  // 0=bg 1=bottom 2=top 3=overlay
-    pub dirty:      bool,
+    pub z_layer: u8,     // 0=bg 1=bottom 2=top 3=overlay
+    pub dirty: bool,
 }
 
 // SAFETY: single-core scheduler, no preemption between islands.
@@ -35,7 +35,7 @@ unsafe impl Sync for CompositeEntry {}
 pub enum SurfaceMsg {
     CompositeList {
         entries: [Option<CompositeEntry>; MAX_WINDOWS],
-        count:   u8,
+        count: u8,
     },
 }
 
