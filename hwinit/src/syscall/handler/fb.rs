@@ -167,15 +167,21 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
     }
 
     // Allocate physical pages for the surface.
+    // CRITICAL: registry guard must be dropped BEFORE sys_map_phys.
+    // sys_map_phys → ensure_user_table → global_registry_mut() would
+    // self-deadlock on GLOBAL_REGISTRY if we still hold it here.
     let pages = info.size.div_ceil(4096);
-    let mut registry = crate::memory::global_registry_mut();
-    let phys = match registry.allocate_pages(
-        crate::memory::AllocateType::AnyPages,
-        crate::memory::MemoryType::Allocated,
-        pages,
-    ) {
-        Ok(p) => p,
-        Err(_) => return ENOMEM,
+    let phys = {
+        let mut registry = crate::memory::global_registry_mut();
+        match registry.allocate_pages(
+            crate::memory::AllocateType::AnyPages,
+            crate::memory::MemoryType::Allocated,
+            pages,
+        ) {
+            Ok(p) => p,
+            Err(_) => return ENOMEM,
+        }
+        // registry dropped here. lock released. interrupts restored.
     };
 
     // Zero the surface (start with black).
@@ -194,6 +200,8 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
     proc.fb_surface_dirty = false;
 
     // Map into the process's address space.
+    // GLOBAL_REGISTRY is NOT held here. sys_map_phys can freely allocate
+    // page-table pages via ensure_user_table without deadlocking.
     sys_map_phys(phys, pages, 0x01)
 }
 
@@ -245,16 +253,9 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
     Ok(())
 }
 
-/// Kernel-internal: push back-buffer delta to VRAM.
-///
-/// Called from the timer ISR (`scheduler_tick`).  Compares the back buffer
-/// against the shadow and writes only changed pixel spans to real VRAM.
-/// Transparent to userspace — no syscall required.
-///
-/// PERF: Gated by `FB_DIRTY` flag.  When nothing has been written to the
-/// back buffer since the last present, this function returns immediately
-/// without touching any framebuffer memory.  This eliminates ~1.6 GB/s
-/// of wasted memory bandwidth at idle (1920×1080 @ 100 Hz).
+/// Push back-buffer delta to VRAM (called from timer ISR).
+/// Compares back buffer vs shadow and writes only changed pixels.
+/// Gated by FB_DIRTY; no syscall.
 pub unsafe fn fb_present_tick() {
     if FB_BACK_PHYS == 0 || FB_SHADOW_PHYS == 0 {
         return;

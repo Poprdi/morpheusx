@@ -1152,6 +1152,7 @@ pub fn is_valid_cr3(cr3: u64) -> bool {
 pub(crate) struct KernelCr3Guard {
     saved_cr3: u64,
     switched: bool,
+    interrupts_were_enabled: bool,
 }
 
 impl KernelCr3Guard {
@@ -1159,30 +1160,32 @@ impl KernelCr3Guard {
     #[cfg(target_arch = "x86_64")]
     pub unsafe fn enter() -> Self {
         let kcr3 = crate::process::scheduler::get_kernel_cr3();
-        if kcr3 == 0 {
+        if kcr3 == 0 || !is_valid_cr3(kcr3) {
             return Self {
                 saved_cr3: 0,
                 switched: false,
+                interrupts_were_enabled: false,
             };
         }
-        if !is_valid_cr3(kcr3) {
-            return Self {
-                saved_cr3: 0,
-                switched: false,
-            };
-        }
+        let interrupts_were_enabled = crate::cpu::idt::interrupts_enabled();
+        crate::cpu::idt::disable_interrupts();
         let saved: u64;
         core::arch::asm!("mov {}, cr3", out(reg) saved, options(nostack, nomem));
         if saved == kcr3 {
+            if interrupts_were_enabled {
+                crate::cpu::idt::enable_interrupts();
+            }
             return Self {
                 saved_cr3: saved,
                 switched: false,
+                interrupts_were_enabled: false,
             };
         }
         core::arch::asm!("mov cr3, {}", in(reg) kcr3, options(nostack, nomem));
         Self {
             saved_cr3: saved,
             switched: true,
+            interrupts_were_enabled,
         }
     }
 
@@ -1192,6 +1195,7 @@ impl KernelCr3Guard {
         Self {
             saved_cr3: 0,
             switched: false,
+            interrupts_were_enabled: false,
         }
     }
 }
@@ -1203,11 +1207,13 @@ impl Drop for KernelCr3Guard {
             unsafe {
                 #[cfg(target_arch = "x86_64")]
                 core::arch::asm!("mov cr3, {}", in(reg) self.saved_cr3, options(nostack, nomem));
+                if self.interrupts_were_enabled {
+                    crate::cpu::idt::enable_interrupts();
+                }
             }
         }
     }
 }
-
 // ORDER ARITHMETIC
 
 /// Smallest order k such that 2ᵏ ≥ pages.
