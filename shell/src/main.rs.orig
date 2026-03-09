@@ -44,7 +44,7 @@ fn main() -> i32 {
     let mut con = console::Console::new(&framebuffer);
     con.clear(&framebuffer);
 
-    con.write_colored(&framebuffer, "msh 0.0.12", (85, 255, 85));
+    con.write_colored(&framebuffer, "msh 1.0", (85, 255, 85));
     con.write_str(&framebuffer, " - MorpheusX Shell\n");
     con.write_str(&framebuffer, "Type 'help' for commands.\n\n");
 
@@ -113,11 +113,6 @@ fn main() -> i32 {
                     continue;
                 }
             };
-
-            if !is_compositor {
-                last_status = exec::run(&pipeline, &cwd);
-                continue;
-            }
 
             let args: alloc::vec::Vec<&str> = cmd.argv.iter().skip(1).map(|s| s.as_str()).collect();
 
