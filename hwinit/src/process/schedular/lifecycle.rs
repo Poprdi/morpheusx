@@ -1,10 +1,14 @@
 use super::state::{
-    clear_waiter_all, set_percpu_fpu_ptr, set_this_core_pid, this_core_pid, IDLE_TSC_TOTAL, KERNEL_CR3,
+    clear_waiter_all, sample_idle_tsc_total, sample_per_core_idle_tsc as state_sample_per_core_idle_tsc,
+    set_percpu_fpu_ptr, set_this_core_pid, this_core_pid, KERNEL_CR3,
     KERNEL_HLT_ENTRY_TSC, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY,
     TIMED_BLOCK_COUNT, TSC_FREQUENCY,
 };
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
-use crate::process::{BlockReason, CpuContext, Process, ProcessState, Signal, MAX_PROCESSES};
+use crate::process::{
+    BlockReason, CpuContext, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal,
+    SCHED_CAP_DEFAULT, MAX_PROCESSES,
+};
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::Ordering;
 
@@ -21,11 +25,31 @@ pub fn mark_kernel_hlt() {
 }
 
 pub fn idle_tsc_total() -> u64 {
-    IDLE_TSC_TOTAL.load(Ordering::Relaxed)
+    sample_idle_tsc_total(crate::cpu::tsc::read_tsc())
+}
+
+pub fn sample_per_core_idle_tsc(out: &mut [u64]) -> usize {
+    state_sample_per_core_idle_tsc(crate::cpu::tsc::read_tsc(), out)
 }
 
 pub fn inc_timed_block_count() {
     TIMED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(super) fn apply_default_scheduler_policy(proc: &mut Process, is_kernel: bool) {
+    proc.importance_16 = 8;
+    proc.power_mode = ProcessPowerMode::Balanced;
+    proc.policy_class = ProcessPolicyClass::Throughput;
+    proc.capability_bits = SCHED_CAP_DEFAULT;
+    proc.affinity_mask = u64::MAX;
+    proc.policy_flags = 0;
+    proc.effective_weight_cache = 0;
+
+    if is_kernel {
+        proc.importance_16 = 16;
+        proc.power_mode = ProcessPowerMode::Performance;
+        proc.policy_class = ProcessPolicyClass::LatencyCritical;
+    }
 }
 
 pub unsafe fn init_scheduler() {
@@ -40,6 +64,7 @@ pub unsafe fn init_scheduler() {
     kernel_proc.state = ProcessState::Running;
     kernel_proc.priority = 0;
     kernel_proc.running_on = 0;
+    apply_default_scheduler_policy(&mut kernel_proc, true);
 
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
@@ -90,6 +115,7 @@ pub unsafe fn spawn_kernel_thread(
     proc.parent_pid = this_core_pid();
     proc.priority = priority;
     proc.state = ProcessState::Ready;
+    apply_default_scheduler_policy(&mut proc, true);
 
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
