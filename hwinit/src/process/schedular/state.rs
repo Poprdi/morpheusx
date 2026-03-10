@@ -27,6 +27,18 @@ pub enum SchedulerCoreState {
     UnparkPending = 4,
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchedulerTransitionReason {
+    TickIdle = 0,
+    TickWork = 1,
+    WakeWork = 2,
+    HysteresisPark = 3,
+    HysteresisUnpark = 4,
+    ThermalGuard = 5,
+    ThermalEmergency = 6,
+}
+
 pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] =
     [const { None }; MAX_PROCESSES];
 
@@ -49,10 +61,14 @@ pub(super) static SCHED_SYSTEM_STATE: AtomicU8 = AtomicU8::new(SchedulerSystemSt
 pub(super) static PER_CORE_STATE: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(SchedulerCoreState::Active as u8) }; MAX_CPUS];
 pub(super) static PER_CORE_LOAD_EWMA: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
 pub(super) static PER_CORE_IDLE_TICKS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_ENTRY_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_ACCUM_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 pub(super) static PER_CORE_LAST_ACTIVE_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 pub(super) static PER_CORE_PARK_CANDIDATE: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(0) }; MAX_CPUS];
 pub(super) static PER_CORE_IDLE_STREAK: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
 pub(super) static PER_CORE_ACTIVE_STREAK: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_LAST_STATE_CHANGE_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_LAST_TRANSITION_REASON: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(SchedulerTransitionReason::TickWork as u8) }; MAX_CPUS];
 pub(super) static SCHED_TIER_HITS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 pub(super) static THERMAL_LEVEL: AtomicU8 = AtomicU8::new(0);
 pub(super) static THERMAL_CONFIDENCE: AtomicU8 = AtomicU8::new(0);
@@ -243,6 +259,14 @@ pub fn set_scheduler_system_state(state: SchedulerSystemState) {
     SCHED_SYSTEM_STATE.store(state as u8, Ordering::Relaxed);
 }
 
+pub fn refresh_balanced_system_mode() {
+    // Thermal hooks own state selection when confidence is non-zero.
+    if THERMAL_CONFIDENCE.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    set_scheduler_system_state(SchedulerSystemState::Balanced);
+}
+
 #[inline(always)]
 pub fn record_tier_hit(tier: usize) {
     if tier < SCHED_TIER_HITS.len() {
@@ -272,12 +296,132 @@ pub fn set_core_state(core_idx: u32, state: SchedulerCoreState) {
 }
 
 #[inline(always)]
+pub fn core_state(core_idx: u32) -> SchedulerCoreState {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return SchedulerCoreState::Active;
+    }
+    match PER_CORE_STATE[idx].load(Ordering::Relaxed) {
+        0 => SchedulerCoreState::Active,
+        1 => SchedulerCoreState::LightIdle,
+        2 => SchedulerCoreState::DeepIdleEligible,
+        3 => SchedulerCoreState::Parked,
+        _ => SchedulerCoreState::UnparkPending,
+    }
+}
+
+pub fn transition_core_state(
+    core_idx: u32,
+    target: SchedulerCoreState,
+    now_tsc: u64,
+    reason: SchedulerTransitionReason,
+) -> bool {
+    const MIN_STATE_RESIDENCY_TSC: u64 = 250_000;
+    const MIN_UNPARK_PENDING_TSC: u64 = 25_000;
+
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return false;
+    }
+
+    let current = core_state(core_idx);
+    if current == target {
+        return true;
+    }
+
+    // force a staging state when waking a parked core.
+    if current == SchedulerCoreState::Parked && target == SchedulerCoreState::Active {
+        PER_CORE_STATE[idx].store(SchedulerCoreState::UnparkPending as u8, Ordering::Relaxed);
+        PER_CORE_LAST_STATE_CHANGE_TSC[idx].store(now_tsc, Ordering::Relaxed);
+        PER_CORE_LAST_TRANSITION_REASON[idx].store(
+            SchedulerTransitionReason::HysteresisUnpark as u8,
+            Ordering::Relaxed,
+        );
+        return false;
+    }
+
+    let last_tsc = PER_CORE_LAST_STATE_CHANGE_TSC[idx].load(Ordering::Relaxed);
+    let min_residency = if current == SchedulerCoreState::UnparkPending {
+        MIN_UNPARK_PENDING_TSC
+    } else {
+        MIN_STATE_RESIDENCY_TSC
+    };
+
+    if now_tsc.saturating_sub(last_tsc) < min_residency
+        && reason != SchedulerTransitionReason::ThermalEmergency
+    {
+        return false;
+    }
+
+    PER_CORE_STATE[idx].store(target as u8, Ordering::Relaxed);
+    PER_CORE_LAST_STATE_CHANGE_TSC[idx].store(now_tsc, Ordering::Relaxed);
+    PER_CORE_LAST_TRANSITION_REASON[idx].store(reason as u8, Ordering::Relaxed);
+    true
+}
+
+#[inline(always)]
 pub fn mark_core_idle_tick(core_idx: u32) {
     let idx = core_idx as usize;
     if idx >= MAX_CPUS {
         return;
     }
     PER_CORE_IDLE_TICKS[idx].fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn mark_core_idle_enter(core_idx: u32, now_tsc: u64) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+    let entry = PER_CORE_IDLE_ENTRY_TSC[idx].load(Ordering::Relaxed);
+    if entry == 0 {
+        PER_CORE_IDLE_ENTRY_TSC[idx].store(now_tsc, Ordering::Relaxed);
+    }
+}
+
+#[inline(always)]
+pub fn mark_core_idle_exit(core_idx: u32, now_tsc: u64) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+    let entry = PER_CORE_IDLE_ENTRY_TSC[idx].swap(0, Ordering::Relaxed);
+    if entry != 0 {
+        PER_CORE_IDLE_ACCUM_TSC[idx].fetch_add(now_tsc.saturating_sub(entry), Ordering::Relaxed);
+    }
+}
+
+pub fn sample_idle_tsc_total(now_tsc: u64) -> u64 {
+    let mut total = IDLE_TSC_TOTAL.load(Ordering::Relaxed);
+    let mut idx = 0usize;
+    while idx < MAX_CPUS {
+        let accum = PER_CORE_IDLE_ACCUM_TSC[idx].load(Ordering::Relaxed);
+        let entry = PER_CORE_IDLE_ENTRY_TSC[idx].load(Ordering::Relaxed);
+        total = total.saturating_add(accum);
+        if entry != 0 {
+            total = total.saturating_add(now_tsc.saturating_sub(entry));
+        }
+        idx += 1;
+    }
+    total
+}
+
+pub fn sample_per_core_idle_tsc(now_tsc: u64, out: &mut [u64]) -> usize {
+    let cpu_count = crate::cpu::per_cpu::cpu_count() as usize;
+    let limit = core::cmp::min(core::cmp::min(cpu_count, MAX_CPUS), out.len());
+    let mut idx = 0usize;
+    while idx < limit {
+        let accum = PER_CORE_IDLE_ACCUM_TSC[idx].load(Ordering::Relaxed);
+        let entry = PER_CORE_IDLE_ENTRY_TSC[idx].load(Ordering::Relaxed);
+        let mut total = accum;
+        if entry != 0 {
+            total = total.saturating_add(now_tsc.saturating_sub(entry));
+        }
+        out[idx] = total;
+        idx += 1;
+    }
+    idx
 }
 
 #[inline(always)]
@@ -444,6 +588,7 @@ pub struct SchedulerDebugInfo {
     pub thermal_level: u8,
     pub thermal_confidence: u8,
     pub core_state: [u8; MAX_CPUS],
+    pub core_last_transition_reason: [u8; MAX_CPUS],
     pub core_load_ewma: [u32; MAX_CPUS],
     pub core_park_candidate: [u8; MAX_CPUS],
 }
@@ -456,6 +601,7 @@ impl SchedulerDebugInfo {
             thermal_level: 0,
             thermal_confidence: 0,
             core_state: [0u8; MAX_CPUS],
+            core_last_transition_reason: [0u8; MAX_CPUS],
             core_load_ewma: [0u32; MAX_CPUS],
             core_park_candidate: [0u8; MAX_CPUS],
         }
@@ -543,6 +689,8 @@ impl Scheduler {
         let mut i = 0usize;
         while i < MAX_CPUS {
             out.core_state[i] = PER_CORE_STATE[i].load(Ordering::Relaxed);
+            out.core_last_transition_reason[i] =
+                PER_CORE_LAST_TRANSITION_REASON[i].load(Ordering::Relaxed);
             out.core_load_ewma[i] = PER_CORE_LOAD_EWMA[i].load(Ordering::Relaxed);
             out.core_park_candidate[i] = PER_CORE_PARK_CANDIDATE[i].load(Ordering::Relaxed);
             i += 1;
@@ -659,6 +807,92 @@ impl Scheduler {
         slot.priority = priority;
         PROCESS_TABLE_LOCK.unlock();
         Ok(())
+    }
+
+    pub unsafe fn set_importance(&self, pid: u32, importance_16: u8) -> Result<(), &'static str> {
+        PROCESS_TABLE_LOCK.lock();
+        let slot = match PROCESS_TABLE.get_mut(pid as usize).and_then(|s| s.as_mut()) {
+            Some(s) => s,
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return Err("set_importance: PID not found");
+            }
+        };
+        if slot.is_free() {
+            PROCESS_TABLE_LOCK.unlock();
+            return Err("set_importance: process terminated");
+        }
+        slot.importance_16 = importance_16.clamp(1, 16);
+        slot.effective_weight_cache = 0;
+        PROCESS_TABLE_LOCK.unlock();
+        Ok(())
+    }
+
+    pub unsafe fn set_power_mode(
+        &self,
+        pid: u32,
+        power_mode: ProcessPowerMode,
+    ) -> Result<(), &'static str> {
+        PROCESS_TABLE_LOCK.lock();
+        let slot = match PROCESS_TABLE.get_mut(pid as usize).and_then(|s| s.as_mut()) {
+            Some(s) => s,
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return Err("set_power_mode: PID not found");
+            }
+        };
+        if slot.is_free() {
+            PROCESS_TABLE_LOCK.unlock();
+            return Err("set_power_mode: process terminated");
+        }
+        slot.power_mode = power_mode;
+        slot.effective_weight_cache = 0;
+        PROCESS_TABLE_LOCK.unlock();
+        Ok(())
+    }
+
+    pub unsafe fn set_policy_class(
+        &self,
+        pid: u32,
+        policy_class: ProcessPolicyClass,
+    ) -> Result<(), &'static str> {
+        PROCESS_TABLE_LOCK.lock();
+        let slot = match PROCESS_TABLE.get_mut(pid as usize).and_then(|s| s.as_mut()) {
+            Some(s) => s,
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return Err("set_policy_class: PID not found");
+            }
+        };
+        if slot.is_free() {
+            PROCESS_TABLE_LOCK.unlock();
+            return Err("set_policy_class: process terminated");
+        }
+        slot.policy_class = policy_class;
+        slot.effective_weight_cache = 0;
+        PROCESS_TABLE_LOCK.unlock();
+        Ok(())
+    }
+
+    pub unsafe fn get_scheduler_policy(
+        &self,
+        pid: u32,
+    ) -> Result<(u8, ProcessPowerMode, ProcessPolicyClass), &'static str> {
+        PROCESS_TABLE_LOCK.lock();
+        let slot = match PROCESS_TABLE.get(pid as usize).and_then(|s| s.as_ref()) {
+            Some(s) => s,
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return Err("get_scheduler_policy: PID not found");
+            }
+        };
+        if slot.is_free() {
+            PROCESS_TABLE_LOCK.unlock();
+            return Err("get_scheduler_policy: process terminated");
+        }
+        let out = (slot.importance_16, slot.power_mode, slot.policy_class);
+        PROCESS_TABLE_LOCK.unlock();
+        Ok(out)
     }
 
     pub unsafe fn get_priority(&self, pid: u32) -> Result<u8, &'static str> {

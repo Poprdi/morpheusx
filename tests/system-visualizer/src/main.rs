@@ -373,6 +373,7 @@ fn main() -> i32 {
             hud::draw_process_panel(&fb, &sys_state, selected);
             hud::draw_state_bar(&fb, &sys_state);
             hud::draw_load_graph(&fb, &sys_state);
+            hud::draw_per_core_graph(&fb, &sys_state);
             hud::draw_controls(&fb);
 
             if let Some(idx) = selected {
