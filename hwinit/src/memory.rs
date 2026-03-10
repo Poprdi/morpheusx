@@ -551,11 +551,8 @@ impl MemoryRegistry {
         }
 
         let reclaimed_mb = (reclaimed_pages * PAGE_SIZE) >> 20;
-        puts("[MEM] reclaim_boot_services: freed ");
-        put_hex32(reclaimed_mb as u32);
-        puts(" MB  free_total=");
-        put_hex32(((self.free_pages * PAGE_SIZE) >> 20) as u32);
-        puts(" MB\n");
+        let _ = reclaimed_mb;
+        crate::serial::log_info("MEM", 762, "reclaimed boot services memory");
     }
 
     /// Add range [start, end) to the buddy, skipping any pages in `holes`.
@@ -1088,11 +1085,9 @@ impl MemoryRegistry {
             }
         }
         if corrupt == 0 {
-            puts("[MEM] free-list validation: OK\n");
+            crate::serial::log_ok("MEM", 760, "free-list validation passed");
         } else {
-            puts("[MEM] free-list validation: ");
-            put_hex32(corrupt as u32);
-            puts(" corrupted chains!\n");
+            crate::serial::log_warn("MEM", 761, "free-list validation found corruption");
         }
         corrupt
     }
@@ -1123,13 +1118,8 @@ impl MemoryRegistry {
     fn print_summary(&self) {
         let total_mb = (self.total_pages * PAGE_SIZE) >> 20;
         let free_mb = (self.free_pages * PAGE_SIZE) >> 20;
-        puts("[MEM] buddy allocator ready: total=");
-        put_hex32(total_mb as u32);
-        puts("MB free=");
-        put_hex32(free_mb as u32);
-        puts("MB regions=");
-        put_hex32(self.map_count as u32);
-        puts("\n");
+        let _ = (total_mb, free_mb);
+        crate::serial::log_ok("MEM", 763, "buddy allocator ready");
     }
 }
 

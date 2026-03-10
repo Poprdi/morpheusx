@@ -26,7 +26,7 @@ use super::signals::Signal;
 use super::{BlockReason, Process, ProcessState, MAX_PROCESSES, PROCESS_KERNEL_STACK_SIZE};
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
 use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
-use crate::serial::{put_hex32, put_hex64, puts};
+use crate::serial::{put_hex32, puts};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::cpu::per_cpu::MAX_CPUS;
@@ -69,7 +69,7 @@ unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
 /// The flat process table.  Index == PID.
 /// Protected by PROCESS_TABLE_LOCK for SMP safety.
 pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] =
-    { [const { None }; MAX_PROCESSES] };
+    [const { None }; MAX_PROCESSES];
 
 /// Spinlock guarding PROCESS_TABLE mutations from concurrent cores.
 /// The timer ISR on every core calls scheduler_tick() which must not
@@ -594,13 +594,8 @@ pub unsafe fn spawn_kernel_thread(
         KERNEL_DS as u64,
     );
 
-    puts("[SCHED] spawned PID ");
-    put_hex32(pid);
-    puts(" \"");
-    puts(proc.name_str());
-    puts("\" entry=");
-    put_hex64(entry_fn);
-    puts("\n");
+    let _ = (pid, entry_fn);
+    crate::serial::log_info("SCHED", 770, "kernel thread spawned");
 
     PROCESS_TABLE[slot_idx] = Some(proc);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1130,15 +1125,8 @@ pub unsafe fn spawn_user_process(
     let total_pages: u64 = image.segments.iter().map(|s| s.memsz / 4096).sum();
     proc.pages_allocated = total_pages;
 
-    puts("[SCHED] spawned user PID ");
-    put_hex32(pid);
-    puts(" \"");
-    puts(proc.name_str());
-    puts("\" entry=");
-    put_hex64(image.entry);
-    puts(" cr3=");
-    put_hex64(proc.cr3);
-    puts("\n");
+    let _ = (pid, image.entry, proc.cr3);
+    crate::serial::log_info("SCHED", 771, "user process spawned");
 
     PROCESS_TABLE[slot_idx] = Some(proc);
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);

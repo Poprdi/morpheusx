@@ -7,7 +7,7 @@
 //! just raw pointer arithmetic through firmware tables.
 
 use crate::cpu::per_cpu::MAX_CPUS;
-use crate::serial::{put_hex32, put_hex64, puts};
+use crate::serial::{put_hex32, puts};
 
 // ── RSDP ─────────────────────────────────────────────────────────────────
 
@@ -256,13 +256,11 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
 pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
     let rsdp_phys = find_rsdp();
     if rsdp_phys == 0 {
-        puts("[ACPI] RSDP not found — MADT discovery unavailable\n");
+        crate::serial::log_warn("ACPI", 760, "RSDP not found; MADT discovery unavailable");
         return ApLapicIds::empty();
     }
 
-    puts("[ACPI] RSDP at ");
-    put_hex64(rsdp_phys);
-    puts("\n");
+    let _ = rsdp_phys;
 
     let rsdp = rsdp_phys as *const Rsdp;
     let revision = (*rsdp).revision;
@@ -272,9 +270,7 @@ pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
         let rsdp2 = rsdp_phys as *const Rsdp2;
         let xsdt = (*rsdp2).xsdt_address;
         if xsdt != 0 {
-            puts("[ACPI] XSDT at ");
-            put_hex64(xsdt);
-            puts("\n");
+            let _ = xsdt;
             let found = find_table_xsdt(xsdt, &MADT_SIG);
             if found != 0 {
                 found
@@ -290,19 +286,15 @@ pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
     };
 
     if madt_phys == 0 {
-        puts("[ACPI] MADT not found in RSDT/XSDT\n");
+        crate::serial::log_warn("ACPI", 761, "MADT not found in RSDT/XSDT");
         return ApLapicIds::empty();
     }
-
-    puts("[ACPI] MADT at ");
-    put_hex64(madt_phys);
-    puts("\n");
+    let _ = madt_phys;
 
     let result = parse_madt(madt_phys, bsp_lapic_id);
 
-    puts("[ACPI] ");
-    put_hex32(result.count as u32);
-    puts(" APs in MADT\n");
+    let _ = result.count;
+    crate::serial::log_ok("ACPI", 762, "MADT parsed");
 
     result
 }

@@ -355,8 +355,6 @@ impl Keyboard {
     }
 
     unsafe fn init_controller(&mut self) {
-        use morpheus_hwinit::serial::puts;
-
         // OVMF already configured the 8042 — don't send 0xAA/0xFF as they clear
         // Translation (bit 6), causing set-2 bytes to arrive instead of set-1.
         // RMW the config byte: keep translation on, disable IRQs (we poll).
@@ -384,7 +382,7 @@ impl Keyboard {
         asm_ps2_flush();
 
         self.initialized = true;
-        puts("[KBD] PS/2 keyboard ready\n");
+        morpheus_hwinit::serial::log_ok("INPUT", 930, "PS/2 keyboard ready");
     }
 
     /// Spin-wait for a response byte from port 0x60, with bounded timeout.

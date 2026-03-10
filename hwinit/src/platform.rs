@@ -20,7 +20,7 @@ use crate::memory::{
 use crate::paging::init_kernel_page_table;
 use crate::pci::{offset, pci_cfg_read16, pci_cfg_write16, PciAddr};
 use crate::process::scheduler::init_scheduler;
-use crate::serial::{checkpoint, put_hex32, put_hex64, puts};
+use crate::serial::{checkpoint, log_error, log_info, log_ok, log_warn};
 use crate::syscall::init_syscall;
 
 // CONSTANTS
@@ -122,10 +122,10 @@ pub unsafe fn platform_init_selfcontained(
         }
     }
 
-    puts("[HWINIT] === TAKING OWNERSHIP ===\n");
+    log_info("BOOT", 100, "taking ownership of platform init");
 
     // phase 1: memory
-    puts("[HWINIT] Phase 1: Memory\n");
+    log_info("BOOT", 101, "phase 1/12: memory");
 
     // ── Collect every page the CPU is actively using ──────────────
     //
@@ -144,10 +144,6 @@ pub unsafe fn platform_init_selfcontained(
     // 1) Page-table pages (PML4, PDPT, PD, PT)
     let (mut hw_holes, mut hw_count) = crate::paging::collect_page_table_pages();
 
-    puts("[MEM] collected ");
-    put_hex32(hw_count as u32);
-    puts(" page-table pages\n");
-
     // 2) GDT page(s)
     {
         let mut buf = [0u8; 10];
@@ -164,9 +160,6 @@ pub unsafe fn platform_init_selfcontained(
             hw_count += 1;
             p += 4096;
         }
-        puts("[MEM] GDT at ");
-        put_hex64(page_start);
-        puts("\n");
     }
 
     // 3) IDT page(s)
@@ -185,9 +178,6 @@ pub unsafe fn platform_init_selfcontained(
             hw_count += 1;
             p += 4096;
         }
-        puts("[MEM] IDT at ");
-        put_hex64(page_start);
-        puts("\n");
     }
 
     // 4) Boot stack pages — use actual bounds from bootloader, not RSP guess.
@@ -244,10 +234,6 @@ pub unsafe fn platform_init_selfcontained(
         hw_count = w;
     }
 
-    puts("[MEM] ");
-    put_hex32(hw_count as u32);
-    puts(" hw-hole pages (PT+GDT+IDT+stack)\n");
-
     // ── Populate the buddy allocator ─────────────────────────────
     init_global_registry(
         config.memory_map_ptr,
@@ -259,32 +245,18 @@ pub unsafe fn platform_init_selfcontained(
         &hw_holes[..hw_count],
     );
 
-    if config.image_pages > 0 {
-        puts("[MEM] excluded PE image: ");
-        put_hex64(config.image_base);
-        puts(" (");
-        put_hex32(config.image_pages as u32);
-        puts(" pages)\n");
-    }
-
     // Validate free-list integrity after import.
     {
         let reg = global_registry_mut();
         let corrupt = reg.validate_free_lists();
         if corrupt > 0 {
-            puts("[MEM] WARNING: dumping map for triage\n");
+            log_warn("MEM", 150, "free-list validation detected corruption; dumping map");
             reg.dump_map();
         }
     }
 
-    puts("[MEM] boot stack: ");
-    put_hex64(boot_stack_base);
-    puts(" .. ");
-    put_hex64(boot_stack_top);
-    puts("\n");
-
     // phase 2: cpu
-    puts("[HWINIT] Phase 2: CPU state\n");
+    log_info("BOOT", 102, "phase 2/12: cpu state");
     checkpoint("phase2-begin");
 
     // Allocate kernel stack inside a narrow scope so GLOBAL_REGISTRY
@@ -333,29 +305,27 @@ pub unsafe fn platform_init_selfcontained(
     }
 
     // phase 3: interrupts
-    puts("[HWINIT] Phase 3: PIC\n");
+    log_info("BOOT", 103, "phase 3/12: pic");
     checkpoint("phase3-pic");
 
     init_pic();
     checkpoint("phase3-done");
 
     // phase 4: heap
-    puts("[HWINIT] Phase 4: Heap\n");
+    log_info("BOOT", 104, "phase 4/12: heap");
     checkpoint("phase4-heap-begin");
 
     // init_heap allocates from registry itself.
     // GLOBAL_REGISTRY is NOT held here — the kernel stack was allocated
     // in a scoped block above and the guard was dropped before this callsite.
     if let Err(e) = init_heap(HEAP_SIZE) {
-        puts("[HWINIT] ERROR: heap init failed: ");
-        puts(e);
-        puts("\n");
+        log_error("HEAP", 401, e);
         return Err(InitError::NoFreeMemory);
     }
     checkpoint("phase4-heap-done");
 
     // phase 5: tsc
-    puts("[HWINIT] Phase 5: TSC\n");
+    log_info("BOOT", 105, "phase 5/12: tsc");
     checkpoint("phase5-tsc-calibrate");
 
     let tsc_freq = calibrate_tsc_pit();
@@ -367,7 +337,7 @@ pub unsafe fn platform_init_selfcontained(
     crate::process::scheduler::set_tsc_frequency(tsc_freq);
 
     // phase 6: dma
-    puts("[HWINIT] Phase 6: DMA\n");
+    log_info("BOOT", 106, "phase 6/12: dma");
     checkpoint("phase6-dma-alloc");
 
     let dma_pages = DMA_SIZE.div_ceil(4096) as u64;
@@ -387,14 +357,14 @@ pub unsafe fn platform_init_selfcontained(
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);
 
     // phase 7: pci
-    puts("[HWINIT] Phase 7: PCI\n");
+    log_info("BOOT", 107, "phase 7/12: pci");
     checkpoint("phase7-pci-begin");
 
     enable_all_pci_devices();
     checkpoint("phase7-done");
 
     // phase 8: paging
-    puts("[HWINIT] Phase 8: Paging\n");
+    log_info("BOOT", 108, "phase 8/12: paging");
     checkpoint("phase8-paging-begin");
 
     init_kernel_page_table();
@@ -407,14 +377,14 @@ pub unsafe fn platform_init_selfcontained(
     checkpoint("phase8-done");
 
     // phase 9: scheduler
-    puts("[HWINIT] Phase 9: Scheduler\n");
+    log_info("BOOT", 109, "phase 9/12: scheduler");
     checkpoint("phase9-scheduler");
 
     init_scheduler();
     checkpoint("phase9-done");
 
     // phase 10: syscalls
-    puts("[HWINIT] Phase 10: Syscalls\n");
+    log_info("BOOT", 110, "phase 10/12: syscalls");
     checkpoint("phase10-syscall");
 
     init_syscall();
@@ -451,7 +421,7 @@ pub unsafe fn platform_init_selfcontained(
     // write FreeNode into them — doing so corrupts the live PML4/PDPT/PD/PT
     // and the very next instruction that triggers a TLB miss will #GP or #PF.
     // Collect them first, sort, and pass as an exclusion set.
-    puts("[HWINIT] Phase 10.5: Reclaiming UEFI BootServices RAM\n");
+    log_info("BOOT", 111, "phase 10.5/12: reclaim boot services ram");
     checkpoint("phase10.5-reclaim-begin");
     {
         let (mut pt_pages, pt_count) = crate::paging::collect_page_table_pages();
@@ -481,7 +451,7 @@ pub unsafe fn platform_init_selfcontained(
     checkpoint("phase10.5-done");
 
     // phase 11: filesystem
-    puts("[HWINIT] Phase 11: HelixFS\n");
+    log_info("BOOT", 112, "phase 11/12: helixfs");
     checkpoint("phase11-fs-alloc");
     {
         const ROOT_FS_SIZE: usize = 16 * 1024 * 1024; // 16 MB
@@ -500,9 +470,9 @@ pub unsafe fn platform_init_selfcontained(
         core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
         checkpoint("phase11-fs-mount");
         match morpheus_helix::vfs::global::init_root_fs(root_fs_base as *mut u8, ROOT_FS_SIZE) {
-            Ok(()) => puts("[HWINIT]   HelixFS mounted at /\n"),
+            Ok(()) => log_ok("FS", 112, "helixfs mounted at /"),
             Err(_) => {
-                puts("[HWINIT]   WARNING: root FS init failed\n");
+                log_warn("FS", 412, "root fs init failed; continuing without fs");
                 // Non-fatal — system continues without FS.
             }
         }
@@ -517,7 +487,7 @@ pub unsafe fn platform_init_selfcontained(
     }
 
     // phase 12: SMP — bring up Application Processors
-    puts("[HWINIT] Phase 12: SMP\n");
+    log_info("BOOT", 113, "phase 12/12: smp");
     checkpoint("phase12-smp-begin");
 
     {
@@ -541,28 +511,22 @@ pub unsafe fn platform_init_selfcontained(
             let cpu_count = apic::detect_cpu_count();
             per_cpu::set_cpu_count(cpu_count);
 
-            puts("[SMP] CPUID fallback: ");
-            put_hex32(cpu_count);
-            puts(" CPUs\n");
+            log_warn("SMP", 213, "using CPUID fallback topology scan");
 
             if cpu_count > 1 {
                 checkpoint("phase12-start-aps-cpuid");
                 ap_boot::start_aps();
             } else {
-                puts("[SMP] single-core — no APs to start\n");
+                log_info("SMP", 114, "single-core detected; no AP startup");
             }
         }
 
         checkpoint("phase12-smp-done");
-        puts("[SMP] ");
-        put_hex32(per_cpu::AP_ONLINE_COUNT.load(core::sync::atomic::Ordering::Relaxed));
-        puts(" cores online\n");
+        log_ok("SMP", 115, "cpu bring-up complete");
     }
 
     // DONE - Machine is sane
-    puts("[HWINIT] ═══════════════════════════════════════════════\n");
-    puts("[HWINIT] PLATFORM READY - Drivers may proceed\n");
-    puts("[HWINIT] ═══════════════════════════════════════════════\n");
+    log_ok("BOOT", 199, "platform ready; drivers may proceed");
 
     // Legacy allocator for backward compatibility
     let allocator = fallback_allocator();
@@ -588,7 +552,7 @@ pub unsafe fn platform_init_selfcontained(
 pub unsafe fn platform_init(config: PlatformConfig) -> Result<PlatformInit, InitError> {
     // Validate DMA region
     if config.dma_base.is_null() || config.dma_size < DmaRegion::MIN_SIZE {
-        puts("[HWINIT] ERROR: invalid DMA region\n");
+        log_error("BOOT", 900, "invalid dma region");
         return Err(InitError::InvalidDmaRegion);
     }
 

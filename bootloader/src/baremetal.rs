@@ -108,10 +108,10 @@ unsafe fn bsod_crash_hook(info: &morpheus_hwinit::CrashInfo) {
 // THE ENTRY POINT — NEVER RETURNS
 
 pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
-    use morpheus_hwinit::serial::puts;
+    use morpheus_hwinit::serial::{log_error, log_info, log_ok, puts};
 
     // First serial output — if you see this, our binary loaded and ran.
-    puts("[MORPHEUSX] enter_baremetal\n");
+    log_info("BOOT", 901, "enter baremetal");
 
     FRAMEBUFFER_INFO = config.framebuffer;
 
@@ -158,7 +158,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let st = &*(config.system_table as *const MinSystemTable);
     let bs = &*st.boot_services;
 
-    puts("[EBS-PREP] allocating stack\n");
+    log_info("EBS", 902, "allocating kernel stack");
     let mut stack_base: u64 = 0;
     let status = (bs.allocate_pages)(0, 2, STACK_PAGES, &mut stack_base);
     if status != 0 {
@@ -170,7 +170,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         }
     }
     let stack_top = stack_base + STACK_SIZE as u64;
-    puts("[EBS-PREP] stack ready, getting memory map\n");
+    log_info("EBS", 903, "stack ready; fetching memory map");
 
     // memory map + exitbootservices
     static mut MMAP_BUF: [u8; 32768] = [0u8; 32768];
@@ -202,14 +202,13 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     DESC_SIZE = desc_size;
     DESC_VER = desc_ver;
 
-    puts("[EBS-PREP] mmap done, calling ExitBootServices\n");
+    log_info("EBS", 904, "calling ExitBootServices");
     let status = (bs.exit_boot_services)(config.image_handle, map_key);
     if status != 0 {
         // EBS failed — either stale map key or wrong offset in MinBootServices.
         // This message will appear on serial before we loop.
-        puts("[FATAL] ExitBootServices failed — status=");
-        morpheus_hwinit::serial::put_hex64(status as u64);
-        puts("\n");
+        let _ = status;
+        log_error("EBS", 905, "ExitBootServices failed");
         loop {
             unsafe {
                 core::arch::asm!("hlt", options(nomem, nostack));
@@ -235,8 +234,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     // switch stack
     core::arch::asm!("mov rsp, {0}", in(reg) stack_top, options(nostack));
 
-    puts("\n");
-    puts("[MORPHEUS] machine is ours\n");
+    log_ok("BOOT", 906, "machine ownership transferred");
 
     // compute pe image bounds for buddy-allocator reservation
     // __ImageBase is defined by LLD for every PE/COFF binary.  From it we
@@ -270,25 +268,17 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
 
     let platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {
         Ok(p) => {
-            puts("[HWINIT] platform ready\n");
-
             // Register BSoD crash hook now that framebuffer info is available
             unsafe {
                 morpheus_hwinit::set_crash_hook(bsod_crash_hook);
             }
-            puts("[HWINIT] crash hook registered\n");
+            morpheus_hwinit::serial::log_info("BOOT", 210, "crash hook registered");
 
             p
         }
         Err(e) => {
-            puts("[FATAL] hwinit: ");
-            match e {
-                morpheus_hwinit::InitError::InvalidDmaRegion => puts("bad DMA"),
-                morpheus_hwinit::InitError::TscCalibrationFailed => puts("TSC dead"),
-                morpheus_hwinit::InitError::NoFreeMemory => puts("no RAM"),
-                morpheus_hwinit::InitError::MemoryRegistryFailed => puts("mmap broke"),
-            }
-            puts("\n");
+            let _ = e;
+            log_error("BOOT", 907, "hwinit failed");
             loop {
                 unsafe {
                     core::arch::asm!("hlt", options(nomem, nostack));
@@ -306,7 +296,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     // framebuffer → screen
     let fb_info = FRAMEBUFFER_INFO;
     if fb_info.base == 0 || fb_info.width == 0 {
-        puts("[FATAL] no framebuffer\n");
+        log_error("DISPLAY", 908, "no framebuffer available");
         loop {
             unsafe {
                 core::arch::asm!("hlt", options(nomem, nostack));
@@ -331,13 +321,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         },
     };
 
-    puts("[DISPLAY] framebuffer: ");
-    morpheus_hwinit::serial::put_hex64(fb_info.width as u64);
-    puts("x");
-    morpheus_hwinit::serial::put_hex64(fb_info.height as u64);
-    puts(" @ ");
-    morpheus_hwinit::serial::put_hex64(fb_info.base);
-    puts("\n");
+    log_ok("DISPLAY", 909, "framebuffer registered");
 
     // Register framebuffer with the syscall layer so SYS_FB_INFO / SYS_FB_MAP work.
     morpheus_hwinit::register_framebuffer(morpheus_hwinit::FbInfo {
@@ -349,6 +333,6 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         format: fb_info.format,
     });
 
-    puts("[BAREMETAL] launching desktop\n");
+    log_info("BOOT", 910, "launching desktop");
     crate::tui::desktop::run_desktop(&display_info);
 }
