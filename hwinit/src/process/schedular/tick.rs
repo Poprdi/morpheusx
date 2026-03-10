@@ -2,8 +2,10 @@ use super::lifecycle::terminate_process_inner;
 use super::state::{
     clear_futex_waiter, clear_waiter_all, cleanup_stale_waiters,
     core_should_park, update_park_hysteresis,
-    mark_core_active_tsc, mark_core_idle_tick, record_tier_hit, scheduler_system_state,
-    set_core_state, update_core_load_ewma, SchedulerCoreState, SchedulerSystemState,
+    refresh_balanced_system_mode, transition_core_state, SchedulerTransitionReason,
+    mark_core_active_tsc, mark_core_idle_enter, mark_core_idle_exit, mark_core_idle_tick,
+    record_tier_hit, scheduler_system_state,
+    update_core_load_ewma, SchedulerCoreState, SchedulerSystemState,
     set_percpu_fpu_ptr, set_percpu_next_cr3, set_this_core_pid, this_core_index, this_core_pid,
     IDLE_TSC_TOTAL, KERNEL_CR3, KERNEL_HLT_ENTRY_TSC, KERNEL_LAST_WAS_IDLE, KERNEL_SKIP_STREAK,
     MAX_KERNEL_SKIP, PROCESS_TABLE, PROCESS_TABLE_LOCK, TICK_COUNT,
@@ -83,11 +85,22 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         let next_pid = pick_next(0, true, core_idx);
         if next_pid == 0 {
             if core_should_park(core_idx) {
-                set_core_state(core_idx, SchedulerCoreState::Parked);
+                let _ = transition_core_state(
+                    core_idx,
+                    SchedulerCoreState::Parked,
+                    now_tsc,
+                    SchedulerTransitionReason::HysteresisPark,
+                );
             } else {
-                set_core_state(core_idx, SchedulerCoreState::LightIdle);
+                let _ = transition_core_state(
+                    core_idx,
+                    SchedulerCoreState::LightIdle,
+                    now_tsc,
+                    SchedulerTransitionReason::TickIdle,
+                );
             }
             mark_core_idle_tick(core_idx);
+            mark_core_idle_enter(core_idx, now_tsc);
             set_percpu_fpu_ptr(0);
             set_percpu_next_cr3(KERNEL_CR3);
             let pcpu = crate::cpu::per_cpu::current();
@@ -97,7 +110,13 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             return ap_idle_context(core_idx);
         }
 
-        set_core_state(core_idx, SchedulerCoreState::Active);
+        let _ = transition_core_state(
+            core_idx,
+            SchedulerCoreState::Active,
+            now_tsc,
+            SchedulerTransitionReason::WakeWork,
+        );
+        mark_core_idle_exit(core_idx, now_tsc);
         mark_core_active_tsc(core_idx, now_tsc);
         set_this_core_pid(next_pid as u32);
         let result = if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
@@ -178,11 +197,22 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     if next_pid == 0 && core_idx != 0 {
         if core_should_park(core_idx) {
-            set_core_state(core_idx, SchedulerCoreState::Parked);
+            let _ = transition_core_state(
+                core_idx,
+                SchedulerCoreState::Parked,
+                now_tsc,
+                SchedulerTransitionReason::HysteresisPark,
+            );
         } else {
-            set_core_state(core_idx, SchedulerCoreState::LightIdle);
+            let _ = transition_core_state(
+                core_idx,
+                SchedulerCoreState::LightIdle,
+                now_tsc,
+                SchedulerTransitionReason::TickIdle,
+            );
         }
         mark_core_idle_tick(core_idx);
+        mark_core_idle_enter(core_idx, now_tsc);
         set_this_core_pid(0);
         set_percpu_fpu_ptr(0);
         set_percpu_next_cr3(KERNEL_CR3);
@@ -193,7 +223,13 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         return ap_idle_context(core_idx);
     }
 
-    set_core_state(core_idx, SchedulerCoreState::Active);
+    let _ = transition_core_state(
+        core_idx,
+        SchedulerCoreState::Active,
+        now_tsc,
+        SchedulerTransitionReason::TickWork,
+    );
+    mark_core_idle_exit(core_idx, now_tsc);
     mark_core_active_tsc(core_idx, now_tsc);
     set_this_core_pid(next_pid as u32);
 
@@ -424,6 +460,9 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
     }
     update_core_load_ewma(core_idx, ready_count);
     update_park_hysteresis(core_idx, ready_count);
+    if is_bsp {
+        refresh_balanced_system_mode();
+    }
 
     // tier 0: safety/eligibility pass entered.
     record_tier_hit(0);
