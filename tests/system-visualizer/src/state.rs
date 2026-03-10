@@ -57,9 +57,10 @@ impl ProcessInfo {
 
 pub struct SystemState {
     procs: [ProcessInfo; MAX_PROCS],
-    /// Previous poll's `cpu_tsc` keyed by PID slot.
-    /// PIDs in this kernel are table slots in `0..MAX_PROCS`.
-    prev_cpu_tsc_by_pid: [u64; MAX_PROCS],
+    /// Previous poll's `cpu_tsc` map keyed by PID.
+    prev_cpu_tsc_pids: [u32; MAX_PROCS],
+    prev_cpu_tsc_vals: [u64; MAX_PROCS],
+    prev_cpu_tsc_count: usize,
     pub proc_count: usize,
     pub total_mem: u64,
     pub free_mem: u64,
@@ -111,7 +112,9 @@ impl SystemState {
     pub fn new() -> Self {
         Self {
             procs: [ProcessInfo::ZEROED; MAX_PROCS],
-            prev_cpu_tsc_by_pid: [0; MAX_PROCS],
+            prev_cpu_tsc_pids: [0; MAX_PROCS],
+            prev_cpu_tsc_vals: [0; MAX_PROCS],
+            prev_cpu_tsc_count: 0,
             proc_count: 0,
             total_mem: 0,
             free_mem: 0,
@@ -188,6 +191,8 @@ impl SystemState {
         // window is complete.
         let compute_pct = self.acc_polls >= POLLS_PER_SEC;
 
+        let cpu_capacity_tsc = self.acc_wall_tsc.saturating_mul(self.cpu_count as u64);
+
         if compute_pct && self.acc_wall_tsc > 0 {
             self.idle_pct =
                 ((self.acc_idle_tsc as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0);
@@ -206,11 +211,11 @@ impl SystemState {
         for i in 0..count {
             let r = &raw[i];
 
-            let cpu_pct = if compute_pct && self.acc_wall_tsc > 0 {
+            let cpu_pct = if compute_pct && cpu_capacity_tsc > 0 {
                 let slot = self.acc_slot_for_pid(r.pid);
-                // Per-process CPU% is normalized to a single core's capacity.
-                // Aggregate/system CPU% remains SMP-normalized via idle accounting.
-                ((self.acc_cpu_tsc[slot] as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0)
+                // Per-process CPU% is normalized to whole-machine capacity.
+                // This aligns process percentages with aggregate SMP utilization.
+                ((self.acc_cpu_tsc[slot] as f32 / cpu_capacity_tsc as f32) * 100.0).min(100.0)
             } else {
                 // Keep the previously displayed value between windows.
                 self.find_prev_cpu_pct(r.pid)
@@ -230,11 +235,15 @@ impl SystemState {
             };
         }
 
+        self.prev_cpu_tsc_count = 0;
         for i in 0..count {
-            let pid = self.procs[i].pid as usize;
-            if pid < MAX_PROCS {
-                self.prev_cpu_tsc_by_pid[pid] = self.procs[i].cpu_tsc;
+            if self.prev_cpu_tsc_count >= MAX_PROCS {
+                break;
             }
+            let s = self.prev_cpu_tsc_count;
+            self.prev_cpu_tsc_pids[s] = self.procs[i].pid;
+            self.prev_cpu_tsc_vals[s] = self.procs[i].cpu_tsc;
+            self.prev_cpu_tsc_count += 1;
         }
 
         self.prev_uptime_ticks = info.uptime_ticks;
@@ -303,9 +312,10 @@ impl SystemState {
     }
 
     fn find_prev_cpu_tsc(&self, pid: u32) -> u64 {
-        let idx = pid as usize;
-        if idx < MAX_PROCS {
-            return self.prev_cpu_tsc_by_pid[idx];
+        for i in 0..self.prev_cpu_tsc_count {
+            if self.prev_cpu_tsc_pids[i] == pid {
+                return self.prev_cpu_tsc_vals[i];
+            }
         }
         0
     }

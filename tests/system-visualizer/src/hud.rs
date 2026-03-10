@@ -204,7 +204,7 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
     let y0 = py + 3;
     fb.draw_str(px + 4, y0, "PID", COL_DIM);
     fb.draw_str(px + 28, y0, "S", COL_DIM);
-    fb.draw_str(px + 40, y0, "CPU%", COL_DIM);
+    fb.draw_str(px + 40, y0, "CPU M%", COL_DIM);
     fb.draw_str(px + 70, y0, "MEM KB", COL_DIM);
     fb.draw_str(px + 112, y0, "NAME", COL_DIM);
     hline(fb, px, y0 + font::CELL_H + 1, pw);
@@ -499,15 +499,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
         fb.draw_u32(content_x + 18, y0, core_idx, 2, COL_TEXT);
 
         let now_pct = state.per_core_util(core) as u32;
-        let pct_col = if now_pct > 85 {
-            COL_CRIT
-        } else if now_pct > 60 {
-            COL_WARN
-        } else {
-            COL_ACCENT
-        };
-        fb.draw_u32(content_x + 26, y0, now_pct.min(100), 3, pct_col);
-        fb.draw_char(content_x + 44, y0, b'%', COL_DIM);
 
         // Row background with threshold bands.
         fb.fill_rect(graph_x, y0, graph_w, row_h, COL_BG);
