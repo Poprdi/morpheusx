@@ -10,7 +10,7 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
     if !validate_user_buf(buf_ptr, size) {
         return EFAULT;
     }
-    match FB_REGISTERED {
+    match fb_registered() {
         Some(info) => {
             core::ptr::write(buf_ptr as *mut FbInfo, info);
             0
@@ -126,7 +126,7 @@ pub fn fb_lock_holder() -> u32 {
 ///     these surfaces to composite windows.
 pub unsafe fn sys_fb_map() -> u64 {
     use crate::serial::{puts, put_hex32};
-    let info = match FB_REGISTERED {
+    let info = match fb_registered() {
         Some(i) => i,
         None => {
             puts("[FB_MAP] ENODEV: no framebuffer registered\n");
@@ -282,7 +282,7 @@ pub unsafe fn fb_present_tick() {
         return;
     }
 
-    let info = match FB_REGISTERED {
+    let info = match fb_registered() {
         Some(i) => i,
         None => return,
     };
@@ -320,7 +320,7 @@ pub unsafe fn sys_fb_present() -> u64 {
     if back == 0 || shadow == 0 {
         return ENODEV;
     }
-    let info = match FB_REGISTERED {
+    let info = match fb_registered() {
         Some(i) => i,
         None => return ENODEV,
     };
@@ -358,7 +358,7 @@ pub unsafe fn sys_fb_blit() -> u64 {
     if back == 0 {
         return ENODEV;
     }
-    let info = match FB_REGISTERED {
+    let info = match fb_registered() {
         Some(i) => i,
         None => return ENODEV,
     };

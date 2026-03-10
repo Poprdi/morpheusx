@@ -64,6 +64,10 @@ pub struct PerCpu {
     pub in_tick: bool,
     /// True once this core has finished init and entered the scheduler.
     pub online: bool,
+    /// AP's original kernel stack top (set during AP boot, never changed).
+    /// Used to restore RSP when the AP returns to the idle loop after
+    /// descheduling a user process.  BSP doesn't use this.
+    pub boot_kernel_rsp: u64,
 }
 
 impl PerCpu {
@@ -81,6 +85,7 @@ impl PerCpu {
             tick_count: 0,
             in_tick: false,
             online: false,
+            boot_kernel_rsp: 0,
         }
     }
 }
@@ -197,6 +202,12 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
     pcpu.current_pid = 0; // starts idle on kernel
     pcpu.lapic_base = lapic_base;
     pcpu.online = true;
+
+    // save the AP's kernel stack top so the scheduler can restore it
+    // when the AP returns to idle after running a user process.
+    let rsp: u64;
+    core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
+    pcpu.boot_kernel_rsp = (rsp + 0x1000) & !0xFFF;
 
     LAPIC_TO_IDX[lapic_id as usize] = idx as u8;
 
