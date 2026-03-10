@@ -1,4 +1,5 @@
 use super::state::{this_core_pid, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY};
+use super::lifecycle::apply_default_scheduler_policy;
 use crate::memory::PAGE_SIZE;
 use crate::process::{CpuContext, Process, ProcessState, MAX_PROCESSES};
 use core::sync::atomic::Ordering;
@@ -64,6 +65,17 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     thread.mmap_brk = parent_mmap_brk;
     thread.cwd = parent_cwd;
     thread.cwd_len = parent_cwd_len;
+    apply_default_scheduler_policy(thread, false);
+
+    // inherit parent policy for thread groups to keep scheduling intent coherent.
+    if let Some(Some(parent_ref)) = PROCESS_TABLE.get(parent_pid as usize) {
+        thread.importance_16 = parent_ref.importance_16;
+        thread.power_mode = parent_ref.power_mode;
+        thread.policy_class = parent_ref.policy_class;
+        thread.affinity_mask = parent_ref.affinity_mask;
+        thread.policy_flags = parent_ref.policy_flags;
+        thread.capability_bits = parent_ref.capability_bits;
+    }
 
     if let Err(e) = thread.alloc_kernel_stack() {
         PROCESS_TABLE[slot_idx] = None;
@@ -148,6 +160,7 @@ pub unsafe fn spawn_user_process(
     proc.priority = 128;
     proc.state = ProcessState::Ready;
     proc.cr3 = page_table.pml4_phys;
+    apply_default_scheduler_policy(&mut proc, false);
 
     if let Err(e) = proc.alloc_kernel_stack() {
         PROCESS_TABLE_LOCK.unlock();

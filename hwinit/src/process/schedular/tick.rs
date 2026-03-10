@@ -1,12 +1,17 @@
 use super::lifecycle::terminate_process_inner;
 use super::state::{
     clear_futex_waiter, clear_waiter_all, cleanup_stale_waiters,
+    core_should_park, update_park_hysteresis,
+    mark_core_active_tsc, mark_core_idle_tick, record_tier_hit, scheduler_system_state,
+    set_core_state, update_core_load_ewma, SchedulerCoreState, SchedulerSystemState,
     set_percpu_fpu_ptr, set_percpu_next_cr3, set_this_core_pid, this_core_index, this_core_pid,
     IDLE_TSC_TOTAL, KERNEL_CR3, KERNEL_HLT_ENTRY_TSC, KERNEL_LAST_WAS_IDLE, KERNEL_SKIP_STREAK,
     MAX_KERNEL_SKIP, PROCESS_TABLE, PROCESS_TABLE_LOCK, TICK_COUNT,
 };
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
-use crate::process::{BlockReason, CpuContext, ProcessState, MAX_PROCESSES};
+use crate::process::{
+    BlockReason, CpuContext, ProcessPolicyClass, ProcessPowerMode, ProcessState, MAX_PROCESSES,
+};
 use crate::process::signals::SignalAction;
 use crate::cpu::per_cpu::MAX_CPUS;
 use crate::serial::{put_hex32, puts};
@@ -77,6 +82,12 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
         let next_pid = pick_next(0, true, core_idx);
         if next_pid == 0 {
+            if core_should_park(core_idx) {
+                set_core_state(core_idx, SchedulerCoreState::Parked);
+            } else {
+                set_core_state(core_idx, SchedulerCoreState::LightIdle);
+            }
+            mark_core_idle_tick(core_idx);
             set_percpu_fpu_ptr(0);
             set_percpu_next_cr3(KERNEL_CR3);
             let pcpu = crate::cpu::per_cpu::current();
@@ -86,6 +97,8 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             return ap_idle_context(core_idx);
         }
 
+        set_core_state(core_idx, SchedulerCoreState::Active);
+        mark_core_active_tsc(core_idx, now_tsc);
         set_this_core_pid(next_pid as u32);
         let result = if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
             next.state = ProcessState::Running;
@@ -164,6 +177,12 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     let next_pid = pick_next(cur_pid, skip_kernel, core_idx);
 
     if next_pid == 0 && core_idx != 0 {
+        if core_should_park(core_idx) {
+            set_core_state(core_idx, SchedulerCoreState::Parked);
+        } else {
+            set_core_state(core_idx, SchedulerCoreState::LightIdle);
+        }
+        mark_core_idle_tick(core_idx);
         set_this_core_pid(0);
         set_percpu_fpu_ptr(0);
         set_percpu_next_cr3(KERNEL_CR3);
@@ -174,6 +193,8 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         return ap_idle_context(core_idx);
     }
 
+    set_core_state(core_idx, SchedulerCoreState::Active);
+    mark_core_active_tsc(core_idx, now_tsc);
     set_this_core_pid(next_pid as u32);
 
     let result = if let Some(Some(next)) = PROCESS_TABLE.get_mut(next_pid) {
@@ -276,11 +297,103 @@ pub(super) unsafe fn wake_expired_sleepers() {
 unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
     let n = MAX_PROCESSES;
     let is_bsp = core_idx == 0;
+    let system_state = scheduler_system_state();
 
     #[inline(always)]
     fn priority_weight(priority: u8) -> u8 {
         // 0 = highest priority. map to 8..1 weight buckets.
         1 + ((255u16.saturating_sub(priority as u16) >> 5) as u8)
+    }
+
+    #[inline(always)]
+    fn policy_bonus(class: ProcessPolicyClass) -> i32 {
+        match class {
+            ProcessPolicyClass::LatencyCritical => 48,
+            ProcessPolicyClass::Interactive => 24,
+            ProcessPolicyClass::Throughput => 8,
+            ProcessPolicyClass::Background => 0,
+        }
+    }
+
+    #[inline(always)]
+    fn mode_bonus(system_state: SchedulerSystemState, mode: ProcessPowerMode) -> i32 {
+        match system_state {
+            SchedulerSystemState::PerfBoost => match mode {
+                ProcessPowerMode::Performance => 16,
+                ProcessPowerMode::Balanced => 8,
+                ProcessPowerMode::Eco => 0,
+                ProcessPowerMode::ThermalClamp => -8,
+            },
+            // default mode stays neutral; power hint interpretation happens later via syscalls.
+            SchedulerSystemState::Balanced => 0,
+            SchedulerSystemState::EcoBias => match mode {
+                ProcessPowerMode::Performance => 0,
+                ProcessPowerMode::Balanced => 8,
+                ProcessPowerMode::Eco => 16,
+                ProcessPowerMode::ThermalClamp => -8,
+            },
+            SchedulerSystemState::ThermalGuard => match mode {
+                ProcessPowerMode::Performance => -16,
+                ProcessPowerMode::Balanced => 8,
+                ProcessPowerMode::Eco => 12,
+                ProcessPowerMode::ThermalClamp => 4,
+            },
+            SchedulerSystemState::ThermalEmergency => match mode {
+                ProcessPowerMode::Performance => -32,
+                ProcessPowerMode::Balanced => 8,
+                ProcessPowerMode::Eco => 16,
+                ProcessPowerMode::ThermalClamp => 8,
+            },
+        }
+    }
+
+    #[inline(always)]
+    fn thermal_disallow(system_state: SchedulerSystemState, mode: ProcessPowerMode) -> bool {
+        matches!(system_state, SchedulerSystemState::ThermalEmergency)
+            && matches!(mode, ProcessPowerMode::Performance)
+    }
+
+    #[inline(always)]
+    fn clamped_importance(raw: u8) -> u8 {
+        raw.clamp(1, 16)
+    }
+
+    #[inline(always)]
+    fn affinity_bonus(mask: u64, core_idx: u32) -> i32 {
+        if core_idx < 64 {
+            if (mask & (1u64 << core_idx)) != 0 {
+                6
+            } else {
+                -6
+            }
+        } else {
+            0
+        }
+    }
+
+    #[inline(always)]
+    fn effective_weight(system_state: SchedulerSystemState, p: &crate::process::Process) -> u8 {
+        let base = priority_weight(p.priority) as i16;
+        let importance_adj = (clamped_importance(p.importance_16) as i16 - 8) / 2;
+        let thermal_adj = if thermal_disallow(system_state, p.power_mode) {
+            -2
+        } else {
+            0
+        };
+        (base + importance_adj + thermal_adj).clamp(1, 16) as u8
+    }
+
+    #[inline(always)]
+    fn pick_score(system_state: SchedulerSystemState, p: &crate::process::Process, delta: usize, core_idx: u32) -> i32 {
+        let importance = (clamped_importance(p.importance_16) as i32) * 8;
+        let wait_bonus = (p.sched_wait_ticks.min(64) / 4) as i32;
+        let rr_locality = 64 - (delta as i32).min(64);
+        importance
+            + wait_bonus
+            + rr_locality
+            + policy_bonus(p.policy_class)
+            + mode_bonus(system_state, p.power_mode)
+            + affinity_bonus(p.affinity_mask, core_idx)
     }
 
     let streak = KERNEL_SKIP_STREAK.load(Ordering::Relaxed);
@@ -303,6 +416,18 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
         }
     }
 
+    let mut ready_count = 0u32;
+    for p in PROCESS_TABLE.iter().flatten() {
+        if p.state == ProcessState::Ready && p.running_on == u32::MAX {
+            ready_count = ready_count.saturating_add(1);
+        }
+    }
+    update_core_load_ewma(core_idx, ready_count);
+    update_park_hysteresis(core_idx, ready_count);
+
+    // tier 0: safety/eligibility pass entered.
+    record_tier_hit(0);
+
     // Hard starvation bound: any long-waiting ready task preempts RR order.
     let mut forced_starving: Option<usize> = None;
     for delta in 1..=n {
@@ -322,9 +447,11 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
     }
 
     if let Some(candidate) = forced_starving {
+        record_tier_hit(1);
         if let Some(Some(p)) = PROCESS_TABLE.get_mut(candidate) {
             if p.sched_budget_left == 0 {
-                p.sched_budget_left = priority_weight(p.priority);
+                p.effective_weight_cache = effective_weight(system_state, p);
+                p.sched_budget_left = p.effective_weight_cache;
             }
             p.sched_budget_left = p.sched_budget_left.saturating_sub(1);
             p.sched_wait_ticks = 0;
@@ -339,7 +466,11 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
         return candidate;
     }
 
-    // Weighted RR pass: pick first ready task with remaining budget.
+    // tier 2-4: thermal/system/process-policy weighted pass.
+    record_tier_hit(2);
+    record_tier_hit(3);
+    record_tier_hit(4);
+    let mut best_candidate: Option<(usize, i32)> = None;
     for delta in 1..=n {
         let candidate = (current + delta) % n;
         if candidate == 0 && (!is_bsp || skip_kernel) {
@@ -349,30 +480,47 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
             if p.running_on != u32::MAX {
                 continue;
             }
-            if p.state == ProcessState::Ready && p.sched_budget_left > 0 {
-                if let Some(Some(pm)) = PROCESS_TABLE.get_mut(candidate) {
-                    pm.sched_budget_left = pm.sched_budget_left.saturating_sub(1);
-                    pm.sched_wait_ticks = 0;
+            if p.state != ProcessState::Ready || p.sched_budget_left == 0 {
+                continue;
+            }
+            if thermal_disallow(system_state, p.power_mode) {
+                continue;
+            }
+            let score = pick_score(system_state, p, delta, core_idx);
+            if let Some((_, best_score)) = best_candidate {
+                if score > best_score {
+                    best_candidate = Some((candidate, score));
                 }
-                if is_bsp {
-                    if candidate == 0 {
-                        KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
-                    } else if skip_kernel {
-                        KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                return candidate;
+            } else {
+                best_candidate = Some((candidate, score));
             }
         }
+    }
+
+    if let Some((candidate, _)) = best_candidate {
+        if let Some(Some(pm)) = PROCESS_TABLE.get_mut(candidate) {
+            pm.sched_budget_left = pm.sched_budget_left.saturating_sub(1);
+            pm.sched_wait_ticks = 0;
+        }
+        if is_bsp {
+            if candidate == 0 {
+                KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
+            } else if skip_kernel {
+                KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        return candidate;
     }
 
     // Epoch rollover: no one had budget, refill ready tasks by priority weight.
     for proc in PROCESS_TABLE.iter_mut().flatten() {
         if proc.state == ProcessState::Ready && proc.running_on == u32::MAX {
-            proc.sched_budget_left = priority_weight(proc.priority);
+            proc.effective_weight_cache = effective_weight(system_state, proc);
+            proc.sched_budget_left = proc.effective_weight_cache;
         }
     }
 
+    best_candidate = None;
     for delta in 1..=n {
         let candidate = (current + delta) % n;
         if candidate == 0 && (!is_bsp || skip_kernel) {
@@ -382,24 +530,40 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
             if p.running_on != u32::MAX {
                 continue;
             }
-            if p.state == ProcessState::Ready && p.sched_budget_left > 0 {
-                if let Some(Some(pm)) = PROCESS_TABLE.get_mut(candidate) {
-                    pm.sched_budget_left = pm.sched_budget_left.saturating_sub(1);
-                    pm.sched_wait_ticks = 0;
+            if p.state != ProcessState::Ready || p.sched_budget_left == 0 {
+                continue;
+            }
+            if thermal_disallow(system_state, p.power_mode) {
+                continue;
+            }
+            let score = pick_score(system_state, p, delta, core_idx);
+            if let Some((_, best_score)) = best_candidate {
+                if score > best_score {
+                    best_candidate = Some((candidate, score));
                 }
-                if is_bsp {
-                    if candidate == 0 {
-                        KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
-                    } else if skip_kernel {
-                        KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                return candidate;
+            } else {
+                best_candidate = Some((candidate, score));
             }
         }
     }
 
+    if let Some((candidate, _)) = best_candidate {
+        if let Some(Some(pm)) = PROCESS_TABLE.get_mut(candidate) {
+            pm.sched_budget_left = pm.sched_budget_left.saturating_sub(1);
+            pm.sched_wait_ticks = 0;
+        }
+        if is_bsp {
+            if candidate == 0 {
+                KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
+            } else if skip_kernel {
+                KERNEL_SKIP_STREAK.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        return candidate;
+    }
+
     if is_bsp {
+        record_tier_hit(5);
         KERNEL_SKIP_STREAK.store(0, Ordering::Relaxed);
         for delta in 1..=n {
             let candidate = (current + delta) % n;
@@ -410,7 +574,8 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
                 if p.state == ProcessState::Ready {
                     if let Some(Some(pm)) = PROCESS_TABLE.get_mut(candidate) {
                         if pm.sched_budget_left == 0 {
-                            pm.sched_budget_left = priority_weight(pm.priority);
+                            pm.effective_weight_cache = effective_weight(system_state, pm);
+                            pm.sched_budget_left = pm.effective_weight_cache;
                         }
                         pm.sched_budget_left = pm.sched_budget_left.saturating_sub(1);
                         pm.sched_wait_ticks = 0;
@@ -425,7 +590,8 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
         if p.state.is_runnable() && !(current == 0 && !is_bsp) {
             if let Some(Some(pm)) = PROCESS_TABLE.get_mut(current) {
                 if pm.sched_budget_left == 0 {
-                    pm.sched_budget_left = priority_weight(pm.priority);
+                    pm.effective_weight_cache = effective_weight(system_state, pm);
+                    pm.sched_budget_left = pm.effective_weight_cache;
                 }
                 pm.sched_budget_left = pm.sched_budget_left.saturating_sub(1);
                 pm.sched_wait_ticks = 0;
