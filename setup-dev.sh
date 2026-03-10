@@ -85,7 +85,7 @@ check_rust()       { has_cmd rustc && rustup target list 2>/dev/null | grep -q "
 check_ovmf()       { get_ovmf_path &>/dev/null; }
 check_bootloader() { [[ -f "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" ]]; }
 check_qemu()       { has_cmd qemu-system-x86_64; }
-check_disk_tools() { has_cmd qemu-img && has_cmd parted && has_cmd mkfs.vfat && has_cmd mkfs.ext4; }
+check_disk_tools() { has_cmd qemu-img && has_cmd parted && has_cmd mkfs.vfat && has_cmd mkfs.ext4 && has_cmd mcopy; }
 # Distribution checks removed - network downloader handles ISO acquisition
 check_disk_50g()   { [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; }
 
@@ -113,7 +113,7 @@ cmd_status() {
     print_check "$(has_cmd nasm && echo 1 || echo 0)" "NASM Assembler"
     print_check "$(check_qemu && echo 1 || echo 0)" "QEMU" "$(qemu-system-x86_64 --version 2>/dev/null | head -1 | grep -oP '\d+\.\d+\.\d+' || echo 'missing')"
     print_check "$(check_ovmf && echo 1 || echo 0)" "OVMF Firmware" "$(get_ovmf_path 2>/dev/null || echo 'missing')"
-    print_check "$(check_disk_tools && echo 1 || echo 0)" "Disk Tools" "parted, mkfs.vfat, mkfs.ext4"
+    print_check "$(check_disk_tools && echo 1 || echo 0)" "Disk Tools" "parted, mkfs.vfat, mkfs.ext4, mtools"
     
     printf "\n${C_DIM}── Build ──${C_RESET}\n"
     print_check "$(check_bootloader && echo 1 || echo 0)" "Bootloader (BOOTX64.EFI)"
@@ -133,29 +133,29 @@ do_install_packages() {
     
     case "${distro}" in
         arch|manjaro|endeavouros)
-            pkgs=(base-devel nasm qemu-full ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools cdrtools)
+            pkgs=(base-devel nasm qemu-full ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools cdrtools mtools)
             install_cmd="sudo pacman -S --needed --noconfirm"
             ;;
         debian|ubuntu|pop|linuxmint|kali)
-            pkgs=(build-essential nasm qemu-system-x86 ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage qemu-utils)
+            pkgs=(build-essential nasm qemu-system-x86 ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage qemu-utils mtools)
             install_cmd="sudo apt-get install -y -qq"
             log_info "Updating package lists..."
             sudo apt-get update -qq
             ;;
         fedora)
-            pkgs=(gcc make nasm qemu-system-x86 edk2-ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage qemu-img)
+            pkgs=(gcc make nasm qemu-system-x86 edk2-ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage qemu-img mtools)
             install_cmd="sudo dnf install -y -q"
             ;;
         rhel|centos|almalinux|rocky)
-            pkgs=(gcc make nasm qemu-kvm edk2-ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage)
+            pkgs=(gcc make nasm qemu-kvm edk2-ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools genisoimage mtools)
             install_cmd="sudo yum install -y -q"
             ;;
         opensuse*|suse)
-            pkgs=(gcc make nasm qemu-x86 qemu-ovmf-x86_64 parted dosfstools e2fsprogs util-linux rsync curl wget squashfs genisoimage)
+            pkgs=(gcc make nasm qemu-x86 qemu-ovmf-x86_64 parted dosfstools e2fsprogs util-linux rsync curl wget squashfs genisoimage mtools)
             install_cmd="sudo zypper install -y"
             ;;
         alpine)
-            pkgs=(build-base nasm qemu-system-x86_64 ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools cdrkit bash)
+            pkgs=(build-base nasm qemu-system-x86_64 ovmf parted dosfstools e2fsprogs util-linux rsync curl wget squashfs-tools cdrkit bash mtools)
             install_cmd="sudo apk add"
             ;;
         *)
@@ -374,6 +374,83 @@ do_create_disk() {
     log_success "Test disk ready (50GB sparse, will be formatted by inject)"
 }
 
+populate_esp_image_with_mtools() {
+    local src_dir="$1"
+    local esp_img="$2"
+    local -a entries=()
+
+    shopt -s dotglob nullglob
+    entries=("${src_dir}"/*)
+    shopt -u dotglob nullglob
+
+    [[ ${#entries[@]} -gt 0 ]] || return 0
+
+    mmd -i "$esp_img" ::/EFI >/dev/null 2>&1 || true
+    mmd -i "$esp_img" ::/EFI/BOOT >/dev/null 2>&1 || true
+    mcopy -i "$esp_img" -s "${entries[@]}" ::/ >/dev/null 2>&1
+}
+
+populate_esp_image_with_loop_mount() {
+    local src_dir="$1"
+    local esp_img="$2"
+    local mnt
+    local loop_dev=""
+    local attached=0
+    local mounted=0
+
+    mnt=$(mktemp -d)
+
+    if has_cmd modprobe; then
+        sudo modprobe loop >/dev/null 2>&1 || true
+    fi
+
+    if ! loop_dev=$(sudo losetup --find --show "$esp_img" 2>/dev/null); then
+        rmdir "$mnt"
+        return 1
+    fi
+    attached=1
+
+    if ! sudo mount -t vfat "$loop_dev" "$mnt"; then
+        sudo losetup -d "$loop_dev" >/dev/null 2>&1 || true
+        rmdir "$mnt"
+        return 1
+    fi
+    mounted=1
+
+    if ! sudo rsync -a "${src_dir}/" "$mnt/"; then
+        (( mounted == 1 )) && sudo umount "$mnt" >/dev/null 2>&1 || true
+        (( attached == 1 )) && sudo losetup -d "$loop_dev" >/dev/null 2>&1 || true
+        rmdir "$mnt"
+        return 1
+    fi
+
+    sudo umount "$mnt"
+    sudo losetup -d "$loop_dev"
+    rmdir "$mnt"
+}
+
+refresh_esp_image() {
+    local esp_img="$1"
+    local src_dir="$2"
+    local esp_size
+
+    esp_size=$(du -sb "${src_dir}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
+    dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
+    mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
+
+    if has_cmd mcopy && has_cmd mmd; then
+        if populate_esp_image_with_mtools "$src_dir" "$esp_img"; then
+            return 0
+        fi
+        log_warn "mtools copy failed; falling back to loop-mount copy"
+    else
+        log_info "mtools not found; using loop-mount copy for ESP image"
+    fi
+
+    populate_esp_image_with_loop_mount "$src_dir" "$esp_img" \
+        || die "Failed to populate ESP image. Install mtools or ensure loop devices are available."
+}
+
 do_launch_qemu() {
     log_step "Launching QEMU"
     
@@ -394,16 +471,7 @@ do_launch_qemu() {
         local esp_img="${TESTING_DIR}/esp-temp.img"
         if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" -nt "$esp_img" ]] || [[ "${FORCE_MODE}" == "true" ]]; then
             log_info "Refreshing boot ESP image..."
-            local esp_size
-            esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
-            dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
-            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
-            local mnt
-            mnt=$(mktemp -d)
-            sudo mount -o loop "$esp_img" "$mnt"
-            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
-            sudo umount "$mnt"
-            rmdir "$mnt"
+            refresh_esp_image "$esp_img" "$ESP_DIR"
         fi
         # Disk 0 (virtio): ESP FAT32 image  — UEFI boots BOOTX64.EFI from here
         # Disk 1 (virtio): raw HelixFS image — kernel mounts this as data storage
@@ -431,14 +499,7 @@ do_launch_qemu() {
         local esp_img="${TESTING_DIR}/esp-temp.img"
         if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}" -nt "$esp_img" ]]; then
             log_info "Creating ESP disk image..."
-            local esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
-            dd if=/dev/zero of="$esp_img" bs=1M count=$esp_size status=none 2>/dev/null || true
-            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1 || true
-            local mnt=$(mktemp -d)
-            sudo mount -o loop "$esp_img" "$mnt"
-            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
-            sudo umount "$mnt"
-            rmdir "$mnt"
+            refresh_esp_image "$esp_img" "$ESP_DIR"
         fi
         qemu-system-x86_64 \
             -enable-kvm \
@@ -662,14 +723,7 @@ do_launch_thinkpad() {
         local esp_img="${TESTING_DIR}/esp-temp.img"
         if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}" -nt "$esp_img" ]]; then
             log_info "Creating ESP disk image..."
-            local esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
-            dd if=/dev/zero of="$esp_img" bs=1M count=$esp_size status=none 2>/dev/null || true
-            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1 || true
-            local mnt=$(mktemp -d)
-            sudo mount -o loop "$esp_img" "$mnt"
-            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
-            sudo umount "$mnt"
-            rmdir "$mnt"
+            refresh_esp_image "$esp_img" "$ESP_DIR"
         fi
         qemu-system-x86_64 \
             -enable-kvm \
