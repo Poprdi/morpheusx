@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 use libmorpheus::process::{self, PsEntry};
-use libmorpheus::sys::{self, SysInfo};
+use libmorpheus::sys::{self, SysInfo, SYSINFO_MAX_CPUS};
 use libmorpheus::time;
 
 const MAX_PROCS: usize = 64;
@@ -57,8 +57,10 @@ impl ProcessInfo {
 
 pub struct SystemState {
     procs: [ProcessInfo; MAX_PROCS],
-    /// Previous poll's `cpu_tsc` per process slot (indexed by proc order, PID-matched).
-    prev_cpu_tsc: [u64; MAX_PROCS],
+    /// Previous poll's `cpu_tsc` map keyed by PID.
+    prev_cpu_tsc_pids: [u32; MAX_PROCS],
+    prev_cpu_tsc_vals: [u64; MAX_PROCS],
+    prev_cpu_tsc_count: usize,
     pub proc_count: usize,
     pub total_mem: u64,
     pub free_mem: u64,
@@ -67,6 +69,7 @@ pub struct SystemState {
     pub heap_free: u64,
     pub uptime_ms: u64,
     pub tsc_freq: u64,
+    pub cpu_count: u32,
     last_poll_ns: u64,
     prev_poll_ns: u64,
     pub load_history: [u8; HISTORY_LEN],
@@ -76,6 +79,7 @@ pub struct SystemState {
     pub run_count: u32,
     pub blocked_count: u32,
     pub total_cpu_pct: f32,
+    pub per_core_util_pct: [u8; SYSINFO_MAX_CPUS],
     /// Idle percentage (0-100): fraction of wall-clock time the CPU spent in HLT.
     pub idle_pct: f32,
     /// `uptime_ticks` (raw TSC) from the previous poll — wall-clock denominator
@@ -83,6 +87,10 @@ pub struct SystemState {
     prev_uptime_ticks: u64,
     /// `idle_tsc` from the previous poll — to compute per-window idle delta.
     prev_idle_tsc: u64,
+    /// Previous per-core idle counters from `SysInfo`.
+    prev_per_core_idle_tsc: [u64; SYSINFO_MAX_CPUS],
+    /// Rolling per-core utilization history (0..100).
+    per_core_history: [[u8; HISTORY_LEN]; SYSINFO_MAX_CPUS],
 
     // --- 1-second averaging window ---
     /// Per-PID accumulated `cpu_tsc` deltas for the current 1-second window.
@@ -104,7 +112,9 @@ impl SystemState {
     pub fn new() -> Self {
         Self {
             procs: [ProcessInfo::ZEROED; MAX_PROCS],
-            prev_cpu_tsc: [0; MAX_PROCS],
+            prev_cpu_tsc_pids: [0; MAX_PROCS],
+            prev_cpu_tsc_vals: [0; MAX_PROCS],
+            prev_cpu_tsc_count: 0,
             proc_count: 0,
             total_mem: 0,
             free_mem: 0,
@@ -113,6 +123,7 @@ impl SystemState {
             heap_free: 0,
             uptime_ms: 0,
             tsc_freq: 0,
+            cpu_count: 1,
             last_poll_ns: 0,
             prev_poll_ns: 0,
             load_history: [0; HISTORY_LEN],
@@ -122,9 +133,12 @@ impl SystemState {
             run_count: 0,
             blocked_count: 0,
             total_cpu_pct: 0.0,
+            per_core_util_pct: [0; SYSINFO_MAX_CPUS],
             idle_pct: 0.0,
             prev_uptime_ticks: 0,
             prev_idle_tsc: 0,
+            prev_per_core_idle_tsc: [0; SYSINFO_MAX_CPUS],
+            per_core_history: [[0; HISTORY_LEN]; SYSINFO_MAX_CPUS],
             acc_cpu_tsc: [0; MAX_PROCS],
             acc_pids: [0; MAX_PROCS],
             acc_count: 0,
@@ -151,9 +165,11 @@ impl SystemState {
         self.heap_free = info.heap_free;
         self.uptime_ms = info.uptime_ms();
         self.tsc_freq = info.tsc_freq;
+        self.cpu_count = info.cpu_count.max(1);
 
         let wall_tsc_delta = info.uptime_ticks.wrapping_sub(self.prev_uptime_ticks);
         let idle_tsc_delta = info.idle_tsc.wrapping_sub(self.prev_idle_tsc);
+        let live_cores = (self.cpu_count as usize).min(SYSINFO_MAX_CPUS);
 
         let mut raw = Box::new([const { PsEntry::zeroed() }; MAX_PROCS]);
         let count = process::ps(&mut *raw).min(MAX_PROCS);
@@ -175,17 +191,31 @@ impl SystemState {
         // window is complete.
         let compute_pct = self.acc_polls >= POLLS_PER_SEC;
 
+        let cpu_capacity_tsc = self.acc_wall_tsc.saturating_mul(self.cpu_count as u64);
+
         if compute_pct && self.acc_wall_tsc > 0 {
             self.idle_pct =
                 ((self.acc_idle_tsc as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0);
+
+            for core in 0..live_cores {
+                let idle_delta =
+                    info.per_core_idle_tsc[core].wrapping_sub(self.prev_per_core_idle_tsc[core]);
+                let idle_pct = ((idle_delta as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0);
+                self.per_core_util_pct[core] = (100.0 - idle_pct).clamp(0.0, 100.0) as u8;
+            }
+            for core in live_cores..SYSINFO_MAX_CPUS {
+                self.per_core_util_pct[core] = 0;
+            }
         }
 
         for i in 0..count {
             let r = &raw[i];
 
-            let cpu_pct = if compute_pct && self.acc_wall_tsc > 0 {
+            let cpu_pct = if compute_pct && cpu_capacity_tsc > 0 {
                 let slot = self.acc_slot_for_pid(r.pid);
-                ((self.acc_cpu_tsc[slot] as f32 / self.acc_wall_tsc as f32) * 100.0).min(100.0)
+                // Per-process CPU% is normalized to whole-machine capacity.
+                // This aligns process percentages with aggregate SMP utilization.
+                ((self.acc_cpu_tsc[slot] as f32 / cpu_capacity_tsc as f32) * 100.0).min(100.0)
             } else {
                 // Keep the previously displayed value between windows.
                 self.find_prev_cpu_pct(r.pid)
@@ -205,12 +235,20 @@ impl SystemState {
             };
         }
 
+        self.prev_cpu_tsc_count = 0;
         for i in 0..count {
-            self.prev_cpu_tsc[i] = self.procs[i].cpu_tsc;
+            if self.prev_cpu_tsc_count >= MAX_PROCS {
+                break;
+            }
+            let s = self.prev_cpu_tsc_count;
+            self.prev_cpu_tsc_pids[s] = self.procs[i].pid;
+            self.prev_cpu_tsc_vals[s] = self.procs[i].cpu_tsc;
+            self.prev_cpu_tsc_count += 1;
         }
 
         self.prev_uptime_ticks = info.uptime_ticks;
         self.prev_idle_tsc = info.idle_tsc;
+        self.prev_per_core_idle_tsc = info.per_core_idle_tsc;
         self.proc_count = count;
         self.prev_poll_ns = self.last_poll_ns;
         self.last_poll_ns = now;
@@ -228,7 +266,6 @@ impl SystemState {
         let mut ready = 0u32;
         let mut run = 0u32;
         let mut blocked = 0u32;
-        let mut cpu_sum = 0.0f32;
         for i in 0..count {
             match self.procs[i].state {
                 0 => ready += 1,
@@ -236,12 +273,12 @@ impl SystemState {
                 2 => blocked += 1,
                 _ => {}
             }
-            cpu_sum += self.procs[i].cpu_pct;
         }
         self.ready_count = ready;
         self.run_count = run;
         self.blocked_count = blocked;
-        self.total_cpu_pct = cpu_sum.min(100.0);
+        // aggregate utilization is derived from global idle accounting.
+        self.total_cpu_pct = (100.0 - self.idle_pct).clamp(0.0, 100.0);
 
         let used_pct = if self.total_mem > 0 {
             ((self.total_mem - self.free_mem) * 100 / self.total_mem).min(100) as u8
@@ -250,6 +287,9 @@ impl SystemState {
         };
         self.load_history[self.load_head % HISTORY_LEN] = used_pct;
         self.cpu_history[self.load_head % HISTORY_LEN] = (self.total_cpu_pct as u8).min(100);
+        for core in 0..live_cores {
+            self.per_core_history[core][self.load_head % HISTORY_LEN] = self.per_core_util_pct[core];
+        }
         self.load_head = self.load_head.wrapping_add(1);
     }
 
@@ -272,9 +312,9 @@ impl SystemState {
     }
 
     fn find_prev_cpu_tsc(&self, pid: u32) -> u64 {
-        for i in 0..self.proc_count {
-            if self.procs[i].pid == pid {
-                return self.prev_cpu_tsc[i];
+        for i in 0..self.prev_cpu_tsc_count {
+            if self.prev_cpu_tsc_pids[i] == pid {
+                return self.prev_cpu_tsc_vals[i];
             }
         }
         0
@@ -326,6 +366,26 @@ impl SystemState {
         }
         let idx = (self.load_head.wrapping_sub(1).wrapping_sub(age)) % HISTORY_LEN;
         self.cpu_history[idx]
+    }
+
+    pub fn per_core_count(&self) -> usize {
+        (self.cpu_count as usize).min(SYSINFO_MAX_CPUS)
+    }
+
+    pub fn per_core_util(&self, core: usize) -> u8 {
+        if core < self.per_core_count() {
+            self.per_core_util_pct[core]
+        } else {
+            0
+        }
+    }
+
+    pub fn per_core_history_sample(&self, core: usize, age: usize) -> u8 {
+        if core >= self.per_core_count() || age >= HISTORY_LEN {
+            return 0;
+        }
+        let idx = (self.load_head.wrapping_sub(1).wrapping_sub(age)) % HISTORY_LEN;
+        self.per_core_history[core][idx]
     }
 
     pub fn mem_used_mb(&self) -> u32 {

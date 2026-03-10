@@ -9,7 +9,7 @@
 *.iso
 *.img
 *.EFI
-
+*.json
 #Builds
 /build/
 /dist/

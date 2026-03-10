@@ -68,6 +68,12 @@ pub struct PerCpu {
     /// Used to restore RSP when the AP returns to the idle loop after
     /// descheduling a user process.  BSP doesn't use this.
     pub boot_kernel_rsp: u64,
+    /// Smoothed per-core runnable load hint (scheduler-owned).
+    pub load_hint: u32,
+    /// Core power/parking state id (scheduler-owned).
+    pub park_state: u8,
+    /// Last observed active TSC on this core.
+    pub last_active_tsc: u64,
 }
 
 impl PerCpu {
@@ -86,6 +92,9 @@ impl PerCpu {
             in_tick: false,
             online: false,
             boot_kernel_rsp: 0,
+            load_hint: 0,
+            park_state: 0,
+            last_active_tsc: 0,
         }
     }
 }

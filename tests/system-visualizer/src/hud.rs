@@ -94,11 +94,22 @@ const COL_ACCENT: u32 = 0x0020F098;
 const COL_WARN: u32 = 0x00FF9030;
 const COL_CRIT: u32 = 0x00FF3838;
 
+const LEFT_COL_X: u32 = 8;
+const LEFT_COL_W: u32 = 200;
+const TOP_PANEL_Y: u32 = 8;
+const TOP_PANEL_H: u32 = 80;
+
+fn per_core_panel_rect(state: &SystemState) -> (u32, u32, u32, u32) {
+    let cores = state.per_core_count().max(1) as u32;
+    let h = (cores.saturating_mul(10) + 24).clamp(92, 188);
+    (LEFT_COL_X, TOP_PANEL_Y + TOP_PANEL_H + 8, LEFT_COL_W, h)
+}
+
 pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
-    let px = 8u32;
-    let py = 8u32;
-    let pw = 200u32;
-    let ph = 80u32;
+    let px = LEFT_COL_X;
+    let py = TOP_PANEL_Y;
+    let pw = LEFT_COL_W;
+    let ph = TOP_PANEL_H;
 
     fb.fill_rect(px, py, pw, ph, COL_PANEL);
     hline(fb, px, py, pw);
@@ -177,9 +188,10 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 }
 
 pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<usize>) {
-    let px = 8u32;
-    let py = 96u32;
-    let pw = 200u32;
+    let px = LEFT_COL_X;
+    let (_, per_core_y, _, per_core_h) = per_core_panel_rect(state);
+    let py = per_core_y + per_core_h + 8;
+    let pw = LEFT_COL_W;
     let max_visible = 12usize;
     let row_h = font::CELL_H + 1;
     let header_h = font::CELL_H + 4;
@@ -192,7 +204,7 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
     let y0 = py + 3;
     fb.draw_str(px + 4, y0, "PID", COL_DIM);
     fb.draw_str(px + 28, y0, "S", COL_DIM);
-    fb.draw_str(px + 40, y0, "CPU%", COL_DIM);
+    fb.draw_str(px + 40, y0, "CPU M%", COL_DIM);
     fb.draw_str(px + 70, y0, "MEM KB", COL_DIM);
     fb.draw_str(px + 112, y0, "NAME", COL_DIM);
     hline(fb, px, y0 + font::CELL_H + 1, pw);
@@ -218,15 +230,15 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
         let st_col = state_color(proc.state);
         fb.draw_char(px + 28, ry, state_char(proc.state), st_col);
 
-        let cpu_int = (proc.cpu_pct as u32).min(99);
+        let cpu_int = (proc.cpu_pct as u32).min(100);
         fb.draw_u32(
             px + 40,
             ry,
             cpu_int,
-            2,
+            3,
             if cpu_int > 50 { COL_WARN } else { c },
         );
-        fb.draw_char(px + 52, ry, b'%', COL_DIM);
+        fb.draw_char(px + 58, ry, b'%', COL_DIM);
 
         let mem_display = (proc.mem_kb as u32).min(9999);
         fb.draw_u32(px + 70, ry, mem_display, 4, c);
@@ -412,6 +424,194 @@ pub fn draw_load_graph(fb: &Framebuf, state: &SystemState) {
         };
         for dy in 0..bar_h {
             fb.put(x, cplot_y + gh - 1 - dy, col);
+        }
+    }
+}
+
+pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
+    let cores = state.per_core_count();
+    if cores == 0 {
+        return;
+    }
+
+    let (gx, gy, gw, gh) = per_core_panel_rect(state);
+
+    // layered panel shell
+    fb.fill_rect(gx, gy, gw, gh, COL_PANEL);
+    fb.fill_rect(gx + 1, gy + 1, gw.saturating_sub(2), 1, 0x001E2834);
+    fb.fill_rect(gx + 1, gy + gh.saturating_sub(2), gw.saturating_sub(2), 1, 0x000E131A);
+    hline(fb, gx, gy, gw);
+    fb.draw_str(gx + 2, gy + 2, "CORE UTILIZATION", COL_ACCENT);
+
+    // Header rollup metrics + compact legend.
+    let mut sum = 0u32;
+    let mut peak = 0u32;
+    for core in 0..cores {
+        let v = state.per_core_util(core) as u32;
+        sum = sum.saturating_add(v);
+        if v > peak {
+            peak = v;
+        }
+    }
+    let avg = if cores > 0 { sum / cores as u32 } else { 0 };
+    fb.draw_str(gx + 96, gy + 2, "A", COL_DIM);
+    fb.draw_u32(gx + 102, gy + 2, avg.min(100), 3, COL_TEXT);
+    fb.draw_char(gx + 120, gy + 2, b'%', COL_DIM);
+    fb.draw_str(gx + 126, gy + 2, "P", COL_DIM);
+    fb.draw_u32(gx + 132, gy + 2, peak.min(100), 3, COL_WARN);
+    fb.draw_char(gx + 150, gy + 2, b'%', COL_DIM);
+
+    // Compact threshold legend chips: N/W/H
+    fb.fill_rect(gx + 156, gy + 3, 4, 4, COL_ACCENT);
+    fb.draw_char(gx + 162, gy + 2, b'N', COL_DIM);
+    fb.fill_rect(gx + 170, gy + 3, 4, 4, COL_WARN);
+    fb.draw_char(gx + 176, gy + 2, b'W', COL_DIM);
+    fb.fill_rect(gx + 184, gy + 3, 4, 4, COL_CRIT);
+    fb.draw_char(gx + 190, gy + 2, b'H', COL_DIM);
+
+    let content_x = gx + 2;
+    let content_y = gy + font::CELL_H + 2;
+    let content_w = gw.saturating_sub(4);
+    let content_h = gh.saturating_sub(font::CELL_H + 4);
+
+    if content_w < 24 || content_h < 8 {
+        return;
+    }
+
+    let graph_x = content_x + 40;
+    let graph_w = content_w.saturating_sub(40);
+    if graph_w < 8 {
+        return;
+    }
+
+    for core in 0..cores {
+        // Evenly partition content so rows exactly fill the panel height.
+        let y0 = content_y + (core as u32 * content_h) / cores as u32;
+        let y1 = content_y + ((core as u32 + 1) * content_h) / cores as u32;
+        let row_h = y1.saturating_sub(y0).max(3);
+        if y0 + row_h > gy + gh {
+            break;
+        }
+
+        let core_idx = core as u32;
+        // Idiomatic labels: CPU0, CPU1, ...
+        fb.draw_str(content_x, y0, "CPU", COL_DIM);
+        fb.draw_u32(content_x + 18, y0, core_idx, 2, COL_TEXT);
+
+        let now_pct = state.per_core_util(core) as u32;
+
+        // Row background with threshold bands.
+        fb.fill_rect(graph_x, y0, graph_w, row_h, COL_BG);
+        let mid_50 = y0 + row_h.saturating_sub(1) - ((row_h.saturating_sub(1) * 50) / 100);
+        let mid_80 = y0 + row_h.saturating_sub(1) - ((row_h.saturating_sub(1) * 80) / 100);
+        if mid_50 > y0 {
+            fb.fill_rect(graph_x, y0, graph_w, mid_50 - y0, 0x00101822);
+        }
+        if mid_80 > y0 {
+            fb.fill_rect(graph_x, y0, graph_w, mid_80 - y0, 0x00160F14);
+        }
+
+        // Temporal grid lines.
+        let mut gx_tick = 0u32;
+        while gx_tick < graph_w {
+            for dy in 0..row_h {
+                fb.put(graph_x + gx_tick, y0 + dy, 0x00141D2A);
+            }
+            gx_tick = gx_tick.saturating_add(16);
+        }
+
+        // Threshold guide lines.
+        for x in 0..graph_w {
+            fb.put(graph_x + x, mid_50, 0x00307090);
+            fb.put(graph_x + x, mid_80, 0x00806030);
+        }
+
+        let ramp = core as u32 % 5;
+        let (base_col, hi_col) = match ramp {
+            0 => (0x002884B0, 0x0038D0FF),
+            1 => (0x001F8C66, 0x0028E0A0),
+            2 => (0x00986A1C, 0x00F0B030),
+            3 => (0x006050B0, 0x00D070FF),
+            _ => (0x005A8C2E, 0x00A0F050),
+        };
+
+        let mut prev_py = y0 + row_h - 1;
+        let mut peak_h = 0u32;
+        for age in 0..120usize {
+            let p = state.per_core_history_sample(core, age) as u32;
+            if p > peak_h {
+                peak_h = p;
+            }
+        }
+
+        for x in 0..graph_w {
+            let age = ((graph_w - 1 - x) as usize * 119) / (graph_w - 1) as usize;
+            let pct = state.per_core_history_sample(core, age) as u32;
+            let h = (row_h.saturating_sub(1) * pct.min(100)) / 100;
+            if h == 0 {
+                prev_py = y0 + row_h - 1;
+                continue;
+            }
+            let py_top = y0 + row_h - 1 - h;
+
+            // Area fill.
+            for dy in 0..h {
+                let py = y0 + row_h - 1 - dy;
+                let col = if dy + 1 == h || dy + 2 == h { hi_col } else { base_col };
+                fb.put(graph_x + x, py, col);
+            }
+
+            // Connect neighboring points for a smoother waveform.
+            let y_min = py_top.min(prev_py);
+            let y_max = py_top.max(prev_py);
+            for py in y_min..=y_max {
+                fb.put(graph_x + x, py, hi_col);
+            }
+
+            // faint glow rails around crest
+            if py_top > y0 {
+                fb.put(graph_x + x, py_top - 1, 0x00406070);
+            }
+            if py_top + 1 < y0 + row_h {
+                fb.put(graph_x + x, py_top + 1, 0x00304050);
+            }
+
+            prev_py = py_top;
+        }
+
+        // Peak-hold marker for this row.
+        let peak_y = y0 + row_h.saturating_sub(1)
+            - ((row_h.saturating_sub(1) * peak_h.min(100)) / 100);
+        for x in (graph_x..(graph_x + graph_w)).step_by(6) {
+            fb.put(x, peak_y, 0x00F0E070);
+        }
+
+        // Animated sweep marker to add temporal direction cue.
+        let sweep_x = graph_x + ((state.uptime_ms as u32 / 32) % graph_w.max(1));
+        for dy in 0..row_h {
+            fb.put(sweep_x, y0 + dy, 0x002C3A4A);
+        }
+
+        // Current sample beacon.
+        let cur_h = (row_h.saturating_sub(1) * now_pct.min(100)) / 100;
+        if cur_h > 0 {
+            let cur_y = y0 + row_h - 1 - cur_h;
+            let blink = ((state.uptime_ms / 120) & 1) == 0;
+            let dot_col = if blink { 0x00F8F8F8 } else { hi_col };
+            fb.put(graph_x + graph_w - 1, cur_y, dot_col);
+            if cur_y > y0 {
+                fb.put(graph_x + graph_w - 1, cur_y - 1, 0x0060A0D0);
+            }
+            if cur_y + 1 < y0 + row_h {
+                fb.put(graph_x + graph_w - 1, cur_y + 1, 0x0060A0D0);
+            }
+        }
+
+        // One-pixel separator between rows.
+        if y1 < content_y + content_h {
+            for x in 0..content_w {
+                fb.put(content_x + x, y1.saturating_sub(1), 0x00203040);
+            }
         }
     }
 }

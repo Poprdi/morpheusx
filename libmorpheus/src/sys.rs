@@ -3,6 +3,9 @@
 use crate::is_error;
 use crate::raw::*;
 
+/// Maximum number of per-core utilization counters exported through `SysInfo`.
+pub const SYSINFO_MAX_CPUS: usize = 16;
+
 /// System information struct — matches the kernel's `SysInfo` layout exactly.
 ///
 /// Populated by `sysinfo()`.
@@ -15,7 +18,8 @@ pub struct SysInfo {
     pub free_mem: u64,
     /// Number of live processes.
     pub num_procs: u32,
-    pub _pad0: u32,
+    /// Number of online CPUs known to the kernel.
+    pub cpu_count: u32,
     /// TSC ticks since boot.
     pub uptime_ticks: u64,
     /// TSC frequency in Hz (divide `uptime_ticks` by this for seconds).
@@ -32,6 +36,9 @@ pub struct SysInfo {
     /// Compute the inter-poll delta and divide by the `uptime_ticks` delta to
     /// get the idle fraction; subtract from 1.0 for true CPU utilization.
     pub idle_tsc: u64,
+    /// Per-core halted TSC cycles since boot (indexed by core id).
+    /// Valid entries are `0..cpu_count`; remaining slots are zeroed.
+    pub per_core_idle_tsc: [u64; SYSINFO_MAX_CPUS],
 }
 
 impl SysInfo {
@@ -41,7 +48,7 @@ impl SysInfo {
             total_mem: 0,
             free_mem: 0,
             num_procs: 0,
-            _pad0: 0,
+            cpu_count: 0,
             uptime_ticks: 0,
             tsc_freq: 0,
             heap_total: 0,
@@ -49,6 +56,7 @@ impl SysInfo {
             heap_free: 0,
             sched_ticks: 0,
             idle_tsc: 0,
+            per_core_idle_tsc: [0; SYSINFO_MAX_CPUS],
         }
     }
 

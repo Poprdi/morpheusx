@@ -52,6 +52,32 @@ pub const MAX_PROCESSES: usize = 64;
 /// Per-process kernel stack size.
 pub const PROCESS_KERNEL_STACK_SIZE: usize = 128 * 1024; // 128 KiB
 
+// scheduler extension constants
+pub const SCHED_CAP_CAN_MIGRATE: u32 = 1 << 0;
+pub const SCHED_CAP_CAN_PARK: u32 = 1 << 1;
+pub const SCHED_CAP_HAS_RT_HINT: u32 = 1 << 2;
+pub const SCHED_CAP_PINNED: u32 = 1 << 3;
+pub const SCHED_CAP_DEFAULT: u32 =
+    SCHED_CAP_CAN_MIGRATE | SCHED_CAP_CAN_PARK | SCHED_CAP_HAS_RT_HINT;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessPowerMode {
+    Performance = 0,
+    Balanced = 1,
+    Eco = 2,
+    ThermalClamp = 3,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessPolicyClass {
+    LatencyCritical = 0,
+    Interactive = 1,
+    Throughput = 2,
+    Background = 3,
+}
+
 // PROCESS STATE
 
 /// Reason a process is blocked.
@@ -154,6 +180,20 @@ pub struct Process {
     /// TSC value recorded when this process last began a scheduler quantum.
     /// Written by `scheduler_tick`; used to split active/idle time.
     pub run_start_tsc: u64,
+    /// Exokernel-facing importance hint (1..=16).
+    pub importance_16: u8,
+    /// Scheduler power mode hint.
+    pub power_mode: ProcessPowerMode,
+    /// Scheduler policy class hint.
+    pub policy_class: ProcessPolicyClass,
+    /// CPU affinity mask (bit i == runnable preference on core i).
+    pub affinity_mask: u64,
+    /// Scheduler policy flags for future behavior toggles.
+    pub policy_flags: u32,
+    /// Scheduler capability bits.
+    pub capability_bits: u32,
+    /// Cached effective scheduling weight after clamping and policy rules.
+    pub effective_weight_cache: u8,
 
     // signals
     pub pending_signals: signals::SignalSet,
@@ -261,6 +301,13 @@ impl Process {
             cpu_ticks: 0,
             cpu_tsc: 0,
             run_start_tsc: 0,
+            importance_16: 8,
+            power_mode: ProcessPowerMode::Balanced,
+            policy_class: ProcessPolicyClass::Throughput,
+            affinity_mask: u64::MAX,
+            policy_flags: 0,
+            capability_bits: SCHED_CAP_DEFAULT,
+            effective_weight_cache: 0,
             pending_signals: signals::SignalSet::empty(),
             signal_handlers: [0u64; 32],
             fd_table: morpheus_helix::vfs::FdTable::new(),

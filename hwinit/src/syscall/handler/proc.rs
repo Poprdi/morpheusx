@@ -1,6 +1,8 @@
 
 // SYS_CLOCK — monotonic nanoseconds since boot (TSC-based)
 
+const SYSINFO_MAX_CPUS: usize = 16;
+
 /// `SYS_CLOCK() → nanoseconds`
 ///
 /// Returns monotonic nanoseconds since boot derived from the TSC.
@@ -26,7 +28,7 @@ pub struct SysInfo {
     pub total_mem: u64,
     pub free_mem: u64,
     pub num_procs: u32,
-    pub _pad0: u32,
+    pub cpu_count: u32,
     pub uptime_ticks: u64,
     pub tsc_freq: u64,
     pub heap_total: u64,
@@ -38,6 +40,9 @@ pub struct SysInfo {
     /// Use with `uptime_ticks` delta to compute true system-wide idle fraction:
     ///   idle_pct = (idle_tsc_delta / uptime_ticks_delta) * 100
     pub idle_tsc: u64,
+    /// Per-core halted TSC cycles since boot.
+    /// Valid entries are `0..cpu_count`; the rest remain zero.
+    pub per_core_idle_tsc: [u64; SYSINFO_MAX_CPUS],
 }
 
 /// `SYS_SYSINFO(buf_ptr) → 0`
@@ -60,11 +65,15 @@ pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
         (registry.total_memory(), registry.free_memory())
     };
 
+    let cpu_count = crate::cpu::per_cpu::cpu_count();
+    let mut per_core_idle_tsc = [0u64; SYSINFO_MAX_CPUS];
+    crate::process::scheduler::sample_per_core_idle_tsc(&mut per_core_idle_tsc);
+
     let info = SysInfo {
         total_mem,
         free_mem,
         num_procs: SCHEDULER.live_count(),
-        _pad0: 0,
+        cpu_count,
         uptime_ticks: crate::cpu::tsc::read_tsc(),
         tsc_freq,
         heap_total: heap_total as u64,
@@ -72,6 +81,7 @@ pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
         heap_free: heap_free as u64,
         sched_ticks: SCHEDULER.tick_count() as u64,
         idle_tsc: crate::process::scheduler::idle_tsc_total(),
+        per_core_idle_tsc,
     };
 
     let dst = buf_ptr as *mut SysInfo;
