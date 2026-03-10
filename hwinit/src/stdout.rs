@@ -16,6 +16,7 @@ static mut BUF: [u8; BUF_SIZE] = [0; BUF_SIZE];
 
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 static TAIL: AtomicUsize = AtomicUsize::new(0);
+static PUSH_LOCK: crate::sync::IsrSafeRawSpinLock = crate::sync::IsrSafeRawSpinLock::new();
 
 /// Master enable flag — the desktop sets this once the WM is ready
 /// to receive process output. Before that, stdout goes to serial only.
@@ -32,10 +33,12 @@ pub fn push(data: &[u8]) {
     if !ENABLED.load(Ordering::Acquire) {
         return;
     }
+    PUSH_LOCK.lock();
     for &b in data {
         let head = HEAD.load(Ordering::Relaxed);
         let next = (head + 1) & BUF_MASK;
         if next == TAIL.load(Ordering::Acquire) {
+            PUSH_LOCK.unlock();
             return; // full — drop remainder
         }
         unsafe {
@@ -43,6 +46,7 @@ pub fn push(data: &[u8]) {
         }
         HEAD.store(next, Ordering::Release);
     }
+    PUSH_LOCK.unlock();
 }
 
 /// Drain all available bytes into `out`, appending up to `limit` bytes.

@@ -68,7 +68,7 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
         return 0;
     }
 
-    let fb_info = match FB_REGISTERED {
+    let fb_info = match fb_registered() {
         Some(i) => i,
         None => return 0,
     };

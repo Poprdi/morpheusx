@@ -120,11 +120,25 @@ pub struct FbInfo {
     pub format: u32,
 }
 
-static mut FB_REGISTERED: Option<FbInfo> = None;
+// write-once, read-many from any core. atomic flag + raw pointer avoids static mut UB.
+use core::sync::atomic::{AtomicBool, Ordering as FbOrd};
+static mut FB_REGISTERED_STORAGE: Option<FbInfo> = None;
+static FB_REGISTERED_READY: AtomicBool = AtomicBool::new(false);
+
+/// Read the registered framebuffer info.  Returns None before register_framebuffer.
+#[inline]
+pub unsafe fn fb_registered() -> Option<FbInfo> {
+    if FB_REGISTERED_READY.load(FbOrd::Acquire) {
+        FB_REGISTERED_STORAGE
+    } else {
+        None
+    }
+}
 
 /// Register framebuffer info.  Called by bootloader before entering desktop.
 pub unsafe fn register_framebuffer(info: FbInfo) {
-    FB_REGISTERED = Some(info);
+    FB_REGISTERED_STORAGE = Some(info);
+    FB_REGISTERED_READY.store(true, FbOrd::Release);
 }
 
 // DOUBLE BUFFER — kernel-owned back buffer + shadow for delta presentation

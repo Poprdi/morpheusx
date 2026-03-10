@@ -28,6 +28,42 @@ use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
 use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
 use crate::serial::{put_hex32, put_hex64, puts};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use crate::cpu::per_cpu::MAX_CPUS;
+
+// Per-AP idle contexts. When an AP descheduled a user process and nothing
+// else is runnable, we MUST NOT return the outgoing process's ring-3 context.
+// That would iretq into user code with current_pid=0, corrupting everything.
+// Instead we return a ring-0 context pointing at the AP idle HLT loop.
+static mut AP_IDLE_CTX: [CpuContext; MAX_CPUS] = [const { CpuContext::empty() }; MAX_CPUS];
+
+/// Ring 0 HLT loop for idle APs. The LAPIC timer will fire and
+/// scheduler_tick will pick a real process if one becomes Ready.
+/// Never called directly — only entered via iretq from the ISR.
+#[inline(never)]
+unsafe fn ap_idle_hlt_loop() -> ! {
+    loop {
+        core::arch::asm!("sti; hlt; cli", options(nostack, nomem));
+    }
+}
+
+/// Build and return a kernel-mode idle context for the given AP core.
+/// Uses the AP's boot kernel stack and jumps to ap_idle_hlt_loop.
+unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
+    let ctx = &mut AP_IDLE_CTX[core_idx as usize];
+    let pcpu = crate::cpu::per_cpu::current();
+    ctx.rip = ap_idle_hlt_loop as u64;
+    ctx.rsp = pcpu.boot_kernel_rsp;
+    ctx.cs = KERNEL_CS as u64;
+    ctx.ss = KERNEL_DS as u64;
+    ctx.rflags = 0x202; // IF=1
+    // zero all GPRs — clean state
+    ctx.rax = 0; ctx.rbx = 0; ctx.rcx = 0; ctx.rdx = 0;
+    ctx.rsi = 0; ctx.rdi = 0; ctx.rbp = 0;
+    ctx.r8 = 0; ctx.r9 = 0; ctx.r10 = 0; ctx.r11 = 0;
+    ctx.r12 = 0; ctx.r13 = 0; ctx.r14 = 0; ctx.r15 = 0;
+    ctx
+}
 // GLOBAL STATE
 
 /// The flat process table.  Index == PID.
@@ -379,13 +415,27 @@ impl Scheduler {
         // TODO: Clean up after dead process :)
         match sig {
             Signal::SIGKILL => {
-                puts("[SCHED] SIGKILL → PID ");
-                put_hex32(pid);
-                puts("\n");
-                terminate_process_inner(slot, -9);
+                // if the target is running a syscall on another core, it holds
+                // &mut Process via current_process_mut() WITHOUT the lock.
+                // calling terminate_process_inner here would race on the same
+                // Process entry. defer: set pending signal, let the target
+                // core's scheduler_tick deliver it after saving context.
+                if slot.running_on != u32::MAX {
+                    slot.pending_signals.raise(Signal::SIGKILL);
+                } else {
+                    puts("[SCHED] SIGKILL → PID ");
+                    put_hex32(pid);
+                    puts("\n");
+                    terminate_process_inner(slot, -9);
+                }
             }
             Signal::SIGSTOP => {
-                slot.state = ProcessState::Blocked(BlockReason::Io);
+                // same race concern as SIGKILL — defer if running on another core.
+                if slot.running_on != u32::MAX {
+                    slot.pending_signals.raise(Signal::SIGSTOP);
+                } else {
+                    slot.state = ProcessState::Blocked(BlockReason::Io);
+                }
             }
             Signal::SIGCONT => {
                 if let ProcessState::Blocked(_) = slot.state {
@@ -655,14 +705,15 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
         let next_pid = pick_next(0, true, core_idx);
         if next_pid == 0 {
-            // no user process available — keep idling. null fpu ptr so ISR
-            // skips FXSAVE/FXRSTOR (AP idle loop doesn't use FPU).
+            // no user process available — return to ring 0 idle loop.
             set_percpu_fpu_ptr(0);
-            set_percpu_next_cr3(0);
+            set_percpu_next_cr3(KERNEL_CR3);
+            // restore AP's own kernel stack in TSS for future ring transitions
+            let pcpu = crate::cpu::per_cpu::current();
+            crate::cpu::gdt::set_kernel_stack_for_core(core_idx, pcpu.boot_kernel_rsp);
+            pcpu.kernel_syscall_rsp = pcpu.boot_kernel_rsp;
             PROCESS_TABLE_LOCK.unlock();
-            // return the ISR's own stack-saved context. AP wakes up exactly
-            // where it was (hlt loop). PID 0's context is untouched.
-            return core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx);
+            return ap_idle_context(core_idx);
         }
 
         // found a real process — switch AP to it
@@ -684,11 +735,15 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             set_percpu_fpu_ptr(fpu_ptr);
             &next.context
         } else {
+            // pick_next lied — PID doesn't exist. reset to idle.
+            set_this_core_pid(0);
             set_percpu_fpu_ptr(0);
-            set_percpu_next_cr3(0);
-            // transmute lifetime — pointer is on ISR stack, used immediately
+            set_percpu_next_cr3(KERNEL_CR3);
+            let pcpu = crate::cpu::per_cpu::current();
+            crate::cpu::gdt::set_kernel_stack_for_core(core_idx, pcpu.boot_kernel_rsp);
+            pcpu.kernel_syscall_rsp = pcpu.boot_kernel_rsp;
             PROCESS_TABLE_LOCK.unlock();
-            return core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx);
+            return ap_idle_context(core_idx);
         };
 
         PROCESS_TABLE_LOCK.unlock();
@@ -751,13 +806,19 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     let next_pid = pick_next(cur_pid, skip_kernel, core_idx);
 
     // AP ran a user process but nothing else is runnable — return to idle.
-    // don't let pick_next's fallback put the AP on PID 0.
+    // CRITICAL: must NOT return the outgoing process's ring-3 context.
+    // That would iretq into user code while AP thinks it's PID 0 — instant UB.
+    // Instead, return a kernel-mode idle context on the AP's own stack.
     if next_pid == 0 && core_idx != 0 {
         set_this_core_pid(0);
         set_percpu_fpu_ptr(0);
-        set_percpu_next_cr3(0);
+        set_percpu_next_cr3(KERNEL_CR3);
+        // restore AP's own kernel stack in TSS
+        let pcpu = crate::cpu::per_cpu::current();
+        crate::cpu::gdt::set_kernel_stack_for_core(core_idx, pcpu.boot_kernel_rsp);
+        pcpu.kernel_syscall_rsp = pcpu.boot_kernel_rsp;
         PROCESS_TABLE_LOCK.unlock();
-        return core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx);
+        return ap_idle_context(core_idx);
     }
 
     set_this_core_pid(next_pid as u32);
@@ -788,11 +849,27 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
         &next.context
     } else {
-        // fallback: restore current
+        // pick_next returned a PID that no longer exists. recover gracefully.
+        if core_idx != 0 {
+            // AP: go back to idle
+            set_this_core_pid(0);
+            set_percpu_fpu_ptr(0);
+            set_percpu_next_cr3(KERNEL_CR3);
+            let pcpu = crate::cpu::per_cpu::current();
+            crate::cpu::gdt::set_kernel_stack_for_core(core_idx, pcpu.boot_kernel_rsp);
+            pcpu.kernel_syscall_rsp = pcpu.boot_kernel_rsp;
+            PROCESS_TABLE_LOCK.unlock();
+            return ap_idle_context(core_idx);
+        }
+        // BSP: reset core PID and return kernel context
+        set_this_core_pid(0);
+        set_percpu_fpu_ptr(0);
+        set_percpu_next_cr3(KERNEL_CR3);
         if let Some(Some(cur)) = PROCESS_TABLE.get(cur_pid) {
             &cur.context
         } else {
-            panic!("scheduler: no runnable process")
+            // nothing — return ISR stack frame unchanged
+            core::mem::transmute::<&CpuContext, &'static CpuContext>(current_ctx)
         }
     };
 
