@@ -172,7 +172,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
         // Terminal window size: derive from framebuffer if available, else 80×25.
         (0..=2, IOCTL_TIOCGWINSZ) => {
             if arg != 0 && validate_user_buf(arg, 8) {
-                let (rows, cols, xpix, ypix) = match FB_REGISTERED {
+                let (rows, cols, xpix, ypix) = match fb_registered() {
                     Some(fb) => {
                         let c = fb.width / 8; // 8px font width
                         let r = fb.height / 16; // 16px font height
