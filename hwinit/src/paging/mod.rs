@@ -7,7 +7,7 @@ pub mod table;
 pub use entry::{PageFlags, PageTable, PageTableEntry};
 pub use table::{MappedPageSize, PageTableManager, VirtAddr};
 
-use crate::serial::puts;
+use crate::serial::{log_info, log_ok};
 use crate::sync::SpinLock;
 
 // kernel page table singleton — SMP-safe via SpinLock
@@ -24,7 +24,7 @@ static PAGING_INITIALIZED: core::sync::atomic::AtomicBool =
 /// - Must be called exactly once.
 pub unsafe fn init_kernel_page_table() {
     if PAGING_INITIALIZED.load(core::sync::atomic::Ordering::Relaxed) {
-        puts("[PAGING] already initialized — skipping\n");
+        log_info("PAGING", 730, "already initialized; skipping");
         return;
     }
 
@@ -43,7 +43,7 @@ pub unsafe fn init_kernel_page_table() {
             in(reg) cr0 & !(1u64 << 16),
             options(nomem, nostack),
         );
-        puts("[PAGING] cleared CR0.WP — kernel owns page tables\n");
+        log_info("PAGING", 731, "cleared CR0.WP");
     }
 
     *KERNEL_PT.lock() = Some(mgr);
@@ -271,7 +271,6 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
 /// - Memory registry must be initialized.
 pub unsafe fn reserve_page_table_pages() -> usize {
     use crate::memory::{global_registry_mut, AllocateType, MemoryType};
-    use crate::serial::put_hex32;
 
     let (pt_pages, pt_count) = collect_page_table_pages();
 
@@ -294,11 +293,7 @@ pub unsafe fn reserve_page_table_pages() -> usize {
         }
     }
 
-    puts("[PAGING] reserved ");
-    put_hex32(reserved as u32);
-    puts(" / ");
-    put_hex32(pt_count as u32);
-    puts(" page-table pages\n");
+    log_ok("PAGING", 732, "reserved live page-table pages");
 
     reserved
 }

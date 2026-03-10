@@ -125,29 +125,22 @@ pub fn fb_lock_holder() -> u32 {
 ///     (same dimensions as the real framebuffer).  The compositor reads
 ///     these surfaces to composite windows.
 pub unsafe fn sys_fb_map() -> u64 {
-    use crate::serial::{puts, put_hex32};
     let info = match fb_registered() {
         Some(i) => i,
         None => {
-            puts("[FB_MAP] ENODEV: no framebuffer registered\n");
+            crate::serial::log_warn("FB", 790, "fb_map with no framebuffer registered");
             return ENODEV;
         }
     };
 
     // Compositor mode: non-compositor processes get their own surface.
     if is_composited_client() {
-        puts("[FB_MAP] pid ");
-        put_hex32(SCHEDULER.current_pid());
-        puts(" → private surface (composited client)\n");
+        crate::serial::log_info("FB", 791, "mapped private composited surface");
         return sys_fb_map_surface(&info);
     }
 
     // Compositor or legacy mode: map the real back buffer.
-    puts("[FB_MAP] pid ");
-    put_hex32(SCHEDULER.current_pid());
-    puts(" → real back buffer (comp_pid=");
-    put_hex32(COMPOSITOR_PID.load(core::sync::atomic::Ordering::Relaxed));
-    puts(")\n");
+    crate::serial::log_info("FB", 792, "mapped real back buffer");
     // Allocate back + shadow buffers on first call.
     if FB_BACK_PHYS.load(core::sync::atomic::Ordering::Relaxed) == 0 {
         if let Err(e) = fb_map_alloc_buffers(&info) {

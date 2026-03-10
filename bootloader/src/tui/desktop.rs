@@ -6,10 +6,9 @@
 //! 3. Spawns /bin/msh as the init user process (it owns the framebuffer via SYS_FB_MAP)
 //! 4. Loops forever forwarding PS/2 keyboard → stdin ring buffer
 
-use alloc::format;
 use alloc::vec::Vec;
 use morpheus_display::types::FramebufferInfo;
-use morpheus_hwinit::serial::{clear_live_console_hook, puts};
+use morpheus_hwinit::serial::{clear_live_console_hook, log_error, log_info, log_ok, puts};
 
 use super::input::Keyboard;
 
@@ -23,7 +22,7 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
         Some(f) => f,
         None => {
-            puts("[LOAD-ELF] FAIL: no filesystem\n");
+            log_error("ELF", 920, "no filesystem mounted");
             return None;
         }
     };
@@ -31,21 +30,14 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
         Ok(s) => s,
         Err(e) => {
-            puts("[LOAD-ELF] FAIL: vfs_stat ");
-            puts(&path);
-            puts(": ");
-            puts(match e {
-                morpheus_helix::error::HelixError::NotFound => "NotFound",
-                morpheus_helix::error::HelixError::MountNotFound => "MountNotFound",
-                _ => "other",
-            });
-            puts("\n");
+            let _ = e;
+            log_error("ELF", 921, "vfs_stat failed");
             return None;
         }
     };
 
     if stat.size == 0 {
-        puts("[LOAD-ELF] FAIL: size is 0\n");
+        log_error("ELF", 922, "ELF file size is zero");
         return None;
     }
 
@@ -61,9 +53,8 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     ) {
         Ok(f) => f,
         Err(e) => {
-            puts("[LOAD-ELF] FAIL: vfs_open: ");
-            puts(&format!("{:?}", e));
-            puts("\n");
+            let _ = e;
+            log_error("ELF", 923, "vfs_open failed");
             return None;
         }
     };
@@ -78,9 +69,8 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     ) {
         Ok(bytes) => bytes,
         Err(e) => {
-            puts("[LOAD-ELF] FAIL: vfs_read: ");
-            puts(&format!("{:?}", e));
-            puts("\n");
+            let _ = e;
+            log_error("ELF", 924, "vfs_read failed");
             return None;
         }
     };
@@ -88,11 +78,8 @@ fn load_elf_from_fs(name: &str) -> Option<Vec<u8>> {
     buf.truncate(n);
     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
 
-    puts("[LOAD-ELF] loaded ");
-    puts(&path);
-    puts(" (");
-    morpheus_hwinit::serial::put_hex32(n as u32);
-    puts(" bytes)\n");
+    let _ = (path, n);
+    log_ok("ELF", 925, "ELF image loaded from filesystem");
     Some(buf)
 }
 
@@ -105,7 +92,7 @@ fn show_boot_log_screen(keyboard: &mut Keyboard) {
 }
 
 pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
-    puts("[KERNEL] preparing to launch /bin/init\n");
+    log_info("KERNEL", 926, "preparing to launch /bin/init");
 
     let mut keyboard = Keyboard::new();
     let mut mouse = super::mouse::Mouse::new();
@@ -126,15 +113,13 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
         morpheus_hwinit::process::scheduler::spawn_user_process("init", &elf_data, &[], 0, false)
     } {
         Ok(pid) => {
-            puts("[KERNEL] init spawned as PID ");
-            morpheus_hwinit::serial::put_hex32(pid);
-            puts("\n");
+            let _ = pid;
+            log_ok("KERNEL", 927, "init process spawned");
             pid
         }
         Err(e) => {
-            puts("[FATAL] failed to spawn init: ");
-            puts(e);
-            puts("\n");
+            let _ = e;
+            log_error("KERNEL", 928, "failed to spawn init");
             loop {
                 core::hint::spin_loop();
             }
@@ -144,7 +129,7 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     // Drop the ELF data — init is loaded into its own address space now
     drop(elf_data);
 
-    puts("[KERNEL] entering input forwarding loop\n");
+    log_info("KERNEL", 929, "entering input forwarding loop");
 
     // Main kernel loop: poll PS/2 keyboard + mouse, feed to consumers.
     //

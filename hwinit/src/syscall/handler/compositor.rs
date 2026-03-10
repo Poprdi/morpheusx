@@ -27,20 +27,17 @@ pub struct SurfaceEntry {
 /// back buffer via SYS_FB_MAP; all other processes get private surfaces.
 /// Returns EBUSY if another compositor is already registered.
 pub unsafe fn sys_compositor_set() -> u64 {
-    use crate::serial::{puts, put_hex32};
     use core::sync::atomic::Ordering::Relaxed;
     let pid = SCHEDULER.current_pid();
     let cur = COMPOSITOR_PID.load(Relaxed);
     if cur != 0 && cur != pid {
-        puts("[COMP] compositor_set EBUSY — already held by pid ");
-        put_hex32(cur);
-        puts("\n");
+        let _ = cur;
+        crate::serial::log_warn("COMP", 780, "compositor already registered (EBUSY)");
         return EBUSY;
     }
     COMPOSITOR_PID.store(pid, Relaxed);
-    puts("[COMP] compositor_set: pid ");
-    put_hex32(pid);
-    puts(" registered\n");
+    let _ = pid;
+    crate::serial::log_ok("COMP", 781, "compositor registered");
     0
 }
 

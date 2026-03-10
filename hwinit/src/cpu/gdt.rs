@@ -14,7 +14,6 @@
 //! | 4     | 0x20     | User code (64)     |
 //! | 5     | 0x28     | TSS (16 bytes)     |
 
-use crate::serial::puts;
 use core::mem::size_of;
 
 // SEGMENT SELECTORS
@@ -259,7 +258,7 @@ static mut GDT_INITIALIZED: bool = false;
 /// - `kernel_stack` must be a valid, mapped stack top
 pub unsafe fn init_gdt(kernel_stack: u64) {
     if GDT_INITIALIZED {
-        puts("[GDT] WARNING: already initialized\n");
+        crate::serial::log_warn("GDT", 710, "already initialized");
         return;
     }
 
@@ -287,7 +286,7 @@ pub unsafe fn init_gdt(kernel_stack: u64) {
     load_tss(TSS_SEL);
 
     GDT_INITIALIZED = true;
-    puts("[GDT] initialized\n");
+    crate::serial::log_ok("GDT", 711, "gdt+tss initialized");
 }
 
 /// Load GDT via lgdt instruction
@@ -405,11 +404,7 @@ pub unsafe fn init_gdt_for_ap(stack_top: u64, core_idx: u32) {
     reload_segments();
     load_tss(TSS_SEL);
 
-    puts("[GDT] AP core ");
-    crate::serial::put_hex32(core_idx);
-    puts(" GDT+TSS loaded, rsp0=");
-    crate::serial::put_hex64(stack_top);
-    puts("\n");
+    let _ = (core_idx, stack_top);
 }
 
 /// Update RSP0 in an AP's TSS.  Called during context switch when the

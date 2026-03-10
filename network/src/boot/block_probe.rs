@@ -29,10 +29,17 @@ use crate::pci::capability::probe_virtio_caps;
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_write16, PciAddr};
 
 // ─── Inline serial helpers (network crate's serial_str + hex) ────────────
+const VERBOSE_BLOCK_PROBE: bool = false;
+
 fn dbg_str(s: &str) {
-    crate::serial_str(s);
+    if VERBOSE_BLOCK_PROBE {
+        crate::serial_str(s);
+    }
 }
 fn dbg_hex64(v: u64) {
+    if !VERBOSE_BLOCK_PROBE {
+        return;
+    }
     const HEX: &[u8; 16] = b"0123456789abcdef";
     crate::serial_str("0x");
     for i in (0..16).rev() {
@@ -43,6 +50,9 @@ fn dbg_hex32(v: u32) {
     dbg_hex64(v as u64);
 }
 fn dbg_hex8(v: u8) {
+    if !VERBOSE_BLOCK_PROBE {
+        return;
+    }
     const HEX: &[u8; 16] = b"0123456789abcdef";
     crate::serial_byte(HEX[(v >> 4) as usize]);
     crate::serial_byte(HEX[(v & 0xF) as usize]);
@@ -689,7 +699,7 @@ pub unsafe fn create_unified_from_detected(
                 for bar_i in 0..6u8 {
                     let raw = pci_cfg_read32(pci_addr, 0x10 + bar_i * 4);
                     dbg_str("[BLK-PROBE] raw BAR");
-                    crate::serial_byte(b'0' + bar_i);
+                    dbg_hex8(bar_i);
                     dbg_str("=");
                     dbg_hex32(raw);
                     dbg_str("\n");
@@ -721,7 +731,7 @@ pub unsafe fn create_unified_from_detected(
             for i in 0..6 {
                 if caps.bar_addrs[i] != 0 {
                     dbg_str("[BLK-PROBE]   BAR");
-                    crate::serial_byte(b'0' + i as u8);
+                    dbg_hex8(i as u8);
                     dbg_str("=");
                     dbg_hex64(caps.bar_addrs[i]);
                     dbg_str("\n");

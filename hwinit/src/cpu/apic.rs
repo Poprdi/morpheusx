@@ -8,7 +8,7 @@
 
 use crate::cpu::per_cpu;
 use crate::cpu::pio::outb;
-use crate::serial::{put_hex32, puts};
+use crate::serial::{log_info, log_ok, log_warn};
 
 // ── LAPIC register offsets ───────────────────────────────────────────────
 
@@ -74,9 +74,7 @@ pub unsafe fn probe_lapic_base() -> u64 {
     LAPIC_BASE_ACTUAL = base;
 
     if base != DEFAULT_LAPIC_BASE {
-        puts("[LAPIC] MSR 0x1B base: ");
-        crate::serial::put_hex64(base);
-        puts(" (relocated from default)\n");
+        log_info("LAPIC", 720, "detected relocated LAPIC base");
     }
 
     base
@@ -150,16 +148,9 @@ pub unsafe fn init_bsp() {
     // accept all interrupts
     lapic_write(base, LAPIC_TPR, 0);
 
-    let id = lapic_read(base, LAPIC_ID) >> 24;
-    let ver = lapic_read(base, LAPIC_VER);
-
-    puts("[LAPIC] BSP id=");
-    put_hex32(id);
-    puts(" ver=");
-    put_hex32(ver & 0xFF);
-    puts(" maxlvt=");
-    put_hex32((ver >> 16) & 0xFF);
-    puts("\n");
+    let _id = lapic_read(base, LAPIC_ID) >> 24;
+    let _ver = lapic_read(base, LAPIC_VER);
+    log_ok("LAPIC", 721, "bsp lapic initialized");
 }
 
 /// Initialize an AP's LAPIC.
@@ -175,10 +166,7 @@ pub unsafe fn init_ap() {
     lapic_write(base, LAPIC_SVR, svr | SVR_ENABLE | SVR_SPURIOUS_VECTOR);
     lapic_write(base, LAPIC_TPR, 0);
 
-    let id = lapic_read(base, LAPIC_ID) >> 24;
-    puts("[LAPIC] AP id=");
-    put_hex32(id);
-    puts(" initialized\n");
+    let _id = lapic_read(base, LAPIC_ID) >> 24;
 }
 
 /// Send end-of-interrupt to the local APIC.
@@ -241,7 +229,7 @@ pub unsafe fn setup_timer(target_hz: u32) {
     lapic_write(base, LAPIC_LVT_TIMER, TIMER_MASKED);
 
     if elapsed == 0 {
-        puts("[LAPIC] WARNING: timer calibration returned 0 ticks\n");
+        log_warn("LAPIC", 723, "timer calibration returned zero ticks");
         return;
     }
 
@@ -251,15 +239,10 @@ pub unsafe fn setup_timer(target_hz: u32) {
     let ticks_per_second = elapsed as u64 * (1000 / CALIBRATION_MS as u64);
     let init_count = (ticks_per_second / target_hz as u64) as u32;
 
-    puts("[LAPIC] timer: ");
-    put_hex32(elapsed);
-    puts(" ticks/");
-    put_hex32(CALIBRATION_MS);
-    puts("ms → init=");
-    put_hex32(init_count);
-    puts(" for ");
-    put_hex32(target_hz);
-    puts("Hz\n");
+    let _ = (elapsed, init_count, target_hz);
+    if crate::cpu::per_cpu::current_core_index() == 0 {
+        log_ok("LAPIC", 724, "timer configured");
+    }
 
     // configure periodic mode at the target frequency
     lapic_write(base, LAPIC_LVT_TIMER, TIMER_PERIODIC | TIMER_VECTOR as u32);
@@ -274,7 +257,7 @@ pub unsafe fn setup_timer(target_hz: u32) {
 pub unsafe fn disable_pic8259() {
     outb(0x21, 0xFF); // master: mask all
     outb(0xA1, 0xFF); // slave: mask all
-    puts("[LAPIC] PIC8259 disabled — all interrupts via LAPIC now\n");
+    log_info("LAPIC", 725, "legacy PIC disabled");
 }
 
 // ── IPI ──────────────────────────────────────────────────────────────────
@@ -318,7 +301,7 @@ unsafe fn wait_icr_idle(base: u64) {
         core::hint::spin_loop();
         timeout -= 1;
         if timeout == 0 {
-            puts("[LAPIC] WARNING: ICR delivery timeout\n");
+            log_warn("LAPIC", 726, "ICR delivery timeout");
             break;
         }
     }

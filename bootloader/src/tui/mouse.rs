@@ -45,8 +45,6 @@ impl Mouse {
     }
 
     unsafe fn init(&mut self) {
-        use morpheus_hwinit::serial::puts;
-
         asm_ps2_flush();
 
         // Enable aux port (port 2)
@@ -64,7 +62,7 @@ impl Mouse {
         // Reset mouse (0xFF via aux)
         let ack_reset = mouse_cmd(0xFF);
         if ack_reset != 0xFA {
-            puts("[MOUSE] WARN reset ACK missing\n");
+            morpheus_hwinit::serial::log_warn("INPUT", 931, "mouse reset ACK missing");
         }
         // eat BAT result + device ID
         drain(100_000);
@@ -72,19 +70,19 @@ impl Mouse {
         // Set defaults
         let ack_defaults = mouse_cmd(0xF6);
         if ack_defaults != 0xFA {
-            puts("[MOUSE] WARN defaults ACK missing\n");
+            morpheus_hwinit::serial::log_warn("INPUT", 932, "mouse defaults ACK missing");
         }
 
         // Enable streaming
         let ack_stream = mouse_cmd(0xF4);
         if ack_stream != 0xFA {
-            puts("[MOUSE] WARN stream ACK missing\n");
+            morpheus_hwinit::serial::log_warn("INPUT", 933, "mouse stream ACK missing");
         }
 
         asm_ps2_flush();
         self.fill = 0;
         self.desync_count = 0;
-        puts("[MOUSE] PS/2 mouse ready\n");
+        morpheus_hwinit::serial::log_ok("INPUT", 934, "PS/2 mouse ready");
     }
 
     /// Feed one raw byte from PS/2 aux port. Returns packet when 3 bytes complete.

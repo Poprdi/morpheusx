@@ -812,7 +812,7 @@ exception_stub_with_error!(exc_control_protection, 21);
 /// Must be called after GDT is initialized.
 pub unsafe fn init_idt() {
     if IDT_INITIALIZED {
-        puts("[IDT] WARNING: already initialized\n");
+        crate::serial::log_warn("IDT", 740, "already initialized");
         return;
     }
 
@@ -871,7 +871,7 @@ pub unsafe fn init_idt() {
     );
 
     IDT_INITIALIZED = true;
-    puts("[IDT] initialized (exceptions only)\n");
+    crate::serial::log_ok("IDT", 741, "exception vectors installed");
 }
 
 /// Set a custom interrupt handler for a vector.
@@ -899,7 +899,7 @@ pub unsafe fn load_idt_for_ap() {
         in(reg) &idt_ptr,
         options(nostack, preserves_flags)
     );
-    crate::serial::puts("[IDT] AP loaded shared IDT\n");
+    // intentionally quiet on AP path to avoid N-core boot spam.
 }
 
 /// Enable interrupts

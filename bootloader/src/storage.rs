@@ -27,7 +27,7 @@
 use morpheus_helix::device::RawBlockDevice;
 use morpheus_hwinit::dma::DmaRegion;
 use morpheus_hwinit::paging::is_paging_initialized;
-use morpheus_hwinit::serial::puts;
+use morpheus_hwinit::serial::{log_error, log_info, log_ok, log_warn, puts};
 use morpheus_hwinit::{kmap_mmio, pci_cfg_read16, pci_cfg_read32, PciAddr};
 use morpheus_network::{
     create_unified_from_detected, scan_all_block_devices, BlockDmaConfig, BlockDriver,
@@ -152,7 +152,7 @@ unsafe fn dump_pci_devices() {
 /// - Paging and MemoryRegistry must be initialized.
 unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
     if !is_paging_initialized() {
-        puts("[STORAGE] WARNING: paging not initialized, cannot map BARs\n");
+        log_warn("STORAGE", 820, "paging not initialized; skipping BAR UC mapping");
         return;
     }
 
@@ -187,11 +187,8 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
             match kmap_mmio(base_addr, MAP_SIZE) {
                 Ok(()) => {}
                 Err(e) => {
-                    puts("[STORAGE] map_mmio BAR");
-                    morpheus_hwinit::serial::put_hex32(bar_idx as u32);
-                    puts(" FAILED: ");
-                    puts(e);
-                    puts("\n");
+                    let _ = (bar_idx, e);
+                    log_warn("STORAGE", 821, "map_mmio for VirtIO BAR failed");
                 }
             }
         }
@@ -286,7 +283,7 @@ fn spinner_done() {
 /// - `tsc_freq` must be the calibrated TSC frequency.
 /// - Must be called exactly once, after hwinit completes.
 pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
-    puts("[STORAGE] probing for block device\n");
+    log_info("STORAGE", 822, "probing block devices");
 
     // Dump PCI bus to serial for device identification diagnostics
     // (Commenting out PCI dump — enable if debugging PCI device discovery)
@@ -335,13 +332,11 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     let (devices, dev_count) = scan_all_block_devices();
 
     if dev_count == 0 {
-        puts("[STORAGE] no block device found — using RAM-disk\n");
+        log_warn("STORAGE", 823, "no block device found; using RAM-disk");
         return;
     }
-
-    puts("[STORAGE] found ");
-    morpheus_hwinit::serial::put_hex32(dev_count as u32);
-    puts(" block device(s), scanning for data disk...\n");
+    let _ = dev_count;
+    log_info("STORAGE", 824, "block devices detected; selecting data disk");
 
     // Try each device: skip boot disks (GPT/MBR), use the first blank or HelixFS one.
     let mut found_data_disk = false;
@@ -360,34 +355,24 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         let device = match create_unified_from_detected(detected, &config) {
             Ok(dev) => dev,
             Err(_) => {
-                puts("[STORAGE]   driver init failed, skipping\n");
+                log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
                 continue;
             }
         };
 
         let info = device.info();
-        puts("[STORAGE]   ");
-        puts(device.driver_type());
-        puts(": ");
-        morpheus_hwinit::serial::put_hex64(info.total_sectors);
-        puts(" sectors × ");
-        morpheus_hwinit::serial::put_hex32(info.sector_size);
-        puts(" B = ");
-        let mb = (info.total_sectors * info.sector_size as u64) / (1024 * 1024);
-        morpheus_hwinit::serial::put_hex64(mb);
-        puts(" MB\n");
 
         // Store temporarily to check if it's a boot disk.
         BLOCK_DEVICE = Some(device);
 
         if is_boot_disk(info.sector_size) {
-            puts("[STORAGE]   has GPT/MBR partition table — skipping (boot disk)\n");
+            log_info("STORAGE", 826, "boot/system disk detected; skipping");
             BLOCK_DEVICE = None;
             continue;
         }
 
         // This device is NOT a boot disk — use it for HelixFS.
-        puts("[STORAGE]   selected as data disk\n");
+        log_ok("STORAGE", 827, "selected data disk");
         found_data_disk = true;
 
         // try to recover or format helixfs
@@ -403,11 +388,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                 Ok(sb) => {
                     // Version mismatch: v2 changed the log payload format.
                     if sb.version != morpheus_helix::types::HELIX_VERSION {
-                        puts("[STORAGE] HelixFS version mismatch (v");
-                        morpheus_hwinit::serial::put_hex32(sb.version);
-                        puts(" != v");
-                        morpheus_hwinit::serial::put_hex32(morpheus_helix::types::HELIX_VERSION);
-                        puts(") — reformat needed\n");
+                        log_warn("STORAGE", 828, "helixfs version mismatch; reformat required");
                         true
                     } else {
                         false
@@ -418,7 +399,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         };
 
         if needs_format {
-            puts("[STORAGE] no valid HelixFS — formatting\n");
+            log_info("STORAGE", 829, "no valid helixfs; formatting disk");
 
             let uuid = [
                 0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -435,18 +416,12 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             ) {
                 Ok(_sb) => {
                     spinner_done();
-                    puts("[STORAGE] format_helix OK\n");
+                    log_ok("STORAGE", 830, "format completed");
                 }
                 Err(e) => {
                     spinner_done();
-                    puts("[STORAGE] format_helix FAILED: ");
-                    match e {
-                        morpheus_helix::error::HelixError::IoWriteFailed => puts("IoWriteFailed"),
-                        morpheus_helix::error::HelixError::IoFlushFailed => puts("IoFlushFailed"),
-                        morpheus_helix::error::HelixError::FormatTooSmall => puts("FormatTooSmall"),
-                        _ => puts("(other)"),
-                    }
-                    puts("\n");
+                    let _ = e;
+                    log_error("STORAGE", 831, "format failed");
                     BLOCK_DEVICE = None;
                     break;
                 }
@@ -460,19 +435,12 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             ) {
                 Ok(_sb) => {}
                 Err(e) => {
-                    puts("[STORAGE] superblock readback FAILED: ");
-                    match e {
-                        morpheus_helix::error::HelixError::NoValidSuperblock => {
-                            puts("NoValidSuperblock")
-                        }
-                        morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
-                        _ => puts("(other)"),
-                    }
-                    puts("\n");
+                    let _ = e;
+                    log_warn("STORAGE", 832, "superblock readback failed after format");
                 }
             }
         } else {
-            puts("[STORAGE] valid HelixFS found — mounting\n");
+            log_info("STORAGE", 833, "valid helixfs found; mounting");
         }
 
         // Now do the actual replace_root_device
@@ -483,31 +451,12 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             Ok(()) => {
                 spinner_done();
                 PERSISTENT_READY = true;
-                puts("[STORAGE] persistent root FS mounted at /\n");
+                log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
             }
             Err(e) => {
                 spinner_done();
-                puts("[STORAGE] ERROR: failed to mount persistent FS: ");
-                match e {
-                    morpheus_helix::error::HelixError::IoReadFailed => puts("IoReadFailed"),
-                    morpheus_helix::error::HelixError::IoWriteFailed => puts("IoWriteFailed"),
-                    morpheus_helix::error::HelixError::IoFlushFailed => puts("IoFlushFailed"),
-                    morpheus_helix::error::HelixError::NoValidSuperblock => {
-                        puts("NoValidSuperblock")
-                    }
-                    morpheus_helix::error::HelixError::IncompatibleVersion => {
-                        puts("IncompatibleVersion")
-                    }
-                    morpheus_helix::error::HelixError::FormatTooSmall => puts("FormatTooSmall"),
-                    morpheus_helix::error::HelixError::InvalidBlockSize => puts("InvalidBlockSize"),
-                    morpheus_helix::error::HelixError::LogFull => puts("LogFull"),
-                    morpheus_helix::error::HelixError::LogCrcMismatch => puts("LogCrcMismatch"),
-                    morpheus_helix::error::HelixError::LogSegmentCorrupt => {
-                        puts("LogSegmentCorrupt")
-                    }
-                    _ => puts("(other)"),
-                }
-                puts("\n");
+                let _ = e;
+                log_error("STORAGE", 835, "failed to mount persistent filesystem");
                 BLOCK_DEVICE = None;
             }
         }
@@ -515,8 +464,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     }
 
     if !found_data_disk {
-        puts("[STORAGE] no suitable data disk found — using RAM-disk\n");
-        puts("[STORAGE] hint: add a blank virtio-blk disk for persistent storage\n");
+        log_warn("STORAGE", 836, "no suitable data disk; using RAM-disk fallback");
     }
 }
 
@@ -595,7 +543,7 @@ pub fn create_init_directories() {
     let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
         Some(f) => f,
         None => {
-            puts("[INITFS] WARNING: no root FS — skipping directory creation\n");
+            log_warn("INITFS", 840, "no root fs; skipping directory bootstrap");
             return;
         }
     };
@@ -605,14 +553,13 @@ pub fn create_init_directories() {
             Ok(_) => {}
             Err(morpheus_helix::error::HelixError::AlreadyExists) => {}
             Err(_) => {
-                puts("[INITFS] WARNING: failed to create ");
-                puts(dir);
-                puts("\n");
+                let _ = dir;
+                log_warn("INITFS", 841, "failed to create one startup directory");
             }
         }
     }
 
-    puts("[INITFS] directory structure ready\n");
+    log_ok("INITFS", 842, "directory structure ready");
 }
 
 // RAW BLOCK DEVICE BRIDGE
