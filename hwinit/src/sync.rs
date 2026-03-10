@@ -130,11 +130,6 @@ impl<T> Drop for SpinLockGuard<'_, T> {
 }
 
 // RAW SPINLOCK (no interrupt disable, for when you manage it yourself)
-
-/// Raw spinlock without interrupt management.
-///
-/// Use when you're already in an interrupt-disabled context or
-/// don't need interrupt safety.
 pub struct RawSpinLock {
     locked: AtomicBool,
 }
@@ -164,6 +159,93 @@ impl RawSpinLock {
         self.locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
+    }
+}
+
+// ISR-SAFE RAW SPINLOCK — disables interrupts before acquiring, restores on release.
+// Uses per-core saved-IF storage so nested/cross-core usage is correct.
+// Max 64 cores. Core index from gs:[0x00] (per-CPU area set up by ap_boot).
+
+pub struct IsrSafeRawSpinLock {
+    locked: AtomicBool,
+    /// Per-core saved IF state. Index = core index (0..MAX_CORES).
+    /// Only the core that holds the lock reads/writes its own slot.
+    saved_if: [core::cell::UnsafeCell<bool>; 64],
+}
+
+// multiple cores touch disjoint slots — safe by construction.
+unsafe impl Sync for IsrSafeRawSpinLock {}
+unsafe impl Send for IsrSafeRawSpinLock {}
+
+impl IsrSafeRawSpinLock {
+    pub const fn new() -> Self {
+        // const init: can't use array::from_fn in const, unroll via macro
+        const CELL_FALSE: core::cell::UnsafeCell<bool> = core::cell::UnsafeCell::new(false);
+        Self {
+            locked: AtomicBool::new(false),
+            saved_if: [CELL_FALSE; 64],
+        }
+    }
+
+    #[inline(always)]
+    fn core_index() -> usize {
+        // before per-CPU area is set up, gs base is 0 and this reads 0 (BSP)
+        let idx: u32;
+        unsafe {
+            core::arch::asm!(
+                "mov {0:e}, gs:[0x00]",
+                out(reg) idx,
+                options(nostack, readonly, preserves_flags)
+            );
+        }
+        (idx as usize) & 63
+    }
+
+    pub fn lock(&self) {
+        let was_enabled = interrupts_enabled();
+        disable_interrupts();
+
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+
+        // save per-core IF state AFTER acquiring — only holder touches its slot
+        let ci = Self::core_index();
+        unsafe { *self.saved_if[ci].get() = was_enabled; }
+    }
+
+    pub fn unlock(&self) {
+        let ci = Self::core_index();
+        let was_enabled = unsafe { *self.saved_if[ci].get() };
+        self.locked.store(false, Ordering::Release);
+
+        if was_enabled {
+            enable_interrupts();
+        }
+    }
+
+    pub fn try_lock(&self) -> bool {
+        let was_enabled = interrupts_enabled();
+        disable_interrupts();
+
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            let ci = Self::core_index();
+            unsafe { *self.saved_if[ci].get() = was_enabled; }
+            true
+        } else {
+            if was_enabled {
+                enable_interrupts();
+            }
+            false
+        }
     }
 }
 
@@ -218,8 +300,6 @@ impl Once {
     }
 }
 
-// LAZY (lazily initialized value)
-
 /// Lazily initialized value.
 pub struct Lazy<T, F = fn() -> T> {
     once: Once,
@@ -258,8 +338,6 @@ impl<T, F: FnOnce() -> T> Deref for Lazy<T, F> {
         self.get()
     }
 }
-
-// INTERRUPT GUARD
 
 /// RAII guard that disables interrupts and restores on drop.
 pub struct InterruptGuard {

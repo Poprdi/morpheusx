@@ -28,14 +28,16 @@ pub struct SurfaceEntry {
 /// Returns EBUSY if another compositor is already registered.
 pub unsafe fn sys_compositor_set() -> u64 {
     use crate::serial::{puts, put_hex32};
+    use core::sync::atomic::Ordering::Relaxed;
     let pid = SCHEDULER.current_pid();
-    if COMPOSITOR_PID != 0 && COMPOSITOR_PID != pid {
+    let cur = COMPOSITOR_PID.load(Relaxed);
+    if cur != 0 && cur != pid {
         puts("[COMP] compositor_set EBUSY — already held by pid ");
-        put_hex32(COMPOSITOR_PID);
+        put_hex32(cur);
         puts("\n");
         return EBUSY;
     }
-    COMPOSITOR_PID = pid;
+    COMPOSITOR_PID.store(pid, Relaxed);
     puts("[COMP] compositor_set: pid ");
     put_hex32(pid);
     puts(" registered\n");
@@ -54,12 +56,14 @@ pub unsafe fn sys_compositor_set() -> u64 {
 /// surfaces written (or total count if buf_ptr is 0).
 pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
     // no compositor registered yet. u64::MAX = "try again later".
-    if COMPOSITOR_PID == 0 {
+    use core::sync::atomic::Ordering::Relaxed;
+    let cpid = COMPOSITOR_PID.load(Relaxed);
+    if cpid == 0 {
         return u64::MAX;
     }
 
     let pid = SCHEDULER.current_pid();
-    if pid != COMPOSITOR_PID {
+    if pid != cpid {
         // compositor is alive but you're not it. return 0 so shelld stops waiting.
         return 0;
     }
@@ -142,7 +146,7 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
 /// EINVAL if the target has no surface, or EPERM if caller isn't compositor.
 pub unsafe fn sys_win_surface_map(target_pid: u64) -> u64 {
     let pid = SCHEDULER.current_pid();
-    if pid != COMPOSITOR_PID {
+    if pid != COMPOSITOR_PID.load(core::sync::atomic::Ordering::Relaxed) {
         return EPERM;
     }
 
@@ -178,7 +182,7 @@ pub unsafe fn sys_win_surface_map(target_pid: u64) -> u64 {
 /// packed_state: bits [15:0] = dx (i16), [31:16] = dy (i16), [39:32] = buttons.
 pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
     let pid = SCHEDULER.current_pid();
-    if pid != COMPOSITOR_PID {
+    if pid != COMPOSITOR_PID.load(core::sync::atomic::Ordering::Relaxed) {
         return EPERM;
     }
 
@@ -208,7 +212,7 @@ pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
 /// Only callable by the compositor (after it has read the surface).
 pub unsafe fn sys_win_surface_dirty_clear(target_pid: u64) -> u64 {
     let pid = SCHEDULER.current_pid();
-    if pid != COMPOSITOR_PID {
+    if pid != COMPOSITOR_PID.load(core::sync::atomic::Ordering::Relaxed) {
         return EPERM;
     }
 
@@ -257,7 +261,7 @@ pub unsafe fn sys_try_wait(pid: u64) -> u64 {
 pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
     // Only the compositor gets to play input router.
     let pid = SCHEDULER.current_pid();
-    if pid != COMPOSITOR_PID {
+    if pid != COMPOSITOR_PID.load(core::sync::atomic::Ordering::Relaxed) {
         return EPERM;
     }
 

@@ -39,9 +39,10 @@ pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] =
 /// The timer ISR on every core calls scheduler_tick() which must not
 /// race against itself or syscall handlers modifying the same process.
 /// Not reentrant — never acquire from code that already holds it.
-/// IF must be disabled before acquiring (IA32_FMASK handles this for syscalls,
-/// hardware handles it for ISRs).
-pub(crate) static PROCESS_TABLE_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
+/// Disables IF on acquire, restores on release — safe from both ISR
+/// and non-ISR contexts (BSP idle loop, task manager, etc).
+pub(crate) static PROCESS_TABLE_LOCK: crate::sync::IsrSafeRawSpinLock =
+    crate::sync::IsrSafeRawSpinLock::new();
 
 /// PID of the currently executing process on core 0 (BSP).
 /// For SMP, each core tracks its own current_pid via gs:[0x0C].

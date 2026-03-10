@@ -144,23 +144,21 @@ extern "win64" {
 }
 
 /// Physical address of the kernel-allocated back buffer (zero = unallocated).
-static mut FB_BACK_PHYS: u64 = 0;
+static FB_BACK_PHYS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Physical address of the kernel-allocated shadow buffer.
-static mut FB_SHADOW_PHYS: u64 = 0;
+static FB_SHADOW_PHYS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Number of physical pages allocated for each of the two buffers.
-static mut FB_BACK_PAGES: u64 = 0;
+static FB_BACK_PAGES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Dirty flag: set by `SYS_FB_PRESENT`, `SYS_FB_BLIT`, and `fb_mark_dirty()`.
 /// Cleared by `fb_present_tick()` after a successful delta present.
 /// When false, `fb_present_tick()` skips the full-screen scan entirely.
-static mut FB_DIRTY: bool = false;
+static FB_DIRTY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Mark the framebuffer back buffer as dirty (needs present).
 /// Called by syscalls that write to the back buffer.
 #[inline]
 pub fn fb_mark_dirty() {
-    unsafe {
-        FB_DIRTY = true;
-    }
+    FB_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
