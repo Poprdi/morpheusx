@@ -1,7 +1,31 @@
 use super::lifecycle::terminate_process_inner;
-use crate::process::{BlockReason, Process, ProcessState, Signal, MAX_PROCESSES};
+use crate::process::{
+    BlockReason, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal,
+    MAX_PROCESSES,
+};
+use crate::cpu::per_cpu::MAX_CPUS;
 use crate::serial::{put_hex32, puts};
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchedulerSystemState {
+    PerfBoost = 0,
+    Balanced = 1,
+    EcoBias = 2,
+    ThermalGuard = 3,
+    ThermalEmergency = 4,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchedulerCoreState {
+    Active = 0,
+    LightIdle = 1,
+    DeepIdleEligible = 2,
+    Parked = 3,
+    UnparkPending = 4,
+}
 
 pub(crate) static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] =
     [const { None }; MAX_PROCESSES];
@@ -21,6 +45,18 @@ pub(super) static KERNEL_LAST_WAS_IDLE: core::sync::atomic::AtomicBool =
 pub(super) static KERNEL_SKIP_STREAK: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
 pub(super) const MAX_KERNEL_SKIP: u32 = 1;
+pub(super) static SCHED_SYSTEM_STATE: AtomicU8 = AtomicU8::new(SchedulerSystemState::Balanced as u8);
+pub(super) static PER_CORE_STATE: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(SchedulerCoreState::Active as u8) }; MAX_CPUS];
+pub(super) static PER_CORE_LOAD_EWMA: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_TICKS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_LAST_ACTIVE_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_PARK_CANDIDATE: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_STREAK: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_ACTIVE_STREAK: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static SCHED_TIER_HITS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+pub(super) static THERMAL_LEVEL: AtomicU8 = AtomicU8::new(0);
+pub(super) static THERMAL_CONFIDENCE: AtomicU8 = AtomicU8::new(0);
+pub(super) static THERMAL_SOURCE_TSC: AtomicU64 = AtomicU64::new(0);
 
 pub(super) static mut SCHEDULER_READY: bool = false;
 pub(super) static mut KERNEL_CR3: u64 = 0;
@@ -193,6 +229,124 @@ pub fn get_kernel_cr3() -> u64 {
     unsafe { KERNEL_CR3 }
 }
 
+pub fn scheduler_system_state() -> SchedulerSystemState {
+    match SCHED_SYSTEM_STATE.load(Ordering::Relaxed) {
+        0 => SchedulerSystemState::PerfBoost,
+        1 => SchedulerSystemState::Balanced,
+        2 => SchedulerSystemState::EcoBias,
+        3 => SchedulerSystemState::ThermalGuard,
+        _ => SchedulerSystemState::ThermalEmergency,
+    }
+}
+
+pub fn set_scheduler_system_state(state: SchedulerSystemState) {
+    SCHED_SYSTEM_STATE.store(state as u8, Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn record_tier_hit(tier: usize) {
+    if tier < SCHED_TIER_HITS.len() {
+        SCHED_TIER_HITS[tier].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[inline(always)]
+pub fn update_core_load_ewma(core_idx: u32, ready_count: u32) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+    // ewma = (7/8 * old) + (1/8 * sample)
+    let old = PER_CORE_LOAD_EWMA[idx].load(Ordering::Relaxed);
+    let ewma = old.saturating_mul(7).saturating_add(ready_count) >> 3;
+    PER_CORE_LOAD_EWMA[idx].store(ewma, Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn set_core_state(core_idx: u32, state: SchedulerCoreState) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+    PER_CORE_STATE[idx].store(state as u8, Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn mark_core_idle_tick(core_idx: u32) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+    PER_CORE_IDLE_TICKS[idx].fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn mark_core_active_tsc(core_idx: u32, now_tsc: u64) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+    PER_CORE_LAST_ACTIVE_TSC[idx].store(now_tsc, Ordering::Relaxed);
+}
+
+pub fn set_thermal_signal(level: u8, source_tsc: u64, confidence: u8) {
+    THERMAL_LEVEL.store(level, Ordering::Relaxed);
+    THERMAL_CONFIDENCE.store(confidence, Ordering::Relaxed);
+    THERMAL_SOURCE_TSC.store(source_tsc, Ordering::Relaxed);
+
+    // 0 = normal, 1 = warm, 2 = high, 3+ = emergency
+    let state = if confidence == 0 {
+        SchedulerSystemState::Balanced
+    } else if level >= 3 {
+        SchedulerSystemState::ThermalEmergency
+    } else if level >= 2 {
+        SchedulerSystemState::ThermalGuard
+    } else {
+        SchedulerSystemState::Balanced
+    };
+    set_scheduler_system_state(state);
+}
+
+pub fn update_park_hysteresis(core_idx: u32, ready_count: u32) {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return;
+    }
+
+    let system_state = scheduler_system_state();
+    let park_idle_threshold = match system_state {
+        SchedulerSystemState::PerfBoost => 16,
+        SchedulerSystemState::Balanced => 8,
+        SchedulerSystemState::EcoBias => 4,
+        SchedulerSystemState::ThermalGuard => 3,
+        SchedulerSystemState::ThermalEmergency => 2,
+    };
+    let unpark_active_threshold = 2u32;
+
+    if ready_count == 0 {
+        let idle = PER_CORE_IDLE_STREAK[idx].fetch_add(1, Ordering::Relaxed) + 1;
+        PER_CORE_ACTIVE_STREAK[idx].store(0, Ordering::Relaxed);
+        if idle >= park_idle_threshold {
+            PER_CORE_PARK_CANDIDATE[idx].store(1, Ordering::Relaxed);
+        }
+    } else {
+        let active = PER_CORE_ACTIVE_STREAK[idx].fetch_add(1, Ordering::Relaxed) + 1;
+        PER_CORE_IDLE_STREAK[idx].store(0, Ordering::Relaxed);
+        if active >= unpark_active_threshold {
+            PER_CORE_PARK_CANDIDATE[idx].store(0, Ordering::Relaxed);
+        }
+    }
+}
+
+#[inline(always)]
+pub fn core_should_park(core_idx: u32) -> bool {
+    let idx = core_idx as usize;
+    if idx >= MAX_CPUS {
+        return false;
+    }
+    PER_CORE_PARK_CANDIDATE[idx].load(Ordering::Relaxed) != 0
+}
+
 pub fn get_earliest_deadline() -> u64 {
     EARLIEST_DEADLINE.load(Ordering::Relaxed)
 }
@@ -254,6 +408,10 @@ pub struct ProcessInfo {
     pub cpu_tsc: u64,
     pub pages_alloc: u64,
     pub priority: u8,
+    pub importance_16: u8,
+    pub power_mode: ProcessPowerMode,
+    pub policy_class: ProcessPolicyClass,
+    pub capability_bits: u32,
 }
 
 impl ProcessInfo {
@@ -266,12 +424,41 @@ impl ProcessInfo {
             cpu_tsc: 0,
             pages_alloc: 0,
             priority: 0,
+            importance_16: 8,
+            power_mode: ProcessPowerMode::Balanced,
+            policy_class: ProcessPolicyClass::Throughput,
+            capability_bits: 0,
         }
     }
 
     pub fn name_bytes(&self) -> &[u8] {
         let end = self.name.iter().position(|&b| b == 0).unwrap_or(32);
         &self.name[..end]
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SchedulerDebugInfo {
+    pub system_state: SchedulerSystemState,
+    pub tier_hits: [u64; 6],
+    pub thermal_level: u8,
+    pub thermal_confidence: u8,
+    pub core_state: [u8; MAX_CPUS],
+    pub core_load_ewma: [u32; MAX_CPUS],
+    pub core_park_candidate: [u8; MAX_CPUS],
+}
+
+impl SchedulerDebugInfo {
+    pub const fn zeroed() -> Self {
+        Self {
+            system_state: SchedulerSystemState::Balanced,
+            tier_hits: [0u64; 6],
+            thermal_level: 0,
+            thermal_confidence: 0,
+            core_state: [0u8; MAX_CPUS],
+            core_load_ewma: [0u32; MAX_CPUS],
+            core_park_candidate: [0u8; MAX_CPUS],
+        }
     }
 }
 
@@ -298,6 +485,10 @@ impl Scheduler {
                             cpu_tsc: p.cpu_tsc,
                             pages_alloc: p.pages_allocated,
                             priority: p.priority,
+                            importance_16: p.importance_16,
+                            power_mode: p.power_mode,
+                            policy_class: p.policy_class,
+                            capability_bits: p.capability_bits,
                         };
                         n += 1;
                     }
@@ -318,6 +509,45 @@ impl Scheduler {
 
     pub fn tick_count(&self) -> u32 {
         TICK_COUNT.load(Ordering::Relaxed)
+    }
+
+    pub fn system_state(&self) -> SchedulerSystemState {
+        scheduler_system_state()
+    }
+
+    pub fn set_system_state(&self, state: SchedulerSystemState) {
+        set_scheduler_system_state(state);
+    }
+
+    pub fn thermal_signal(&self, level: u8, source_tsc: u64, confidence: u8) {
+        set_thermal_signal(level, source_tsc, confidence);
+    }
+
+    pub fn tier_hits(&self) -> [u64; 6] {
+        [
+            SCHED_TIER_HITS[0].load(Ordering::Relaxed),
+            SCHED_TIER_HITS[1].load(Ordering::Relaxed),
+            SCHED_TIER_HITS[2].load(Ordering::Relaxed),
+            SCHED_TIER_HITS[3].load(Ordering::Relaxed),
+            SCHED_TIER_HITS[4].load(Ordering::Relaxed),
+            SCHED_TIER_HITS[5].load(Ordering::Relaxed),
+        ]
+    }
+
+    pub fn debug_snapshot(&self) -> SchedulerDebugInfo {
+        let mut out = SchedulerDebugInfo::zeroed();
+        out.system_state = scheduler_system_state();
+        out.tier_hits = self.tier_hits();
+        out.thermal_level = THERMAL_LEVEL.load(Ordering::Relaxed);
+        out.thermal_confidence = THERMAL_CONFIDENCE.load(Ordering::Relaxed);
+        let mut i = 0usize;
+        while i < MAX_CPUS {
+            out.core_state[i] = PER_CORE_STATE[i].load(Ordering::Relaxed);
+            out.core_load_ewma[i] = PER_CORE_LOAD_EWMA[i].load(Ordering::Relaxed);
+            out.core_park_candidate[i] = PER_CORE_PARK_CANDIDATE[i].load(Ordering::Relaxed);
+            i += 1;
+        }
+        out
     }
 
     pub unsafe fn current_fd_table_mut(&self) -> &'static mut morpheus_helix::vfs::FdTable {
