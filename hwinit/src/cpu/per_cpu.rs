@@ -10,7 +10,7 @@
 //! this struct, grep the asm/ directory and update every constant or
 //! the next timer tick will be your last.
 
-use crate::serial::{put_hex32, put_hex64, puts};
+use crate::serial::{log_ok, put_hex32, puts};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Maximum cores we support.  16 is generous for a desktop OS on QEMU.
@@ -177,11 +177,7 @@ pub unsafe fn init_bsp(lapic_id: u32, lapic_base: u64) {
 
     AP_ONLINE_COUNT.store(1, Ordering::SeqCst);
 
-    puts("[PERCPU] BSP core ");
-    put_hex32(lapic_id);
-    puts(" → idx 0, GS=");
-    put_hex64(addr);
-    puts("\n");
+    log_ok("PERCPU", 601, "BSP per-cpu context online");
 
     debug_assert_offsets();
 }
@@ -217,13 +213,7 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
 
     AP_ONLINE_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    puts("[PERCPU] AP core ");
-    put_hex32(lapic_id);
-    puts(" → idx ");
-    put_hex32(core_idx);
-    puts(", GS=");
-    put_hex64(addr);
-    puts("\n");
+    // AP bring-up is noisy on many-core systems; summary is logged by SMP phase.
 }
 
 // ── Accessors ────────────────────────────────────────────────────────────

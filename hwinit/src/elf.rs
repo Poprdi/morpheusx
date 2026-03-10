@@ -146,39 +146,16 @@ fn elf_flags_to_page_flags(p_flags: u32) -> PageFlags {
 /// # Safety
 /// MemoryRegistry and paging must be initialized.
 pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), ElfError> {
-    use crate::serial::{put_hex32, put_hex64, puts};
+    use crate::serial::{log_error, log_info, log_ok};
 
-    puts("[ELF] load_elf64: data len=");
-    put_hex32(data.len() as u32);
-    puts("\n");
-
-    // Print first 4 bytes to verify ELF magic.
-    if data.len() >= 4 {
-        puts("[ELF] first 4 bytes: ");
-        for &byte in &data[..4] {
-            crate::serial::put_hex8(byte);
-            puts(" ");
-        }
-        puts("\n");
-    }
+    log_info("ELF", 300, "loading user image");
 
     let ehdr = validate_elf64(data)?;
-    puts("[ELF] validated OK, entry=");
-    put_hex64(ehdr.e_entry);
-    puts(" phnum=");
-    put_hex32(ehdr.e_phnum as u32);
-    puts("\n");
-
     let phdrs = program_headers(data, ehdr)?;
-    puts("[ELF] program headers OK\n");
 
     let mut pt = PageTableManager::new_empty().map_err(|_| ElfError::AllocFailed)?;
-    puts("[ELF] new PML4 at ");
-    put_hex64(pt.pml4_phys);
-    puts("\n");
 
     clone_kernel_mappings(&mut pt)?;
-    puts("[ELF] kernel mappings cloned\n");
 
     let mut segments = Vec::new();
     let mut has_load = false;
@@ -194,23 +171,9 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         let vaddr_end = (ph.p_vaddr + ph.p_memsz + 0xFFF) & !0xFFF;
         let num_pages = (vaddr_end - vaddr_base) / PAGE_SIZE;
 
-        puts("[ELF] PT_LOAD vaddr=");
-        put_hex64(vaddr_base);
-        puts(" memsz=");
-        put_hex64(ph.p_memsz);
-        puts(" filesz=");
-        put_hex64(ph.p_filesz);
-        puts(" pages=");
-        put_hex32(num_pages as u32);
-        puts("\n");
-
         let phys_base = global_registry_mut()
             .allocate_pages(AllocateType::AnyPages, MemoryType::LoaderData, num_pages)
             .map_err(|_| ElfError::AllocFailed)?;
-
-        puts("[ELF]   phys_base=");
-        put_hex64(phys_base);
-        puts("\n");
 
         // Zero the region, then copy file data.
         core::ptr::write_bytes(phys_base as *mut u8, 0, (num_pages * PAGE_SIZE) as usize);
@@ -232,18 +195,8 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         for i in 0..num_pages {
             let virt = vaddr_base + i * PAGE_SIZE;
             let phys = phys_base + i * PAGE_SIZE;
-            if i == 0 {
-                puts("[ELF]   mapping first page virt=");
-                put_hex64(virt);
-                puts(" -> phys=");
-                put_hex64(phys);
-                puts("\n");
-            }
             map_user_page(&mut pt, virt, phys, page_flags)?;
         }
-        puts("[ELF]   mapped all ");
-        put_hex32(num_pages as u32);
-        puts(" pages OK\n");
 
         segments.push(LoadedSegment {
             vaddr: vaddr_base,
@@ -254,10 +207,9 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
     }
 
     if !has_load {
+        log_error("ELF", 404, "no PT_LOAD segments in image");
         return Err(ElfError::NoLoadSegments);
     }
-
-    puts("[ELF] mapping user stack\n");
 
     // Allocate and map user stack.
     let stack_phys = global_registry_mut()
@@ -287,9 +239,7 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         entry: ehdr.e_entry,
         segments,
     };
-    puts("[ELF] load_elf64 SUCCESS, entry=");
-    put_hex64(ehdr.e_entry);
-    puts("\n");
+    log_ok("ELF", 301, "user image mapped successfully");
     Ok((image, pt))
 }
 

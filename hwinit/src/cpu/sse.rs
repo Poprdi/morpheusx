@@ -14,13 +14,15 @@
 //! | CR4      |  9  | OSFXSR      |   1   | OS supports FXSAVE/FXRSTOR              |
 //! | CR4      | 10  | OSXMMEXCPT  |   1   | OS handles #XF (SIMD FP exceptions)     |
 
-use crate::serial::puts;
+use crate::serial::log_ok;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const CR0_MP: u64 = 1 << 1;
 const CR0_EM: u64 = 1 << 2;
 const CR0_TS: u64 = 1 << 3;
 const CR4_OSFXSR: u64 = 1 << 9;
 const CR4_OSXMMEXCPT: u64 = 1 << 10;
+static SSE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Enable SSE and x87 FPU for the kernel and all user processes.
 ///
@@ -44,5 +46,7 @@ pub unsafe fn enable_sse() {
         core::arch::asm!("mov cr4, {}", in(reg) cr4_new, options(nomem, nostack));
     }
 
-    puts("[SSE] enabled — CR0.EM=0 CR0.TS=0 CR4.OSFXSR=1 CR4.OSXMMEXCPT=1\n");
+    if !SSE_LOGGED.swap(true, Ordering::AcqRel) {
+        log_ok("SSE", 701, "SIMD/FPU enabled");
+    }
 }

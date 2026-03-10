@@ -14,7 +14,7 @@ use crate::cpu::apic;
 use crate::cpu::gdt;
 use crate::cpu::per_cpu::{self, MAX_CPUS};
 use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
-use crate::serial::{put_hex32, puts};
+use crate::serial::{log_error, log_info, log_ok, log_warn};
 use core::sync::atomic::Ordering;
 
 /// Physical address where the AP trampoline is copied.
@@ -68,7 +68,7 @@ unsafe fn setup_trampoline() -> bool {
     ) {
         Ok(_) => {}
         Err(_) => {
-            puts("[AP] ERROR: trampoline page 0x8000 is not available in memory map\n");
+            log_error("AP", 500, "trampoline page 0x8000 unavailable in memory map");
             return false;
         }
     }
@@ -112,9 +112,7 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     ) {
         Ok(base) => base,
         Err(_) => {
-            puts("[AP] ERROR: stack alloc failed for core ");
-            put_hex32(core_idx);
-            puts("\n");
+            log_error("AP", 501, "stack allocation failed");
             return false;
         }
     };
@@ -128,12 +126,6 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     *((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32) = 0;
 
     let before = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
-
-    puts("[AP] INIT+SIPI → LAPIC ");
-    put_hex32(lapic_id);
-    puts(" (core ");
-    put_hex32(core_idx);
-    puts(")\n");
 
     // INIT IPI
     apic::send_init_ipi(lapic_id);
@@ -158,14 +150,9 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     }
 
     if per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) > before {
-        puts("[AP] core ");
-        put_hex32(core_idx);
-        puts(" online\n");
         true
     } else {
-        puts("[AP] WARNING: LAPIC ");
-        put_hex32(lapic_id);
-        puts(" did not respond — freeing stack\n");
+        log_warn("AP", 502, "ap did not respond to INIT+SIPI; freeing stack");
         // don't leak 64KB per ghost core
         let _ = global_registry_mut().free_pages(stack_base, stack_pages);
         false
@@ -184,16 +171,14 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
 /// memory registry, scheduler).
 pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
     if AP_TRAMPOLINE_BIN.is_empty() {
-        puts("[AP] no trampoline binary — SMP disabled\n");
+        log_warn("AP", 503, "no trampoline binary; smp disabled");
         return;
     }
     if ap_lapic_ids.is_empty() {
         return;
     }
 
-    puts("[AP] starting ");
-    put_hex32(ap_lapic_ids.len() as u32);
-    puts(" APs (MADT)\n");
+    log_info("AP", 504, "starting AP bring-up from MADT list");
 
     if !setup_trampoline() {
         return;
@@ -209,12 +194,7 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
         }
     }
 
-    let total_online = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
-    puts("[AP] ");
-    put_hex32(total_online);
-    puts(" / ");
-    put_hex32(ap_lapic_ids.len() as u32 + 1);
-    puts(" cores online\n");
+    log_ok("AP", 505, "MADT AP bring-up pass complete");
 }
 
 /// Start APs by brute-force LAPIC ID enumeration (CPUID fallback).
@@ -226,23 +206,18 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
 /// BSP must have completed full platform init.
 pub unsafe fn start_aps() {
     if AP_TRAMPOLINE_BIN.is_empty() {
-        puts("[AP] no trampoline binary — SMP disabled\n");
+        log_warn("AP", 506, "no trampoline binary; smp disabled");
         return;
     }
 
     let total_cpus = per_cpu::cpu_count();
     if total_cpus <= 1 {
-        puts("[AP] single-core detected — no APs to start\n");
+        log_info("AP", 507, "single-core detected; no AP startup needed");
         return;
     }
 
     let bsp_lapic_id = apic::read_lapic_id();
-
-    puts("[AP] starting up to ");
-    put_hex32(total_cpus - 1);
-    puts(" APs (brute-force, BSP LAPIC=");
-    put_hex32(bsp_lapic_id);
-    puts(")\n");
+    log_warn("AP", 508, "starting AP bring-up via brute-force LAPIC scan");
 
     if !setup_trampoline() {
         return;
@@ -269,12 +244,7 @@ pub unsafe fn start_aps() {
         }
     }
 
-    let total_online = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
-    puts("[AP] ");
-    put_hex32(total_online);
-    puts(" / ");
-    put_hex32(total_cpus);
-    puts(" cores online\n");
+    log_ok("AP", 509, "brute-force AP bring-up pass complete");
 }
 
 // ── AP Rust entry point ──────────────────────────────────────────────────
@@ -295,12 +265,6 @@ pub unsafe fn start_aps() {
 /// 5. Enter the idle loop (scheduler will assign work)
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
-    puts("[AP] Rust entry: core=");
-    put_hex32(core_idx);
-    puts(" lapic=");
-    put_hex32(lapic_id);
-    puts("\n");
-
     // 1. Set up per-core GDT + TSS
     // get the current stack we're running on (allocated by BSP)
     let rsp: u64;
@@ -330,10 +294,6 @@ pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     // 7. Signal we're online (done in init_ap via per_cpu::init_ap)
 
     // 8. Enable interrupts and enter AP idle loop
-    puts("[AP] core ");
-    put_hex32(core_idx);
-    puts(" entering scheduler\n");
-
     core::arch::asm!("sti", options(nostack, nomem));
 
     // AP idle loop — the LAPIC timer will fire and call scheduler_tick,

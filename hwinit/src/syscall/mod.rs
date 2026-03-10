@@ -94,7 +94,6 @@
 pub mod handler;
 
 use crate::process::scheduler::SCHEDULER;
-use crate::serial::puts;
 use handler::*;
 
 // SYSCALL NUMBERS — core (0-9)
@@ -377,9 +376,8 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_TRY_WAIT => sys_try_wait(a1),
         SYS_FORWARD_INPUT => sys_forward_input(a1, a2, a3),
         unknown => {
-            puts("[SYSCALL] unknown nr=");
-            crate::serial::put_hex32(unknown as u32);
-            puts("\n");
+            crate::serial::log_warn("SYSCALL", 801, "unknown syscall number");
+            let _ = unknown;
             ENOSYS_RET
         }
     }
@@ -428,5 +426,5 @@ unsafe fn sys_free(phys_base: u64, pages: u64) -> u64 {
 /// Must be called in long mode with interrupts disabled.
 pub unsafe fn init_syscall() {
     syscall_init();
-    puts("[SYSCALL] SYSCALL/SYSRET enabled (IA32_LSTAR configured)\n");
+    crate::serial::log_ok("SYSCALL", 800, "syscall/sysret path enabled");
 }

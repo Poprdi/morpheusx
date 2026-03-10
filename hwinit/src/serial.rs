@@ -10,7 +10,7 @@
 //! is serialized by a spinlock.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::sync::SpinLock;
 
@@ -31,6 +31,13 @@ unsafe impl Sync for LogBuf {}
 
 static BOOT_LOG_BUF: LogBuf = LogBuf(UnsafeCell::new([0u8; BOOT_LOG_SIZE]));
 static BOOT_LOG_LEN: AtomicUsize = AtomicUsize::new(0);
+static CHECKPOINTS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_CYAN: &str = "\x1b[36m";
+const ANSI_GREEN: &str = "\x1b[32m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RED: &str = "\x1b[31m";
 
 /// Serializes COM1 port access + framebuffer console hook across cores.
 /// SpinLock saves/disables/restores IF — safe from ISR context.
@@ -134,6 +141,108 @@ pub fn puts(s: &str) {
     }
 }
 
+#[inline]
+fn put_str_raw(s: &str) {
+    for b in s.bytes() {
+        unsafe {
+            if let Some(f) = LIVE_PUTC {
+                f(b);
+            }
+        }
+        putc_raw(b);
+    }
+}
+
+#[inline]
+fn put_dec_u16_raw(mut val: u16) {
+    let mut buf = [0u8; 5];
+    let mut i = 0usize;
+    if val == 0 {
+        putc_raw(b'0');
+        return;
+    }
+    while val > 0 {
+        buf[i] = b'0' + (val % 10) as u8;
+        i += 1;
+        val /= 10;
+    }
+    while i > 0 {
+        i -= 1;
+        putc_raw(buf[i]);
+    }
+}
+
+#[inline]
+fn log_level(color: &str, level: &str, component: &str, code: u16, msg: &str) {
+    // keep boot-log capture aligned with serial output
+    log_capture(color);
+    log_capture("[");
+    log_capture(level);
+    log_capture("][");
+    log_capture(component);
+    log_capture(":");
+    // capture decimal code without allocating
+    {
+        let mut tmp = [0u8; 5];
+        let mut n = code;
+        let mut i = 0usize;
+        if n == 0 {
+            log_capture("0");
+        } else {
+            while n > 0 {
+                tmp[i] = b'0' + (n % 10) as u8;
+                i += 1;
+                n /= 10;
+            }
+            while i > 0 {
+                i -= 1;
+                let b = [tmp[i]];
+                if let Ok(s) = core::str::from_utf8(&b) {
+                    log_capture(s);
+                }
+            }
+        }
+    }
+    log_capture("] ");
+    log_capture(msg);
+    log_capture(ANSI_RESET);
+    log_capture("\n");
+
+    // build one logical line under one lock so SMP cores can't interleave it.
+    let _guard = SERIAL_LOCK.lock();
+    put_str_raw(color);
+    put_str_raw("[");
+    put_str_raw(level);
+    put_str_raw("][");
+    put_str_raw(component);
+    put_str_raw(":");
+    put_dec_u16_raw(code);
+    put_str_raw("] ");
+    put_str_raw(msg);
+    put_str_raw(ANSI_RESET);
+    put_str_raw("\n");
+}
+
+pub fn log_info(component: &str, code: u16, msg: &str) {
+    log_level(ANSI_CYAN, "INFO", component, code, msg);
+}
+
+pub fn log_ok(component: &str, code: u16, msg: &str) {
+    log_level(ANSI_GREEN, "OK", component, code, msg);
+}
+
+pub fn log_warn(component: &str, code: u16, msg: &str) {
+    log_level(ANSI_YELLOW, "WARN", component, code, msg);
+}
+
+pub fn log_error(component: &str, code: u16, msg: &str) {
+    log_level(ANSI_RED, "ERR", component, code, msg);
+}
+
+pub fn set_checkpoints_enabled(enabled: bool) {
+    CHECKPOINTS_ENABLED.store(enabled, Ordering::Release);
+}
+
 // live framebuffer console hook
 
 /// Function pointer set by the bootloader to mirror serial output to the
@@ -199,6 +308,9 @@ pub fn serial_puts(s: &str) {
 /// If this doesn't appear on serial, the problem is below software.
 #[inline(never)]
 pub fn checkpoint(label: &str) {
+    if !CHECKPOINTS_ENABLED.load(Ordering::Acquire) {
+        return;
+    }
     #[inline(always)]
     fn emit(b: u8) {
         unsafe {

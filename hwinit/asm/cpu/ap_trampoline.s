@@ -11,8 +11,8 @@
 ; DATA AREA at offset 0xF00 within this page is filled by ap_boot.rs
 ; before each AP is woken.  Layout must match the TD_* constants there.
 ;
-; DEBUG: emits '1'..'6','R' to COM1 (0x3F8) at each transition.
-;        if output stops at 'N', the AP faulted between marker N and N+1.
+; DEBUG markers are intentionally disabled in normal builds to keep
+; early-boot logs readable on SMP.
 ;
 ; ═══════════════════════════════════════════════════════════════════════════
 
@@ -45,7 +45,7 @@ ap_start:
     mov     ss, ax
     xor     sp, sp          ; stack at top of segment (wraps to 0xFFFF)
 
-    SERIAL_MARKER '1'       ; marker 1: real mode entry alive
+    ; SERIAL_MARKER '1'       ; marker 1: real mode entry alive
 
     ; ── load a TEMPORARY GDT that lives inside this trampoline page ──────
     ; The BSP's GDT is above 4 GB (PE BSS at 0x140xxxxxx).  In 16-bit
@@ -68,10 +68,7 @@ ap_start:
 ; ───────────────────────────────────────────────────────────────────────────
 bits 32
 ap_pm32:
-    ; 32-bit mode COM1 marker — can't use the 16-bit macro (push/pop width changed)
-    mov     dx, 0x3F8
-    mov     al, '2'
-    out     dx, al
+    ; marker disabled
 
     ; load data segments with kernel data selector (0x10)
     mov     ax, 0x10
@@ -90,9 +87,7 @@ ap_pm32:
     mov     eax, dword [0x8F00]     ; TD_CR3 low 32 bits (phys address < 4GB)
     mov     cr3, eax
 
-    mov     dx, 0x3F8
-    mov     al, '3'
-    out     dx, al          ; marker 3: CR3 loaded, about to set EFER
+    ; marker disabled
 
     ; ── enable long mode via IA32_EFER.LME + NXE ──────────────────────────
     ; NXE (bit 11) is MANDATORY: the kernel page tables have NX bits (bit 63)
@@ -108,9 +103,7 @@ ap_pm32:
     or      eax, (1 << 31)          ; CR0.PG
     mov     cr0, eax
 
-    mov     dx, 0x3F8
-    mov     al, '4'
-    out     dx, al          ; marker 4: paging on, about to jump to 64-bit
+    ; marker disabled
 
     ; far jump to 64-bit long mode code.
     ; selector 0x18 = temp GDT's 64-bit code descriptor (L=1, D=0).
@@ -122,10 +115,7 @@ ap_pm32:
 ; ───────────────────────────────────────────────────────────────────────────
 bits 64
 ap_lm64:
-    ; 64-bit COM1 marker
-    mov     dx, 0x3F8
-    mov     al, '5'
-    out     dx, al
+    ; marker disabled
 
     ; reload data segments for 64-bit mode
     mov     ax, 0x10
@@ -166,9 +156,7 @@ ap_lm64:
     mov     esi, dword [0x8F1C]     ; TD_LAPIC_ID → RSI (arg2, SysV x64)
 
     ; ── jump to Rust entry point ──────────────────────────────────────────
-    mov     dx, 0x3F8
-    mov     al, 'R'
-    out     dx, al          ; marker R: about to enter Rust
+    ; marker disabled
 
     mov     rax, qword [0x8F08]     ; TD_ENTRY64
     jmp     rax                     ; ap_rust_entry(core_idx, lapic_id) — never returns

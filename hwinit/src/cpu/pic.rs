@@ -18,7 +18,7 @@
 //! ```
 
 use crate::cpu::pio::{inb, outb};
-use crate::serial::puts;
+use crate::serial::{log_info, log_ok, log_warn};
 
 // PIC PORTS
 
@@ -77,7 +77,7 @@ static mut PIC_MASK2: u8 = 0xFF;
 /// Must be called before enabling interrupts.
 pub unsafe fn init_pic() {
     if PIC_INITIALIZED {
-        puts("[PIC] WARNING: already initialized\n");
+        log_warn("PIC", 750, "already initialized");
         return;
     }
 
@@ -113,7 +113,7 @@ pub unsafe fn init_pic() {
     PIC_MASK2 = 0xFF;
     PIC_INITIALIZED = true;
 
-    puts("[PIC] remapped to vectors 0x20-0x2F\n");
+    log_ok("PIC", 751, "remapped to vectors 0x20-0x2f");
 }
 
 /// Disable the PIC (when using APIC).
@@ -122,7 +122,7 @@ pub unsafe fn init_pic() {
 pub unsafe fn disable_pic() {
     outb(PIC1_DATA, 0xFF);
     outb(PIC2_DATA, 0xFF);
-    puts("[PIC] disabled\n");
+    log_info("PIC", 752, "disabled");
 }
 
 // IRQ MANAGEMENT
