@@ -170,6 +170,7 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                         return 0;
                     }
                     // Park until the compositor sends us something.
+                     crate::process::scheduler::mark_input_waiter(proc.pid);
                     proc.state = crate::process::ProcessState::Blocked(
                         crate::process::BlockReason::InputRead,
                     );
@@ -191,6 +192,7 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 }
                 {
                     let proc = SCHEDULER.current_process_mut();
+                     crate::process::scheduler::mark_stdin_waiter(proc.pid);
                     proc.state = crate::process::ProcessState::Blocked(
                         crate::process::BlockReason::StdinRead,
                     );

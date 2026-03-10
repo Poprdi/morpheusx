@@ -26,6 +26,7 @@
 //! (to allocate its kernel stack via MemoryRegistry, not via Vec/Box).
 
 pub mod context;
+mod schedular;
 pub mod scheduler;
 pub mod signals;
 pub mod vma;
@@ -99,6 +100,10 @@ impl ProcessState {
 ///
 /// Stored in a fixed-size static slot; no heap allocation for the descriptor
 /// itself.  The kernel stack is allocated from MemoryRegistry.
+///
+/// Cache-aligned (64-byte) to prevent false sharing of scheduler-hot fields
+/// on SMP when multiple cores update different process metadata fields.
+#[repr(C, align(64))]
 pub struct Process {
     // identity
     pub pid: u32,
@@ -136,6 +141,10 @@ pub struct Process {
     // scheduling
     /// Scheduling priority (lower = higher priority; 0 = real-time).
     pub priority: u8,
+    /// Remaining weighted quanta in the current RR epoch.
+    pub sched_budget_left: u8,
+    /// Ticks spent Ready but not selected; used for starvation forcing.
+    pub sched_wait_ticks: u32,
     /// Accumulated CPU ticks (for the task manager display).
     pub cpu_ticks: u64,
     /// Accumulated TSC cycles this process was *actively* running (not in HLT).
@@ -247,6 +256,8 @@ impl Process {
             heap_region: (0, 0),
             pages_allocated: 0,
             priority: 128,
+            sched_budget_left: 0,
+            sched_wait_ticks: 0,
             cpu_ticks: 0,
             cpu_tsc: 0,
             run_start_tsc: 0,

@@ -439,6 +439,7 @@ unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
         // Block until a writer wakes us.
         {
             let proc = SCHEDULER.current_process_mut();
+            crate::process::scheduler::mark_pipe_waiter(proc.pid, pipe_idx);
             proc.state = crate::process::ProcessState::Blocked(
                 crate::process::BlockReason::PipeRead(pipe_idx),
             );

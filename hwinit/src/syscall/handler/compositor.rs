@@ -299,6 +299,7 @@ pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(target as usize) {
         if matches!(proc.state, crate::process::ProcessState::Blocked(crate::process::BlockReason::InputRead)) {
             proc.state = crate::process::ProcessState::Ready;
+            crate::process::scheduler::clear_input_waiter(target);
         }
     }
     PROCESS_TABLE_LOCK.unlock();

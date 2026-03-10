@@ -34,6 +34,7 @@ pub unsafe fn sys_futex(addr: u64, op: u64, val: u64, timeout_ms: u64) -> u64 {
             // Block on this address.
             {
                 let proc = SCHEDULER.current_process_mut();
+                    crate::process::scheduler::mark_futex_waiter(proc.pid, addr);
                 proc.state = crate::process::ProcessState::Blocked(
                     crate::process::BlockReason::FutexWait(addr),
                 );
@@ -46,6 +47,17 @@ pub unsafe fn sys_futex(addr: u64, op: u64, val: u64, timeout_ms: u64) -> u64 {
                             .saturating_add(timeout_ms.saturating_mul(ticks_per_ms));
                         proc.futex_deadline = deadline;
                         crate::process::scheduler::inc_timed_block_count();
+                        // update earliest deadline for fast wake-path early exit
+                        loop {
+                            let current_earliest = crate::process::scheduler::get_earliest_deadline();
+                            if deadline < current_earliest {
+                                if crate::process::scheduler::try_set_earliest_deadline(current_earliest, deadline) {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 }
             }
