@@ -20,8 +20,7 @@ The system boots through an 11-phase initialization that transforms raw x86-64 h
 10. Syscall interface (SYSCALL/SYSRET)
 11. Root filesystem (HelixFS)
 
-After boot, applications can spawn user processes, allocate memory, perform I/O, and communicate through syscalls. The Shell and windowed applications run directly in the kernel's event loop.
-
+After boot, applications can spawn user processes, allocate memory, perform I/O, and communicate through syscalls.
 ## Design Principles
 
 - **Minimize abstraction**: Hardware is exposed. Page tables, interrupts, CPUs are visible resources.
