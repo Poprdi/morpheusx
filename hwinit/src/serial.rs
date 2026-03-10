@@ -32,6 +32,8 @@ unsafe impl Sync for LogBuf {}
 static BOOT_LOG_BUF: LogBuf = LogBuf(UnsafeCell::new([0u8; BOOT_LOG_SIZE]));
 static BOOT_LOG_LEN: AtomicUsize = AtomicUsize::new(0);
 static CHECKPOINTS_ENABLED: AtomicBool = AtomicBool::new(false);
+static LOG_ANSI_ENABLED: AtomicBool = AtomicBool::new(false);
+static LOG_CODES_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_CYAN: &str = "\x1b[36m";
@@ -174,52 +176,67 @@ fn put_dec_u16_raw(mut val: u16) {
 
 #[inline]
 fn log_level(color: &str, level: &str, component: &str, code: u16, msg: &str) {
+    let ansi = LOG_ANSI_ENABLED.load(Ordering::Acquire);
+    let codes = LOG_CODES_ENABLED.load(Ordering::Acquire);
+
     // keep boot-log capture aligned with serial output
-    log_capture(color);
+    if ansi {
+        log_capture(color);
+    }
     log_capture("[");
     log_capture(level);
-    log_capture("][");
+    log_capture("] [");
     log_capture(component);
-    log_capture(":");
-    // capture decimal code without allocating
-    {
-        let mut tmp = [0u8; 5];
-        let mut n = code;
-        let mut i = 0usize;
-        if n == 0 {
-            log_capture("0");
-        } else {
-            while n > 0 {
-                tmp[i] = b'0' + (n % 10) as u8;
-                i += 1;
-                n /= 10;
-            }
-            while i > 0 {
-                i -= 1;
-                let b = [tmp[i]];
-                if let Ok(s) = core::str::from_utf8(&b) {
-                    log_capture(s);
+    if codes {
+        log_capture(":");
+        // capture decimal code without allocating
+        {
+            let mut tmp = [0u8; 5];
+            let mut n = code;
+            let mut i = 0usize;
+            if n == 0 {
+                log_capture("0");
+            } else {
+                while n > 0 {
+                    tmp[i] = b'0' + (n % 10) as u8;
+                    i += 1;
+                    n /= 10;
+                }
+                while i > 0 {
+                    i -= 1;
+                    let b = [tmp[i]];
+                    if let Ok(s) = core::str::from_utf8(&b) {
+                        log_capture(s);
+                    }
                 }
             }
         }
     }
     log_capture("] ");
     log_capture(msg);
-    log_capture(ANSI_RESET);
+    if ansi {
+        log_capture(ANSI_RESET);
+    }
     log_capture("\n");
 
     // build one logical line under one lock so SMP cores can't interleave it.
     let _guard = SERIAL_LOCK.lock();
-    put_str_raw(color);
+    if ansi {
+        put_str_raw(color);
+    }
     put_str_raw("[");
     put_str_raw(level);
-    put_str_raw("][");
+    put_str_raw("] [");
     put_str_raw(component);
-    put_str_raw(":");
-    put_dec_u16_raw(code);
+    if codes {
+        put_str_raw(":");
+        put_dec_u16_raw(code);
+    }
     put_str_raw("] ");
     put_str_raw(msg);
-    put_str_raw(ANSI_RESET);
+    if ansi {
+        put_str_raw(ANSI_RESET);
+    }
     put_str_raw("\n");
 }
 
@@ -241,6 +258,16 @@ pub fn log_error(component: &str, code: u16, msg: &str) {
 
 pub fn set_checkpoints_enabled(enabled: bool) {
     CHECKPOINTS_ENABLED.store(enabled, Ordering::Release);
+}
+
+/// Configure structured log rendering.
+///
+/// `ansi_enabled=false` avoids escape-code artifacts on targets that don't
+/// render ANSI colors (like some QEMU display windows).
+/// `codes_enabled=false` hides numeric event codes for cleaner output.
+pub fn set_log_style(ansi_enabled: bool, codes_enabled: bool) {
+    LOG_ANSI_ENABLED.store(ansi_enabled, Ordering::Release);
+    LOG_CODES_ENABLED.store(codes_enabled, Ordering::Release);
 }
 
 // live framebuffer console hook
