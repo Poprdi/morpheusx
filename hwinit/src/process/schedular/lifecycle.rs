@@ -1,5 +1,6 @@
 use super::state::{
-    clear_waiter_all, set_percpu_fpu_ptr, set_this_core_pid, this_core_pid, IDLE_TSC_TOTAL, KERNEL_CR3,
+    clear_waiter_all, sample_idle_tsc_total, sample_per_core_idle_tsc as state_sample_per_core_idle_tsc,
+    set_percpu_fpu_ptr, set_this_core_pid, this_core_pid, KERNEL_CR3,
     KERNEL_HLT_ENTRY_TSC, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY,
     TIMED_BLOCK_COUNT, TSC_FREQUENCY,
 };
@@ -24,7 +25,11 @@ pub fn mark_kernel_hlt() {
 }
 
 pub fn idle_tsc_total() -> u64 {
-    IDLE_TSC_TOTAL.load(Ordering::Relaxed)
+    sample_idle_tsc_total(crate::cpu::tsc::read_tsc())
+}
+
+pub fn sample_per_core_idle_tsc(out: &mut [u64]) -> usize {
+    state_sample_per_core_idle_tsc(crate::cpu::tsc::read_tsc(), out)
 }
 
 pub fn inc_timed_block_count() {

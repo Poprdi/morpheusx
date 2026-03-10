@@ -7,7 +7,7 @@ pub mod wake;
 
 pub use lifecycle::{
     exit_process, idle_tsc_total, inc_timed_block_count, init_scheduler, mark_kernel_hlt,
-    set_tsc_frequency, spawn_kernel_thread, tsc_frequency,
+    sample_per_core_idle_tsc, set_tsc_frequency, spawn_kernel_thread, tsc_frequency,
 };
 pub use spawn::{spawn_user_process, spawn_user_thread};
 pub use state::{
