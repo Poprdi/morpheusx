@@ -49,13 +49,20 @@ pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
         return EFAULT;
     }
 
-    let registry = crate::memory::global_registry();
-    let tsc_freq = crate::process::scheduler::tsc_frequency();
+    // heap_stats acquires HEAP lock. global_registry acquires GLOBAL_REGISTRY.
+    // heap growth path does HEAP → GLOBAL_REGISTRY. acquiring GLOBAL_REGISTRY
+    // first then HEAP would be an ABBA inversion. so: heap first.
     let (heap_total, heap_used, heap_free) = crate::heap::heap_stats().unwrap_or((0, 0, 0));
+    let tsc_freq = crate::process::scheduler::tsc_frequency();
+
+    let (total_mem, free_mem) = {
+        let registry = crate::memory::global_registry();
+        (registry.total_memory(), registry.free_memory())
+    };
 
     let info = SysInfo {
-        total_mem: registry.total_memory(),
-        free_mem: registry.free_memory(),
+        total_mem,
+        free_mem,
         num_procs: SCHEDULER.live_count(),
         _pad0: 0,
         uptime_ticks: crate::cpu::tsc::read_tsc(),
