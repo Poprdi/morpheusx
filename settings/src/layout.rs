@@ -6,12 +6,22 @@ use crate::state::{Route, SafetyMode, SettingsApp};
 
 use crate::widgets;
 
-pub const STRIP_HEIGHT: u32 = 20;
-pub const BAR_HEIGHT: u32 = 20;
+pub const STRIP_HEIGHT: u32 = 24;
+pub const BAR_HEIGHT: u32 = 24;
 pub const RAIL_WIDTH: u32 = 160;
-pub const RAIL_ITEM_HEIGHT: u32 = 20;
+pub const RAIL_ITEM_HEIGHT: u32 = 24;
 pub const SECTION_PAD: u32 = 8;
 pub const PANE_PAD: u32 = 12;
+
+#[inline(always)]
+pub fn row_step(app: &SettingsApp, extra: u32) -> u32 {
+    let pane_h = app
+        .fb_h
+        .saturating_sub(STRIP_HEIGHT + BAR_HEIGHT + 2 * PANE_PAD);
+    // grow spacing on taller panes so content doesn't collapse into the top third
+    let bonus = (pane_h / 120).saturating_sub(4).min(8);
+    widgets::FONT_H + extra + bonus
+}
 
 pub fn render_frame(app: &mut SettingsApp) {
     let s = app.surface;
@@ -46,14 +56,10 @@ fn render_strip(app: &SettingsApp) {
     widgets::fill_rect(s, st, 0, 0, w, STRIP_HEIGHT, t.strip_bg, w, h);
     widgets::hline(s, st, 0, STRIP_HEIGHT - 1, w, t.contour, w, h);
 
-    // chamber title
+    widgets::draw_str(s, st, 4, 4, "Settings", t.glyph_dim, t.strip_bg, w, h);
     let label = app.route.label();
-    widgets::draw_str(s, st, 4, 2, label, t.glyph, t.strip_bg, w, h);
-
-    // technical alias
-    let alias = app.route.technical_alias();
-    let alias_x = 4 + (label.len() as u32 + 2) * widgets::FONT_W;
-    widgets::draw_str(s, st, alias_x, 2, alias, t.glyph_dim, t.strip_bg, w, h);
+    let title_x = 4 + 10 * widgets::FONT_W;
+    widgets::draw_str(s, st, title_x, 4, label, t.glyph, t.strip_bg, w, h);
 
     // mode badge
     let (badge, badge_color) = match app.safety {
@@ -106,19 +112,19 @@ fn render_rail(app: &SettingsApp) {
         let label = route.label();
         let fg = if is_current { t.glyph } else { t.glyph_dim };
         widgets::draw_str(s, st, 4, y + 2, sigil, t.signal, bg, w, h);
-        widgets::draw_str_trunc(s, st, 4 + 2 * widgets::FONT_W, y + 2, label, fg, bg, w, h, 16);
+        widgets::draw_str_trunc(s, st, 4 + 2 * widgets::FONT_W, y + 4, label, fg, bg, w, h, 14);
 
         // keyboard hint (1-7)
         let mut hint = [0u8; 1];
         hint[0] = b'1' + i as u8;
         let hint_str = core::str::from_utf8(&hint).unwrap_or("?");
         let hint_x = RAIL_WIDTH - 3 * widgets::FONT_W;
-        widgets::draw_str(s, st, hint_x, y + 2, hint_str, t.glyph_dim, bg, w, h);
+        widgets::draw_str(s, st, hint_x, y + 4, hint_str, t.glyph_dim, bg, w, h);
 
         // pending dot for this chamber
         if app.has_pending_for(*route) {
             let dot_x = RAIL_WIDTH - 5 * widgets::FONT_W;
-            widgets::draw_str(s, st, dot_x, y + 2, "*", t.warning, bg, w, h);
+            widgets::draw_str(s, st, dot_x, y + 4, "*", t.warning, bg, w, h);
         }
     }
 }
@@ -212,7 +218,9 @@ pub fn draw_kv(app: &SettingsApp, x: u32, y: u32, key: &str, val: &str, val_colo
 
     widgets::draw_str(s, st, x, y, key, t.glyph_dim, t.substrate, w, h);
     let vx = x + (key.len() as u32 + 1) * widgets::FONT_W;
-    widgets::draw_str(s, st, vx, y, val, val_color, t.substrate, w, h);
+    let pane_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
+    let max_chars = pane_w.saturating_sub(vx.saturating_sub(x)) / widgets::FONT_W;
+    widgets::draw_str_trunc(s, st, vx, y, val, val_color, t.substrate, w, h, max_chars as usize);
 }
 
 // focusable field row — highlighted when focused
@@ -227,15 +235,21 @@ pub fn draw_field_row(app: &SettingsApp, x: u32, y: u32, label: &str, value: &st
 
     let bg = if is_focused { t.surface } else { t.substrate };
     let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
-    widgets::fill_rect(s, st, x, y, row_w, widgets::FONT_H + 4, bg, w, h);
+    let row_h = row_step(app, 4);
+    widgets::fill_rect(s, st, x, y, row_w, row_h, bg, w, h);
 
     if is_focused {
-        widgets::rect_outline(s, st, x, y, row_w, widgets::FONT_H + 4, t.focus_ring, w, h);
+        widgets::rect_outline(s, st, x, y, row_w, row_h, t.focus_ring, w, h);
     }
 
-    widgets::draw_str(s, st, x + 4, y + 2, label, t.glyph_dim, bg, w, h);
-    let vx = x + 20 * widgets::FONT_W;
-    widgets::draw_str(s, st, vx, y + 2, value, t.glyph, bg, w, h);
+    let ty = y + row_h.saturating_sub(widgets::FONT_H) / 2;
+
+    let label_w = (row_w / 3).clamp(12 * widgets::FONT_W, 22 * widgets::FONT_W);
+    let label_chars = label_w.saturating_sub(8) / widgets::FONT_W;
+    widgets::draw_str_trunc(s, st, x + 4, ty, label, t.glyph_dim, bg, w, h, label_chars as usize);
+    let vx = x + label_w;
+    let value_chars = row_w.saturating_sub(label_w + 6) / widgets::FONT_W;
+    widgets::draw_str_trunc(s, st, vx, ty, value, t.glyph, bg, w, h, value_chars as usize);
 }
 
 // button row — rendered as a text button
@@ -249,12 +263,14 @@ pub fn draw_button_row(app: &SettingsApp, x: u32, y: u32, label: &str, field_idx
     let is_focused = !app.focus_in_rail && app.pane_focus == field_idx;
 
     let bg = if is_focused { t.surface } else { t.substrate };
-    let btn_w = (label.len() as u32 + 4) * widgets::FONT_W;
-    let btn_h = widgets::FONT_H + 4;
+    let btn_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
+    let btn_h = row_step(app, 4);
 
     widgets::fill_rect(s, st, x, y, btn_w, btn_h, bg, w, h);
     widgets::rect_outline(s, st, x, y, btn_w, btn_h, if is_focused { t.focus_ring } else { t.contour }, w, h);
-    widgets::draw_str(s, st, x + 2 * widgets::FONT_W, y + 2, label, color, bg, w, h);
+    let label_chars = btn_w.saturating_sub(4 * widgets::FONT_W) / widgets::FONT_W;
+    let ty = y + btn_h.saturating_sub(widgets::FONT_H) / 2;
+    widgets::draw_str_trunc(s, st, x + 2 * widgets::FONT_W, ty, label, color, bg, w, h, label_chars as usize);
 }
 
 // risk band — a warning banner for destructive context
@@ -266,6 +282,19 @@ pub fn draw_risk_band(app: &SettingsApp, x: u32, y: u32, msg: &str) {
     let t = &app.theme;
 
     let band_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
-    widgets::fill_rect(s, st, x, y, band_w, widgets::FONT_H + 8, t.destructive, w, h);
-    widgets::draw_str(s, st, x + 4, y + 4, msg, t.substrate, t.destructive, w, h);
+    let band_h = row_step(app, 8);
+    widgets::fill_rect(s, st, x, y, band_w, band_h, t.destructive, w, h);
+    let ty = y + band_h.saturating_sub(widgets::FONT_H) / 2;
+    widgets::draw_str_trunc(
+        s,
+        st,
+        x + 4,
+        ty,
+        msg,
+        t.substrate,
+        t.destructive,
+        w,
+        h,
+        band_w.saturating_sub(8) as usize / widgets::FONT_W as usize,
+    );
 }

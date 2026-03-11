@@ -284,7 +284,7 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
 }
 
 pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = (widgets::FONT_H + 8) as i32;
+    let row_h = layout::row_step(app, 8) as i32;
     let idx = ((py - 40) / row_h).max(0) as usize;
     if idx < FIELD_COUNT {
         app.pane_focus = idx;
@@ -298,27 +298,31 @@ pub fn render(app: &SettingsApp) {
 
     let px = RAIL_WIDTH + PANE_PAD;
     let mut cy = STRIP_HEIGHT + PANE_PAD;
+    let r2 = layout::row_step(app, 2);
+    let r4 = layout::row_step(app, 4);
+    let r8 = layout::row_step(app, 8);
+    let r12 = layout::row_step(app, 12);
 
     // link status section
     layout::draw_section(app, px, cy, "Link Status");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let link_str = if net.link_up { "UP" } else { "DOWN" };
     let link_color = if net.link_up { t.success } else { t.destructive };
     layout::draw_kv(app, px, cy, "Link:", link_str, link_color);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let mut mac_buf = [0u8; 17];
     let mac_len = widgets::format_mac(&net.mac, &mut mac_buf);
     let mac_str = core::str::from_utf8(&mac_buf[..mac_len]).unwrap_or("??");
     layout::draw_kv(app, px, cy, "MAC:", mac_str, t.immutable);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let mut mtu_buf = [0u8; 8];
     let mtu_len = widgets::u64_to_str(net.mtu as u64, &mut mtu_buf);
     let mtu_str = core::str::from_utf8(&mtu_buf[..mtu_len]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "MTU:", mtu_str, t.telemetry);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // state
     let state_str = match net.state {
@@ -334,97 +338,97 @@ pub fn render(app: &SettingsApp) {
         _ => t.warning,
     };
     layout::draw_kv(app, px, cy, "State:", state_str, state_color);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // configuration section
     layout::draw_section(app, px, cy, "Configuration");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     // DHCP toggle
     let dhcp_label = if net.edit_dhcp { "[X] DHCP" } else { "[ ] Static" };
     layout::draw_button_row(app, px, cy, dhcp_label, FIELD_DHCP_TOGGLE, t.glyph);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // hostname
     let hn = core::str::from_utf8(&net.edit_hostname[..net.edit_hostname_len]).unwrap_or("");
     let hn_display = if hn.is_empty() { "(none)" } else { hn };
     let hn_editing = net.editing_field == Some(FIELD_HOSTNAME);
     draw_editable_field(app, px, cy, "Hostname:", hn_display, FIELD_HOSTNAME, hn_editing);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     if !net.edit_dhcp {
         // static ip fields
         let ip_str = core::str::from_utf8(&net.edit_ip[..net.edit_ip_len]).unwrap_or("0.0.0.0");
         let ip_editing = net.editing_field == Some(FIELD_IP);
         draw_editable_field(app, px, cy, "IP Address:", ip_str, FIELD_IP, ip_editing);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
 
         let mut pfx_buf = [0u8; 4];
         let pfx_len = widgets::u64_to_str(net.edit_prefix as u64, &mut pfx_buf);
         let pfx_str = core::str::from_utf8(&pfx_buf[..pfx_len]).unwrap_or("24");
         layout::draw_field_row(app, px, cy, "Prefix Len:", pfx_str, false, FIELD_PREFIX);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
 
         let gw_str = core::str::from_utf8(&net.edit_gateway[..net.edit_gw_len]).unwrap_or("0.0.0.0");
         let gw_editing = net.editing_field == Some(FIELD_GATEWAY);
         draw_editable_field(app, px, cy, "Gateway:", gw_str, FIELD_GATEWAY, gw_editing);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
 
         let d1_str = core::str::from_utf8(&net.edit_dns1[..net.edit_dns1_len]).unwrap_or("0.0.0.0");
         let d1_editing = net.editing_field == Some(FIELD_DNS1);
         draw_editable_field(app, px, cy, "DNS Primary:", d1_str, FIELD_DNS1, d1_editing);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
 
         let d2_str = core::str::from_utf8(&net.edit_dns2[..net.edit_dns2_len]).unwrap_or("0.0.0.0");
         let d2_editing = net.editing_field == Some(FIELD_DNS2);
         draw_editable_field(app, px, cy, "DNS Secondary:", d2_str, FIELD_DNS2, d2_editing);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
     } else {
         // show current DHCP-assigned values as read-only
         let mut ip_buf = [0u8; 16];
         let ip_len = widgets::format_ip(net.ip, &mut ip_buf);
         let ip_str = core::str::from_utf8(&ip_buf[..ip_len]).unwrap_or("0.0.0.0");
         layout::draw_kv(app, px, cy, "Assigned IP:", ip_str, t.immutable);
-        cy += widgets::FONT_H + 4;
+        cy += r4;
 
         let mut gw_buf = [0u8; 16];
         let gw_len = widgets::format_ip(net.gateway, &mut gw_buf);
         let gw_str = core::str::from_utf8(&gw_buf[..gw_len]).unwrap_or("0.0.0.0");
         layout::draw_kv(app, px, cy, "Gateway:", gw_str, t.immutable);
-        cy += widgets::FONT_H + 4;
+        cy += r4;
 
         let mut d1_buf = [0u8; 16];
         let d1_len = widgets::format_ip(net.dns1, &mut d1_buf);
         let d1_str = core::str::from_utf8(&d1_buf[..d1_len]).unwrap_or("0.0.0.0");
         layout::draw_kv(app, px, cy, "DNS:", d1_str, t.immutable);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
     }
 
     // action buttons
     layout::draw_button_row(app, px, cy, "Apply Network Config", FIELD_APPLY, t.signal);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
     layout::draw_button_row(app, px, cy, "Refresh", FIELD_REFRESH, t.glyph);
-    cy += widgets::FONT_H + 12;
+    cy += r12;
 
     // traffic stats section
     layout::draw_section(app, px, cy, "Traffic");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let mut buf = [0u8; 32];
     let n = widgets::u64_to_str(net.tx_packets, &mut buf);
     let tx_p = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "TX Packets:", tx_p, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::u64_to_str(net.rx_packets, &mut buf);
     let rx_p = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "RX Packets:", rx_p, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::format_bytes(net.tx_bytes, &mut buf);
     let tx_b = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "TX Bytes:", tx_b, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::format_bytes(net.rx_bytes, &mut buf);
     let rx_b = core::str::from_utf8(&buf[..n]).unwrap_or("?");
@@ -441,7 +445,8 @@ fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &s
     let is_focused = !app.focus_in_rail && app.pane_focus == field_idx;
     let bg = if editing { t.input_bg } else if is_focused { t.surface } else { t.substrate };
     let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
-    widgets::fill_rect(s, st, x, y, row_w, widgets::FONT_H + 4, bg, w, h);
+    let row_h = layout::row_step(app, 4);
+    widgets::fill_rect(s, st, x, y, row_w, row_h, bg, w, h);
 
     let border_color = if editing {
         t.signal
@@ -450,16 +455,20 @@ fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &s
     } else {
         t.contour
     };
-    widgets::rect_outline(s, st, x, y, row_w, widgets::FONT_H + 4, border_color, w, h);
+    widgets::rect_outline(s, st, x, y, row_w, row_h, border_color, w, h);
 
-    widgets::draw_str(s, st, x + 4, y + 2, label, t.glyph_dim, bg, w, h);
-    let vx = x + 20 * widgets::FONT_W;
-    widgets::draw_str(s, st, vx, y + 2, value, t.glyph, bg, w, h);
+    let ty = y + row_h.saturating_sub(widgets::FONT_H) / 2;
+    let label_w = (row_w / 3).clamp(12 * widgets::FONT_W, 22 * widgets::FONT_W);
+    let label_chars = label_w.saturating_sub(8) / widgets::FONT_W;
+    widgets::draw_str_trunc(s, st, x + 4, ty, label, t.glyph_dim, bg, w, h, label_chars as usize);
+    let vx = x + label_w;
+    let value_chars = row_w.saturating_sub(label_w + 6) / widgets::FONT_W;
+    widgets::draw_str_trunc(s, st, vx, ty, value, t.glyph, bg, w, h, value_chars as usize);
 
     // cursor
     if editing {
         let cursor_x = vx + value.len() as u32 * widgets::FONT_W;
-        widgets::fill_rect(s, st, cursor_x, y + 2, 2, widgets::FONT_H, t.focus_ring, w, h);
+        widgets::fill_rect(s, st, cursor_x, ty, 2, widgets::FONT_H, t.focus_ring, w, h);
     }
 }
 

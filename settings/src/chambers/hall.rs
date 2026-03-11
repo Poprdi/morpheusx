@@ -145,12 +145,15 @@ pub fn render(app: &SettingsApp) {
 
     let px = RAIL_WIDTH + PANE_PAD;
     let mut cy = STRIP_HEIGHT + PANE_PAD;
+    let r2 = layout::row_step(app, 2);
+    let r4 = layout::row_step(app, 4);
+    let r8 = layout::row_step(app, 8);
 
-    layout::draw_section(app, px, cy, "Hall of Masks");
-    cy += widgets::FONT_H + 4;
+    layout::draw_section(app, px, cy, "Profiles");
+    cy += r4;
 
     widgets::draw_str(s, st, px, cy, "Select a preset to preview, then Apply to commit.", t.glyph_dim, t.substrate, w, h);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // preset cards
     for i in 0..PRESET_COUNT {
@@ -197,21 +200,21 @@ pub fn render(app: &SettingsApp) {
     // delta preview
     if hall.preview_active {
         layout::draw_section(app, px, cy, "Delta Preview");
-        cy += widgets::FONT_H + 4;
+        cy += r4;
 
         let p = &PRESETS[hall.selected];
         let mode_str = if p.dark { "Dark" } else { "Light" };
         layout::draw_kv(app, px, cy, "Mode:", mode_str, t.glyph);
-        cy += widgets::FONT_H + 2;
+        cy += r2;
 
         // show accent color value
         let accent = theme::pack(p.accent_r, p.accent_g, p.accent_b);
         widgets::fill_rect(s, st, px + 80, cy, 48, 12, accent, w, h);
         widgets::draw_str(s, st, px, cy, "Accent:", t.glyph, t.substrate, w, h);
-        cy += widgets::FONT_H + 2;
+        cy += r2;
 
         layout::draw_kv(app, px, cy, "Name:", p.name, t.immutable);
-        cy += widgets::FONT_H + 8;
+        cy += r8;
     }
 
     // apply button

@@ -35,25 +35,25 @@ impl Route {
 
     pub fn label(self) -> &'static str {
         match self {
-            Route::Gateway => "Gateway",
-            Route::MistShore => "Mist Shore",
-            Route::MirrorBasin => "Mirror Basin",
-            Route::NetObservatory => "Observatory:Net",
-            Route::SysObservatory => "Observatory:Sys",
-            Route::Archive => "Archive",
-            Route::HallOfMasks => "Hall of Masks",
+            Route::Gateway => "General",
+            Route::MistShore => "Display",
+            Route::MirrorBasin => "Appearance",
+            Route::NetObservatory => "Network",
+            Route::SysObservatory => "System",
+            Route::Archive => "Activity",
+            Route::HallOfMasks => "Profiles",
         }
     }
 
     pub fn sigil(self) -> &'static str {
         match self {
-            Route::Gateway => ">",
-            Route::MistShore => "~",
-            Route::MirrorBasin => "o",
-            Route::NetObservatory => "*",
-            Route::SysObservatory => "#",
-            Route::Archive => "=",
-            Route::HallOfMasks => "%",
+            Route::Gateway => "G",
+            Route::MistShore => "D",
+            Route::MirrorBasin => "A",
+            Route::NetObservatory => "N",
+            Route::SysObservatory => "S",
+            Route::Archive => "L",
+            Route::HallOfMasks => "P",
         }
     }
 
@@ -248,10 +248,13 @@ impl SettingsApp {
 
     fn poll_input(&mut self) {
         // keyboard
-        let mut buf = [0u8; 1];
-        let n = libmorpheus::io::read_stdin(&mut buf);
-        if n > 0 {
-            self.handle_key(buf[0]);
+        let avail = libmorpheus::io::stdin_available();
+        if avail > 0 {
+            let mut buf = [0u8; 1];
+            let n = libmorpheus::io::read_stdin(&mut buf);
+            if n > 0 {
+                self.handle_key(buf[0]);
+            }
         }
 
         // mouse
