@@ -113,6 +113,7 @@ pub static AP_ONLINE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 static SHUTDOWN_QUIESCE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SHUTDOWN_QUIESCE_ACK_MASK: AtomicU64 = AtomicU64::new(0);
+static REBOOT_OWNER_CORE: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Total number of detected CPUs (BSP + APs).  Set by BSP during MADT parse
 /// or CPUID enumeration, before AP startup.
@@ -326,7 +327,9 @@ pub fn shutdown_quiesce_ack(core_idx: u32) {
 }
 
 pub fn request_shutdown_quiesce() {
-    SHUTDOWN_QUIESCE_ACK_MASK.store(1, Ordering::Release);
+    let owner = reboot_owner().unwrap_or(0);
+    let owner_mask = if owner < 64 { 1u64 << owner } else { 1u64 };
+    SHUTDOWN_QUIESCE_ACK_MASK.store(owner_mask, Ordering::Release);
     SHUTDOWN_QUIESCE_REQUESTED.store(true, Ordering::Release);
 }
 
@@ -375,6 +378,31 @@ pub fn wait_for_shutdown_quiesce(timeout_ms: u64) -> bool {
 
         core::hint::spin_loop();
     }
+}
+
+#[inline(always)]
+pub fn set_reboot_owner(core_idx: u32) {
+    REBOOT_OWNER_CORE.store(core_idx, Ordering::Release);
+}
+
+#[inline(always)]
+pub fn clear_reboot_owner() {
+    REBOOT_OWNER_CORE.store(u32::MAX, Ordering::Release);
+}
+
+#[inline(always)]
+pub fn reboot_owner() -> Option<u32> {
+    let owner = REBOOT_OWNER_CORE.load(Ordering::Acquire);
+    if owner == u32::MAX {
+        None
+    } else {
+        Some(owner)
+    }
+}
+
+#[inline(always)]
+pub fn is_reboot_owner(core_idx: u32) -> bool {
+    REBOOT_OWNER_CORE.load(Ordering::Acquire) == core_idx
 }
 
 // ── Offset validation ────────────────────────────────────────────────────

@@ -57,6 +57,20 @@ unsafe fn triple_fault_reset() -> ! {
 }
 
 pub unsafe fn reset_machine_now() -> ! {
+    let core_idx = crate::cpu::per_cpu::current_core_index();
+    if crate::cpu::per_cpu::reboot_owner().is_none() {
+        crate::cpu::per_cpu::set_reboot_owner(core_idx);
+    }
+    if let Some(owner) = crate::cpu::per_cpu::reboot_owner() {
+        if owner != core_idx {
+            shutdown_stage("shutdown: non-owner reset attempt blocked");
+            crate::cpu::idt::disable_interrupts();
+            loop {
+                core::arch::asm!("hlt", options(nostack, nomem));
+            }
+        }
+    }
+
     crate::serial::set_checkpoints_enabled(true);
     shutdown_stage("shutdown: request ap quiesce");
 
