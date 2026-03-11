@@ -91,3 +91,45 @@ pub fn syslog(msg: &str) {
         syscall2(SYS_SYSLOG, msg.as_ptr() as u64, msg.len() as u64);
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub enum SystemControlMode {
+    RebootGraceful = SYSCTL_REBOOT_GRACEFUL,
+    RebootForce = SYSCTL_REBOOT_FORCE,
+    ShutdownGraceful = SYSCTL_SHUTDOWN_GRACEFUL,
+    ShutdownForce = SYSCTL_SHUTDOWN_FORCE,
+    ShutdownPanic = SYSCTL_SHUTDOWN_PANIC,
+}
+
+/// System control request. On success this does not return.
+pub fn system_control(mode: SystemControlMode) -> Result<(), u64> {
+    let ret = unsafe { syscall1(SYS_SYSTEM_CONTROL, mode as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn reboot(force: bool) -> Result<(), u64> {
+    let mode = if force {
+        SystemControlMode::RebootForce
+    } else {
+        SystemControlMode::RebootGraceful
+    };
+    system_control(mode)
+}
+
+pub fn shutdown(force: bool) -> Result<(), u64> {
+    let mode = if force {
+        SystemControlMode::ShutdownForce
+    } else {
+        SystemControlMode::ShutdownGraceful
+    };
+    system_control(mode)
+}
+
+pub fn shutdown_panic() -> Result<(), u64> {
+    system_control(SystemControlMode::ShutdownPanic)
+}

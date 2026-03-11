@@ -78,6 +78,8 @@ pub fn dispatch(argv: &[String], cwd: &str) -> Option<i32> {
         "kill" => Some(proc_cmds::kill(args)),
         "sysinfo" => Some(proc_cmds::sysinfo()),
         "sleep" => Some(proc_cmds::sleep(args)),
+        "reboot" => Some(proc_cmds::reboot(args)),
+        "shutdown" => Some(proc_cmds::shutdown(args)),
 
         _ => None,
     }
@@ -127,6 +129,8 @@ pub fn dispatch_fb(argv: &[String], cwd: &str, fb: &Framebuffer, con: &mut Conso
         "kill" => Some(proc_cmds::kill_fb(args, fb, con)),
         "sysinfo" => Some(proc_cmds::sysinfo_fb(fb, con)),
         "sleep" => Some(proc_cmds::sleep_fb(args, fb, con)),
+        "reboot" => Some(proc_cmds::reboot_fb(args, fb, con)),
+        "shutdown" => Some(proc_cmds::shutdown_fb(args, fb, con)),
 
         _ => None,
     }
@@ -365,6 +369,8 @@ const HELP_TEXT: &str = concat!(
     "  kill [-s] <pid> Send signal (default: SIGTERM)\n",
     "  sysinfo         System information\n",
     "  sleep <ms>      Sleep milliseconds\n",
+    "  reboot [-f]     Reboot (graceful default)\n",
+    "  shutdown [-f|-p] Shutdown+reset (or panic+reset)\n",
     "\n",
     "Operators:\n",
     "  cmd1 | cmd2     Pipeline\n",

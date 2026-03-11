@@ -31,6 +31,15 @@ unsafe fn ap_idle_hlt_loop() -> ! {
     }
 }
 
+#[inline(never)]
+unsafe fn ap_quiesce_hlt_loop(core_idx: u32) -> ! {
+    crate::cpu::per_cpu::shutdown_quiesce_ack(core_idx);
+    core::arch::asm!("cli", options(nostack, nomem));
+    loop {
+        core::arch::asm!("hlt", options(nostack, nomem));
+    }
+}
+
 unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
     let ctx = &mut AP_IDLE_CTX[core_idx as usize];
     let pcpu = crate::cpu::per_cpu::current();
@@ -63,6 +72,10 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     let now_tsc = crate::cpu::tsc::read_tsc();
     let core_idx = this_core_index();
+
+    if core_idx != 0 && crate::cpu::per_cpu::shutdown_quiesce_requested() {
+        ap_quiesce_hlt_loop(core_idx);
+    }
 
     if core_idx == 0 {
         crate::syscall::handler::fb_present_tick();

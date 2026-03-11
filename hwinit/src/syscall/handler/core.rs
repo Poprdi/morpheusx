@@ -6,6 +6,15 @@ use crate::process::signals::Signal;
 use crate::serial::puts;
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
+const SYSCTL_REBOOT_GRACEFUL: u64 = 0;
+const SYSCTL_REBOOT_FORCE: u64 = 1;
+const SYSCTL_SHUTDOWN_GRACEFUL: u64 = 2;
+const SYSCTL_SHUTDOWN_FORCE: u64 = 3;
+const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
+
+static SYSTEM_CONTROL_IN_PROGRESS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 // SYS_EXIT — terminate the current process
 
 /// `SYS_EXIT(code: i32)` — terminate the calling process.
@@ -260,4 +269,96 @@ pub unsafe fn sys_sleep(millis: u64) -> u64 {
     let ticks_per_ms = tsc_freq / 1000;
     let deadline = crate::cpu::tsc::read_tsc().saturating_add(millis.saturating_mul(ticks_per_ms));
     crate::process::scheduler::block_sleep(deadline)
+}
+
+pub unsafe fn sys_system_control(mode: u64) -> u64 {
+    // single transition owner. concurrent reboot/shutdown callers get EBUSY.
+    if SYSTEM_CONTROL_IN_PROGRESS
+        .compare_exchange(
+            false,
+            true,
+            core::sync::atomic::Ordering::AcqRel,
+            core::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return EBUSY;
+    }
+
+    match mode {
+        SYSCTL_REBOOT_FORCE | SYSCTL_SHUTDOWN_FORCE => hard_reset_now(),
+        SYSCTL_SHUTDOWN_PANIC => {
+            // Show crash screen, then reset from exception handler path.
+            crate::cpu::idt::set_reset_on_crash(true);
+            core::arch::asm!("ud2", options(noreturn));
+        }
+        SYSCTL_REBOOT_GRACEFUL | SYSCTL_SHUTDOWN_GRACEFUL => graceful_reset_now(),
+        _ => {
+            SYSTEM_CONTROL_IN_PROGRESS.store(false, core::sync::atomic::Ordering::Release);
+            EINVAL
+        }
+    }
+}
+
+unsafe fn graceful_reset_now() -> ! {
+    const MAX_SNAPSHOT: usize = 64;
+    const DRAIN_ROUNDS: usize = 24;
+    const DRAIN_BACKOFF_SPINS: usize = 200_000;
+
+    let caller = SCHEDULER.current_pid();
+
+    crate::serial::set_checkpoints_enabled(true);
+    crate::serial::fb_puts("[INFO] [SHUTDOWN] draining processes\n");
+    crate::serial::checkpoint("shutdown-drain-begin");
+
+    // Best-effort graceful drain: TERM first, then KILL survivors.
+    for round in 0..DRAIN_ROUNDS {
+        let mut procs = [crate::process::scheduler::ProcessInfo::zeroed(); MAX_SNAPSHOT];
+        let n = SCHEDULER.snapshot_processes(&mut procs);
+
+        let mut alive_user = 0usize;
+        for p in &procs[..n] {
+            let pid = p.pid;
+            if pid == 0
+                || pid == caller
+                || matches!(
+                    p.state,
+                    crate::process::ProcessState::Terminated | crate::process::ProcessState::Zombie
+                )
+            {
+                continue;
+            }
+            alive_user += 1;
+            let sig = if round < (DRAIN_ROUNDS / 2) {
+                Signal::SIGTERM
+            } else {
+                Signal::SIGKILL
+            };
+            let _ = SCHEDULER.send_signal(pid, sig);
+        }
+
+        if alive_user == 0 {
+            crate::serial::checkpoint("shutdown-drain-empty");
+            break;
+        }
+
+        // No HLT here. if local timer IRQ is masked/misrouted this would hang forever.
+        // We still make forward progress to reset even if teardown is partial.
+        if round == (DRAIN_ROUNDS / 2) {
+            crate::serial::checkpoint("shutdown-drain-escalate-sigkill");
+        }
+        for _ in 0..DRAIN_BACKOFF_SPINS {
+            core::hint::spin_loop();
+        }
+    }
+
+    crate::serial::fb_puts("[INFO] [SHUTDOWN] entering reset sequence\n");
+    crate::serial::checkpoint("shutdown-reset-seq");
+
+    // Do not block here on VFS lock during teardown; reset path must always complete.
+    hard_reset_now()
+}
+
+unsafe fn hard_reset_now() -> ! {
+    crate::cpu::reset::reset_machine_now()
 }
