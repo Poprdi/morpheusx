@@ -272,6 +272,7 @@ USER_APPS=(
     "init,/bin/init"
     "compd,/bin/compd"
     "shelld,/bin/shelld"
+    "settings,/bin/settings"
     "syscall-e2e,/bin/syscall-e2e"
     "msh,/bin/msh"
     "spinning-cube,/bin/spinning-cube"

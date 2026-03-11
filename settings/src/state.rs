@@ -1,0 +1,579 @@
+use alloc::vec::Vec;
+use core::fmt;
+
+use crate::chambers::{
+    archive::ArchiveChamber, gateway::GatewayChamber, hall::HallChamber,
+    mirror::MirrorChamber, mist::MistChamber, net_obs::NetObsChamber,
+    sys_obs::SysObsChamber,
+};
+use crate::layout;
+use crate::theme::OneiricTheme;
+
+// route ids — flat enum, zero-cost dispatch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Route {
+    Gateway = 0,
+    MistShore = 1,
+    MirrorBasin = 2,
+    NetObservatory = 3,
+    SysObservatory = 4,
+    Archive = 5,
+    HallOfMasks = 6,
+}
+
+impl Route {
+    pub const ALL: [Route; 7] = [
+        Route::Gateway,
+        Route::MistShore,
+        Route::MirrorBasin,
+        Route::NetObservatory,
+        Route::SysObservatory,
+        Route::Archive,
+        Route::HallOfMasks,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Route::Gateway => "Gateway",
+            Route::MistShore => "Mist Shore",
+            Route::MirrorBasin => "Mirror Basin",
+            Route::NetObservatory => "Observatory:Net",
+            Route::SysObservatory => "Observatory:Sys",
+            Route::Archive => "Archive",
+            Route::HallOfMasks => "Hall of Masks",
+        }
+    }
+
+    pub fn sigil(self) -> &'static str {
+        match self {
+            Route::Gateway => ">",
+            Route::MistShore => "~",
+            Route::MirrorBasin => "o",
+            Route::NetObservatory => "*",
+            Route::SysObservatory => "#",
+            Route::Archive => "=",
+            Route::HallOfMasks => "%",
+        }
+    }
+
+    pub fn technical_alias(self) -> &'static str {
+        match self {
+            Route::Gateway => "/gateway",
+            Route::MistShore => "/visual/mist-shore",
+            Route::MirrorBasin => "/visual/mirror-basin",
+            Route::NetObservatory => "/network/observatory",
+            Route::SysObservatory => "/system/observatory",
+            Route::Archive => "/storage/archive",
+            Route::HallOfMasks => "/presets/hall-of-masks",
+        }
+    }
+
+    pub fn from_index(i: usize) -> Route {
+        Route::ALL[i.min(Route::ALL.len() - 1)]
+    }
+}
+
+// setting lifecycle states
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FieldState {
+    Pristine = 0,
+    Edited = 1,
+    Staged = 2,
+    Applied = 3,
+    Failed = 4,
+}
+
+// safety mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SafetyMode {
+    Safe = 0,
+    Severe = 1,
+}
+
+// armed confirmation for destructive actions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ArmState {
+    Disarmed = 0,
+    Armed = 1,
+    Confirmed = 2,
+}
+
+// pending change tracker
+pub struct PendingChange {
+    pub chamber: Route,
+    pub field_name: &'static str,
+    pub state: FieldState,
+}
+
+// changelog entry for Archive of Echoes
+pub struct ChangeEntry {
+    pub timestamp_ms: u64,
+    pub chamber: Route,
+    pub field_name: &'static str,
+    pub description: [u8; 128],
+    pub desc_len: usize,
+    pub destructive: bool,
+}
+
+// the master state machine
+pub struct SettingsApp {
+    // display surface
+    pub surface: *mut u32,
+    pub fb_w: u32,
+    pub fb_h: u32,
+    pub fb_stride: u32,
+    pub is_bgrx: bool,
+
+    // navigation
+    pub route: Route,
+    pub prev_route: Route,
+    pub rail_focus: usize,
+    pub pane_focus: usize,
+    pub focus_in_rail: bool,
+
+    // mode
+    pub safety: SafetyMode,
+    pub severe_arm: ArmState,
+
+    // theme
+    pub theme: OneiricTheme,
+
+    // dirty tracking
+    pub pending: Vec<PendingChange>,
+    pub changelog: Vec<ChangeEntry>,
+    pub frame_dirty: bool,
+    pub status_msg: [u8; 128],
+    pub status_len: usize,
+    pub status_is_error: bool,
+
+    // mouse state
+    pub mouse_x: i32,
+    pub mouse_y: i32,
+    pub last_buttons: u8,
+
+    // chamber states
+    pub gateway: GatewayChamber,
+    pub mist: MistChamber,
+    pub mirror: MirrorChamber,
+    pub net_obs: NetObsChamber,
+    pub sys_obs: SysObsChamber,
+    pub archive: ArchiveChamber,
+    pub hall: HallChamber,
+
+    // tick counter for animations
+    pub tick_count: u64,
+}
+
+impl SettingsApp {
+    pub fn new(
+        surface: *mut u32,
+        fb_w: u32,
+        fb_h: u32,
+        fb_stride: u32,
+        is_bgrx: bool,
+    ) -> Self {
+        Self {
+            surface,
+            fb_w,
+            fb_h,
+            fb_stride,
+            is_bgrx,
+
+            route: Route::Gateway,
+            prev_route: Route::Gateway,
+            rail_focus: 0,
+            pane_focus: 0,
+            focus_in_rail: true,
+
+            safety: SafetyMode::Safe,
+            severe_arm: ArmState::Disarmed,
+
+            theme: OneiricTheme::dark(),
+
+            pending: Vec::new(),
+            changelog: Vec::new(),
+            frame_dirty: true,
+            status_msg: [0; 128],
+            status_len: 0,
+            status_is_error: false,
+
+            mouse_x: 0,
+            mouse_y: 0,
+            last_buttons: 0,
+
+            gateway: GatewayChamber::new(),
+            mist: MistChamber::new(),
+            mirror: MirrorChamber::new(),
+            net_obs: NetObsChamber::new(),
+            sys_obs: SysObsChamber::new(),
+            archive: ArchiveChamber::new(),
+            hall: HallChamber::new(),
+
+            tick_count: 0,
+        }
+    }
+
+    pub fn init(&mut self) {
+        self.frame_dirty = true;
+        self.net_obs.refresh();
+        self.sys_obs.refresh();
+        self.mist.refresh();
+    }
+
+    pub fn tick(&mut self) {
+        self.tick_count += 1;
+
+        // poll input from compositor
+        self.poll_input();
+
+        // periodic refresh for observatory chambers (every ~60 ticks ≈ 1 second)
+        if self.tick_count % 60 == 0 {
+            match self.route {
+                Route::SysObservatory => self.sys_obs.refresh(),
+                Route::NetObservatory => self.net_obs.refresh(),
+                _ => {}
+            }
+            self.frame_dirty = true;
+        }
+
+        if self.frame_dirty {
+            self.render();
+            self.frame_dirty = false;
+        }
+    }
+
+    fn poll_input(&mut self) {
+        // keyboard
+        let mut buf = [0u8; 1];
+        let n = libmorpheus::io::read_stdin(&mut buf);
+        if n > 0 {
+            self.handle_key(buf[0]);
+        }
+
+        // mouse
+        let ms = libmorpheus::hw::mouse_read();
+        if ms.dx != 0 || ms.dy != 0 || ms.buttons != 0 {
+            self.mouse_x = (self.mouse_x + ms.dx as i32).clamp(0, self.fb_w as i32 - 1);
+            self.mouse_y = (self.mouse_y + ms.dy as i32).clamp(0, self.fb_h as i32 - 1);
+
+            let left = (ms.buttons & 1) != 0;
+            let left_was = (self.last_buttons & 1) != 0;
+            if left && !left_was {
+                self.handle_click(self.mouse_x, self.mouse_y);
+            }
+            self.last_buttons = ms.buttons;
+            self.frame_dirty = true;
+        }
+    }
+
+    fn handle_key(&mut self, scancode: u8) {
+        self.frame_dirty = true;
+
+        match scancode {
+            // Tab = toggle rail/pane focus
+            0x0F => {
+                self.focus_in_rail = !self.focus_in_rail;
+            }
+            // Up arrow
+            0x48 => {
+                if self.focus_in_rail {
+                    if self.rail_focus > 0 {
+                        self.rail_focus -= 1;
+                    }
+                } else {
+                    self.pane_focus_up();
+                }
+            }
+            // Down arrow
+            0x50 => {
+                if self.focus_in_rail {
+                    if self.rail_focus < Route::ALL.len() - 1 {
+                        self.rail_focus += 1;
+                    }
+                } else {
+                    self.pane_focus_down();
+                }
+            }
+            // Enter = navigate to rail selection or activate pane widget
+            0x1C => {
+                if self.focus_in_rail {
+                    self.navigate(Route::from_index(self.rail_focus));
+                } else {
+                    self.pane_activate();
+                }
+            }
+            // Escape = back to gateway or disarm
+            0x01 => {
+                if self.severe_arm == ArmState::Armed {
+                    self.severe_arm = ArmState::Disarmed;
+                    self.set_status("Disarmed", false);
+                } else if self.route != Route::Gateway {
+                    if self.has_pending_for(self.route) {
+                        self.set_status("Unsaved changes — apply or revert first", true);
+                    } else {
+                        self.navigate(Route::Gateway);
+                    }
+                }
+            }
+            // Left arrow = focus rail
+            0x4B => {
+                self.focus_in_rail = true;
+            }
+            // Right arrow = focus pane
+            0x4D => {
+                self.focus_in_rail = false;
+            }
+            // 'a' key (apply staged) — scancode 0x1E
+            0x1E => {
+                if !self.focus_in_rail {
+                    self.apply_pending();
+                }
+            }
+            // 'r' key (revert) — scancode 0x13
+            0x13 => {
+                if !self.focus_in_rail {
+                    self.revert_pending();
+                }
+            }
+            // forward to active chamber for chamber-specific keys
+            _ => {
+                self.chamber_key(scancode);
+            }
+        }
+    }
+
+    fn handle_click(&mut self, x: i32, y: i32) {
+        self.frame_dirty = true;
+
+        let rail_w = layout::RAIL_WIDTH;
+        let strip_h = layout::STRIP_HEIGHT;
+        let bar_h = layout::BAR_HEIGHT;
+
+        // click in rail?
+        if x < rail_w as i32 && y >= strip_h as i32 && y < (self.fb_h - bar_h) as i32 {
+            let rel_y = (y - strip_h as i32) as u32;
+            let item_h = layout::RAIL_ITEM_HEIGHT;
+            let idx = (rel_y / item_h) as usize;
+            if idx < Route::ALL.len() {
+                self.rail_focus = idx;
+                self.focus_in_rail = true;
+                self.navigate(Route::from_index(idx));
+            }
+            return;
+        }
+
+        // click in command bar?
+        if y >= (self.fb_h - bar_h) as i32 {
+            self.handle_bar_click(x);
+            return;
+        }
+
+        // click in pane — delegate to chamber
+        if x >= rail_w as i32 && y >= strip_h as i32 {
+            self.focus_in_rail = false;
+            let pane_x = x - rail_w as i32;
+            let pane_y = y - strip_h as i32;
+            self.chamber_click(pane_x, pane_y);
+        }
+    }
+
+    fn handle_bar_click(&mut self, x: i32) {
+        let pane_w = self.fb_w - layout::RAIL_WIDTH;
+        let btn_w = pane_w / 4;
+        let base_x = layout::RAIL_WIDTH as i32;
+
+        if x >= base_x && x < base_x + btn_w as i32 {
+            self.apply_pending();
+        } else if x >= base_x + btn_w as i32 && x < base_x + 2 * btn_w as i32 {
+            self.revert_pending();
+        } else if x >= base_x + 2 * btn_w as i32 && x < base_x + 3 * btn_w as i32 {
+            self.restore_defaults();
+        }
+    }
+
+    pub fn navigate(&mut self, target: Route) {
+        if target == self.route {
+            return;
+        }
+        if self.has_pending_for(self.route) {
+            self.set_status("Unsaved changes — apply or revert first", true);
+            return;
+        }
+        self.prev_route = self.route;
+        self.route = target;
+        self.pane_focus = 0;
+        self.focus_in_rail = false;
+
+        // refresh data for the target chamber
+        match target {
+            Route::NetObservatory => self.net_obs.refresh(),
+            Route::SysObservatory => self.sys_obs.refresh(),
+            Route::MistShore => self.mist.refresh(),
+            _ => {}
+        }
+    }
+
+    pub fn has_pending_for(&self, route: Route) -> bool {
+        self.pending.iter().any(|p| p.chamber == route && p.state == FieldState::Edited)
+    }
+
+    pub fn has_any_pending(&self) -> bool {
+        self.pending.iter().any(|p| p.state == FieldState::Edited)
+    }
+
+    fn apply_pending(&mut self) {
+        let route = self.route;
+        match route {
+            Route::NetObservatory => self.net_obs.apply(self),
+            Route::MistShore => self.mist.apply(),
+            Route::MirrorBasin => self.mirror.apply(),
+            Route::HallOfMasks => self.hall.apply(self),
+            _ => {}
+        }
+        self.pending.retain(|p| p.chamber != route);
+        self.set_status("Applied", false);
+    }
+
+    fn revert_pending(&mut self) {
+        let route = self.route;
+        match route {
+            Route::NetObservatory => self.net_obs.revert(),
+            Route::MistShore => self.mist.revert(),
+            Route::MirrorBasin => self.mirror.revert(),
+            _ => {}
+        }
+        self.pending.retain(|p| p.chamber != route);
+        self.set_status("Reverted", false);
+    }
+
+    fn restore_defaults(&mut self) {
+        let route = self.route;
+        match route {
+            Route::NetObservatory => self.net_obs.restore_defaults(),
+            Route::MistShore => self.mist.restore_defaults(),
+            Route::MirrorBasin => self.mirror.restore_defaults(),
+            _ => {}
+        }
+        self.pending.retain(|p| p.chamber != route);
+        self.set_status("Defaults restored", false);
+    }
+
+    fn pane_focus_up(&mut self) {
+        if self.pane_focus > 0 {
+            self.pane_focus -= 1;
+        }
+    }
+
+    fn pane_focus_down(&mut self) {
+        let max = self.pane_widget_count();
+        if self.pane_focus + 1 < max {
+            self.pane_focus += 1;
+        }
+    }
+
+    fn pane_activate(&mut self) {
+        match self.route {
+            Route::Gateway => {
+                self.gateway.activate(self.pane_focus, self);
+            }
+            Route::NetObservatory => {
+                self.net_obs.activate(self.pane_focus, self);
+            }
+            Route::SysObservatory => {
+                self.sys_obs.activate(self.pane_focus, self);
+            }
+            Route::MistShore => {
+                self.mist.activate(self.pane_focus, self);
+            }
+            Route::MirrorBasin => {
+                self.mirror.activate(self.pane_focus, self);
+            }
+            Route::Archive => {
+                self.archive.activate(self.pane_focus);
+            }
+            Route::HallOfMasks => {
+                self.hall.activate(self.pane_focus, self);
+            }
+        }
+    }
+
+    fn chamber_key(&mut self, scancode: u8) {
+        match self.route {
+            Route::Gateway => self.gateway.handle_key(scancode, self),
+            Route::NetObservatory => self.net_obs.handle_key(scancode, self),
+            Route::SysObservatory => self.sys_obs.handle_key(scancode, self),
+            Route::MistShore => self.mist.handle_key(scancode, self),
+            Route::MirrorBasin => self.mirror.handle_key(scancode, self),
+            Route::Archive => self.archive.handle_key(scancode),
+            Route::HallOfMasks => self.hall.handle_key(scancode, self),
+        }
+    }
+
+    fn chamber_click(&mut self, pane_x: i32, pane_y: i32) {
+        match self.route {
+            Route::Gateway => self.gateway.handle_click(pane_x, pane_y, self),
+            Route::NetObservatory => self.net_obs.handle_click(pane_x, pane_y, self),
+            Route::SysObservatory => self.sys_obs.handle_click(pane_x, pane_y, self),
+            Route::MistShore => self.mist.handle_click(pane_x, pane_y, self),
+            Route::MirrorBasin => self.mirror.handle_click(pane_x, pane_y, self),
+            Route::Archive => self.archive.handle_click(pane_x, pane_y),
+            Route::HallOfMasks => self.hall.handle_click(pane_x, pane_y, self),
+        }
+    }
+
+    fn pane_widget_count(&self) -> usize {
+        match self.route {
+            Route::Gateway => self.gateway.widget_count(),
+            Route::MistShore => self.mist.widget_count(),
+            Route::MirrorBasin => self.mirror.widget_count(),
+            Route::NetObservatory => self.net_obs.widget_count(),
+            Route::SysObservatory => self.sys_obs.widget_count(),
+            Route::Archive => self.archive.widget_count(),
+            Route::HallOfMasks => self.hall.widget_count(),
+        }
+    }
+
+    pub fn set_status(&mut self, msg: &str, is_error: bool) {
+        let n = msg.len().min(self.status_msg.len());
+        self.status_msg[..n].copy_from_slice(&msg.as_bytes()[..n]);
+        self.status_len = n;
+        self.status_is_error = is_error;
+        self.frame_dirty = true;
+    }
+
+    pub fn log_change(&mut self, chamber: Route, field: &'static str, desc: &str, destructive: bool) {
+        let ts = libmorpheus::time::uptime_ms();
+        let mut buf = [0u8; 128];
+        let n = desc.len().min(128);
+        buf[..n].copy_from_slice(&desc.as_bytes()[..n]);
+        self.changelog.push(ChangeEntry {
+            timestamp_ms: ts,
+            chamber,
+            field_name: field,
+            description: buf,
+            desc_len: n,
+            destructive,
+        });
+    }
+
+    pub fn mark_edited(&mut self, chamber: Route, field: &'static str) {
+        // upsert
+        if let Some(p) = self.pending.iter_mut().find(|p| p.chamber == chamber && p.field_name == field) {
+            p.state = FieldState::Edited;
+        } else {
+            self.pending.push(PendingChange {
+                chamber,
+                field_name: field,
+                state: FieldState::Edited,
+            });
+        }
+    }
+
+    fn render(&mut self) {
+        layout::render_frame(self);
+    }
+}
