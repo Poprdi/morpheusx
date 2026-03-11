@@ -119,7 +119,7 @@ fn rebuild_theme(app: &mut SettingsApp) {
 pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
 
 pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = (widgets::FONT_H + 8) as i32;
+    let row_h = layout::row_step(app, 8) as i32;
     let idx = ((py - 40) / row_h).max(0) as usize;
     if idx < FIELD_COUNT {
         app.pane_focus = idx;
@@ -133,18 +133,22 @@ pub fn render(app: &SettingsApp) {
 
     let px = RAIL_WIDTH + PANE_PAD;
     let mut cy = STRIP_HEIGHT + PANE_PAD;
+    let r2 = layout::row_step(app, 2);
+    let r4 = layout::row_step(app, 4);
+    let r8 = layout::row_step(app, 8);
+    let r12 = layout::row_step(app, 12);
 
     // theme mode
     layout::draw_section(app, px, cy, "Theme Mode");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let mode_label = if mirror.dark_mode { "[X] Dark   [ ] Light" } else { "[ ] Dark   [X] Light" };
     layout::draw_button_row(app, px, cy, mode_label, FIELD_THEME_TOGGLE, t.glyph);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // accent color
     layout::draw_section(app, px, cy, "Accent Color");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let (ar, ag, ab, name) = ACCENTS[mirror.accent_idx];
     let accent = crate::theme::pack(ar, ag, ab);
@@ -164,17 +168,17 @@ pub fn render(app: &SettingsApp) {
 
     // selected name
     widgets::draw_str(app.surface, app.fb_stride, px, cy, name, accent, t.substrate, app.fb_w, app.fb_h);
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     // nav buttons
     layout::draw_button_row(app, px, cy, "<< Previous Accent", FIELD_ACCENT_PREV, t.glyph);
-    cy += widgets::FONT_H + 4;
+    cy += r4;
     layout::draw_button_row(app, px, cy, ">> Next Accent", FIELD_ACCENT_NEXT, t.glyph);
-    cy += widgets::FONT_H + 12;
+    cy += r12;
 
     // preview section
     layout::draw_section(app, px, cy, "Preview");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     // color swatch grid showing all theme tokens
     let tokens: [(&str, u32); 10] = [
@@ -193,13 +197,13 @@ pub fn render(app: &SettingsApp) {
     for (name, color) in &tokens {
         widgets::fill_rect(app.surface, app.fb_stride, px, cy, 16, 12, *color, app.fb_w, app.fb_h);
         widgets::draw_str(app.surface, app.fb_stride, px + 20, cy, name, t.glyph, t.substrate, app.fb_w, app.fb_h);
-        cy += widgets::FONT_H + 2;
+        cy += r2;
     }
 
     cy += 8;
 
     // action buttons
     layout::draw_button_row(app, px, cy, "Apply Appearance", FIELD_APPLY, t.signal);
-    cy += widgets::FONT_H + 4;
+    cy += r4;
     layout::draw_button_row(app, px, cy, "Revert", FIELD_REVERT, t.glyph_dim);
 }

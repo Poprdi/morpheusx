@@ -65,7 +65,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
 pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
 
 pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = (widgets::FONT_H + 8) as i32;
+    let row_h = layout::row_step(app, 8) as i32;
     let idx = ((py - 40) / row_h).max(0) as usize;
     if idx < FIELD_COUNT {
         app.pane_focus = idx;
@@ -83,9 +83,13 @@ pub fn render(app: &SettingsApp) {
 
     let px = RAIL_WIDTH + PANE_PAD;
     let mut cy = STRIP_HEIGHT + PANE_PAD;
+    let r2 = layout::row_step(app, 2);
+    let r4 = layout::row_step(app, 4);
+    let r8 = layout::row_step(app, 8);
+    let r12 = layout::row_step(app, 12);
 
     layout::draw_section(app, px, cy, "Framebuffer");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     // resolution
     let mut buf = [0u8; 32];
@@ -101,20 +105,20 @@ pub fn render(app: &SettingsApp) {
     ri += hn;
     let res_str = core::str::from_utf8(&res[..ri]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Resolution:", res_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // stride
     let n = widgets::u64_to_str(mist.fb_stride as u64, &mut buf);
     let stride_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Stride (bytes):", stride_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // stride in pixels
     let stride_px = mist.fb_stride / 4;
     let n = widgets::u64_to_str(stride_px as u64, &mut buf);
     let spx_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Stride (pixels):", spx_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // pixel format
     let fmt_str = match mist.fb_format {
@@ -125,57 +129,57 @@ pub fn render(app: &SettingsApp) {
         _ => "Unknown",
     };
     layout::draw_kv(app, px, cy, "Pixel Format:", fmt_str, t.immutable);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // fb size
     let n = widgets::format_bytes(mist.fb_size, &mut buf);
     let size_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "FB Size:", size_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // base address
     let mut hex_buf = [0u8; 18];
     let hex_len = format_hex(mist.fb_base, &mut hex_buf);
     let hex_str = core::str::from_utf8(&hex_buf[..hex_len]).unwrap_or("0x???");
     layout::draw_kv(app, px, cy, "Base Addr:", hex_str, t.immutable);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // pixel math section
     layout::draw_section(app, px, cy, "Pixel Math");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let bpp = 4u32;
     let n = widgets::u64_to_str(bpp as u64, &mut buf);
     let bpp_str = core::str::from_utf8(&buf[..n]).unwrap_or("4");
     layout::draw_kv(app, px, cy, "Bytes/Pixel:", bpp_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // total pixels
     let total_px = mist.fb_width as u64 * mist.fb_height as u64;
     let n = widgets::u64_to_str(total_px, &mut buf);
     let tpx_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Total Pixels:", tpx_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     // scanline padding
     let pad = mist.fb_stride.saturating_sub(mist.fb_width * bpp);
     let pad_label = if pad == 0 { "None" } else { "Present" };
     let pad_color = if pad == 0 { t.success } else { t.warning };
     layout::draw_kv(app, px, cy, "Scanline Pad:", pad_label, pad_color);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     if pad > 0 {
         let n = widgets::u64_to_str(pad as u64, &mut buf);
         let pad_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
         layout::draw_kv(app, px, cy, "  Pad Bytes:", pad_str, t.warning);
-        cy += widgets::FONT_H + 2;
+        cy += r2;
     }
 
     cy += 8;
 
     // packing reminder
     layout::draw_section(app, px, cy, "Packing Reference");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let packing = match mist.fb_format {
         1 => "BGRX: b | (g<<8) | (r<<16) | (0xFF<<24)",
@@ -183,9 +187,9 @@ pub fn render(app: &SettingsApp) {
         _ => "(non-standard format)",
     };
     widgets::draw_str(s, st, px, cy, packing, t.immutable, t.substrate, w, h);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
     widgets::draw_str(s, st, px, cy, "addr = base + (y * stride) + (x * 4)", t.glyph_dim, t.substrate, w, h);
-    cy += widgets::FONT_H + 12;
+    cy += r12;
 
     layout::draw_button_row(app, px, cy, "Refresh Display Info", FIELD_REFRESH, t.glyph);
 }

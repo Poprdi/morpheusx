@@ -138,7 +138,7 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
 }
 
 pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = (widgets::FONT_H + 8) as i32;
+    let row_h = layout::row_step(app, 8) as i32;
     let idx = ((py - 40) / row_h).max(0) as usize;
     if idx < FIELD_COUNT {
         app.pane_focus = idx;
@@ -156,26 +156,30 @@ pub fn render(app: &SettingsApp) {
 
     let px = RAIL_WIDTH + PANE_PAD;
     let mut cy = STRIP_HEIGHT + PANE_PAD;
+    let r2 = layout::row_step(app, 2);
+    let r4 = layout::row_step(app, 4);
+    let r8 = layout::row_step(app, 8);
+    let r12 = layout::row_step(app, 12);
 
     // memory section
     layout::draw_section(app, px, cy, "Memory");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let mut buf = [0u8; 32];
     let n = widgets::format_bytes(sys.total_mem, &mut buf);
     let total_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Total:", total_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::format_bytes(sys.used_mem, &mut buf);
     let used_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Used:", used_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::format_bytes(sys.free_mem, &mut buf);
     let free_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Free:", free_str, t.success);
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     // memory usage bar
     let bar_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
@@ -186,51 +190,51 @@ pub fn render(app: &SettingsApp) {
     };
     let bar_color = if pct > 90 { t.destructive } else if pct > 70 { t.warning } else { t.signal };
     widgets::draw_bar(s, st, px, cy, bar_w, 10, pct, 100, bar_color, t.substrate, t.contour, w, h);
-    cy += 14;
+    cy += (r4 / 2).max(10);
 
     // heap section
     layout::draw_section(app, px, cy, "Heap");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let n = widgets::format_bytes(sys.heap_used, &mut buf);
     let hu_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Used:", hu_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::format_bytes(sys.heap_total, &mut buf);
     let ht_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Total:", ht_str, t.telemetry);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // cpu section
     layout::draw_section(app, px, cy, "CPU");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let n = widgets::u64_to_str(sys.cpu_count as u64, &mut buf);
     let cpu_str = core::str::from_utf8(&buf[..n]).unwrap_or("1");
     layout::draw_kv(app, px, cy, "Cores:", cpu_str, t.telemetry);
-    cy += widgets::FONT_H + 2;
+    cy += r2;
 
     let n = widgets::u64_to_str(sys.idle_pct as u64, &mut buf);
     let idle_str = core::str::from_utf8(&buf[..n]).unwrap_or("0");
     layout::draw_kv(app, px, cy, "Idle %:", idle_str, t.telemetry);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // uptime
     layout::draw_section(app, px, cy, "Uptime");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     let n = widgets::format_uptime(sys.uptime_secs, &mut buf);
     let up_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Since boot:", up_str, t.immutable);
-    cy += widgets::FONT_H + 12;
+    cy += r12;
 
     // power controls
     layout::draw_section(app, px, cy, "Power Controls");
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     layout::draw_button_row(app, px, cy, "Refresh Telemetry", FIELD_REFRESH, t.glyph);
-    cy += widgets::FONT_H + 8;
+    cy += r8;
 
     // reboot
     let rb_label = match sys.reboot_arm {
@@ -244,13 +248,13 @@ pub fn render(app: &SettingsApp) {
         ArmState::Confirmed => t.destructive,
     };
     layout::draw_button_row(app, px, cy, rb_label, FIELD_REBOOT, rb_color);
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     if matches!(sys.reboot_arm, ArmState::Armed) {
         layout::draw_risk_band(app, px, cy, "System will restart. Unsaved work is lost.");
-        cy += widgets::FONT_H + 4;
+        cy += r4;
         layout::draw_button_row(app, px, cy, "Force Reboot (skip cleanup)", FIELD_FORCE_REBOOT, t.destructive);
-        cy += widgets::FONT_H + 4;
+        cy += r4;
     }
 
     // shutdown
@@ -265,11 +269,11 @@ pub fn render(app: &SettingsApp) {
         ArmState::Confirmed => t.destructive,
     };
     layout::draw_button_row(app, px, cy, sd_label, FIELD_SHUTDOWN, sd_color);
-    cy += widgets::FONT_H + 4;
+    cy += r4;
 
     if matches!(sys.shutdown_arm, ArmState::Armed) {
         layout::draw_risk_band(app, px, cy, "System will power off. No recovery without physical restart.");
-        cy += widgets::FONT_H + 4;
+        cy += r4;
         layout::draw_button_row(app, px, cy, "Force Shutdown (immediate)", FIELD_FORCE_SHUTDOWN, t.destructive);
     }
 }
