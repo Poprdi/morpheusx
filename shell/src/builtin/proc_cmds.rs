@@ -241,3 +241,145 @@ pub fn sleep_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
     process::sleep(ms);
     0
 }
+
+pub fn reboot(args: &[String]) -> i32 {
+    let mut force = false;
+    for arg in args {
+        match arg.as_str() {
+            "-f" | "--force" => force = true,
+            "-h" | "--help" => {
+                libmorpheus::io::print(
+                    "reboot — restart the machine\n\nUSAGE\n  reboot [-f|--force]\n\nDefault is graceful reboot.\n",
+                );
+                return 0;
+            }
+            _ => {
+                libmorpheus::eprintln!("reboot: unknown option: {}", arg);
+                return 1;
+            }
+        }
+    }
+
+    match libmorpheus::sys::reboot(force) {
+        Ok(()) => 0,
+        Err(e) => {
+            libmorpheus::eprintln!("reboot: error 0x{:x}", e);
+            1
+        }
+    }
+}
+
+pub fn reboot_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
+    let mut force = false;
+    for arg in args {
+        match arg.as_str() {
+            "-f" | "--force" => force = true,
+            "-h" | "--help" => {
+                con.write_str(
+                    fb,
+                    "reboot — restart the machine\n\nUSAGE\n  reboot [-f|--force]\n\nDefault is graceful reboot.\n",
+                );
+                return 0;
+            }
+            _ => {
+                con.write_colored(fb, &format!("reboot: unknown option: {}\n", arg), (170, 0, 0));
+                return 1;
+            }
+        }
+    }
+
+    match libmorpheus::sys::reboot(force) {
+        Ok(()) => 0,
+        Err(e) => {
+            con.write_colored(fb, &format!("reboot: error 0x{:x}\n", e), (170, 0, 0));
+            1
+        }
+    }
+}
+
+pub fn shutdown(args: &[String]) -> i32 {
+    let mut force = false;
+    let mut panic_mode = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "-f" | "--force" => force = true,
+            "-p" => panic_mode = true,
+            "-h" | "--help" => {
+                libmorpheus::io::print(
+                    "shutdown — stop services and reset\n\nUSAGE\n  shutdown [-f|--force] [-p]\n\nDefault is graceful reset.\n  -f  immediate hard reset\n  -p  intentional kernel panic (BSOD) then reset\n",
+                );
+                return 0;
+            }
+            _ => {
+                libmorpheus::eprintln!("shutdown: unknown option: {}", arg);
+                return 1;
+            }
+        }
+    }
+
+    if force && panic_mode {
+        libmorpheus::eprintln!("shutdown: -f and -p are mutually exclusive");
+        return 1;
+    }
+
+    let ret = if panic_mode {
+        libmorpheus::sys::shutdown_panic()
+    } else {
+        libmorpheus::sys::shutdown(force)
+    };
+
+    match ret {
+        Ok(()) => 0,
+        Err(e) => {
+            libmorpheus::eprintln!("shutdown: error 0x{:x}", e);
+            1
+        }
+    }
+}
+
+pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
+    let mut force = false;
+    let mut panic_mode = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "-f" | "--force" => force = true,
+            "-p" => panic_mode = true,
+            "-h" | "--help" => {
+                con.write_str(
+                    fb,
+                    "shutdown — stop services and reset\n\nUSAGE\n  shutdown [-f|--force] [-p]\n\nDefault is graceful reset.\n  -f  immediate hard reset\n  -p  intentional kernel panic (BSOD) then reset\n",
+                );
+                return 0;
+            }
+            _ => {
+                con.write_colored(
+                    fb,
+                    &format!("shutdown: unknown option: {}\n", arg),
+                    (170, 0, 0),
+                );
+                return 1;
+            }
+        }
+    }
+
+    if force && panic_mode {
+        con.write_colored(fb, "shutdown: -f and -p are mutually exclusive\n", (170, 0, 0));
+        return 1;
+    }
+
+    let ret = if panic_mode {
+        libmorpheus::sys::shutdown_panic()
+    } else {
+        libmorpheus::sys::shutdown(force)
+    };
+
+    match ret {
+        Ok(()) => 0,
+        Err(e) => {
+            con.write_colored(fb, &format!("shutdown: error 0x{:x}\n", e), (170, 0, 0));
+            1
+        }
+    }
+}
