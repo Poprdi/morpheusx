@@ -67,6 +67,8 @@ pub fn update(state: &mut CompState) {
                             win.surface_pages = entry.pages;
                             win.src_w = entry.width;
                             win.src_h = entry.height;
+                            // Keep historical behavior: entry stride comes from shared
+                            // metadata path in bytes, convert to pixels for blit math.
                             win.src_stride = (entry.stride / 4).max(entry.width.max(1));
                             win.mapped = true;
                         }
@@ -114,12 +116,15 @@ pub fn update(state: &mut CompState) {
                 state.desktop_idx = Some(idx);
             } else {
                 let step = CASCADE_STEP * (state.cascade_n % 5);
-                let max_w = state.fb_w.saturating_sub(40);
-                let max_h = state.fb_h.saturating_sub(TITLE_H + PANEL_H + 40);
-                let w = ((state.fb_w as u64 * 58) / 100) as u32;
-                let h = ((state.fb_h as u64 * 58) / 100) as u32;
-                let w = w.clamp(320, max_w.max(320));
-                let h = h.clamp(220, max_h.max(220));
+                // Open at source size when possible, but clamp to visible work area
+                // so move/resize affordances remain reachable.
+                let max_w = state.fb_w.saturating_sub(40).max(160);
+                let max_h = state
+                    .fb_h
+                    .saturating_sub(TITLE_H + PANEL_H + 40)
+                    .max(120);
+                let w = entry.width.max(1).min(max_w);
+                let h = entry.height.max(1).min(max_h);
 
                 let cx = (20 + step).clamp(0, (state.fb_w as i32 - w as i32).max(0));
                 let cy = (TITLE_H as i32 + 20 + step).clamp(
