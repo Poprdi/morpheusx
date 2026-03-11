@@ -285,22 +285,33 @@ pub unsafe fn sys_system_control(mode: u64) -> u64 {
         return EBUSY;
     }
 
+    let owner_core = crate::cpu::per_cpu::current_core_index();
+    crate::cpu::per_cpu::set_reboot_owner(owner_core);
+    crate::shutdown::ensure_initialized();
+
     match mode {
-        SYSCTL_REBOOT_FORCE | SYSCTL_SHUTDOWN_FORCE => hard_reset_now(),
+        SYSCTL_REBOOT_FORCE => hard_reset_now(crate::shutdown::TransitionKind::RebootForce),
+        SYSCTL_SHUTDOWN_FORCE => hard_reset_now(crate::shutdown::TransitionKind::ShutdownForce),
         SYSCTL_SHUTDOWN_PANIC => {
             // Show crash screen, then reset from exception handler path.
             crate::cpu::idt::set_reset_on_crash(true);
             core::arch::asm!("ud2", options(noreturn));
         }
-        SYSCTL_REBOOT_GRACEFUL | SYSCTL_SHUTDOWN_GRACEFUL => graceful_reset_now(),
+        SYSCTL_REBOOT_GRACEFUL => {
+            graceful_reset_now(crate::shutdown::TransitionKind::RebootGraceful)
+        }
+        SYSCTL_SHUTDOWN_GRACEFUL => {
+            graceful_reset_now(crate::shutdown::TransitionKind::ShutdownGraceful)
+        }
         _ => {
             SYSTEM_CONTROL_IN_PROGRESS.store(false, core::sync::atomic::Ordering::Release);
+            crate::cpu::per_cpu::clear_reboot_owner();
             EINVAL
         }
     }
 }
 
-unsafe fn graceful_reset_now() -> ! {
+unsafe fn graceful_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
     const MAX_SNAPSHOT: usize = 64;
     const DRAIN_ROUNDS: usize = 24;
     const DRAIN_BACKOFF_SPINS: usize = 200_000;
@@ -308,6 +319,14 @@ unsafe fn graceful_reset_now() -> ! {
     let caller = SCHEDULER.current_pid();
 
     crate::serial::set_checkpoints_enabled(true);
+    crate::serial::checkpoint("shutdown-prepare-begin");
+    let prepare_ok = crate::shutdown::run_prepare_handlers(kind, 300);
+    if prepare_ok {
+        crate::serial::checkpoint("shutdown-prepare-complete");
+    } else {
+        crate::serial::checkpoint("shutdown-prepare-incomplete");
+    }
+
     crate::serial::fb_puts("[INFO] [SHUTDOWN] draining processes\n");
     crate::serial::checkpoint("shutdown-drain-begin");
 
@@ -356,9 +375,19 @@ unsafe fn graceful_reset_now() -> ! {
     crate::serial::checkpoint("shutdown-reset-seq");
 
     // Do not block here on VFS lock during teardown; reset path must always complete.
-    hard_reset_now()
+    hard_reset_now(kind)
 }
 
-unsafe fn hard_reset_now() -> ! {
+unsafe fn hard_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
+    match kind {
+        crate::shutdown::TransitionKind::RebootGraceful
+        | crate::shutdown::TransitionKind::RebootForce => {
+            crate::shutdown::run_restart_handlers(kind);
+        }
+        crate::shutdown::TransitionKind::ShutdownGraceful
+        | crate::shutdown::TransitionKind::ShutdownForce => {
+            crate::shutdown::run_poweroff_handlers(kind);
+        }
+    }
     crate::cpu::reset::reset_machine_now()
 }
