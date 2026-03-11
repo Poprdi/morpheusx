@@ -11,7 +11,7 @@ mod state;
 mod theme;
 mod widgets;
 
-use libmorpheus::{entry, hw, io, process};
+use libmorpheus::{entry, hw, io};
 
 entry!(main);
 
@@ -38,7 +38,6 @@ fn main() -> i32 {
 
     loop {
         app.tick();
-        hw::fb_mark_dirty();
-        process::yield_cpu();
+        let _ = hw::fb_present();
     }
 }

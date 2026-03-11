@@ -3,7 +3,7 @@
 // every pixel accounted for, every margin deliberate.
 
 use crate::state::{Route, SafetyMode, SettingsApp};
-use crate::theme::OneiricTheme;
+
 use crate::widgets;
 
 pub const STRIP_HEIGHT: u32 = 20;
@@ -216,7 +216,7 @@ pub fn draw_kv(app: &SettingsApp, x: u32, y: u32, key: &str, val: &str, val_colo
 }
 
 // focusable field row — highlighted when focused
-pub fn draw_field_row(app: &SettingsApp, x: u32, y: u32, label: &str, value: &str, focused: bool, field_idx: usize) {
+pub fn draw_field_row(app: &SettingsApp, x: u32, y: u32, label: &str, value: &str, _focused: bool, field_idx: usize) {
     let s = app.surface;
     let st = app.fb_stride;
     let w = app.fb_w;

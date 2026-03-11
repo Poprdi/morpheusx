@@ -3,7 +3,7 @@
 // the system's memory. read-only — you cannot un-echo what has been spoken.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
-use crate::state::{ChangeEntry, SettingsApp};
+use crate::state::SettingsApp;
 use crate::widgets;
 
 const VISIBLE_ENTRIES: usize = 16;

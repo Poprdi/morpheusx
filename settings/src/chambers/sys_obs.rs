@@ -67,83 +67,82 @@ impl SysObsChamber {
     pub fn widget_count(&self) -> usize {
         FIELD_COUNT
     }
+}
 
-    pub fn activate(&mut self, idx: usize, app: &mut SettingsApp) {
-        match idx {
-            FIELD_REFRESH => {
-                self.refresh();
-                app.set_status("Telemetry refreshed", false);
-            }
-            FIELD_REBOOT => {
-                match self.reboot_arm {
-                    ArmState::Disarmed => {
-                        self.reboot_arm = ArmState::Armed;
-                        app.set_status("Reboot ARMED. Press again to confirm.", false);
-                    }
-                    ArmState::Armed => {
-                        self.reboot_arm = ArmState::Confirmed;
-                        app.log_change(Route::SysObservatory, "power", "Graceful reboot", true);
-                        let _ = sys::reboot(false);
-                    }
-                    ArmState::Confirmed => {}
-                }
-            }
-            FIELD_SHUTDOWN => {
-                match self.shutdown_arm {
-                    ArmState::Disarmed => {
-                        self.shutdown_arm = ArmState::Armed;
-                        app.set_status("Shutdown ARMED. Press again to confirm.", false);
-                    }
-                    ArmState::Armed => {
-                        self.shutdown_arm = ArmState::Confirmed;
-                        app.log_change(Route::SysObservatory, "power", "Graceful shutdown", true);
-                        let _ = sys::shutdown(false);
-                    }
-                    ArmState::Confirmed => {}
-                }
-            }
-            FIELD_FORCE_REBOOT => {
-                match self.reboot_arm {
-                    ArmState::Armed => {
-                        app.log_change(Route::SysObservatory, "power", "Force reboot", true);
-                        let _ = sys::reboot(true);
-                    }
-                    _ => {
-                        app.set_status("Arm reboot first (Enter on Reboot)", false);
-                    }
-                }
-            }
-            FIELD_FORCE_SHUTDOWN => {
-                match self.shutdown_arm {
-                    ArmState::Armed => {
-                        app.log_change(Route::SysObservatory, "power", "Force shutdown", true);
-                        let _ = sys::shutdown(true);
-                    }
-                    _ => {
-                        app.set_status("Arm shutdown first (Enter on Shutdown)", false);
-                    }
-                }
-            }
-            _ => {}
+pub fn activate(app: &mut SettingsApp, idx: usize) {
+    match idx {
+        FIELD_REFRESH => {
+            app.sys_obs.refresh();
+            app.set_status("Telemetry refreshed", false);
         }
+        FIELD_REBOOT => {
+            match app.sys_obs.reboot_arm {
+                ArmState::Disarmed => {
+                    app.sys_obs.reboot_arm = ArmState::Armed;
+                    app.set_status("Reboot ARMED. Press again to confirm.", false);
+                }
+                ArmState::Armed => {
+                    app.sys_obs.reboot_arm = ArmState::Confirmed;
+                    app.log_change(Route::SysObservatory, "power", "Graceful reboot", true);
+                    let _ = sys::reboot(false);
+                }
+                ArmState::Confirmed => {}
+            }
+        }
+        FIELD_SHUTDOWN => {
+            match app.sys_obs.shutdown_arm {
+                ArmState::Disarmed => {
+                    app.sys_obs.shutdown_arm = ArmState::Armed;
+                    app.set_status("Shutdown ARMED. Press again to confirm.", false);
+                }
+                ArmState::Armed => {
+                    app.sys_obs.shutdown_arm = ArmState::Confirmed;
+                    app.log_change(Route::SysObservatory, "power", "Graceful shutdown", true);
+                    let _ = sys::shutdown(false);
+                }
+                ArmState::Confirmed => {}
+            }
+        }
+        FIELD_FORCE_REBOOT => {
+            match app.sys_obs.reboot_arm {
+                ArmState::Armed => {
+                    app.log_change(Route::SysObservatory, "power", "Force reboot", true);
+                    let _ = sys::reboot(true);
+                }
+                _ => {
+                    app.set_status("Arm reboot first (Enter on Reboot)", false);
+                }
+            }
+        }
+        FIELD_FORCE_SHUTDOWN => {
+            match app.sys_obs.shutdown_arm {
+                ArmState::Armed => {
+                    app.log_change(Route::SysObservatory, "power", "Force shutdown", true);
+                    let _ = sys::shutdown(true);
+                }
+                _ => {
+                    app.set_status("Arm shutdown first (Enter on Shutdown)", false);
+                }
+            }
+        }
+        _ => {}
     }
+}
 
-    pub fn handle_key(&mut self, scancode: u8, app: &mut SettingsApp) {
-        if scancode == 0x01 {
-            // Escape — disarm all
-            self.reboot_arm = ArmState::Disarmed;
-            self.shutdown_arm = ArmState::Disarmed;
-            app.set_status("Power actions disarmed", false);
-        }
+pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
+    if scancode == 0x01 {
+        app.sys_obs.reboot_arm = ArmState::Disarmed;
+        app.sys_obs.shutdown_arm = ArmState::Disarmed;
+        app.set_status("Power actions disarmed", false);
     }
+}
 
-    pub fn handle_click(&mut self, _px: i32, py: i32, app: &mut SettingsApp) {
-        let row_h = (widgets::FONT_H + 8) as i32;
-        let idx = ((py - 40) / row_h).max(0) as usize;
-        if idx < FIELD_COUNT {
-            app.pane_focus = idx;
-            self.activate(idx, app);
-        }
+pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
+    let row_h = (widgets::FONT_H + 8) as i32;
+    let idx = ((py - 40) / row_h).max(0) as usize;
+    if idx < FIELD_COUNT {
+        app.pane_focus = idx;
+        activate(app, idx);
     }
 }
 

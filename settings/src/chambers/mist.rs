@@ -3,7 +3,7 @@
 // read-only telemetry mostly — this is the calmest chamber.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
-use crate::state::{Route, SettingsApp};
+use crate::state::SettingsApp;
 use crate::widgets;
 
 use libmorpheus::hw;
@@ -47,32 +47,29 @@ impl MistChamber {
         FIELD_COUNT
     }
 
-    pub fn activate(&mut self, idx: usize, app: &mut SettingsApp) {
-        match idx {
-            FIELD_REFRESH => {
-                self.refresh();
-                app.set_status("Display info refreshed", false);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn apply(&mut self) {
-        // mist shore is read-only telemetry. nothing to apply.
-    }
-
+    pub fn apply(&mut self) {}
     pub fn revert(&mut self) {}
     pub fn restore_defaults(&mut self) {}
+}
 
-    pub fn handle_key(&mut self, _scancode: u8, _app: &mut SettingsApp) {}
-
-    pub fn handle_click(&mut self, _px: i32, py: i32, app: &mut SettingsApp) {
-        let row_h = (widgets::FONT_H + 8) as i32;
-        let idx = ((py - 40) / row_h).max(0) as usize;
-        if idx < FIELD_COUNT {
-            app.pane_focus = idx;
-            self.activate(idx, app);
+pub fn activate(app: &mut SettingsApp, idx: usize) {
+    match idx {
+        FIELD_REFRESH => {
+            app.mist.refresh();
+            app.set_status("Display info refreshed", false);
         }
+        _ => {}
+    }
+}
+
+pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
+
+pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
+    let row_h = (widgets::FONT_H + 8) as i32;
+    let idx = ((py - 40) / row_h).max(0) as usize;
+    if idx < FIELD_COUNT {
+        app.pane_focus = idx;
+        activate(app, idx);
     }
 }
 
