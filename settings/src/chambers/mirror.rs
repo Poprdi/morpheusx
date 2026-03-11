@@ -47,57 +47,6 @@ impl MirrorChamber {
         FIELD_COUNT
     }
 
-    pub fn activate(&mut self, idx: usize, app: &mut SettingsApp) {
-        match idx {
-            FIELD_THEME_TOGGLE => {
-                self.dark_mode = !self.dark_mode;
-                self.rebuild_theme(app);
-                app.mark_edited(Route::MirrorBasin, "theme_mode");
-            }
-            FIELD_ACCENT_PREV => {
-                self.accent_idx = if self.accent_idx == 0 { ACCENT_COUNT - 1 } else { self.accent_idx - 1 };
-                self.rebuild_theme(app);
-                app.mark_edited(Route::MirrorBasin, "accent");
-            }
-            FIELD_ACCENT_NEXT => {
-                self.accent_idx = (self.accent_idx + 1) % ACCENT_COUNT;
-                self.rebuild_theme(app);
-                app.mark_edited(Route::MirrorBasin, "accent");
-            }
-            FIELD_APPLY => {
-                self.apply();
-                app.set_status("Appearance applied", false);
-                app.log_change(Route::MirrorBasin, "appearance", ACCENTS[self.accent_idx].3, false);
-            }
-            FIELD_REVERT => {
-                self.revert();
-                self.rebuild_theme(app);
-                app.set_status("Appearance reverted", false);
-            }
-            _ => {}
-        }
-    }
-
-    fn rebuild_theme(&self, app: &mut SettingsApp) {
-        let base = if self.dark_mode { OneiricTheme::dark() } else { OneiricTheme::light() };
-        let (r, g, b, _) = ACCENTS[self.accent_idx];
-        let accent = crate::theme::pack(r, g, b);
-        // override signal and focus ring with accent
-        app.theme.signal = accent;
-        app.theme.focus_ring = accent;
-        app.theme.rail_active = accent;
-        app.theme.substrate = base.substrate;
-        app.theme.contour = base.contour;
-        app.theme.glyph = base.glyph;
-        app.theme.glyph_dim = base.glyph_dim;
-        app.theme.surface = base.surface;
-        app.theme.input_bg = base.input_bg;
-        app.theme.rail_bg = base.rail_bg;
-        app.theme.bar_bg = base.bar_bg;
-        app.theme.strip_bg = base.strip_bg;
-        app.frame_dirty = true;
-    }
-
     pub fn apply(&mut self) {
         self.saved_dark = self.dark_mode;
         self.saved_accent = self.accent_idx;
@@ -112,16 +61,69 @@ impl MirrorChamber {
         self.dark_mode = true;
         self.accent_idx = 0;
     }
+}
 
-    pub fn handle_key(&mut self, _scancode: u8, _app: &mut SettingsApp) {}
-
-    pub fn handle_click(&mut self, _px: i32, py: i32, app: &mut SettingsApp) {
-        let row_h = (widgets::FONT_H + 8) as i32;
-        let idx = ((py - 40) / row_h).max(0) as usize;
-        if idx < FIELD_COUNT {
-            app.pane_focus = idx;
-            self.activate(idx, app);
+pub fn activate(app: &mut SettingsApp, idx: usize) {
+    match idx {
+        FIELD_THEME_TOGGLE => {
+            app.mirror.dark_mode = !app.mirror.dark_mode;
+            rebuild_theme(app);
+            app.mark_edited(Route::MirrorBasin, "theme_mode");
         }
+        FIELD_ACCENT_PREV => {
+            app.mirror.accent_idx = if app.mirror.accent_idx == 0 { ACCENT_COUNT - 1 } else { app.mirror.accent_idx - 1 };
+            rebuild_theme(app);
+            app.mark_edited(Route::MirrorBasin, "accent");
+        }
+        FIELD_ACCENT_NEXT => {
+            app.mirror.accent_idx = (app.mirror.accent_idx + 1) % ACCENT_COUNT;
+            rebuild_theme(app);
+            app.mark_edited(Route::MirrorBasin, "accent");
+        }
+        FIELD_APPLY => {
+            let accent_name = ACCENTS[app.mirror.accent_idx].3;
+            app.mirror.apply();
+            app.set_status("Appearance applied", false);
+            app.log_change(Route::MirrorBasin, "appearance", accent_name, false);
+        }
+        FIELD_REVERT => {
+            app.mirror.revert();
+            rebuild_theme(app);
+            app.set_status("Appearance reverted", false);
+        }
+        _ => {}
+    }
+}
+
+fn rebuild_theme(app: &mut SettingsApp) {
+    let dark = app.mirror.dark_mode;
+    let ai = app.mirror.accent_idx;
+    let base = if dark { OneiricTheme::dark() } else { OneiricTheme::light() };
+    let (r, g, b, _) = ACCENTS[ai];
+    let accent = crate::theme::pack(r, g, b);
+    app.theme.signal = accent;
+    app.theme.focus_ring = accent;
+    app.theme.rail_active = accent;
+    app.theme.substrate = base.substrate;
+    app.theme.contour = base.contour;
+    app.theme.glyph = base.glyph;
+    app.theme.glyph_dim = base.glyph_dim;
+    app.theme.surface = base.surface;
+    app.theme.input_bg = base.input_bg;
+    app.theme.rail_bg = base.rail_bg;
+    app.theme.bar_bg = base.bar_bg;
+    app.theme.strip_bg = base.strip_bg;
+    app.frame_dirty = true;
+}
+
+pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
+
+pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
+    let row_h = (widgets::FONT_H + 8) as i32;
+    let idx = ((py - 40) / row_h).max(0) as usize;
+    if idx < FIELD_COUNT {
+        app.pane_focus = idx;
+        activate(app, idx);
     }
 }
 

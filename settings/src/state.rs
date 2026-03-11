@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::fmt;
+
 
 use crate::chambers::{
     archive::ArchiveChamber, gateway::GatewayChamber, hall::HallChamber,
@@ -428,10 +428,10 @@ impl SettingsApp {
     fn apply_pending(&mut self) {
         let route = self.route;
         match route {
-            Route::NetObservatory => self.net_obs.apply(self),
+            Route::NetObservatory => crate::chambers::net_obs::apply(self),
             Route::MistShore => self.mist.apply(),
             Route::MirrorBasin => self.mirror.apply(),
-            Route::HallOfMasks => self.hall.apply(self),
+            Route::HallOfMasks => crate::chambers::hall::apply(self),
             _ => {}
         }
         self.pending.retain(|p| p.chamber != route);
@@ -476,52 +476,39 @@ impl SettingsApp {
     }
 
     fn pane_activate(&mut self) {
+        let idx = self.pane_focus;
         match self.route {
-            Route::Gateway => {
-                self.gateway.activate(self.pane_focus, self);
-            }
-            Route::NetObservatory => {
-                self.net_obs.activate(self.pane_focus, self);
-            }
-            Route::SysObservatory => {
-                self.sys_obs.activate(self.pane_focus, self);
-            }
-            Route::MistShore => {
-                self.mist.activate(self.pane_focus, self);
-            }
-            Route::MirrorBasin => {
-                self.mirror.activate(self.pane_focus, self);
-            }
-            Route::Archive => {
-                self.archive.activate(self.pane_focus);
-            }
-            Route::HallOfMasks => {
-                self.hall.activate(self.pane_focus, self);
-            }
+            Route::Gateway => crate::chambers::gateway::activate(self, idx),
+            Route::NetObservatory => crate::chambers::net_obs::activate(self, idx),
+            Route::SysObservatory => crate::chambers::sys_obs::activate(self, idx),
+            Route::MistShore => crate::chambers::mist::activate(self, idx),
+            Route::MirrorBasin => crate::chambers::mirror::activate(self, idx),
+            Route::Archive => self.archive.activate(idx),
+            Route::HallOfMasks => crate::chambers::hall::activate(self, idx),
         }
     }
 
     fn chamber_key(&mut self, scancode: u8) {
         match self.route {
-            Route::Gateway => self.gateway.handle_key(scancode, self),
-            Route::NetObservatory => self.net_obs.handle_key(scancode, self),
-            Route::SysObservatory => self.sys_obs.handle_key(scancode, self),
-            Route::MistShore => self.mist.handle_key(scancode, self),
-            Route::MirrorBasin => self.mirror.handle_key(scancode, self),
+            Route::Gateway => crate::chambers::gateway::handle_key(self, scancode),
+            Route::NetObservatory => crate::chambers::net_obs::handle_key(self, scancode),
+            Route::SysObservatory => crate::chambers::sys_obs::handle_key(self, scancode),
+            Route::MistShore => crate::chambers::mist::handle_key(self, scancode),
+            Route::MirrorBasin => crate::chambers::mirror::handle_key(self, scancode),
             Route::Archive => self.archive.handle_key(scancode),
-            Route::HallOfMasks => self.hall.handle_key(scancode, self),
+            Route::HallOfMasks => crate::chambers::hall::handle_key(self, scancode),
         }
     }
 
     fn chamber_click(&mut self, pane_x: i32, pane_y: i32) {
         match self.route {
-            Route::Gateway => self.gateway.handle_click(pane_x, pane_y, self),
-            Route::NetObservatory => self.net_obs.handle_click(pane_x, pane_y, self),
-            Route::SysObservatory => self.sys_obs.handle_click(pane_x, pane_y, self),
-            Route::MistShore => self.mist.handle_click(pane_x, pane_y, self),
-            Route::MirrorBasin => self.mirror.handle_click(pane_x, pane_y, self),
+            Route::Gateway => crate::chambers::gateway::handle_click(self, pane_x, pane_y),
+            Route::NetObservatory => crate::chambers::net_obs::handle_click(self, pane_x, pane_y),
+            Route::SysObservatory => crate::chambers::sys_obs::handle_click(self, pane_x, pane_y),
+            Route::MistShore => crate::chambers::mist::handle_click(self, pane_x, pane_y),
+            Route::MirrorBasin => crate::chambers::mirror::handle_click(self, pane_x, pane_y),
             Route::Archive => self.archive.handle_click(pane_x, pane_y),
-            Route::HallOfMasks => self.hall.handle_click(pane_x, pane_y, self),
+            Route::HallOfMasks => crate::chambers::hall::handle_click(self, pane_x, pane_y),
         }
     }
 

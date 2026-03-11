@@ -146,73 +146,6 @@ impl NetObsChamber {
         FIELD_COUNT
     }
 
-    pub fn activate(&mut self, idx: usize, app: &mut SettingsApp) {
-        match idx {
-            FIELD_DHCP_TOGGLE => {
-                self.edit_dhcp = !self.edit_dhcp;
-                app.mark_edited(Route::NetObservatory, "dhcp");
-            }
-            FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2 => {
-                self.editing_field = Some(idx);
-            }
-            FIELD_PREFIX => {
-                // cycle prefix: 8, 16, 24, 32
-                self.edit_prefix = match self.edit_prefix {
-                    8 => 16,
-                    16 => 24,
-                    24 => 32,
-                    _ => 8,
-                };
-                app.mark_edited(Route::NetObservatory, "prefix");
-            }
-            FIELD_APPLY => {
-                self.apply(app);
-            }
-            FIELD_REFRESH => {
-                self.refresh();
-                app.set_status("Network refreshed", false);
-            }
-            _ => {}
-        }
-    }
-
-    pub fn apply(&mut self, app: &mut SettingsApp) {
-        // hostname
-        if self.edit_hostname_len > 0 {
-            let hn = core::str::from_utf8(&self.edit_hostname[..self.edit_hostname_len]).unwrap_or("");
-            if let Err(_) = net::net_set_hostname(hn) {
-                app.set_status("Hostname set failed", true);
-                return;
-            }
-            app.log_change(Route::NetObservatory, "hostname", hn, false);
-        }
-
-        if self.edit_dhcp {
-            if let Err(_) = net::net_dhcp() {
-                app.set_status("DHCP request failed", true);
-                return;
-            }
-            app.log_change(Route::NetObservatory, "mode", "Switched to DHCP", false);
-        } else {
-            let ip = parse_ip(&self.edit_ip[..self.edit_ip_len]);
-            let gw = parse_ip(&self.edit_gateway[..self.edit_gw_len]);
-            if let Err(_) = net::net_static_ip(ip, self.edit_prefix, gw) {
-                app.set_status("Static IP set failed", true);
-                return;
-            }
-            app.log_change(Route::NetObservatory, "mode", "Switched to static", false);
-
-            // dns
-            let d1 = parse_ip(&self.edit_dns1[..self.edit_dns1_len]);
-            let d2 = parse_ip(&self.edit_dns2[..self.edit_dns2_len]);
-            let servers = [d1, d2];
-            let _ = net::dns_set_servers(&servers);
-        }
-
-        self.refresh();
-        app.set_status("Network config applied", false);
-    }
-
     pub fn revert(&mut self) {
         self.editing_field = None;
         self.sync_edit_from_live();
@@ -222,37 +155,6 @@ impl NetObsChamber {
         self.edit_dhcp = true;
         self.edit_hostname_len = 0;
         self.editing_field = None;
-    }
-
-    pub fn handle_key(&mut self, scancode: u8, app: &mut SettingsApp) {
-        // if editing a text field, handle character input
-        if let Some(field) = self.editing_field {
-            match scancode {
-                0x01 => {
-                    // Escape — stop editing
-                    self.editing_field = None;
-                }
-                0x1C => {
-                    // Enter — commit edit, stop editing
-                    self.editing_field = None;
-                    app.mark_edited(Route::NetObservatory, field_name(field));
-                }
-                0x0E => {
-                    // Backspace
-                    self.text_backspace(field);
-                    app.mark_edited(Route::NetObservatory, field_name(field));
-                }
-                _ => {
-                    // try to map scancode to ascii char
-                    if let Some(ch) = scancode_to_char(scancode) {
-                        self.text_insert(field, ch);
-                        app.mark_edited(Route::NetObservatory, field_name(field));
-                    }
-                }
-            }
-            app.frame_dirty = true;
-            return;
-        }
     }
 
     fn text_insert(&mut self, field: usize, ch: u8) {
@@ -280,23 +182,117 @@ impl NetObsChamber {
             _ => (&mut self.edit_hostname, &mut self.edit_hostname_len),
         }
     }
+}
 
-    pub fn handle_click(&mut self, px: i32, py: i32, app: &mut SettingsApp) {
-        let row_h = (widgets::FONT_H + 8) as i32;
-        // rough hit test — map y to field index
-        let idx = ((py - 40) / row_h).max(0) as usize;
-        if idx < FIELD_COUNT {
-            app.pane_focus = idx;
-            self.activate(idx, app);
+pub fn activate(app: &mut SettingsApp, idx: usize) {
+    match idx {
+        FIELD_DHCP_TOGGLE => {
+            app.net_obs.edit_dhcp = !app.net_obs.edit_dhcp;
+            app.mark_edited(Route::NetObservatory, "dhcp");
         }
+        FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2 => {
+            app.net_obs.editing_field = Some(idx);
+        }
+        FIELD_PREFIX => {
+            app.net_obs.edit_prefix = match app.net_obs.edit_prefix {
+                8 => 16,
+                16 => 24,
+                24 => 32,
+                _ => 8,
+            };
+            app.mark_edited(Route::NetObservatory, "prefix");
+        }
+        FIELD_APPLY => {
+            apply(app);
+        }
+        FIELD_REFRESH => {
+            app.net_obs.refresh();
+            app.set_status("Network refreshed", false);
+        }
+        _ => {}
+    }
+}
+
+pub fn apply(app: &mut SettingsApp) {
+    // hostname — copy to local buf so we don't hold a borrow on app across log_change
+    let hl = app.net_obs.edit_hostname_len;
+    if hl > 0 {
+        let mut hn_buf = [0u8; 64];
+        hn_buf[..hl].copy_from_slice(&app.net_obs.edit_hostname[..hl]);
+        let hn = core::str::from_utf8(&hn_buf[..hl]).unwrap_or("");
+        if let Err(_) = net::net_set_hostname(hn) {
+            app.set_status("Hostname set failed", true);
+            return;
+        }
+        app.log_change(Route::NetObservatory, "hostname", hn, false);
+    }
+
+    let dhcp = app.net_obs.edit_dhcp;
+    if dhcp {
+        if let Err(_) = net::net_dhcp() {
+            app.set_status("DHCP request failed", true);
+            return;
+        }
+        app.log_change(Route::NetObservatory, "mode", "Switched to DHCP", false);
+    } else {
+        let ip_len = app.net_obs.edit_ip_len;
+        let gw_len = app.net_obs.edit_gw_len;
+        let prefix = app.net_obs.edit_prefix;
+        let ip = parse_ip(&app.net_obs.edit_ip[..ip_len]);
+        let gw = parse_ip(&app.net_obs.edit_gateway[..gw_len]);
+        if let Err(_) = net::net_static_ip(ip, prefix, gw) {
+            app.set_status("Static IP set failed", true);
+            return;
+        }
+        app.log_change(Route::NetObservatory, "mode", "Switched to static", false);
+
+        let d1_len = app.net_obs.edit_dns1_len;
+        let d2_len = app.net_obs.edit_dns2_len;
+        let d1 = parse_ip(&app.net_obs.edit_dns1[..d1_len]);
+        let d2 = parse_ip(&app.net_obs.edit_dns2[..d2_len]);
+        let servers = [d1, d2];
+        let _ = net::dns_set_servers(&servers);
+    }
+
+    app.net_obs.refresh();
+    app.set_status("Network config applied", false);
+}
+
+pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
+    if let Some(field) = app.net_obs.editing_field {
+        match scancode {
+            0x01 => {
+                app.net_obs.editing_field = None;
+            }
+            0x1C => {
+                app.net_obs.editing_field = None;
+                app.mark_edited(Route::NetObservatory, field_name(field));
+            }
+            0x0E => {
+                app.net_obs.text_backspace(field);
+                app.mark_edited(Route::NetObservatory, field_name(field));
+            }
+            _ => {
+                if let Some(ch) = scancode_to_char(scancode) {
+                    app.net_obs.text_insert(field, ch);
+                    app.mark_edited(Route::NetObservatory, field_name(field));
+                }
+            }
+        }
+        app.frame_dirty = true;
+    }
+}
+
+pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
+    let row_h = (widgets::FONT_H + 8) as i32;
+    let idx = ((py - 40) / row_h).max(0) as usize;
+    if idx < FIELD_COUNT {
+        app.pane_focus = idx;
+        activate(app, idx);
     }
 }
 
 pub fn render(app: &SettingsApp) {
-    let s = app.surface;
-    let st = app.fb_stride;
-    let w = app.fb_w;
-    let h = app.fb_h;
     let t = &app.theme;
     let net = &app.net_obs;
 

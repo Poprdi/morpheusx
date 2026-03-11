@@ -2,7 +2,7 @@
 // no canvas abstraction. no trait dispatch. just pointer math and pixel writes.
 // this is a standalone process with its own mapped surface.
 
-use crate::theme::OneiricTheme;
+
 
 // vga 8x16 font constants
 pub const FONT_W: u32 = 8;

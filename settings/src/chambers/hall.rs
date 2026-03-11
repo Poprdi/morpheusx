@@ -73,48 +73,6 @@ impl HallChamber {
         FIELD_COUNT
     }
 
-    pub fn activate(&mut self, idx: usize, app: &mut SettingsApp) {
-        if idx < PRESET_COUNT {
-            self.selected = idx;
-            self.preview_active = true;
-            // live preview — apply theme immediately
-            self.apply_theme_preview(app);
-            app.set_status("Previewing preset. Enter on Apply to commit.", false);
-        } else if idx == FIELD_APPLY {
-            self.apply(app);
-        }
-    }
-
-    fn apply_theme_preview(&self, app: &mut SettingsApp) {
-        let p = &PRESETS[self.selected];
-        let base = if p.dark { OneiricTheme::dark() } else { OneiricTheme::light() };
-        let accent = theme::pack(p.accent_r, p.accent_g, p.accent_b);
-
-        app.theme = base;
-        app.theme.signal = accent;
-        app.theme.focus_ring = accent;
-        app.theme.rail_active = accent;
-
-        // sync mirror chamber state
-        app.mirror.dark_mode = p.dark;
-        // find closest accent idx
-        app.mirror.accent_idx = 0;
-
-        app.frame_dirty = true;
-    }
-
-    pub fn apply(&mut self, app: &mut SettingsApp) {
-        if !self.preview_active {
-            app.set_status("Select a preset first", false);
-            return;
-        }
-        self.apply_theme_preview(app);
-        app.mirror.apply();
-        self.preview_active = false;
-        app.log_change(Route::HallOfMasks, "preset", PRESETS[self.selected].name, false);
-        app.set_status("Preset applied", false);
-    }
-
     pub fn revert(&mut self) {
         self.preview_active = false;
     }
@@ -123,17 +81,57 @@ impl HallChamber {
         self.selected = 0;
         self.preview_active = false;
     }
+}
 
-    pub fn handle_key(&mut self, _scancode: u8, _app: &mut SettingsApp) {}
+pub fn activate(app: &mut SettingsApp, idx: usize) {
+    if idx < PRESET_COUNT {
+        app.hall.selected = idx;
+        app.hall.preview_active = true;
+        apply_theme_preview(app);
+        app.set_status("Previewing preset. Enter on Apply to commit.", false);
+    } else if idx == FIELD_APPLY {
+        apply(app);
+    }
+}
 
-    pub fn handle_click(&mut self, _px: i32, py: i32, app: &mut SettingsApp) {
-        let row_h = (widgets::FONT_H + 12) as i32;
-        let header = 60i32;
-        let idx = ((py - header) / row_h).max(0) as usize;
-        if idx < FIELD_COUNT {
-            app.pane_focus = idx;
-            self.activate(idx, app);
-        }
+fn apply_theme_preview(app: &mut SettingsApp) {
+    let sel = app.hall.selected;
+    let p = &PRESETS[sel];
+    let base = if p.dark { OneiricTheme::dark() } else { OneiricTheme::light() };
+    let accent = theme::pack(p.accent_r, p.accent_g, p.accent_b);
+
+    app.theme = base;
+    app.theme.signal = accent;
+    app.theme.focus_ring = accent;
+    app.theme.rail_active = accent;
+
+    app.mirror.dark_mode = p.dark;
+    app.mirror.accent_idx = 0;
+    app.frame_dirty = true;
+}
+
+pub fn apply(app: &mut SettingsApp) {
+    if !app.hall.preview_active {
+        app.set_status("Select a preset first", false);
+        return;
+    }
+    apply_theme_preview(app);
+    app.mirror.apply();
+    app.hall.preview_active = false;
+    let name = PRESETS[app.hall.selected].name;
+    app.log_change(Route::HallOfMasks, "preset", name, false);
+    app.set_status("Preset applied", false);
+}
+
+pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
+
+pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
+    let row_h = (widgets::FONT_H + 12) as i32;
+    let header = 60i32;
+    let idx = ((py - header) / row_h).max(0) as usize;
+    if idx < FIELD_COUNT {
+        app.pane_focus = idx;
+        activate(app, idx);
     }
 }
 
