@@ -266,9 +266,8 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     }
 }
 
-/// 1:1 blit from surface buffer to framebuffer. no scaling. clips to both window and FB bounds.
-/// the window is a viewport into the top-left of the app's full-resolution surface.
-/// apps render at native FB res. we show as many pixels as fit. text stays sharp.
+/// Scale full source surface into the window rectangle.
+/// Bilinear sampling keeps resized windows from looking like crunchy nearest-neighbor soup.
 fn blit_surface(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -276,13 +275,17 @@ fn blit_surface(
     dst_y: i32,
     dst_w: u32,
     dst_h: u32,
-    _src_w: u32,
-    _src_h: u32,
+    src_w: u32,
+    src_h: u32,
     src_stride: u32,
     surface_ptr: *const u32,
     surface_pages: u64,
 ) {
-    let src_stride = src_stride.max(1);
+    let src_w = src_w.max(1);
+    let src_h = src_h.max(1);
+    let src_stride = src_stride.max(src_w).max(1);
+    let dst_w = dst_w.max(1);
+    let dst_h = dst_h.max(1);
     let fb_stride = state.fb_stride;
     let mapped_pixels = (surface_pages as usize).saturating_mul(4096 / 4);
 
@@ -295,28 +298,88 @@ fn blit_surface(
         return;
     }
 
-    // source offset: if dst_x < 0 we skip into the source by that many pixels
-    let src_x_off = (x0 as i32 - dst_x) as u32;
-    let src_y_off = (y0 as i32 - dst_y) as u32;
+    #[inline(always)]
+    fn lerp8(a: u32, b: u32, t: u32) -> u32 {
+        // fixed-point blend, t in [0, 65535]
+        ((a * (65535 - t)) + (b * t)) >> 16
+    }
 
-    // 1:1 copy. one source pixel = one destination pixel. the compiler can auto-vectorize this.
+    #[inline(always)]
+    fn bilerp(c00: u32, c10: u32, c01: u32, c11: u32, tx: u32, ty: u32) -> u32 {
+        let b00 = c00 & 0x0000_00FF;
+        let g00 = (c00 >> 8) & 0xFF;
+        let r00 = (c00 >> 16) & 0xFF;
+
+        let b10 = c10 & 0x0000_00FF;
+        let g10 = (c10 >> 8) & 0xFF;
+        let r10 = (c10 >> 16) & 0xFF;
+
+        let b01 = c01 & 0x0000_00FF;
+        let g01 = (c01 >> 8) & 0xFF;
+        let r01 = (c01 >> 16) & 0xFF;
+
+        let b11 = c11 & 0x0000_00FF;
+        let g11 = (c11 >> 8) & 0xFF;
+        let r11 = (c11 >> 16) & 0xFF;
+
+        let bx0 = lerp8(b00, b10, tx);
+        let gx0 = lerp8(g00, g10, tx);
+        let rx0 = lerp8(r00, r10, tx);
+
+        let bx1 = lerp8(b01, b11, tx);
+        let gx1 = lerp8(g01, g11, tx);
+        let rx1 = lerp8(r01, r11, tx);
+
+        let b = lerp8(bx0, bx1, ty);
+        let g = lerp8(gx0, gx1, ty);
+        let r = lerp8(rx0, rx1, ty);
+
+        b | (g << 8) | (r << 16)
+    }
+
+    // map each destination pixel into source space so windows resize live.
     unsafe {
         for dy in y0..y1 {
-            let sy = src_y_off + (dy - y0);
             let dst_row = dy * fb_stride;
-            let src_row = sy * src_stride;
-            if (src_row + src_x_off) as usize >= mapped_pixels {
-                break;
+            let local_y = (dy as i32 - dst_y) as u64;
+            let sy_fp = (local_y << 16).saturating_mul(src_h as u64) / dst_h as u64;
+            let sy0 = ((sy_fp >> 16) as u32).min(src_h - 1);
+            let sy1 = (sy0 + 1).min(src_h - 1);
+            let ty = (sy_fp as u32) & 0xFFFF;
+
+            let src_row0 = sy0 * src_stride;
+            let src_row1 = sy1 * src_stride;
+            if src_row0 as usize >= mapped_pixels || src_row1 as usize >= mapped_pixels {
+                continue;
             }
 
             for dx in x0..x1 {
-                let sx = src_x_off + (dx - x0);
-                let src_off = (src_row + sx) as usize;
-                if src_off >= mapped_pixels {
-                    break;
+                let local_x = (dx as i32 - dst_x) as u64;
+                let sx_fp = (local_x << 16).saturating_mul(src_w as u64) / dst_w as u64;
+                let sx0 = ((sx_fp >> 16) as u32).min(src_w - 1);
+                let sx1 = (sx0 + 1).min(src_w - 1);
+                let tx = (sx_fp as u32) & 0xFFFF;
+
+                let off00 = (src_row0 + sx0) as usize;
+                let off10 = (src_row0 + sx1) as usize;
+                let off01 = (src_row1 + sx0) as usize;
+                let off11 = (src_row1 + sx1) as usize;
+                if off00 >= mapped_pixels
+                    || off10 >= mapped_pixels
+                    || off01 >= mapped_pixels
+                    || off11 >= mapped_pixels
+                {
+                    continue;
                 }
+
+                let c00 = *surface_ptr.add(off00);
+                let c10 = *surface_ptr.add(off10);
+                let c01 = *surface_ptr.add(off01);
+                let c11 = *surface_ptr.add(off11);
+                let out = bilerp(c00, c10, c01, c11, tx, ty);
+
                 let dst_off = (dst_row + dx) as usize;
-                *fb_ptr.add(dst_off) = *surface_ptr.add(src_off);
+                *fb_ptr.add(dst_off) = out;
             }
         }
     }

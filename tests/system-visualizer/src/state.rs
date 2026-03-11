@@ -156,8 +156,10 @@ impl SystemState {
         let now = time::clock_gettime();
         let _elapsed_ns = now.saturating_sub(self.prev_poll_ns).max(1);
 
-        let mut info = SysInfo::zeroed();
-        let _ = sys::sysinfo(&mut info);
+        let mut info = Box::new(SysInfo::zeroed());
+        if sys::sysinfo(&mut *info).is_err() {
+            return;
+        }
         self.total_mem = info.total_mem;
         self.free_mem = info.free_mem;
         self.heap_total = info.heap_total;
@@ -177,7 +179,15 @@ impl SystemState {
         // -- accumulate this poll's deltas into the 1-second window --
         for i in 0..count {
             let r = &raw[i];
-            let prev_tsc = self.find_prev_cpu_tsc(r.pid);
+            let prev_tsc = match self.find_prev_cpu_tsc(r.pid) {
+                Some(v) => v,
+                None => {
+                    // First sample for this PID: seed baseline and skip this poll
+                    // so we don't treat lifetime cpu_tsc as a 250ms delta.
+                    self.set_prev_cpu_tsc(r.pid, r.cpu_tsc);
+                    continue;
+                }
+            };
             let delta_tsc = r.cpu_tsc.wrapping_sub(prev_tsc);
             let slot = self.acc_slot_for_pid(r.pid);
             self.acc_cpu_tsc[slot] = self.acc_cpu_tsc[slot].saturating_add(delta_tsc);
@@ -235,15 +245,8 @@ impl SystemState {
             };
         }
 
-        self.prev_cpu_tsc_count = 0;
         for i in 0..count {
-            if self.prev_cpu_tsc_count >= MAX_PROCS {
-                break;
-            }
-            let s = self.prev_cpu_tsc_count;
-            self.prev_cpu_tsc_pids[s] = self.procs[i].pid;
-            self.prev_cpu_tsc_vals[s] = self.procs[i].cpu_tsc;
-            self.prev_cpu_tsc_count += 1;
+            self.set_prev_cpu_tsc(self.procs[i].pid, self.procs[i].cpu_tsc);
         }
 
         self.prev_uptime_ticks = info.uptime_ticks;
@@ -311,13 +314,35 @@ impl SystemState {
             .position(|p| p.pid == pid)
     }
 
-    fn find_prev_cpu_tsc(&self, pid: u32) -> u64 {
+    fn find_prev_cpu_tsc(&self, pid: u32) -> Option<u64> {
         for i in 0..self.prev_cpu_tsc_count {
             if self.prev_cpu_tsc_pids[i] == pid {
-                return self.prev_cpu_tsc_vals[i];
+                return Some(self.prev_cpu_tsc_vals[i]);
             }
         }
-        0
+        None
+    }
+
+    fn set_prev_cpu_tsc(&mut self, pid: u32, val: u64) {
+        for i in 0..self.prev_cpu_tsc_count {
+            if self.prev_cpu_tsc_pids[i] == pid {
+                self.prev_cpu_tsc_vals[i] = val;
+                return;
+            }
+        }
+
+        if self.prev_cpu_tsc_count < MAX_PROCS {
+            let s = self.prev_cpu_tsc_count;
+            self.prev_cpu_tsc_pids[s] = pid;
+            self.prev_cpu_tsc_vals[s] = val;
+            self.prev_cpu_tsc_count += 1;
+            return;
+        }
+
+        // Bounded replacement when PID map is full.
+        let victim = (pid as usize) % MAX_PROCS;
+        self.prev_cpu_tsc_pids[victim] = pid;
+        self.prev_cpu_tsc_vals[victim] = val;
     }
 
     /// Find or allocate an accumulator slot for `pid`.

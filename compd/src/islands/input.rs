@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, PANEL_H, TITLE_H};
+use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, TITLE_H};
 use crate::messages::InputMsg;
 use libmorpheus::{compositor as compsys, hw, io, process};
 
@@ -83,16 +83,6 @@ fn poll_mouse(state: &mut CompState) {
     }
 
     if left_pressed {
-        // panel area is always handled by shelld — intercept BEFORE window hit-test.
-        // this ensures the taskbar is always clickable even with overlapping windows.
-        let panel_top = (state.fb_h as i32).saturating_sub(PANEL_H as i32);
-        if state.mouse_y >= panel_top {
-            // re-forward with actual button state so shelld registers the click
-            forward_to_desktop(state, 0, 0, ms.buttons);
-            state.last_buttons = ms.buttons;
-            return;
-        }
-
         if let Some((idx, region)) = hit_test(state, state.mouse_x, state.mouse_y) {
             state.focused = Some(idx);
             match region {
@@ -128,7 +118,7 @@ fn poll_mouse(state: &mut CompState) {
                 HitRegion::Content => {}
             }
         } else {
-            // click on empty desktop — forward buttons to shelld
+            // no window hit: panel area goes to shelld, else desktop click also goes to shelld.
             forward_to_desktop(state, 0, 0, ms.buttons);
             state.last_buttons = ms.buttons;
             return;
