@@ -401,12 +401,50 @@ pub fn netup(args: &[String]) -> i32 {
         }
     }
 
+    match net::nic_info() {
+        Ok(info) => {
+            libmorpheus::println!(
+                "netup: pre-state present={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                info.present,
+                info.link_up,
+                info.mac[0],
+                info.mac[1],
+                info.mac[2],
+                info.mac[3],
+                info.mac[4],
+                info.mac[5]
+            );
+        }
+        Err(e) => {
+            libmorpheus::eprintln!("netup: nic_info pre-check failed: 0x{:x}", e);
+        }
+    }
+
     match net::net_activate() {
         Ok(rc) => {
             if rc == 0 {
                 libmorpheus::println!("netup: networking activated");
             } else {
                 libmorpheus::println!("netup: networking already active");
+            }
+
+            match net::nic_info() {
+                Ok(info) => {
+                    libmorpheus::println!(
+                        "netup: post-state present={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        info.present,
+                        info.link_up,
+                        info.mac[0],
+                        info.mac[1],
+                        info.mac[2],
+                        info.mac[3],
+                        info.mac[4],
+                        info.mac[5]
+                    );
+                }
+                Err(e) => {
+                    libmorpheus::eprintln!("netup: nic_info post-check failed: 0x{:x}", e);
+                }
             }
             0
         }
@@ -434,12 +472,64 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
         }
     }
 
+    match net::nic_info() {
+        Ok(info) => {
+            con.write_str(
+                fb,
+                &format!(
+                    "netup: pre-state present={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                    info.present,
+                    info.link_up,
+                    info.mac[0],
+                    info.mac[1],
+                    info.mac[2],
+                    info.mac[3],
+                    info.mac[4],
+                    info.mac[5]
+                ),
+            );
+        }
+        Err(e) => {
+            con.write_colored(
+                fb,
+                &format!("netup: nic_info pre-check failed: 0x{:x}\n", e),
+                (170, 0, 0),
+            );
+        }
+    }
+
     match net::net_activate() {
         Ok(rc) => {
             if rc == 0 {
                 con.write_str(fb, "netup: networking activated\n");
             } else {
                 con.write_str(fb, "netup: networking already active\n");
+            }
+
+            match net::nic_info() {
+                Ok(info) => {
+                    con.write_str(
+                        fb,
+                        &format!(
+                            "netup: post-state present={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                            info.present,
+                            info.link_up,
+                            info.mac[0],
+                            info.mac[1],
+                            info.mac[2],
+                            info.mac[3],
+                            info.mac[4],
+                            info.mac[5]
+                        ),
+                    );
+                }
+                Err(e) => {
+                    con.write_colored(
+                        fb,
+                        &format!("netup: nic_info post-check failed: 0x{:x}\n", e),
+                        (170, 0, 0),
+                    );
+                }
             }
             0
         }
