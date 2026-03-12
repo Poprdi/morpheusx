@@ -256,6 +256,7 @@ impl SettingsApp {
 
     pub fn init(&mut self) {
         self.frame_dirty = true;
+        crate::chambers::mirror::sync_from_global(self);
         self.net_obs.refresh();
         self.sys_obs.refresh();
         self.mist.refresh();

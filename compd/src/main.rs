@@ -30,8 +30,22 @@ fn main() -> i32 {
     let mut state =
         islands::CompState::new(fb_ptr, fb_info.width, fb_info.height, fb_stride_px, is_bgrx);
 
+    if let Some(a) = libmorpheus::desktop::DesktopAppearance::load() {
+        state.apply_desktop_appearance(&a);
+    }
+
+    let mut last_appearance_poll_ms = 0u64;
+
     // 5. enter main vsync loop
     loop {
+        let now_ms = libmorpheus::time::uptime_ms();
+        if now_ms.saturating_sub(last_appearance_poll_ms) >= 400 {
+            if let Some(a) = libmorpheus::desktop::DesktopAppearance::load() {
+                state.apply_desktop_appearance(&a);
+            }
+            last_appearance_poll_ms = now_ms;
+        }
+
         islands::vsync::tick(&mut state);
         islands::input::poll(&mut state);
         islands::surface_mgr::update(&mut state);

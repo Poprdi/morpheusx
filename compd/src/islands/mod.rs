@@ -13,12 +13,9 @@ pub const TITLE_H: u32 = 22;
 pub const BORDER: u32 = 1;
 pub const CASCADE_STEP: i32 = 28;
 
-pub const TITLE_FOCUSED_RGB: (u8, u8, u8) = (0, 85, 0);
 pub const TITLE_UNFOCUSED_RGB: (u8, u8, u8) = (40, 40, 40);
 pub const TITLE_TEXT_RGB: (u8, u8, u8) = (255, 255, 255);
-pub const BORDER_FOCUSED_RGB: (u8, u8, u8) = (0, 170, 0);
 pub const BORDER_UNFOCUSED_RGB: (u8, u8, u8) = (85, 85, 85);
-pub const DESKTOP_RGB: (u8, u8, u8) = (26, 26, 46);
 pub const CURSOR_RGB: (u8, u8, u8) = (255, 255, 255);
 
 // shelld's panel height. hardcoded here so compd can re-blit it above windows.
@@ -93,6 +90,10 @@ pub struct CompState {
     pub last_buttons: u8,
     pub capture: Option<MouseCapture>,
 
+    pub desktop_rgb: (u8, u8, u8),
+    pub title_focused_rgb: (u8, u8, u8),
+    pub border_focused_rgb: (u8, u8, u8),
+
     // --- channels (SPSC) ---
     pub ch_input_to_focus: Channel<InputMsg, 16>,
     pub ch_mouse_spatial: Channel<MouseSpatialMsg, 32>,
@@ -117,6 +118,9 @@ impl CompState {
             mouse_y: (fb_h / 2) as i32,
             last_buttons: 0,
             capture: None,
+            desktop_rgb: (26, 26, 46),
+            title_focused_rgb: (0, 85, 0),
+            border_focused_rgb: (0, 170, 0),
             ch_input_to_focus: Channel::new(),
             ch_mouse_spatial: Channel::new(),
             ch_mouse_route: Channel::new(),
@@ -131,6 +135,12 @@ impl CompState {
         } else {
             (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
         }
+    }
+
+    pub fn apply_desktop_appearance(&mut self, a: &libmorpheus::desktop::DesktopAppearance) {
+        self.desktop_rgb = a.desktop_rgb;
+        self.title_focused_rgb = a.title_focus_rgb;
+        self.border_focused_rgb = a.border_focus_rgb;
     }
 }
 

@@ -60,7 +60,21 @@ fn main() -> i32 {
         is_bgrx,
     );
 
+    if let Some(a) = libmorpheus::desktop::DesktopAppearance::load() {
+        state.apply_desktop_appearance(&a);
+    }
+
+    let mut last_appearance_poll_ms = 0u64;
+
     loop {
+        let now_ms = libmorpheus::time::uptime_ms();
+        if now_ms.saturating_sub(last_appearance_poll_ms) >= 400 {
+            if let Some(a) = libmorpheus::desktop::DesktopAppearance::load() {
+                state.apply_desktop_appearance(&a);
+            }
+            last_appearance_poll_ms = now_ms;
+        }
+
         // render wallpaper (only when dirty — first frame)
         islands::wallpaper::tick(&mut state);
 
