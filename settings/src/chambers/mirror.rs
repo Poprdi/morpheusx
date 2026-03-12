@@ -118,15 +118,6 @@ fn rebuild_theme(app: &mut SettingsApp) {
 
 pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
 
-pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = layout::row_step(app, 8) as i32;
-    let idx = ((py - 40) / row_h).max(0) as usize;
-    if idx < FIELD_COUNT {
-        app.pane_focus = idx;
-        activate(app, idx);
-    }
-}
-
 pub fn render(app: &SettingsApp) {
     let t = &app.theme;
     let mirror = &app.mirror;

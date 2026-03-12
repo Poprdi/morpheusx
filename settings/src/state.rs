@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::cell::{Cell, RefCell};
 
 
 use crate::chambers::{
@@ -8,7 +9,6 @@ use crate::chambers::{
 };
 use crate::layout;
 use crate::theme::OneiricTheme;
-use crate::widgets;
 
 // route ids — flat enum, zero-cost dispatch
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,8 +177,8 @@ pub struct SettingsApp {
     // tick counter for animations
     pub tick_count: u64,
 
-    pub hitboxes: [Hitbox; 128],
-    pub hitbox_count: usize,
+    pub hitboxes: RefCell<[Hitbox; 128]>,
+    pub hitbox_count: Cell<usize>,
 }
 
 impl SettingsApp {
@@ -228,14 +228,14 @@ impl SettingsApp {
 
             tick_count: 0,
 
-            hitboxes: [Hitbox {
+            hitboxes: RefCell::new([Hitbox {
                 x: 0,
                 y: 0,
                 w: 0,
                 h: 0,
                 widget_idx: 0,
-            }; 128],
-            hitbox_count: 0,
+            }; 128]),
+            hitbox_count: Cell::new(0),
         }
     }
 
@@ -548,20 +548,6 @@ impl SettingsApp {
         if let Some(idx) = self.hitbox_at(abs_x, abs_y) {
             self.pane_focus = idx;
             self.pane_activate();
-            return;
-        }
-
-        // fallback for clicks outside registered controls: pick nearest slot.
-        let count = self.pane_widget_count();
-        if count > 0 {
-            let pane_h = self
-                .fb_h
-                .saturating_sub(layout::STRIP_HEIGHT + layout::BAR_HEIGHT + 2 * layout::PANE_PAD)
-                .max(1);
-            let y = pane_y.max(0) as u32;
-            let idx = ((y as u64 * count as u64) / pane_h as u64) as usize;
-            self.pane_focus = idx.min(count - 1);
-            self.pane_activate();
         }
     }
 
@@ -623,89 +609,40 @@ impl SettingsApp {
     }
 
     fn render(&mut self) {
+        self.clear_hitboxes();
         layout::render_frame(self);
-        self.rebuild_hitboxes();
     }
 
-    fn clear_hitboxes(&mut self) {
-        self.hitbox_count = 0;
+    fn clear_hitboxes(&self) {
+        self.hitbox_count.set(0);
     }
 
-    fn push_hitbox(&mut self, x: i32, y: i32, w: i32, h: i32, widget_idx: usize) {
-        if self.hitbox_count >= self.hitboxes.len() || w <= 0 || h <= 0 {
+    pub fn register_widget_hitbox(&self, x: u32, y: u32, w: u32, h: u32, widget_idx: usize) {
+        self.push_hitbox(x as i32, y as i32, w as i32, h as i32, widget_idx);
+    }
+
+    fn push_hitbox(&self, x: i32, y: i32, w: i32, h: i32, widget_idx: usize) {
+        let count = self.hitbox_count.get();
+        if count >= 128 || w <= 0 || h <= 0 {
             return;
         }
-        self.hitboxes[self.hitbox_count] = Hitbox {
+        let mut hitboxes = self.hitboxes.borrow_mut();
+        hitboxes[count] = Hitbox {
             x,
             y,
             w,
             h,
             widget_idx,
         };
-        self.hitbox_count += 1;
-    }
-
-    fn rebuild_hitboxes(&mut self) {
-        self.clear_hitboxes();
-
-        let count = self.pane_widget_count();
-        if count == 0 {
-            return;
-        }
-
-        let px = layout::RAIL_WIDTH as i32 + layout::PANE_PAD as i32;
-        let pw = (self.fb_w.saturating_sub(layout::RAIL_WIDTH + 2 * layout::PANE_PAD)) as i32;
-        if pw <= 0 {
-            return;
-        }
-
-        match self.route {
-            Route::Gateway => {
-                let row_h = layout::row_step(self, 8) as i32;
-                let base_y = layout::STRIP_HEIGHT as i32 + 2 * row_h;
-                for i in 0..count {
-                    let y = base_y + i as i32 * row_h;
-                    self.push_hitbox(px, y, pw, row_h.max(14), i);
-                }
-            }
-            Route::NetObservatory | Route::SysObservatory | Route::MistShore | Route::MirrorBasin => {
-                let row_h = layout::row_step(self, 8) as i32;
-                let base_y = layout::STRIP_HEIGHT as i32 + 40;
-                for i in 0..count {
-                    let y = base_y + i as i32 * row_h;
-                    self.push_hitbox(px, y, pw, row_h.max(14), i);
-                }
-            }
-            Route::HallOfMasks => {
-                let row_h = (widgets::FONT_H + 12) as i32;
-                let base_y = layout::STRIP_HEIGHT as i32 + 60;
-                for i in 0..count {
-                    let y = base_y + i as i32 * row_h;
-                    self.push_hitbox(px, y, pw, row_h.max(14), i);
-                }
-            }
-            Route::Archive => {
-                // row picks in the log table (index 3 + visible row).
-                let row_h = (widgets::FONT_H + 4) as i32;
-                let table_y = layout::STRIP_HEIGHT as i32 + 60;
-                let half = (pw / 2).max(20);
-                self.push_hitbox(px, table_y - row_h, half, row_h, 0);
-                self.push_hitbox(px + half, table_y - row_h, pw - half, row_h, 1);
-                self.push_hitbox(px, table_y - 2 * row_h, pw, row_h, 2);
-
-                let rows = count.saturating_sub(3);
-                for i in 0..rows {
-                    let y = table_y + i as i32 * row_h;
-                    self.push_hitbox(px, y, pw, row_h.max(14), i + 3);
-                }
-            }
-        }
+        self.hitbox_count.set(count + 1);
     }
 
     fn hitbox_at(&self, x: i32, y: i32) -> Option<usize> {
         // last one wins in case of overlap
-        for i in (0..self.hitbox_count).rev() {
-            let hb = self.hitboxes[i];
+        let count = self.hitbox_count.get();
+        let hitboxes = self.hitboxes.borrow();
+        for i in (0..count).rev() {
+            let hb = hitboxes[i];
             if x >= hb.x && y >= hb.y && x < hb.x + hb.w && y < hb.y + hb.h {
                 return Some(hb.widget_idx);
             }

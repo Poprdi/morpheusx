@@ -125,16 +125,6 @@ pub fn apply(app: &mut SettingsApp) {
 
 pub fn handle_key(_app: &mut SettingsApp, _scancode: u8) {}
 
-pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = (widgets::FONT_H + 12) as i32;
-    let header = 60i32;
-    let idx = ((py - header) / row_h).max(0) as usize;
-    if idx < FIELD_COUNT {
-        app.pane_focus = idx;
-        activate(app, idx);
-    }
-}
-
 pub fn render(app: &SettingsApp) {
     let s = app.surface;
     let st = app.fb_stride;
@@ -163,6 +153,7 @@ pub fn render(app: &SettingsApp) {
 
         let card_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
         let card_h = widgets::FONT_H * 2 + 12;
+        app.register_widget_hitbox(px, cy, card_w, card_h, i);
         let card_bg = if is_selected { t.surface } else { t.substrate };
 
         widgets::fill_rect(s, st, px, cy, card_w, card_h, card_bg, w, h);
