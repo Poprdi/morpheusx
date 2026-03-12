@@ -508,6 +508,9 @@ fn parse_ip(buf: &[u8]) -> u32 {
 }
 
 pub fn scancode_to_char(sc: u8) -> Option<u8> {
+    if sc.is_ascii_graphic() || sc == b' ' {
+        return Some(sc.to_ascii_lowercase());
+    }
     match sc {
         0x02..=0x0A => Some(b'1' + (sc - 0x02)),
         0x0B => Some(b'0'),
