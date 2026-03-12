@@ -8,6 +8,8 @@ use crate::widgets;
 
 use libmorpheus::net;
 
+const ENODEV: u64 = u64::MAX - 19;
+
 // editable field indices
 const FIELD_MODE_DHCP: usize = 0;
 const FIELD_MODE_STATIC: usize = 1;
@@ -37,6 +39,7 @@ pub struct NetObsChamber {
     pub hostname_len: usize,
     pub link_up: bool,
     pub mtu: u32,
+    pub stack_available: bool,
 
     // stats
     pub tx_packets: u64,
@@ -77,6 +80,7 @@ impl NetObsChamber {
             hostname_len: 0,
             link_up: false,
             mtu: 0,
+            stack_available: false,
             tx_packets: 0,
             rx_packets: 0,
             tx_bytes: 0,
@@ -114,7 +118,10 @@ impl NetObsChamber {
             self.hostname[..hlen].copy_from_slice(&cfg.hostname[..hlen]);
             self.hostname_len = hlen;
 
-            self.edit_dhcp = (cfg.flags & net::NET_FLAG_DHCP) != 0;
+            // keep DHCP default-on when stack is still unconfigured.
+            if cfg.state != 0 {
+                self.edit_dhcp = (cfg.flags & net::NET_FLAG_DHCP) != 0;
+            }
 
             // populate edit fields from live state
             self.sync_edit_from_live();
@@ -124,11 +131,17 @@ impl NetObsChamber {
             self.link_up = info.link_up != 0;
         }
 
-        if let Ok(stats) = net::net_stats() {
-            self.tx_packets = stats.tx_packets;
-            self.rx_packets = stats.rx_packets;
-            self.tx_bytes = stats.tx_bytes;
-            self.rx_bytes = stats.rx_bytes;
+        match net::net_stats() {
+            Ok(stats) => {
+                self.tx_packets = stats.tx_packets;
+                self.rx_packets = stats.rx_packets;
+                self.tx_bytes = stats.tx_bytes;
+                self.rx_bytes = stats.rx_bytes;
+                self.stack_available = true;
+            }
+            Err(_) => {
+                self.stack_available = false;
+            }
         }
     }
 
@@ -139,7 +152,7 @@ impl NetObsChamber {
 
         // ip
         self.edit_ip_len = widgets::format_ip(self.ip, &mut self.edit_ip);
-        self.edit_prefix = self.prefix_len;
+        self.edit_prefix = if self.prefix_len == 0 { 24 } else { self.prefix_len };
         self.edit_gw_len = widgets::format_ip(self.gateway, &mut self.edit_gateway);
         self.edit_dns1_len = widgets::format_ip(self.dns1, &mut self.edit_dns1);
         self.edit_dns2_len = widgets::format_ip(self.dns2, &mut self.edit_dns2);
@@ -187,6 +200,64 @@ impl NetObsChamber {
     }
 }
 
+fn run_dhcp_request(app: &mut SettingsApp, source: &'static str) -> bool {
+    // force mode to DHCP for this action regardless of previous UI mode.
+    app.net_obs.edit_dhcp = true;
+    libmorpheus::println!("[settings/net] dhcp request source={}", source);
+
+    match net::net_dhcp() {
+        Ok(()) => {
+            // keep driving the stack for a short burst to surface lease progress.
+            for _ in 0..256 {
+                let _ = net::nic_refill();
+                let _ = net::net_poll_drive(libmorpheus::time::uptime_ms());
+            }
+            app.net_obs.refresh();
+
+            let mut ip_buf = [0u8; 16];
+            let ip_len = widgets::format_ip(app.net_obs.ip, &mut ip_buf);
+            let ip = core::str::from_utf8(&ip_buf[..ip_len]).unwrap_or("0.0.0.0");
+            if app.net_obs.ip != 0 {
+                app.set_status("DHCP lease updated", false);
+                libmorpheus::println!(
+                    "[settings/net] dhcp lease ip={} gw=0x{:08x} dns1=0x{:08x} state={}",
+                    ip,
+                    app.net_obs.gateway,
+                    app.net_obs.dns1,
+                    app.net_obs.state
+                );
+            } else {
+                app.set_status("DHCP requested (no lease yet)", true);
+                libmorpheus::println!(
+                    "[settings/net] dhcp pending state={} flags=0x{:08x}",
+                    app.net_obs.state,
+                    app.net_obs.flags
+                );
+            }
+            true
+        }
+        Err(e) => {
+            if e == ENODEV {
+                // NIC path is active, but stack ops are not registered in kernel yet.
+                libmorpheus::println!(
+                    "[settings/net] dhcp unavailable: ip stack not registered err=0x{:x}",
+                    e
+                );
+                app.set_status("DHCP unavailable: IP stack not registered", true);
+            } else {
+                libmorpheus::println!("[settings/net] dhcp request failed err=0x{:x}", e);
+                app.set_status("DHCP request failed", true);
+            }
+            false
+        }
+    }
+}
+
+#[inline]
+fn is_text_field(idx: usize) -> bool {
+    matches!(idx, FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2)
+}
+
 pub fn activate(app: &mut SettingsApp, idx: usize) {
     match idx {
         FIELD_MODE_DHCP => {
@@ -198,38 +269,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             app.mark_edited(Route::NetObservatory, "dhcp");
         }
         FIELD_DHCP_REQUEST => {
-            // DHCP can take a few polls to settle; drive it inline so UI reflects results now.
-            app.net_obs.edit_dhcp = true;
-            libmorpheus::io::print("[settings/net] dhcp request requested\n");
-            match net::net_dhcp() {
-                Ok(()) => {
-                    for _ in 0..128 {
-                        let _ = net::nic_refill();
-                        let _ = net::net_poll_drive(0);
-                    }
-                    app.net_obs.refresh();
-
-                    let mut ip_buf = [0u8; 16];
-                    let ip_len = widgets::format_ip(app.net_obs.ip, &mut ip_buf);
-                    let ip = core::str::from_utf8(&ip_buf[..ip_len]).unwrap_or("0.0.0.0");
-                    if app.net_obs.ip != 0 {
-                        app.set_status("DHCP requested (lease info refreshed)", false);
-                        libmorpheus::println!(
-                            "[settings/net] dhcp lease ip={} gw=0x{:08x} dns1=0x{:08x}",
-                            ip,
-                            app.net_obs.gateway,
-                            app.net_obs.dns1
-                        );
-                    } else {
-                        app.set_status("DHCP requested (no lease yet)", true);
-                        libmorpheus::println!("[settings/net] dhcp no lease yet");
-                    }
-                }
-                Err(e) => {
-                    libmorpheus::println!("[settings/net] dhcp request failed err=0x{:x}", e);
-                    app.set_status("DHCP request failed", true);
-                }
-            }
+            let _ = run_dhcp_request(app, "button");
         }
         FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2 => {
             app.net_obs.editing_field = Some(idx);
@@ -293,16 +333,19 @@ pub fn apply(app: &mut SettingsApp) -> bool {
 
     let dhcp = app.net_obs.edit_dhcp;
     if dhcp {
-        if let Err(_) = net::net_dhcp() {
-            app.set_status("DHCP request failed", true);
+        if !run_dhcp_request(app, "apply") {
             return false;
         }
         app.log_change(Route::NetObservatory, "mode", "Switched to DHCP", false);
     } else {
         let ip_len = app.net_obs.edit_ip_len;
         let gw_len = app.net_obs.edit_gw_len;
-        let prefix = app.net_obs.edit_prefix;
-        if prefix == 0 || prefix > 32 {
+        let mut prefix = app.net_obs.edit_prefix;
+        if prefix == 0 {
+            prefix = 24;
+            app.net_obs.edit_prefix = 24;
+        }
+        if prefix > 32 {
             app.set_status("Invalid prefix length", true);
             return false;
         }
@@ -377,6 +420,27 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
             }
         }
         app.frame_dirty = true;
+        return;
+    }
+
+    // start text editing immediately when the focused field gets typed into.
+    if is_text_field(app.pane_focus) {
+        match scancode {
+            0x0E => {
+                app.net_obs.editing_field = Some(app.pane_focus);
+                app.net_obs.text_backspace(app.pane_focus);
+                app.mark_edited(Route::NetObservatory, field_name(app.pane_focus));
+                app.frame_dirty = true;
+            }
+            _ => {
+                if let Some(ch) = scancode_to_char(scancode) {
+                    app.net_obs.editing_field = Some(app.pane_focus);
+                    app.net_obs.text_insert(app.pane_focus, ch);
+                    app.mark_edited(Route::NetObservatory, field_name(app.pane_focus));
+                    app.frame_dirty = true;
+                }
+            }
+        }
     }
 }
 
@@ -398,6 +462,11 @@ pub fn render(app: &SettingsApp) {
     let link_str = if net.link_up { "UP" } else { "DOWN" };
     let link_color = if net.link_up { t.success } else { t.destructive };
     layout::draw_kv(app, px, cy, "Link:", link_str, link_color);
+    cy += r2;
+
+    let stack_str = if net.stack_available { "ONLINE" } else { "OFFLINE" };
+    let stack_color = if net.stack_available { t.success } else { t.warning };
+    layout::draw_kv(app, px, cy, "IP Stack:", stack_str, stack_color);
     cy += r2;
 
     let mut mac_buf = [0u8; 17];
@@ -444,10 +513,8 @@ pub fn render(app: &SettingsApp) {
     layout::draw_button_row(app, px, cy, static_label, FIELD_MODE_STATIC, t.glyph);
     cy += r8;
 
-    if net.edit_dhcp {
-        layout::draw_button_row(app, px, cy, "Request IP (DHCP)", FIELD_DHCP_REQUEST, t.warning);
-        cy += r8;
-    }
+    layout::draw_button_row(app, px, cy, "Request IP (DHCP)", FIELD_DHCP_REQUEST, t.warning);
+    cy += r8;
 
     // hostname
     let hn = core::str::from_utf8(&net.edit_hostname[..net.edit_hostname_len]).unwrap_or("");

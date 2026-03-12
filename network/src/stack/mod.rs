@@ -42,6 +42,8 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
 pub use crate::device::pci::ecam_bases;
+pub use smoltcp::iface::SocketHandle;
+pub use smoltcp::socket::dns::QueryHandle as DnsQueryHandle;
 pub use interface::{NetConfig, NetInterface, NetState, MAX_TCP_SOCKETS};
 
 const MTU: usize = 1536;

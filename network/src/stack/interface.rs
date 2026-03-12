@@ -67,6 +67,10 @@ use smoltcp::socket::dns::{GetQueryResultError, Socket as DnsSocket};
 use smoltcp::socket::tcp::{
     Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState,
 };
+use smoltcp::socket::udp::{
+    PacketBuffer as UdpPacketBuffer, PacketMetadata as UdpPacketMetadata, Socket as UdpSocket,
+};
+use smoltcp::time::Duration;
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr};
 
@@ -142,6 +146,12 @@ pub const TCP_RX_BUFFER_SIZE: usize = 65535;
 /// TCP transmit buffer size.
 pub const TCP_TX_BUFFER_SIZE: usize = 65535;
 
+/// UDP packet metadata entry count.
+pub const UDP_PACKET_META_COUNT: usize = 8;
+
+/// UDP payload storage per direction.
+pub const UDP_PACKET_DATA_BYTES: usize = 8192;
+
 /// Full network interface with IP stack.
 ///
 /// Wraps a `NetworkDevice` with complete smoltcp integration.
@@ -205,11 +215,8 @@ impl<D: NetworkDevice> NetInterface<D> {
         super::set_debug_stage(16); // Stage 16: SocketSet created
         super::debug_log(16, "SocketSet created");
 
-        // Default DNS servers (Cloudflare and Google)
-        let default_dns_servers: &[IpAddress] = &[
-            IpAddress::v4(1, 1, 1, 1), // Cloudflare
-            IpAddress::v4(8, 8, 8, 8), // Google
-        ];
+        // Keep this list to one entry to match small DNS_MAX_SERVER_COUNT configs.
+        let default_dns_servers: &[IpAddress] = &[IpAddress::v4(1, 1, 1, 1)];
 
         // Create DNS socket with default servers
         super::set_debug_stage(17); // Stage 17: about to create DNS socket
@@ -324,6 +331,23 @@ impl<D: NetworkDevice> NetInterface<D> {
             })
     }
 
+    /// Override DNS servers for the interface.
+    pub fn set_dns_servers(&mut self, servers: &[Ipv4Addr]) -> Result<()> {
+        if servers.is_empty() {
+            return Err(NetworkError::DnsResolutionFailed);
+        }
+
+        let mut list: Vec<IpAddress> = Vec::with_capacity(servers.len());
+        for server in servers {
+            list.push(IpAddress::Ipv4(Ipv4Address::from_bytes(&server.octets())));
+        }
+
+        let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+        dns_socket.update_servers(&list);
+        self.dns = Some(Ipv4Address::from_bytes(&servers[0].octets()));
+        Ok(())
+    }
+
     /// Check DNS query result. Returns Ok(Some(ip)) if resolved, Ok(None) if pending, Err if failed.
     pub fn get_dns_result(
         &mut self,
@@ -392,29 +416,15 @@ impl<D: NetworkDevice> NetInterface<D> {
                         self.gateway = Some(router);
                     }
 
-                    // Update DNS servers: DHCP-provided first, then real-world fallbacks
-                    // This ensures QEMU/virtual DNS works while keeping real DNS for hardware
-                    let mut dns_addrs: Vec<IpAddress> =
-                        dns_servers.iter().map(|a| IpAddress::Ipv4(*a)).collect();
-
-                    // Add real-world DNS servers as fallbacks (for real hardware)
-                    // Only add if not already present from DHCP
-                    let cloudflare = IpAddress::v4(1, 1, 1, 1);
-                    let google = IpAddress::v4(8, 8, 8, 8);
-                    if !dns_addrs.contains(&cloudflare) {
-                        dns_addrs.push(cloudflare);
-                    }
-                    if !dns_addrs.contains(&google) {
-                        dns_addrs.push(google);
-                    }
-
-                    // Update DNS socket with combined servers
+                    // Update DNS server with a single preferred entry to avoid
+                    // panics when DNS_MAX_SERVER_COUNT is configured to 1.
+                    let primary_dns = dns_servers
+                        .first()
+                        .copied()
+                        .unwrap_or(Ipv4Address::new(1, 1, 1, 1));
                     let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
-                    dns_socket.update_servers(&dns_addrs);
-
-                    if !dns_servers.is_empty() {
-                        self.dns = Some(dns_servers[0]);
-                    }
+                    dns_socket.update_servers(&[IpAddress::Ipv4(primary_dns)]);
+                    self.dns = Some(primary_dns);
 
                     self.state = NetState::Ready;
                     super::debug_log(31, "DHCP state -> Ready");
@@ -511,6 +521,113 @@ impl<D: NetworkDevice> NetInterface<D> {
         socket.close();
     }
 
+    /// Start listening for inbound TCP on `port`.
+    pub fn tcp_listen(&mut self, handle: SocketHandle, port: u16) -> Result<()> {
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        socket.listen(port).map_err(|_| NetworkError::ConnectionFailed)
+    }
+
+    /// Returns true if the socket is currently in listening state.
+    pub fn tcp_is_listening(&self, handle: SocketHandle) -> bool {
+        let socket = self.sockets.get::<TcpSocket>(handle);
+        socket.is_listening()
+    }
+
+    /// Returns local port if bound.
+    pub fn tcp_local_port(&self, handle: SocketHandle) -> Option<u16> {
+        let socket = self.sockets.get::<TcpSocket>(handle);
+        socket.local_endpoint().map(|ep| ep.port)
+    }
+
+    /// Half-close TCP (write side).
+    pub fn tcp_shutdown(&mut self, handle: SocketHandle) -> Result<()> {
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        socket.close();
+        Ok(())
+    }
+
+    /// Toggle Nagle algorithm. `on = true` means TCP_NODELAY.
+    pub fn tcp_set_nodelay(&mut self, handle: SocketHandle, on: bool) {
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        socket.set_nagle_enabled(!on);
+    }
+
+    /// Set TCP keepalive interval in milliseconds. `0` disables.
+    pub fn tcp_set_keepalive(&mut self, handle: SocketHandle, interval_ms: u64) {
+        let socket = self.sockets.get_mut::<TcpSocket>(handle);
+        if interval_ms == 0 {
+            socket.set_keep_alive(None);
+        } else {
+            socket.set_keep_alive(Some(Duration::from_millis(interval_ms)));
+        }
+    }
+
+    /// Create a UDP socket and return its handle.
+    pub fn udp_socket(&mut self) -> Result<SocketHandle> {
+        let rx_meta = vec![UdpPacketMetadata::EMPTY; UDP_PACKET_META_COUNT];
+        let tx_meta = vec![UdpPacketMetadata::EMPTY; UDP_PACKET_META_COUNT];
+        let rx_data = vec![0u8; UDP_PACKET_DATA_BYTES];
+        let tx_data = vec![0u8; UDP_PACKET_DATA_BYTES];
+
+        let socket = UdpSocket::new(
+            UdpPacketBuffer::new(rx_meta, rx_data),
+            UdpPacketBuffer::new(tx_meta, tx_data),
+        );
+        Ok(self.sockets.add(socket))
+    }
+
+    /// Bind a UDP socket to local port.
+    pub fn udp_bind(&mut self, handle: SocketHandle, port: u16) -> Result<()> {
+        let socket = self.sockets.get_mut::<UdpSocket>(handle);
+        socket.bind(port).map_err(|_| NetworkError::ConnectionFailed)
+    }
+
+    /// Send a UDP datagram.
+    pub fn udp_send_to(
+        &mut self,
+        handle: SocketHandle,
+        remote_ip: Ipv4Addr,
+        remote_port: u16,
+        data: &[u8],
+    ) -> Result<usize> {
+        let remote = Ipv4Address::from_bytes(&remote_ip.octets());
+        let endpoint = IpEndpoint::new(IpAddress::Ipv4(remote), remote_port);
+        let local_port = self.ephemeral_port();
+
+        let socket = self.sockets.get_mut::<UdpSocket>(handle);
+        if !socket.is_open() {
+            socket
+                .bind(local_port)
+                .map_err(|_| NetworkError::ConnectionFailed)?;
+        }
+
+        socket
+            .send_slice(data, endpoint)
+            .map(|_| data.len())
+            .map_err(|_| NetworkError::SendFailed)
+    }
+
+    /// Receive a UDP datagram.
+    pub fn udp_recv_from(
+        &mut self,
+        handle: SocketHandle,
+        buffer: &mut [u8],
+    ) -> Result<(usize, Ipv4Addr, u16)> {
+        let socket = self.sockets.get_mut::<UdpSocket>(handle);
+        match socket.recv_slice(buffer) {
+            Ok((n, meta)) => {
+                let IpAddress::Ipv4(v4) = meta.endpoint.addr;
+                let octets = v4.as_bytes();
+                Ok((
+                    n,
+                    Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]),
+                    meta.endpoint.port,
+                ))
+            }
+            Err(_) => Ok((0, Ipv4Addr::new(0, 0, 0, 0), 0)),
+        }
+    }
+
     /// Remove a socket from the set.
     pub fn remove_socket(&mut self, handle: SocketHandle) {
         self.sockets.remove(handle);
@@ -519,6 +636,23 @@ impl<D: NetworkDevice> NetInterface<D> {
     /// Get TCP socket state.
     pub fn tcp_state(&self, handle: SocketHandle) -> TcpState {
         self.sockets.get::<TcpSocket>(handle).state()
+    }
+
+    /// Get TCP state as syscall ABI ordinal (0..10).
+    pub fn tcp_state_code(&self, handle: SocketHandle) -> u8 {
+        match self.tcp_state(handle) {
+            TcpState::Closed => 0,
+            TcpState::Listen => 1,
+            TcpState::SynSent => 2,
+            TcpState::SynReceived => 3,
+            TcpState::Established => 4,
+            TcpState::FinWait1 => 5,
+            TcpState::FinWait2 => 6,
+            TcpState::CloseWait => 7,
+            TcpState::Closing => 8,
+            TcpState::LastAck => 9,
+            TcpState::TimeWait => 10,
+        }
     }
 
     /// Generate an ephemeral port number.
@@ -541,3 +675,4 @@ impl<D: NetworkDevice> NetInterface<D> {
         &mut self.device.inner
     }
 }
+

@@ -306,7 +306,8 @@ impl SettingsApp {
 
         // mouse
         let ms = libmorpheus::hw::mouse_read();
-        if ms.dx != 0 || ms.dy != 0 || ms.buttons != 0 {
+        let buttons_changed = ms.buttons != self.last_buttons;
+        if ms.dx != 0 || ms.dy != 0 || buttons_changed {
             self.mouse_x = (self.mouse_x + ms.dx as i32).clamp(0, self.fb_w as i32 - 1);
             self.mouse_y = (self.mouse_y + ms.dy as i32).clamp(0, self.fb_h as i32 - 1);
 

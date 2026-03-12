@@ -15,6 +15,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 mod baremetal;
+mod baremetal_ops;
 mod bsod;
 mod storage;
 mod tui;
