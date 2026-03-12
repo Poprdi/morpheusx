@@ -3,6 +3,7 @@
 
 use crate::cpu::gdt::KERNEL_CS;
 use crate::serial::{newline, put_hex32, put_hex64, put_hex8, puts};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // IDT ENTRY
 
@@ -204,6 +205,7 @@ pub struct CrashInfo {
 pub type CrashHookFn = unsafe fn(&CrashInfo);
 
 static mut CRASH_HOOK: Option<CrashHookFn> = None;
+static RESET_ON_CRASH: AtomicBool = AtomicBool::new(false);
 
 /// Register the crash screen callback (typically called during boot init).
 ///
@@ -211,6 +213,11 @@ static mut CRASH_HOOK: Option<CrashHookFn> = None;
 /// Must be called during single-threaded init.
 pub unsafe fn set_crash_hook(hook: CrashHookFn) {
     CRASH_HOOK = Some(hook);
+}
+
+/// If set, fatal exceptions reset the machine after the crash hook runs.
+pub fn set_reset_on_crash(enable: bool) {
+    RESET_ON_CRASH.store(enable, Ordering::Relaxed);
 }
 
 /// Number of IDT entries
@@ -678,6 +685,13 @@ pub extern "C" fn exception_handler(
     unsafe {
         if let Some(hook) = CRASH_HOOK {
             hook(&info);
+        }
+    }
+
+    if RESET_ON_CRASH.load(Ordering::Relaxed) {
+        unsafe {
+            crate::cpu::reset::wait_for_keypress_or_timeout_ms(10_000);
+            crate::cpu::reset::reset_machine_now();
         }
     }
 

@@ -28,5 +28,6 @@ pub mod mmio;
 pub mod per_cpu;
 pub mod pic;
 pub mod pio;
+pub mod reset;
 pub mod sse;
 pub mod tsc;

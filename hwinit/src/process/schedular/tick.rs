@@ -31,6 +31,15 @@ unsafe fn ap_idle_hlt_loop() -> ! {
     }
 }
 
+#[inline(never)]
+unsafe fn ap_quiesce_hlt_loop(core_idx: u32) -> ! {
+    crate::cpu::per_cpu::shutdown_quiesce_ack(core_idx);
+    core::arch::asm!("cli", options(nostack, nomem));
+    loop {
+        core::arch::asm!("hlt", options(nostack, nomem));
+    }
+}
+
 unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
     let ctx = &mut AP_IDLE_CTX[core_idx as usize];
     let pcpu = crate::cpu::per_cpu::current();
@@ -59,10 +68,16 @@ unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
 
 #[no_mangle]
 pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static CpuContext {
-    let tick = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
-
-    let now_tsc = crate::cpu::tsc::read_tsc();
     let core_idx = this_core_index();
+
+    if crate::cpu::per_cpu::shutdown_quiesce_requested()
+        && !crate::cpu::per_cpu::is_reboot_owner(core_idx)
+    {
+        ap_quiesce_hlt_loop(core_idx);
+    }
+
+    let tick = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    let now_tsc = crate::cpu::tsc::read_tsc();
 
     if core_idx == 0 {
         crate::syscall::handler::fb_present_tick();
@@ -331,6 +346,12 @@ pub(super) unsafe fn wake_expired_sleepers() {
 }
 
 unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
+    if crate::cpu::per_cpu::shutdown_quiesce_requested()
+        && crate::cpu::per_cpu::is_reboot_owner(core_idx)
+    {
+        return 0;
+    }
+
     let n = MAX_PROCESSES;
     let is_bsp = core_idx == 0;
     let system_state = scheduler_system_state();
