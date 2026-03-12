@@ -143,6 +143,7 @@ pub const AHCI_DEVICE_WPT_LP: u16 = 0x9C83;
 
 /// Other supported AHCI device IDs
 pub const AHCI_DEVICE_IDS: &[u16] = &[
+    0x2922, // ICH9 AHCI (QEMU ich9-ahci)
     0x9C83, // Wildcat Point-LP (T450s)
     0x9C03, // Lynx Point-LP
     0x8C02, // 8 Series/C220
@@ -237,6 +238,28 @@ impl AhciDriver {
     /// - `abar` must be valid AHCI MMIO address (from BAR5)
     /// - `config` must contain valid DMA memory pointers/addresses
     pub unsafe fn new(abar: u64, config: AhciConfig) -> Result<Self, AhciInitError> {
+        Self::new_inner(abar, config, None)
+    }
+
+    /// Create and initialize AHCI driver on a specific port.
+    ///
+    /// # Safety
+    /// - `abar` must be valid AHCI MMIO address (from BAR5)
+    /// - `config` must contain valid DMA memory pointers/addresses
+    /// - `port_num` must be an AHCI port index (0..31)
+    pub unsafe fn new_on_port(
+        abar: u64,
+        config: AhciConfig,
+        port_num: u32,
+    ) -> Result<Self, AhciInitError> {
+        Self::new_inner(abar, config, Some(port_num))
+    }
+
+    unsafe fn new_inner(
+        abar: u64,
+        config: AhciConfig,
+        forced_port: Option<u32>,
+    ) -> Result<Self, AhciInitError> {
         // Validate config
         if config.cmd_list_cpu.is_null() || config.fis_cpu.is_null() {
             return Err(AhciInitError::InvalidConfig);
@@ -268,29 +291,44 @@ impl AhciDriver {
         asm_ahci_disable_interrupts(abar);
 
         // ═══════════════════════════════════════════════════════════════════
-        // STEP 4: Find first port with an attached ATA device
+        // STEP 4: Select ATA port
         // ═══════════════════════════════════════════════════════════════════
-        let mut active_port: Option<u32> = None;
-
-        for port in 0..32u32 {
-            if (ports_impl & (1 << port)) == 0 {
-                continue; // Port not implemented
+        let port_num = if let Some(port) = forced_port {
+            if port >= 32 || (ports_impl & (1 << port)) == 0 {
+                return Err(AhciInitError::NoDeviceFound);
             }
-
             let det = asm_ahci_port_detect(abar, port);
             if det != DET_PHY_COMM {
-                continue; // No device or not ready
+                return Err(AhciInitError::NoDeviceFound);
             }
-
-            // Check signature
             let sig = asm_ahci_port_read_sig(abar, port);
-            if sig == SIG_ATA {
-                active_port = Some(port);
-                break;
+            if sig != SIG_ATA {
+                return Err(AhciInitError::NoDeviceFound);
             }
-        }
+            port
+        } else {
+            let mut active_port: Option<u32> = None;
 
-        let port_num = active_port.ok_or(AhciInitError::NoDeviceFound)?;
+            for port in 0..32u32 {
+                if (ports_impl & (1 << port)) == 0 {
+                    continue; // Port not implemented
+                }
+
+                let det = asm_ahci_port_detect(abar, port);
+                if det != DET_PHY_COMM {
+                    continue; // No device or not ready
+                }
+
+                // Check signature
+                let sig = asm_ahci_port_read_sig(abar, port);
+                if sig == SIG_ATA {
+                    active_port = Some(port);
+                    break;
+                }
+            }
+
+            active_port.ok_or(AhciInitError::NoDeviceFound)?
+        };
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 5: Stop port and configure DMA structures

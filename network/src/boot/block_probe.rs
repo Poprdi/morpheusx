@@ -69,8 +69,11 @@ const VIRTIO_BLK_DEVICE_LEGACY: u16 = 0x1001;
 /// VirtIO-blk device ID (modern)
 const VIRTIO_BLK_DEVICE_MODERN: u16 = 0x1042;
 
-/// PCI Class code for SATA AHCI controller
-const PCI_CLASS_SATA_AHCI: u32 = 0x0106;
+/// PCI subclass/prog-if for SATA AHCI controller (0x06/0x01).
+///
+/// We compare against `(class_code >> 8) & 0xFFFF`, which yields
+/// subclass:prog_if (not class:subclass).
+const PCI_CLASS_SATA_AHCI: u32 = 0x0601;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROBE ERRORS
@@ -821,6 +824,39 @@ pub unsafe fn create_unified_from_detected(
                 Ok(UnifiedBlockDevice::VirtIO(driver))
             }
         }
+    }
+}
+
+/// Create a unified block device from a specific AHCI port on a detected controller.
+///
+/// Returns `NoDevice` for non-AHCI devices.
+///
+/// # Safety
+/// Same as `probe_unified_block_device`.
+pub unsafe fn create_unified_from_detected_ahci_port(
+    detected: &DetectedBlockDevice,
+    config: &BlockDmaConfig,
+    port_num: u32,
+) -> Result<UnifiedBlockDevice, UnifiedBlockError> {
+    match *detected {
+        DetectedBlockDevice::Ahci(info) => {
+            enable_pci_device(info.pci_addr);
+            let ahci_config = AhciConfig {
+                tsc_freq: config.tsc_freq,
+                cmd_list_cpu: config.ahci_cmd_list_cpu,
+                cmd_list_phys: config.ahci_cmd_list_phys,
+                fis_cpu: config.ahci_fis_cpu,
+                fis_phys: config.ahci_fis_phys,
+                cmd_tables_cpu: config.ahci_cmd_tables_cpu,
+                cmd_tables_phys: config.ahci_cmd_tables_phys,
+                identify_cpu: config.ahci_identify_cpu,
+                identify_phys: config.ahci_identify_phys,
+            };
+            let driver = AhciDriver::new_on_port(info.abar, ahci_config, port_num)
+                .map_err(|_| UnifiedBlockError::NoDevice)?;
+            Ok(UnifiedBlockDevice::Ahci(driver))
+        }
+        _ => Err(UnifiedBlockError::NoDevice),
     }
 }
 

@@ -30,8 +30,8 @@ use morpheus_hwinit::paging::is_paging_initialized;
 use morpheus_hwinit::serial::{log_error, log_info, log_ok, log_warn, puts};
 use morpheus_hwinit::{kmap_mmio, pci_cfg_read16, pci_cfg_read32, PciAddr};
 use morpheus_network::{
-    create_unified_from_detected, scan_all_block_devices, BlockDmaConfig, BlockDriver,
-    DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
+    create_unified_from_detected, create_unified_from_detected_ahci_port, scan_all_block_devices,
+    BlockDmaConfig, BlockDriver, DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
 };
 
 // DMA LAYOUT CONSTANTS
@@ -207,9 +207,144 @@ static mut STORAGE_DMA: Option<DmaRegion> = None;
 
 /// TSC frequency for timeout computation.
 static mut STORAGE_TSC_FREQ: u64 = 0;
+/// Start LBA of selected persistent region (0 = whole disk).
+static mut STORAGE_LBA_BASE: u64 = 0;
+/// Sector count of selected persistent region.
+static mut STORAGE_REGION_SECTORS: u64 = 0;
 
 /// Whether persistent storage was successfully initialized.
 static mut PERSISTENT_READY: bool = false;
+
+const GPT_SIG: &[u8; 8] = b"EFI PART";
+// EFI System Partition type GUID on disk (little-endian fields).
+const GPT_TYPE_ESP: [u8; 16] = [
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
+    0x3B,
+];
+
+#[derive(Clone, Copy)]
+struct DataRegion {
+    lba_start: u64,
+    sectors: u64,
+}
+
+#[inline(always)]
+fn le_u32(buf: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+}
+
+#[inline(always)]
+fn le_u64(buf: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes([
+        buf[off],
+        buf[off + 1],
+        buf[off + 2],
+        buf[off + 3],
+        buf[off + 4],
+        buf[off + 5],
+        buf[off + 6],
+        buf[off + 7],
+    ])
+}
+
+/// Select a writable data region from the currently active block device.
+///
+/// Policy:
+/// - GPT disk: pick first non-ESP partition
+/// - MBR-only disk: skip (treated as boot/system for now)
+/// - No partition table: whole disk is data region
+unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<DataRegion> {
+    let dev = BLOCK_DEVICE.as_mut()?;
+    let dma = STORAGE_DMA.as_ref()?;
+
+    let io_cpu = dma.cpu_base().add(OFF_IO_BUFFER);
+    let io_phys = dma.bus_at(OFF_IO_BUFFER);
+    let io_buf = core::slice::from_raw_parts_mut(io_cpu, IO_BUFFER_SIZE);
+    let timeout = STORAGE_TSC_FREQ * 5;
+
+    let mut bio = UnifiedBlockIo::new(dev, io_buf, io_phys, timeout).ok()?;
+
+    use morpheus_network::GptBlockIo;
+    use morpheus_network::GptLba;
+
+    let mut first_two = alloc::vec![0u8; (sector_size as usize) * 2];
+    if bio.read_blocks(GptLba(0), &mut first_two).is_err() {
+        return None;
+    }
+
+    let has_mbr = first_two.len() >= 512 && first_two[510] == 0x55 && first_two[511] == 0xAA;
+    let gpt_off = sector_size as usize;
+    let has_gpt = first_two.len() >= gpt_off + 8 && &first_two[gpt_off..gpt_off + 8] == GPT_SIG;
+
+    if has_gpt {
+        let hdr = &first_two[gpt_off..gpt_off + sector_size as usize];
+        let entries_lba = le_u64(hdr, 72);
+        let num_entries = le_u32(hdr, 80) as usize;
+        let entry_size = le_u32(hdr, 84) as usize;
+
+        if entry_size < 56 || num_entries == 0 {
+            return None;
+        }
+
+        let entries_per_sector = (sector_size as usize) / entry_size;
+        if entries_per_sector == 0 {
+            return None;
+        }
+
+        let mut sec = alloc::vec![0u8; sector_size as usize];
+
+        for idx in 0..num_entries {
+            let sector_delta = idx / entries_per_sector;
+            let idx_in_sector = idx % entries_per_sector;
+            let lba = entries_lba + sector_delta as u64;
+
+            if bio.read_blocks(GptLba(lba), &mut sec).is_err() {
+                return None;
+            }
+
+            let off = idx_in_sector * entry_size;
+            let ent = &sec[off..off + entry_size];
+
+            // Empty partition entry if type GUID is all zero.
+            if ent[..16].iter().all(|b| *b == 0) {
+                continue;
+            }
+
+            // Skip ESP partition.
+            if ent[..16] == GPT_TYPE_ESP {
+                continue;
+            }
+
+            let first_lba = le_u64(ent, 32);
+            let last_lba = le_u64(ent, 40);
+            if first_lba == 0 || last_lba < first_lba {
+                continue;
+            }
+
+            let sectors = last_lba - first_lba + 1;
+            if sectors == 0 {
+                continue;
+            }
+
+            return Some(DataRegion {
+                lba_start: first_lba,
+                sectors,
+            });
+        }
+
+        return None;
+    }
+
+    if has_mbr {
+        // Keep conservative behavior for plain MBR disks until partition parser exists.
+        return None;
+    }
+
+    Some(DataRegion {
+        lba_start: 0,
+        sectors: total_sectors,
+    })
+}
 
 // spinner
 
@@ -340,8 +475,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
 
     // Try each device: skip boot disks (GPT/MBR), use the first blank or HelixFS one.
     let mut found_data_disk = false;
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..dev_count {
+    'device_scan: for i in 0..dev_count {
         let detected = match &devices[i] {
             Some(d) => d,
             None => continue,
@@ -352,115 +486,158 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             map_virtio_bars(pci_addr.bus, pci_addr.device, pci_addr.function);
         }
 
-        let device = match create_unified_from_detected(detected, &config) {
-            Ok(dev) => dev,
-            Err(_) => {
-                log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
-                continue;
-            }
-        };
+        let is_ahci = matches!(detected, DetectedBlockDevice::Ahci(_));
+        let mut ahci_port_attempted = false;
+        let mut ahci_port_found = false;
 
-        let info = device.info();
+        let max_ports = if is_ahci { 32 } else { 1 };
 
-        // Store temporarily to check if it's a boot disk.
-        BLOCK_DEVICE = Some(device);
-
-        if is_boot_disk(info.sector_size) {
-            log_info("STORAGE", 826, "boot/system disk detected; skipping");
-            BLOCK_DEVICE = None;
-            continue;
-        }
-
-        // This device is NOT a boot disk — use it for HelixFS.
-        log_ok("STORAGE", 827, "selected data disk");
-        found_data_disk = true;
-
-        // try to recover or format helixfs
-        let mut raw_dev = make_raw_block_device();
-
-        let needs_format = {
-            let mut probe_dev = make_raw_block_device();
-            match morpheus_helix::log::recovery::recover_superblock(
-                &mut probe_dev,
-                0,
-                info.sector_size,
-            ) {
-                Ok(sb) => {
-                    // Version mismatch: v2 changed the log payload format.
-                    if sb.version != morpheus_helix::types::HELIX_VERSION {
-                        log_warn("STORAGE", 828, "helixfs version mismatch; reformat required");
-                        true
-                    } else {
-                        false
+        for port in 0..max_ports {
+            let device = if is_ahci {
+                ahci_port_attempted = true;
+                match create_unified_from_detected_ahci_port(detected, &config, port as u32) {
+                    Ok(dev) => dev,
+                    Err(_) => continue,
+                }
+            } else {
+                match create_unified_from_detected(detected, &config) {
+                    Ok(dev) => dev,
+                    Err(_) => {
+                        log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
+                        break;
                     }
                 }
-                Err(_) => true,
+            };
+
+            if is_ahci {
+                ahci_port_found = true;
             }
-        };
 
-        if needs_format {
-            log_info("STORAGE", 829, "no valid helixfs; formatting disk");
+            let info = device.info();
 
-            let uuid = [
-                0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x01,
-            ];
-            spinner_start();
-            match morpheus_helix::format::format_helix(
-                &mut raw_dev,
-                0,
-                info.total_sectors,
-                info.sector_size,
-                "root",
-                uuid,
-            ) {
-                Ok(_sb) => {
-                    spinner_done();
-                    log_ok("STORAGE", 830, "format completed");
-                }
-                Err(e) => {
-                    spinner_done();
-                    let _ = e;
-                    log_error("STORAGE", 831, "format failed");
+            // Store temporarily to check if it's a boot disk.
+            BLOCK_DEVICE = Some(device);
+
+            let region = match select_data_region(info.sector_size, info.total_sectors) {
+                Some(r) => r,
+                None => {
+                    log_info("STORAGE", 826, "boot/system disk detected; skipping");
                     BLOCK_DEVICE = None;
-                    break;
+                    continue;
                 }
+            };
+
+            STORAGE_LBA_BASE = region.lba_start;
+            STORAGE_REGION_SECTORS = region.sectors;
+
+            if region.lba_start != 0 {
+                log_info("STORAGE", 837, "selected GPT data partition region");
             }
 
-            // Verify format succeeded
-            match morpheus_helix::log::recovery::recover_superblock(
-                &mut raw_dev,
-                0,
-                info.sector_size,
-            ) {
-                Ok(_sb) => {}
-                Err(e) => {
-                    let _ = e;
-                    log_warn("STORAGE", 832, "superblock readback failed after format");
-                }
-            }
-        } else {
-            log_info("STORAGE", 833, "valid helixfs found; mounting");
-        }
-
-        // Now do the actual replace_root_device
-        // If we already formatted above, pass do_format=false to avoid double-format
-        let mount_dev = make_raw_block_device();
-        spinner_start();
-        match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
-            Ok(()) => {
-                spinner_done();
-                PERSISTENT_READY = true;
-                log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
-            }
-            Err(e) => {
-                spinner_done();
-                let _ = e;
-                log_error("STORAGE", 835, "failed to mount persistent filesystem");
+            if region.sectors == 0 {
                 BLOCK_DEVICE = None;
+                continue;
+            }
+
+            // This device is NOT a boot disk — use it for HelixFS.
+            log_ok("STORAGE", 827, "selected data disk");
+            found_data_disk = true;
+
+            // try to recover or format helixfs
+            let mut raw_dev = make_raw_block_device();
+
+            let needs_format = {
+                let mut probe_dev = make_raw_block_device();
+                match morpheus_helix::log::recovery::recover_superblock(
+                    &mut probe_dev,
+                    0,
+                    info.sector_size,
+                ) {
+                    Ok(sb) => {
+                        // Version mismatch: v2 changed the log payload format.
+                        if sb.version != morpheus_helix::types::HELIX_VERSION {
+                            log_warn("STORAGE", 828, "helixfs version mismatch; reformat required");
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Err(_) => true,
+                }
+            };
+
+            if needs_format {
+                log_info("STORAGE", 829, "no valid helixfs; formatting disk");
+
+                let uuid = [
+                    0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x01,
+                ];
+                spinner_start();
+                match morpheus_helix::format::format_helix(
+                    &mut raw_dev,
+                    0,
+                    info.total_sectors,
+                    info.sector_size,
+                    "root",
+                    uuid,
+                ) {
+                    Ok(_sb) => {
+                        spinner_done();
+                        log_ok("STORAGE", 830, "format completed");
+                    }
+                    Err(e) => {
+                        spinner_done();
+                        let _ = e;
+                        log_error("STORAGE", 831, "format failed");
+                        BLOCK_DEVICE = None;
+                        continue;
+                    }
+                }
+
+                // Verify format succeeded
+                match morpheus_helix::log::recovery::recover_superblock(
+                    &mut raw_dev,
+                    0,
+                    info.sector_size,
+                ) {
+                    Ok(_sb) => {}
+                    Err(e) => {
+                        let _ = e;
+                        log_warn("STORAGE", 832, "superblock readback failed after format");
+                    }
+                }
+            } else {
+                log_info("STORAGE", 833, "valid helixfs found; mounting");
+            }
+
+            // Now do the actual replace_root_device
+            // If we already formatted above, pass do_format=false to avoid double-format
+            let mount_dev = make_raw_block_device();
+            spinner_start();
+            match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
+                Ok(()) => {
+                    spinner_done();
+                    PERSISTENT_READY = true;
+                    log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
+                    break 'device_scan;
+                }
+                Err(e) => {
+                    spinner_done();
+                    let _ = e;
+                    log_error("STORAGE", 835, "failed to mount persistent filesystem");
+                    BLOCK_DEVICE = None;
+                    continue;
+                }
             }
         }
-        break;
+
+        if is_ahci {
+            if ahci_port_attempted && !ahci_port_found {
+                log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
+            }
+            continue;
+        }
     }
 
     if !found_data_disk {
@@ -576,10 +753,15 @@ pub fn create_init_directories() {
 unsafe fn make_raw_block_device() -> RawBlockDevice {
     let dev = BLOCK_DEVICE.as_ref().unwrap();
     let info = dev.info();
+    let total = if STORAGE_REGION_SECTORS != 0 {
+        STORAGE_REGION_SECTORS
+    } else {
+        info.total_sectors
+    };
 
     RawBlockDevice::new(
         core::ptr::null_mut(), // ctx unused — we access statics directly
-        info.total_sectors,
+        total,
         info.sector_size,
         raw_read,
         raw_write,
@@ -616,7 +798,8 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
 
     use morpheus_network::GptBlockIo;
     use morpheus_network::GptLba;
-    bio.read_blocks(GptLba(lba), dst_slice).is_ok()
+    bio.read_blocks(GptLba(lba + STORAGE_LBA_BASE), dst_slice)
+        .is_ok()
 }
 
 /// Write callback for `RawBlockDevice`.
@@ -645,7 +828,8 @@ unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool
 
     use morpheus_network::GptBlockIo;
     use morpheus_network::GptLba;
-    bio.write_blocks(GptLba(lba), src_slice).is_ok()
+    bio.write_blocks(GptLba(lba + STORAGE_LBA_BASE), src_slice)
+        .is_ok()
 }
 
 /// Flush callback for `RawBlockDevice`.

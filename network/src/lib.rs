@@ -132,9 +132,10 @@ pub use gpt_disk_types::{BlockSize as GptBlockSize, Lba as GptLba};
 
 // Block probe
 pub use boot::block_probe::{
-    create_unified_from_detected, detect_block_device_type, probe_and_create_block_driver,
-    probe_unified_block_device, scan_all_block_devices, BlockDeviceType, BlockDmaConfig,
-    BlockProbeError, BlockProbeResult, DetectedBlockDevice,
+    create_unified_from_detected, create_unified_from_detected_ahci_port,
+    detect_block_device_type, probe_and_create_block_driver, probe_unified_block_device,
+    scan_all_block_devices, BlockDeviceType, BlockDmaConfig, BlockProbeError, BlockProbeResult,
+    DetectedBlockDevice,
 };
 
 // Client

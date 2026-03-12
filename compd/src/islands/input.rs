@@ -115,7 +115,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
             match region {
                 HitRegion::Close => {
                     if let Some(ref win) = state.windows[idx] {
-                        let _ = process::kill(win.pid, process::signal::SIGKILL);
+                        let _ = process::kill(win.pid, process::signal::SIGTERM);
                     }
                     state.capture = None;
                     route_to_child = false;

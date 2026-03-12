@@ -796,6 +796,25 @@ do_launch_thinkpad() {
     fi
 
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
+        # Build/refresh the boot ESP image that UEFI will load BOOTX64.EFI from.
+        # The data disk (test-disk-50g.img) is raw HelixFS with no partition table
+        # so the kernel won't mistake it for the boot disk.
+        local esp_img="${TESTING_DIR}/esp-temp.img"
+        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" -nt "$esp_img" ]] || [[ "${FORCE_MODE}" == "true" ]]; then
+            log_info "Refreshing boot ESP image..."
+            local esp_size
+            esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
+            dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
+            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
+            local mnt
+            mnt=$(mktemp -d)
+            sudo mount -o loop "$esp_img" "$mnt"
+            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
+            sudo umount "$mnt"
+            rmdir "$mnt"
+        fi
+        # Disk 0 (SATA port 0): ESP FAT32 image — UEFI boots BOOTX64.EFI from here
+        # Disk 1 (SATA port 1): raw HelixFS image — kernel mounts this as data storage
         if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
@@ -806,9 +825,11 @@ do_launch_thinkpad() {
             -smbios type=2,manufacturer=LENOVO,product=20BWS0XX00 \
             -smbios type=3,manufacturer=LENOVO \
             -object iothread,id=iothread0 \
-            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
+            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
             -device ich9-ahci,id=ahci0 \
             -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk1,cache=writeback \
+            -device ide-hd,drive=disk1,bus=ahci0.1 \
             "${net_args[@]}" \
             -smp 8 \
             -m 12G \
