@@ -58,7 +58,7 @@ fn poll_keyboard(state: &mut CompState) {
 
 fn poll_mouse(state: &mut CompState) {
     let ms = hw::mouse_read();
-    if ms.dx == 0 && ms.dy == 0 && ms.buttons == 0 {
+    if ms.dx == 0 && ms.dy == 0 && ms.buttons == state.last_buttons {
         return;
     }
 
