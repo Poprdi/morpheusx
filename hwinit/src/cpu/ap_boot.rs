@@ -28,6 +28,22 @@ const AP_TRAMPOLINE_PAGE: u8 = (AP_TRAMPOLINE_PHYS / 0x1000) as u8;
 /// AP kernel stack size (64 KiB per core).
 const AP_STACK_SIZE: u64 = 64 * 1024;
 
+// Brute-force LAPIC probing is a fallback path. Keep it bounded so one bad
+// topology guess doesn't make boot look dead on real hardware.
+const AP_WAIT_STEP_US: u64 = 50;
+const AP_WAIT_TIMEOUT_US: u64 = 20_000;
+const AP_BRUTE_SCAN_BUDGET_US: u64 = 3_000_000;
+
+#[inline(always)]
+fn ap_dbg_probe(tag: &str, lapic_id: u32) {
+    crate::serial::checkpoint(tag);
+    crate::serial::puts("[APDBG] ");
+    crate::serial::puts(tag);
+    crate::serial::puts(" lapic=");
+    crate::serial::put_hex32(lapic_id);
+    crate::serial::puts("\r\n");
+}
+
 // ── Trampoline data area offsets ─────────────────────────────────────────
 // These must match the .data section layout at the end of ap_trampoline.s.
 // The trampoline data block starts at AP_TRAMPOLINE_PHYS + TRAMPOLINE_DATA_OFFSET.
@@ -59,6 +75,7 @@ static AP_TRAMPOLINE_BIN: &[u8] = &[];
 ///
 /// Returns false if the trampoline page is unavailable (reserved by firmware).
 unsafe fn setup_trampoline() -> bool {
+    crate::serial::checkpoint("ap-tramp-setup-begin");
     // validate the trampoline page is usable before stomping it.
     // on exotic firmware 0x8000 might be reserved/MMIO.
     match global_registry_mut().allocate_pages(
@@ -69,6 +86,7 @@ unsafe fn setup_trampoline() -> bool {
         Ok(_) => {}
         Err(_) => {
             log_error("AP", 500, "trampoline page 0x8000 unavailable in memory map");
+            crate::serial::checkpoint("ap-tramp-setup-no-page");
             return false;
         }
     }
@@ -95,6 +113,8 @@ unsafe fn setup_trampoline() -> bool {
     *((AP_TRAMPOLINE_PHYS + TD_CR3) as *mut u64) = kernel_cr3;
     *((AP_TRAMPOLINE_PHYS + TD_ENTRY64) as *mut u64) = ap_rust_entry as u64;
 
+    crate::serial::checkpoint("ap-tramp-setup-done");
+
     true
 }
 
@@ -103,6 +123,8 @@ unsafe fn setup_trampoline() -> bool {
 /// Returns true if the AP responded within the timeout.
 /// On failure, frees the allocated stack — no leak.
 unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
+    ap_dbg_probe("ap-probe-begin", lapic_id);
+
     // allocate a kernel stack for this AP
     let stack_pages = AP_STACK_SIZE / PAGE_SIZE;
     let stack_base = match global_registry_mut().allocate_pages(
@@ -113,10 +135,12 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
         Ok(base) => base,
         Err(_) => {
             log_error("AP", 501, "stack allocation failed");
+            crate::serial::checkpoint("ap-probe-stack-alloc-fail");
             return false;
         }
     };
     let stack_top = stack_base + AP_STACK_SIZE;
+    ap_dbg_probe("ap-probe-stack-alloc-ok", lapic_id);
 
     // fill per-AP trampoline data
     *((AP_TRAMPOLINE_PHYS + TD_STACK) as *mut u64) = stack_top;
@@ -128,31 +152,40 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     let before = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
 
     // INIT IPI
+    ap_dbg_probe("ap-probe-init-send", lapic_id);
     apic::send_init_ipi(lapic_id);
+    ap_dbg_probe("ap-probe-init-sent", lapic_id);
     apic::delay_us(10_000); // 10ms
 
     // SIPI #1
+    ap_dbg_probe("ap-probe-sipi1-send", lapic_id);
     apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
+    ap_dbg_probe("ap-probe-sipi1-sent", lapic_id);
     apic::delay_us(200); // 200µs
 
     // SIPI #2 (per Intel spec, send twice for reliability)
+    ap_dbg_probe("ap-probe-sipi2-send", lapic_id);
     apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
+    ap_dbg_probe("ap-probe-sipi2-sent", lapic_id);
     apic::delay_us(200);
 
-    // wait for AP to come online (up to 100ms)
-    let mut waited = 0u32;
+    // wait for AP to come online (bounded; fallback path must stay snappy)
+    ap_dbg_probe("ap-probe-online-wait", lapic_id);
+    let mut waited_us = 0u64;
     while per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) <= before {
-        apic::delay_us(100);
-        waited += 1;
-        if waited > 1000 {
+        apic::delay_us(AP_WAIT_STEP_US);
+        waited_us += AP_WAIT_STEP_US;
+        if waited_us >= AP_WAIT_TIMEOUT_US {
             break;
         }
     }
 
     if per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) > before {
+        ap_dbg_probe("ap-probe-online-ok", lapic_id);
         true
     } else {
         log_warn("AP", 502, "ap did not respond to INIT+SIPI; freeing stack");
+        ap_dbg_probe("ap-probe-online-timeout", lapic_id);
         // don't leak 64KB per ghost core
         let _ = global_registry_mut().free_pages(stack_base, stack_pages);
         false
@@ -218,6 +251,7 @@ pub unsafe fn start_aps() {
 
     let bsp_lapic_id = apic::read_lapic_id();
     log_warn("AP", 508, "starting AP bring-up via brute-force LAPIC scan");
+    crate::serial::checkpoint("ap-scan-begin");
 
     if !setup_trampoline() {
         return;
@@ -225,6 +259,7 @@ pub unsafe fn start_aps() {
 
     let mut core_idx: u32 = 1; // 0 = BSP
     let mut online: u32 = 0;
+    let mut scan_budget_used_us: u64 = 0;
     for lapic_id in 0u32..256 {
         if lapic_id == bsp_lapic_id {
             continue;
@@ -237,13 +272,28 @@ pub unsafe fn start_aps() {
             break;
         }
 
+        if scan_budget_used_us >= AP_BRUTE_SCAN_BUDGET_US {
+            log_warn("AP", 510, "brute-force AP scan budget exhausted; continuing with discovered cores");
+            crate::serial::checkpoint("ap-scan-budget-exhausted");
+            break;
+        }
+
+        if (lapic_id & 0x1F) == 0 {
+            log_info("AP", 511, "AP scan progress checkpoint");
+            ap_dbg_probe("ap-scan-progress", lapic_id);
+        }
+
         if boot_single_ap(core_idx, lapic_id) {
             // only consume a core slot on success
             core_idx += 1;
             online += 1;
         }
+
+        // upper bound for one probe: INIT delay + SIPI delays + wait timeout
+        scan_budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
 
+    crate::serial::checkpoint("ap-scan-done");
     log_ok("AP", 509, "brute-force AP bring-up pass complete");
 }
 

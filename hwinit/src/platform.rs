@@ -423,6 +423,9 @@ pub unsafe fn platform_init_selfcontained(
     // Collect them first, sort, and pass as an exclusion set.
     log_info("BOOT", 111, "phase 10.5/12: reclaim boot services ram");
     checkpoint("phase10.5-reclaim-begin");
+    // Keep this whole critical section non-preemptible. The timer IRQ is live
+    // after phase 10; reclaim/reserve mutates allocator + paging metadata.
+    crate::cpu::idt::disable_interrupts();
     {
         let (mut pt_pages, pt_count) = crate::paging::collect_page_table_pages();
 
@@ -448,6 +451,7 @@ pub unsafe fn platform_init_selfcontained(
         let reg = global_registry_mut();
         reg.validate_free_lists();
     }
+    crate::cpu::idt::enable_interrupts();
     checkpoint("phase10.5-done");
 
     // phase 11: filesystem
@@ -504,7 +508,9 @@ pub unsafe fn platform_init_selfcontained(
         if madt_result.count > 0 {
             per_cpu::set_cpu_count(madt_result.count as u32 + 1); // +1 for BSP
             checkpoint("phase12-start-aps-madt");
+            crate::cpu::idt::disable_interrupts();
             ap_boot::start_aps_from_list(&madt_result.ids[..madt_result.count]);
+            crate::cpu::idt::enable_interrupts();
         } else {
             // fallback: CPUID-based count + brute-force LAPIC ID enumeration.
             // works but slow on sparse topologies.
@@ -515,7 +521,9 @@ pub unsafe fn platform_init_selfcontained(
 
             if cpu_count > 1 {
                 checkpoint("phase12-start-aps-cpuid");
+                crate::cpu::idt::disable_interrupts();
                 ap_boot::start_aps();
+                crate::cpu::idt::enable_interrupts();
             } else {
                 log_info("SMP", 114, "single-core detected; no AP startup");
             }

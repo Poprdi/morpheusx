@@ -10,6 +10,13 @@ use crate::cpu::per_cpu;
 use crate::cpu::pio::outb;
 use crate::serial::{log_info, log_ok, log_warn};
 
+#[inline(always)]
+fn apic_dbg(msg: &str) {
+    crate::serial::puts("[APICDBG] ");
+    crate::serial::puts(msg);
+    crate::serial::puts("\r\n");
+}
+
 // ── LAPIC register offsets ───────────────────────────────────────────────
 
 const LAPIC_ID: u32 = 0x020;
@@ -265,10 +272,12 @@ pub unsafe fn disable_pic8259() {
 /// Send an INIT IPI to target APIC ID.
 pub unsafe fn send_init_ipi(target_apic_id: u32) {
     let base = lapic_base();
+    apic_dbg("init-ipi-begin");
 
     // INIT assert
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
     lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_LEVEL_ASSERT);
+    apic_dbg("init-ipi-assert");
     wait_icr_idle(base);
 
     // INIT deassert — trigger mode MUST be level (bit 15) with level=0.
@@ -279,7 +288,9 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
         LAPIC_ICR_LO,
         ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT,
     );
+    apic_dbg("init-ipi-deassert");
     wait_icr_idle(base);
+    apic_dbg("init-ipi-done");
 }
 
 /// Send a Startup IPI (SIPI) to target APIC ID.
@@ -288,23 +299,30 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
 /// Must be below 1 MiB and page-aligned (e.g., 0x8000 → start_page = 8).
 pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
     let base = lapic_base();
+    apic_dbg("sipi-begin");
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
     lapic_write(base, LAPIC_ICR_LO, ICR_STARTUP | start_page as u32);
+    apic_dbg("sipi-write");
     wait_icr_idle(base);
+    apic_dbg("sipi-done");
 }
 
 /// Wait for the ICR delivery status bit to clear.
 #[inline]
 unsafe fn wait_icr_idle(base: u64) {
-    let mut timeout = 100_000u32;
+    // Keep this tightly bounded. Some hardware can leave delivery status set
+    // long enough to look like a deadlock if we spin too generously.
+    let mut timeout = 2_000u32;
     while lapic_read(base, LAPIC_ICR_LO) & ICR_DELIVERY_STATUS != 0 {
         core::hint::spin_loop();
         timeout -= 1;
         if timeout == 0 {
             log_warn("LAPIC", 726, "ICR delivery timeout");
+            apic_dbg("icr-wait-timeout");
             break;
         }
     }
+    apic_dbg("icr-wait-done");
 }
 
 // ── Delay helper ─────────────────────────────────────────────────────────
@@ -313,11 +331,30 @@ unsafe fn wait_icr_idle(base: u64) {
 /// Falls back to a dumb loop if TSC freq is unknown.
 pub unsafe fn delay_us(us: u64) {
     let freq = crate::process::scheduler::tsc_frequency();
-    if freq > 0 {
+    // Sanity-window the TSC frequency. Bad calibration here turns a 10ms AP
+    // bring-up delay into a geological epoch on some firmware.
+    if (1_000_000..=10_000_000_000).contains(&freq) {
+        let cycles_per_us = freq / 1_000_000;
+        if cycles_per_us == 0 {
+            for _ in 0..(us * 1000) {
+                core::hint::spin_loop();
+            }
+            return;
+        }
+
         let start = crate::cpu::tsc::read_tsc();
-        let target = start + (freq / 1_000_000) * us;
+        let delta = cycles_per_us.saturating_mul(us);
+        let target = start.saturating_add(delta);
+
+        // Watchdog the spin so a broken TSC path can't wedge bring-up forever.
+        let mut spins = 0u32;
         while crate::cpu::tsc::read_tsc() < target {
             core::hint::spin_loop();
+            spins = spins.wrapping_add(1);
+            if spins == 50_000_000 {
+                log_warn("LAPIC", 727, "delay_us watchdog tripped; falling back");
+                break;
+            }
         }
     } else {
         // dumb fallback: ~1µs per iteration at ~1GHz

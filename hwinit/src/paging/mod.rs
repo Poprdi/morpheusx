@@ -7,7 +7,7 @@ pub mod table;
 pub use entry::{PageFlags, PageTable, PageTableEntry};
 pub use table::{MappedPageSize, PageTableManager, VirtAddr};
 
-use crate::serial::{log_info, log_ok};
+use crate::serial::{log_info, log_ok, log_warn};
 use crate::sync::SpinLock;
 
 // kernel page table singleton — SMP-safe via SpinLock
@@ -174,8 +174,10 @@ pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
 ///   - up to ~24 PD pages   (one per 1 GiB)
 ///   - PT pages only if 4 KiB region exists (firmware code, MMIO, etc.)
 ///
-/// 512 entries is vastly more than needed but fits comfortably on the stack.
-const MAX_PT_PAGES: usize = 512;
+/// On some firmware builds, low memory and MMIO windows are mapped with many
+/// 4 KiB leaves, which can produce far more than a few hundred PT pages.
+/// Keep this comfortably large so reclaim never misses live paging structures.
+const MAX_PT_PAGES: usize = 8192;
 
 /// Walk the active CR3 page table hierarchy and collect the physical
 /// addresses of **every** page that is itself a page table page (PML4,
@@ -197,6 +199,7 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
 
     let mut pages = [0u64; MAX_PT_PAGES];
     let mut count = 0usize;
+    let mut truncated = false;
 
     // Helper closure (inlined) to add a page if not already seen.
     macro_rules! add_page {
@@ -209,9 +212,13 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
                     break;
                 }
             }
-            if !seen && count < MAX_PT_PAGES {
-                pages[count] = p;
-                count += 1;
+            if !seen {
+                if count < MAX_PT_PAGES {
+                    pages[count] = p;
+                    count += 1;
+                } else {
+                    truncated = true;
+                }
             }
         };
     }
@@ -253,6 +260,10 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
                 add_page!(pt_phys);
             }
         }
+    }
+
+    if truncated {
+        log_warn("PAGING", 733, "page-table page collection truncated");
     }
 
     (pages, count)

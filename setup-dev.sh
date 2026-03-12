@@ -447,6 +447,24 @@ do_inject_apps() {
     log_info "Building morpheus-cli (host)..."
     cargo build --release -p morpheus-cli 2>&1 || { log_error "morpheus-cli build failed"; return 1; }
 
+    # Unified image layout: p1=ESP, p2=HelixFS data region.
+    local loopdev=""
+    local data_part=""
+    loopdev=$(sudo losetup --find --show --partscan "$disk_img") || {
+        log_error "Failed to attach loop device for unified image"
+        return 1
+    }
+    data_part="${loopdev}p2"
+    for _ in {1..50}; do
+        [[ -b "$data_part" ]] && break
+        sleep 0.1
+    done
+    if [[ ! -b "$data_part" ]]; then
+        sudo losetup -d "$loopdev" 2>/dev/null || true
+        log_error "Unified image data partition not found (${data_part})"
+        return 1
+    fi
+
     local injected=0
     for entry in "${USER_APPS[@]}"; do
         local pkg="${entry%%,*}"
@@ -458,15 +476,86 @@ do_inject_apps() {
             continue
         fi
 
-        log_info "Injecting ${pkg} → ${dest} (main disk HelixFS)..."
-        cargo run --release -p morpheus-cli -- inject "$disk_img" "$elf" --dest "$dest" 2>&1 \
-            || { log_error "Inject failed for ${pkg}"; return 1; }
+        log_info "Injecting ${pkg} → ${dest} (HelixFS partition)..."
+        sudo "${PROJECT_ROOT}/target/release/morpheus-cli" inject "$data_part" "$elf" --dest "$dest" 2>&1 \
+            || {
+                sudo losetup -d "$loopdev" 2>/dev/null || true
+                log_error "Inject failed for ${pkg}"
+                return 1
+            }
         injected=$((injected + 1))
     done
+
+    sudo losetup -d "$loopdev" 2>/dev/null || true
 
     [[ $injected -gt 0 ]] \
         && log_success "${injected} app(s) deployed to HelixFS — boot MorpheusX and run 'exec <name>'" \
         || log_warn "No apps injected"
+}
+
+sync_unified_esp() {
+    local disk_img="${TESTING_DIR}/test-disk-50g.img"
+    [[ -f "$disk_img" ]] || return 1
+
+    set +e
+    local rc=0
+    local loopdev=""
+    local esp_part=""
+    local mnt=""
+
+    loopdev=$(sudo losetup --find --show --partscan "$disk_img")
+    if [[ -z "$loopdev" ]]; then
+        rc=1
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        esp_part="${loopdev}p1"
+        for _ in {1..50}; do
+            [[ -b "$esp_part" ]] && break
+            sleep 0.1
+        done
+        [[ -b "$esp_part" ]] || rc=1
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        mnt=$(mktemp -d)
+        if ! sudo mount -t vfat "$esp_part" "$mnt"; then
+            log_warn "ESP mount failed; reformatting partition 1 as FAT32"
+            sudo partprobe "$loopdev" >/dev/null 2>&1 || true
+            has_cmd udevadm && sudo udevadm settle >/dev/null 2>&1 || true
+
+            if ! sudo mkfs.vfat -F 32 -n MORPHEUS "$esp_part" >/dev/null 2>&1; then
+                rc=1
+            else
+                # Retry mount a few times in case kernel uevents lag after mkfs.
+                local mounted=0
+                for _ in {1..10}; do
+                    if sudo mount -t vfat "$esp_part" "$mnt"; then
+                        mounted=1
+                        break
+                    fi
+                    sleep 0.1
+                done
+                [[ $mounted -eq 1 ]] || rc=1
+            fi
+        fi
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        sudo mkdir -p "$mnt/EFI/BOOT" || rc=1
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        sudo rsync -rtD --delete "${ESP_DIR}/" "$mnt/" || rc=1
+        sync
+    fi
+
+    [[ -n "$mnt" ]] && sudo umount "$mnt" >/dev/null 2>&1
+    [[ -n "$mnt" ]] && rmdir "$mnt" >/dev/null 2>&1
+    [[ -n "$loopdev" ]] && sudo losetup -d "$loopdev" >/dev/null 2>&1
+
+    set -e
+    return $rc
 }
 
 do_create_disk() {
@@ -479,15 +568,38 @@ do_create_disk() {
     
     local disk_img="${TESTING_DIR}/test-disk-50g.img"
 
-    # Create a raw sparse image — no partition table.
-    # The kernel's storage layer skips GPT/MBR disks as "boot disks", so the
-    # HelixFS data disk must be partition-table-free.  morpheus-cli inject will
-    # format HelixFS on first write; no pre-formatting needed.
-    log_info "Creating 50GB sparse HelixFS data disk..."
+    # Unified image layout:
+    #   p1: EFI System Partition (FAT32, BOOTX64.EFI)
+    #   p2: HelixFS data partition (raw, formatted by morpheus-cli inject)
+    log_info "Creating 50GB unified GPT disk (ESP + HelixFS)..."
     rm -f "$disk_img"
     truncate -s 50G "$disk_img"
 
-    log_success "Test disk ready (50GB sparse, will be formatted by inject)"
+    parted "$disk_img" --script mklabel gpt
+    parted "$disk_img" --script mkpart ESP fat32 1MiB 513MiB
+    parted "$disk_img" --script set 1 esp on
+    parted "$disk_img" --script set 1 boot on
+    parted "$disk_img" --script mkpart HELIX 513MiB 100%
+
+    local loopdev
+    loopdev=$(sudo losetup --find --show --partscan "$disk_img") || die "Failed to attach unified disk loop device"
+    local esp_part="${loopdev}p1"
+    for _ in {1..50}; do
+        [[ -b "$esp_part" ]] && break
+        sleep 0.1
+    done
+    [[ -b "$esp_part" ]] || { sudo losetup -d "$loopdev" 2>/dev/null || true; die "ESP partition node not found"; }
+
+    sudo mkfs.vfat -F 32 -n MORPHEUS "$esp_part" >/dev/null 2>&1 || {
+        sudo losetup -d "$loopdev" 2>/dev/null || true
+        die "Failed to format ESP partition"
+    }
+
+    sudo losetup -d "$loopdev" 2>/dev/null || true
+
+    sync_unified_esp || die "Failed to populate ESP partition from testing/esp"
+
+    log_success "Unified disk ready (GPT: p1 ESP, p2 HelixFS)"
 }
 
 do_launch_qemu() {
@@ -520,35 +632,17 @@ do_launch_qemu() {
     fi
 
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
-        # Build/refresh the boot ESP image that UEFI will load BOOTX64.EFI from.
-        # The data disk (test-disk-50g.img) is raw HelixFS with no partition table
-        # so the kernel won't mistake it for the boot disk.
-        local esp_img="${TESTING_DIR}/esp-temp.img"
-        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" -nt "$esp_img" ]] || [[ "${FORCE_MODE}" == "true" ]]; then
-            log_info "Refreshing boot ESP image..."
-            local esp_size
-            esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
-            dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
-            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
-            local mnt
-            mnt=$(mktemp -d)
-            sudo mount -o loop "$esp_img" "$mnt"
-            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
-            sudo umount "$mnt"
-            rmdir "$mnt"
-        fi
-        # Disk 0 (virtio): ESP FAT32 image  — UEFI boots BOOTX64.EFI from here
-        # Disk 1 (virtio): raw HelixFS image — kernel mounts this as data storage
+        sync_unified_esp || die "Failed to refresh unified ESP partition"
+
+        # Disk 0 (virtio): unified GPT image (p1 ESP + p2 HelixFS)
         if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
             -bios "$ovmf_path" \
             -object iothread,id=iothread0 \
-            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,bootindex=1 \
-            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk1,cache=writeback \
-            -device virtio-blk-pci,drive=disk1,disable-legacy=on,iothread=iothread0 \
             "${net_args[@]}" \
             -smp 8 \
             -m 12G \
@@ -796,25 +890,9 @@ do_launch_thinkpad() {
     fi
 
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
-        # Build/refresh the boot ESP image that UEFI will load BOOTX64.EFI from.
-        # The data disk (test-disk-50g.img) is raw HelixFS with no partition table
-        # so the kernel won't mistake it for the boot disk.
-        local esp_img="${TESTING_DIR}/esp-temp.img"
-        if [[ ! -f "$esp_img" ]] || [[ "${ESP_DIR}/EFI/BOOT/BOOTX64.EFI" -nt "$esp_img" ]] || [[ "${FORCE_MODE}" == "true" ]]; then
-            log_info "Refreshing boot ESP image..."
-            local esp_size
-            esp_size=$(du -sb "${ESP_DIR}" | awk '{print int(($1 / 1024 / 1024) + 50)}')
-            dd if=/dev/zero of="$esp_img" bs=1M count="$esp_size" status=none 2>/dev/null
-            mkfs.vfat -F 32 -n ESP "$esp_img" >/dev/null 2>&1
-            local mnt
-            mnt=$(mktemp -d)
-            sudo mount -o loop "$esp_img" "$mnt"
-            sudo rsync -a "${ESP_DIR}/" "$mnt/" 2>/dev/null || true
-            sudo umount "$mnt"
-            rmdir "$mnt"
-        fi
-        # Disk 0 (SATA port 0): ESP FAT32 image — UEFI boots BOOTX64.EFI from here
-        # Disk 1 (SATA port 1): raw HelixFS image — kernel mounts this as data storage
+        sync_unified_esp || die "Failed to refresh unified ESP partition"
+
+        # Disk 0 (AHCI): unified GPT image (p1 ESP + p2 HelixFS)
         if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
@@ -825,11 +903,9 @@ do_launch_thinkpad() {
             -smbios type=2,manufacturer=LENOVO,product=20BWS0XX00 \
             -smbios type=3,manufacturer=LENOVO \
             -object iothread,id=iothread0 \
-            -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
+            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
             -device ich9-ahci,id=ahci0 \
             -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
-            -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk1,cache=writeback \
-            -device ide-hd,drive=disk1,bus=ahci0.1 \
             "${net_args[@]}" \
             -smp 8 \
             -m 12G \
@@ -911,6 +987,135 @@ cmd_thinkpad() {
     do_launch_thinkpad
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Flash to Physical Media
+# Provisions a real block device (USB stick, SD card) with the two-partition
+# layout used by the unified image — but only copies what's actually needed.
+# No 50 GB dd. Just ESP contents + app injection.
+# ══════════════════════════════════════════════════════════════════════════════
+
+cmd_flash() {
+    local target="${1:-}"
+    print_banner
+    log_step "Flash to Physical Media"
+
+    [[ -n "$target" ]] || die "Usage: $0 flash <device>  (e.g. $0 flash /dev/sdd)"
+
+    log_step "Refreshing build artifacts"
+    FORCE_MODE=true
+    do_build
+    do_build_user_apps
+
+    # Refuse to flash the device that contains the current root fs.
+    local root_dev
+    root_dev=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/[0-9]*$//' || true)
+    [[ -z "$root_dev" ]] && root_dev=$(df / 2>/dev/null | awk 'NR==2{print $1}' | sed 's/[0-9]*$//' || true)
+    if [[ -n "$root_dev" && "$(realpath "$target")" == "$(realpath "$root_dev")" ]]; then
+        die "Refusing to flash to the system root device (${root_dev})"
+    fi
+
+    # Only write to block devices.
+    [[ -b "$target" ]] || die "${target} is not a block device"
+
+    # Removable-only guard (RM flag in sysfs). If sysfs says 0 it's internal.
+    local sysfs_name
+    sysfs_name=$(basename "$target")
+    local rm_flag=1
+    [[ -r "/sys/block/${sysfs_name}/removable" ]] && rm_flag=$(cat "/sys/block/${sysfs_name}/removable")
+    if [[ "$rm_flag" != "1" ]]; then
+        log_warn "${target} does not report as removable (sysfs RM=0)"
+        printf "${C_RED}${C_BOLD}This looks like an internal disk. Type CONFIRM to proceed anyway: ${C_RESET}"
+        read -r answer
+        [[ "$answer" == "CONFIRM" ]] || die "Aborted"
+    fi
+
+    # Show what we're about to do and ask for confirmation.
+    local dev_size
+    dev_size=$(lsblk -dno SIZE "$target" 2>/dev/null || echo "?")
+    local dev_model
+    dev_model=$(lsblk -dno MODEL "$target" 2>/dev/null | xargs || echo "unknown")
+    printf "\n"
+    printf "  ${C_BOLD}Target :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$target"
+    printf "  ${C_BOLD}Model  :${C_RESET} %s\n" "$dev_model"
+    printf "  ${C_BOLD}Size   :${C_RESET} %s\n" "$dev_size"
+    printf "  ${C_BOLD}Action :${C_RESET} repartition → p1 ESP (512 MiB FAT32) + p2 HELIX (rest)\n"
+    printf "           copy ESP files only + inject apps. No full dd.\n"
+    printf "\n"
+    printf "${C_YELLOW}${C_BOLD}ALL DATA ON ${target} WILL BE LOST. Type YES to continue: ${C_RESET}"
+    read -r answer
+    [[ "$answer" == "YES" ]] || die "Aborted"
+
+    log_step "Unmounting partitions on ${target}"
+    for part in $(lsblk -lno NAME "$target" | tail -n +2); do
+        sudo umount "/dev/${part}" 2>/dev/null && log_info "Unmounted /dev/${part}" || true
+    done
+
+    log_step "Partitioning ${target}"
+    sudo parted "$target" --script mklabel gpt
+    sudo parted "$target" --script mkpart ESP fat32 1MiB 513MiB
+    sudo parted "$target" --script set 1 esp on
+    sudo parted "$target" --script set 1 boot on
+    sudo parted "$target" --script mkpart HELIX 513MiB 100%
+    sudo partprobe "$target" 2>/dev/null || true
+    has_cmd udevadm && sudo udevadm settle 2>/dev/null || sleep 1
+
+    # Resolve partition nodes (handles both /dev/sddN and /dev/mmcblkXpN).
+    local esp_part helix_part
+    if [[ -b "${target}p1" ]]; then
+        esp_part="${target}p1"
+        helix_part="${target}p2"
+    else
+        esp_part="${target}1"
+        helix_part="${target}2"
+    fi
+
+    # Wait for nodes to appear.
+    for _ in {1..50}; do [[ -b "$esp_part" ]] && break; sleep 0.1; done
+    [[ -b "$esp_part" ]] || die "ESP partition node did not appear (${esp_part})"
+    for _ in {1..50}; do [[ -b "$helix_part" ]] && break; sleep 0.1; done
+    [[ -b "$helix_part" ]] || die "HELIX partition node did not appear (${helix_part})"
+
+    log_step "Formatting ESP (${esp_part})"
+    sudo mkfs.vfat -F 32 -n MORPHEUS "$esp_part" >/dev/null \
+        || die "Failed to format ESP partition"
+
+    log_step "Copying ESP contents"
+    check_bootloader || die "Bootloader not built — run: $0 build"
+    local mnt
+    mnt=$(mktemp -d)
+    sudo mount -t vfat "$esp_part" "$mnt" || die "Failed to mount ESP on ${esp_part}"
+    sudo mkdir -p "$mnt/EFI/BOOT"
+    sudo rsync -rtD --delete "${ESP_DIR}/" "$mnt/" \
+        || { sudo umount "$mnt"; rmdir "$mnt"; die "rsync to ESP failed"; }
+    sudo umount "$mnt"
+    rmdir "$mnt"
+    log_success "ESP written to ${esp_part}"
+
+    log_step "Injecting apps into HELIX (${helix_part})"
+    # Build morpheus-cli first.
+    cargo build --release -p morpheus-cli 2>&1 \
+        || die "morpheus-cli build failed"
+
+    local injected=0
+    for entry in "${USER_APPS[@]}"; do
+        local pkg="${entry%%,*}"
+        local dest="${entry##*,}"
+        local elf="target/x86_64-morpheus/release/${pkg}"
+        if [[ ! -f "$elf" ]]; then
+            log_warn "${pkg}: ELF not found (build first), skipping"
+            continue
+        fi
+        log_info "Injecting ${pkg} → ${dest}"
+        sudo "${PROJECT_ROOT}/target/release/morpheus-cli" inject "$helix_part" "$elf" --dest "$dest" 2>&1 \
+            || { log_error "Inject failed for ${pkg}"; continue; }
+        injected=$((injected + 1))
+    done
+
+    sudo sync
+    log_success "Flash complete — ${injected} app(s) on ${helix_part}"
+    printf "\n  Eject the card and boot the ThinkPad from it.\n\n"
+}
+
 cmd_clean() {
     print_banner
     log_step "Cleaning"
@@ -970,6 +1175,7 @@ usage() {
     printf "  ${C_CYAN}disk${C_RESET} [target]      Create disk image (50g|info)\n"
     printf "  ${C_CYAN}run${C_RESET}                Launch QEMU (VirtIO devices)\n"
     printf "  ${C_CYAN}thinkpad${C_RESET}           Launch QEMU with ThinkPad T450s hardware\n"
+    printf "  ${C_CYAN}flash${C_RESET} <device>     Write to physical media (SD/USB) — no full dd\n"
     printf "  ${C_CYAN}deploy${C_RESET}             Build & inject user apps into HelixFS\n"
     printf "  ${C_CYAN}status${C_RESET}             Show environment status\n"
     printf "  ${C_CYAN}clean${C_RESET}              Remove artifacts\n"
@@ -989,6 +1195,8 @@ usage() {
     printf "  %s build\n\n" "$(basename "$0")"
     printf "  ${C_DIM}# Test with ThinkPad T450s hardware (AHCI + Intel e1000)${C_RESET}\n"
     printf "  %s thinkpad\n\n" "$(basename "$0")"
+    printf "  ${C_DIM}# Flash to real SD card / USB stick (fast — ESP files + apps only)${C_RESET}\n"
+    printf "  %s flash /dev/sdd\n\n" "$(basename "$0")"
 }
 
 main() {
@@ -1029,6 +1237,7 @@ main() {
         disk|image)      cmd_disk "${args[@]:-}" ;;
         run|start|qemu)  cmd_run ;;
         thinkpad|t450s)  cmd_thinkpad ;;
+        flash)           cmd_flash "${args[0]:-}" ;;
         status|info)     cmd_status ;;
         clean|purge)     cmd_clean ;;
         *)               die "Unknown command: $cmd" ;;

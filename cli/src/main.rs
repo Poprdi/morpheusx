@@ -51,8 +51,12 @@ struct FileBlockDevice {
 
 impl FileBlockDevice {
     fn open(path: &str) -> io::Result<Self> {
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
-        let len = file.metadata()?.len();
+        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+        let mut len = file.metadata()?.len();
+        if len == 0 {
+            // Block devices may report 0 via metadata; use seek-to-end as fallback.
+            len = file.seek(SeekFrom::End(0))?;
+        }
         let total_sectors = len / SECTOR_SIZE as u64;
         Ok(Self {
             file,
