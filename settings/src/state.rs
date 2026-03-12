@@ -182,6 +182,21 @@ pub struct SettingsApp {
 }
 
 impl SettingsApp {
+    const RAIL_HITBOX_BASE: usize = 10_000;
+
+    pub fn rail_hitbox_widget_idx(route_index: usize) -> usize {
+        Self::RAIL_HITBOX_BASE + route_index
+    }
+
+    fn rail_index_from_widget_idx(widget_idx: usize) -> Option<usize> {
+        let idx = widget_idx.checked_sub(Self::RAIL_HITBOX_BASE)?;
+        if idx < Route::ALL.len() {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
     pub fn new(
         surface: *mut u32,
         fb_w: u32,
@@ -271,12 +286,21 @@ impl SettingsApp {
 
     fn poll_input(&mut self) {
         // keyboard
-        let avail = libmorpheus::io::stdin_available();
-        if avail > 0 {
-            let mut buf = [0u8; 1];
-            let n = libmorpheus::io::read_stdin(&mut buf);
-            if n > 0 {
-                self.handle_key(buf[0]);
+        let mut kbuf = [0u8; 32];
+        loop {
+            let avail = libmorpheus::io::stdin_available();
+            if avail == 0 {
+                break;
+            }
+            let n = libmorpheus::io::read_stdin(&mut kbuf);
+            if n == 0 {
+                break;
+            }
+            for b in kbuf.iter().take(n) {
+                self.handle_key(*b);
+            }
+            if n < kbuf.len() {
+                break;
             }
         }
 
@@ -298,6 +322,13 @@ impl SettingsApp {
 
     fn handle_key(&mut self, key: u8) {
         self.frame_dirty = true;
+
+        // when a chamber owns text input, global hotkeys are disabled.
+        // otherwise typing an IP turns into navigation chaos.
+        if self.is_text_input_active() {
+            self.chamber_key(key);
+            return;
+        }
 
         if matches!(key, b'1'..=b'7') {
             let idx = (key - b'1') as usize;
@@ -394,10 +425,10 @@ impl SettingsApp {
 
         // click in rail?
         if x < rail_w as i32 && y >= strip_h as i32 && y < (self.fb_h - bar_h) as i32 {
-            let rel_y = (y - strip_h as i32) as u32;
-            let item_h = layout::RAIL_ITEM_HEIGHT;
-            let idx = (rel_y / item_h) as usize;
-            if idx < Route::ALL.len() {
+            if let Some(idx) = self
+                .hitbox_at(x, y)
+                .and_then(Self::rail_index_from_widget_idx)
+            {
                 self.rail_focus = idx;
                 self.focus_in_rail = true;
                 self.navigate(Route::from_index(idx));
@@ -466,15 +497,41 @@ impl SettingsApp {
 
     fn apply_pending(&mut self) {
         let route = self.route;
-        match route {
+        let applied = match route {
             Route::NetObservatory => crate::chambers::net_obs::apply(self),
-            Route::MistShore => self.mist.apply(),
-            Route::MirrorBasin => self.mirror.apply(),
-            Route::HallOfMasks => crate::chambers::hall::apply(self),
-            _ => {}
+            Route::MistShore => {
+                self.mist.apply();
+                true
+            }
+            Route::MirrorBasin => {
+                self.mirror.apply();
+                true
+            }
+            Route::HallOfMasks => {
+                crate::chambers::hall::apply(self);
+                true
+            }
+            _ => true,
+        };
+
+        if !applied {
+            return;
         }
-        self.pending.retain(|p| p.chamber != route);
-        self.set_status("Applied", false);
+
+        // clear route-local pending only after successful apply path.
+        self.clear_pending_for(route);
+
+        if route != Route::NetObservatory {
+            self.set_status("Applied", false);
+        }
+    }
+
+    fn is_text_input_active(&self) -> bool {
+        match self.route {
+            Route::NetObservatory => self.net_obs.editing_field.is_some(),
+            Route::Archive => self.archive.searching,
+            _ => false,
+        }
     }
 
     fn revert_pending(&mut self) {
@@ -499,6 +556,10 @@ impl SettingsApp {
         }
         self.pending.retain(|p| p.chamber != route);
         self.set_status("Defaults restored", false);
+    }
+
+    pub fn clear_pending_for(&mut self, route: Route) {
+        self.pending.retain(|p| p.chamber != route);
     }
 
     fn pane_focus_up(&mut self) {

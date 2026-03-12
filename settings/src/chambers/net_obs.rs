@@ -17,8 +17,9 @@ const FIELD_GATEWAY: usize = 4;
 const FIELD_DNS1: usize = 5;
 const FIELD_DNS2: usize = 6;
 const FIELD_APPLY: usize = 7;
-const FIELD_REFRESH: usize = 8;
-const FIELD_COUNT: usize = 9;
+const FIELD_ACTIVATE: usize = 8;
+const FIELD_REFRESH: usize = 9;
+const FIELD_COUNT: usize = 10;
 
 pub struct NetObsChamber {
     // live state from kernel
@@ -203,8 +204,24 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             app.mark_edited(Route::NetObservatory, "prefix");
         }
         FIELD_APPLY => {
-            apply(app);
+            if apply(app) {
+                app.clear_pending_for(Route::NetObservatory);
+                app.net_obs.editing_field = None;
+            }
         }
+        FIELD_ACTIVATE => match net::net_activate() {
+            Ok(rc) => {
+                app.net_obs.refresh();
+                if rc == 0 {
+                    app.set_status("Networking activated", false);
+                } else {
+                    app.set_status("Networking already active", false);
+                }
+            }
+            Err(_) => {
+                app.set_status("Networking activation failed", true);
+            }
+        },
         FIELD_REFRESH => {
             app.net_obs.refresh();
             app.set_status("Network refreshed", false);
@@ -213,7 +230,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
     }
 }
 
-pub fn apply(app: &mut SettingsApp) {
+pub fn apply(app: &mut SettingsApp) -> bool {
     // hostname — copy to local buf so we don't hold a borrow on app across log_change
     let hl = app.net_obs.edit_hostname_len;
     if hl > 0 {
@@ -222,7 +239,7 @@ pub fn apply(app: &mut SettingsApp) {
         let hn = core::str::from_utf8(&hn_buf[..hl]).unwrap_or("");
         if let Err(_) = net::net_set_hostname(hn) {
             app.set_status("Hostname set failed", true);
-            return;
+            return false;
         }
         app.log_change(Route::NetObservatory, "hostname", hn, false);
     }
@@ -231,31 +248,64 @@ pub fn apply(app: &mut SettingsApp) {
     if dhcp {
         if let Err(_) = net::net_dhcp() {
             app.set_status("DHCP request failed", true);
-            return;
+            return false;
         }
         app.log_change(Route::NetObservatory, "mode", "Switched to DHCP", false);
     } else {
         let ip_len = app.net_obs.edit_ip_len;
         let gw_len = app.net_obs.edit_gw_len;
         let prefix = app.net_obs.edit_prefix;
-        let ip = parse_ip(&app.net_obs.edit_ip[..ip_len]);
-        let gw = parse_ip(&app.net_obs.edit_gateway[..gw_len]);
+        if prefix == 0 || prefix > 32 {
+            app.set_status("Invalid prefix length", true);
+            return false;
+        }
+
+        let ip = match parse_ipv4_strict(&app.net_obs.edit_ip[..ip_len]) {
+            Ok(v) => v,
+            Err(_) => {
+                app.set_status("Invalid static IP", true);
+                return false;
+            }
+        };
+        let gw = match parse_ipv4_strict(&app.net_obs.edit_gateway[..gw_len]) {
+            Ok(v) => v,
+            Err(_) => {
+                app.set_status("Invalid gateway IP", true);
+                return false;
+            }
+        };
         if let Err(_) = net::net_static_ip(ip, prefix, gw) {
             app.set_status("Static IP set failed", true);
-            return;
+            return false;
         }
         app.log_change(Route::NetObservatory, "mode", "Switched to static", false);
 
         let d1_len = app.net_obs.edit_dns1_len;
         let d2_len = app.net_obs.edit_dns2_len;
-        let d1 = parse_ip(&app.net_obs.edit_dns1[..d1_len]);
-        let d2 = parse_ip(&app.net_obs.edit_dns2[..d2_len]);
+        let d1 = match parse_ipv4_or_empty(&app.net_obs.edit_dns1[..d1_len]) {
+            Ok(v) => v,
+            Err(_) => {
+                app.set_status("Invalid primary DNS", true);
+                return false;
+            }
+        };
+        let d2 = match parse_ipv4_or_empty(&app.net_obs.edit_dns2[..d2_len]) {
+            Ok(v) => v,
+            Err(_) => {
+                app.set_status("Invalid secondary DNS", true);
+                return false;
+            }
+        };
         let servers = [d1, d2];
-        let _ = net::dns_set_servers(&servers);
+        if let Err(_) = net::dns_set_servers(&servers) {
+            app.set_status("DNS set failed", true);
+            return false;
+        }
     }
 
     app.net_obs.refresh();
     app.set_status("Network config applied", false);
+    true
 }
 
 pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
@@ -398,6 +448,8 @@ pub fn render(app: &SettingsApp) {
     // action buttons
     layout::draw_button_row(app, px, cy, "Apply Network Config", FIELD_APPLY, t.signal);
     cy += r8;
+    layout::draw_button_row(app, px, cy, "Activate Networking", FIELD_ACTIVATE, t.warning);
+    cy += r8;
     layout::draw_button_row(app, px, cy, "Refresh", FIELD_REFRESH, t.glyph);
     cy += r12;
 
@@ -477,26 +529,47 @@ fn field_name(idx: usize) -> &'static str {
     }
 }
 
-fn parse_ip(buf: &[u8]) -> u32 {
-    let s = core::str::from_utf8(buf).unwrap_or("0.0.0.0");
+fn parse_ipv4_or_empty(buf: &[u8]) -> Result<u32, ()> {
+    if buf.is_empty() {
+        return Ok(0);
+    }
+    parse_ipv4_strict(buf)
+}
+
+fn parse_ipv4_strict(buf: &[u8]) -> Result<u32, ()> {
     let mut octets = [0u8; 4];
-    let mut oi = 0;
+    let mut oi = 0usize;
     let mut acc: u32 = 0;
-    for &b in s.as_bytes() {
+    let mut saw_digit = false;
+
+    for &b in buf {
         if b == b'.' {
-            if oi < 4 {
-                octets[oi] = acc.min(255) as u8;
-                oi += 1;
-                acc = 0;
+            if !saw_digit || oi >= 3 || acc > 255 {
+                return Err(());
             }
-        } else if b >= b'0' && b <= b'9' {
-            acc = acc * 10 + (b - b'0') as u32;
+            octets[oi] = acc as u8;
+            oi += 1;
+            acc = 0;
+            saw_digit = false;
+            continue;
+        }
+
+        if !b.is_ascii_digit() {
+            return Err(());
+        }
+
+        saw_digit = true;
+        acc = acc.saturating_mul(10).saturating_add((b - b'0') as u32);
+        if acc > 255 {
+            return Err(());
         }
     }
-    if oi < 4 {
-        octets[oi] = acc.min(255) as u8;
+
+    if !saw_digit || oi != 3 || acc > 255 {
+        return Err(());
     }
-    u32::from_be_bytes(octets)
+    octets[3] = acc as u8;
+    Ok(u32::from_be_bytes(octets))
 }
 
 pub fn scancode_to_char(sc: u8) -> Option<u8> {

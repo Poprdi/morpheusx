@@ -53,6 +53,13 @@ impl ArchiveChamber {
     }
 
     pub fn handle_key(&mut self, scancode: u8) {
+        if !self.searching {
+            if scancode == 0x35 || scancode == b'/' {
+                self.searching = true;
+                return;
+            }
+        }
+
         if self.searching {
             match scancode {
                 0x01 => {

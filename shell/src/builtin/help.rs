@@ -223,6 +223,15 @@ pub fn usage(cmd: &str) -> Option<&'static str> {
             "-f: immediate hard reset\n",
             "-p: intentional kernel panic (yes just because) then reset\n",
         ),
+        "netup" | "nicup" => concat!(
+            "netup — activate networking from userspace\n",
+            "\n",
+            "USAGE\n",
+            "  netup\n",
+            "\n",
+            "Brings up NIC/driver on demand.\n",
+            "Boot remains offline by default until this is called.\n",
+        ),
         "true" => concat!(
             "true — return success\n",
             "\n",

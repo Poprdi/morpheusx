@@ -89,6 +89,13 @@ fn render_rail(app: &SettingsApp) {
 
     for (i, route) in Route::ALL.iter().enumerate() {
         let y = STRIP_HEIGHT + i as u32 * RAIL_ITEM_HEIGHT;
+        app.register_widget_hitbox(
+            0,
+            y,
+            RAIL_WIDTH.saturating_sub(1),
+            RAIL_ITEM_HEIGHT,
+            SettingsApp::rail_hitbox_widget_idx(i),
+        );
         let is_current = *route == app.route;
         let is_focused = app.focus_in_rail && app.rail_focus == i;
 

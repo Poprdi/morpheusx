@@ -109,6 +109,9 @@ pub fn update(state: &mut CompState) {
                     src_w: entry.width,
                     src_h: entry.height,
                     src_stride: (entry.stride / 4).max(entry.width.max(1)),
+                    mouse_local_x: 0,
+                    mouse_local_y: 0,
+                    mouse_local_valid: false,
                     title: [0u8; 64],
                     title_len: 0,
                     z_layer: 0,
@@ -146,13 +149,55 @@ pub fn update(state: &mut CompState) {
                     src_w: entry.width,
                     src_h: entry.height,
                     src_stride: (entry.stride / 4).max(entry.width.max(1)),
+                    mouse_local_x: 0,
+                    mouse_local_y: 0,
+                    mouse_local_valid: false,
                     title: [0u8; 64],
                     title_len: 0,
                     z_layer: 1,
                 });
 
+                // seed app-local cursor at spawn so first click lands where the cursor already is.
+                if let Some(ref mut win) = state.windows[idx] {
+                    let (local_x, local_y) = map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);
+                    let dx = local_x.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                    let dy = local_y.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                    let _ = compsys::mouse_forward(win.pid, dx, dy, 0);
+                    win.mouse_local_x = local_x;
+                    win.mouse_local_y = local_y;
+                    win.mouse_local_valid = true;
+                }
+
                 state.focused = Some(idx);
             }
         }
     }
+}
+
+#[inline(always)]
+fn map_global_to_local_spawn(
+    mx: i32,
+    my: i32,
+    win: &ChildWindow,
+) -> (i32, i32) {
+    let sw = win.src_w.max(1) as i32;
+    let sh = win.src_h.max(1) as i32;
+    let ww = win.w.max(1) as i32;
+    let wh = win.h.max(1) as i32;
+
+    let rel_x = (mx - win.x).clamp(0, ww - 1);
+    let rel_y = (my - win.y).clamp(0, wh - 1);
+
+    let local_x = if ww <= 1 || sw <= 1 {
+        0
+    } else {
+        (rel_x as i64 * (sw - 1) as i64 / (ww - 1) as i64) as i32
+    };
+    let local_y = if wh <= 1 || sh <= 1 {
+        0
+    } else {
+        (rel_y as i64 * (sh - 1) as i64 / (wh - 1) as i64) as i32
+    };
+
+    (local_x, local_y)
 }
