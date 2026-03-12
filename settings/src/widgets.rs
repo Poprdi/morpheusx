@@ -79,12 +79,36 @@ pub fn draw_str(surface: *mut u32, stride: u32, x: u32, y: u32, s: &str, fg: u32
 
 // draw string with max width (truncates with ".." if too long)
 pub fn draw_str_trunc(surface: *mut u32, stride: u32, x: u32, y: u32, s: &str, fg: u32, bg: u32, fb_w: u32, fb_h: u32, max_chars: usize) {
-    if s.len() <= max_chars {
+    if max_chars == 0 {
+        return;
+    }
+    let total_chars = s.chars().count();
+    if total_chars <= max_chars {
         draw_str(surface, stride, x, y, s, fg, bg, fb_w, fb_h);
     } else {
-        let trunc = &s[..max_chars.saturating_sub(2)];
+        if max_chars <= 2 {
+            draw_str(surface, stride, x, y, "..", fg, bg, fb_w, fb_h);
+            return;
+        }
+
+        let keep = max_chars - 2;
+        let mut end = 0usize;
+        for (i, (bi, _)) in s.char_indices().enumerate() {
+            if i == keep {
+                break;
+            }
+            end = bi;
+        }
+        // include last kept character boundary
+        if keep > 0 {
+            if let Some((bi, ch)) = s.char_indices().nth(keep - 1) {
+                end = bi + ch.len_utf8();
+            }
+        }
+
+        let trunc = &s[..end.min(s.len())];
         draw_str(surface, stride, x, y, trunc, fg, bg, fb_w, fb_h);
-        let cx = x + (max_chars as u32 - 2) * FONT_W;
+        let cx = x + (keep as u32) * FONT_W;
         draw_str(surface, stride, cx, y, "..", fg, bg, fb_w, fb_h);
     }
 }

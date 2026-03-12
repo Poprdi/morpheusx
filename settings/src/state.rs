@@ -8,6 +8,7 @@ use crate::chambers::{
 };
 use crate::layout;
 use crate::theme::OneiricTheme;
+use crate::widgets;
 
 // route ids — flat enum, zero-cost dispatch
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,15 @@ pub struct ChangeEntry {
     pub destructive: bool,
 }
 
+#[derive(Clone, Copy)]
+pub struct Hitbox {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub widget_idx: usize,
+}
+
 // the master state machine
 pub struct SettingsApp {
     // display surface
@@ -166,6 +176,9 @@ pub struct SettingsApp {
 
     // tick counter for animations
     pub tick_count: u64,
+
+    pub hitboxes: [Hitbox; 128],
+    pub hitbox_count: usize,
 }
 
 impl SettingsApp {
@@ -214,6 +227,15 @@ impl SettingsApp {
             hall: HallChamber::new(),
 
             tick_count: 0,
+
+            hitboxes: [Hitbox {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+                widget_idx: 0,
+            }; 128],
+            hitbox_count: 0,
         }
     }
 
@@ -222,6 +244,7 @@ impl SettingsApp {
         self.net_obs.refresh();
         self.sys_obs.refresh();
         self.mist.refresh();
+        self.set_status("Tab switch focus, W/S move, Enter activate, 1-7 jump sections", false);
     }
 
     pub fn tick(&mut self) {
@@ -273,16 +296,23 @@ impl SettingsApp {
         }
     }
 
-    fn handle_key(&mut self, scancode: u8) {
+    fn handle_key(&mut self, key: u8) {
         self.frame_dirty = true;
 
-        match scancode {
+        if matches!(key, b'1'..=b'7') {
+            let idx = (key - b'1') as usize;
+            self.rail_focus = idx;
+            self.navigate(Route::from_index(idx));
+            return;
+        }
+
+        match key {
             // Tab = toggle rail/pane focus
-            0x0F => {
+            0x0F | b'\t' => {
                 self.focus_in_rail = !self.focus_in_rail;
             }
-            // Up arrow
-            0x48 => {
+            // up navigation
+            b'k' | b'K' | b'w' | b'W' => {
                 if self.focus_in_rail {
                     if self.rail_focus > 0 {
                         self.rail_focus -= 1;
@@ -291,8 +321,8 @@ impl SettingsApp {
                     self.pane_focus_up();
                 }
             }
-            // Down arrow
-            0x50 => {
+            // down navigation
+            b'j' | b'J' | b's' | b'S' => {
                 if self.focus_in_rail {
                     if self.rail_focus < Route::ALL.len() - 1 {
                         self.rail_focus += 1;
@@ -302,7 +332,7 @@ impl SettingsApp {
                 }
             }
             // Enter = navigate to rail selection or activate pane widget
-            0x1C => {
+            0x1C | b'\r' | b'\n' => {
                 if self.focus_in_rail {
                     self.navigate(Route::from_index(self.rail_focus));
                 } else {
@@ -310,7 +340,7 @@ impl SettingsApp {
                 }
             }
             // Escape = back to gateway or disarm
-            0x01 => {
+            0x01 | 0x1B => {
                 if self.severe_arm == ArmState::Armed {
                     self.severe_arm = ArmState::Disarmed;
                     self.set_status("Disarmed", false);
@@ -322,29 +352,35 @@ impl SettingsApp {
                     }
                 }
             }
-            // Left arrow = focus rail
-            0x4B => {
+            // focus rail
+            b'h' | b'H' => {
                 self.focus_in_rail = true;
             }
-            // Right arrow = focus pane
-            0x4D => {
+            // focus pane
+            b'l' | b'L' => {
                 self.focus_in_rail = false;
             }
             // 'a' key (apply staged) — scancode 0x1E
-            0x1E => {
+            0x1E | b'a' | b'A' => {
                 if !self.focus_in_rail {
                     self.apply_pending();
                 }
             }
             // 'r' key (revert) — scancode 0x13
-            0x13 => {
+            0x13 | b'r' | b'R' => {
                 if !self.focus_in_rail {
                     self.revert_pending();
                 }
             }
+            // 'd' key (defaults)
+            0x20 | b'd' | b'D' => {
+                if !self.focus_in_rail {
+                    self.restore_defaults();
+                }
+            }
             // forward to active chamber for chamber-specific keys
             _ => {
-                self.chamber_key(scancode);
+                self.chamber_key(key);
             }
         }
     }
@@ -466,12 +502,14 @@ impl SettingsApp {
     }
 
     fn pane_focus_up(&mut self) {
+        self.clamp_pane_focus();
         if self.pane_focus > 0 {
             self.pane_focus -= 1;
         }
     }
 
     fn pane_focus_down(&mut self) {
+        self.clamp_pane_focus();
         let max = self.pane_widget_count();
         if self.pane_focus + 1 < max {
             self.pane_focus += 1;
@@ -479,6 +517,7 @@ impl SettingsApp {
     }
 
     fn pane_activate(&mut self) {
+        self.clamp_pane_focus();
         let idx = self.pane_focus;
         match self.route {
             Route::Gateway => crate::chambers::gateway::activate(self, idx),
@@ -504,14 +543,34 @@ impl SettingsApp {
     }
 
     fn chamber_click(&mut self, pane_x: i32, pane_y: i32) {
-        match self.route {
-            Route::Gateway => crate::chambers::gateway::handle_click(self, pane_x, pane_y),
-            Route::NetObservatory => crate::chambers::net_obs::handle_click(self, pane_x, pane_y),
-            Route::SysObservatory => crate::chambers::sys_obs::handle_click(self, pane_x, pane_y),
-            Route::MistShore => crate::chambers::mist::handle_click(self, pane_x, pane_y),
-            Route::MirrorBasin => crate::chambers::mirror::handle_click(self, pane_x, pane_y),
-            Route::Archive => self.archive.handle_click(pane_x, pane_y),
-            Route::HallOfMasks => crate::chambers::hall::handle_click(self, pane_x, pane_y),
+        let abs_x = pane_x + layout::RAIL_WIDTH as i32;
+        let abs_y = pane_y + layout::STRIP_HEIGHT as i32;
+        if let Some(idx) = self.hitbox_at(abs_x, abs_y) {
+            self.pane_focus = idx;
+            self.pane_activate();
+            return;
+        }
+
+        // fallback for clicks outside registered controls: pick nearest slot.
+        let count = self.pane_widget_count();
+        if count > 0 {
+            let pane_h = self
+                .fb_h
+                .saturating_sub(layout::STRIP_HEIGHT + layout::BAR_HEIGHT + 2 * layout::PANE_PAD)
+                .max(1);
+            let y = pane_y.max(0) as u32;
+            let idx = ((y as u64 * count as u64) / pane_h as u64) as usize;
+            self.pane_focus = idx.min(count - 1);
+            self.pane_activate();
+        }
+    }
+
+    fn clamp_pane_focus(&mut self) {
+        let count = self.pane_widget_count();
+        if count == 0 {
+            self.pane_focus = 0;
+        } else if self.pane_focus >= count {
+            self.pane_focus = count - 1;
         }
     }
 
@@ -565,5 +624,92 @@ impl SettingsApp {
 
     fn render(&mut self) {
         layout::render_frame(self);
+        self.rebuild_hitboxes();
+    }
+
+    fn clear_hitboxes(&mut self) {
+        self.hitbox_count = 0;
+    }
+
+    fn push_hitbox(&mut self, x: i32, y: i32, w: i32, h: i32, widget_idx: usize) {
+        if self.hitbox_count >= self.hitboxes.len() || w <= 0 || h <= 0 {
+            return;
+        }
+        self.hitboxes[self.hitbox_count] = Hitbox {
+            x,
+            y,
+            w,
+            h,
+            widget_idx,
+        };
+        self.hitbox_count += 1;
+    }
+
+    fn rebuild_hitboxes(&mut self) {
+        self.clear_hitboxes();
+
+        let count = self.pane_widget_count();
+        if count == 0 {
+            return;
+        }
+
+        let px = layout::RAIL_WIDTH as i32 + layout::PANE_PAD as i32;
+        let pw = (self.fb_w.saturating_sub(layout::RAIL_WIDTH + 2 * layout::PANE_PAD)) as i32;
+        if pw <= 0 {
+            return;
+        }
+
+        match self.route {
+            Route::Gateway => {
+                let row_h = layout::row_step(self, 8) as i32;
+                let base_y = layout::STRIP_HEIGHT as i32 + 2 * row_h;
+                for i in 0..count {
+                    let y = base_y + i as i32 * row_h;
+                    self.push_hitbox(px, y, pw, row_h.max(14), i);
+                }
+            }
+            Route::NetObservatory | Route::SysObservatory | Route::MistShore | Route::MirrorBasin => {
+                let row_h = layout::row_step(self, 8) as i32;
+                let base_y = layout::STRIP_HEIGHT as i32 + 40;
+                for i in 0..count {
+                    let y = base_y + i as i32 * row_h;
+                    self.push_hitbox(px, y, pw, row_h.max(14), i);
+                }
+            }
+            Route::HallOfMasks => {
+                let row_h = (widgets::FONT_H + 12) as i32;
+                let base_y = layout::STRIP_HEIGHT as i32 + 60;
+                for i in 0..count {
+                    let y = base_y + i as i32 * row_h;
+                    self.push_hitbox(px, y, pw, row_h.max(14), i);
+                }
+            }
+            Route::Archive => {
+                // row picks in the log table (index 3 + visible row).
+                let row_h = (widgets::FONT_H + 4) as i32;
+                let table_y = layout::STRIP_HEIGHT as i32 + 60;
+                let half = (pw / 2).max(20);
+                self.push_hitbox(px, table_y - row_h, half, row_h, 0);
+                self.push_hitbox(px + half, table_y - row_h, pw - half, row_h, 1);
+                self.push_hitbox(px, table_y - 2 * row_h, pw, row_h, 2);
+
+                let rows = count.saturating_sub(3);
+                for i in 0..rows {
+                    let y = table_y + i as i32 * row_h;
+                    self.push_hitbox(px, y, pw, row_h.max(14), i + 3);
+                }
+            }
+        }
+    }
+
+    fn hitbox_at(&self, x: i32, y: i32) -> Option<usize> {
+        // last one wins in case of overlap
+        for i in (0..self.hitbox_count).rev() {
+            let hb = self.hitboxes[i];
+            if x >= hb.x && y >= hb.y && x < hb.x + hb.w && y < hb.y + hb.h {
+                return Some(hb.widget_idx);
+            }
+        }
+        None
     }
 }
