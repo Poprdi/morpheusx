@@ -315,6 +315,25 @@ impl<D: NetworkDevice> NetInterface<D> {
         })
     }
 
+    /// Restart DHCP discovery on an existing DHCP-enabled interface.
+    pub fn restart_dhcp(&mut self) -> Result<()> {
+        let Some(dhcp_handle) = self.dhcp_handle else {
+            return Err(NetworkError::ProtocolNotAvailable);
+        };
+
+        let dhcp = self.sockets.get_mut::<DhcpSocket>(dhcp_handle);
+        dhcp.reset();
+
+        // Drop current lease immediately so userspace sees discovery state.
+        self.iface.update_ip_addrs(|addrs| addrs.clear());
+        self.iface.routes_mut().remove_default_ipv4_route();
+        self.gateway = None;
+        self.dns = None;
+        self.state = NetState::DhcpDiscovering;
+
+        Ok(())
+    }
+
     /// Start a DNS query for a hostname. Returns a query handle.
     pub fn start_dns_query(&mut self, hostname: &str) -> Result<smoltcp::socket::dns::QueryHandle> {
         super::debug_log(80, "start_dns_query");

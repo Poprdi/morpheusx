@@ -123,8 +123,10 @@ impl NetObsChamber {
                 self.edit_dhcp = (cfg.flags & net::NET_FLAG_DHCP) != 0;
             }
 
-            // populate edit fields from live state
-            self.sync_edit_from_live();
+            // Don't clobber in-progress typing with periodic refresh.
+            if self.editing_field.is_none() {
+                self.sync_edit_from_live();
+            }
         }
 
         if let Ok(info) = net::nic_info() {
@@ -142,6 +144,14 @@ impl NetObsChamber {
             Err(_) => {
                 self.stack_available = false;
             }
+        }
+
+        // Prefer NIC hardware counters when available.
+        if let Ok(hw) = net::nic_hw_stats() {
+            self.tx_packets = hw.tx_packets;
+            self.rx_packets = hw.rx_packets;
+            self.tx_bytes = hw.tx_bytes;
+            self.rx_bytes = hw.rx_bytes;
         }
     }
 
@@ -702,9 +712,7 @@ fn parse_ipv4_strict(buf: &[u8]) -> Result<u32, ()> {
 }
 
 pub fn scancode_to_char(sc: u8) -> Option<u8> {
-    if sc.is_ascii_graphic() || sc == b' ' {
-        return Some(sc.to_ascii_lowercase());
-    }
+    // Input here is keyboard scancode, not ASCII. Map explicitly.
     match sc {
         0x02..=0x0A => Some(b'1' + (sc - 0x02)),
         0x0B => Some(b'0'),

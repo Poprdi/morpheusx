@@ -1,7 +1,4 @@
-use crate::islands::{
-    draw_text, raw_fill, ShellState, PANEL_BG_RGB, PANEL_H, START_ACTIVE_RGB, START_BTN_W,
-    START_RGB,
-};
+use crate::islands::{draw_text, raw_fill, ShellState, PANEL_H, START_BTN_W};
 use libmorpheus::time;
 
 /// panel island. taskbar at the bottom of the screen.
@@ -12,7 +9,7 @@ pub fn tick(state: &mut ShellState) {
     }
 
     let panel_y = state.fb_h.saturating_sub(PANEL_H);
-    let (pr, pg, pb) = PANEL_BG_RGB;
+    let (pr, pg, pb) = state.panel_rgb;
     let panel_bg = state.pack(pr, pg, pb);
 
     // panel background bar
@@ -27,11 +24,7 @@ pub fn tick(state: &mut ShellState) {
     );
 
     // START button
-    let (sr, sg, sb) = if state.launcher_open {
-        START_ACTIVE_RGB
-    } else {
-        START_RGB
-    };
+    let (sr, sg, sb) = if state.launcher_open { state.start_active_rgb } else { state.start_rgb };
     let start_bg = state.pack(sr, sg, sb);
     raw_fill(
         state.surface_ptr,
@@ -43,11 +36,7 @@ pub fn tick(state: &mut ShellState) {
         start_bg,
     );
     let start_fg = (255u8, 255u8, 255u8);
-    let start_bg_rgb = if state.launcher_open {
-        START_ACTIVE_RGB
-    } else {
-        START_RGB
-    };
+    let start_bg_rgb = if state.launcher_open { state.start_active_rgb } else { state.start_rgb };
     draw_text(state, 10, panel_y + 7, "START", start_fg, start_bg_rgb);
 
     // status label
@@ -57,7 +46,7 @@ pub fn tick(state: &mut ShellState) {
         panel_y + 7,
         "MorpheusX DE",
         (200, 200, 210),
-        PANEL_BG_RGB,
+        state.panel_rgb,
     );
 
     // uptime clock on the right side
@@ -76,7 +65,7 @@ pub fn tick(state: &mut ShellState) {
             panel_y + 7,
             clock_str,
             (180, 220, 180),
-            PANEL_BG_RGB,
+            state.panel_rgb,
         );
     }
 

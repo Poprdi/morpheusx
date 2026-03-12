@@ -45,10 +45,13 @@ pub(super) unsafe fn net_cfg_get(buf: *mut u8) -> i64 {
 }
 
 pub(super) unsafe fn net_cfg_dhcp() -> i64 {
-    if state::user_net_stack_mut().is_some() {
-        0
-    } else {
-        -1
+    let Some(stack) = state::user_net_stack_mut() else {
+        return -1;
+    };
+
+    match stack.restart_dhcp() {
+        Ok(()) => 0,
+        Err(_) => -1,
     }
 }
 
@@ -81,6 +84,8 @@ pub(super) unsafe fn net_poll_stats(buf: *mut u8) -> i64 {
         0,
         core::mem::size_of::<morpheus_hwinit::NetStats>(),
     );
+    out.tx_packets = morpheus_network::stack::tx_packet_count() as u64;
+    out.rx_packets = morpheus_network::stack::rx_packet_count() as u64;
     out.tcp_active = state::tcp_active_count();
     0
 }
