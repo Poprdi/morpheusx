@@ -283,15 +283,6 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
     }
 }
 
-pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = layout::row_step(app, 8) as i32;
-    let idx = ((py - 40) / row_h).max(0) as usize;
-    if idx < FIELD_COUNT {
-        app.pane_focus = idx;
-        activate(app, idx);
-    }
-}
-
 pub fn render(app: &SettingsApp) {
     let t = &app.theme;
     let net = &app.net_obs;
@@ -446,6 +437,7 @@ fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &s
     let bg = if editing { t.input_bg } else if is_focused { t.surface } else { t.substrate };
     let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
     let row_h = layout::row_step(app, 4);
+    app.register_widget_hitbox(x, y, row_w, row_h, field_idx);
     widgets::fill_rect(s, st, x, y, row_w, row_h, bg, w, h);
 
     let border_color = if editing {

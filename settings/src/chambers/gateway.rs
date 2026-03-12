@@ -93,16 +93,6 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
     }
 }
 
-pub fn handle_click(app: &mut SettingsApp, _px: i32, py: i32) {
-    let row_h = layout::row_step(app, 8);
-    let idx = (py as u32 / row_h) as usize;
-    if idx >= 2 {
-        let adjusted = idx - 2;
-        app.pane_focus = adjusted;
-        activate(app, adjusted);
-    }
-}
-
 pub fn render(app: &SettingsApp) {
     let s = app.surface;
     let st = app.fb_stride;
@@ -152,6 +142,7 @@ pub fn render(app: &SettingsApp) {
         let fg = if is_focused { t.signal } else { t.glyph };
 
         let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
+        app.register_widget_hitbox(px, cy, row_w, r4, i + 1);
         widgets::fill_rect(s, st, px, cy, row_w, r4, bg, w, h);
         if is_focused {
             widgets::rect_outline(s, st, px, cy, row_w, r4, t.focus_ring, w, h);

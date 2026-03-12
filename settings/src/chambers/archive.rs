@@ -78,15 +78,6 @@ impl ArchiveChamber {
             }
         }
     }
-
-    pub fn handle_click(&mut self, _px: i32, py: i32) {
-        let row_h = (widgets::FONT_H + 4) as i32;
-        let header = 60i32;
-        let idx = ((py - header) / row_h).max(0) as usize;
-        if idx < VISIBLE_ENTRIES {
-            self.selected = idx + self.scroll_offset;
-        }
-    }
 }
 
 pub fn render(app: &SettingsApp) {
@@ -118,6 +109,7 @@ pub fn render(app: &SettingsApp) {
     if arch.searching {
         let search_str = core::str::from_utf8(&arch.search_buf[..arch.search_len]).unwrap_or("");
         let search_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
+        app.register_widget_hitbox(px, cy, search_w, widgets::FONT_H + 4, 2);
         widgets::fill_rect(s, st, px, cy, search_w, widgets::FONT_H + 4, t.input_bg, w, h);
         widgets::rect_outline(s, st, px, cy, search_w, widgets::FONT_H + 4, t.signal, w, h);
         widgets::draw_str(s, st, px + 4, cy + 2, "Search: ", t.glyph_dim, t.input_bg, w, h);
@@ -125,6 +117,7 @@ pub fn render(app: &SettingsApp) {
         let cursor_x = px + 68 + arch.search_len as u32 * widgets::FONT_W;
         widgets::fill_rect(s, st, cursor_x, cy + 2, 2, widgets::FONT_H, t.focus_ring, w, h);
     } else {
+        app.register_widget_hitbox(px, cy, (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD), widgets::FONT_H + 4, 2);
         widgets::draw_str(s, st, px, cy, "Press '/' or activate to search", t.glyph_dim, t.substrate, w, h);
     }
     cy += r8;
@@ -134,6 +127,8 @@ pub fn render(app: &SettingsApp) {
     let can_down = changelog_len > arch.scroll_offset + VISIBLE_ENTRIES;
     let up_color = if can_up { t.glyph } else { t.contour };
     let dn_color = if can_down { t.glyph } else { t.contour };
+    app.register_widget_hitbox(px, cy, 72, widgets::FONT_H, 0);
+    app.register_widget_hitbox(px + 80, cy, 80, widgets::FONT_H, 1);
     widgets::draw_str(s, st, px, cy, "^^ Up", up_color, t.substrate, w, h);
     widgets::draw_str(s, st, px + 80, cy, "vv Down", dn_color, t.substrate, w, h);
     cy += r4;
@@ -166,6 +161,7 @@ pub fn render(app: &SettingsApp) {
         let row_bg = if is_selected { t.surface } else { t.substrate };
 
         let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
+        app.register_widget_hitbox(px, cy, row_w, widgets::FONT_H + 2, 3 + displayed);
         widgets::fill_rect(s, st, px, cy, row_w, widgets::FONT_H + 2, row_bg, w, h);
 
         // index

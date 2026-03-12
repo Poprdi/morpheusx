@@ -236,6 +236,7 @@ pub fn draw_field_row(app: &SettingsApp, x: u32, y: u32, label: &str, value: &st
     let bg = if is_focused { t.surface } else { t.substrate };
     let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
     let row_h = row_step(app, 4);
+    app.register_widget_hitbox(x, y, row_w, row_h, field_idx);
     widgets::fill_rect(s, st, x, y, row_w, row_h, bg, w, h);
 
     if is_focused {
@@ -265,6 +266,7 @@ pub fn draw_button_row(app: &SettingsApp, x: u32, y: u32, label: &str, field_idx
     let bg = if is_focused { t.surface } else { t.substrate };
     let btn_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
     let btn_h = row_step(app, 4);
+    app.register_widget_hitbox(x, y, btn_w, btn_h, field_idx);
 
     widgets::fill_rect(s, st, x, y, btn_w, btn_h, bg, w, h);
     widgets::rect_outline(s, st, x, y, btn_w, btn_h, if is_focused { t.focus_ring } else { t.contour }, w, h);
