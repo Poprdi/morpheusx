@@ -83,12 +83,14 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
         FIELD_APPLY => {
             let accent_name = ACCENTS[app.mirror.accent_idx].3;
             app.mirror.apply();
+            app.clear_pending_for(Route::MirrorBasin);
             app.set_status("Appearance applied", false);
             app.log_change(Route::MirrorBasin, "appearance", accent_name, false);
         }
         FIELD_REVERT => {
             app.mirror.revert();
             rebuild_theme(app);
+            app.clear_pending_for(Route::MirrorBasin);
             app.set_status("Appearance reverted", false);
         }
         _ => {}

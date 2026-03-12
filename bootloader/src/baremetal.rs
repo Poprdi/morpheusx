@@ -5,6 +5,8 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use morpheus_display::console::TextConsole;
+use morpheus_network::device::UnifiedNetDevice;
+use morpheus_network::driver::traits::NetworkDriver;
 
 // TYPES THAT CROSS THE BORDER
 
@@ -48,6 +50,101 @@ static BAREMETAL_MODE: AtomicBool = AtomicBool::new(false);
 // After that every puts() in hwinit mirrors to the screen in real-time.
 
 static mut LIVE_CONSOLE: Option<TextConsole> = None;
+
+// userspace-activated networking state. offline by default until requested.
+static mut USER_NET_DRIVER: Option<UnifiedNetDevice> = None;
+static mut USER_NET_DMA: Option<morpheus_hwinit::DmaRegion> = None;
+static mut USER_NET_TSC_FREQ: u64 = 0;
+
+#[inline]
+unsafe fn user_net_driver_mut() -> Option<&'static mut UnifiedNetDevice> {
+    USER_NET_DRIVER.as_mut()
+}
+
+unsafe fn user_net_tx(frame: *const u8, len: usize) -> i64 {
+    let Some(driver) = user_net_driver_mut() else {
+        return -1;
+    };
+    let frame = core::slice::from_raw_parts(frame, len);
+    if driver.transmit(frame).is_ok() {
+        0
+    } else {
+        -1
+    }
+}
+
+unsafe fn user_net_rx(buf: *mut u8, buf_len: usize) -> i64 {
+    let Some(driver) = user_net_driver_mut() else {
+        return -1;
+    };
+    let buf = core::slice::from_raw_parts_mut(buf, buf_len);
+    match driver.receive(buf) {
+        Ok(Some(n)) => n as i64,
+        Ok(None) => 0,
+        Err(_) => -1,
+    }
+}
+
+unsafe fn user_net_link_up() -> i64 {
+    let Some(driver) = user_net_driver_mut() else {
+        return 0;
+    };
+    driver.link_up() as i64
+}
+
+unsafe fn user_net_mac(out: *mut u8) -> i64 {
+    let Some(driver) = user_net_driver_mut() else {
+        return -1;
+    };
+    let mac = driver.mac_address();
+    core::ptr::copy_nonoverlapping(mac.as_ptr(), out, 6);
+    0
+}
+
+unsafe fn user_net_refill() -> i64 {
+    let Some(driver) = user_net_driver_mut() else {
+        return -1;
+    };
+    driver.refill_rx_queue();
+    driver.collect_tx_completions();
+    0
+}
+
+unsafe fn user_net_ctrl(_cmd: u32, _arg: u64) -> i64 {
+    // full NIC control routing can be added later per-driver.
+    -1
+}
+
+unsafe fn activate_network_from_userspace() -> i64 {
+    if USER_NET_DRIVER.is_some() {
+        return 1;
+    }
+
+    let Some(dma) = USER_NET_DMA else {
+        return -1;
+    };
+    let tsc_freq = USER_NET_TSC_FREQ;
+
+    let driver = match UnifiedNetDevice::probe(&dma, tsc_freq) {
+        Ok(d) => d,
+        Err(_) => return -1,
+    };
+
+    USER_NET_DRIVER = Some(driver);
+
+    morpheus_hwinit::register_nic(morpheus_hwinit::NicOps {
+        tx: Some(user_net_tx),
+        rx: Some(user_net_rx),
+        link_up: Some(user_net_link_up),
+        mac: Some(user_net_mac),
+        refill: Some(user_net_refill),
+        ctrl: Some(user_net_ctrl),
+    });
+
+    // prime descriptor maintenance immediately.
+    let _ = user_net_refill();
+    0
+}
 
 /// Called by the hwinit serial hook for every byte emitted via `puts()`.
 /// Writes directly to the TextConsole backed by the GOP framebuffer.
@@ -286,6 +383,11 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
             }
         }
     };
+
+    // userspace network activation hook. we stay offline by default.
+    USER_NET_DMA = Some(*platform.dma());
+    USER_NET_TSC_FREQ = platform.tsc_freq();
+    morpheus_hwinit::register_net_activation(activate_network_from_userspace);
 
     // persistent storage — try to mount a real block device
     crate::storage::init_persistent_storage(platform.dma(), platform.tsc_freq());

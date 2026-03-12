@@ -307,6 +307,7 @@ pub use syscall::{
 // hardware backends that hwinit cannot depend on directly.
 pub use syscall::handler::{
     register_framebuffer,
+    register_net_activation,
     register_net_stack,
     register_nic,
     FbInfo,

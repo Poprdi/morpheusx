@@ -3,6 +3,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 
+use libmorpheus::net;
 use libmorpheus::process::{self, PsEntry};
 use libmorpheus::sys::{self, SysInfo};
 
@@ -379,6 +380,71 @@ pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 
         Ok(()) => 0,
         Err(e) => {
             con.write_colored(fb, &format!("shutdown: error 0x{:x}\n", e), (170, 0, 0));
+            1
+        }
+    }
+}
+
+pub fn netup(args: &[String]) -> i32 {
+    for arg in args {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                libmorpheus::io::print(
+                    "netup — activate networking from userspace\n\nUSAGE\n  netup\n\nBrings up NIC/driver on demand. Boot stays offline by default.\n",
+                );
+                return 0;
+            }
+            _ => {
+                libmorpheus::eprintln!("netup: unknown option: {}", arg);
+                return 1;
+            }
+        }
+    }
+
+    match net::net_activate() {
+        Ok(rc) => {
+            if rc == 0 {
+                libmorpheus::println!("netup: networking activated");
+            } else {
+                libmorpheus::println!("netup: networking already active");
+            }
+            0
+        }
+        Err(e) => {
+            libmorpheus::eprintln!("netup: activation failed: 0x{:x}", e);
+            1
+        }
+    }
+}
+
+pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
+    for arg in args {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                con.write_str(
+                    fb,
+                    "netup — activate networking from userspace\n\nUSAGE\n  netup\n\nBrings up NIC/driver on demand. Boot stays offline by default.\n",
+                );
+                return 0;
+            }
+            _ => {
+                con.write_colored(fb, &format!("netup: unknown option: {}\n", arg), (170, 0, 0));
+                return 1;
+            }
+        }
+    }
+
+    match net::net_activate() {
+        Ok(rc) => {
+            if rc == 0 {
+                con.write_str(fb, "netup: networking activated\n");
+            } else {
+                con.write_str(fb, "netup: networking already active\n");
+            }
+            0
+        }
+        Err(e) => {
+            con.write_colored(fb, &format!("netup: activation failed: 0x{:x}\n", e), (170, 0, 0));
             1
         }
     }

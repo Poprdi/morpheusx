@@ -38,6 +38,9 @@ pub struct ChildWindow {
     pub src_w: u32,
     pub src_h: u32,
     pub src_stride: u32, // in pixels. not bytes. the framebuffer stride IS bytes. yes again.
+    pub mouse_local_x: i32,
+    pub mouse_local_y: i32,
+    pub mouse_local_valid: bool,
     pub title: [u8; 64],
     pub title_len: usize,
     pub z_layer: u8, // 0=desktop background, 1=normal window, 3=overlay
@@ -92,6 +95,8 @@ pub struct CompState {
 
     // --- channels (SPSC) ---
     pub ch_input_to_focus: Channel<InputMsg, 16>,
+    pub ch_mouse_spatial: Channel<MouseSpatialMsg, 32>,
+    pub ch_mouse_route: Channel<MouseZRouteMsg, 32>,
 }
 
 impl CompState {
@@ -113,6 +118,8 @@ impl CompState {
             last_buttons: 0,
             capture: None,
             ch_input_to_focus: Channel::new(),
+            ch_mouse_spatial: Channel::new(),
+            ch_mouse_route: Channel::new(),
         }
     }
 
