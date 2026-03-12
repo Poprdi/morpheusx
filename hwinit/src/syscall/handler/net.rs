@@ -616,10 +616,13 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
         NET_CFG_ACTIVATE => match NET_ACTIVATE_FN {
             Some(f) => {
                 let rc = f();
-                if rc < 0 {
-                    EIO
-                } else {
-                    rc as u64
+                match rc {
+                    0.. => rc as u64,
+                    -1 => EIO,
+                    -2 => ENODEV,
+                    -4 => EIO,
+                    -5 => EFAULT,
+                    _ => EIO,
                 }
             }
             None => ENODEV,

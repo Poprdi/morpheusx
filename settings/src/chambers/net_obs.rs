@@ -9,17 +9,19 @@ use crate::widgets;
 use libmorpheus::net;
 
 // editable field indices
-const FIELD_DHCP_TOGGLE: usize = 0;
-const FIELD_HOSTNAME: usize = 1;
-const FIELD_IP: usize = 2;
-const FIELD_PREFIX: usize = 3;
-const FIELD_GATEWAY: usize = 4;
-const FIELD_DNS1: usize = 5;
-const FIELD_DNS2: usize = 6;
-const FIELD_APPLY: usize = 7;
-const FIELD_ACTIVATE: usize = 8;
-const FIELD_REFRESH: usize = 9;
-const FIELD_COUNT: usize = 10;
+const FIELD_MODE_DHCP: usize = 0;
+const FIELD_MODE_STATIC: usize = 1;
+const FIELD_DHCP_REQUEST: usize = 2;
+const FIELD_HOSTNAME: usize = 3;
+const FIELD_IP: usize = 4;
+const FIELD_PREFIX: usize = 5;
+const FIELD_GATEWAY: usize = 6;
+const FIELD_DNS1: usize = 7;
+const FIELD_DNS2: usize = 8;
+const FIELD_APPLY: usize = 9;
+const FIELD_ACTIVATE: usize = 10;
+const FIELD_REFRESH: usize = 11;
+const FIELD_COUNT: usize = 12;
 
 pub struct NetObsChamber {
     // live state from kernel
@@ -187,9 +189,47 @@ impl NetObsChamber {
 
 pub fn activate(app: &mut SettingsApp, idx: usize) {
     match idx {
-        FIELD_DHCP_TOGGLE => {
-            app.net_obs.edit_dhcp = !app.net_obs.edit_dhcp;
+        FIELD_MODE_DHCP => {
+            app.net_obs.edit_dhcp = true;
             app.mark_edited(Route::NetObservatory, "dhcp");
+        }
+        FIELD_MODE_STATIC => {
+            app.net_obs.edit_dhcp = false;
+            app.mark_edited(Route::NetObservatory, "dhcp");
+        }
+        FIELD_DHCP_REQUEST => {
+            // DHCP can take a few polls to settle; drive it inline so UI reflects results now.
+            app.net_obs.edit_dhcp = true;
+            libmorpheus::io::print("[settings/net] dhcp request requested\n");
+            match net::net_dhcp() {
+                Ok(()) => {
+                    for _ in 0..128 {
+                        let _ = net::nic_refill();
+                        let _ = net::net_poll_drive(0);
+                    }
+                    app.net_obs.refresh();
+
+                    let mut ip_buf = [0u8; 16];
+                    let ip_len = widgets::format_ip(app.net_obs.ip, &mut ip_buf);
+                    let ip = core::str::from_utf8(&ip_buf[..ip_len]).unwrap_or("0.0.0.0");
+                    if app.net_obs.ip != 0 {
+                        app.set_status("DHCP requested (lease info refreshed)", false);
+                        libmorpheus::println!(
+                            "[settings/net] dhcp lease ip={} gw=0x{:08x} dns1=0x{:08x}",
+                            ip,
+                            app.net_obs.gateway,
+                            app.net_obs.dns1
+                        );
+                    } else {
+                        app.set_status("DHCP requested (no lease yet)", true);
+                        libmorpheus::println!("[settings/net] dhcp no lease yet");
+                    }
+                }
+                Err(e) => {
+                    libmorpheus::println!("[settings/net] dhcp request failed err=0x{:x}", e);
+                    app.set_status("DHCP request failed", true);
+                }
+            }
         }
         FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2 => {
             app.net_obs.editing_field = Some(idx);
@@ -204,13 +244,18 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             app.mark_edited(Route::NetObservatory, "prefix");
         }
         FIELD_APPLY => {
+            libmorpheus::io::print("[settings/net] apply requested\n");
             if apply(app) {
                 app.clear_pending_for(Route::NetObservatory);
                 app.net_obs.editing_field = None;
+                libmorpheus::io::print("[settings/net] apply succeeded\n");
+            } else {
+                libmorpheus::io::print("[settings/net] apply failed\n");
             }
         }
         FIELD_ACTIVATE => match net::net_activate() {
             Ok(rc) => {
+                libmorpheus::println!("[settings/net] activation rc={}", rc);
                 app.net_obs.refresh();
                 if rc == 0 {
                     app.set_status("Networking activated", false);
@@ -218,11 +263,13 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                     app.set_status("Networking already active", false);
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                libmorpheus::println!("[settings/net] activation failed err=0x{:x}", e);
                 app.set_status("Networking activation failed", true);
             }
         },
         FIELD_REFRESH => {
+            libmorpheus::io::print("[settings/net] refresh requested\n");
             app.net_obs.refresh();
             app.set_status("Network refreshed", false);
         }
@@ -381,14 +428,26 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "State:", state_str, state_color);
     cy += r8;
 
+    // explicit activation control — always visible near top.
+    layout::draw_button_row(app, px, cy, "Activate Networking", FIELD_ACTIVATE, t.warning);
+    cy += r8;
+
     // configuration section
     layout::draw_section(app, px, cy, "Configuration");
     cy += r4;
 
-    // DHCP toggle
-    let dhcp_label = if net.edit_dhcp { "[X] DHCP" } else { "[ ] Static" };
-    layout::draw_button_row(app, px, cy, dhcp_label, FIELD_DHCP_TOGGLE, t.glyph);
+    // mode selector + explicit DHCP action
+    let dhcp_label = if net.edit_dhcp { "[X] Mode: DHCP" } else { "[ ] Mode: DHCP" };
+    let static_label = if net.edit_dhcp { "[ ] Mode: Static" } else { "[X] Mode: Static" };
+    layout::draw_button_row(app, px, cy, dhcp_label, FIELD_MODE_DHCP, t.glyph);
     cy += r8;
+    layout::draw_button_row(app, px, cy, static_label, FIELD_MODE_STATIC, t.glyph);
+    cy += r8;
+
+    if net.edit_dhcp {
+        layout::draw_button_row(app, px, cy, "Request IP (DHCP)", FIELD_DHCP_REQUEST, t.warning);
+        cy += r8;
+    }
 
     // hostname
     let hn = core::str::from_utf8(&net.edit_hostname[..net.edit_hostname_len]).unwrap_or("");
@@ -442,13 +501,15 @@ pub fn render(app: &SettingsApp) {
         let d1_len = widgets::format_ip(net.dns1, &mut d1_buf);
         let d1_str = core::str::from_utf8(&d1_buf[..d1_len]).unwrap_or("0.0.0.0");
         layout::draw_kv(app, px, cy, "DNS:", d1_str, t.immutable);
+        cy += r4;
+
+        let dhcp_flag = if (net.flags & net::NET_FLAG_DHCP) != 0 { "yes" } else { "no" };
+        layout::draw_kv(app, px, cy, "DHCP Active:", dhcp_flag, t.telemetry);
         cy += r8;
     }
 
     // action buttons
     layout::draw_button_row(app, px, cy, "Apply Network Config", FIELD_APPLY, t.signal);
-    cy += r8;
-    layout::draw_button_row(app, px, cy, "Activate Networking", FIELD_ACTIVATE, t.warning);
     cy += r8;
     layout::draw_button_row(app, px, cy, "Refresh", FIELD_REFRESH, t.glyph);
     cy += r12;
@@ -518,7 +579,8 @@ fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &s
 
 fn field_name(idx: usize) -> &'static str {
     match idx {
-        FIELD_DHCP_TOGGLE => "dhcp",
+        FIELD_MODE_DHCP | FIELD_MODE_STATIC => "dhcp",
+        FIELD_DHCP_REQUEST => "dhcp_request",
         FIELD_HOSTNAME => "hostname",
         FIELD_IP => "ip",
         FIELD_PREFIX => "prefix",

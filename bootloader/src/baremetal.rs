@@ -5,8 +5,8 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use morpheus_display::console::TextConsole;
-use morpheus_network::device::UnifiedNetDevice;
-use morpheus_network::driver::traits::NetworkDriver;
+use morpheus_network::device::{NetworkDevice, UnifiedNetDevice};
+use morpheus_network::boot::{probe_and_create_driver, ProbeError, ProbeResult};
 
 // TYPES THAT CROSS THE BORDER
 
@@ -53,8 +53,63 @@ static mut LIVE_CONSOLE: Option<TextConsole> = None;
 
 // userspace-activated networking state. offline by default until requested.
 static mut USER_NET_DRIVER: Option<UnifiedNetDevice> = None;
-static mut USER_NET_DMA: Option<morpheus_hwinit::DmaRegion> = None;
+static mut USER_NET_DMA: Option<morpheus_network::dma::DmaRegion> = None;
 static mut USER_NET_TSC_FREQ: u64 = 0;
+
+unsafe fn log_pci_network_candidates() {
+    let mut found = 0u32;
+    for bus in 0..=255u8 {
+        for dev in 0..32u8 {
+            for func in 0..8u8 {
+                let addr = morpheus_hwinit::PciAddr::new(bus, dev, func);
+                let vendor = morpheus_hwinit::pci_cfg_read16(addr, 0x00);
+                if vendor == 0xFFFF {
+                    if func == 0 {
+                        break;
+                    }
+                    continue;
+                }
+
+                let class = morpheus_hwinit::pci_cfg_read8(addr, 0x0B);
+                let subclass = morpheus_hwinit::pci_cfg_read8(addr, 0x0A);
+                if class != 0x02 {
+                    if func == 0 {
+                        let header = morpheus_hwinit::pci_cfg_read8(addr, 0x0E);
+                        if (header & 0x80) == 0 {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                let device = morpheus_hwinit::pci_cfg_read16(addr, 0x02);
+                found = found.wrapping_add(1);
+                morpheus_hwinit::serial::puts("[INFO] [NET] pci net candidate bdf=");
+                morpheus_hwinit::serial::put_hex64(((bus as u64) << 16) | ((dev as u64) << 8) | func as u64);
+                morpheus_hwinit::serial::puts(" ven=");
+                morpheus_hwinit::serial::put_hex64(vendor as u64);
+                morpheus_hwinit::serial::puts(" dev=");
+                morpheus_hwinit::serial::put_hex64(device as u64);
+                morpheus_hwinit::serial::puts(" sub=");
+                morpheus_hwinit::serial::put_hex64(subclass as u64);
+                morpheus_hwinit::serial::puts("\n");
+
+                if func == 0 {
+                    let header = morpheus_hwinit::pci_cfg_read8(addr, 0x0E);
+                    if (header & 0x80) == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if found == 0 {
+        morpheus_hwinit::serial::log_warn("NET", 953, "pci scan found zero class-0x02 devices");
+    } else {
+        morpheus_hwinit::serial::log_info("NET", 954, "pci net candidates logged");
+    }
+}
 
 #[inline]
 unsafe fn user_net_driver_mut() -> Option<&'static mut UnifiedNetDevice> {
@@ -116,22 +171,57 @@ unsafe fn user_net_ctrl(_cmd: u32, _arg: u64) -> i64 {
 }
 
 unsafe fn activate_network_from_userspace() -> i64 {
+    morpheus_hwinit::serial::log_info("NET", 940, "userspace activation requested");
+
     if USER_NET_DRIVER.is_some() {
+        morpheus_hwinit::serial::log_info("NET", 941, "already active");
         return 1;
     }
 
-    let Some(dma) = USER_NET_DMA else {
+    let Some(dma) = USER_NET_DMA.as_ref() else {
+        morpheus_hwinit::serial::log_error("NET", 942, "activation failed: dma unavailable");
         return -1;
     };
     let tsc_freq = USER_NET_TSC_FREQ;
 
-    let driver = match UnifiedNetDevice::probe(&dma, tsc_freq) {
-        Ok(d) => d,
-        Err(_) => return -1,
+    morpheus_hwinit::serial::log_info("NET", 943, "probing NIC via network::probe_and_create_driver");
+    let driver = match probe_and_create_driver(dma, tsc_freq) {
+        Ok(ProbeResult::VirtIO(v)) => {
+            morpheus_hwinit::serial::log_info("NET", 949, "probe selected virtio NIC");
+            UnifiedNetDevice::VirtIO(v)
+        }
+        Ok(ProbeResult::Intel(i)) => {
+            morpheus_hwinit::serial::log_info("NET", 951, "probe selected intel NIC");
+            UnifiedNetDevice::Intel(i)
+        }
+        Err(ProbeError::NoDevice) => {
+            morpheus_hwinit::serial::log_error("NET", 944, "probe failed: no supported NIC detected");
+            log_pci_network_candidates();
+            return -2;
+        }
+        Err(ProbeError::VirtioInitFailed) => {
+            morpheus_hwinit::serial::log_error("NET", 950, "virtio init failed");
+            return -3;
+        }
+        Err(ProbeError::IntelInitFailed) => {
+            morpheus_hwinit::serial::log_error("NET", 952, "intel init failed");
+            return -3;
+        }
+        Err(ProbeError::DeviceNotResponding) => {
+            morpheus_hwinit::serial::log_error("NET", 955, "nic mmio not responding");
+            return -4;
+        }
+        Err(ProbeError::BarMappingFailed) => {
+            morpheus_hwinit::serial::log_error("NET", 956, "nic bar mapping failure");
+            return -5;
+        }
     };
+
+    morpheus_hwinit::serial::log_ok("NET", 945, "driver initialized");
 
     USER_NET_DRIVER = Some(driver);
 
+    morpheus_hwinit::serial::log_info("NET", 946, "registering NIC ops");
     morpheus_hwinit::register_nic(morpheus_hwinit::NicOps {
         tx: Some(user_net_tx),
         rx: Some(user_net_rx),
@@ -143,6 +233,14 @@ unsafe fn activate_network_from_userspace() -> i64 {
 
     // prime descriptor maintenance immediately.
     let _ = user_net_refill();
+
+    let link_now = user_net_link_up();
+    if link_now != 0 {
+        morpheus_hwinit::serial::log_ok("NET", 947, "activation complete: link up");
+    } else {
+        morpheus_hwinit::serial::log_info("NET", 948, "activation complete: link down");
+    }
+
     0
 }
 
@@ -385,7 +483,11 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     };
 
     // userspace network activation hook. we stay offline by default.
-    USER_NET_DMA = Some(*platform.dma());
+    USER_NET_DMA = Some(morpheus_network::dma::DmaRegion::new(
+        platform.dma().cpu_base(),
+        platform.dma().bus_base(),
+        platform.dma().size(),
+    ));
     USER_NET_TSC_FREQ = platform.tsc_freq();
     morpheus_hwinit::register_net_activation(activate_network_from_userspace);
 

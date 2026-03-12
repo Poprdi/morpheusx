@@ -26,6 +26,8 @@ use crate::driver::intel::{
     IntelNicInfo,
 };
 use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
+use crate::driver::virtio::transport::{PciModernConfig, VirtioTransport};
+use crate::pci::capability::probe_virtio_caps;
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, PciAddr};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -235,8 +237,22 @@ pub unsafe fn probe_and_create_driver(
                 buffer_size: 2048,
             };
 
-            // Create driver
-            let driver = VirtioNetDriver::new(mmio_base, config)?;
+            // Prefer PCI modern transport; fallback to legacy MMIO for old QEMU.
+            let caps = probe_virtio_caps(pci_addr);
+            let driver = if caps.has_required() {
+                let pci_cfg = PciModernConfig {
+                    common_cfg: caps.common_cfg_addr().unwrap_or(0),
+                    notify_cfg: caps.notify_addr().unwrap_or(0),
+                    notify_off_multiplier: caps.notify_multiplier(),
+                    isr_cfg: caps.isr_addr().unwrap_or(0),
+                    device_cfg: caps.device_cfg_addr().unwrap_or(0),
+                    pci_cfg: 0,
+                };
+                let transport = VirtioTransport::pci_modern(pci_cfg);
+                VirtioNetDriver::new_with_transport(transport, config, tsc_freq)?
+            } else {
+                VirtioNetDriver::new(mmio_base, config)?
+            };
             Ok(ProbeResult::VirtIO(driver))
         }
     }
