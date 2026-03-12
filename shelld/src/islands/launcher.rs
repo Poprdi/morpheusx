@@ -1,7 +1,4 @@
-use crate::islands::{
-    draw_text, raw_fill, ShellState, ICON_BG_RGB, ICON_INNER_RGB, ICON_SIZE, LAUNCHER_BG_RGB,
-    LAUNCHER_H, LAUNCHER_W, PANEL_H, START_RGB,
-};
+use crate::islands::{draw_text, raw_fill, ShellState, ICON_SIZE, LAUNCHER_H, LAUNCHER_W, PANEL_H};
 use libmorpheus::{io, process};
 
 /// launcher island. application launcher overlay triggered by clicking START.
@@ -14,7 +11,7 @@ pub fn tick(state: &mut ShellState) {
     let ly = state.fb_h.saturating_sub(PANEL_H + LAUNCHER_H + 8);
 
     // launcher background
-    let (lr, lg, lb) = LAUNCHER_BG_RGB;
+    let (lr, lg, lb) = state.launcher_bg_rgb;
     let launcher_bg = state.pack(lr, lg, lb);
     raw_fill(
         state.surface_ptr,
@@ -27,7 +24,7 @@ pub fn tick(state: &mut ShellState) {
     );
 
     // launcher title bar
-    let (sr, sg, sb) = START_RGB;
+    let (sr, sg, sb) = state.start_rgb;
     let title_bg = state.pack(sr, sg, sb);
     raw_fill(
         state.surface_ptr,
@@ -44,13 +41,13 @@ pub fn tick(state: &mut ShellState) {
         ly + 4,
         "Launcher",
         (255, 255, 255),
-        START_RGB,
+        state.start_rgb,
     );
 
     // shell icon
     let icon_x = lx + 16;
     let icon_y = ly + 40;
-    let (ir, ig, ib) = ICON_BG_RGB;
+    let (ir, ig, ib) = state.icon_bg_rgb;
     raw_fill(
         state.surface_ptr,
         state.fb_stride,
@@ -60,7 +57,7 @@ pub fn tick(state: &mut ShellState) {
         ICON_SIZE,
         state.pack(ir, ig, ib),
     );
-    let (iir, iig, iib) = ICON_INNER_RGB;
+    let (iir, iig, iib) = state.icon_inner_rgb;
     raw_fill(
         state.surface_ptr,
         state.fb_stride,
@@ -76,7 +73,7 @@ pub fn tick(state: &mut ShellState) {
         icon_y + 20,
         ">_",
         (255, 255, 255),
-        ICON_INNER_RGB,
+        state.icon_inner_rgb,
     );
     draw_text(
         state,
@@ -84,7 +81,7 @@ pub fn tick(state: &mut ShellState) {
         icon_y + ICON_SIZE + 8,
         "Shell",
         (230, 230, 230),
-        LAUNCHER_BG_RGB,
+        state.launcher_bg_rgb,
     );
 
     state.launcher_dirty = false;

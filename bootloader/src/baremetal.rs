@@ -6,6 +6,8 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use morpheus_display::console::TextConsole;
 
+use crate::baremetal_ops::network;
+
 // TYPES THAT CROSS THE BORDER
 
 /// Raw framebuffer info from GOP. stride is pixels_per_scan_line from GOP.
@@ -286,6 +288,13 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
             }
         }
     };
+
+    // userspace network activation hook. we stay offline by default.
+    network::init_userspace_network_activation(morpheus_network::dma::DmaRegion::new(
+        platform.dma().cpu_base(),
+        platform.dma().bus_base(),
+        platform.dma().size(),
+    ), platform.tsc_freq());
 
     // persistent storage — try to mount a real block device
     crate::storage::init_persistent_storage(platform.dma(), platform.tsc_freq());

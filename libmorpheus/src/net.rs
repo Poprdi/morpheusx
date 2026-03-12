@@ -515,6 +515,7 @@ const CFG_GET: u64 = 0;
 const CFG_DHCP: u64 = 1;
 const CFG_STATIC: u64 = 2;
 const CFG_HOSTNAME: u64 = 3;
+const CFG_ACTIVATE: u64 = 4;
 
 /// Network configuration snapshot.
 #[repr(C)]
@@ -596,6 +597,21 @@ pub fn net_set_hostname(hostname: &str) -> Result<(), u64> {
         Err(ret)
     } else {
         Ok(())
+    }
+}
+
+/// Explicitly activate networking from userspace.
+///
+/// This requests NIC driver bring-up while keeping boot default offline.
+/// Returns:
+/// - `0` when activated now
+/// - `>0` when already active/no-op
+pub fn net_activate() -> Result<u64, u64> {
+    let ret = unsafe { syscall1(SYS_NET_CFG, CFG_ACTIVATE) };
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
     }
 }
 

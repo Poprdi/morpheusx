@@ -51,3 +51,22 @@ pub enum InputMsg {
 pub enum FocusMsg {
     FocusChanged { old: Option<u8>, new: Option<u8> },
 }
+
+/// raw spatial sample from input polling: absolute desktop position + edge transitions.
+#[derive(Clone, Copy)]
+pub struct MouseSpatialMsg {
+    pub mx: i32,
+    pub my: i32,
+    pub buttons: u8,
+    pub left_pressed: bool,
+    pub left_released: bool,
+    pub in_panel: bool,
+}
+
+/// z-layer routing decision derived from spatial sample.
+#[derive(Clone, Copy)]
+pub enum MouseZRouteMsg {
+    Desktop { buttons: u8 },
+    Child { idx: u8, buttons: u8 },
+    None,
+}

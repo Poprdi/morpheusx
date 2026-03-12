@@ -1,0 +1,16 @@
+[package]
+name    = "settings"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "settings"
+path = "src/main.rs"
+
+[dependencies]
+libmorpheus = { path = "../libmorpheus" }
+morpheus-ui = { path = "../ui" }
+
+[profile.release]
+opt-level = 3
+lto       = true

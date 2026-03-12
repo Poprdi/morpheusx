@@ -29,6 +29,8 @@ readonly SYM_BULLET="•"
 INTERACTIVE=false
 FORCE_MODE=false
 SKIP_QEMU=false
+NET_MODE="${MORPHEUS_NET_MODE:-bridge}"
+NET_BRIDGE_IF="${MORPHEUS_BRIDGE_IF:-br0}"
 
 log_info()    { printf "${C_BLUE}${SYM_ARROW} %s${C_RESET}\n" "$1"; }
 log_success() { printf "${C_GREEN}${SYM_CHECK} %s${C_RESET}\n" "$1"; }
@@ -38,6 +40,118 @@ log_step()    { printf "\n${C_BOLD}${C_BLUE}==>${C_RESET} ${C_BOLD}%s${C_RESET}\
 die()         { log_error "$1"; exit 1; }
 
 has_cmd() { command -v "$1" &>/dev/null; }
+
+bridge_acl_allows() {
+    local bridge="$1"
+    local conf="/etc/qemu/bridge.conf"
+
+    [[ -f "$conf" ]] || return 1
+
+    # If ACL exists but is unreadable to this user, don't guess deny here.
+    # qemu-bridge-helper will enforce policy with its own privileges.
+    if [[ ! -r "$conf" ]]; then
+        return 2
+    fi
+
+    # Accept either explicit bridge or allow-all policy.
+    if grep -Eq "^[[:space:]]*allow[[:space:]]+(${bridge}|all)[[:space:]]*$" "$conf"; then
+        return 0
+    fi
+
+    return 1
+}
+
+bridge_helper_available() {
+    local helper=""
+    if [[ -x /usr/lib/qemu/qemu-bridge-helper ]]; then
+        helper="/usr/lib/qemu/qemu-bridge-helper"
+    elif [[ -x /usr/libexec/qemu-bridge-helper ]]; then
+        helper="/usr/libexec/qemu-bridge-helper"
+    else
+        return 1
+    fi
+
+    # Helper needs privilege elevation (setuid root or cap_net_admin).
+    if [[ -u "$helper" ]]; then
+        return 0
+    fi
+    if has_cmd getcap && getcap "$helper" 2>/dev/null | grep -q 'cap_net_admin'; then
+        return 0
+    fi
+
+    return 1
+}
+
+bridge_interface_exists() {
+    local bridge="$1"
+    if has_cmd ip; then
+        ip link show "$bridge" >/dev/null 2>&1
+        return $?
+    fi
+    [[ -d "/sys/class/net/${bridge}" ]]
+}
+
+pick_net_mode() {
+    case "${NET_MODE}" in
+        bridge|user) ;;
+        *)
+            log_warn "Unknown network mode '${NET_MODE}', falling back to user"
+            NET_MODE="user"
+            ;;
+    esac
+
+    if [[ "${NET_MODE}" == "bridge" ]]; then
+        if ! bridge_interface_exists "${NET_BRIDGE_IF}"; then
+            if bridge_interface_exists "virbr0"; then
+                log_warn "Bridge '${NET_BRIDGE_IF}' not found; using 'virbr0' instead"
+                NET_BRIDGE_IF="virbr0"
+            else
+                log_warn "Bridge '${NET_BRIDGE_IF}' not found on host; falling back to user NAT"
+                log_warn "Fix: create bridge '${NET_BRIDGE_IF}' or run with --bridge <existing-bridge>"
+                NET_MODE="user"
+                return
+            fi
+        fi
+
+        local acl_status=0
+        if bridge_acl_allows "${NET_BRIDGE_IF}"; then
+            acl_status=0
+        else
+            acl_status=$?
+        fi
+        if [[ $acl_status -eq 1 ]]; then
+            log_warn "Bridge ACL does not allow '${NET_BRIDGE_IF}' in /etc/qemu/bridge.conf; falling back to user NAT"
+            log_warn "Fix: add 'allow ${NET_BRIDGE_IF}' to /etc/qemu/bridge.conf"
+            NET_MODE="user"
+            return
+        elif [[ $acl_status -eq 2 ]]; then
+            log_warn "Bridge ACL file exists but is unreadable by current user; attempting bridge anyway"
+            log_warn "Tip: chmod 0644 /etc/qemu/bridge.conf to silence this preflight warning"
+        fi
+
+        if ! bridge_helper_available; then
+            log_warn "qemu-bridge-helper missing privileges; falling back to user NAT"
+            log_warn "Fix: ensure qemu-bridge-helper is setuid root (or has cap_net_admin)"
+            NET_MODE="user"
+        fi
+    fi
+}
+
+run_qemu_command() {
+    local rc=0
+    set +e
+    "$@"
+    rc=$?
+    set -e
+
+    if [[ $rc -ne 0 && "${NET_MODE}" == "bridge" ]]; then
+        log_warn "Bridge launch failed (exit ${rc}); retrying with user NAT"
+        NET_MODE="user"
+        return 88
+    fi
+
+    return $rc
+}
 
 ask() {
     [[ "${INTERACTIVE}" != "true" ]] && return 0
@@ -272,7 +386,9 @@ USER_APPS=(
     "init,/bin/init"
     "compd,/bin/compd"
     "shelld,/bin/shelld"
+    "settings,/bin/settings"
     "syscall-e2e,/bin/syscall-e2e"
+    "netcheck,/bin/netcheck"
     "msh,/bin/msh"
     "spinning-cube,/bin/spinning-cube"
     "system-visualizer,/bin/sysvis"
@@ -464,6 +580,22 @@ do_launch_qemu() {
     log_info "Press Ctrl+A X to exit QEMU"
     printf "\n"
     
+    pick_net_mode
+    local -a net_args
+    if [[ "${NET_MODE}" == "bridge" ]]; then
+        log_info "Network mode: bridge (${NET_BRIDGE_IF})"
+        net_args=(
+            -device virtio-net-pci,netdev=net0,disable-legacy=on
+            -netdev bridge,id=net0,br="${NET_BRIDGE_IF}"
+        )
+    else
+        log_info "Network mode: user NAT"
+        net_args=(
+            -device virtio-net-pci,netdev=net0,disable-legacy=on
+            -netdev user,id=net0,hostfwd=tcp::2222-:22
+        )
+    fi
+
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
         # Build/refresh the boot ESP image that UEFI will load BOOTX64.EFI from.
         # The data disk (test-disk-50g.img) is raw HelixFS with no partition table
@@ -475,7 +607,7 @@ do_launch_qemu() {
         fi
         # Disk 0 (virtio): ESP FAT32 image  — UEFI boots BOOTX64.EFI from here
         # Disk 1 (virtio): raw HelixFS image — kernel mounts this as data storage
-        qemu-system-x86_64 \
+        if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
@@ -485,15 +617,21 @@ do_launch_qemu() {
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,bootindex=1 \
             -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk1,cache=writeback \
             -device virtio-blk-pci,drive=disk1,disable-legacy=on,iothread=iothread0 \
-            -device virtio-net-pci,netdev=net0,disable-legacy=on \
-            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+            "${net_args[@]}" \
             -smp 8 \
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -no-reboot \
             -d cpu_reset,int -D /tmp/qemu-int.log \
-            -serial stdio
+            -serial stdio; then
+            local rc=$?
+            if [[ $rc -eq 88 ]]; then
+                do_launch_qemu
+                return
+            fi
+            return $rc
+        fi
     else
         # Create a temp ESP image for virtio-blk
         local esp_img="${TESTING_DIR}/esp-temp.img"
@@ -501,7 +639,7 @@ do_launch_qemu() {
             log_info "Creating ESP disk image..."
             refresh_esp_image "$esp_img" "$ESP_DIR"
         fi
-        qemu-system-x86_64 \
+        if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
@@ -509,14 +647,20 @@ do_launch_qemu() {
             -object iothread,id=iothread0 \
             -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
             -device virtio-blk-pci,drive=disk0,disable-legacy=on,iothread=iothread0 \
-            -device virtio-net-pci,netdev=net0,disable-legacy=on \
-            -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+            "${net_args[@]}" \
             -smp 8 \
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -no-reboot \
-            -serial stdio
+            -serial stdio; then
+            local rc=$?
+            if [[ $rc -eq 88 ]]; then
+                do_launch_qemu
+                return
+            fi
+            return $rc
+        fi
     fi
 }
 
@@ -696,8 +840,24 @@ do_launch_thinkpad() {
     log_info "Press Ctrl+A X to exit QEMU"
     printf "\n"
     
+    pick_net_mode
+    local -a net_args
+    if [[ "${NET_MODE}" == "bridge" ]]; then
+        log_info "Network mode: bridge (${NET_BRIDGE_IF})"
+        net_args=(
+            -device e1000,netdev=net0
+            -netdev bridge,id=net0,br="${NET_BRIDGE_IF}"
+        )
+    else
+        log_info "Network mode: user NAT"
+        net_args=(
+            -device e1000,netdev=net0
+            -netdev user,id=net0
+        )
+    fi
+
     if [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; then
-        qemu-system-x86_64 \
+        if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
@@ -710,14 +870,20 @@ do_launch_thinkpad() {
             -drive file="${TESTING_DIR}/test-disk-50g.img",format=raw,if=none,id=disk0,cache=writeback \
             -device ich9-ahci,id=ahci0 \
             -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
-            -device e1000,netdev=net0 \
-            -netdev user,id=net0 \
+            "${net_args[@]}" \
             -smp 8 \
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -no-reboot \
-            -serial stdio
+            -serial stdio; then
+            local rc=$?
+            if [[ $rc -eq 88 ]]; then
+                do_launch_thinkpad
+                return
+            fi
+            return $rc
+        fi
     else
         # Create a temp ESP image for AHCI
         local esp_img="${TESTING_DIR}/esp-temp.img"
@@ -725,7 +891,7 @@ do_launch_thinkpad() {
             log_info "Creating ESP disk image..."
             refresh_esp_image "$esp_img" "$ESP_DIR"
         fi
-        qemu-system-x86_64 \
+        if ! run_qemu_command qemu-system-x86_64 \
             -enable-kvm \
             -machine q35,accel=kvm,i8042=on,usb=off \
             -cpu host \
@@ -738,17 +904,22 @@ do_launch_thinkpad() {
             -drive file="$esp_img",format=raw,if=none,id=disk0,cache=writeback \
             -device ich9-ahci,id=ahci0 \
             -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
-            -device e1000,netdev=net0 \
-            -netdev user,id=net0 \
+            "${net_args[@]}" \
             -smp 8 \
             -m 12G \
             -vga virtio \
             -display sdl,gl=on,grab-mod=rctrl,show-cursor=off \
             -no-reboot \
-            -serial stdio
+            -serial stdio; then
+            local rc=$?
+            if [[ $rc -eq 88 ]]; then
+                do_launch_thinkpad
+                return
+            fi
+            return $rc
+        fi
     fi
 }
-
 cmd_thinkpad() {
     print_banner
     check_bootloader || die "Bootloader not built. Run: $0 build"
@@ -822,6 +993,8 @@ usage() {
     printf "  ${C_CYAN}-i, --interactive${C_RESET}  Ask at each step what to do\n"
     printf "  ${C_CYAN}-f, --force${C_RESET}        Force rebuild/recreate\n"
     printf "  ${C_CYAN}-n, --no-qemu${C_RESET}      Setup everything but don't launch QEMU\n"
+    printf "  ${C_CYAN}--bridge [br]${C_RESET}      Use bridge netdev (default: br0)\n"
+    printf "  ${C_CYAN}--usernet${C_RESET}          Use QEMU user-mode NAT networking\n"
     printf "  ${C_CYAN}-h, --help${C_RESET}         Show this help\n"
     
     printf "\n${C_BOLD}Commands:${C_RESET} (for power users)\n"
@@ -860,6 +1033,15 @@ main() {
             -i|--interactive) INTERACTIVE=true; shift ;;
             -f|--force)       FORCE_MODE=true; shift ;;
             -n|--no-qemu)     SKIP_QEMU=true; shift ;;
+            --bridge)
+                NET_MODE="bridge"
+                if [[ $# -gt 1 && "${2:-}" != -* ]]; then
+                    NET_BRIDGE_IF="$2"
+                    shift
+                fi
+                shift
+                ;;
+            --usernet)        NET_MODE="user"; shift ;;
             -h|--help)        usage; exit 0 ;;
             -*)               die "Unknown option: $1" ;;
             *)                [[ -z "$cmd" ]] && cmd="$1" || args+=("$1"); shift ;;

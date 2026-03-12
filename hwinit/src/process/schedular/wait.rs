@@ -32,48 +32,51 @@ pub unsafe fn block_sleep(deadline: u64) -> u64 {
 pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
     let current = this_core_pid();
 
-    PROCESS_TABLE_LOCK.lock();
+    loop {
+        PROCESS_TABLE_LOCK.lock();
 
-    let (child_parent, child_state) = match PROCESS_TABLE
-        .get(child_pid as usize)
-        .and_then(|s| s.as_ref())
-    {
-        Some(p) => (p.parent_pid, p.state),
-        None => {
+        let (child_parent, child_state) = match PROCESS_TABLE
+            .get(child_pid as usize)
+            .and_then(|s| s.as_ref())
+        {
+            Some(p) => (p.parent_pid, p.state),
+            None => {
+                PROCESS_TABLE_LOCK.unlock();
+                return u64::MAX - 3;
+            }
+        };
+
+        if child_parent != current {
             PROCESS_TABLE_LOCK.unlock();
             return u64::MAX - 3;
         }
-    };
 
-    if child_parent != current {
+        if matches!(child_state, ProcessState::Terminated) {
+            PROCESS_TABLE_LOCK.unlock();
+            return u64::MAX - 10;
+        }
+
+        if child_state == ProcessState::Zombie {
+            let result = reap_child(child_pid);
+            PROCESS_TABLE_LOCK.unlock();
+            // Zombie observed but still running on some core; wait until
+            // scheduler deschedules it before freeing CR3/page tables.
+            if result == u64::MAX - 11 {
+                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+                continue;
+            }
+            return result;
+        }
+
+        let cur = current as usize;
+        if let Some(Some(proc)) = PROCESS_TABLE.get_mut(cur) {
+            proc.state = ProcessState::Blocked(BlockReason::WaitChild(child_pid));
+        }
+
         PROCESS_TABLE_LOCK.unlock();
-        return u64::MAX - 3;
+
+        core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
     }
-
-    if matches!(child_state, ProcessState::Terminated) {
-        PROCESS_TABLE_LOCK.unlock();
-        return u64::MAX - 10;
-    }
-
-    if child_state == ProcessState::Zombie {
-        let result = reap_child(child_pid);
-        PROCESS_TABLE_LOCK.unlock();
-        return result;
-    }
-
-    let cur = current as usize;
-    if let Some(Some(proc)) = PROCESS_TABLE.get_mut(cur) {
-        proc.state = ProcessState::Blocked(BlockReason::WaitChild(child_pid));
-    }
-
-    PROCESS_TABLE_LOCK.unlock();
-
-    core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
-
-    PROCESS_TABLE_LOCK.lock();
-    let result = reap_child(child_pid);
-    PROCESS_TABLE_LOCK.unlock();
-    result
 }
 
 pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
@@ -114,6 +117,13 @@ pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
 
 unsafe fn reap_child(pid: u32) -> u64 {
     if let Some(Some(child)) = PROCESS_TABLE.get_mut(pid as usize) {
+        // A process may be Zombie but still executing on another core until
+        // that core takes a scheduler tick and switches away. Reaping early
+        // would free its page tables while CR3 still points at them.
+        if child.running_on != u32::MAX {
+            return u64::MAX - 11;
+        }
+
         let code = child.exit_code.unwrap_or(-1);
 
         free_process_resources(child);

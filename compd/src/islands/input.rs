@@ -1,7 +1,7 @@
 extern crate alloc;
 
-use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, PANEL_H, TITLE_H};
-use crate::messages::InputMsg;
+use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, TITLE_H};
+use crate::messages::{InputMsg, MouseSpatialMsg, MouseZRouteMsg};
 use libmorpheus::{compositor as compsys, hw, io, process};
 
 const CTRL_BRACKET: u8 = 0x1D; // Ctrl+] — focus cycle scancode
@@ -58,7 +58,7 @@ fn poll_keyboard(state: &mut CompState) {
 
 fn poll_mouse(state: &mut CompState) {
     let ms = hw::mouse_read();
-    if ms.dx == 0 && ms.dy == 0 && ms.buttons == 0 {
+    if ms.dx == 0 && ms.dy == 0 && ms.buttons == state.last_buttons {
         return;
     }
 
@@ -68,32 +68,49 @@ fn poll_mouse(state: &mut CompState) {
     state.mouse_x = (state.mouse_x + ms.dx as i32).clamp(0, fb_w - 1);
     state.mouse_y = (state.mouse_y + ms.dy as i32).clamp(0, fb_h - 1);
 
-    // always forward movement to shelld so its cursor position tracks ours.
-    // buttons are only forwarded when the click is actually for shelld.
-    forward_to_desktop(state, ms.dx, ms.dy, 0);
-
     let left = (ms.buttons & 1) != 0;
     let left_was = (state.last_buttons & 1) != 0;
-    let left_pressed = left && !left_was;
-    let left_released = !left && left_was;
-    let mut route_to_child = true;
+    let sample = MouseSpatialMsg {
+        mx: state.mouse_x,
+        my: state.mouse_y,
+        buttons: ms.buttons,
+        left_pressed: left && !left_was,
+        left_released: !left && left_was,
+        in_panel: state.mouse_y >= (state.fb_h as i32 - crate::islands::PANEL_H as i32),
+    };
 
-    if left_released {
+    if let Err(msg) = state.ch_mouse_spatial.send(sample) {
+        route_mouse_spatial(state, msg);
+    }
+
+    while let Some(msg) = state.ch_mouse_spatial.recv() {
+        route_mouse_spatial(state, msg);
+    }
+
+    while let Some(msg) = state.ch_mouse_route.recv() {
+        dispatch_mouse_route(state, msg);
+    }
+}
+
+fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
+    // always keep desktop cursor in sync with absolute position.
+    enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 });
+
+    if msg.left_released {
         state.capture = None;
     }
 
-    if left_pressed {
-        // panel area is always handled by shelld — intercept BEFORE window hit-test.
-        // this ensures the taskbar is always clickable even with overlapping windows.
-        let panel_top = (state.fb_h as i32).saturating_sub(PANEL_H as i32);
-        if state.mouse_y >= panel_top {
-            // re-forward with actual button state so shelld registers the click
-            forward_to_desktop(state, 0, 0, ms.buttons);
-            state.last_buttons = ms.buttons;
-            return;
-        }
+    // panel is visually over windows (z3 overlay), so input there belongs to shelld.
+    if msg.in_panel {
+        enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: msg.buttons });
+        state.last_buttons = msg.buttons;
+        return;
+    }
 
-        if let Some((idx, region)) = hit_test(state, state.mouse_x, state.mouse_y) {
+    let mut route_to_child = true;
+
+    if msg.left_pressed {
+        if let Some((idx, region)) = hit_test(state, msg.mx, msg.my) {
             state.focused = Some(idx);
             match region {
                 HitRegion::Close => {
@@ -107,8 +124,8 @@ fn poll_mouse(state: &mut CompState) {
                     if let Some(ref win) = state.windows[idx] {
                         state.capture = Some(MouseCapture::Move {
                             idx,
-                            off_x: state.mouse_x - win.x,
-                            off_y: state.mouse_y - win.y,
+                            off_x: msg.mx - win.x,
+                            off_y: msg.my - win.y,
                         });
                     }
                     route_to_child = false;
@@ -117,8 +134,8 @@ fn poll_mouse(state: &mut CompState) {
                     if let Some(ref win) = state.windows[idx] {
                         state.capture = Some(MouseCapture::Resize {
                             idx,
-                            start_mx: state.mouse_x,
-                            start_my: state.mouse_y,
+                            start_mx: msg.mx,
+                            start_my: msg.my,
                             start_w: win.w,
                             start_h: win.h,
                         });
@@ -128,24 +145,24 @@ fn poll_mouse(state: &mut CompState) {
                 HitRegion::Content => {}
             }
         } else {
-            // click on empty desktop — forward buttons to shelld
-            forward_to_desktop(state, 0, 0, ms.buttons);
-            state.last_buttons = ms.buttons;
+            enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: msg.buttons });
+            state.last_buttons = msg.buttons;
             return;
         }
     }
 
-    if left {
+    if (msg.buttons & 1) != 0 {
         if let Some(capture) = state.capture {
             match capture {
                 MouseCapture::Move { idx, off_x, off_y } => {
                     if let Some(ref mut win) = state.windows[idx] {
-                        let nx = state.mouse_x - off_x;
-                        let ny = state.mouse_y - off_y;
+                        let nx = msg.mx - off_x;
+                        let ny = msg.my - off_y;
                         let max_x = (state.fb_w as i32 - win.w as i32).max(0);
                         let max_y = (state.fb_h as i32 - win.h as i32).max(TITLE_H as i32);
                         win.x = nx.clamp(0, max_x);
                         win.y = ny.clamp(TITLE_H as i32, max_y);
+                        win.mouse_local_valid = false;
                     }
                     route_to_child = false;
                 }
@@ -157,14 +174,15 @@ fn poll_mouse(state: &mut CompState) {
                     start_h,
                 } => {
                     if let Some(ref mut win) = state.windows[idx] {
-                        let dx = state.mouse_x - start_mx;
-                        let dy = state.mouse_y - start_my;
+                        let dx = msg.mx - start_mx;
+                        let dy = msg.my - start_my;
                         let max_w = state.fb_w.saturating_sub(win.x.max(0) as u32).max(160);
                         let max_h = state.fb_h.saturating_sub(win.y.max(0) as u32).max(120);
                         let nw = (start_w as i32 + dx).clamp(160, max_w as i32);
                         let nh = (start_h as i32 + dy).clamp(120, max_h as i32);
                         win.w = nw as u32;
                         win.h = nh as u32;
+                        win.mouse_local_valid = false;
                     }
                     route_to_child = false;
                 }
@@ -172,25 +190,110 @@ fn poll_mouse(state: &mut CompState) {
         }
     }
 
-    state.last_buttons = ms.buttons;
-
-    // forward unhandled mouse to focused child
     if route_to_child {
         if let Some(idx) = state.focused {
-            if let Some(ref win) = state.windows[idx] {
-                let _ = compsys::mouse_forward(win.pid, ms.dx, ms.dy, ms.buttons);
+            enqueue_mouse_route(
+                state,
+                MouseZRouteMsg::Child {
+                    idx: idx as u8,
+                    buttons: msg.buttons,
+                },
+            );
+        } else {
+            enqueue_mouse_route(state, MouseZRouteMsg::None);
+        }
+    }
+
+    state.last_buttons = msg.buttons;
+}
+
+#[inline(always)]
+fn enqueue_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
+    if let Err(msg) = state.ch_mouse_route.send(msg) {
+        // channel full. handle inline so no route decision gets dropped.
+        dispatch_mouse_route(state, msg);
+    }
+}
+
+fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
+    match msg {
+        MouseZRouteMsg::Desktop { buttons } => {
+            forward_to_desktop(state, buttons);
+        }
+        MouseZRouteMsg::Child { idx, buttons } => {
+            let idx = idx as usize;
+            if let Some(ref mut win) = state.windows[idx] {
+                let (local_x, local_y) = map_global_to_local(state.mouse_x, state.mouse_y, win);
+                let (dx, dy) = if win.mouse_local_valid {
+                    (local_x - win.mouse_local_x, local_y - win.mouse_local_y)
+                } else {
+                    win.mouse_local_valid = true;
+                    (0, 0)
+                };
+                win.mouse_local_x = local_x;
+                win.mouse_local_y = local_y;
+                let dx = dx.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                let dy = dy.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                let _ = compsys::mouse_forward(win.pid, dx, dy, buttons);
             }
+        }
+        MouseZRouteMsg::None => {}
+    }
+}
+
+/// forward mouse to shelld (desktop surface), derived from absolute global cursor.
+fn forward_to_desktop(state: &mut CompState, buttons: u8) {
+    if let Some(di) = state.desktop_idx {
+        if let Some(ref mut dw) = state.windows[di] {
+            let (local_x, local_y) = map_global_to_local(state.mouse_x, state.mouse_y, dw);
+            let (dx, dy) = if dw.mouse_local_valid {
+                (local_x - dw.mouse_local_x, local_y - dw.mouse_local_y)
+            } else {
+                dw.mouse_local_valid = true;
+                (0, 0)
+            };
+            dw.mouse_local_x = local_x;
+            dw.mouse_local_y = local_y;
+            let dx = dx.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let dy = dy.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let _ = compsys::mouse_forward(dw.pid, dx, dy, buttons);
         }
     }
 }
 
-/// forward mouse to shelld (desktop surface). always forward so shelld's position tracks ours.
-fn forward_to_desktop(state: &CompState, dx: i16, dy: i16, buttons: u8) {
-    if let Some(di) = state.desktop_idx {
-        if let Some(ref dw) = state.windows[di] {
-            let _ = compsys::mouse_forward(dw.pid, dx, dy, buttons);
-        }
-    }
+#[inline(always)]
+fn map_global_to_local(mx: i32, my: i32, win: &crate::islands::ChildWindow) -> (i32, i32) {
+    let sw = win.src_w.max(1) as i32;
+    let sh = win.src_h.max(1) as i32;
+
+    // z0 is desktop-space; z1 is window content-space.
+    let (rel_x, rel_y, ww, wh) = if win.z_layer == 0 {
+        let ww = sw.max(1);
+        let wh = sh.max(1);
+        (mx.clamp(0, ww - 1), my.clamp(0, wh - 1), ww, wh)
+    } else {
+        let ww = win.w.max(1) as i32;
+        let wh = win.h.max(1) as i32;
+        (
+            (mx - win.x).clamp(0, ww - 1),
+            (my - win.y).clamp(0, wh - 1),
+            ww,
+            wh,
+        )
+    };
+
+    let local_x = if ww <= 1 || sw <= 1 {
+        0
+    } else {
+        (rel_x as i64 * (sw - 1) as i64 / (ww - 1) as i64) as i32
+    };
+    let local_y = if wh <= 1 || sh <= 1 {
+        0
+    } else {
+        (rel_y as i64 * (sh - 1) as i64 / (wh - 1) as i64) as i32
+    };
+
+    (local_x, local_y)
 }
 
 fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {

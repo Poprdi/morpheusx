@@ -11,7 +11,7 @@
 //! the next timer tick will be your last.
 
 use crate::serial::{log_ok, put_hex32, puts};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Maximum cores we support.  16 is generous for a desktop OS on QEMU.
 /// Increase if you're running on a Threadripper and hate yourself.
@@ -110,6 +110,10 @@ static mut LAPIC_TO_IDX: [u8; 256] = [0xFF; 256];
 
 /// Number of cores that have completed init.
 pub static AP_ONLINE_COUNT: AtomicU32 = AtomicU32::new(0);
+
+static SHUTDOWN_QUIESCE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SHUTDOWN_QUIESCE_ACK_MASK: AtomicU64 = AtomicU64::new(0);
+static REBOOT_OWNER_CORE: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Total number of detected CPUs (BSP + APs).  Set by BSP during MADT parse
 /// or CPUID enumeration, before AP startup.
@@ -308,6 +312,97 @@ pub unsafe fn set_current_pid(pid: u32) {
 #[inline(always)]
 pub fn smp_active() -> bool {
     AP_ONLINE_COUNT.load(Ordering::Relaxed) > 1
+}
+
+#[inline(always)]
+pub fn shutdown_quiesce_requested() -> bool {
+    SHUTDOWN_QUIESCE_REQUESTED.load(Ordering::Acquire)
+}
+
+#[inline(always)]
+pub fn shutdown_quiesce_ack(core_idx: u32) {
+    if core_idx < 64 {
+        SHUTDOWN_QUIESCE_ACK_MASK.fetch_or(1u64 << core_idx, Ordering::Release);
+    }
+}
+
+pub fn request_shutdown_quiesce() {
+    let owner = reboot_owner().unwrap_or(0);
+    let owner_mask = if owner < 64 { 1u64 << owner } else { 1u64 };
+    SHUTDOWN_QUIESCE_ACK_MASK.store(owner_mask, Ordering::Release);
+    SHUTDOWN_QUIESCE_REQUESTED.store(true, Ordering::Release);
+}
+
+pub fn wait_for_shutdown_quiesce(timeout_ms: u64) -> bool {
+    let online = AP_ONLINE_COUNT.load(Ordering::Acquire) as usize;
+    if online <= 1 {
+        return true;
+    }
+
+    let expected = if online >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << online) - 1
+    };
+
+    let tsc_hz = crate::process::scheduler::tsc_frequency();
+    let deadline = if tsc_hz > 0 {
+        let ticks_per_ms = (tsc_hz / 1000).max(1);
+        Some(
+            crate::cpu::tsc::read_tsc()
+                .saturating_add(timeout_ms.saturating_mul(ticks_per_ms)),
+        )
+    } else {
+        None
+    };
+
+    // no calibrated TSC: still bound the wait so teardown cannot deadlock forever.
+    let mut fallback_spins = timeout_ms.saturating_mul(200_000).max(200_000);
+
+    loop {
+        let acked = SHUTDOWN_QUIESCE_ACK_MASK.load(Ordering::Acquire);
+        if (acked & expected) == expected {
+            return true;
+        }
+
+        if let Some(d) = deadline {
+            if crate::cpu::tsc::read_tsc() >= d {
+                return false;
+            }
+        } else {
+            if fallback_spins == 0 {
+                return false;
+            }
+            fallback_spins -= 1;
+        }
+
+        core::hint::spin_loop();
+    }
+}
+
+#[inline(always)]
+pub fn set_reboot_owner(core_idx: u32) {
+    REBOOT_OWNER_CORE.store(core_idx, Ordering::Release);
+}
+
+#[inline(always)]
+pub fn clear_reboot_owner() {
+    REBOOT_OWNER_CORE.store(u32::MAX, Ordering::Release);
+}
+
+#[inline(always)]
+pub fn reboot_owner() -> Option<u32> {
+    let owner = REBOOT_OWNER_CORE.load(Ordering::Acquire);
+    if owner == u32::MAX {
+        None
+    } else {
+        Some(owner)
+    }
+}
+
+#[inline(always)]
+pub fn is_reboot_owner(core_idx: u32) -> bool {
+    REBOOT_OWNER_CORE.load(Ordering::Acquire) == core_idx
 }
 
 // ── Offset validation ────────────────────────────────────────────────────

@@ -230,6 +230,7 @@ pub const SYS_MOUSE_FORWARD: u64 = 94;
 pub const SYS_WIN_SURFACE_DIRTY_CLEAR: u64 = 95;
 pub const SYS_TRY_WAIT: u64 = 96;
 pub const SYS_FORWARD_INPUT: u64 = 97;
+pub const SYS_SYSTEM_CONTROL: u64 = 98;
 
 // EXTERN ASM FUNCTIONS
 
@@ -375,6 +376,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_WIN_SURFACE_DIRTY_CLEAR => sys_win_surface_dirty_clear(a1),
         SYS_TRY_WAIT => sys_try_wait(a1),
         SYS_FORWARD_INPUT => sys_forward_input(a1, a2, a3),
+        SYS_SYSTEM_CONTROL => sys_system_control(a1),
         unknown => {
             crate::serial::log_warn("SYSCALL", 801, "unknown syscall number");
             let _ = unknown;

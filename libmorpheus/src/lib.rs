@@ -16,6 +16,7 @@ extern crate alloc; // buddy.rs registers #[global_allocator] → Vec/Box/String
 
 pub mod buddy;
 pub mod compositor;
+pub mod desktop;
 pub mod entry;
 pub mod env;
 pub mod error;

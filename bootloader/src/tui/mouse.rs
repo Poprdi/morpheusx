@@ -117,6 +117,20 @@ impl Mouse {
         self.fill = 0;
 
         let status = self.buf[0];
+        let raw_dx = self.buf[1];
+        let raw_dy = self.buf[2];
+
+        // bit3-only sync is too weak when stale bytes exist at boot.
+        // reject packets whose sign bits cannot describe the data bytes.
+        if !packet_sign_bits_match(status, raw_dx, raw_dy) {
+            self.desync_count = self.desync_count.saturating_add(1);
+            if self.desync_count >= RESYNC_THRESHOLD {
+                self.desync_count = 0;
+            }
+            return None;
+        }
+
+        self.desync_count = 0;
         let buttons = status & 0x07;
 
         // 9-bit sign extension using status byte sign bits.
@@ -149,6 +163,16 @@ impl Mouse {
             buttons,
         })
     }
+}
+
+#[inline(always)]
+fn packet_sign_bits_match(status: u8, dx: u8, dy: u8) -> bool {
+    // If overflow is set, data bytes are not reliable for sign checks.
+    let x_overflow = (status & 0x40) != 0;
+    let y_overflow = (status & 0x80) != 0;
+    let x_ok = x_overflow || (((status & 0x10) != 0) == ((dx & 0x80) != 0));
+    let y_ok = y_overflow || (((status & 0x20) != 0) == ((dy & 0x80) != 0));
+    x_ok && y_ok
 }
 
 /// Send a command byte to the mouse (via 0xD4 → aux port), wait for ACK.

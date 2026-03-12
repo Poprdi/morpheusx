@@ -139,6 +139,14 @@ pub const SYS_MOUSE_FORWARD: u64 = 94;
 pub const SYS_WIN_SURFACE_DIRTY_CLEAR: u64 = 95;
 pub const SYS_TRY_WAIT: u64 = 96;
 pub const SYS_FORWARD_INPUT: u64 = 97;
+pub const SYS_SYSTEM_CONTROL: u64 = 98;
+
+// SYS_SYSTEM_CONTROL modes
+pub const SYSCTL_REBOOT_GRACEFUL: u64 = 0;
+pub const SYSCTL_REBOOT_FORCE: u64 = 1;
+pub const SYSCTL_SHUTDOWN_GRACEFUL: u64 = 2;
+pub const SYSCTL_SHUTDOWN_FORCE: u64 = 3;
+pub const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
 
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> u64 {

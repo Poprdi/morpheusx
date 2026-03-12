@@ -42,6 +42,7 @@ pub const NET_CFG_GET: u64 = 0;
 pub const NET_CFG_DHCP: u64 = 1;
 pub const NET_CFG_STATIC: u64 = 2;
 pub const NET_CFG_HOSTNAME: u64 = 3;
+pub const NET_CFG_ACTIVATE: u64 = 4;
 
 // sub-commands for sys_net_poll (41)
 pub const NET_POLL_DRIVE: u64 = 0;
@@ -195,12 +196,27 @@ static mut NET_STACK_OPS: NetStackOps = NetStackOps {
     poll_stats: None,
 };
 
+// userspace-triggered network bring-up callback.
+// bootloader registers this so the kernel can stay offline by default.
+static mut NET_ACTIVATE_FN: Option<unsafe fn() -> i64> = None;
+
 /// Register network stack function pointers.
 ///
 /// Called by the bootloader after it creates a `NetInterface<D>` and
 /// wraps its methods into `unsafe fn` closures.
 pub unsafe fn register_net_stack(ops: NetStackOps) {
     NET_STACK_OPS = ops;
+}
+
+/// Register userspace-triggered network activation callback.
+///
+/// This callback is invoked by `SYS_NET_CFG(NET_CFG_ACTIVATE)`.
+/// Return values:
+/// - `0`  => activated now
+/// - `>0` => already active / no-op success
+/// - `<0` => failure
+pub unsafe fn register_net_activation(callback: unsafe fn() -> i64) {
+    NET_ACTIVATE_FN = Some(callback);
 }
 
 /// Check if a network stack is registered.
@@ -595,6 +611,22 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
                 }
             }
         }
+        // CFG_ACTIVATE() — explicit userspace network bring-up.
+        // offline by default; userspace opts in when it wants networking.
+        NET_CFG_ACTIVATE => match NET_ACTIVATE_FN {
+            Some(f) => {
+                let rc = f();
+                match rc {
+                    0.. => rc as u64,
+                    -1 => EIO,
+                    -2 => ENODEV,
+                    -4 => EIO,
+                    -5 => EFAULT,
+                    _ => EIO,
+                }
+            }
+            None => ENODEV,
+        },
         // All remaining subcmds require the stack.
         _ if !net_stack_present() => ENODEV,
 

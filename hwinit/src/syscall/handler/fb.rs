@@ -112,6 +112,16 @@ pub fn fb_lock_holder() -> u32 {
     FB_LOCK_PID.load(Relaxed)
 }
 
+/// Best-effort display ownership release for shutdown paths.
+///
+/// Clears framebuffer lock and compositor owner so no stale holder state
+/// survives into teardown and reset.
+pub unsafe fn shutdown_release_display_ownership() {
+    use core::sync::atomic::Ordering::Relaxed;
+    FB_LOCK_PID.store(0, Relaxed);
+    COMPOSITOR_PID.store(0, Relaxed);
+}
+
 // SYS_FB_MAP (64) — map the back buffer into user virtual address space
 
 /// `SYS_FB_MAP() → virt_addr`

@@ -19,7 +19,9 @@ members = [
     "compd",
     "init",
     "shelld",
+    "settings",
     "tests/syscall-e2e",
+    "tests/netcheck",
     "tests/spinning-cube",
     "tests/system-visualizer",
 ]
