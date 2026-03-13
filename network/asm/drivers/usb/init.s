@@ -28,8 +28,8 @@ global asm_xhci_bios_handoff
 ;   EAX bits 31:16 = HCIVERSION (should be >= 0x0100)
 ;   EAX = 0 if bar reads back all-F (unmapped/dead)
 asm_usb_host_probe:
-    sub     rsp, 40
     push    rbx
+    sub     rsp, 32             ; 1 push + ret = 16; +32 = 48; 48%16=0. aligned.
 
     mov     rbx, rcx
 
@@ -37,9 +37,9 @@ asm_usb_host_probe:
     call    asm_mmio_read32
     cmp     eax, 0xFFFFFFFF
     je      .probe_dead
-    ; sanity: CAPLENGTH must be ≥ 0x20 (minimum xHCI cap region)
+    ; sanity: CAPLENGTH must be ≥ 0x10 (relaxed — some controllers are small)
     movzx   edx, al
-    cmp     edx, 0x20
+    cmp     edx, 0x10
     jb      .probe_dead
     ; HCIVERSION must be ≥ 0x0100
     shr     eax, 16
@@ -54,8 +54,8 @@ asm_usb_host_probe:
 .probe_dead:
     xor     eax, eax
 .probe_out:
+    add     rsp, 32
     pop     rbx
-    add     rsp, 40
     ret
 
 ; ───────────────────────────────────────────────────────────────────────────

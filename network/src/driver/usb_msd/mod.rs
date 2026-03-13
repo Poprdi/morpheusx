@@ -267,19 +267,48 @@ unsafe fn tsc_delay(tsc_freq: u64, ms: u64) {
 // Implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
+// serial hex dump for diagnostics. not pretty, don't care.
+fn dbg(s: &str) {
+    crate::serial_str(s);
+}
+fn dbg_hex32(v: u32) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    crate::serial_str("0x");
+    for i in (0..8).rev() {
+        crate::serial_byte(HEX[((v >> (i * 4)) & 0xF) as usize]);
+    }
+}
+fn dbg_hex64(v: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    crate::serial_str("0x");
+    for i in (0..16).rev() {
+        crate::serial_byte(HEX[((v >> (i * 4)) & 0xF) as usize]);
+    }
+}
+
 impl UsbMsdDriver {
     // ─── public entry point ──────────────────────────────────────────────
 
     /// Initialise xHCI controller, enumerate first USB mass-storage device,
     /// run SCSI READ CAPACITY.  Returns a ready-to-read driver or an error.
     pub unsafe fn new(mmio_base: u64, config: UsbMsdConfig) -> Result<Self, UsbMsdInitError> {
+        dbg("[USB] new() mmio=");
+        dbg_hex64(mmio_base);
+        dbg(" tsc=");
+        dbg_hex64(config.tsc_freq);
+        dbg("\n");
+
         if mmio_base == 0 || config.tsc_freq == 0 {
+            dbg("[USB] FAIL: invalid config\n");
             return Err(UsbMsdInitError::InvalidConfig);
         }
 
         let mut drv = Self::init_controller(mmio_base, config.tsc_freq)?;
+        dbg("[USB] controller init OK, enumerating...\n");
         drv.enumerate_and_configure()?;
+        dbg("[USB] enumeration OK, SCSI init...\n");
         drv.scsi_init()?;
+        dbg("[USB] SCSI init OK, driver ready\n");
         Ok(drv)
     }
 
