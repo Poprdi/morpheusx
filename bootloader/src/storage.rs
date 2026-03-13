@@ -702,6 +702,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
 
     // Try each device: skip boot disks (GPT/MBR), use the first blank or HelixFS one.
     let mut found_data_disk = false;
+    let mut saw_unimplemented_backend = false;
     'device_scan: for i in 0..dev_count {
         let detected = match &devices[i] {
             Some(d) => d,
@@ -823,6 +824,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                                 log_warn("STORAGE", 825, "SDHCI init failed: I/O error");
                             }
                             SdhciInitError::NotImplemented => {
+                                saw_unimplemented_backend = true;
                                 log_warn("STORAGE", 825, "SDHCI init failed: not implemented");
                             }
                         }
@@ -852,6 +854,7 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: I/O error");
                             }
                             UsbMsdInitError::NotImplemented => {
+                                saw_unimplemented_backend = true;
                                 log_warn("STORAGE", 825, "USB-MSD init failed: not implemented");
                             }
                         }
@@ -888,9 +891,8 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             continue;
         }
 
-        // This device is NOT a boot disk — use it for HelixFS.
-        log_ok("STORAGE", 827, "selected data disk");
-        found_data_disk = true;
+        // Candidate selected. We only commit once it proves to hold HelixFS.
+        log_ok("STORAGE", 827, "selected data-disk candidate");
 
         // try to recover or format helixfs
         let mut raw_dev = make_raw_block_device();
@@ -916,50 +918,20 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         };
 
         if needs_format {
-            log_info("STORAGE", 829, "no valid helixfs; formatting disk");
-
-            let uuid = [
-                0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x01,
-            ];
-            spinner_start();
-            match morpheus_helix::format::format_helix(
-                &mut raw_dev,
-                0,
-                STORAGE_REGION_SECTORS,
-                info.sector_size,
-                "root",
-                uuid,
-            ) {
-                Ok(_sb) => {
-                    spinner_done();
-                    log_ok("STORAGE", 830, "format completed");
-                }
-                Err(e) => {
-                    spinner_done();
-                    let _ = e;
-                    log_error("STORAGE", 831, "format failed");
-                    BLOCK_DEVICE = None;
-                    continue;
-                }
-            }
-
-            // Verify format succeeded
-            match morpheus_helix::log::recovery::recover_superblock(&mut raw_dev, 0, info.sector_size)
-            {
-                Ok(_sb) => {}
-                Err(e) => {
-                    let _ = e;
-                    log_warn("STORAGE", 832, "superblock readback failed after format");
-                }
-            }
+            // Bring-up safety: never auto-format random host disks at boot.
+            // Keep scanning until we find an existing HelixFS root.
+            log_warn("STORAGE", 829, "no valid helixfs on candidate; skipping disk");
+            BLOCK_DEVICE = None;
+            continue;
         } else {
             log_info("STORAGE", 833, "valid helixfs found; mounting");
         }
 
+        let mut mounted_from_ram = false;
         let mount_dev = match stage_selected_region_to_ram(info.sector_size) {
             Some(mem_dev) => {
                 log_ok("STORAGE", 838, "helix partition staged into RAM");
+                mounted_from_ram = true;
                 mem_dev
             }
             None => {
@@ -977,7 +949,67 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
             Ok(()) => {
                 spinner_done();
+                let mut root_has_init = root_path_exists("/bin/init");
+                if mounted_from_ram && !root_path_exists("/bin/init") {
+                    log_warn(
+                        "STORAGE",
+                        844,
+                        "RAM-staged root missing /bin/init; remounting directly from media",
+                    );
+                    spinner_start();
+                    match morpheus_helix::vfs::global::replace_root_device(
+                        make_raw_block_device(),
+                        false,
+                    ) {
+                        Ok(()) => {
+                            spinner_done();
+                            if root_path_exists("/bin/init") {
+                                root_has_init = true;
+                                log_ok("STORAGE", 845, "direct-media root remount restored /bin/init");
+                            } else {
+                                root_has_init = false;
+                                log_warn(
+                                    "STORAGE",
+                                    846,
+                                    "direct-media root still missing /bin/init",
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            spinner_done();
+                            root_has_init = false;
+                            log_warn("STORAGE", 847, "direct-media root remount failed");
+                        }
+                    }
+                }
+
+                if !root_has_init {
+                    log_warn(
+                        "STORAGE",
+                        851,
+                        "candidate root rejected: /bin/init missing; scanning next disk",
+                    );
+                    BLOCK_DEVICE = None;
+                    continue;
+                }
+
                 PERSISTENT_READY = true;
+                found_data_disk = true;
+                if root_path_exists("/bin/init") {
+                    log_ok("STORAGE", 848, "root check: /bin/init present");
+                } else {
+                    log_warn("STORAGE", 848, "root check: /bin/init missing");
+                }
+                if root_path_exists("/bin/compd") {
+                    log_ok("STORAGE", 849, "root check: /bin/compd present");
+                } else {
+                    log_warn("STORAGE", 849, "root check: /bin/compd missing");
+                }
+                if root_path_exists("/bin/shelld") {
+                    log_ok("STORAGE", 850, "root check: /bin/shelld present");
+                } else {
+                    log_warn("STORAGE", 850, "root check: /bin/shelld missing");
+                }
                 log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
                 break 'device_scan;
             }
@@ -998,7 +1030,23 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             839,
             "runtime persistent backends currently support AHCI/VirtIO/SDHCI (USB/NVMe pending)",
         );
+        if saw_unimplemented_backend {
+            log_error(
+                "STORAGE",
+                852,
+                "boot medium backend is scaffold-only (SDHCI/USB-MSD not implemented); /bin/init will be unavailable",
+            );
+        }
     }
+}
+
+fn root_path_exists(path: &str) -> bool {
+    let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
+        Some(f) => f,
+        None => return false,
+    };
+
+    morpheus_helix::vfs::vfs_stat(&fs.mount_table, path).is_ok()
 }
 
 /// Whether persistent storage is active (vs RAM-disk fallback).

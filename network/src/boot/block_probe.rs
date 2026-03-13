@@ -74,8 +74,10 @@ const VIRTIO_BLK_DEVICE_MODERN: u16 = 0x1042;
 /// We compare against `(class_code >> 8) & 0xFFFF`, which yields
 /// subclass:prog_if (not class:subclass).
 const PCI_CLASS_SATA_AHCI: u32 = 0x0601;
-/// PCI subclass/prog-if for SD Host Controller (SDHCI): 0x05/0x01.
-const PCI_CLASS_SDHCI: u32 = 0x0501;
+/// PCI class/subclass for SD Host Controller: 0x08/0x05.
+///
+/// Prog-if differs across controller revisions, so do not pin it to one value.
+const PCI_CLASS_SUBCLASS_SDHCI: u32 = 0x0805;
 /// PCI subclass/prog-if for USB xHCI: 0x03/0x30.
 const PCI_CLASS_USB_XHCI: u32 = 0x0330;
 
@@ -305,8 +307,8 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
                     continue;
                 }
                 let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
-                let class = (class_code >> 8) & 0xFFFF;
-                if class != PCI_CLASS_SDHCI {
+                let class_subclass = (class_code >> 16) & 0xFFFF;
+                if class_subclass != PCI_CLASS_SUBCLASS_SDHCI {
                     continue;
                 }
                 let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
@@ -504,8 +506,8 @@ pub fn find_sdhci_controller() -> Option<SdhciInfo> {
                 }
 
                 let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
-                let class = (class_code >> 8) & 0xFFFF;
-                if class != PCI_CLASS_SDHCI {
+                let class_subclass = (class_code >> 16) & 0xFFFF;
+                if class_subclass != PCI_CLASS_SUBCLASS_SDHCI {
                     continue;
                 }
 

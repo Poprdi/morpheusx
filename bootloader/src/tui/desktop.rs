@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 use morpheus_display::types::FramebufferInfo;
-use morpheus_hwinit::serial::{clear_live_console_hook, log_error, log_info, log_ok, puts};
+use morpheus_hwinit::serial::{log_error, log_info, log_ok, puts};
 
 use super::input::Keyboard;
 
@@ -88,7 +88,6 @@ fn show_boot_log_screen(keyboard: &mut Keyboard) {
     puts("Press any key to launch msh...");
     keyboard.wait_for_key();
     puts("\n");
-    clear_live_console_hook();
 }
 
 pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
