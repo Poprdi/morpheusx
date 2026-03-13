@@ -120,6 +120,8 @@ pub use driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver, Bl
 
 // Block drivers
 pub use driver::ahci::{AhciConfig, AhciDriver, AhciInitError};
+pub use driver::sdhci::{SdhciConfig, SdhciDriver, SdhciInitError};
+pub use driver::usb_msd::{UsbMsdConfig, UsbMsdDriver, UsbMsdInitError};
 pub use driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
 
 // BlockIo adapters (for filesystem compatibility)

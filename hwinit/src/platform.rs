@@ -474,7 +474,7 @@ pub unsafe fn platform_init_selfcontained(
         core::ptr::write_bytes(root_fs_base as *mut u8, 0, ROOT_FS_SIZE);
         checkpoint("phase11-fs-mount");
         match morpheus_helix::vfs::global::init_root_fs(root_fs_base as *mut u8, ROOT_FS_SIZE) {
-            Ok(()) => log_ok("FS", 112, "helixfs mounted at /"),
+            Ok(()) => log_ok("FS", 112, "bootstrap RAM helixfs mounted at /"),
             Err(_) => {
                 log_warn("FS", 412, "root fs init failed; continuing without fs");
                 // Non-fatal — system continues without FS.

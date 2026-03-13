@@ -52,6 +52,10 @@ const ASM_AHCI: &[&str] = &[
     "asm/drivers/ahci/io.s",
 ];
 
+const ASM_SDHCI: &[&str] = &["asm/drivers/sdhci/init.s"];
+
+const ASM_USB: &[&str] = &["asm/drivers/usb/init.s"];
+
 const ASM_PHY: &[&str] = &["asm/phy/mdio.s", "asm/phy/mii.s", "asm/phy/link.s"];
 
 fn main() {
@@ -114,6 +118,8 @@ fn main() {
         ("virtio", ASM_VIRTIO),
         ("intel", ASM_INTEL),
         ("ahci", ASM_AHCI),
+        ("sdhci", ASM_SDHCI),
+        ("usb", ASM_USB),
         ("phy", ASM_PHY),
     ];
 

@@ -95,8 +95,8 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
     log_info("KERNEL", 926, "preparing to launch /bin/init");
 
     let mut keyboard = Keyboard::new();
-    let mut mouse = super::mouse::Mouse::new();
     show_boot_log_screen(&mut keyboard);
+    let mut mouse = super::mouse::Mouse::new();
 
     // Load and spawn the userland init supervisor
     let elf_data = match load_elf_from_fs("init") {
@@ -149,7 +149,7 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
             let device = (raw >> 8) & 0xFF;
             let byte = (raw & 0xFF) as u8;
 
-            if device == 0x03 {
+            if device == 0x03 && !keyboard.aux_as_kbd() {
                 // Mouse byte
                 if let Some(pkt) = mouse.feed(byte) {
                     morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);

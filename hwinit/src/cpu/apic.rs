@@ -9,13 +9,10 @@
 use crate::cpu::per_cpu;
 use crate::cpu::pio::outb;
 use crate::serial::{log_info, log_ok, log_warn};
+use core::sync::atomic::{AtomicBool, Ordering};
 
-#[inline(always)]
-fn apic_dbg(msg: &str) {
-    crate::serial::puts("[APICDBG] ");
-    crate::serial::puts(msg);
-    crate::serial::puts("\r\n");
-}
+
+
 
 // ── LAPIC register offsets ───────────────────────────────────────────────
 
@@ -41,7 +38,7 @@ const TIMER_MASKED: u32 = 1 << 16;
 
 // ICR delivery modes
 const ICR_INIT: u32 = 0x500;
-const ICR_STARTUP: u32 = 0x600;
+const ICR_STARTUP: u32 = 0x8000;
 const ICR_LEVEL_ASSERT: u32 = 0x4000;
 const ICR_LEVEL_DEASSERT: u32 = 0x0000;
 const ICR_TRIGGER_LEVEL: u32 = 1 << 15;
@@ -55,9 +52,55 @@ pub const TIMER_VECTOR: u8 = 0x20;
 
 /// IA32_APIC_BASE MSR — contains the actual LAPIC physical base address.
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
+const IA32_X2APIC_ICR_MSR: u32 = 0x830;
+const IA32_X2APIC_ID_MSR: u32 = 0x802;
 
 /// Actual LAPIC base, probed from MSR 0x1B. written once during BSP init.
 static mut LAPIC_BASE_ACTUAL: u64 = DEFAULT_LAPIC_BASE;
+static X2APIC_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+unsafe fn rdmsr(msr: u32) -> u64 {
+    let lo: u32;
+    let hi: u32;
+    core::arch::asm!(
+        "rdmsr",
+        in("ecx") msr,
+        out("eax") lo,
+        out("edx") hi,
+        options(nostack, nomem),
+    );
+    ((hi as u64) << 32) | lo as u64
+}
+
+#[inline(always)]
+unsafe fn wrmsr(msr: u32, val: u64) {
+    let lo = val as u32;
+    let hi = (val >> 32) as u32;
+    core::arch::asm!(
+        "wrmsr",
+        in("ecx") msr,
+        in("eax") lo,
+        in("edx") hi,
+        options(nostack, nomem),
+    );
+}
+
+#[inline(always)]
+unsafe fn wrmsr_parts(msr: u32, lo: u32, hi: u32) {
+    core::arch::asm!(
+        "wrmsr",
+        in("ecx") msr,
+        in("eax") lo,
+        in("edx") hi,
+        options(nostack, nomem),
+    );
+}
+
+#[inline(always)]
+unsafe fn x2apic_enabled() -> bool {
+    X2APIC_ENABLED.load(Ordering::Relaxed)
+}
 
 /// Probe the LAPIC base address from IA32_APIC_BASE MSR.
 /// Stores the result for all subsequent LAPIC access.
@@ -76,6 +119,8 @@ pub unsafe fn probe_lapic_base() -> u64 {
         options(nostack, nomem),
     );
     let raw = (hi as u64) << 32 | lo as u64;
+    let x2 = (raw & (1 << 10)) != 0;
+    X2APIC_ENABLED.store(x2, Ordering::Relaxed);
     // bits [12:N] = base physical address, bits [0:11] = flags
     let base = raw & 0xFFFF_FFFF_FFFF_F000;
     LAPIC_BASE_ACTUAL = base;
@@ -112,7 +157,11 @@ unsafe fn lapic_write(base: u64, reg: u32, val: u32) {
 
 /// Read the current CPU's LAPIC ID from hardware.
 pub unsafe fn read_lapic_id() -> u32 {
-    lapic_read(lapic_base(), LAPIC_ID) >> 24
+    if x2apic_enabled() {
+        rdmsr(IA32_X2APIC_ID_MSR) as u32
+    } else {
+        lapic_read(lapic_base(), LAPIC_ID) >> 24
+    }
 }
 
 /// Check if APIC is available via CPUID.
@@ -272,12 +321,23 @@ pub unsafe fn disable_pic8259() {
 /// Send an INIT IPI to target APIC ID.
 pub unsafe fn send_init_ipi(target_apic_id: u32) {
     let base = lapic_base();
-    apic_dbg("init-ipi-begin");
+
+    if x2apic_enabled() {
+        // x2APIC uses MSR 0x830 for ICR writes; MMIO ICR can wedge on some hw.
+        let init_assert = (target_apic_id as u64) << 32 | (ICR_INIT | ICR_LEVEL_ASSERT) as u64;
+        wrmsr(IA32_X2APIC_ICR_MSR, init_assert);
+        wait_icr_idle(base);
+
+        let init_deassert = (target_apic_id as u64) << 32
+            | (ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT) as u64;
+        wrmsr(IA32_X2APIC_ICR_MSR, init_deassert);
+        wait_icr_idle(base);
+        return;
+    }
 
     // INIT assert
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
     lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_LEVEL_ASSERT);
-    apic_dbg("init-ipi-assert");
     wait_icr_idle(base);
 
     // INIT deassert — trigger mode MUST be level (bit 15) with level=0.
@@ -288,9 +348,7 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
         LAPIC_ICR_LO,
         ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT,
     );
-    apic_dbg("init-ipi-deassert");
     wait_icr_idle(base);
-    apic_dbg("init-ipi-done");
 }
 
 /// Send a Startup IPI (SIPI) to target APIC ID.
@@ -299,12 +357,16 @@ pub unsafe fn send_init_ipi(target_apic_id: u32) {
 /// Must be below 1 MiB and page-aligned (e.g., 0x8000 → start_page = 8).
 pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
     let base = lapic_base();
-    apic_dbg("sipi-begin");
+    if x2apic_enabled() {
+        let icr_lo = ICR_STARTUP | start_page as u32;
+        let icr_hi = target_apic_id;
+        wrmsr_parts(IA32_X2APIC_ICR_MSR, icr_lo, icr_hi);
+        wait_icr_idle(base);
+        return;
+    }
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
     lapic_write(base, LAPIC_ICR_LO, ICR_STARTUP | start_page as u32);
-    apic_dbg("sipi-write");
     wait_icr_idle(base);
-    apic_dbg("sipi-done");
 }
 
 /// Wait for the ICR delivery status bit to clear.
@@ -313,16 +375,20 @@ unsafe fn wait_icr_idle(base: u64) {
     // Keep this tightly bounded. Some hardware can leave delivery status set
     // long enough to look like a deadlock if we spin too generously.
     let mut timeout = 2_000u32;
-    while lapic_read(base, LAPIC_ICR_LO) & ICR_DELIVERY_STATUS != 0 {
+    while {
+        if x2apic_enabled() {
+            (rdmsr(IA32_X2APIC_ICR_MSR) as u32 & ICR_DELIVERY_STATUS) != 0
+        } else {
+            (lapic_read(base, LAPIC_ICR_LO) & ICR_DELIVERY_STATUS) != 0
+        }
+    } {
         core::hint::spin_loop();
         timeout -= 1;
         if timeout == 0 {
             log_warn("LAPIC", 726, "ICR delivery timeout");
-            apic_dbg("icr-wait-timeout");
             break;
         }
     }
-    apic_dbg("icr-wait-done");
 }
 
 // ── Delay helper ─────────────────────────────────────────────────────────

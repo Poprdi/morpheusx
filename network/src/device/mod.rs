@@ -235,6 +235,8 @@ impl NetworkDevice for UnifiedNetDevice {
 
 use crate::driver::ahci::{AhciDriver, AhciInitError};
 use crate::driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver, BlockError};
+use crate::driver::sdhci::{SdhciDriver, SdhciInitError};
+use crate::driver::usb_msd::{UsbMsdDriver, UsbMsdInitError};
 use crate::driver::virtio_blk::{VirtioBlkDriver, VirtioBlkInitError};
 
 /// Unified block device that works with both VirtIO-blk and AHCI.
@@ -264,6 +266,10 @@ pub enum UnifiedBlockDevice {
     VirtIO(VirtioBlkDriver),
     /// AHCI SATA driver (real hardware - ThinkPad T450s)
     Ahci(AhciDriver),
+    /// SDHCI block driver (SD/MMC host path)
+    Sdhci(SdhciDriver),
+    /// USB mass-storage block driver
+    UsbMsd(UsbMsdDriver),
 }
 
 /// Errors from unified block device operations.
@@ -275,6 +281,10 @@ pub enum UnifiedBlockError {
     VirtioError(VirtioBlkInitError),
     /// AHCI initialization failed
     AhciError(AhciInitError),
+    /// SDHCI initialization failed
+    SdhciError(SdhciInitError),
+    /// USB MSD initialization failed
+    UsbMsdError(UsbMsdInitError),
 }
 
 impl From<VirtioBlkInitError> for UnifiedBlockError {
@@ -289,12 +299,26 @@ impl From<AhciInitError> for UnifiedBlockError {
     }
 }
 
+impl From<SdhciInitError> for UnifiedBlockError {
+    fn from(e: SdhciInitError) -> Self {
+        UnifiedBlockError::SdhciError(e)
+    }
+}
+
+impl From<UsbMsdInitError> for UnifiedBlockError {
+    fn from(e: UsbMsdInitError) -> Self {
+        UnifiedBlockError::UsbMsdError(e)
+    }
+}
+
 impl UnifiedBlockDevice {
     /// Get which driver type is being used.
     pub fn driver_type(&self) -> &'static str {
         match self {
             UnifiedBlockDevice::VirtIO(_) => "VirtIO-blk",
             UnifiedBlockDevice::Ahci(_) => "AHCI SATA",
+            UnifiedBlockDevice::Sdhci(_) => "SDHCI",
+            UnifiedBlockDevice::UsbMsd(_) => "USB-MSD",
         }
     }
 
@@ -303,6 +327,8 @@ impl UnifiedBlockDevice {
         match self {
             UnifiedBlockDevice::VirtIO(_) => true, // VirtIO always ready after init
             UnifiedBlockDevice::Ahci(d) => d.link_up(),
+            UnifiedBlockDevice::Sdhci(_) => true,
+            UnifiedBlockDevice::UsbMsd(_) => true,
         }
     }
 }
@@ -312,6 +338,8 @@ impl BlockDriver for UnifiedBlockDevice {
         match self {
             UnifiedBlockDevice::VirtIO(d) => d.info(),
             UnifiedBlockDevice::Ahci(d) => d.info(),
+            UnifiedBlockDevice::Sdhci(d) => d.info(),
+            UnifiedBlockDevice::UsbMsd(d) => d.info(),
         }
     }
 
@@ -319,6 +347,8 @@ impl BlockDriver for UnifiedBlockDevice {
         match self {
             UnifiedBlockDevice::VirtIO(d) => d.can_submit(),
             UnifiedBlockDevice::Ahci(d) => d.can_submit(),
+            UnifiedBlockDevice::Sdhci(d) => d.can_submit(),
+            UnifiedBlockDevice::UsbMsd(d) => d.can_submit(),
         }
     }
 
@@ -334,6 +364,12 @@ impl BlockDriver for UnifiedBlockDevice {
                 d.submit_read(sector, buffer_phys, num_sectors, request_id)
             }
             UnifiedBlockDevice::Ahci(d) => {
+                d.submit_read(sector, buffer_phys, num_sectors, request_id)
+            }
+            UnifiedBlockDevice::Sdhci(d) => {
+                d.submit_read(sector, buffer_phys, num_sectors, request_id)
+            }
+            UnifiedBlockDevice::UsbMsd(d) => {
                 d.submit_read(sector, buffer_phys, num_sectors, request_id)
             }
         }
@@ -353,6 +389,12 @@ impl BlockDriver for UnifiedBlockDevice {
             UnifiedBlockDevice::Ahci(d) => {
                 d.submit_write(sector, buffer_phys, num_sectors, request_id)
             }
+            UnifiedBlockDevice::Sdhci(d) => {
+                d.submit_write(sector, buffer_phys, num_sectors, request_id)
+            }
+            UnifiedBlockDevice::UsbMsd(d) => {
+                d.submit_write(sector, buffer_phys, num_sectors, request_id)
+            }
         }
     }
 
@@ -360,6 +402,8 @@ impl BlockDriver for UnifiedBlockDevice {
         match self {
             UnifiedBlockDevice::VirtIO(d) => d.poll_completion(),
             UnifiedBlockDevice::Ahci(d) => d.poll_completion(),
+            UnifiedBlockDevice::Sdhci(d) => d.poll_completion(),
+            UnifiedBlockDevice::UsbMsd(d) => d.poll_completion(),
         }
     }
 
@@ -367,6 +411,8 @@ impl BlockDriver for UnifiedBlockDevice {
         match self {
             UnifiedBlockDevice::VirtIO(d) => d.notify(),
             UnifiedBlockDevice::Ahci(d) => d.notify(),
+            UnifiedBlockDevice::Sdhci(d) => d.notify(),
+            UnifiedBlockDevice::UsbMsd(d) => d.notify(),
         }
     }
 
@@ -374,6 +420,8 @@ impl BlockDriver for UnifiedBlockDevice {
         match self {
             UnifiedBlockDevice::VirtIO(d) => d.flush(),
             UnifiedBlockDevice::Ahci(d) => d.flush(),
+            UnifiedBlockDevice::Sdhci(d) => d.flush(),
+            UnifiedBlockDevice::UsbMsd(d) => d.flush(),
         }
     }
 }

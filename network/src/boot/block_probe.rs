@@ -20,9 +20,9 @@
 //! ```
 
 use crate::device::{UnifiedBlockDevice, UnifiedBlockError};
-use crate::driver::ahci::{
-    AhciConfig, AhciDriver, AhciInitError, AHCI_DEVICE_IDS, INTEL_VENDOR_ID,
-};
+use crate::driver::ahci::{AhciConfig, AhciDriver, AhciInitError, INTEL_VENDOR_ID};
+use crate::driver::sdhci::{SdhciConfig, SdhciDriver, SdhciInitError};
+use crate::driver::usb_msd::{UsbMsdConfig, UsbMsdDriver, UsbMsdInitError};
 use crate::driver::virtio::transport::{PciModernConfig, VirtioTransport};
 use crate::driver::virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
 use crate::pci::capability::probe_virtio_caps;
@@ -74,6 +74,10 @@ const VIRTIO_BLK_DEVICE_MODERN: u16 = 0x1042;
 /// We compare against `(class_code >> 8) & 0xFFFF`, which yields
 /// subclass:prog_if (not class:subclass).
 const PCI_CLASS_SATA_AHCI: u32 = 0x0601;
+/// PCI subclass/prog-if for SD Host Controller (SDHCI): 0x05/0x01.
+const PCI_CLASS_SDHCI: u32 = 0x0501;
+/// PCI subclass/prog-if for USB xHCI: 0x03/0x30.
+const PCI_CLASS_USB_XHCI: u32 = 0x0330;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROBE ERRORS
@@ -88,6 +92,10 @@ pub enum BlockProbeError {
     VirtioInitFailed,
     /// AHCI initialization failed
     AhciInitFailed,
+    /// SDHCI initialization failed
+    SdhciInitFailed,
+    /// USB mass-storage initialization failed
+    UsbMsdInitFailed,
     /// BAR mapping failed
     BarMappingFailed,
     /// Device not responding
@@ -106,6 +114,18 @@ impl From<AhciInitError> for BlockProbeError {
     }
 }
 
+impl From<SdhciInitError> for BlockProbeError {
+    fn from(_: SdhciInitError) -> Self {
+        BlockProbeError::SdhciInitFailed
+    }
+}
+
+impl From<UsbMsdInitError> for BlockProbeError {
+    fn from(_: UsbMsdInitError) -> Self {
+        BlockProbeError::UsbMsdInitFailed
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // DETECTED DEVICE INFO
 // ═══════════════════════════════════════════════════════════════════════════
@@ -117,6 +137,10 @@ pub enum DetectedBlockDevice {
     VirtIO { pci_addr: PciAddr, mmio_base: u64 },
     /// AHCI SATA controller
     Ahci(AhciInfo),
+    /// SDHCI controller
+    Sdhci(SdhciInfo),
+    /// USB xHCI controller candidate for USB MSD path
+    UsbMsd(UsbMsdInfo),
 }
 
 /// Information about detected AHCI controller.
@@ -130,12 +154,38 @@ pub struct AhciInfo {
     pub device_id: u16,
 }
 
+/// Information about detected SDHCI controller.
+#[derive(Debug, Clone, Copy)]
+pub struct SdhciInfo {
+    /// PCI address
+    pub pci_addr: PciAddr,
+    /// MMIO base from BAR0
+    pub mmio_base: u64,
+    /// Device ID
+    pub device_id: u16,
+}
+
+/// Information about detected USB xHCI controller.
+#[derive(Debug, Clone, Copy)]
+pub struct UsbMsdInfo {
+    /// PCI address
+    pub pci_addr: PciAddr,
+    /// MMIO base from BAR0
+    pub mmio_base: u64,
+    /// Device ID
+    pub device_id: u16,
+}
+
 /// Result of successful probe and initialization.
 pub enum BlockProbeResult {
     /// VirtIO-blk driver
     VirtIO(VirtioBlkDriver),
     /// AHCI SATA driver
     Ahci(AhciDriver),
+    /// SDHCI block driver
+    Sdhci(SdhciDriver),
+    /// USB mass-storage block driver
+    UsbMsd(UsbMsdDriver),
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -153,6 +203,16 @@ pub fn scan_for_block_device() -> Option<DetectedBlockDevice> {
     // First try to find AHCI controller (real hardware)
     if let Some(info) = find_ahci_controller() {
         return Some(DetectedBlockDevice::Ahci(info));
+    }
+
+    // Then try SDHCI (SD card host)
+    if let Some(info) = find_sdhci_controller() {
+        return Some(DetectedBlockDevice::Sdhci(info));
+    }
+
+    // Then try USB xHCI for USB mass-storage path
+    if let Some(info) = find_usb_xhci_controller() {
+        return Some(DetectedBlockDevice::UsbMsd(info));
     }
 
     // Fall back to VirtIO-blk (QEMU, VMs)
@@ -195,24 +255,12 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
                     }
                     continue;
                 }
-                if vendor_id != INTEL_VENDOR_ID {
-                    if function == 0 {
-                        let header = pci_cfg_read16(addr, offset::HEADER_TYPE) & 0x80;
-                        if header == 0 {
-                            break;
-                        }
-                    }
-                    continue;
-                }
                 let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
                 let class = (class_code >> 8) & 0xFFFF;
                 if class != PCI_CLASS_SATA_AHCI {
                     continue;
                 }
                 let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
-                if !AHCI_DEVICE_IDS.contains(&device_id) {
-                    continue;
-                }
                 let bar5 = pci_cfg_read32(addr, offset::BAR5);
                 if bar5 == 0 || (bar5 & 0x01) != 0 {
                     continue;
@@ -227,6 +275,103 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
                 result[count] = Some(DetectedBlockDevice::Ahci(AhciInfo {
                     pci_addr: addr,
                     abar,
+                    device_id,
+                }));
+                count += 1;
+            }
+        }
+    }
+
+    // Collect all VirtIO-blk devices.
+    // Collect all SDHCI controllers.
+    for bus in 0..=255u8 {
+        if count >= MAX_BLOCK_DEVICES {
+            break;
+        }
+        for device in 0..32u8 {
+            if count >= MAX_BLOCK_DEVICES {
+                break;
+            }
+            for function in 0..8u8 {
+                if count >= MAX_BLOCK_DEVICES {
+                    break;
+                }
+                let addr = PciAddr::new(bus, device, function);
+                let vendor_id = pci_cfg_read16(addr, offset::VENDOR_ID);
+                if vendor_id == 0xFFFF {
+                    if function == 0 {
+                        break;
+                    }
+                    continue;
+                }
+                let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
+                let class = (class_code >> 8) & 0xFFFF;
+                if class != PCI_CLASS_SDHCI {
+                    continue;
+                }
+                let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
+                let bar0 = pci_cfg_read32(addr, offset::BAR0);
+                if bar0 == 0 || (bar0 & 0x01) != 0 {
+                    continue;
+                }
+                let is_64bit = (bar0 & 0x06) == 0x04;
+                let mmio_base = if is_64bit {
+                    let bar1 = pci_cfg_read32(addr, offset::BAR1);
+                    ((bar1 as u64) << 32) | ((bar0 & 0xFFFFFFF0) as u64)
+                } else {
+                    (bar0 & 0xFFFFFFF0) as u64
+                };
+                result[count] = Some(DetectedBlockDevice::Sdhci(SdhciInfo {
+                    pci_addr: addr,
+                    mmio_base,
+                    device_id,
+                }));
+                count += 1;
+            }
+        }
+    }
+
+    // Collect all USB xHCI controllers.
+    for bus in 0..=255u8 {
+        if count >= MAX_BLOCK_DEVICES {
+            break;
+        }
+        for device in 0..32u8 {
+            if count >= MAX_BLOCK_DEVICES {
+                break;
+            }
+            for function in 0..8u8 {
+                if count >= MAX_BLOCK_DEVICES {
+                    break;
+                }
+                let addr = PciAddr::new(bus, device, function);
+                let vendor_id = pci_cfg_read16(addr, offset::VENDOR_ID);
+                if vendor_id == 0xFFFF {
+                    if function == 0 {
+                        break;
+                    }
+                    continue;
+                }
+                let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
+                let class = (class_code >> 8) & 0xFFFF;
+                if class != PCI_CLASS_USB_XHCI {
+                    continue;
+                }
+                let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
+                let bar0 = pci_cfg_read32(addr, offset::BAR0);
+                if bar0 == 0 || (bar0 & 0x01) != 0 {
+                    continue;
+                }
+                let is_64bit = (bar0 & 0x06) == 0x04;
+                let mmio_base = if is_64bit {
+                    let bar1 = pci_cfg_read32(addr, offset::BAR1);
+                    ((bar1 as u64) << 32) | ((bar0 & 0xFFFFFFF0) as u64)
+                } else {
+                    (bar0 & 0xFFFFFFF0) as u64
+                };
+                result[count] = Some(DetectedBlockDevice::UsbMsd(UsbMsdInfo {
+                    pci_addr: addr,
+                    mmio_base,
                     device_id,
                 }));
                 count += 1;
@@ -306,17 +451,6 @@ pub fn find_ahci_controller() -> Option<AhciInfo> {
                     continue;
                 }
 
-                // Check for Intel
-                if vendor_id != INTEL_VENDOR_ID {
-                    if function == 0 {
-                        let header = pci_cfg_read16(addr, offset::HEADER_TYPE) & 0x80;
-                        if header == 0 {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-
                 // Check class code for SATA AHCI
                 let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
                 let class = (class_code >> 8) & 0xFFFF;
@@ -325,11 +459,6 @@ pub fn find_ahci_controller() -> Option<AhciInfo> {
                 }
 
                 let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
-
-                // Verify it's a known AHCI device
-                if !AHCI_DEVICE_IDS.contains(&device_id) {
-                    continue;
-                }
 
                 // Read BAR5 (ABAR - AHCI Base Address Register)
                 // AHCI uses BAR5 for MMIO
@@ -350,6 +479,100 @@ pub fn find_ahci_controller() -> Option<AhciInfo> {
                 return Some(AhciInfo {
                     pci_addr: addr,
                     abar,
+                    device_id,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+/// Scan for SDHCI controller.
+pub fn find_sdhci_controller() -> Option<SdhciInfo> {
+    for bus in 0..=255u8 {
+        for device in 0..32u8 {
+            for function in 0..8u8 {
+                let addr = PciAddr::new(bus, device, function);
+
+                let vendor_id = pci_cfg_read16(addr, offset::VENDOR_ID);
+                if vendor_id == 0xFFFF {
+                    if function == 0 {
+                        break;
+                    }
+                    continue;
+                }
+
+                let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
+                let class = (class_code >> 8) & 0xFFFF;
+                if class != PCI_CLASS_SDHCI {
+                    continue;
+                }
+
+                let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
+                let bar0 = pci_cfg_read32(addr, offset::BAR0);
+                if bar0 == 0 || (bar0 & 0x01) != 0 {
+                    continue;
+                }
+
+                let is_64bit = (bar0 & 0x06) == 0x04;
+                let mmio_base = if is_64bit {
+                    let bar1 = pci_cfg_read32(addr, offset::BAR1);
+                    ((bar1 as u64) << 32) | ((bar0 & 0xFFFFFFF0) as u64)
+                } else {
+                    (bar0 & 0xFFFFFFF0) as u64
+                };
+
+                return Some(SdhciInfo {
+                    pci_addr: addr,
+                    mmio_base,
+                    device_id,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+/// Scan for USB xHCI controller (candidate for USB mass-storage backend).
+pub fn find_usb_xhci_controller() -> Option<UsbMsdInfo> {
+    for bus in 0..=255u8 {
+        for device in 0..32u8 {
+            for function in 0..8u8 {
+                let addr = PciAddr::new(bus, device, function);
+
+                let vendor_id = pci_cfg_read16(addr, offset::VENDOR_ID);
+                if vendor_id == 0xFFFF {
+                    if function == 0 {
+                        break;
+                    }
+                    continue;
+                }
+
+                let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
+                let class = (class_code >> 8) & 0xFFFF;
+                if class != PCI_CLASS_USB_XHCI {
+                    continue;
+                }
+
+                let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
+                let bar0 = pci_cfg_read32(addr, offset::BAR0);
+                if bar0 == 0 || (bar0 & 0x01) != 0 {
+                    continue;
+                }
+
+                let is_64bit = (bar0 & 0x06) == 0x04;
+                let mmio_base = if is_64bit {
+                    let bar1 = pci_cfg_read32(addr, offset::BAR1);
+                    ((bar1 as u64) << 32) | ((bar0 & 0xFFFFFFF0) as u64)
+                } else {
+                    (bar0 & 0xFFFFFFF0) as u64
+                };
+
+                return Some(UsbMsdInfo {
+                    pci_addr: addr,
+                    mmio_base,
                     device_id,
                 });
             }
@@ -477,6 +700,50 @@ fn enable_pci_device(addr: PciAddr) {
     pci_cfg_write16(addr, offset::COMMAND, cmd | 0x06);
 }
 
+/// Intel AHCI quirk: firmware sometimes leaves PCS port-enable bits unset.
+/// Mirror PORTS_IMPL into PCS_6 so AHCI ports are actually visible to software.
+fn intel_ahci_pcs_quirk(addr: PciAddr, abar: u64) {
+    const PCS_6: u8 = 0x92;
+    const PCS_7: u8 = 0x94;
+    const AHCI_CAP_OFF: u64 = 0x00;
+    const AHCI_PI_OFF: u64 = 0x0C;
+
+    if pci_cfg_read16(addr, offset::VENDOR_ID) != INTEL_VENDOR_ID {
+        return;
+    }
+
+    let mut port_map = unsafe { core::ptr::read_volatile((abar + AHCI_PI_OFF) as *const u32) };
+    if port_map == 0 {
+        let cap = unsafe { core::ptr::read_volatile((abar + AHCI_CAP_OFF) as *const u32) };
+        let n_ports = ((cap & 0x1F) + 1).min(32);
+        port_map = if n_ports >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << n_ports) - 1
+        };
+    }
+
+    if port_map == 0 {
+        return;
+    }
+
+    let lo = (port_map & 0xFFFF) as u16;
+    if lo != 0 {
+        let pcs6 = pci_cfg_read16(addr, PCS_6);
+        if (pcs6 & lo) != lo {
+            pci_cfg_write16(addr, PCS_6, pcs6 | lo);
+        }
+    }
+
+    let hi = ((port_map >> 16) & 0xFFFF) as u16;
+    if hi != 0 {
+        let pcs7 = pci_cfg_read16(addr, PCS_7);
+        if (pcs7 & hi) != hi {
+            pci_cfg_write16(addr, PCS_7, pcs7 | hi);
+        }
+    }
+}
+
 /// Probe for block device and create appropriate driver.
 ///
 /// # Safety
@@ -491,6 +758,7 @@ pub unsafe fn probe_and_create_block_driver(
         DetectedBlockDevice::Ahci(info) => {
             // Enable device
             enable_pci_device(info.pci_addr);
+            intel_ahci_pcs_quirk(info.pci_addr, info.abar);
 
             // Create AHCI config
             let ahci_config = AhciConfig {
@@ -508,6 +776,32 @@ pub unsafe fn probe_and_create_block_driver(
             // Create driver
             let driver = AhciDriver::new(info.abar, ahci_config)?;
             Ok(BlockProbeResult::Ahci(driver))
+        }
+
+        DetectedBlockDevice::Sdhci(info) => {
+            enable_pci_device(info.pci_addr);
+
+            let sdhci_config = SdhciConfig {
+                tsc_freq: config.tsc_freq,
+                dma_phys: 0,
+                dma_size: 0,
+            };
+
+            let driver = SdhciDriver::new(info.mmio_base, sdhci_config)?;
+            Ok(BlockProbeResult::Sdhci(driver))
+        }
+
+        DetectedBlockDevice::UsbMsd(info) => {
+            enable_pci_device(info.pci_addr);
+
+            let usb_config = UsbMsdConfig {
+                tsc_freq: config.tsc_freq,
+                dma_phys: 0,
+                dma_size: 0,
+            };
+
+            let driver = UsbMsdDriver::new(info.mmio_base, usb_config)?;
+            Ok(BlockProbeResult::UsbMsd(driver))
         }
 
         DetectedBlockDevice::VirtIO {
@@ -569,9 +863,13 @@ pub unsafe fn probe_unified_block_device(
     match probe_and_create_block_driver(config) {
         Ok(BlockProbeResult::VirtIO(driver)) => Ok(UnifiedBlockDevice::VirtIO(driver)),
         Ok(BlockProbeResult::Ahci(driver)) => Ok(UnifiedBlockDevice::Ahci(driver)),
+        Ok(BlockProbeResult::Sdhci(driver)) => Ok(UnifiedBlockDevice::Sdhci(driver)),
+        Ok(BlockProbeResult::UsbMsd(driver)) => Ok(UnifiedBlockDevice::UsbMsd(driver)),
         Err(BlockProbeError::NoDevice) => Err(UnifiedBlockError::NoDevice),
         Err(BlockProbeError::VirtioInitFailed) => Err(UnifiedBlockError::NoDevice),
         Err(BlockProbeError::AhciInitFailed) => Err(UnifiedBlockError::NoDevice),
+        Err(BlockProbeError::SdhciInitFailed) => Err(UnifiedBlockError::NoDevice),
+        Err(BlockProbeError::UsbMsdInitFailed) => Err(UnifiedBlockError::NoDevice),
         Err(_) => Err(UnifiedBlockError::NoDevice),
     }
 }
@@ -590,6 +888,7 @@ pub unsafe fn create_unified_from_detected(
     match *detected {
         DetectedBlockDevice::Ahci(info) => {
             enable_pci_device(info.pci_addr);
+            intel_ahci_pcs_quirk(info.pci_addr, info.abar);
             let ahci_config = AhciConfig {
                 tsc_freq: config.tsc_freq,
                 cmd_list_cpu: config.ahci_cmd_list_cpu,
@@ -601,9 +900,30 @@ pub unsafe fn create_unified_from_detected(
                 identify_cpu: config.ahci_identify_cpu,
                 identify_phys: config.ahci_identify_phys,
             };
-            let driver =
-                AhciDriver::new(info.abar, ahci_config).map_err(|_| UnifiedBlockError::NoDevice)?;
+            let driver = AhciDriver::new(info.abar, ahci_config).map_err(UnifiedBlockError::AhciError)?;
             Ok(UnifiedBlockDevice::Ahci(driver))
+        }
+        DetectedBlockDevice::Sdhci(info) => {
+            enable_pci_device(info.pci_addr);
+            let sdhci_config = SdhciConfig {
+                tsc_freq: config.tsc_freq,
+                dma_phys: 0,
+                dma_size: 0,
+            };
+            let driver = SdhciDriver::new(info.mmio_base, sdhci_config)
+                .map_err(UnifiedBlockError::SdhciError)?;
+            Ok(UnifiedBlockDevice::Sdhci(driver))
+        }
+        DetectedBlockDevice::UsbMsd(info) => {
+            enable_pci_device(info.pci_addr);
+            let usb_config = UsbMsdConfig {
+                tsc_freq: config.tsc_freq,
+                dma_phys: 0,
+                dma_size: 0,
+            };
+            let driver = UsbMsdDriver::new(info.mmio_base, usb_config)
+                .map_err(UnifiedBlockError::UsbMsdError)?;
+            Ok(UnifiedBlockDevice::UsbMsd(driver))
         }
         DetectedBlockDevice::VirtIO {
             pci_addr,
@@ -810,7 +1130,7 @@ pub unsafe fn create_unified_from_detected(
                             VirtioBlkInitError::TransportError => dbg_str("TransportError"),
                         }
                         dbg_str("\n");
-                        Err(UnifiedBlockError::NoDevice)
+                        Err(UnifiedBlockError::VirtioError(e))
                     }
                 }
             } else {
@@ -820,7 +1140,7 @@ pub unsafe fn create_unified_from_detected(
                 legacy_config.notify_addr = config.virtio_notify_addr;
                 legacy_config.transport_type = 0;
                 let driver = VirtioBlkDriver::new(mmio_base, legacy_config)
-                    .map_err(|_| UnifiedBlockError::NoDevice)?;
+                    .map_err(UnifiedBlockError::VirtioError)?;
                 Ok(UnifiedBlockDevice::VirtIO(driver))
             }
         }
@@ -841,6 +1161,7 @@ pub unsafe fn create_unified_from_detected_ahci_port(
     match *detected {
         DetectedBlockDevice::Ahci(info) => {
             enable_pci_device(info.pci_addr);
+            intel_ahci_pcs_quirk(info.pci_addr, info.abar);
             let ahci_config = AhciConfig {
                 tsc_freq: config.tsc_freq,
                 cmd_list_cpu: config.ahci_cmd_list_cpu,
@@ -853,7 +1174,7 @@ pub unsafe fn create_unified_from_detected_ahci_port(
                 identify_phys: config.ahci_identify_phys,
             };
             let driver = AhciDriver::new_on_port(info.abar, ahci_config, port_num)
-                .map_err(|_| UnifiedBlockError::NoDevice)?;
+                .map_err(UnifiedBlockError::AhciError)?;
             Ok(UnifiedBlockDevice::Ahci(driver))
         }
         _ => Err(UnifiedBlockError::NoDevice),

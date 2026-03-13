@@ -301,6 +301,8 @@ pub struct Keyboard {
     initialized: bool,
     /// Active keymap
     layout: KeyLayout,
+    /// Some controllers mis-tag keyboard bytes as AUX; fallback mode accepts both tags.
+    aux_as_kbd: bool,
 }
 
 impl Keyboard {
@@ -328,6 +330,7 @@ impl Keyboard {
             extended: false,
             initialized: false,
             layout: KeyLayout::Us,
+            aux_as_kbd: false,
         };
 
         unsafe { kb.init_controller() };
@@ -354,20 +357,38 @@ impl Keyboard {
         self.alt
     }
 
+    pub fn aux_as_kbd(&self) -> bool {
+        self.aux_as_kbd
+    }
+
     unsafe fn init_controller(&mut self) {
-        // OVMF already configured the 8042 — don't send 0xAA/0xFF as they clear
-        // Translation (bit 6), causing set-2 bytes to arrive instead of set-1.
-        // RMW the config byte: keep translation on, disable IRQs (we poll).
+        // i8042 bring-up on real hardware is messy; probe and normalize hard.
+        morpheus_hwinit::serial::log_info("INPUT", 935, "keyboard controller init begin");
 
         asm_ps2_flush();
 
+        // Disable port 1 while we reconfigure.
         asm_ps2_write_cmd(0xAD); // disable port 1 scanning
         Self::io_delay();
         asm_ps2_flush();
 
+        // Controller self-test (0xAA -> 0x55 expected).
+        asm_ps2_write_cmd(0xAA);
+        let ctl_self = self.wait_response_tagged(100_000).map(|(_, b)| b);
+        if ctl_self != Some(0x55) {
+            morpheus_hwinit::serial::log_warn("INPUT", 936, "8042 self-test unexpected response");
+        }
+
+        // Interface test for first PS/2 port (0xAB -> 0x00 expected).
+        asm_ps2_write_cmd(0xAB);
+        let port1_test = self.wait_response_tagged(100_000).map(|(_, b)| b);
+        if port1_test != Some(0x00) {
+            morpheus_hwinit::serial::log_warn("INPUT", 937, "8042 port1 test unexpected response");
+        }
+
         asm_ps2_write_cmd(0x20); // read config byte
-        let config = Self::wait_response(50_000).unwrap_or(0x45);
-        let new_config = (config | 0x40) & !0x03; // set translation, clear IRQs
+        let config = self.wait_response_tagged(50_000).map(|(_, b)| b).unwrap_or(0x45);
+        let new_config = (config | 0x41) & !0x30; // translation on, IRQ1 on, both PS/2 clocks enabled
 
         asm_ps2_write_cmd(0x60); // write config byte
         asm_ps2_write_data(new_config);
@@ -375,9 +396,62 @@ impl Keyboard {
 
         asm_ps2_write_cmd(0xAE); // re-enable port 1
         Self::io_delay();
+        asm_ps2_write_cmd(0xA8); // keep aux port enabled too (some firmware paths tag keyboard via AUX)
+        Self::io_delay();
+
+        // Reset keyboard and wait for BAT completion.
+        asm_ps2_write_data(0xFF);
+        let ack_ff = self.wait_response_tagged(100_000);
+        let bat = self.wait_response_tagged(200_000);
+        if matches!(ack_ff, Some((0x300, _))) || matches!(bat, Some((0x300, _))) {
+            self.aux_as_kbd = true;
+            morpheus_hwinit::serial::log_warn("INPUT", 939, "keyboard bytes tagged as AUX; enabling fallback");
+        }
+        let ack_ff_b = ack_ff.map(|(_, b)| b);
+        let bat_b = bat.map(|(_, b)| b);
+        if ack_ff_b != Some(0xFA) || bat_b != Some(0xAA) {
+            self.aux_as_kbd = true;
+            morpheus_hwinit::serial::log_warn(
+                "INPUT",
+                939,
+                "keyboard reset/BAT failed; forcing AUX-tag keyboard fallback",
+            );
+            morpheus_hwinit::serial::log_warn("INPUT", 938, "keyboard reset/BAT incomplete");
+        }
+
+        // Force keyboard scan set 1 so decoder matches real hardware output.
+        asm_ps2_write_data(0xF5); // disable scanning
+        let _ = self.wait_response_tagged(100_000); // ACK best-effort
+        asm_ps2_write_data(0xF6); // set defaults
+        let _ = self.wait_response_tagged(100_000);
+        asm_ps2_write_data(0xF0); // set/get scancode set command
+        let ack_f0 = self.wait_response_tagged(100_000);
+        asm_ps2_write_data(0x01); // set 1
+        let ack_set1 = self.wait_response_tagged(100_000);
 
         asm_ps2_write_data(0xF4); // enable scanning
-        let _ = Self::wait_response(50_000);
+        let ack_f4 = self.wait_response_tagged(100_000);
+
+        if matches!(ack_f0, Some((0x300, _)))
+            || matches!(ack_set1, Some((0x300, _)))
+            || matches!(ack_f4, Some((0x300, _)))
+        {
+            self.aux_as_kbd = true;
+            morpheus_hwinit::serial::log_warn("INPUT", 939, "keyboard bytes tagged as AUX; enabling fallback");
+        }
+
+        if ack_f0.map(|(_, b)| b) != Some(0xFA)
+            || ack_set1.map(|(_, b)| b) != Some(0xFA)
+            || ack_f4.map(|(_, b)| b) != Some(0xFA)
+        {
+            self.aux_as_kbd = true;
+            morpheus_hwinit::serial::log_warn(
+                "INPUT",
+                939,
+                "set-1 handshake failed; forcing AUX-tag keyboard fallback",
+            );
+            morpheus_hwinit::serial::log_warn("INPUT", 931, "keyboard set-1 handshake incomplete");
+        }
 
         asm_ps2_flush();
 
@@ -386,11 +460,12 @@ impl Keyboard {
     }
 
     /// Spin-wait for a response byte from port 0x60, with bounded timeout.
-    unsafe fn wait_response(max_spins: u32) -> Option<u8> {
+    unsafe fn wait_response_tagged(&mut self, max_spins: u32) -> Option<(u16, u8)> {
         for _ in 0..max_spins {
-            let r = asm_ps2_poll();
-            if r & 0x100 != 0 {
-                return Some((r & 0xFF) as u8);
+            let r = asm_ps2_poll_any();
+            let tag = (r & 0x300) as u16;
+            if tag == 0x100 || tag == 0x300 {
+                return Some((tag, (r & 0xFF) as u8));
             }
             core::hint::spin_loop();
         }
@@ -414,8 +489,9 @@ impl Keyboard {
     /// key-press event was decoded, `None` if the buffer was empty or
     /// only a modifier/break code was processed.
     pub fn read_key(&mut self) -> Option<InputKey> {
-        let raw = unsafe { asm_ps2_poll() };
-        if raw & 0x100 == 0 {
+        let raw = unsafe { asm_ps2_poll_any() };
+        let tag = raw & 0x300;
+        if tag != 0x100 && !(self.aux_as_kbd && tag == 0x300) {
             return None;
         }
         let byte = (raw & 0xFF) as u8;
@@ -435,14 +511,28 @@ impl Keyboard {
     /// near-zero power draw while waiting and immediate wakeup on keypress.
     pub fn wait_for_key(&mut self) -> InputKey {
         loop {
-            if let Some(key) = self.read_key() {
-                return key;
+            let raw = unsafe { asm_ps2_poll_any() };
+            let tag = raw & 0x300;
+            if tag == 0x100 || (self.aux_as_kbd && tag == 0x300) {
+                let byte = (raw & 0xFF) as u8;
+
+                if let Some(key) = self.decode(byte) {
+                    return key;
+                }
+
+                // Boot gate should continue on any non-break keyboard make byte,
+                // even if it's a modifier or currently unmapped key.
+                if byte != EXTENDED_PREFIX && (byte & BREAK_FLAG) == 0 {
+                    return InputKey {
+                        scan_code: SCAN_NULL,
+                        unicode_char: 0,
+                    };
+                }
             }
-            // Halt the CPU until the next interrupt (IRQ1 = PS/2 keyboard).
-            // Eliminates busy-waiting with no latency cost on actual keypresses.
-            // SAFETY: sti/hlt/cli is safe in bare-metal bootloader context.
-            unsafe {
-                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+
+            // Do not rely on interrupt wakeups at this stage; poll with short backoff.
+            for _ in 0..4096 {
+                core::hint::spin_loop();
             }
         }
     }

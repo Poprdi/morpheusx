@@ -53,8 +53,9 @@ impl Mouse {
 
         // RMW config: enable aux IRQ (bit 1), clear aux clock-disable (bit 5)
         asm_ps2_write_cmd(0x20);
-        let config = wait_data(50_000);
-        let new_config = (config | 0x02) & !0x20;
+        let config = wait_kbd_data(50_000).unwrap_or(0x45);
+        // Keep translation on and keyboard IRQ enabled; just bring mouse path up.
+        let new_config = (config | 0x43) & !0x30;
         asm_ps2_write_cmd(0x60);
         asm_ps2_write_data(new_config);
         io_delay();
@@ -193,6 +194,18 @@ unsafe fn wait_data(max_spins: u32) -> u8 {
         core::hint::spin_loop();
     }
     0
+}
+
+/// Spin-read one keyboard-tagged byte (0x1xx) from port 0x60.
+unsafe fn wait_kbd_data(max_spins: u32) -> Option<u8> {
+    for _ in 0..max_spins {
+        let r = asm_ps2_poll_any();
+        if (r & 0x300) == 0x100 {
+            return Some((r & 0xFF) as u8);
+        }
+        core::hint::spin_loop();
+    }
+    None
 }
 
 /// Spin-read one aux-port byte (mouse channel, tagged as 0x3xx).

@@ -24,15 +24,20 @@
 //! Total      ≈ 128 KB (well within 2 MB)
 //! ```
 
-use morpheus_helix::device::RawBlockDevice;
+use morpheus_helix::device::{MemBlockDevice, RawBlockDevice};
+/// In-RAM copy of the selected Helix partition (if RAM staging succeeds).
+static mut RAM_HELIX_DEVICE: Option<MemBlockDevice> = None;
 use morpheus_hwinit::dma::DmaRegion;
+use morpheus_hwinit::memory::{global_registry_mut, AllocateType, MemoryType};
 use morpheus_hwinit::paging::is_paging_initialized;
 use morpheus_hwinit::serial::{log_error, log_info, log_ok, log_warn, puts};
 use morpheus_hwinit::{kmap_mmio, pci_cfg_read16, pci_cfg_read32, PciAddr};
 use morpheus_network::{
-    create_unified_from_detected, create_unified_from_detected_ahci_port, scan_all_block_devices,
-    BlockDmaConfig, BlockDriver, DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
+    AhciInitError, SdhciInitError, UsbMsdInitError, VirtioBlkInitError,
+    create_unified_from_detected, scan_all_block_devices, BlockDmaConfig, BlockDriver,
+    DetectedBlockDevice, UnifiedBlockDevice, UnifiedBlockIo,
 };
+use morpheus_network::device::UnifiedBlockError;
 
 // DMA LAYOUT CONSTANTS
 
@@ -54,6 +59,7 @@ const OFF_AHCI_IDENTIFY: usize = 0x0_4800;
 // I/O transfer buffer — used by UnifiedBlockIo for synchronous read/write
 const OFF_IO_BUFFER: usize = 0x1_0000;
 const IO_BUFFER_SIZE: usize = 64 * 1024; // 64 KB = UnifiedBlockIo::MAX_TRANSFER_SIZE
+const UNKNOWN_TOTAL_SECTORS: u64 = u32::MAX as u64;
 
 // PCI BUS DUMP (diagnostic)
 
@@ -215,6 +221,9 @@ static mut STORAGE_REGION_SECTORS: u64 = 0;
 /// Whether persistent storage was successfully initialized.
 static mut PERSISTENT_READY: bool = false;
 
+const RAM_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+static mut RAM_STAGE_LAST_REASON: &'static str = "none";
+
 const GPT_SIG: &[u8; 8] = b"EFI PART";
 // EFI System Partition type GUID on disk (little-endian fields).
 const GPT_TYPE_ESP: [u8; 16] = [
@@ -226,6 +235,13 @@ const GPT_TYPE_ESP: [u8; 16] = [
 struct DataRegion {
     lba_start: u64,
     sectors: u64,
+}
+
+#[derive(Clone, Copy)]
+struct GptPartition {
+    type_guid: [u8; 16],
+    first_lba: u64,
+    last_lba: u64,
 }
 
 #[inline(always)]
@@ -247,11 +263,74 @@ fn le_u64(buf: &[u8], off: usize) -> u64 {
     ])
 }
 
+#[inline(always)]
+fn select_largest_gpt_free_region(
+    first_usable: u64,
+    last_usable: u64,
+    used_ranges: &mut alloc::vec::Vec<(u64, u64)>,
+    sector_size: u32,
+) -> Option<DataRegion> {
+    if first_usable == 0 || last_usable < first_usable {
+        return None;
+    }
+
+    used_ranges.sort_unstable_by_key(|(start, _)| *start);
+
+    let mut cursor = first_usable;
+    let mut best_start = 0u64;
+    let mut best_sectors = 0u64;
+
+    for (raw_start, raw_end) in used_ranges.iter().copied() {
+        if raw_end < first_usable || raw_start > last_usable {
+            continue;
+        }
+
+        let start = raw_start.max(first_usable);
+        let end = raw_end.min(last_usable);
+
+        if start > cursor {
+            let gap = start - cursor;
+            if gap > best_sectors {
+                best_start = cursor;
+                best_sectors = gap;
+            }
+        }
+
+        let next = end.saturating_add(1);
+        if next > cursor {
+            cursor = next;
+        }
+
+        if cursor > last_usable {
+            break;
+        }
+    }
+
+    if cursor <= last_usable {
+        let tail = (last_usable - cursor) + 1;
+        if tail > best_sectors {
+            best_start = cursor;
+            best_sectors = tail;
+        }
+    }
+
+    let min_free_sectors = ((64u64 * 1024 * 1024) + (sector_size as u64 - 1)) / sector_size as u64;
+    if best_sectors >= min_free_sectors {
+        Some(DataRegion {
+            lba_start: best_start,
+            sectors: best_sectors,
+        })
+    } else {
+        None
+    }
+}
+
 /// Select a writable data region from the currently active block device.
 ///
 /// Policy:
-/// - GPT disk: pick first non-ESP partition
-/// - MBR-only disk: skip (treated as boot/system for now)
+/// - GPT disk: prefer partition immediately after ESP on same disk
+/// - MBR-only disk: prefer partition immediately after EFI partition entry
+/// - Fallback: largest free GPT region, then first non-ESP partition, then largest MBR primary
 /// - No partition table: whole disk is data region
 unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<DataRegion> {
     let dev = BLOCK_DEVICE.as_mut()?;
@@ -278,6 +357,8 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
 
     if has_gpt {
         let hdr = &first_two[gpt_off..gpt_off + sector_size as usize];
+        let first_usable = le_u64(hdr, 40);
+        let last_usable = le_u64(hdr, 48);
         let entries_lba = le_u64(hdr, 72);
         let num_entries = le_u32(hdr, 80) as usize;
         let entry_size = le_u32(hdr, 84) as usize;
@@ -292,6 +373,9 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
         }
 
         let mut sec = alloc::vec![0u8; sector_size as usize];
+        let mut used_ranges = alloc::vec::Vec::<(u64, u64)>::new();
+        let mut partitions = alloc::vec::Vec::<GptPartition>::new();
+        let mut first_non_esp: Option<DataRegion> = None;
 
         for idx in 0..num_entries {
             let sector_delta = idx / entries_per_sector;
@@ -310,14 +394,24 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
                 continue;
             }
 
-            // Skip ESP partition.
-            if ent[..16] == GPT_TYPE_ESP {
-                continue;
-            }
-
             let first_lba = le_u64(ent, 32);
             let last_lba = le_u64(ent, 40);
             if first_lba == 0 || last_lba < first_lba {
+                continue;
+            }
+
+            used_ranges.push((first_lba, last_lba));
+
+            partitions.push(GptPartition {
+                type_guid: [
+                    ent[0], ent[1], ent[2], ent[3], ent[4], ent[5], ent[6], ent[7], ent[8],
+                    ent[9], ent[10], ent[11], ent[12], ent[13], ent[14], ent[15],
+                ],
+                first_lba,
+                last_lba,
+            });
+
+            if ent[..16] == GPT_TYPE_ESP {
                 continue;
             }
 
@@ -326,17 +420,150 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
                 continue;
             }
 
-            return Some(DataRegion {
-                lba_start: first_lba,
-                sectors,
-            });
+            if first_non_esp.is_none() {
+                first_non_esp = Some(DataRegion {
+                    lba_start: first_lba,
+                    sectors,
+                });
+            }
+        }
+
+        // Pair Helix with the same media as the boot ESP: pick next partition after ESP.
+        partitions.sort_unstable_by_key(|p| p.first_lba);
+        if let Some((boot_idx, boot_part)) = partitions
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.type_guid == GPT_TYPE_ESP)
+        {
+            let mut next_after_boot: Option<DataRegion> = None;
+            for part in partitions.iter().skip(boot_idx + 1) {
+                if part.type_guid == GPT_TYPE_ESP {
+                    continue;
+                }
+                if part.first_lba <= boot_part.last_lba {
+                    continue;
+                }
+
+                let sectors = part.last_lba - part.first_lba + 1;
+                if sectors == 0 {
+                    continue;
+                }
+
+                if part.first_lba == boot_part.last_lba.saturating_add(1) {
+                    return Some(DataRegion {
+                        lba_start: part.first_lba,
+                        sectors,
+                    });
+                }
+
+                if next_after_boot.is_none() {
+                    next_after_boot = Some(DataRegion {
+                        lba_start: part.first_lba,
+                        sectors,
+                    });
+                }
+            }
+
+            if let Some(region) = next_after_boot {
+                return Some(region);
+            }
+        }
+
+        // Legacy fallback when explicit ESP pairing is unavailable.
+        if let Some(region) =
+            select_largest_gpt_free_region(first_usable, last_usable, &mut used_ranges, sector_size)
+        {
+            return Some(region);
+        }
+
+        if let Some(region) = first_non_esp {
+            return Some(region);
         }
 
         return None;
     }
 
     if has_mbr {
-        // Keep conservative behavior for plain MBR disks until partition parser exists.
+        // Prefer the partition entry after EFI partition entry in MBR layout.
+        const MBR_PART_OFF: usize = 446;
+        const MBR_PART_SIZE: usize = 16;
+        const MBR_PARTS: usize = 4;
+        let mut mbr_parts: [Option<(u8, u64, u64)>; MBR_PARTS] = [None, None, None, None];
+
+        let mut best_start = 0u64;
+        let mut best_sectors = 0u64;
+
+        for i in 0..MBR_PARTS {
+            let off = MBR_PART_OFF + (i * MBR_PART_SIZE);
+            let ptype = first_two[off + 4];
+
+            // 0x00 empty, 0xEE GPT protective, 0xEF EFI system partition.
+            if ptype == 0x00 || ptype == 0xEE || ptype == 0xEF {
+                continue;
+            }
+
+            // Extended partition containers are not directly writable data regions.
+            if ptype == 0x05 || ptype == 0x0F || ptype == 0x85 {
+                continue;
+            }
+
+            let start = le_u32(&first_two, off + 8) as u64;
+            let sectors = le_u32(&first_two, off + 12) as u64;
+
+            if start == 0 || sectors == 0 {
+                continue;
+            }
+
+            if total_sectors != UNKNOWN_TOTAL_SECTORS
+                && start.saturating_add(sectors) > total_sectors
+            {
+                continue;
+            }
+
+            mbr_parts[i] = Some((ptype, start, sectors));
+
+            if sectors > best_sectors {
+                best_start = start;
+                best_sectors = sectors;
+            }
+        }
+
+        if let Some((boot_idx, _)) = mbr_parts
+            .iter()
+            .enumerate()
+            .find(|(_, p)| matches!(p, Some((0xEF, _, _))))
+        {
+            for part in mbr_parts.iter().skip(boot_idx + 1) {
+                if let Some((ptype, start, sectors)) = *part {
+                    if ptype == 0x00 || ptype == 0xEE || ptype == 0xEF {
+                        continue;
+                    }
+                    if ptype == 0x05 || ptype == 0x0F || ptype == 0x85 {
+                        continue;
+                    }
+                    if start == 0 || sectors == 0 {
+                        continue;
+                    }
+
+                    return Some(DataRegion {
+                        lba_start: start,
+                        sectors,
+                    });
+                }
+            }
+        }
+
+        if best_sectors != 0 {
+            return Some(DataRegion {
+                lba_start: best_start,
+                sectors: best_sectors,
+            });
+        }
+
+        return None;
+    }
+
+    if total_sectors == UNKNOWN_TOTAL_SECTORS {
         return None;
     }
 
@@ -484,164 +711,293 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         // Map high-address MMIO BARs before driver init touches them
         if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
             map_virtio_bars(pci_addr.bus, pci_addr.device, pci_addr.function);
+        } else if let DetectedBlockDevice::Ahci(info) = detected {
+            if is_paging_initialized() {
+                // ABAR covers generic HBA regs + up to 32 ports × 0x80 = 0x1100.
+                // 0x2000 rounds to 2 pages; UC flags set by kmap_mmio.
+                let _ = kmap_mmio(info.abar, 0x2000);
+            }
+        } else if let DetectedBlockDevice::Sdhci(info) = detected {
+            if is_paging_initialized() {
+                // SDHCI register space is typically < 4KB, map one page.
+                let _ = kmap_mmio(info.mmio_base, 0x1000);
+            }
+        } else if let DetectedBlockDevice::UsbMsd(info) = detected {
+            if is_paging_initialized() {
+                // xHCI operational + runtime windows vary by controller; map a conservative range.
+                let _ = kmap_mmio(info.mmio_base, 0x4000);
+            }
         }
 
         let is_ahci = matches!(detected, DetectedBlockDevice::Ahci(_));
-        let mut ahci_port_attempted = false;
-        let mut ahci_port_found = false;
-
-        let max_ports = if is_ahci { 32 } else { 1 };
-
-        for port in 0..max_ports {
-            let device = if is_ahci {
-                ahci_port_attempted = true;
-                match create_unified_from_detected_ahci_port(detected, &config, port as u32) {
-                    Ok(dev) => dev,
-                    Err(_) => continue,
-                }
-            } else {
-                match create_unified_from_detected(detected, &config) {
-                    Ok(dev) => dev,
-                    Err(_) => {
-                        log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
-                        break;
+        let device = match create_unified_from_detected(detected, &config) {
+            Ok(dev) => dev,
+            Err(err) => {
+                match err {
+                    UnifiedBlockError::AhciError(e) => {
+                        match e {
+                            AhciInitError::InvalidConfig => {
+                                log_warn("STORAGE", 825, "AHCI init failed: invalid config");
+                            }
+                            AhciInitError::ResetFailed => {
+                                log_warn("STORAGE", 825, "AHCI init failed: HBA reset timeout");
+                            }
+                            AhciInitError::NoDeviceFound => {
+                                log_warn("STORAGE", 825, "AHCI init failed: no SATA device found");
+                            }
+                            AhciInitError::PortStopTimeout => {
+                                log_warn("STORAGE", 825, "AHCI init failed: port stop timeout");
+                            }
+                            AhciInitError::PortStartFailed => {
+                                log_warn("STORAGE", 825, "AHCI init failed: port start failed");
+                            }
+                            AhciInitError::IdentifyFailed => {
+                                log_warn("STORAGE", 825, "AHCI init failed: IDENTIFY failed");
+                            }
+                            AhciInitError::No64BitSupport => {
+                                log_warn("STORAGE", 825, "AHCI init failed: no 64-bit DMA support");
+                            }
+                            AhciInitError::DeviceNotResponding => {
+                                log_warn("STORAGE", 825, "AHCI init failed: device not responding");
+                            }
+                            AhciInitError::DmaSetupFailed => {
+                                log_warn("STORAGE", 825, "AHCI init failed: DMA setup failed");
+                            }
+                        }
+                        log_warn("STORAGE", 825, "AHCI candidate skipped");
+                    }
+                    UnifiedBlockError::VirtioError(e) => {
+                        match e {
+                            VirtioBlkInitError::ResetFailed => {
+                                log_warn("STORAGE", 825, "VirtIO init failed: reset failed");
+                            }
+                            VirtioBlkInitError::FeatureNegotiationFailed => {
+                                log_warn("STORAGE", 825, "VirtIO init failed: feature negotiation failed");
+                            }
+                            VirtioBlkInitError::QueueSetupFailed => {
+                                log_warn("STORAGE", 825, "VirtIO init failed: queue setup failed");
+                            }
+                            VirtioBlkInitError::DeviceFailed => {
+                                log_warn("STORAGE", 825, "VirtIO init failed: device failed status");
+                            }
+                            VirtioBlkInitError::InvalidConfig => {
+                                log_warn("STORAGE", 825, "VirtIO init failed: invalid config");
+                            }
+                            VirtioBlkInitError::TransportError => {
+                                log_warn("STORAGE", 825, "VirtIO init failed: transport error");
+                            }
+                        }
+                        log_warn("STORAGE", 825, "VirtIO candidate skipped");
+                    }
+                    UnifiedBlockError::NoDevice => {
+                        if is_ahci {
+                            log_warn("STORAGE", 825, "AHCI controller init failed; skipping candidate");
+                        } else {
+                            log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
+                        }
+                    }
+                    UnifiedBlockError::SdhciError(e) => {
+                        match e {
+                            SdhciInitError::InvalidConfig => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: invalid config");
+                            }
+                            SdhciInitError::ControllerResetFailed => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: controller reset failed");
+                            }
+                            SdhciInitError::NoCardPresent => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: no card present");
+                            }
+                            SdhciInitError::VoltageSwitchFailed => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: voltage switch failed");
+                            }
+                            SdhciInitError::ClockSetupFailed => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: clock setup failed");
+                            }
+                            SdhciInitError::CommandTimeout => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: command timeout");
+                            }
+                            SdhciInitError::DataTimeout => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: data timeout");
+                            }
+                            SdhciInitError::IoError => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: I/O error");
+                            }
+                            SdhciInitError::NotImplemented => {
+                                log_warn("STORAGE", 825, "SDHCI init failed: not implemented");
+                            }
+                        }
+                        log_warn("STORAGE", 825, "SDHCI candidate skipped");
+                    }
+                    UnifiedBlockError::UsbMsdError(e) => {
+                        match e {
+                            UsbMsdInitError::InvalidConfig => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: invalid config");
+                            }
+                            UsbMsdInitError::ControllerInitFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: controller init failed");
+                            }
+                            UsbMsdInitError::DeviceEnumerationFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: device enumeration failed");
+                            }
+                            UsbMsdInitError::TransportInitFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: transport init failed");
+                            }
+                            UsbMsdInitError::NoMedia => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: no media");
+                            }
+                            UsbMsdInitError::CommandTimeout => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: command timeout");
+                            }
+                            UsbMsdInitError::IoError => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: I/O error");
+                            }
+                            UsbMsdInitError::NotImplemented => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: not implemented");
+                            }
+                        }
+                        log_warn("STORAGE", 825, "USB-MSD candidate skipped");
                     }
                 }
-            };
-
-            if is_ahci {
-                ahci_port_found = true;
+                continue;
             }
+        };
 
-            let info = device.info();
+        let info = device.info();
 
-            // Store temporarily to check if it's a boot disk.
-            BLOCK_DEVICE = Some(device);
+        // Store temporarily to check if it's a boot disk.
+        BLOCK_DEVICE = Some(device);
 
-            let region = match select_data_region(info.sector_size, info.total_sectors) {
-                Some(r) => r,
-                None => {
-                    log_info("STORAGE", 826, "boot/system disk detected; skipping");
-                    BLOCK_DEVICE = None;
-                    continue;
-                }
-            };
-
-            STORAGE_LBA_BASE = region.lba_start;
-            STORAGE_REGION_SECTORS = region.sectors;
-
-            if region.lba_start != 0 {
-                log_info("STORAGE", 837, "selected GPT data partition region");
-            }
-
-            if region.sectors == 0 {
+        let region = match select_data_region(info.sector_size, info.total_sectors) {
+            Some(r) => r,
+            None => {
+                log_info("STORAGE", 826, "boot/system disk detected; skipping");
                 BLOCK_DEVICE = None;
                 continue;
             }
+        };
 
-            // This device is NOT a boot disk — use it for HelixFS.
-            log_ok("STORAGE", 827, "selected data disk");
-            found_data_disk = true;
+        STORAGE_LBA_BASE = region.lba_start;
+        STORAGE_REGION_SECTORS = region.sectors;
 
-            // try to recover or format helixfs
-            let mut raw_dev = make_raw_block_device();
+        if region.lba_start != 0 {
+            log_info("STORAGE", 837, "selected non-zero LBA data region");
+        }
 
-            let needs_format = {
-                let mut probe_dev = make_raw_block_device();
-                match morpheus_helix::log::recovery::recover_superblock(
-                    &mut probe_dev,
-                    0,
-                    info.sector_size,
-                ) {
-                    Ok(sb) => {
-                        // Version mismatch: v2 changed the log payload format.
-                        if sb.version != morpheus_helix::types::HELIX_VERSION {
-                            log_warn("STORAGE", 828, "helixfs version mismatch; reformat required");
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    Err(_) => true,
-                }
-            };
+        if region.sectors == 0 {
+            BLOCK_DEVICE = None;
+            continue;
+        }
 
-            if needs_format {
-                log_info("STORAGE", 829, "no valid helixfs; formatting disk");
+        // This device is NOT a boot disk — use it for HelixFS.
+        log_ok("STORAGE", 827, "selected data disk");
+        found_data_disk = true;
 
-                let uuid = [
-                    0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x01,
-                ];
-                spinner_start();
-                match morpheus_helix::format::format_helix(
-                    &mut raw_dev,
-                    0,
-                    info.total_sectors,
-                    info.sector_size,
-                    "root",
-                    uuid,
-                ) {
-                    Ok(_sb) => {
-                        spinner_done();
-                        log_ok("STORAGE", 830, "format completed");
-                    }
-                    Err(e) => {
-                        spinner_done();
-                        let _ = e;
-                        log_error("STORAGE", 831, "format failed");
-                        BLOCK_DEVICE = None;
-                        continue;
+        // try to recover or format helixfs
+        let mut raw_dev = make_raw_block_device();
+
+        let needs_format = {
+            let mut probe_dev = make_raw_block_device();
+            match morpheus_helix::log::recovery::recover_superblock(
+                &mut probe_dev,
+                0,
+                info.sector_size,
+            ) {
+                Ok(sb) => {
+                    // Version mismatch: v2 changed the log payload format.
+                    if sb.version != morpheus_helix::types::HELIX_VERSION {
+                        log_warn("STORAGE", 828, "helixfs version mismatch; reformat required");
+                        true
+                    } else {
+                        false
                     }
                 }
-
-                // Verify format succeeded
-                match morpheus_helix::log::recovery::recover_superblock(
-                    &mut raw_dev,
-                    0,
-                    info.sector_size,
-                ) {
-                    Ok(_sb) => {}
-                    Err(e) => {
-                        let _ = e;
-                        log_warn("STORAGE", 832, "superblock readback failed after format");
-                    }
-                }
-            } else {
-                log_info("STORAGE", 833, "valid helixfs found; mounting");
+                Err(_) => true,
             }
+        };
 
-            // Now do the actual replace_root_device
-            // If we already formatted above, pass do_format=false to avoid double-format
-            let mount_dev = make_raw_block_device();
+        if needs_format {
+            log_info("STORAGE", 829, "no valid helixfs; formatting disk");
+
+            let uuid = [
+                0x4Du8, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x01,
+            ];
             spinner_start();
-            match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
-                Ok(()) => {
+            match morpheus_helix::format::format_helix(
+                &mut raw_dev,
+                0,
+                STORAGE_REGION_SECTORS,
+                info.sector_size,
+                "root",
+                uuid,
+            ) {
+                Ok(_sb) => {
                     spinner_done();
-                    PERSISTENT_READY = true;
-                    log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
-                    break 'device_scan;
+                    log_ok("STORAGE", 830, "format completed");
                 }
                 Err(e) => {
                     spinner_done();
                     let _ = e;
-                    log_error("STORAGE", 835, "failed to mount persistent filesystem");
+                    log_error("STORAGE", 831, "format failed");
                     BLOCK_DEVICE = None;
                     continue;
                 }
             }
+
+            // Verify format succeeded
+            match morpheus_helix::log::recovery::recover_superblock(&mut raw_dev, 0, info.sector_size)
+            {
+                Ok(_sb) => {}
+                Err(e) => {
+                    let _ = e;
+                    log_warn("STORAGE", 832, "superblock readback failed after format");
+                }
+            }
+        } else {
+            log_info("STORAGE", 833, "valid helixfs found; mounting");
         }
 
-        if is_ahci {
-            if ahci_port_attempted && !ahci_port_found {
-                log_warn("STORAGE", 825, "driver init failed for one candidate; skipping");
+        let mount_dev = match stage_selected_region_to_ram(info.sector_size) {
+            Some(mem_dev) => {
+                log_ok("STORAGE", 838, "helix partition staged into RAM");
+                mem_dev
             }
-            continue;
+            None => {
+                let reason = RAM_STAGE_LAST_REASON;
+                if reason == "none" {
+                    log_warn("STORAGE", 838, "RAM staging failed; mounting directly from media");
+                } else {
+                    log_warn("STORAGE", 838, reason);
+                }
+                make_raw_block_device()
+            }
+        };
+
+        spinner_start();
+        match morpheus_helix::vfs::global::replace_root_device(mount_dev, false) {
+            Ok(()) => {
+                spinner_done();
+                PERSISTENT_READY = true;
+                log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
+                break 'device_scan;
+            }
+            Err(e) => {
+                spinner_done();
+                let _ = e;
+                log_error("STORAGE", 835, "failed to mount persistent filesystem");
+                BLOCK_DEVICE = None;
+                continue;
+            }
         }
     }
 
     if !found_data_disk {
         log_warn("STORAGE", 836, "no suitable data disk; using RAM-disk fallback");
+        log_warn(
+            "STORAGE",
+            839,
+            "runtime persistent backends currently support AHCI/VirtIO/SDHCI (USB/NVMe pending)",
+        );
     }
 }
 
@@ -704,6 +1060,142 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
     }
 
     false
+}
+
+/// Copy selected Helix partition content into RAM and expose it as RawBlockDevice.
+unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevice> {
+    RAM_STAGE_LAST_REASON = "none";
+    log_info("STORAGE", 843, "RAM stage attempt begin");
+
+    let mut probe = make_raw_block_device();
+    let sb = match morpheus_helix::log::recovery::recover_superblock(&mut probe, 0, sector_size) {
+        Ok(sb) => sb,
+        Err(_) => {
+            RAM_STAGE_LAST_REASON = "RAM stage: superblock probe failed; mounting directly from media";
+            return None;
+        }
+    };
+
+    // Stage only live filesystem footprint, not full partition capacity.
+    let mut stage_blocks = 2u64;
+    let log_hi = sb.log_end_block.saturating_add(1);
+    if log_hi > stage_blocks {
+        stage_blocks = log_hi;
+    }
+
+    let data_hi = sb.data_start_block.saturating_add(sb.blocks_used);
+    if data_hi > stage_blocks {
+        stage_blocks = data_hi;
+    }
+
+    if stage_blocks > sb.total_blocks {
+        stage_blocks = sb.total_blocks;
+    }
+
+    if stage_blocks == 0 {
+        RAM_STAGE_LAST_REASON = "RAM stage: empty footprint; mounting directly from media";
+        return None;
+    }
+
+    let fs_bytes = match stage_blocks.checked_mul(sb.block_size as u64) {
+        Some(v) => v,
+        None => {
+            RAM_STAGE_LAST_REASON = "RAM stage: byte size overflow; mounting directly from media";
+            return None;
+        }
+    };
+    if fs_bytes == 0 {
+        return None;
+    }
+
+    if fs_bytes > RAM_STAGE_MAX_BYTES {
+        RAM_STAGE_LAST_REASON = "RAM stage: footprint exceeds RAM cap; mounting directly from media";
+        return None;
+    }
+
+    if fs_bytes > usize::MAX as u64 {
+        RAM_STAGE_LAST_REASON = "RAM stage: size exceeds usize; mounting directly from media";
+        return None;
+    }
+
+    let sector_bytes = sector_size as usize;
+    let mut copy_bytes = fs_bytes as usize;
+    let rem = copy_bytes % sector_bytes;
+    if rem != 0 {
+        copy_bytes = match copy_bytes.checked_add(sector_bytes - rem) {
+            Some(v) => v,
+            None => {
+                RAM_STAGE_LAST_REASON = "RAM stage: alignment overflow; mounting directly from media";
+                return None;
+            }
+        };
+    }
+
+    let region_bytes = match (STORAGE_REGION_SECTORS as usize).checked_mul(sector_bytes) {
+        Some(v) => v,
+        None => {
+            RAM_STAGE_LAST_REASON = "RAM stage: region size overflow; mounting directly from media";
+            return None;
+        }
+    };
+    if copy_bytes > region_bytes {
+        RAM_STAGE_LAST_REASON =
+            "RAM stage: footprint exceeds selected region; mounting directly from media";
+        return None;
+    }
+
+    let stage_pages = copy_bytes.div_ceil(4096);
+    log_info("STORAGE", 843, "RAM stage: allocating page-backed image");
+    let stage_base = {
+        let mut registry = global_registry_mut();
+        match registry.allocate_pages(
+            AllocateType::AnyPages,
+            MemoryType::LoaderData,
+            stage_pages as u64,
+        ) {
+            Ok(p) => p,
+            Err(_) => {
+                RAM_STAGE_LAST_REASON =
+                    "RAM stage: page allocation failed; mounting directly from media";
+                return None;
+            }
+        }
+    };
+
+    if stage_base == 0 {
+        RAM_STAGE_LAST_REASON = "RAM stage: zero allocation base; mounting directly from media";
+        return None;
+    }
+
+    let image = core::slice::from_raw_parts_mut(stage_base as *mut u8, copy_bytes);
+
+    const CHUNK_SECTORS: usize = 256;
+    let chunk_bytes = CHUNK_SECTORS * sector_bytes;
+    let mut lba = 0u64;
+    let mut off = 0usize;
+
+    while off < copy_bytes {
+        let this_chunk = core::cmp::min(chunk_bytes, copy_bytes - off);
+        if !raw_read(
+            core::ptr::null_mut(),
+            lba,
+            image.as_mut_ptr().add(off),
+            this_chunk,
+        ) {
+            RAM_STAGE_LAST_REASON = "RAM stage: media read failed; mounting directly from media";
+            return None;
+        }
+
+        off += this_chunk;
+        lba = lba.saturating_add((this_chunk / sector_bytes) as u64);
+    }
+
+    let base = image.as_mut_ptr();
+    let size = image.len();
+
+    RAM_HELIX_DEVICE = Some(MemBlockDevice::new(base, size, sector_size));
+    let mem_dev = RAM_HELIX_DEVICE.as_mut()?;
+    Some(MemBlockDevice::into_raw(mem_dev))
 }
 
 /// Create the standard initFS directory structure.

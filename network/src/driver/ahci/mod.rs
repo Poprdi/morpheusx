@@ -36,6 +36,7 @@ pub mod regs;
 use crate::driver::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
+use crate::boot::read_tsc_raw;
 use core::ptr;
 
 // Re-exports
@@ -268,8 +269,11 @@ impl AhciDriver {
         let tsc_freq = config.tsc_freq;
 
         // ═══════════════════════════════════════════════════════════════════
-        // STEP 1: Enable AHCI mode
+        // STEP 1: Reset HBA to known state, then enable AHCI mode
         // ═══════════════════════════════════════════════════════════════════
+        if asm_ahci_hba_reset(abar, tsc_freq) != 0 {
+            return Err(AhciInitError::ResetFailed);
+        }
         asm_ahci_enable(abar);
 
         // ═══════════════════════════════════════════════════════════════════
@@ -291,110 +295,174 @@ impl AhciDriver {
         asm_ahci_disable_interrupts(abar);
 
         // ═══════════════════════════════════════════════════════════════════
-        // STEP 4: Select ATA port
+        // STEP 4: Build candidate port list (strict ATA first, then fallback)
         // ═══════════════════════════════════════════════════════════════════
-        let port_num = if let Some(port) = forced_port {
-            if port >= 32 || (ports_impl & (1 << port)) == 0 {
+        let mut strict_ports = [u32::MAX; 32];
+        let mut strict_count = 0usize;
+        let mut fallback_ports = [u32::MAX; 32];
+        let mut fallback_count = 0usize;
+
+        if let Some(port) = forced_port {
+            if port >= 32 {
                 return Err(AhciInitError::NoDeviceFound);
             }
-            let det = asm_ahci_port_detect(abar, port);
-            if det != DET_PHY_COMM {
+            let mut impl_mask = ports_impl;
+            if impl_mask == 0 {
+                let n_ports = asm_ahci_get_num_ports(abar).min(32);
+                impl_mask = if n_ports >= 32 {
+                    u32::MAX
+                } else {
+                    (1u32 << n_ports) - 1
+                };
+            }
+            if (impl_mask & (1 << port)) == 0 {
                 return Err(AhciInitError::NoDeviceFound);
             }
-            let sig = asm_ahci_port_read_sig(abar, port);
-            if sig != SIG_ATA {
-                return Err(AhciInitError::NoDeviceFound);
-            }
-            port
+            strict_ports[0] = port;
+            strict_count = 1;
         } else {
-            let mut active_port: Option<u32> = None;
+            let mut impl_mask = ports_impl;
+            if impl_mask == 0 {
+                let n_ports = asm_ahci_get_num_ports(abar).min(32);
+                impl_mask = if n_ports >= 32 {
+                    u32::MAX
+                } else {
+                    (1u32 << n_ports) - 1
+                };
+            }
 
+            let settle_ticks = (tsc_freq / 1000).saturating_mul(200);
             for port in 0..32u32 {
-                if (ports_impl & (1 << port)) == 0 {
-                    continue; // Port not implemented
+                if (impl_mask & (1 << port)) == 0 {
+                    continue;
                 }
 
-                let det = asm_ahci_port_detect(abar, port);
-                if det != DET_PHY_COMM {
-                    continue; // No device or not ready
+                let start = read_tsc_raw();
+                let mut strict = false;
+                let mut fallback = false;
+
+                while read_tsc_raw().wrapping_sub(start) < settle_ticks {
+                    let det = asm_ahci_port_detect(abar, port);
+                    let sig = asm_ahci_port_read_sig(abar, port);
+                    let ssts = asm_ahci_port_read_ssts(abar, port);
+                    let ipm = (ssts >> 8) & 0x0F;
+
+                    if (det == DET_PHY_COMM || det == DET_PRESENT) && sig == SIG_ATA {
+                        strict = true;
+                        break;
+                    }
+
+                    if det != DET_NONE || sig != 0 || ipm != 0 {
+                        fallback = true;
+                    }
+
+                    core::hint::spin_loop();
                 }
 
-                // Check signature
-                let sig = asm_ahci_port_read_sig(abar, port);
-                if sig == SIG_ATA {
-                    active_port = Some(port);
+                if strict && strict_count < strict_ports.len() {
+                    strict_ports[strict_count] = port;
+                    strict_count += 1;
+                } else if fallback && fallback_count < fallback_ports.len() {
+                    fallback_ports[fallback_count] = port;
+                    fallback_count += 1;
+                }
+            }
+        }
+
+        if strict_count == 0 && fallback_count == 0 {
+            return Err(AhciInitError::NoDeviceFound);
+        }
+
+        let mut candidate_ports = [u32::MAX; 32];
+        let mut candidate_count = 0usize;
+        for i in 0..strict_count {
+            candidate_ports[candidate_count] = strict_ports[i];
+            candidate_count += 1;
+        }
+        for i in 0..fallback_count {
+            if candidate_count >= candidate_ports.len() {
+                break;
+            }
+            candidate_ports[candidate_count] = fallback_ports[i];
+            candidate_count += 1;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 5-7: Try candidates until one IDENTIFY succeeds
+        // ═══════════════════════════════════════════════════════════════════
+        let mut last_err = AhciInitError::NoDeviceFound;
+
+        for i in 0..candidate_count {
+            let port_num = candidate_ports[i];
+
+            let stop_result = asm_ahci_port_stop(abar, port_num, tsc_freq);
+            if stop_result != 0 {
+                last_err = AhciInitError::PortStopTimeout;
+                continue;
+            }
+
+            asm_ahci_port_setup(abar, port_num, config.cmd_list_phys, config.fis_phys);
+            asm_ahci_port_clear_errors(abar, port_num);
+            asm_ahci_port_disable_interrupts(abar, port_num);
+            asm_ahci_port_start(abar, port_num);
+
+            // Give link/signature a brief settle window after engine start.
+            let link_ticks = (tsc_freq / 1000).saturating_mul(50);
+            let link_start = read_tsc_raw();
+            while read_tsc_raw().wrapping_sub(link_start) < link_ticks {
+                let det = asm_ahci_port_detect(abar, port_num);
+                let sig = asm_ahci_port_read_sig(abar, port_num);
+                if det != DET_NONE && (sig == SIG_ATA || sig == 0) {
                     break;
                 }
+                core::hint::spin_loop();
             }
 
-            active_port.ok_or(AhciInitError::NoDeviceFound)?
-        };
+            let identify_result = asm_ahci_identify_device(
+                abar,
+                port_num,
+                config.identify_phys,
+                config.cmd_list_cpu as u64,
+                config.cmd_tables_cpu as u64,
+                config.cmd_tables_phys,
+                tsc_freq,
+            );
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 5: Stop port and configure DMA structures
-        // ═══════════════════════════════════════════════════════════════════
-        let stop_result = asm_ahci_port_stop(abar, port_num, tsc_freq);
-        if stop_result != 0 {
-            return Err(AhciInitError::PortStopTimeout);
+            if identify_result != 0 {
+                last_err = AhciInitError::IdentifyFailed;
+                continue;
+            }
+
+            let total_sectors = asm_ahci_get_identify_capacity(config.identify_cpu as u64);
+            let sector_size = asm_ahci_get_identify_sector_size(config.identify_cpu as u64);
+
+            let info = BlockDeviceInfo {
+                total_sectors,
+                sector_size,
+                max_sectors_per_request: 256,
+                read_only: false,
+            };
+
+            return Ok(Self {
+                abar,
+                port_num,
+                tsc_freq,
+                info,
+                num_slots,
+                in_flight: [InFlightRequest::default(); MAX_CMD_SLOTS],
+                next_slot: 0,
+                cmd_list_cpu: config.cmd_list_cpu,
+                cmd_list_phys: config.cmd_list_phys,
+                fis_cpu: config.fis_cpu,
+                fis_phys: config.fis_phys,
+                cmd_tables_cpu: config.cmd_tables_cpu,
+                cmd_tables_phys: config.cmd_tables_phys,
+                identify_cpu: config.identify_cpu,
+                identify_phys: config.identify_phys,
+            });
         }
 
-        // Setup command list and FIS receive buffer
-        asm_ahci_port_setup(abar, port_num, config.cmd_list_phys, config.fis_phys);
-
-        // Clear any pending errors
-        asm_ahci_port_clear_errors(abar, port_num);
-        asm_ahci_port_disable_interrupts(abar, port_num);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 6: Start port
-        // ═══════════════════════════════════════════════════════════════════
-        asm_ahci_port_start(abar, port_num);
-
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 7: Issue IDENTIFY DEVICE to get capacity
-        // ═══════════════════════════════════════════════════════════════════
-        let identify_result = asm_ahci_identify_device(
-            abar,
-            port_num,
-            config.identify_phys,
-            config.cmd_list_cpu as u64,
-            config.cmd_tables_cpu as u64,
-            config.cmd_tables_phys,
-            tsc_freq,
-        );
-
-        if identify_result != 0 {
-            return Err(AhciInitError::IdentifyFailed);
-        }
-
-        // Parse IDENTIFY data
-        let total_sectors = asm_ahci_get_identify_capacity(config.identify_cpu as u64);
-        let sector_size = asm_ahci_get_identify_sector_size(config.identify_cpu as u64);
-
-        let info = BlockDeviceInfo {
-            total_sectors,
-            sector_size,
-            max_sectors_per_request: 256, // Conservative for DMA
-            read_only: false,
-        };
-
-        Ok(Self {
-            abar,
-            port_num,
-            tsc_freq,
-            info,
-            num_slots,
-            in_flight: [InFlightRequest::default(); MAX_CMD_SLOTS],
-            next_slot: 0,
-            cmd_list_cpu: config.cmd_list_cpu,
-            cmd_list_phys: config.cmd_list_phys,
-            fis_cpu: config.fis_cpu,
-            fis_phys: config.fis_phys,
-            cmd_tables_cpu: config.cmd_tables_cpu,
-            cmd_tables_phys: config.cmd_tables_phys,
-            identify_cpu: config.identify_cpu,
-            identify_phys: config.identify_phys,
-        })
+        Err(last_err)
     }
 
     /// Get command header pointer for a slot
