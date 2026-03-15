@@ -44,6 +44,13 @@ pub unsafe fn init_kernel_page_table() {
             options(nomem, nostack),
         );
         log_info("PAGING", 731, "cleared CR0.WP");
+
+        // Flush TLB so stale entries that cached R/W=0 under WP=1 are
+        // discarded.  Without this, writes to UEFI-owned PT pages can
+        // still fault on real hardware that cached the old permission.
+        let cr3_val: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3_val, options(nomem, nostack));
+        core::arch::asm!("mov cr3, {}", in(reg) cr3_val, options(nostack));
     }
 
     *KERNEL_PT.lock() = Some(mgr);

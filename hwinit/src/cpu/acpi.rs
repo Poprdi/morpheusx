@@ -8,6 +8,7 @@
 
 use crate::cpu::per_cpu::MAX_CPUS;
 use crate::serial::{put_hex32, puts};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ── RSDP ─────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,17 @@ struct MadtLocalApic {
     flags: u32,
 }
 
+/// MADT entry type 9: Processor Local x2APIC.
+#[repr(C, packed)]
+struct MadtLocalX2Apic {
+    entry_type: u8, // 9
+    length: u8,     // 16
+    _reserved: u16,
+    x2apic_id: u32,
+    flags: u32,
+    _acpi_processor_uid: u32,
+}
+
 // MADT Local APIC flags
 const LAPIC_ENABLED: u32 = 1 << 0;
 const LAPIC_ONLINE_CAPABLE: u32 = 1 << 1;
@@ -93,7 +105,29 @@ impl ApLapicIds {
     }
 }
 
-// ── RSDP scanning ────────────────────────────────────────────────────────
+#[inline(always)]
+fn push_apic_id(result: &mut ApLapicIds, apic_id: u32, bsp_lapic_id: u32) {
+    if apic_id == bsp_lapic_id || result.count >= MAX_CPUS {
+        return;
+    }
+    for i in 0..result.count {
+        if result.ids[i] == apic_id {
+            return;
+        }
+    }
+    result.ids[result.count] = apic_id;
+    result.count += 1;
+}
+
+// ── RSDP source ──────────────────────────────────────────────────────────
+
+static RSDP_PHYS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_rsdp_phys(rsdp_phys: u64) {
+    RSDP_PHYS_OVERRIDE.store(rsdp_phys, Ordering::Release);
+}
+
+// ── Legacy RSDP scan helpers (kept for diagnostics only) ────────────────
 
 /// Scan a physical memory range for the RSDP signature.
 /// Returns the physical address of the RSDP, or 0 on failure.
@@ -140,7 +174,21 @@ unsafe fn find_rsdp() -> u64 {
 }
 
 // ── SDT traversal ────────────────────────────────────────────────────────
-
+/// Validate an ACPI SDT by checksumming its entire reported length.
+/// Returns true if all bytes sum to 0 (valid per ACPI spec).
+unsafe fn validate_sdt_checksum(table_phys: u64) -> bool {
+    let header = table_phys as *const SdtHeader;
+    let length = core::ptr::read_unaligned(core::ptr::addr_of!((*header).length)) as usize;
+    // Sanity: reject implausible lengths (0, or > 1 MiB).
+    if length < SDT_HEADER_SIZE || length > 0x10_0000 {
+        return false;
+    }
+    let mut sum: u8 = 0;
+    for i in 0..length {
+        sum = sum.wrapping_add(*((table_phys + i as u64) as *const u8));
+    }
+    sum == 0
+}
 /// Find a table with the given 4-byte signature in the RSDT (32-bit pointers).
 unsafe fn find_table_rsdt(rsdt_phys: u64, sig: &[u8; 4]) -> u64 {
     let header = rsdt_phys as *const SdtHeader;
@@ -211,6 +259,17 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
     put_hex32(reported_lapic_addr);
     puts("\n");
 
+    // Cross-check MADT LAPIC address against the probed IA32_APIC_BASE.
+    // A mismatch indicates firmware is lying about one of them.
+    let probed_base = crate::cpu::apic::lapic_base() as u32;
+    if reported_lapic_addr != 0 && reported_lapic_addr != probed_base {
+        puts("[ACPI] WARN: MADT LAPIC addr ");
+        put_hex32(reported_lapic_addr);
+        puts(" != probed base ");
+        put_hex32(probed_base);
+        puts("\n");
+    }
+
     // walk variable-length entries after the fixed header
     let mut offset = fixed_offset;
     while offset + 2 <= total_len {
@@ -222,7 +281,7 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
             break; // malformed — bail
         }
 
-        // type 0 = Processor Local APIC
+        // type 0 = Processor Local APIC (xAPIC)
         if entry_type == 0 && entry_len >= 8 {
             let lapic_entry = entry_ptr as *const MadtLocalApic;
             let apic_id = (*lapic_entry).apic_id as u32;
@@ -231,9 +290,20 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
             // enabled or online-capable
             let usable = (flags & LAPIC_ENABLED) != 0 || (flags & LAPIC_ONLINE_CAPABLE) != 0;
 
-            if usable && apic_id != bsp_lapic_id && result.count < MAX_CPUS {
-                result.ids[result.count] = apic_id;
-                result.count += 1;
+            if usable {
+                push_apic_id(&mut result, apic_id, bsp_lapic_id);
+            }
+        }
+
+        // type 9 = Processor Local x2APIC
+        if entry_type == 9 && entry_len >= 16 {
+            let x2_entry = entry_ptr as *const MadtLocalX2Apic;
+            let apic_id = (*x2_entry).x2apic_id;
+            let flags = (*x2_entry).flags;
+
+            let usable = (flags & LAPIC_ENABLED) != 0 || (flags & LAPIC_ONLINE_CAPABLE) != 0;
+            if usable {
+                push_apic_id(&mut result, apic_id, bsp_lapic_id);
             }
         }
 
@@ -254,9 +324,9 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
 /// Memory must be identity-mapped (true after UEFI ExitBootServices + our paging).
 /// The ACPI tables must not have been overwritten. Call before reclaiming AcpiReclaim.
 pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
-    let rsdp_phys = find_rsdp();
+    let rsdp_phys = RSDP_PHYS_OVERRIDE.load(Ordering::Acquire);
     if rsdp_phys == 0 {
-        crate::serial::log_warn("ACPI", 760, "RSDP not found; MADT discovery unavailable");
+        crate::serial::log_warn("ACPI", 760, "UEFI RSDP pointer unavailable; MADT discovery unavailable");
         return ApLapicIds::empty();
     }
 
@@ -270,30 +340,57 @@ pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
         let rsdp2 = rsdp_phys as *const Rsdp2;
         let xsdt = (*rsdp2).xsdt_address;
         if xsdt != 0 {
-            let _ = xsdt;
-            let found = find_table_xsdt(xsdt, &MADT_SIG);
-            if found != 0 {
-                found
+            if !validate_sdt_checksum(xsdt) {
+                crate::serial::log_warn("ACPI", 764, "XSDT checksum invalid; trying RSDT");
+                let rsdt = (*rsdp).rsdt_address as u64;
+                if rsdt != 0 && validate_sdt_checksum(rsdt) {
+                    find_table_rsdt(rsdt, &MADT_SIG)
+                } else {
+                    0
+                }
             } else {
-                // XSDT didn't have MADT, try RSDT
-                find_table_rsdt((*rsdp).rsdt_address as u64, &MADT_SIG)
+                let found = find_table_xsdt(xsdt, &MADT_SIG);
+                if found != 0 {
+                    found
+                } else {
+                    // XSDT didn't have MADT, try RSDT
+                    find_table_rsdt((*rsdp).rsdt_address as u64, &MADT_SIG)
+                }
             }
         } else {
-            find_table_rsdt((*rsdp).rsdt_address as u64, &MADT_SIG)
+            let rsdt = (*rsdp).rsdt_address as u64;
+            if rsdt != 0 && validate_sdt_checksum(rsdt) {
+                find_table_rsdt(rsdt, &MADT_SIG)
+            } else {
+                0
+            }
         }
     } else {
-        find_table_rsdt((*rsdp).rsdt_address as u64, &MADT_SIG)
+        let rsdt = (*rsdp).rsdt_address as u64;
+        if rsdt != 0 && validate_sdt_checksum(rsdt) {
+            find_table_rsdt(rsdt, &MADT_SIG)
+        } else {
+            0
+        }
     };
 
     if madt_phys == 0 {
         crate::serial::log_warn("ACPI", 761, "MADT not found in RSDT/XSDT");
         return ApLapicIds::empty();
     }
-    let _ = madt_phys;
+
+    // Validate MADT checksum before trusting its contents.
+    if !validate_sdt_checksum(madt_phys) {
+        crate::serial::log_warn("ACPI", 765, "MADT checksum invalid; skipping AP discovery");
+        return ApLapicIds::empty();
+    }
 
     let result = parse_madt(madt_phys, bsp_lapic_id);
 
-    let _ = result.count;
+    if result.count == 0 {
+        crate::serial::log_warn("ACPI", 763, "MADT parsed but no usable AP LAPIC entries");
+    }
+
     crate::serial::log_ok("ACPI", 762, "MADT parsed");
 
     result

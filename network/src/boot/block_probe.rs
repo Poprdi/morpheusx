@@ -195,7 +195,7 @@ pub enum BlockProbeResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum block devices we can discover in a single scan.
-const MAX_BLOCK_DEVICES: usize = 8;
+const MAX_BLOCK_DEVICES: usize = 32;
 
 /// Scan PCI bus for supported block devices.
 ///
@@ -230,7 +230,7 @@ pub fn scan_for_block_device() -> Option<DetectedBlockDevice> {
 
 /// Scan PCI bus for ALL supported block devices.
 ///
-/// Returns all detected AHCI and VirtIO-blk devices (up to 8).
+/// Returns all detected AHCI/SDHCI/USB/VirtIO devices (up to MAX_BLOCK_DEVICES).
 /// AHCI devices are listed first, then VirtIO-blk.
 pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVICES], usize) {
     let mut result: [Option<DetectedBlockDevice>; MAX_BLOCK_DEVICES] = [None; MAX_BLOCK_DEVICES];
@@ -794,7 +794,20 @@ pub unsafe fn probe_and_create_block_driver(
         }
 
         DetectedBlockDevice::UsbMsd(info) => {
+            crate::serial_str("[BLK-PROBE] USB xHCI pci=");
+            dbg_hex8(info.pci_addr.bus);
+            crate::serial_str(":");
+            dbg_hex8(info.pci_addr.device);
+            crate::serial_str(".");
+            dbg_hex8(info.pci_addr.function);
+            crate::serial_str("  bar0=");
+            dbg_hex64(info.mmio_base);
+            crate::serial_str("\n");
+
             enable_pci_device(info.pci_addr);
+            // also disable INTx so BIOS SMI handlers can't interfere
+            let cmd = pci_cfg_read16(info.pci_addr, offset::COMMAND);
+            pci_cfg_write16(info.pci_addr, offset::COMMAND, cmd | (1 << 10));
 
             let usb_config = UsbMsdConfig {
                 tsc_freq: config.tsc_freq,
@@ -917,7 +930,20 @@ pub unsafe fn create_unified_from_detected(
             Ok(UnifiedBlockDevice::Sdhci(driver))
         }
         DetectedBlockDevice::UsbMsd(info) => {
+            crate::serial_str("[BLK-PROBE] USB xHCI pci=");
+            dbg_hex8(info.pci_addr.bus);
+            crate::serial_str(":");
+            dbg_hex8(info.pci_addr.device);
+            crate::serial_str(".");
+            dbg_hex8(info.pci_addr.function);
+            crate::serial_str("  bar0=");
+            dbg_hex64(info.mmio_base);
+            crate::serial_str("\n");
+
             enable_pci_device(info.pci_addr);
+            let cmd = pci_cfg_read16(info.pci_addr, offset::COMMAND);
+            pci_cfg_write16(info.pci_addr, offset::COMMAND, cmd | (1 << 10));
+
             let usb_config = UsbMsdConfig {
                 tsc_freq: config.tsc_freq,
                 dma_phys: 0,

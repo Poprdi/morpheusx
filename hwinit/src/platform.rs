@@ -18,7 +18,7 @@ use crate::memory::{
     PhysicalAllocator,
 };
 use crate::paging::init_kernel_page_table;
-use crate::pci::{offset, pci_cfg_read16, pci_cfg_write16, PciAddr};
+use crate::pci::{offset, pci_cfg_read8, pci_cfg_read16, pci_cfg_write16, PciAddr};
 use crate::process::scheduler::init_scheduler;
 use crate::serial::{checkpoint, log_error, log_info, log_ok, log_warn};
 use crate::syscall::init_syscall;
@@ -61,6 +61,9 @@ pub struct SelfContainedConfig {
     pub stack_base: u64,
     /// Number of 4 KiB pages in the boot stack allocation.
     pub stack_pages: u64,
+    /// Physical address of the ACPI RSDP from UEFI configuration table.
+    /// 0 means unavailable.
+    pub acpi_rsdp_phys: u64,
 }
 
 /// Platform configuration input (legacy - externally allocated).
@@ -119,6 +122,11 @@ pub unsafe fn platform_init_selfcontained(
                 in(reg) cr0 & !(1u64 << 16),
                 options(nomem, nostack),
             );
+            // Flush TLB so no stale entries carry the old WP=1 permission
+            // model.  Some real CPUs cache the WP bit in TLB entries.
+            let cr3: u64;
+            core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+            core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack));
         }
     }
 
@@ -333,6 +341,41 @@ pub unsafe fn platform_init_selfcontained(
         return Err(InitError::TscCalibrationFailed);
     }
 
+    // Check for invariant TSC (CPUID.80000007H:EDX[8]).
+    // Without it, CPU frequency scaling (P-states, C-states) causes TSC
+    // drift — delay_us and scheduler timing will be inaccurate on real HW.
+    {
+        let max_ext: u32;
+        core::arch::asm!(
+            "push rbx",
+            "mov eax, 0x80000000",
+            "cpuid",
+            "pop rbx",
+            out("eax") max_ext,
+            out("ecx") _,
+            out("edx") _,
+            options(nostack),
+        );
+        if max_ext >= 0x80000007 {
+            let edx: u32;
+            core::arch::asm!(
+                "push rbx",
+                "mov eax, 0x80000007",
+                "cpuid",
+                "pop rbx",
+                out("edx") edx,
+                out("eax") _,
+                out("ecx") _,
+                options(nostack),
+            );
+            if edx & (1 << 8) == 0 {
+                log_warn("TSC", 551, "CPU lacks invariant TSC; timing may drift with P-state changes");
+            }
+        } else {
+            log_warn("TSC", 552, "CPUID extended leaf 0x80000007 unavailable; cannot verify invariant TSC");
+        }
+    }
+
     checkpoint("phase5-done");
     crate::process::scheduler::set_tsc_frequency(tsc_freq);
 
@@ -344,7 +387,7 @@ pub unsafe fn platform_init_selfcontained(
     let dma_phys = {
         let mut dma_reg = global_registry_mut();
         dma_reg
-            .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedDma, dma_pages)
+            .allocate_pages(AllocateType::MaxAddress(0xFFFF_FFFF), MemoryType::AllocatedDma, dma_pages)
             .map_err(|_| InitError::NoFreeMemory)?
     };
 
@@ -497,6 +540,9 @@ pub unsafe fn platform_init_selfcontained(
     {
         use crate::cpu::{acpi, ap_boot, apic, per_cpu};
 
+        // UEFI gave us the authoritative ACPI root. no BIOS scavenger hunt.
+        acpi::set_rsdp_phys(config.acpi_rsdp_phys);
+
         let bsp_lapic_id = apic::read_lapic_id();
         checkpoint("phase12-madt-scan");
 
@@ -597,8 +643,8 @@ unsafe fn enable_all_pci_devices() -> usize {
                 continue;
             }
 
-            // Enable this device
-            enable_bus_mastering(addr);
+            // Enable this device (if it's not a bridge)
+            maybe_enable_bus_mastering(addr);
             count += 1;
 
             // Check for multi-function
@@ -608,7 +654,7 @@ unsafe fn enable_all_pci_devices() -> usize {
                     let faddr = PciAddr::new(bus, device, function);
                     let v = pci_cfg_read16(faddr, offset::VENDOR_ID);
                     if v != 0xFFFF && v != 0x0000 {
-                        enable_bus_mastering(faddr);
+                        maybe_enable_bus_mastering(faddr);
                         count += 1;
                     }
                 }
@@ -617,6 +663,19 @@ unsafe fn enable_all_pci_devices() -> usize {
     }
 
     count
+}
+
+/// Check class code and skip bridge devices. Blindly enabling bus mastering
+/// on host bridges, PCI-PCI bridges, and ISA bridges can trigger IOMMU
+/// faults or stray DMA from shadow BARs on real hardware.
+fn maybe_enable_bus_mastering(addr: PciAddr) {
+    let class = pci_cfg_read8(addr, 0x0B);  // base class at offset 0x0B
+    if class == 0x06 {
+        // 0x06 = Bridge device (host, ISA, PCI-PCI, CardBus, etc.)
+        // Don't toggle bus mastering — the firmware configured these.
+        return;
+    }
+    enable_bus_mastering(addr);
 }
 
 /// Enable memory space and bus mastering on a device.

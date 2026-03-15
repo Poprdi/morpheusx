@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 /// Maximum cores we support.  16 is generous for a desktop OS on QEMU.
 /// Increase if you're running on a Threadripper and hate yourself.
 pub const MAX_CPUS: usize = 16;
+const LAPIC_ID_MAP_SIZE: usize = 1024;
 
 // ── ABI field offsets (must match struct layout below) ────────────────────
 // These are used by context_switch.s and syscall.s via `gs:[OFFSET]`.
@@ -74,6 +75,9 @@ pub struct PerCpu {
     pub park_state: u8,
     /// Last observed active TSC on this core.
     pub last_active_tsc: u64,
+    /// Sequential core index (0 = BSP). Cached here so
+    /// `current_core_index()` avoids the LAPIC-ID table lookup.
+    pub core_index: u32,
 }
 
 impl PerCpu {
@@ -95,6 +99,7 @@ impl PerCpu {
             load_hint: 0,
             park_state: 0,
             last_active_tsc: 0,
+            core_index: 0,
         }
     }
 }
@@ -106,7 +111,37 @@ impl PerCpu {
 static mut PER_CPU_ARRAY: [PerCpu; MAX_CPUS] = [const { PerCpu::zeroed() }; MAX_CPUS];
 
 /// Maps LAPIC ID → sequential core index.  Sparse (most entries 0xFF = unused).
-static mut LAPIC_TO_IDX: [u8; 256] = [0xFF; 256];
+static mut LAPIC_TO_IDX: [u8; LAPIC_ID_MAP_SIZE] = [0xFF; LAPIC_ID_MAP_SIZE];
+
+#[inline(always)]
+unsafe fn map_lapic_id(lapic_id: u32, idx: u8) {
+    if (lapic_id as usize) < LAPIC_ID_MAP_SIZE {
+        LAPIC_TO_IDX[lapic_id as usize] = idx;
+    } else {
+        puts("[PERCPU] LAPIC ID out of fast-map range: ");
+        put_hex32(lapic_id);
+        puts("\n");
+    }
+}
+
+#[inline(always)]
+unsafe fn lapic_id_to_index(lapic_id: u32) -> Option<u32> {
+    if (lapic_id as usize) < LAPIC_ID_MAP_SIZE {
+        let idx = LAPIC_TO_IDX[lapic_id as usize];
+        if idx != 0xFF {
+            return Some(idx as u32);
+        }
+    }
+
+    // fallback scan for sparse/high IDs. MAX_CPUS is tiny, so this is cheap.
+    for i in 0..MAX_CPUS {
+        let pcpu = &PER_CPU_ARRAY[i];
+        if pcpu.online && pcpu.cpu_id == lapic_id {
+            return Some(i as u32);
+        }
+    }
+    None
+}
 
 /// Number of cores that have completed init.
 pub static AP_ONLINE_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -177,10 +212,11 @@ pub unsafe fn init_bsp(lapic_id: u32, lapic_base: u64) {
     pcpu.cpu_id = lapic_id;
     pcpu.current_pid = 0; // kernel
     pcpu.lapic_base = lapic_base;
+    pcpu.core_index = idx as u32;
     pcpu.online = true;
 
     // map LAPIC ID → index
-    LAPIC_TO_IDX[lapic_id as usize] = idx as u8;
+    map_lapic_id(lapic_id, idx as u8);
 
     // load GS-base to point at this PerCpu
     let addr = pcpu as *const PerCpu as u64;
@@ -210,6 +246,7 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
     pcpu.cpu_id = lapic_id;
     pcpu.current_pid = 0; // starts idle on kernel
     pcpu.lapic_base = lapic_base;
+    pcpu.core_index = core_idx;
     pcpu.online = true;
 
     // save the AP's kernel stack top so the scheduler can restore it
@@ -218,7 +255,7 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
     core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
     pcpu.boot_kernel_rsp = (rsp + 0x1000) & !0xFFF;
 
-    LAPIC_TO_IDX[lapic_id as usize] = idx as u8;
+    map_lapic_id(lapic_id, idx as u8);
 
     let addr = pcpu as *const PerCpu as u64;
     wrmsr(IA32_GS_BASE, addr);
@@ -253,25 +290,13 @@ pub unsafe fn by_index(idx: u32) -> &'static mut PerCpu {
 /// Get PerCpu by LAPIC ID.
 #[inline(always)]
 pub unsafe fn by_lapic_id(lapic_id: u32) -> Option<&'static mut PerCpu> {
-    let idx = LAPIC_TO_IDX[lapic_id as usize];
-    if idx == 0xFF {
-        None
-    } else {
-        Some(&mut PER_CPU_ARRAY[idx as usize])
-    }
+    lapic_id_to_index(lapic_id).map(|idx| &mut PER_CPU_ARRAY[idx as usize])
 }
 
 /// Current core's sequential index (0 = BSP).
 #[inline(always)]
 pub unsafe fn current_core_index() -> u32 {
-    let lapic_id: u32;
-    core::arch::asm!(
-        "mov {0:e}, gs:[0x08]", // cpu_id is u32 at offset 0x08. read 32-bit to avoid
-                                 // bleeding into current_pid at 0x0C.
-        out(reg) lapic_id,
-        options(nostack, readonly, preserves_flags),
-    );
-    LAPIC_TO_IDX[lapic_id as usize] as u32
+    current().core_index
 }
 
 /// Current core's LAPIC ID.

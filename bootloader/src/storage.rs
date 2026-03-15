@@ -647,6 +647,37 @@ fn spinner_done() {
 pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
     log_info("STORAGE", 822, "probing block devices");
 
+    if let Some((base, size, sector_size)) = crate::baremetal::take_pre_ebs_helix_image() {
+        log_info("STORAGE", 822, "using pre-EBS staged Helix image");
+        RAM_HELIX_DEVICE = Some(MemBlockDevice::new(base as *mut u8, size, sector_size));
+        if let Some(mem_dev) = RAM_HELIX_DEVICE.as_mut() {
+            match morpheus_helix::vfs::global::replace_root_device(
+                MemBlockDevice::into_raw(mem_dev),
+                false,
+            ) {
+                Ok(()) => {
+                    if root_path_exists("/bin/init") {
+                        PERSISTENT_READY = true;
+                        log_ok("STORAGE", 827, "mounted pre-EBS staged Helix root");
+                        return;
+                    }
+                    log_warn(
+                        "STORAGE",
+                        827,
+                        "pre-EBS staged root missing /bin/init; falling back to probe",
+                    );
+                }
+                Err(_) => {
+                    log_warn(
+                        "STORAGE",
+                        827,
+                        "pre-EBS staged root mount failed; falling back to probe",
+                    );
+                }
+            }
+        }
+    }
+
     // Dump PCI bus to serial for device identification diagnostics
     // (Commenting out PCI dump — enable if debugging PCI device discovery)
     // dump_pci_devices();
@@ -708,6 +739,21 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
             Some(d) => d,
             None => continue,
         };
+
+        match detected {
+            DetectedBlockDevice::Ahci(_) => {
+                log_info("STORAGE", 824, "probing AHCI candidate");
+            }
+            DetectedBlockDevice::Sdhci(_) => {
+                log_info("STORAGE", 824, "probing SDHCI candidate");
+            }
+            DetectedBlockDevice::UsbMsd(_) => {
+                log_info("STORAGE", 824, "probing USB xHCI/MSD candidate");
+            }
+            DetectedBlockDevice::VirtIO { .. } => {
+                log_info("STORAGE", 824, "probing VirtIO-blk candidate");
+            }
+        }
 
         // Map high-address MMIO BARs before driver init touches them
         if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
@@ -837,6 +883,66 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
                             }
                             UsbMsdInitError::ControllerInitFailed => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: controller init failed");
+                            }
+                            UsbMsdInitError::ControllerProbeFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: controller probe failed");
+                            }
+                            UsbMsdInitError::ControllerResetFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: controller reset failed");
+                            }
+                            UsbMsdInitError::ControllerScratchpadUnsupported => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: scratchpad requirement unsupported");
+                            }
+                            UsbMsdInitError::ControllerStartFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: controller start failed (HCH stuck)");
+                            }
+                            UsbMsdInitError::HubUnsupported => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: USB hub detected; downstream hub traversal not implemented");
+                            }
+                            UsbMsdInitError::PortResetFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: port reset failed");
+                            }
+                            UsbMsdInitError::PortResetTimeout => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: port reset timeout");
+                            }
+                            UsbMsdInitError::PortResetHotCmdTimeout => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: hot reset command timeout");
+                            }
+                            UsbMsdInitError::PortResetHotSettleTimeout => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: hot reset settle timeout");
+                            }
+                            UsbMsdInitError::PortResetWarmTimeout => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: warm reset timeout");
+                            }
+                            UsbMsdInitError::PortResetNoLink => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: USB link not usable");
+                            }
+                            UsbMsdInitError::EnableSlotFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: enable-slot command failed");
+                            }
+                            UsbMsdInitError::AddressDeviceFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: address-device command failed");
+                            }
+                            UsbMsdInitError::DeviceDescriptorFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: GET_DESCRIPTOR(device) failed");
+                            }
+                            UsbMsdInitError::ConfigDescriptorFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: GET_DESCRIPTOR(config) failed");
+                            }
+                            UsbMsdInitError::MassStorageProtocolUnsupported => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: mass-storage protocol unsupported (need BOT)");
+                            }
+                            UsbMsdInitError::NoBotMassStorageInterface => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: no BOT mass-storage interface found");
+                            }
+                            UsbMsdInitError::ActivePortsNoConnectedDevice => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: root ports active but no connected device detected");
+                            }
+                            UsbMsdInitError::SetConfigurationFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: SET_CONFIGURATION failed");
+                            }
+                            UsbMsdInitError::ConfigureEndpointsFailed => {
+                                log_warn("STORAGE", 825, "USB-MSD init failed: configure endpoint command failed");
                             }
                             UsbMsdInitError::DeviceEnumerationFailed => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: device enumeration failed");

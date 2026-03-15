@@ -18,8 +18,8 @@ extern "win64" {
     /// Reads CAPLENGTH + HCIVERSION.  0 = dead controller.
     /// Low byte = CAPLENGTH, bits 31:16 = HCIVERSION.
     fn asm_usb_host_probe(mmio_base: u64) -> u32;
-    /// Stop + HCRST + wait CNR.  0 = ok, 1/2/3 = timeout at halt/reset/cnr.
-    fn asm_xhci_controller_reset(op_base: u64, tsc_freq: u64) -> u32;
+    /// Soft restart: stop + start (NO HCRST). Preserves UEFI port state.  0 = ok, 1/2 = timeout.
+    fn asm_xhci_controller_soft_restart(op_base: u64, tsc_freq: u64) -> u32;
     /// Walk extended caps, claim ownership from BIOS/SMM.  0 = ok.
     fn asm_xhci_bios_handoff(mmio_base: u64, hccparams1: u64, tsc_freq: u64) -> u32;
 }
@@ -53,11 +53,23 @@ const STS_HCH: u32 = 1 << 0;
 const PORTSC_CCS: u32 = 1 << 0;
 const PORTSC_PED: u32 = 1 << 1;
 const PORTSC_PR: u32 = 1 << 4;
+const PORTSC_PLS_MASK: u32 = 0xF << 5;
 const PORTSC_PP: u32 = 1 << 9;
+const PORTSC_LWS: u32 = 1 << 16;
+const PORTSC_WRC: u32 = 1 << 19;
 const PORTSC_PRC: u32 = 1 << 21;
+const PORTSC_CAS: u32 = 1 << 24;
+const PORTSC_WPR: u32 = 1 << 31;
 // RW1C mask: bits 17-23 must be written 0 to preserve, 1 to clear
 const PORTSC_RW1C: u32 = 0x00FE_0000;
 const PORTSC_SPEED_SHIFT: u32 = 10;
+const PLS_U0: u32 = 0x0 << 5;
+const PLS_U3: u32 = 0x3 << 5;
+const PLS_RECOVERY: u32 = 0x8 << 5;
+const PLS_RESUME: u32 = 0xF << 5;
+const PLS_INACTIVE: u32 = 0x6 << 5;
+const PLS_POLLING: u32 = 0x7 << 5;
+const PLS_COMPLIANCE: u32 = 0xA << 5;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TRB types (pre-shifted to bits 15:10)
@@ -90,6 +102,7 @@ const TRB_TYPE_MASK: u32 = 0x3F << 10;
 // ═══════════════════════════════════════════════════════════════════════════
 
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
+const USB_CLASS_HUB: u8 = 0x09;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
 const USB_PROTOCOL_BOT: u8 = 0x50;
 
@@ -103,7 +116,7 @@ const SCSI_READ_10: u8 = 0x28;
 // DMA region layout — all offsets 64-byte aligned inside a 64KB-aligned buf
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DMA_SIZE: usize = 65536;
+const DMA_SIZE: usize = 0x48000;
 const CMD_RING_LEN: u8 = 32;
 const EVT_RING_LEN: u8 = 32;
 const XFER_RING_LEN: u8 = 16;
@@ -123,8 +136,8 @@ const OFF_DESC: usize = 0x4480; // 256B
 const OFF_DATA: usize = 0x5000; // 4KB sector bounce buffer (one page, no 64KB boundary crossing)
 const DATA_BUF_SIZE: usize = 4096;
 const OFF_SCRATCH_ARR: usize = 0x7000; // 64B
-const OFF_SCRATCH_PG: usize = 0x8000; // up to 8 × 4KB pages
-const MAX_SCRATCH: usize = 8;
+const OFF_SCRATCH_PG: usize = 0x8000; // scratchpad pages begin here
+const MAX_SCRATCH: usize = 64;
 
 #[repr(C, align(4096))]
 struct XhciDma([u8; DMA_SIZE]);
@@ -151,6 +164,26 @@ pub struct UsbMsdConfig {
 pub enum UsbMsdInitError {
     InvalidConfig,
     ControllerInitFailed,
+    ControllerProbeFailed,
+    ControllerResetFailed,
+    ControllerScratchpadUnsupported,
+    ControllerStartFailed,
+    HubUnsupported,
+    PortResetFailed,
+    PortResetTimeout,
+    PortResetHotCmdTimeout,
+    PortResetHotSettleTimeout,
+    PortResetWarmTimeout,
+    PortResetNoLink,
+    EnableSlotFailed,
+    AddressDeviceFailed,
+    DeviceDescriptorFailed,
+    ConfigDescriptorFailed,
+    MassStorageProtocolUnsupported,
+    NoBotMassStorageInterface,
+    ActivePortsNoConnectedDevice,
+    SetConfigurationFailed,
+    ConfigureEndpointsFailed,
     DeviceEnumerationFailed,
     TransportInitFailed,
     NoMedia,
@@ -164,6 +197,34 @@ impl core::fmt::Display for UsbMsdInitError {
         match self {
             Self::InvalidConfig => write!(f, "Invalid USB MSD configuration"),
             Self::ControllerInitFailed => write!(f, "USB xHCI controller init failed"),
+            Self::ControllerProbeFailed => write!(f, "USB xHCI probe failed (dead/invalid BAR)"),
+            Self::ControllerResetFailed => write!(f, "USB xHCI reset failed (halt/reset/cnr timeout)"),
+            Self::ControllerScratchpadUnsupported => {
+                write!(f, "USB xHCI requires too many scratchpad buffers")
+            }
+            Self::ControllerStartFailed => write!(f, "USB xHCI start failed (HCH never cleared)"),
+            Self::HubUnsupported => write!(f, "USB hub detected but hub traversal is not implemented"),
+            Self::PortResetFailed => write!(f, "USB port reset failed"),
+            Self::PortResetTimeout => write!(f, "USB port reset timed out"),
+            Self::PortResetHotCmdTimeout => write!(f, "USB hot reset command did not complete"),
+            Self::PortResetHotSettleTimeout => write!(f, "USB hot reset completed but link did not settle"),
+            Self::PortResetWarmTimeout => write!(f, "USB warm reset did not complete"),
+            Self::PortResetNoLink => write!(f, "USB reset completed but link never became usable"),
+            Self::EnableSlotFailed => write!(f, "USB enable-slot command failed"),
+            Self::AddressDeviceFailed => write!(f, "USB address-device command failed"),
+            Self::DeviceDescriptorFailed => write!(f, "USB device descriptor fetch failed"),
+            Self::ConfigDescriptorFailed => write!(f, "USB config descriptor fetch failed"),
+            Self::MassStorageProtocolUnsupported => {
+                write!(f, "USB mass-storage present but protocol is not BOT")
+            }
+            Self::NoBotMassStorageInterface => {
+                write!(f, "USB config has no BOT mass-storage interface")
+            }
+            Self::ActivePortsNoConnectedDevice => {
+                write!(f, "USB root ports active but no connected device detected")
+            }
+            Self::SetConfigurationFailed => write!(f, "USB SET_CONFIGURATION failed"),
+            Self::ConfigureEndpointsFailed => write!(f, "USB Configure Endpoint command failed"),
             Self::DeviceEnumerationFailed => write!(f, "USB device enumeration failed"),
             Self::TransportInitFailed => write!(f, "USB BOT transport init failed"),
             Self::NoMedia => write!(f, "No USB mass-storage device found"),
@@ -183,6 +244,19 @@ enum Ring {
     Ep0,
     BulkOut,
     BulkIn,
+}
+
+enum ConfigParse {
+    MassStorage {
+        cfg_val: u8,
+        ep_in: u8,
+        ep_out: u8,
+        mp_in: u16,
+        mp_out: u16,
+    },
+    Hub,
+    MassStorageUnsupported,
+    None,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -263,19 +337,66 @@ unsafe fn tsc_delay(tsc_freq: u64, ms: u64) {
     }
 }
 
+// Preserve only RO+RWS bits on PORTSC writes (Linux xhci_port_state_to_neutral style).
+#[inline(always)]
+fn portsc_neutral(state: u32) -> u32 {
+    const PORT_RO: u32 = (1 << 0) | (1 << 3) | (0xF << 10) | (1 << 30);
+    const PORT_RWS: u32 = (0xF << 5) | (1 << 9) | (0x3 << 14) | (0x7 << 25);
+    state & (PORT_RO | PORT_RWS)
+}
+
+#[inline(always)]
+unsafe fn portsc_write(addr: u64, current: u32, set_bits: u32, clear_bits: u32) {
+    let mut v = portsc_neutral(current);
+    v &= !clear_bits;
+    v |= set_bits;
+    mmio::write32(addr, v);
+}
+
+#[inline(always)]
+fn warm_reset_needed(ps: u32) -> bool {
+    let pls = ps & PORTSC_PLS_MASK;
+    let speed = (ps >> PORTSC_SPEED_SHIFT) & 0xF;
+    (ps & PORTSC_CAS) != 0
+        || pls == PLS_POLLING
+        || pls == PLS_COMPLIANCE
+        || pls == PLS_INACTIVE
+        || speed >= 4
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
-// serial hex dump for diagnostics. not pretty, don't care.
+// serial and framebuffer diagnostics via console hook
 fn dbg(s: &str) {
-    crate::serial_str(s);
+    morpheus_hwinit::serial::puts(s);
+}
+fn dbg_u32(v: u32) {
+    let mut digits = [0u8; 10];
+    let mut n = v;
+    let mut len = 0usize;
+    if n == 0 {
+        digits[0] = b'0';
+        len = 1;
+    } else {
+        while n > 0 {
+            digits[len] = b'0' + (n % 10) as u8;
+            len += 1;
+            n /= 10;
+        }
+        digits[..len].reverse();
+    }
+    if let Ok(s) = core::str::from_utf8(&digits[..len]) {
+        morpheus_hwinit::serial::puts(s);
+    }
 }
 fn dbg_hex32(v: u32) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    crate::serial_str("0x");
+    morpheus_hwinit::serial::puts("0x");
     for i in (0..8).rev() {
-        crate::serial_byte(HEX[((v >> (i * 4)) & 0xF) as usize]);
+        let byte = HEX[((v >> (i * 4)) & 0xF) as usize];
+        morpheus_hwinit::serial::putc(byte);
     }
 }
 fn dbg_hex64(v: u64) {
@@ -287,6 +408,68 @@ fn dbg_hex64(v: u64) {
 }
 
 impl UsbMsdDriver {
+    #[inline(always)]
+    fn err_label(e: UsbMsdInitError) -> &'static str {
+        match e {
+            UsbMsdInitError::InvalidConfig => "invalid-config",
+            UsbMsdInitError::ControllerInitFailed => "controller-init",
+            UsbMsdInitError::ControllerProbeFailed => "controller-probe",
+            UsbMsdInitError::ControllerResetFailed => "controller-restart",
+            UsbMsdInitError::ControllerScratchpadUnsupported => "scratchpad-unsupported",
+            UsbMsdInitError::ControllerStartFailed => "controller-start",
+            UsbMsdInitError::HubUnsupported => "hub-unsupported",
+            UsbMsdInitError::PortResetFailed => "port-reset",
+            UsbMsdInitError::PortResetTimeout => "port-timeout",
+            UsbMsdInitError::PortResetHotCmdTimeout => "port-hotcmd-timeout",
+            UsbMsdInitError::PortResetHotSettleTimeout => "port-settle-timeout",
+            UsbMsdInitError::PortResetWarmTimeout => "port-warm-timeout",
+            UsbMsdInitError::PortResetNoLink => "no-link",
+            UsbMsdInitError::EnableSlotFailed => "enable-slot",
+            UsbMsdInitError::AddressDeviceFailed => "address-device",
+            UsbMsdInitError::DeviceDescriptorFailed => "device-desc",
+            UsbMsdInitError::ConfigDescriptorFailed => "config-desc",
+            UsbMsdInitError::MassStorageProtocolUnsupported => "msd-protocol",
+            UsbMsdInitError::NoBotMassStorageInterface => "no-bot-intf",
+            UsbMsdInitError::ActivePortsNoConnectedDevice => "active-no-device",
+            UsbMsdInitError::SetConfigurationFailed => "set-config",
+            UsbMsdInitError::ConfigureEndpointsFailed => "config-eps",
+            UsbMsdInitError::DeviceEnumerationFailed => "enumeration",
+            UsbMsdInitError::TransportInitFailed => "transport-init",
+            UsbMsdInitError::NoMedia => "no-media",
+            UsbMsdInitError::CommandTimeout => "cmd-timeout",
+            UsbMsdInitError::IoError => "io",
+            UsbMsdInitError::NotImplemented => "not-implemented",
+        }
+    }
+
+    #[inline(always)]
+    fn log_port_attempt(&self, port: u8, portsc: u32, err: UsbMsdInitError) {
+        dbg("[USB] p");
+        dbg_u32(port as u32);
+        dbg(" ccs=");
+        dbg_u32(if (portsc & PORTSC_CCS) != 0 { 1 } else { 0 });
+        dbg(" ped=");
+        dbg_u32(if (portsc & PORTSC_PED) != 0 { 1 } else { 0 });
+        dbg(" speed=");
+        dbg_u32((portsc >> PORTSC_SPEED_SHIFT) & 0xF);
+        dbg(" -> ");
+        dbg(Self::err_label(err));
+        dbg("\n");
+    }
+
+    #[inline(always)]
+    fn log_port_success(&self, port: u8, portsc: u32) {
+        dbg("[USB] p");
+        dbg_u32(port as u32);
+        dbg(" ccs=");
+        dbg_u32(if (portsc & PORTSC_CCS) != 0 { 1 } else { 0 });
+        dbg(" ped=");
+        dbg_u32(if (portsc & PORTSC_PED) != 0 { 1 } else { 0 });
+        dbg(" speed=");
+        dbg_u32((portsc >> PORTSC_SPEED_SHIFT) & 0xF);
+        dbg(" -> ok\n");
+    }
+
     // ─── public entry point ──────────────────────────────────────────────
 
     /// Initialise xHCI controller, enumerate first USB mass-storage device,
@@ -317,10 +500,25 @@ impl UsbMsdDriver {
     unsafe fn init_controller(mmio_base: u64, tsc_freq: u64) -> Result<Self, UsbMsdInitError> {
         // probe: low byte = CAPLENGTH, high half = HCIVERSION. 0 = dead.
         let probe = asm_usb_host_probe(mmio_base);
+        dbg("[USB] probe=");
+        dbg_hex32(probe);
+        dbg("\n");
         if probe == 0 {
-            return Err(UsbMsdInitError::ControllerInitFailed);
+            dbg("[USB] FAIL: probe returned 0 (dead BAR or bad CAPLENGTH/HCIVERSION)\n");
+            // read raw dword for diagnostics
+            let raw = mmio::read32(mmio_base);
+            dbg("[USB]   raw mmio_base+0 = ");
+            dbg_hex32(raw);
+            dbg("\n");
+            return Err(UsbMsdInitError::ControllerProbeFailed);
         }
         let cap_len = (probe & 0xFF) as u64;
+        let hci_ver = probe >> 16;
+        dbg("[USB] CAPLENGTH=");
+        dbg_hex32(cap_len as u32);
+        dbg(" HCIVERSION=");
+        dbg_hex32(hci_ver);
+        dbg("\n");
         let op_base = mmio_base + cap_len;
 
         let hcsparams1 = mmio::read32(mmio_base + 0x04);
@@ -339,27 +537,77 @@ impl UsbMsdDriver {
         let rt_base = mmio_base + rts_off as u64;
         let db_base = mmio_base + db_off as u64;
 
+        dbg("[USB] slots=");
+        crate::serial_u32(max_slots as u32);
+        dbg(" ports=");
+        crate::serial_u32(max_ports as u32);
+        dbg(" ctxsz=");
+        crate::serial_u32(ctx_size as u32);
+        dbg(" scratch=");
+        crate::serial_u32(n_scratch as u32);
+        dbg(" hccparams1=");
+        dbg_hex32(hccparams1);
+        dbg("\n");
+        dbg("[USB] op_base=");
+        dbg_hex64(op_base);
+        dbg(" rt_base=");
+        dbg_hex64(rt_base);
+        dbg(" db_base=");
+        dbg_hex64(db_base);
+        dbg("\n");
+
+        // read USBSTS before we touch anything
+        let sts_before = mmio::read32(op_base + OP_USBSTS);
+        dbg("[USB] USBSTS before reset=");
+        dbg_hex32(sts_before);
+        dbg("\n");
+
         // static DMA buffer, identity-mapped in UEFI
         let dma_base = core::ptr::addr_of_mut!(XHCI_DMA) as u64;
         core::ptr::write_bytes(dma_base as *mut u8, 0, DMA_SIZE);
+        dbg("[USB] DMA base=");
+        dbg_hex64(dma_base);
+        dbg("\n");
 
-        // ── rip controller from BIOS/UEFI/SMM ──
-        asm_xhci_bios_handoff(mmio_base, hccparams1 as u64, tsc_freq);
+        // ── legacy owner handoff (SMM/firmware) ──
+        dbg("[USB] xHCI legacy-owner handoff...\n");
+        let handoff_rc = asm_xhci_bios_handoff(mmio_base, hccparams1 as u64, tsc_freq);
         tsc_delay(tsc_freq, 10);
-
-        // ── controller reset with 3 attempts because hardware lies ──
-        let mut reset_ok = false;
-        for attempt in 0..3u32 {
-            let rc = asm_xhci_controller_reset(op_base, tsc_freq);
-            if rc == 0 {
-                reset_ok = true;
-                break;
-            }
-            // increasing backoff: 100ms, 200ms, 300ms
-            tsc_delay(tsc_freq, 100 * (attempt as u64 + 1));
+        if handoff_rc == 0 {
+            dbg("[USB] xHCI legacy-owner handoff done\n");
+        } else {
+            dbg("[USB] xHCI legacy-owner handoff timed out; continuing without force takeover\n");
         }
-        if !reset_ok {
-            return Err(UsbMsdInitError::ControllerInitFailed);
+
+        // If firmware already trained links, don't touch controller run state.
+        let mut linked_ports = 0u32;
+        let mut active_ports = 0u32;
+        for p in 0..max_ports {
+            let ps = mmio::read32(op_base + PORT_REG_BASE + (p as u64) * PORT_REG_STRIDE);
+            let speed = (ps >> PORTSC_SPEED_SHIFT) & 0xF;
+            if ps != 0 && ps != u32::MAX {
+                active_ports += 1;
+            }
+            if (ps & (PORTSC_CCS | PORTSC_PED)) != 0 || speed != 0 {
+                linked_ports += 1;
+            }
+        }
+        dbg_u32(linked_ports);
+        dbg(" active=");
+        dbg_u32(active_ports);
+        dbg(" total=");
+        dbg_u32(max_ports as u32);
+        dbg("\n");
+
+        if linked_ports == 0 {
+            // All dead after handoff: one soft restart may wake stale HC run state.
+            let rc_soft = asm_xhci_controller_soft_restart(op_base, tsc_freq);
+            if rc_soft != 0 {
+                dbg("[USB] FAIL: soft restart failed rc=");
+                crate::serial_u32(rc_soft);
+                dbg("\n");
+                return Err(UsbMsdInitError::ControllerResetFailed);
+            }
         }
 
         // post-reset settle
@@ -370,7 +618,12 @@ impl UsbMsdDriver {
 
         // scratchpad buffers (controller refuses to start without them)
         if n_scratch > MAX_SCRATCH {
-            return Err(UsbMsdInitError::ControllerInitFailed);
+            dbg("[USB] FAIL: too many scratchpad bufs (");
+            crate::serial_u32(n_scratch as u32);
+            dbg(" > ");
+            crate::serial_u32(MAX_SCRATCH as u32);
+            dbg(")\n");
+            return Err(UsbMsdInitError::ControllerScratchpadUnsupported);
         }
         if n_scratch > 0 {
             let arr = dma_base + OFF_SCRATCH_ARR as u64;
@@ -412,35 +665,63 @@ impl UsbMsdDriver {
         mmio::write32(rt_base + IR0_IMAN, iman | 0x02);
 
         // start controller: RS=1, INTE=1
+        dbg("[USB] starting controller (RS=1)...\n");
         mmio::write32(op_base + OP_USBCMD, CMD_RS | CMD_INTE);
 
         // wait HCH to clear (controller running) — 1 second
         let start = tsc::read_tsc();
         let timeout = tsc_freq;
         loop {
-            if mmio::read32(op_base + OP_USBSTS) & STS_HCH == 0 {
+            let sts = mmio::read32(op_base + OP_USBSTS);
+            if sts & STS_HCH == 0 {
+                dbg("[USB] controller running (HCH cleared)\n");
                 break;
             }
             if tsc::read_tsc().wrapping_sub(start) > timeout {
-                return Err(UsbMsdInitError::ControllerInitFailed);
+                dbg("[USB] FAIL: HCH never cleared. USBSTS=");
+                dbg_hex32(sts);
+                dbg(" USBCMD=");
+                dbg_hex32(mmio::read32(op_base + OP_USBCMD));
+                dbg("\n");
+                return Err(UsbMsdInitError::ControllerStartFailed);
             }
             core::hint::spin_loop();
         }
 
-        // ── port power cycle: turn off, wait, turn on, wait ──
+        // ensure PP is set and clear sticky change bits so we see fresh state.
         for p in 0..max_ports {
             let addr = op_base + PORT_REG_BASE + (p as u64) * PORT_REG_STRIDE;
             let ps = mmio::read32(addr);
-            mmio::write32(addr, (ps & !PORTSC_RW1C) & !PORTSC_PP);
+            if ps & PORTSC_PP == 0 {
+                portsc_write(addr, ps, PORTSC_PP, 0);
+            }
+            // clear any stale change bits from before HCRST
+            let clr = ps & PORTSC_RW1C;
+            if clr != 0 {
+                portsc_write(addr, ps, clr, 0);
+            }
         }
-        tsc_delay(tsc_freq, 50);
-        for p in 0..max_ports {
-            let addr = op_base + PORT_REG_BASE + (p as u64) * PORT_REG_STRIDE;
-            let ps = mmio::read32(addr);
-            mmio::write32(addr, (ps & !PORTSC_RW1C) | PORTSC_PP);
-        }
-        // let devices settle after power-on
+        // give ports 200ms to surface CCS after controller restart
         tsc_delay(tsc_freq, 200);
+
+        // dump port status for diagnostics
+        dbg("[USB] port status after init:\n");
+        for p in 0..max_ports {
+            let addr = op_base + PORT_REG_BASE + (p as u64) * PORT_REG_STRIDE;
+            let ps = mmio::read32(addr);
+            if ps & PORTSC_CCS != 0 {
+                dbg("[USB]   port ");
+                crate::serial_u32(p as u32);
+                dbg(" PORTSC=");
+                dbg_hex32(ps);
+                dbg(" CCS=1");
+                if ps & PORTSC_PED != 0 { dbg(" PED"); }
+                if ps & PORTSC_PP != 0 { dbg(" PP"); }
+                dbg(" speed=");
+                crate::serial_u32((ps >> PORTSC_SPEED_SHIFT) & 0xF);
+                dbg("\n");
+            }
+        }
 
         Ok(Self {
             op_base,
@@ -477,30 +758,190 @@ impl UsbMsdDriver {
     // ─── phase 2: USB device enumeration ─────────────────────────────────
 
     unsafe fn enumerate_and_configure(&mut self) -> Result<(), UsbMsdInitError> {
+        // Fast-fail signature seen on some firmware handoffs: MMIO active but no link state.
+        let mut pre_active = 0u32;
+        let mut pre_linked = 0u32;
         for port in 0..self.max_ports {
             let ps = mmio::read32(self.portsc(port));
-            if ps & PORTSC_CCS == 0 {
-                continue;
+            if ps != 0 && ps != u32::MAX {
+                pre_active += 1;
             }
-            if ps & PORTSC_PP == 0 {
-                continue;
-            }
-
-            // settle delay before touching connected device
-            tsc_delay(self.tsc_freq, 100);
-            self.reset_transfer_state();
-
-            match self.try_port(port) {
-                Ok(()) => return Ok(()),
-                Err(_) => continue,
+            let speed = (ps >> PORTSC_SPEED_SHIFT) & 0xF;
+            if (ps & (PORTSC_CCS | PORTSC_PED)) != 0 || speed != 0 {
+                pre_linked += 1;
             }
         }
-        Err(UsbMsdInitError::NoMedia)
+        if pre_active >= 8 && pre_linked == 0 {
+            dbg("[USB] active ports with zero link state; skip xHCI enum\n");
+            return Err(UsbMsdInitError::ActivePortsNoConnectedDevice);
+        }
+
+        let mut saw_connected = false;
+        let mut saw_activity = false;
+        let mut last_err: Option<UsbMsdInitError> = None;
+        let mut kicked_mask: u64 = 0;
+        let mut speculative_mask: u64 = 0;
+        let scan_start = tsc::read_tsc();
+        // Don't let one flaky port starve the rest; rounds stay quick, scan window is longer.
+        let scan_timeout = self.tsc_freq * 8;
+
+        while tsc::read_tsc().wrapping_sub(scan_start) < scan_timeout {
+            let mut round_connected = false;
+
+            for port in 0..self.max_ports {
+                let mut ps = mmio::read32(self.portsc(port));
+                if ps != 0 && ps != u32::MAX {
+                    saw_activity = true;
+                }
+
+                // Some controllers/hubs don't present CCS until after a short settle.
+                if ps & PORTSC_CCS == 0 && ps != 0 && ps != u32::MAX {
+                    let bit = if port < 64 { 1u64 << port } else { 0 };
+                    if bit == 0 || (kicked_mask & bit) == 0 {
+                        self.kick_port_detect(port);
+                        if bit != 0 {
+                            kicked_mask |= bit;
+                        }
+                        ps = mmio::read32(self.portsc(port));
+                    }
+                }
+
+                let speed_hint = (ps >> PORTSC_SPEED_SHIFT) & 0xF;
+                let candidate = (ps & PORTSC_CCS != 0)
+                    || (ps & PORTSC_PED != 0)
+                    || speed_hint != 0;
+                if !candidate {
+                    // Some controllers don't expose CCS/speed promptly; try once anyway.
+                    if ps != 0 && ps != u32::MAX {
+                        let bit = if port < 64 { 1u64 << port } else { 0 };
+                        if bit == 0 || (speculative_mask & bit) == 0 {
+                            if bit != 0 {
+                                speculative_mask |= bit;
+                            }
+                            tsc_delay(self.tsc_freq, 20);
+                            self.reset_transfer_state();
+                            match self.try_port_with_mode(port, false) {
+                                Ok(()) => {
+                                    self.log_port_success(port, ps);
+                                    return Ok(());
+                                }
+                                Err(e) => {
+                                    self.log_port_attempt(port, ps, e);
+                                    last_err = Some(e);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if ps & PORTSC_CCS != 0 {
+                    saw_connected = true;
+                }
+                round_connected = true;
+
+                // hubs and card readers can appear late; let them settle.
+                tsc_delay(self.tsc_freq, 80);
+                self.reset_transfer_state();
+
+                match self.try_port(port) {
+                    Ok(()) => {
+                        self.log_port_success(port, ps);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        self.log_port_attempt(port, ps, e);
+                        last_err = Some(e);
+                    }
+                }
+            }
+
+            if round_connected {
+                tsc_delay(self.tsc_freq, 80);
+            } else {
+                tsc_delay(self.tsc_freq, 100);
+            }
+        }
+
+        if saw_connected {
+            Err(last_err.unwrap_or(UsbMsdInitError::NoBotMassStorageInterface))
+        } else if saw_activity {
+            Err(last_err.unwrap_or(UsbMsdInitError::ActivePortsNoConnectedDevice))
+        } else {
+            Err(UsbMsdInitError::NoMedia)
+        }
+    }
+
+    // Detection nudge only; do not reset here because firmware may own link state.
+    unsafe fn kick_port_detect(&self, port: u8) {
+        let _ = port;
+        // Give hardware a breath to update CCS/speed without us poking PR.
+        tsc_delay(self.tsc_freq, 8);
     }
 
     unsafe fn try_port(&mut self, port: u8) -> Result<(), UsbMsdInitError> {
-        let speed = self.port_reset(port)?;
-        let slot = self.cmd_enable_slot()?;
+        self.try_port_with_mode(port, false)
+    }
+
+    unsafe fn try_port_with_mode(&mut self, port: u8, force_reset: bool) -> Result<(), UsbMsdInitError> {
+        let ps0 = mmio::read32(self.portsc(port));
+        let mut speed = ((ps0 >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+        let connected = (ps0 & PORTSC_CCS) != 0;
+        let linked = connected || (ps0 & PORTSC_PED) != 0 || speed != 0;
+
+        if !linked && !force_reset {
+            return Err(UsbMsdInitError::PortResetNoLink);
+        }
+
+        // CCS=1 but PED=0 means USB 2.0 connect without bus reset.
+        // Controller reset wiped UEFI state so port reset is mandatory, not destructive.
+        let enabled = (ps0 & PORTSC_PED) != 0;
+        let needs_reset = connected && !enabled;
+
+        if needs_reset || force_reset {
+            match self.port_reset(port, true) {
+                Ok(s) => speed = s,
+                Err(e) => {
+                    // fallback: if port still claims a connected+typed link, keep going
+                    let ps1 = mmio::read32(self.portsc(port));
+                    let speed1 = ((ps1 >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                    if (ps1 & PORTSC_CCS) != 0 && speed1 != 0 {
+                        speed = speed1;
+                    } else {
+                        return Err(match e {
+                            UsbMsdInitError::PortResetTimeout => UsbMsdInitError::PortResetTimeout,
+                            UsbMsdInitError::PortResetHotCmdTimeout => {
+                                UsbMsdInitError::PortResetHotCmdTimeout
+                            }
+                            UsbMsdInitError::PortResetHotSettleTimeout => {
+                                UsbMsdInitError::PortResetHotSettleTimeout
+                            }
+                            UsbMsdInitError::PortResetWarmTimeout => {
+                                UsbMsdInitError::PortResetWarmTimeout
+                            }
+                            UsbMsdInitError::PortResetNoLink => UsbMsdInitError::PortResetNoLink,
+                            _ => UsbMsdInitError::PortResetFailed,
+                        });
+                    }
+                }
+            }
+        } else if connected && speed == 0 {
+            // PED=1 but speed missing (USB 3.0 quirk) — poll briefly.
+            let start = tsc::read_tsc();
+            let timeout = self.tsc_freq / 10;
+            loop {
+                let ps = mmio::read32(self.portsc(port));
+                let s = ((ps >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                if s != 0 { speed = s; break; }
+                if tsc::read_tsc().wrapping_sub(start) > timeout { break; }
+                core::hint::spin_loop();
+            }
+            if speed == 0 { speed = 1; }
+        }
+
+        let slot = self
+            .cmd_enable_slot()
+            .map_err(|_| UsbMsdInitError::EnableSlotFailed)?;
         self.slot_id = slot;
 
         // wire output context into DCBAA
@@ -510,20 +951,43 @@ impl UsbMsdDriver {
             out_ctx,
         );
 
-        self.cmd_address_device(port, speed)?;
+        self.cmd_address_device(port, speed)
+            .map_err(|_| UsbMsdInitError::AddressDeviceFailed)?;
 
         // GET_DESCRIPTOR device (18 bytes)
-        let _dev_desc = self.control_in(0x80, 0x06, 0x0100, 0, 18)?;
+        let dev_desc = self
+            .control_in(0x80, 0x06, 0x0100, 0, 18)
+            .map_err(|_| UsbMsdInitError::DeviceDescriptorFailed)?;
+
+        // If root-port device is a hub, we'd need hub class traversal for downstream SD.
+        if dev_desc.len() >= 6 && dev_desc[4] == USB_CLASS_HUB {
+            return Err(UsbMsdInitError::HubUnsupported);
+        }
 
         // GET_DESCRIPTOR configuration (up to 255 bytes)
-        let _cfg = self.control_in(0x80, 0x06, 0x0200, 0, 255)?;
+        let _cfg = self
+            .control_in(0x80, 0x06, 0x0200, 0, 255)
+            .map_err(|_| UsbMsdInitError::ConfigDescriptorFailed)?;
 
         // parse for mass-storage interface + bulk endpoints
-        let (cfg_val, ep_in, ep_out, mpkt_in, mpkt_out) =
-            self.parse_config_desc().ok_or(UsbMsdInitError::DeviceEnumerationFailed)?;
+        let (cfg_val, ep_in, ep_out, mpkt_in, mpkt_out) = match self.parse_config_desc() {
+            ConfigParse::MassStorage {
+                cfg_val,
+                ep_in,
+                ep_out,
+                mp_in,
+                mp_out,
+            } => (cfg_val, ep_in, ep_out, mp_in, mp_out),
+            ConfigParse::Hub => return Err(UsbMsdInitError::HubUnsupported),
+            ConfigParse::MassStorageUnsupported => {
+                return Err(UsbMsdInitError::MassStorageProtocolUnsupported)
+            }
+            ConfigParse::None => return Err(UsbMsdInitError::NoBotMassStorageInterface),
+        };
 
         // SET_CONFIGURATION
-        self.control_nodata(0x00, 0x09, cfg_val as u16, 0)?;
+        self.control_nodata(0x00, 0x09, cfg_val as u16, 0)
+            .map_err(|_| UsbMsdInitError::SetConfigurationFailed)?;
 
         // compute DCIs
         let dci_in = ((ep_in & 0x0F) * 2) + ((ep_in >> 7) & 1);
@@ -532,7 +996,8 @@ impl UsbMsdDriver {
         self.dci_bulk_out = dci_out;
 
         // configure endpoint command
-        self.cmd_configure_eps(dci_in, dci_out, mpkt_in, mpkt_out)?;
+        self.cmd_configure_eps(dci_in, dci_out, mpkt_in, mpkt_out)
+            .map_err(|_| UsbMsdInitError::ConfigureEndpointsFailed)?;
 
         Ok(())
     }
@@ -567,29 +1032,187 @@ impl UsbMsdDriver {
         self.op_base + PORT_REG_BASE + (port as u64) * PORT_REG_STRIDE
     }
 
-    unsafe fn port_reset(&self, port: u8) -> Result<u8, UsbMsdInitError> {
+    unsafe fn port_reset(&self, port: u8, force: bool) -> Result<u8, UsbMsdInitError> {
         let addr = self.portsc(port);
-        // preserve non-RW1C bits, set PR
-        let ps = mmio::read32(addr);
-        mmio::write32(addr, (ps & !PORTSC_RW1C) | PORTSC_PR);
+        let mut stage_timeout: Option<UsbMsdInitError> = None;
 
-        let start = tsc::read_tsc();
-        let timeout = self.tsc_freq / 2;
-        loop {
-            let ps = mmio::read32(addr);
-            if ps & PORTSC_PRC != 0 {
-                // clear PRC
-                mmio::write32(addr, (ps & !PORTSC_RW1C) | PORTSC_PRC);
-                if ps & PORTSC_PED != 0 {
-                    let speed = ((ps >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+        // ensure port power before any reset attempt
+        let ps = mmio::read32(addr);
+
+        if ps & PORTSC_PP == 0 {
+            portsc_write(addr, ps, PORTSC_PP, 0);
+            tsc_delay(self.tsc_freq, 10);
+        }
+
+        // No link indicators at all: don't burn reset time on a probably empty port.
+        let pre = mmio::read32(addr);
+        let pre_speed = ((pre >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+        if !force && (pre & PORTSC_CCS) == 0 && (pre & PORTSC_PED) == 0 && pre_speed == 0 {
+            dbg("[USB] no link indicators, returning PortResetNoLink\n");
+            return Err(UsbMsdInitError::PortResetNoLink);
+        }
+
+        // Linux-style nudge: if SS link is in U3/Recovery/Resume, strobe link state to U0 first.
+        let pls = pre & PORTSC_PLS_MASK;
+        if pre_speed >= 4 && (pls == PLS_U3 || pls == PLS_RECOVERY || pls == PLS_RESUME) {
+            portsc_write(addr, pre, PORTSC_LWS | PLS_U0, PORTSC_PLS_MASK);
+            let start_u0 = tsc::read_tsc();
+            let timeout_u0 = self.tsc_freq / 10;
+            loop {
+                let p = mmio::read32(addr);
+                if (p & PORTSC_PLS_MASK) == PLS_U0 {
+                    break;
+                }
+                if tsc::read_tsc().wrapping_sub(start_u0) > timeout_u0 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+
+        // one quick hot reset per scan pass; later passes retry other ports fairly.
+        for _ in 0..1 {
+            let psh = mmio::read32(addr);
+            portsc_write(addr, psh, PORTSC_PR, 0);
+
+            // stage 1: controller accepts/completes reset command
+            let start_cmd = tsc::read_tsc();
+            let timeout_cmd = self.tsc_freq / 8;
+            let mut reset_done = false;
+            loop {
+                let psn = mmio::read32(addr);
+                if (psn & PORTSC_PR) == 0 || (psn & PORTSC_PRC) != 0 {
+                    reset_done = true;
+                    break;
+                }
+                if tsc::read_tsc().wrapping_sub(start_cmd) > timeout_cmd {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+
+            // Clear sticky change bits only after reset command phase settles.
+            let ps_post_cmd = mmio::read32(addr);
+            let clr_post_cmd = ps_post_cmd & PORTSC_RW1C;
+            if clr_post_cmd != 0 {
+                portsc_write(addr, ps_post_cmd, clr_post_cmd, 0);
+            }
+
+            if !reset_done {
+                let pst = mmio::read32(addr);
+                let speed_t = ((pst >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                if (pst & PORTSC_CCS) != 0 && speed_t != 0 {
+                    return Ok(speed_t);
+                }
+                stage_timeout = Some(UsbMsdInitError::PortResetHotCmdTimeout);
+                continue;
+            }
+
+            // stage 2: give link training time to become usable
+            let start_settle = tsc::read_tsc();
+            let timeout_settle = self.tsc_freq / 5;
+            loop {
+                let psn = mmio::read32(addr);
+                let clr = psn & PORTSC_RW1C;
+                if clr != 0 {
+                    portsc_write(addr, psn, clr, 0);
+                }
+
+                if psn & PORTSC_PED != 0 {
+                    let speed = ((psn >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
                     return Ok(speed);
                 }
-                return Err(UsbMsdInitError::DeviceEnumerationFailed);
+
+                let speed = ((psn >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                if (psn & PORTSC_CCS != 0) && speed != 0 {
+                    return Ok(speed);
+                }
+
+                // SS links can get stuck in non-U0 states right after reset.
+                let pls = psn & PORTSC_PLS_MASK;
+                if speed >= 4 && (pls == PLS_U3 || pls == PLS_RECOVERY || pls == PLS_RESUME) {
+                    portsc_write(addr, psn, PORTSC_LWS | PLS_U0, PORTSC_PLS_MASK);
+                }
+
+                if tsc::read_tsc().wrapping_sub(start_settle) > timeout_settle {
+                    stage_timeout = Some(UsbMsdInitError::PortResetHotSettleTimeout);
+                    break;
+                }
+                core::hint::spin_loop();
             }
-            if tsc::read_tsc().wrapping_sub(start) > timeout {
-                return Err(UsbMsdInitError::CommandTimeout);
+        }
+
+        // warm reset only for superspeed/CAS/stuck-link cases
+        let psw = mmio::read32(addr);
+        let hot_cmd_timed_out = matches!(
+            stage_timeout,
+            Some(UsbMsdInitError::PortResetHotCmdTimeout)
+        );
+        let speedw = ((psw >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+        let warm_fallback = hot_cmd_timed_out
+            && ((psw & (PORTSC_CCS | PORTSC_PED)) != 0 || speedw != 0);
+        if warm_reset_needed(psw) || warm_fallback {
+            portsc_write(addr, psw, PORTSC_WPR, 0);
+            let start_w = tsc::read_tsc();
+            let timeout_w = self.tsc_freq / 5;
+
+            loop {
+                let psn = mmio::read32(addr);
+                let clr = psn & PORTSC_RW1C;
+                if clr != 0 {
+                    portsc_write(addr, psn, clr, 0);
+                }
+
+                if psn & PORTSC_PED != 0 {
+                    let speed = ((psn >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                    return Ok(speed);
+                }
+                let speed = ((psn >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                if (psn & PORTSC_CCS != 0) && speed != 0 {
+                    return Ok(speed);
+                }
+
+                if tsc::read_tsc().wrapping_sub(start_w) > timeout_w {
+                    stage_timeout = Some(UsbMsdInitError::PortResetWarmTimeout);
+                    break;
+                }
+                core::hint::spin_loop();
             }
-            core::hint::spin_loop();
+        }
+
+        let psf = mmio::read32(addr);
+        let speedf = ((psf >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+        if (psf & PORTSC_CCS) != 0 && speedf != 0 {
+            // Link can be valid even when PED lags behind on some controllers.
+            tsc_delay(self.tsc_freq, 20);
+            return Ok(speedf);
+        }
+        let looks_connected = (psf & PORTSC_CCS) != 0 || speedf != 0 || (psf & PORTSC_PED) != 0;
+        if looks_connected {
+            // Some controllers surface connect/enable first and speed later.
+            let start_late = tsc::read_tsc();
+            let late_timeout = self.tsc_freq / 10;
+            loop {
+                let psl = mmio::read32(addr);
+                let speedl = ((psl >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
+                if speedl != 0 {
+                    return Ok(speedl);
+                }
+                if tsc::read_tsc().wrapping_sub(start_late) > late_timeout {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+
+            // Connected but speed never surfaced; assume full-speed to keep enumeration moving.
+            if (psf & (PORTSC_CCS | PORTSC_PED)) != 0 {
+                return Ok(1);
+            }
+        }
+        if looks_connected {
+            Err(UsbMsdInitError::PortResetNoLink)
+        } else {
+            Err(stage_timeout.unwrap_or(UsbMsdInitError::PortResetTimeout))
         }
     }
 
@@ -978,9 +1601,8 @@ impl UsbMsdDriver {
 
     // ─── descriptor parsing ──────────────────────────────────────────────
 
-    /// Parse the configuration descriptor at OFF_DESC for a mass-storage
-    /// BOT interface.  Returns (config_val, ep_in_addr, ep_out_addr, max_pkt_in, max_pkt_out).
-    unsafe fn parse_config_desc(&self) -> Option<(u8, u8, u8, u16, u16)> {
+    /// Parse configuration descriptor and classify the device function.
+    unsafe fn parse_config_desc(&self) -> ConfigParse {
         let d = self.dma_base + OFF_DESC as u64;
         let total = u16::from_le_bytes([
             core::ptr::read_volatile((d + 2) as *const u8),
@@ -995,6 +1617,8 @@ impl UsbMsdDriver {
         let mut ep_out: u8 = 0;
         let mut mp_in: u16 = 0;
         let mut mp_out: u16 = 0;
+        let mut saw_hub_iface = false;
+        let mut saw_mass_storage_non_bot = false;
 
         while off + 2 <= limit {
             let blen = core::ptr::read_volatile((d + off as u64) as *const u8) as usize;
@@ -1010,6 +1634,14 @@ impl UsbMsdDriver {
                 let cls = core::ptr::read_volatile((d + off as u64 + 5) as *const u8);
                 let sub = core::ptr::read_volatile((d + off as u64 + 6) as *const u8);
                 let proto = core::ptr::read_volatile((d + off as u64 + 7) as *const u8);
+                if cls == USB_CLASS_HUB {
+                    saw_hub_iface = true;
+                }
+                if cls == USB_CLASS_MASS_STORAGE
+                    && (sub != USB_SUBCLASS_SCSI || proto != USB_PROTOCOL_BOT)
+                {
+                    saw_mass_storage_non_bot = true;
+                }
                 in_msc =
                     cls == USB_CLASS_MASS_STORAGE && sub == USB_SUBCLASS_SCSI && proto == USB_PROTOCOL_BOT;
             }
@@ -1036,9 +1668,19 @@ impl UsbMsdDriver {
         }
 
         if ep_in != 0 && ep_out != 0 {
-            Some((cfg_val, ep_in, ep_out, mp_in, mp_out))
+            ConfigParse::MassStorage {
+                cfg_val,
+                ep_in,
+                ep_out,
+                mp_in,
+                mp_out,
+            }
+        } else if saw_hub_iface {
+            ConfigParse::Hub
+        } else if saw_mass_storage_non_bot {
+            ConfigParse::MassStorageUnsupported
         } else {
-            None
+            ConfigParse::None
         }
     }
 

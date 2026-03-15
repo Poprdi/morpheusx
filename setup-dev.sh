@@ -11,6 +11,7 @@ readonly VERSION="2.0.4"
 # Must match the nightly in rust-toolchain.toml comments.
 # To update: change both here and in rust-toolchain.toml, then rebuild.
 readonly PINNED_NIGHTLY="nightly-2026-02-22"
+readonly HELIX_PAYLOAD_MB="512"
 
 readonly C_RED='\033[0;31m'
 readonly C_GREEN='\033[0;32m'
@@ -1091,11 +1092,15 @@ cmd_flash() {
     rmdir "$mnt"
     log_success "ESP written to ${esp_part}"
 
-    log_step "Injecting apps into HELIX (${helix_part})"
+    log_step "Formatting HELIX (${helix_part})"
     # Build morpheus-cli first.
     cargo build --release -p morpheus-cli 2>&1 \
         || die "morpheus-cli build failed"
+    sudo "${PROJECT_ROOT}/target/release/morpheus-cli" format "$helix_part" \
+        || die "Failed to format HELIX partition"
+    log_success "HELIX formatted — clean HelixFS ready"
 
+    log_step "Injecting apps into HELIX (${helix_part})"
     local injected=0
     for entry in "${USER_APPS[@]}"; do
         local pkg="${entry%%,*}"
@@ -1111,8 +1116,44 @@ cmd_flash() {
         injected=$((injected + 1))
     done
 
+    log_step "Writing helix.img to ESP (${esp_part})"
+    mnt=$(mktemp -d)
+    sudo mount -t vfat "$esp_part" "$mnt" || {
+        die "Failed to remount ESP on ${esp_part}"
+    }
+    sudo mkdir -p "$mnt/morpheus"
+
+    # Auto-fit payload to available ESP space with safety headroom for FAT metadata.
+    local esp_free_bytes
+    esp_free_bytes=$(df -B1 --output=avail "$mnt" | tail -n 1 | tr -d '[:space:]')
+    local reserve_bytes=$((24 * 1024 * 1024))
+    local max_payload_bytes=$((HELIX_PAYLOAD_MB * 1024 * 1024))
+    local payload_bytes=0
+    if [[ "$esp_free_bytes" -gt "$reserve_bytes" ]]; then
+        payload_bytes=$((esp_free_bytes - reserve_bytes))
+        if [[ "$payload_bytes" -gt "$max_payload_bytes" ]]; then
+            payload_bytes=$max_payload_bytes
+        fi
+    fi
+
+    local payload_mb=$((payload_bytes / 1024 / 1024))
+    if [[ "$payload_mb" -lt 64 ]]; then
+        sudo umount "$mnt" || true
+        rmdir "$mnt" || true
+        die "ESP free space too small for helix.img payload (need >=64 MiB usable)"
+    fi
+
+    log_info "helix.img payload size: ${payload_mb} MiB (ESP free: $((esp_free_bytes / 1024 / 1024)) MiB)"
+    if ! sudo "${PROJECT_ROOT}/target/release/morpheus-cli" pack "$helix_part" "$mnt/morpheus/helix.img" --max-mb "$payload_mb"; then
+        sudo umount "$mnt" || true
+        rmdir "$mnt" || true
+        die "Failed to write helix.img to ESP"
+    fi
+    sudo umount "$mnt"
+    rmdir "$mnt"
+
     sudo sync
-    log_success "Flash complete — ${injected} app(s) on ${helix_part}"
+    log_success "Flash complete — ${injected} app(s) on ${helix_part}, helix.img on ${esp_part}:/morpheus/helix.img"
     printf "\n  Eject the card and boot the ThinkPad from it.\n\n"
 }
 

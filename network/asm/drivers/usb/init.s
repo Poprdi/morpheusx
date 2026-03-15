@@ -16,7 +16,7 @@ extern asm_tsc_read
 extern asm_bar_mfence
 
 global asm_usb_host_probe
-global asm_xhci_controller_reset
+global asm_xhci_controller_soft_restart
 global asm_xhci_bios_handoff
 
 ; ───────────────────────────────────────────────────────────────────────────
@@ -125,27 +125,13 @@ asm_xhci_bios_handoff:
     sub     rax, rbx
     cmp     rax, r14            ; 1 second = tsc_freq ticks
     jb      .bios_wait
-
-    ; timeout — force it. clear BIOS bit, keep OS bit
-    mov     rcx, r13
-    call    asm_mmio_read32
-    and     eax, ~XHCI_LEGSUP_BIOS_OWNED
-    or      eax, XHCI_LEGSUP_OS_OWNED
-    mov     edx, eax
-    mov     rcx, r13
-    call    asm_mmio_write32
-    call    asm_bar_mfence
-
-    ; also nuke the legacy control/status dword at offset +4
-    ; disable all SMI sources so BIOS can't interfere
-    lea     rcx, [r13 + 4]
-    xor     edx, edx
-    call    asm_mmio_write32
-    call    asm_bar_mfence
+    mov     eax, 1              ; timeout waiting owner release
+    jmp     .bios_out
 
 .bios_claimed:
 .bios_none:
     xor     eax, eax
+.bios_out:
     add     rsp, 40
     pop     r14
     pop     r13
@@ -154,15 +140,14 @@ asm_xhci_bios_handoff:
     ret
 
 ; ───────────────────────────────────────────────────────────────────────────
-; asm_xhci_controller_reset
+; asm_xhci_controller_soft_restart
 ; ───────────────────────────────────────────────────────────────────────────
+; Restart xHCI without hard reset (preserves port state from UEFI handoff).
+; Assumes UEFI left controller in a valid state. We just stop and restart.
 ; RCX = op_base (mmio_base + CAPLENGTH)
 ; RDX = tsc_freq
-; Returns: EAX = 0 success, 1 halt timeout, 2 reset timeout, 3 CNR timeout
-;
-; brutal reset: nuke interrupts, force-stop, HCRST, wait CNR.
-; 1 second timeout per phase because real hardware is dramatic.
-asm_xhci_controller_reset:
+; Returns: EAX = 0 success, 1 halt timeout, 2 start timeout
+asm_xhci_controller_soft_restart:
     push    rbx
     push    r12
     push    r13
@@ -173,75 +158,59 @@ asm_xhci_controller_reset:
     mov     r13, rdx            ; tsc_freq
     mov     r14, r13            ; 1 second timeout = tsc_freq ticks
 
-    ; ── step 0: nuke USBCMD — clear RS, INTE, everything ──
+    ; ── step 1: stop controller (RS = 0) ──
     lea     rcx, [r12 + XHCI_OP_USBCMD]
     xor     edx, edx
     call    asm_mmio_write32
     call    asm_bar_mfence
 
-    ; ── step 1: wait USBSTS.HCH (halted) ──
+    ; ── wait for HCH (halted) ──
     call    asm_tsc_read
     mov     rbx, rax
-.wait_halt:
+.wait_halt_soft:
     lea     rcx, [r12 + XHCI_OP_USBSTS]
     call    asm_mmio_read32
     test    eax, XHCI_STS_HCH
-    jnz     .halted
+    jnz     .halted_soft
     call    asm_tsc_read
     sub     rax, rbx
     cmp     rax, r14
-    jb      .wait_halt
-    ; timeout — try HCRST anyway, some controllers only halt via reset
-    jmp     .do_reset
+    jb      .wait_halt_soft
+    mov     eax, 1              ; halt timeout
+    jmp     .out_soft
 
-.halted:
-    ; ── clear all pending status bits ──
+.halted_soft:
+    ; ── clear status bits ──
     lea     rcx, [r12 + XHCI_OP_USBSTS]
     mov     edx, 0xFFFFFFFF
     call    asm_mmio_write32
     call    asm_bar_mfence
 
-.do_reset:
-    ; ── step 2: HCRST ──
+    ; ── start controller (RS = 1, INTE = 1) — NO HCRST ──
     lea     rcx, [r12 + XHCI_OP_USBCMD]
-    mov     edx, XHCI_CMD_HCRST
+    mov     edx, XHCI_CMD_RS | XHCI_CMD_INTE
     call    asm_mmio_write32
     call    asm_bar_mfence
 
+    ; ── wait for HCH to clear (running) ──
     call    asm_tsc_read
     mov     rbx, rax
-.wait_reset:
-    lea     rcx, [r12 + XHCI_OP_USBCMD]
-    call    asm_mmio_read32
-    test    eax, XHCI_CMD_HCRST
-    jz      .reset_done
-    call    asm_tsc_read
-    sub     rax, rbx
-    cmp     rax, r14
-    jb      .wait_reset
-    mov     eax, 2
-    jmp     .out
-
-.reset_done:
-    ; ── step 3: wait CNR clear ──
-    call    asm_tsc_read
-    mov     rbx, rax
-.wait_cnr:
+.wait_running:
     lea     rcx, [r12 + XHCI_OP_USBSTS]
     call    asm_mmio_read32
-    test    eax, XHCI_STS_CNR
-    jz      .ready
+    test    eax, XHCI_STS_HCH
+    jz      .running_soft
     call    asm_tsc_read
     sub     rax, rbx
     cmp     rax, r14
-    jb      .wait_cnr
-    mov     eax, 3
-    jmp     .out
+    jb      .wait_running
+    mov     eax, 2              ; start timeout
+    jmp     .out_soft
 
-.ready:
+.running_soft:
     xor     eax, eax
 
-.out:
+.out_soft:
     add     rsp, 40
     pop     r14
     pop     r13

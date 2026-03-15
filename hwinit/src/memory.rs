@@ -11,7 +11,7 @@ pub const PAGE_SHIFT: u32 = 12;
 /// one constant to rule them all. 26 → 256 GiB, 28 → 1 TiB, 30 → 4 TiB.
 const MAX_ORDER: usize = 26;
 
-const MAX_MAP: usize = 384; // UEFI snapshot slots
+const MAX_MAP: usize = 768; // UEFI snapshot slots — real hardware can have 400+
 
 // memory types (UEFI + our own tags)
 

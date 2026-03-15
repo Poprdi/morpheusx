@@ -32,6 +32,7 @@ const AP_STACK_SIZE: u64 = 64 * 1024;
 const AP_WAIT_STEP_US: u64 = 50;
 const AP_WAIT_TIMEOUT_US: u64 = 20_000;
 const AP_BRUTE_SCAN_BUDGET_US: u64 = 3_000_000;
+const AP_MADT_SCAN_BUDGET_US: u64 = 1_000_000;
 
 // These must match the .data section layout at the end of ap_trampoline.s.lapic_id
 // The trampoline data block starts at AP_TRAMPOLINE_PHYS + TRAMPOLINE_DATA_OFFSET.
@@ -88,6 +89,14 @@ unsafe fn setup_trampoline() -> bool {
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
     let kernel_cr3 = cr3 & 0x000F_FFFF_FFFF_F000;
+
+    // The 32-bit protected mode trampoline loads CR3 via `mov eax, [0x8F00]`
+    // which only reads the low 32 bits.  If the kernel page tables are above
+    // 4 GB, the AP would load a truncated CR3 and triple-fault immediately.
+    if kernel_cr3 > 0xFFFF_FFFF {
+        log_error("AP", 514, "kernel CR3 above 4GB; AP trampoline cannot load it in 32-bit mode");
+        return false;
+    }
 
     // read current GDT for APs to load (temporary, until per-core GDT)
     let mut gdt_buf = [0u8; 10];
@@ -188,13 +197,30 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
     }
 
     let mut core_idx: u32 = 1; // 0 = BSP
+    let mut budget_used_us: u64 = 0;
+    let x2_mode = apic::is_x2apic_mode();
     for &lapic_id in ap_lapic_ids {
         if core_idx as usize >= MAX_CPUS {
             break;
         }
+
+        if !x2_mode && lapic_id > 0xFF {
+            // xAPIC destination field is 8-bit. without x2APIC mode this target is unreachable.
+            log_warn("AP", 513, "skipping MADT x2APIC ID in xAPIC mode");
+            continue;
+        }
+
+        if budget_used_us >= AP_MADT_SCAN_BUDGET_US {
+            log_warn("AP", 512, "MADT AP bring-up budget exhausted; continuing with discovered cores");
+            break;
+        }
+
         if boot_single_ap(core_idx, lapic_id) {
             core_idx += 1;
         }
+
+        // same per-attempt upper bound used by brute-force path.
+        budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
 
     log_ok("AP", 505, "MADT AP bring-up pass complete");
@@ -282,10 +308,10 @@ pub unsafe fn start_aps() {
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     // 1. Set up per-core GDT + TSS
-    // get the current stack we're running on (allocated by BSP)
-    let rsp: u64;
-    core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
-    let stack_top = (rsp + 0x1000) & !0xFFF; // round up to page boundary
+    // Read the exact stack_top from the trampoline data area.
+    // The BSP wrote the precise value to TD_STACK; rounding RSP up
+    // can overshoot if RSP is near a page boundary.
+    let stack_top = *((AP_TRAMPOLINE_PHYS + TD_STACK) as *const u64);
     gdt::init_gdt_for_ap(stack_top, core_idx);
 
     // 2. Load the shared IDT

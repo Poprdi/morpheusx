@@ -115,6 +115,7 @@ fn usage() {
     eprintln!();
     eprintln!("USAGE:");
     eprintln!("  morpheus-cli inject <disk-image> <binary> [--dest /bin/name]");
+    eprintln!("  morpheus-cli pack   <disk-image> <output-image> [--max-mb N]");
     eprintln!("  morpheus-cli ls     <disk-image> [path]");
     eprintln!("  morpheus-cli mkbin  <disk-image>");
     eprintln!();
@@ -123,7 +124,94 @@ fn usage() {
         "  morpheus-cli inject testing/helix-data.img \\\n      target/x86_64-morpheus/release/syscall-e2e"
     );
     eprintln!("  morpheus-cli inject testing/helix-data.img my-app --dest /bin/app");
+    eprintln!("  morpheus-cli pack /dev/sdb2 testing/helix.img --max-mb 384");
     eprintln!("  morpheus-cli ls testing/helix-data.img /bin");
+}
+
+fn cmd_pack(disk: &str, output: &str, max_mb: u64) -> Result<(), String> {
+    if max_mb == 0 {
+        return Err("--max-mb must be > 0".to_string());
+    }
+
+    let mut dev =
+        FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
+
+    let sb = recover_superblock(&mut dev, 0, SECTOR_SIZE)
+        .map_err(|e| format!("recover_superblock: {:?}", e))?;
+
+    let mut stage_blocks = 2u64;
+    let log_hi = sb.log_end_block.saturating_add(1);
+    if log_hi > stage_blocks {
+        stage_blocks = log_hi;
+    }
+
+    let data_hi = sb.data_start_block.saturating_add(sb.blocks_used);
+    if data_hi > stage_blocks {
+        stage_blocks = data_hi;
+    }
+
+    if stage_blocks > sb.total_blocks {
+        stage_blocks = sb.total_blocks;
+    }
+
+    if stage_blocks == 0 {
+        return Err("empty Helix footprint".to_string());
+    }
+
+    let mut bytes = stage_blocks
+        .checked_mul(sb.block_size as u64)
+        .ok_or_else(|| "footprint byte overflow".to_string())?;
+
+    let max_bytes = max_mb
+        .checked_mul(1024)
+        .and_then(|v| v.checked_mul(1024))
+        .ok_or_else(|| "max size overflow".to_string())?;
+
+    if bytes > max_bytes {
+        bytes = max_bytes;
+    }
+
+    let rem = bytes % SECTOR_SIZE as u64;
+    if rem != 0 {
+        bytes = bytes.saturating_sub(rem);
+    }
+
+    if bytes == 0 {
+        return Err("packed image size resolved to 0 bytes".to_string());
+    }
+
+    let mut out = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(output)
+        .map_err(|e| format!("cannot create '{}': {}", output, e))?;
+
+    const CHUNK: usize = 1024 * 1024;
+    let mut buf = vec![0u8; CHUNK];
+    let mut copied = 0u64;
+
+    while copied < bytes {
+        let remaining = (bytes - copied) as usize;
+        let n = remaining.min(CHUNK);
+        dev.file
+            .seek(SeekFrom::Start(copied))
+            .map_err(|_| "seek failed".to_string())?;
+        dev.file
+            .read_exact(&mut buf[..n])
+            .map_err(|_| "read failed".to_string())?;
+        out.write_all(&buf[..n])
+            .map_err(|_| "write failed".to_string())?;
+        copied += n as u64;
+    }
+
+    out.flush().map_err(|e| format!("flush failed: {}", e))?;
+
+    println!("[pack] source : {}", disk);
+    println!("[pack] output : {}", output);
+    println!("[pack] bytes  : {}", bytes);
+    println!("[pack] done");
+    Ok(())
 }
 
 // Mount an existing or fresh HelixFS from a FileBlockDevice.
@@ -311,6 +399,19 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
 // mkbin command — pre-create /bin directory
 // ──────────────────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────────
+// format command — wipe and reformat HelixFS partition
+// ──────────────────────────────────────────────────────────────────────────────
+
+fn cmd_format(disk: &str) -> Result<(), String> {
+    let mut dev =
+        FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
+    println!("[format] wiping and reformatting {}", disk);
+    do_format(&mut dev)?;
+    println!("[format] done — clean HelixFS ready");
+    Ok(())
+}
+
 fn cmd_mkbin(disk: &str) -> Result<(), String> {
     let (_dev, mut mt) = mount(disk)?;
     match vfs::vfs_mkdir(&mut mt, "/bin", 0) {
@@ -343,7 +444,6 @@ fn main() {
             let disk = &args[2];
             let binary = &args[3];
 
-            // Default dest = /bin/<filename>
             let default_dest = format!(
                 "/bin/{}",
                 Path::new(binary)
@@ -356,7 +456,6 @@ fn main() {
                 .find(|w| w[0] == "--dest")
                 .map(|w| w[1].as_str())
                 .unwrap_or(&default_dest);
-
             cmd_inject(disk, binary, dest)
         }
         "ls" => {
@@ -374,6 +473,27 @@ fn main() {
                 std::process::exit(1);
             }
             cmd_mkbin(&args[2])
+        }
+        "pack" => {
+            if args.len() < 4 {
+                eprintln!("Usage: morpheus-cli pack <disk-image> <output-image> [--max-mb N]");
+                std::process::exit(1);
+            }
+            let disk = &args[2];
+            let output = &args[3];
+            let max_mb = args
+                .windows(2)
+                .find(|w| w[0] == "--max-mb")
+                .and_then(|w| w[1].parse::<u64>().ok())
+                .unwrap_or(512);
+            cmd_pack(disk, output, max_mb)
+        }
+        "format" => {
+            if args.len() < 3 {
+                eprintln!("Usage: morpheus-cli format <disk-image>");
+                std::process::exit(1);
+            }
+            cmd_format(&args[2])
         }
         _ => {
             usage();

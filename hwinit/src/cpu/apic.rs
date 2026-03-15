@@ -38,7 +38,7 @@ const TIMER_MASKED: u32 = 1 << 16;
 
 // ICR delivery modes
 const ICR_INIT: u32 = 0x500;
-const ICR_STARTUP: u32 = 0x8000;
+const ICR_STARTUP: u32 = 0x600;
 const ICR_LEVEL_ASSERT: u32 = 0x4000;
 const ICR_LEVEL_DEASSERT: u32 = 0x0000;
 const ICR_TRIGGER_LEVEL: u32 = 1 << 15;
@@ -98,8 +98,13 @@ unsafe fn wrmsr_parts(msr: u32, lo: u32, hi: u32) {
 }
 
 #[inline(always)]
-unsafe fn x2apic_enabled() -> bool {
+fn x2apic_enabled() -> bool {
     X2APIC_ENABLED.load(Ordering::Relaxed)
+}
+
+#[inline(always)]
+pub fn is_x2apic_mode() -> bool {
+    x2apic_enabled()
 }
 
 /// Probe the LAPIC base address from IA32_APIC_BASE MSR.
@@ -261,14 +266,18 @@ pub unsafe fn setup_timer(target_hz: u32) {
     outb(0x42, (PIT_TICKS & 0xFF) as u8);
     outb(0x42, ((PIT_TICKS >> 8) & 0xFF) as u8);
 
-    // start LAPIC timer with max initial count
-    lapic_write(base, LAPIC_TIMER_INIT, 0xFFFF_FFFF);
-
-    // wait for PIT channel 2 to expire (bit 5 of port 0x61 goes high)
-    // re-arm the gate
+    // Re-arm the PIT gate BEFORE starting the LAPIC timer.
+    // On real hardware each I/O port access takes ~1µs.  If the LAPIC
+    // timer starts first, the gate re-arm sequence inflates the measured
+    // LAPIC frequency by several microseconds → timer runs 5-15% fast
+    // → delay_us finishes early → AP SIPI delays too short.
     let v = crate::cpu::pio::inb(0x61) & 0xFE;
-    outb(0x61, v);
-    outb(0x61, v | 1);
+    outb(0x61, v);       // gate LOW
+    outb(0x61, v | 1);   // gate HIGH — PIT countdown restarts NOW
+
+    // Start LAPIC timer immediately after PIT gate goes high so both
+    // timers run from the same instant.
+    lapic_write(base, LAPIC_TIMER_INIT, 0xFFFF_FFFF);
 
     // spin until PIT output goes high. if this hangs: PIT gate not armed, or
     // hardware has no PIT channel 2. the checkpoint tells us we entered the spin.
@@ -372,16 +381,16 @@ pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
 /// Wait for the ICR delivery status bit to clear.
 #[inline]
 unsafe fn wait_icr_idle(base: u64) {
-    // Keep this tightly bounded. Some hardware can leave delivery status set
-    // long enough to look like a deadlock if we spin too generously.
-    let mut timeout = 2_000u32;
-    while {
-        if x2apic_enabled() {
-            (rdmsr(IA32_X2APIC_ICR_MSR) as u32 & ICR_DELIVERY_STATUS) != 0
-        } else {
-            (lapic_read(base, LAPIC_ICR_LO) & ICR_DELIVERY_STATUS) != 0
-        }
-    } {
+    // x2APIC: ICR writes via MSR 0x830 are performed synchronously by
+    // the CPU microcode.  There is no delivery-status bit to poll, and
+    // reading the MSR back can #GP on some implementations.
+    if x2apic_enabled() {
+        return;
+    }
+
+    // xAPIC: poll MMIO ICR_LO for delivery-status bit to clear.
+    let mut timeout = 10_000u32;
+    while (lapic_read(base, LAPIC_ICR_LO) & ICR_DELIVERY_STATUS) != 0 {
         core::hint::spin_loop();
         timeout -= 1;
         if timeout == 0 {
@@ -412,12 +421,19 @@ pub unsafe fn delay_us(us: u64) {
         let delta = cycles_per_us.saturating_mul(us);
         let target = start.saturating_add(delta);
 
-        // Watchdog the spin so a broken TSC path can't wedge bring-up forever.
+        // Scale watchdog with TSC frequency.  Each loop iteration takes
+        // roughly 10–30 cycles (RDTSC + compare + PAUSE).  Use a
+        // conservative estimate of 10 cycles/iteration so the watchdog
+        // never fires before the TSC target is actually reached.
+        let iters_per_us = (cycles_per_us / 10).max(1);
+        let max_spins_u64 = us.saturating_mul(iters_per_us)
+            .clamp(10_000, 1_000_000_000);
+        let max_spins = max_spins_u64 as u32;
         let mut spins = 0u32;
         while crate::cpu::tsc::read_tsc() < target {
             core::hint::spin_loop();
             spins = spins.wrapping_add(1);
-            if spins == 50_000_000 {
+            if spins >= max_spins {
                 log_warn("LAPIC", 727, "delay_us watchdog tripped; falling back");
                 break;
             }

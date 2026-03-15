@@ -50,6 +50,51 @@ static BAREMETAL_MODE: AtomicBool = AtomicBool::new(false);
 // After that every puts() in hwinit mirrors to the screen in real-time.
 
 static mut LIVE_CONSOLE: Option<TextConsole> = None;
+static mut PRE_EBS_HELIX_BASE: u64 = 0;
+static mut PRE_EBS_HELIX_SIZE: usize = 0;
+static mut PRE_EBS_HELIX_SECTOR_SIZE: u32 = 512;
+
+const LOADED_IMAGE_PROTOCOL_GUID: [u8; 16] = [
+    0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11, 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69,
+    0x72, 0x3B,
+];
+const SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: [u8; 16] = [
+    0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11, 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69,
+    0x72, 0x3B,
+];
+const ACPI_20_TABLE_GUID: [u8; 16] = [
+    0x71, 0xE8, 0x68, 0x88, 0xF1, 0xE4, 0xD3, 0x11, 0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C,
+    0x88, 0x81,
+];
+const ACPI_10_TABLE_GUID: [u8; 16] = [
+    0x30, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11, 0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F,
+    0xC1, 0x4D,
+];
+const PRE_EBS_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const HELIX_IMG_SECTOR_SIZE: u32 = 512;
+const EFI_FILE_MODE_READ: u64 = 0x0000_0000_0000_0001;
+const HELIX_IMG_PATH: [u16; 20] = [
+    b'\\' as u16,
+    b'm' as u16,
+    b'o' as u16,
+    b'r' as u16,
+    b'p' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b'u' as u16,
+    b's' as u16,
+    b'\\' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b'l' as u16,
+    b'i' as u16,
+    b'x' as u16,
+    b'.' as u16,
+    b'i' as u16,
+    b'm' as u16,
+    b'g' as u16,
+    0,
+];
 
 /// Called by the hwinit serial hook for every byte emitted via `puts()`.
 /// Writes directly to the TextConsole backed by the GOP framebuffer.
@@ -97,6 +142,20 @@ pub fn get_framebuffer_info() -> Option<FramebufferInfo> {
     }
 }
 
+pub unsafe fn take_pre_ebs_helix_image() -> Option<(u64, usize, u32)> {
+    if PRE_EBS_HELIX_BASE == 0 || PRE_EBS_HELIX_SIZE == 0 {
+        return None;
+    }
+    let out = (
+        PRE_EBS_HELIX_BASE,
+        PRE_EBS_HELIX_SIZE,
+        PRE_EBS_HELIX_SECTOR_SIZE,
+    );
+    PRE_EBS_HELIX_BASE = 0;
+    PRE_EBS_HELIX_SIZE = 0;
+    Some(out)
+}
+
 // BSoD CRASH HOOK — called by exception handlers in hwinit
 
 /// Callback invoked by hwinit exception handlers to display the crash screen.
@@ -107,10 +166,59 @@ unsafe fn bsod_crash_hook(info: &morpheus_hwinit::CrashInfo) {
     crate::bsod::show_crash_screen(info);
 }
 
+#[inline(always)]
+unsafe fn pe_image_size(image_base: u64) -> u64 {
+    let pe_off_ptr = (image_base + 0x3C) as *const u32;
+    let pe_off = core::ptr::read_unaligned(pe_off_ptr) as u64;
+    // SizeOfImage is at offset 56 in the PE32+ optional header.
+    // PE signature (4) + COFF header (20) + offset 56 into optional header = +80.
+    let size_of_image_ptr = (image_base + pe_off + 4 + 20 + 56) as *const u32;
+    core::ptr::read_unaligned(size_of_image_ptr) as u64
+}
+
+#[repr(C)]
+struct EfiLoadedImage {
+    _revision: u32,
+    _parent_handle: *mut (),
+    _system_table: *mut (),
+    device_handle: *mut (),
+}
+
+#[repr(C)]
+struct EfiSimpleFileSystem {
+    _revision: u64,
+    open_volume:
+        extern "efiapi" fn(*mut EfiSimpleFileSystem, *mut *mut EfiFileProtocol) -> usize,
+}
+
+#[repr(C)]
+struct EfiConfigurationTable {
+    vendor_guid: [u8; 16],
+    vendor_table: *const (),
+}
+
+#[repr(C)]
+struct EfiFileProtocol {
+    _revision: u64,
+    open: extern "efiapi" fn(
+        *mut EfiFileProtocol,
+        *mut *mut EfiFileProtocol,
+        *const u16,
+        u64,
+        u64,
+    ) -> usize,
+    close: extern "efiapi" fn(*mut EfiFileProtocol) -> usize,
+    _delete: usize,
+    read: extern "efiapi" fn(*mut EfiFileProtocol, *mut usize, *mut u8) -> usize,
+    _write: usize,
+    get_position: extern "efiapi" fn(*mut EfiFileProtocol, *mut u64) -> usize,
+    set_position: extern "efiapi" fn(*mut EfiFileProtocol, u64) -> usize,
+}
+
 // THE ENTRY POINT — NEVER RETURNS
 
 pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
-    use morpheus_hwinit::serial::{log_error, log_info, log_ok, puts};
+    use morpheus_hwinit::serial::{log_error, log_info, log_ok, log_warn, puts};
 
     // First serial output — if you see this, our binary loaded and ran.
     log_info("BOOT", 901, "enter baremetal");
@@ -138,6 +246,8 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         _stderr: *const (),
         _runtime: *const (),
         boot_services: *const MinBootServices,
+        number_of_table_entries: usize,
+        configuration_table: *const EfiConfigurationTable,
     }
 
     #[repr(C)]
@@ -151,14 +261,61 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
             extern "efiapi" fn(*mut usize, *mut u8, *mut usize, *mut usize, *mut u32) -> usize,
         _alloc_pool: usize,
         _free_pool: usize,
-        // slots 8..26 (create_event → unload_image) = 19 × 8 = 152 bytes
-        // puts exit_boot_services at offset 232, matching UEFI spec exactly.
-        _padding: [usize; 19],
+        _create_event: usize,
+        _set_timer: usize,
+        _wait_for_event: usize,
+        _signal_event: usize,
+        _close_event: usize,
+        _check_event: usize,
+        _install_protocol_interface: usize,
+        _reinstall_protocol_interface: usize,
+        _uninstall_protocol_interface: usize,
+        handle_protocol:
+            extern "efiapi" fn(*mut (), *const [u8; 16], *mut *mut ()) -> usize,
+        _reserved: usize,
+        _register_protocol_notify: usize,
+        _locate_handle: usize,
+        _locate_device_path: usize,
+        _install_configuration_table: usize,
+        _load_image: usize,
+        _start_image: usize,
+        _exit: usize,
+        _unload_image: usize,
         exit_boot_services: extern "efiapi" fn(*mut (), usize) -> usize,
     }
 
     let st = &*(config.system_table as *const MinSystemTable);
     let bs = &*st.boot_services;
+
+    let mut acpi_rsdp_phys = 0u64;
+    if !st.configuration_table.is_null() {
+        let tables = core::slice::from_raw_parts(st.configuration_table, st.number_of_table_entries);
+        for t in tables {
+            if t.vendor_guid == ACPI_20_TABLE_GUID {
+                acpi_rsdp_phys = t.vendor_table as u64;
+                break;
+            }
+        }
+        if acpi_rsdp_phys == 0 {
+            for t in tables {
+                if t.vendor_guid == ACPI_10_TABLE_GUID {
+                    acpi_rsdp_phys = t.vendor_table as u64;
+                    break;
+                }
+            }
+        }
+    }
+    if acpi_rsdp_phys != 0 {
+        log_ok("ACPI", 901, "found RSDP via UEFI config table");
+    } else {
+        log_warn("ACPI", 901, "RSDP not present in UEFI config table");
+    }
+
+    // We still need this for hwinit image reservation post-EBS.
+    extern "C" {
+        static __ImageBase: u8;
+    }
+    let image_base = &__ImageBase as *const u8 as u64;
 
     log_info("EBS", 902, "allocating kernel stack");
     let mut stack_base: u64 = 0;
@@ -174,8 +331,105 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     let stack_top = stack_base + STACK_SIZE as u64;
     log_info("EBS", 903, "stack ready; fetching memory map");
 
+    // Pre-EBS media stage: load /morpheus/helix.img from ESP into RAM.
+    let mut loaded_image_ptr: *mut () = core::ptr::null_mut();
+    let li_status = (bs.handle_protocol)(
+        config.image_handle,
+        &LOADED_IMAGE_PROTOCOL_GUID,
+        &mut loaded_image_ptr,
+    );
+    if li_status == 0 && !loaded_image_ptr.is_null() {
+        let li = &*(loaded_image_ptr as *const EfiLoadedImage);
+        let mut sfs_ptr: *mut () = core::ptr::null_mut();
+        let sfs_status = (bs.handle_protocol)(
+            li.device_handle,
+            &SIMPLE_FILE_SYSTEM_PROTOCOL_GUID,
+            &mut sfs_ptr,
+        );
+        if sfs_status == 0 && !sfs_ptr.is_null() {
+            let sfs = sfs_ptr as *mut EfiSimpleFileSystem;
+            let mut root: *mut EfiFileProtocol = core::ptr::null_mut();
+            if ((*sfs).open_volume)(sfs, &mut root) == 0 && !root.is_null() {
+                let mut img: *mut EfiFileProtocol = core::ptr::null_mut();
+                let open_rc = ((*root).open)(
+                    root,
+                    &mut img,
+                    HELIX_IMG_PATH.as_ptr(),
+                    EFI_FILE_MODE_READ,
+                    0,
+                );
+                if open_rc == 0 && !img.is_null() {
+                    // Position at EOF to query file size, then rewind.
+                    let _ = ((*img).set_position)(img, u64::MAX);
+                    let mut file_size = 0u64;
+                    let _ = ((*img).get_position)(img, &mut file_size);
+                    let _ = ((*img).set_position)(img, 0);
+
+                    if file_size > 0 && file_size <= PRE_EBS_STAGE_MAX_BYTES {
+                        let mut alloc_bytes = file_size as usize;
+                        let rem = alloc_bytes % HELIX_IMG_SECTOR_SIZE as usize;
+                        if rem != 0 {
+                            alloc_bytes += (HELIX_IMG_SECTOR_SIZE as usize) - rem;
+                        }
+                        let mut stage_base: u64 = 0;
+                        let stage_pages = alloc_bytes.div_ceil(4096);
+                        let alloc_rc = (bs.allocate_pages)(0, 2, stage_pages, &mut stage_base);
+                        if alloc_rc == 0 && stage_base != 0 {
+                            let mut off = 0usize;
+                            let mut ok = true;
+                            while off < file_size as usize {
+                                let remaining = (file_size as usize) - off;
+                                let mut want = core::cmp::min(1024 * 1024, remaining);
+                                let rc = ((*img).read)(
+                                    img,
+                                    &mut want,
+                                    (stage_base as *mut u8).add(off),
+                                );
+                                if rc != 0 {
+                                    ok = false;
+                                    break;
+                                }
+                                // want == 0 means EOF — nothing more to read.
+                                if want == 0 {
+                                    break;
+                                }
+                                off += want;
+                                // don't break on short reads — some UEFI firmware caps per-call
+                                // transfer size. just keep looping with what we got.
+                            }
+
+                            if ok && off > 0 {
+                                let usable = off - (off % HELIX_IMG_SECTOR_SIZE as usize);
+                                if usable > 0 {
+                                    PRE_EBS_HELIX_BASE = stage_base;
+                                    PRE_EBS_HELIX_SIZE = usable;
+                                    PRE_EBS_HELIX_SECTOR_SIZE = HELIX_IMG_SECTOR_SIZE;
+                                    log_ok("EBS", 901, "pre-EBS loaded /morpheus/helix.img to RAM");
+                                } else {
+                                    log_warn("EBS", 901, "helix.img size not sector-aligned");
+                                }
+                            } else {
+                                log_warn("EBS", 901, "failed reading /morpheus/helix.img");
+                            }
+                        } else {
+                            log_warn("EBS", 901, "pre-EBS stage alloc failed");
+                        }
+                    } else {
+                        log_warn("EBS", 901, "helix.img missing/empty/too-large");
+                    }
+                    let _ = ((*img).close)(img);
+                } else {
+                    log_warn("EBS", 901, "/morpheus/helix.img not found on ESP");
+                }
+                let _ = ((*root).close)(root);
+            }
+        }
+    }
+
+    log_info("EBS", 903, "fetching memory map");
+
     // memory map + exitbootservices
-    static mut MMAP_BUF: [u8; 32768] = [0u8; 32768];
+    static mut MMAP_BUF: [u8; 65536] = [0u8; 65536];
     static mut MMAP_SIZE: usize = 0;
     static mut DESC_SIZE: usize = 0;
     static mut DESC_VER: u32 = 0;
@@ -233,28 +487,13 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     // Switch allocator to our own heap (UEFI pool is gone)
     crate::uefi_allocator::switch_to_post_ebs();
 
-    // switch stack
+    // Switch once, after EBS, onto our own loaderdata stack.
     core::arch::asm!("mov rsp, {0}", in(reg) stack_top, options(nostack));
 
     log_ok("BOOT", 906, "machine ownership transferred");
 
     // compute pe image bounds for buddy-allocator reservation
-    // __ImageBase is defined by LLD for every PE/COFF binary.  From it we
-    // read the PE optional header's SizeOfImage to determine the full
-    // virtual extent (including BSS) that must be kept out of the free pool.
-    extern "C" {
-        static __ImageBase: u8;
-    }
-    let image_base = &__ImageBase as *const u8 as u64;
-    let image_pages = {
-        let pe_off_ptr = (image_base + 0x3C) as *const u32;
-        let pe_off = core::ptr::read_unaligned(pe_off_ptr) as u64;
-        // SizeOfImage is at offset 56 in the PE32+ optional header.
-        // PE signature (4) + COFF header (20) + offset 56 into optional header = +80.
-        let size_of_image_ptr = (image_base + pe_off + 4 + 20 + 56) as *const u32;
-        let size_of_image = core::ptr::read_unaligned(size_of_image_ptr) as u64;
-        size_of_image.div_ceil(4096)
-    };
+    let image_pages = pe_image_size(image_base).div_ceil(4096);
 
     // hwinit — gdt, idt, pic, heap, tsc, dma, bus mastering
     let hwinit_cfg = morpheus_hwinit::SelfContainedConfig {
@@ -266,6 +505,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         image_pages,
         stack_base,
         stack_pages: STACK_PAGES as u64,
+        acpi_rsdp_phys,
     };
 
     let platform = match morpheus_hwinit::platform_init_selfcontained(hwinit_cfg) {

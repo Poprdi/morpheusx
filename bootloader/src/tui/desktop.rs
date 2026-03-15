@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 use morpheus_display::types::FramebufferInfo;
-use morpheus_hwinit::serial::{log_error, log_info, log_ok, puts};
+use morpheus_hwinit::serial::{clear_live_console_hook, log_error, log_info, log_ok, puts};
 
 use super::input::Keyboard;
 
@@ -88,6 +88,7 @@ fn show_boot_log_screen(keyboard: &mut Keyboard) {
     puts("Press any key to launch msh...");
     keyboard.wait_for_key();
     puts("\n");
+    clear_live_console_hook();
 }
 
 pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
@@ -148,11 +149,15 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
             let device = (raw >> 8) & 0xFF;
             let byte = (raw & 0xFF) as u8;
 
-            if device == 0x03 && !keyboard.aux_as_kbd() {
+            if device == 0x03 {
                 // Mouse byte
                 if let Some(pkt) = mouse.feed(byte) {
                     morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
                 }
+                continue;
+            }
+
+            if device != 0x01 {
                 continue;
             }
 

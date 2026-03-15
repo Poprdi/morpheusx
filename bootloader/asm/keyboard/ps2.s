@@ -34,7 +34,6 @@ asm_ps2_write_cmd:
     pause
     dec     r8
     jnz     .wcmd_ibf_wait
-    ret
 .wcmd_send:
     mov     al, cl
     out     PS2_CMD, al
@@ -50,7 +49,6 @@ asm_ps2_write_data:
     pause
     dec     r8
     jnz     .wdat_ibf_wait
-    ret
 .wdat_send:
     mov     al, cl
     out     PS2_DATA, al

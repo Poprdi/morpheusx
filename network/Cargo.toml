@@ -12,6 +12,7 @@ display = ["morpheus-display"]  # Enable framebuffer display for post-EBS debug 
 
 [dependencies]
 morpheus-core = { workspace = true }
+morpheus-hwinit = { workspace = true }
 morpheus-display = { path = "../display", features = ["framebuffer-backend"], optional = true }
 
 # GPT disk I/O trait for filesystem compatibility
