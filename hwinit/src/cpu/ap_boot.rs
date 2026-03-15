@@ -141,7 +141,7 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     let before = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
 
     // INIT IPI
-    apic::send_init_ipi(lapic_id);
+    apic::send_init_assert(lapic_id);
     apic::delay_us(10_000); // 10ms
 
     // SIPI #1
@@ -331,7 +331,8 @@ pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
 
     // 6. Initialize LAPIC + timer on this core
     apic::init_ap();
-    apic::setup_timer(100); // 100 Hz, same as BSP
+    apic::setup_timer(100);
+    crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
 
     // 7. Signal we're online (done in init_ap via per_cpu::init_ap)
 
