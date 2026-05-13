@@ -148,8 +148,16 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         )
     };
 
-    let (tb_r, tb_g, tb_b) = if focused { state.title_focused_rgb } else { TITLE_UNFOCUSED_RGB };
-    let (br, bg, bb) = if focused { state.border_focused_rgb } else { BORDER_UNFOCUSED_RGB };
+    let (tb_r, tb_g, tb_b) = if focused {
+        state.title_focused_rgb
+    } else {
+        TITLE_UNFOCUSED_RGB
+    };
+    let (br, bg, bb) = if focused {
+        state.border_focused_rgb
+    } else {
+        BORDER_UNFOCUSED_RGB
+    };
 
     let outer_x = win_x - BORDER as i32;
     let outer_y = win_y - TITLE_H as i32 - BORDER as i32;

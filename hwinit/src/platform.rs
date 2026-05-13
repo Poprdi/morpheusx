@@ -18,7 +18,7 @@ use crate::memory::{
     PhysicalAllocator,
 };
 use crate::paging::init_kernel_page_table;
-use crate::pci::{offset, pci_cfg_read8, pci_cfg_read16, pci_cfg_write16, PciAddr};
+use crate::pci::{offset, pci_cfg_read16, pci_cfg_read8, pci_cfg_write16, PciAddr};
 use crate::process::scheduler::init_scheduler;
 use crate::serial::{checkpoint, log_error, log_info, log_ok, log_warn};
 use crate::syscall::init_syscall;
@@ -258,7 +258,11 @@ pub unsafe fn platform_init_selfcontained(
         let reg = global_registry_mut();
         let corrupt = reg.validate_free_lists();
         if corrupt > 0 {
-            log_warn("MEM", 150, "free-list validation detected corruption; dumping map");
+            log_warn(
+                "MEM",
+                150,
+                "free-list validation detected corruption; dumping map",
+            );
             reg.dump_map();
         }
     }
@@ -369,10 +373,18 @@ pub unsafe fn platform_init_selfcontained(
                 options(nostack),
             );
             if edx & (1 << 8) == 0 {
-                log_warn("TSC", 551, "CPU lacks invariant TSC; timing may drift with P-state changes");
+                log_warn(
+                    "TSC",
+                    551,
+                    "CPU lacks invariant TSC; timing may drift with P-state changes",
+                );
             }
         } else {
-            log_warn("TSC", 552, "CPUID extended leaf 0x80000007 unavailable; cannot verify invariant TSC");
+            log_warn(
+                "TSC",
+                552,
+                "CPUID extended leaf 0x80000007 unavailable; cannot verify invariant TSC",
+            );
         }
     }
 
@@ -387,7 +399,11 @@ pub unsafe fn platform_init_selfcontained(
     let dma_phys = {
         let mut dma_reg = global_registry_mut();
         dma_reg
-            .allocate_pages(AllocateType::MaxAddress(0xFFFF_FFFF), MemoryType::AllocatedDma, dma_pages)
+            .allocate_pages(
+                AllocateType::MaxAddress(0xFFFF_FFFF),
+                MemoryType::AllocatedDma,
+                dma_pages,
+            )
             .map_err(|_| InitError::NoFreeMemory)?
     };
 
@@ -669,7 +685,7 @@ unsafe fn enable_all_pci_devices() -> usize {
 /// on host bridges, PCI-PCI bridges, and ISA bridges can trigger IOMMU
 /// faults or stray DMA from shadow BARs on real hardware.
 fn maybe_enable_bus_mastering(addr: PciAddr) {
-    let class = pci_cfg_read8(addr, 0x0B);  // base class at offset 0x0B
+    let class = pci_cfg_read8(addr, 0x0B); // base class at offset 0x0B
     if class == 0x06 {
         // 0x06 = Bridge device (host, ISA, PCI-PCI, CardBus, etc.)
         // Don't toggle bus mastering — the firmware configured these.

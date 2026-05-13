@@ -122,10 +122,7 @@ pub fn update(state: &mut CompState) {
                 // Open at source size when possible, but clamp to visible work area
                 // so move/resize affordances remain reachable.
                 let max_w = state.fb_w.saturating_sub(40).max(160);
-                let max_h = state
-                    .fb_h
-                    .saturating_sub(TITLE_H + PANEL_H + 40)
-                    .max(120);
+                let max_h = state.fb_h.saturating_sub(TITLE_H + PANEL_H + 40).max(120);
                 let w = entry.width.max(1).min(max_w);
                 let h = entry.height.max(1).min(max_h);
 
@@ -159,7 +156,8 @@ pub fn update(state: &mut CompState) {
 
                 // seed app-local cursor at spawn so first click lands where the cursor already is.
                 if let Some(ref mut win) = state.windows[idx] {
-                    let (local_x, local_y) = map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);
+                    let (local_x, local_y) =
+                        map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);
                     let dx = local_x.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
                     let dy = local_y.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
                     let _ = compsys::mouse_forward(win.pid, dx, dy, 0);
@@ -175,11 +173,7 @@ pub fn update(state: &mut CompState) {
 }
 
 #[inline(always)]
-fn map_global_to_local_spawn(
-    mx: i32,
-    my: i32,
-    win: &ChildWindow,
-) -> (i32, i32) {
+fn map_global_to_local_spawn(mx: i32, my: i32, win: &ChildWindow) -> (i32, i32) {
     let sw = win.src_w.max(1) as i32;
     let sh = win.src_h.max(1) as i32;
     let ww = win.w.max(1) as i32;

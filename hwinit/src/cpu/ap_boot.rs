@@ -15,7 +15,7 @@ use crate::cpu::gdt;
 use crate::cpu::per_cpu::{self, MAX_CPUS};
 use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
 use crate::serial::{log_error, log_info, log_ok, log_warn};
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 /// Physical address where the AP trampoline is copied.
 /// Must be page-aligned, below 1 MiB, and not in use by anything else.
 /// 0x8000 is the traditional choice (page 8).
@@ -33,6 +33,9 @@ const AP_WAIT_STEP_US: u64 = 50;
 const AP_WAIT_TIMEOUT_US: u64 = 20_000;
 const AP_BRUTE_SCAN_BUDGET_US: u64 = 3_000_000;
 const AP_MADT_SCAN_BUDGET_US: u64 = 1_000_000;
+
+static AP_SCHEDULER_RELEASED: AtomicBool = AtomicBool::new(false);
+static AP_PARKED_COUNT: AtomicU32 = AtomicU32::new(0);
 
 // These must match the .data section layout at the end of ap_trampoline.s.lapic_id
 // The trampoline data block starts at AP_TRAMPOLINE_PHYS + TRAMPOLINE_DATA_OFFSET.
@@ -73,7 +76,11 @@ unsafe fn setup_trampoline() -> bool {
     ) {
         Ok(_) => {}
         Err(_) => {
-            log_error("AP", 500, "trampoline page 0x8000 unavailable in memory map");
+            log_error(
+                "AP",
+                500,
+                "trampoline page 0x8000 unavailable in memory map",
+            );
             return false;
         }
     }
@@ -94,7 +101,11 @@ unsafe fn setup_trampoline() -> bool {
     // which only reads the low 32 bits.  If the kernel page tables are above
     // 4 GB, the AP would load a truncated CR3 and triple-fault immediately.
     if kernel_cr3 > 0xFFFF_FFFF {
-        log_error("AP", 514, "kernel CR3 above 4GB; AP trampoline cannot load it in 32-bit mode");
+        log_error(
+            "AP",
+            514,
+            "kernel CR3 above 4GB; AP trampoline cannot load it in 32-bit mode",
+        );
         return false;
     }
 
@@ -171,6 +182,24 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     }
 }
 
+fn park_until_scheduler_release() {
+    AP_PARKED_COUNT.fetch_add(1, Ordering::Release);
+
+    while !AP_SCHEDULER_RELEASED.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+}
+
+/// Release parked APs into LAPIC timer-driven scheduling.
+///
+/// APs are deliberately brought up during platform init, but held with
+/// interrupts disabled until the BSP is done with driver init and is about to
+/// hand off to userland.
+pub fn release_parked_aps() {
+    AP_SCHEDULER_RELEASED.store(true, Ordering::Release);
+    log_ok("AP", 530, "parked APs released for scheduling");
+}
+
 // ── Public API ───────────────────────────────────────────────────────────
 
 /// Start APs from an explicit list of LAPIC IDs (from ACPI MADT).
@@ -211,7 +240,11 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
         }
 
         if budget_used_us >= AP_MADT_SCAN_BUDGET_US {
-            log_warn("AP", 512, "MADT AP bring-up budget exhausted; continuing with discovered cores");
+            log_warn(
+                "AP",
+                512,
+                "MADT AP bring-up budget exhausted; continuing with discovered cores",
+            );
             break;
         }
 
@@ -268,7 +301,11 @@ pub unsafe fn start_aps() {
         }
 
         if scan_budget_used_us >= AP_BRUTE_SCAN_BUDGET_US {
-            log_warn("AP", 510, "brute-force AP scan budget exhausted; continuing with discovered cores");
+            log_warn(
+                "AP",
+                510,
+                "brute-force AP scan budget exhausted; continuing with discovered cores",
+            );
             break;
         }
 
@@ -307,36 +344,52 @@ pub unsafe fn start_aps() {
 /// 5. Enter the idle loop (scheduler will assign work)
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
+    log_ok("AP", 520, "ap_rust_entry: entering");
+
     // 1. Set up per-core GDT + TSS
     // Read the exact stack_top from the trampoline data area.
     // The BSP wrote the precise value to TD_STACK; rounding RSP up
     // can overshoot if RSP is near a page boundary.
     let stack_top = *((AP_TRAMPOLINE_PHYS + TD_STACK) as *const u64);
     gdt::init_gdt_for_ap(stack_top, core_idx);
+    log_ok("AP", 521, "gdt_init done");
 
     // 2. Load the shared IDT
     crate::cpu::idt::load_idt_for_ap();
+    log_ok("AP", 522, "idt_load done");
 
     // 3. Initialize per-CPU data — use probed base, not the default constant
     per_cpu::init_ap(core_idx, lapic_id, apic::lapic_base());
+    log_ok("AP", 523, "percpu_init done");
 
     // 4. Enable SSE on this core
     crate::cpu::sse::enable_sse();
+    log_ok("AP", 524, "sse_init done");
 
     // 5. Set up SYSCALL MSRs for this core
     extern "C" {
         fn syscall_init();
     }
     syscall_init();
+    log_ok("AP", 525, "syscall_init done");
 
-    // 6. Initialize LAPIC + timer on this core
+    // 6. Initialize LAPIC on this core. Timer stays masked until release.
     apic::init_ap();
+    log_ok("AP", 526, "lapic_init done");
+
+    *((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32) = 1;
+    // Release publishes all AP-local CPU init before the BSP observes this core.
+    crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, Ordering::Release);
+    log_ok("AP", 527, "ap parked before scheduler release");
+
+    park_until_scheduler_release();
+    log_ok("AP", 528, "scheduler release observed");
+
+    // 7. Arm the timer only after the BSP releases AP scheduling.
     apic::setup_timer(100);
-    crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+    log_ok("AP", 529, "lapic_timer armed");
 
-    // 7. Signal we're online (done in init_ap via per_cpu::init_ap)
-
-    // 8. Enable interrupts and enter AP idle loop
+    // 8. Enable interrupts and enter AP idle loop.
     core::arch::asm!("sti", options(nostack, nomem));
 
     // AP idle loop — the LAPIC timer will fire and call scheduler_tick,

@@ -55,20 +55,16 @@ static mut PRE_EBS_HELIX_SIZE: usize = 0;
 static mut PRE_EBS_HELIX_SECTOR_SIZE: u32 = 512;
 
 const LOADED_IMAGE_PROTOCOL_GUID: [u8; 16] = [
-    0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11, 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69,
-    0x72, 0x3B,
+    0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11, 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B,
 ];
 const SIMPLE_FILE_SYSTEM_PROTOCOL_GUID: [u8; 16] = [
-    0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11, 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69,
-    0x72, 0x3B,
+    0x22, 0x5B, 0x4E, 0x96, 0x59, 0x64, 0xD2, 0x11, 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B,
 ];
 const ACPI_20_TABLE_GUID: [u8; 16] = [
-    0x71, 0xE8, 0x68, 0x88, 0xF1, 0xE4, 0xD3, 0x11, 0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C,
-    0x88, 0x81,
+    0x71, 0xE8, 0x68, 0x88, 0xF1, 0xE4, 0xD3, 0x11, 0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C, 0x88, 0x81,
 ];
 const ACPI_10_TABLE_GUID: [u8; 16] = [
-    0x30, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11, 0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F,
-    0xC1, 0x4D,
+    0x30, 0x2D, 0x9D, 0xEB, 0x88, 0x2D, 0xD3, 0x11, 0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D,
 ];
 const PRE_EBS_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const HELIX_IMG_SECTOR_SIZE: u32 = 512;
@@ -187,8 +183,7 @@ struct EfiLoadedImage {
 #[repr(C)]
 struct EfiSimpleFileSystem {
     _revision: u64,
-    open_volume:
-        extern "efiapi" fn(*mut EfiSimpleFileSystem, *mut *mut EfiFileProtocol) -> usize,
+    open_volume: extern "efiapi" fn(*mut EfiSimpleFileSystem, *mut *mut EfiFileProtocol) -> usize,
 }
 
 #[repr(C)]
@@ -270,8 +265,7 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         _install_protocol_interface: usize,
         _reinstall_protocol_interface: usize,
         _uninstall_protocol_interface: usize,
-        handle_protocol:
-            extern "efiapi" fn(*mut (), *const [u8; 16], *mut *mut ()) -> usize,
+        handle_protocol: extern "efiapi" fn(*mut (), *const [u8; 16], *mut *mut ()) -> usize,
         _reserved: usize,
         _register_protocol_notify: usize,
         _locate_handle: usize,
@@ -289,7 +283,8 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
 
     let mut acpi_rsdp_phys = 0u64;
     if !st.configuration_table.is_null() {
-        let tables = core::slice::from_raw_parts(st.configuration_table, st.number_of_table_entries);
+        let tables =
+            core::slice::from_raw_parts(st.configuration_table, st.number_of_table_entries);
         for t in tables {
             if t.vendor_guid == ACPI_20_TABLE_GUID {
                 acpi_rsdp_phys = t.vendor_table as u64;
@@ -380,11 +375,8 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
                             while off < file_size as usize {
                                 let remaining = (file_size as usize) - off;
                                 let mut want = core::cmp::min(1024 * 1024, remaining);
-                                let rc = ((*img).read)(
-                                    img,
-                                    &mut want,
-                                    (stage_base as *mut u8).add(off),
-                                );
+                                let rc =
+                                    ((*img).read)(img, &mut want, (stage_base as *mut u8).add(off));
                                 if rc != 0 {
                                     ok = false;
                                     break;
@@ -530,11 +522,14 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
     };
 
     // userspace network activation hook. we stay offline by default.
-    network::init_userspace_network_activation(morpheus_network::dma::DmaRegion::new(
-        platform.dma().cpu_base(),
-        platform.dma().bus_base(),
-        platform.dma().size(),
-    ), platform.tsc_freq());
+    network::init_userspace_network_activation(
+        morpheus_network::dma::DmaRegion::new(
+            platform.dma().cpu_base(),
+            platform.dma().bus_base(),
+            platform.dma().size(),
+        ),
+        platform.tsc_freq(),
+    );
 
     // persistent storage — try to mount a real block device
     crate::storage::init_persistent_storage(platform.dma(), platform.tsc_freq());

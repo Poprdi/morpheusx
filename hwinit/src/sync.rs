@@ -215,7 +215,9 @@ impl IsrSafeRawSpinLock {
 
         // save per-core IF state AFTER acquiring — only holder touches its slot
         let ci = Self::core_index();
-        unsafe { *self.saved_if[ci].get() = was_enabled; }
+        unsafe {
+            *self.saved_if[ci].get() = was_enabled;
+        }
     }
 
     pub fn unlock(&self) {
@@ -238,7 +240,9 @@ impl IsrSafeRawSpinLock {
             .is_ok()
         {
             let ci = Self::core_index();
-            unsafe { *self.saved_if[ci].get() = was_enabled; }
+            unsafe {
+                *self.saved_if[ci].get() = was_enabled;
+            }
             true
         } else {
             if was_enabled {

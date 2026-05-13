@@ -25,8 +25,8 @@ use crate::driver::intel::{
     enable_device, find_intel_nic, validate_mmio_access, E1000eConfig, E1000eDriver, E1000eError,
     IntelNicInfo,
 };
-use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::driver::virtio::transport::{PciModernConfig, VirtioTransport};
+use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::pci::capability::probe_virtio_caps;
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, PciAddr};
 

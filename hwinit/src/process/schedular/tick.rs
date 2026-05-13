@@ -1,21 +1,20 @@
 use super::lifecycle::terminate_process_inner;
 use super::state::{
-    clear_futex_waiter, clear_waiter_all, cleanup_stale_waiters,
-    core_should_park, update_park_hysteresis,
-    refresh_balanced_system_mode, transition_core_state, SchedulerTransitionReason,
+    cleanup_stale_waiters, clear_futex_waiter, clear_waiter_all, core_should_park,
     mark_core_active_tsc, mark_core_idle_enter, mark_core_idle_exit, mark_core_idle_tick,
-    record_tier_hit, scheduler_system_state,
-    update_core_load_ewma, SchedulerCoreState, SchedulerSystemState,
-    set_percpu_fpu_ptr, set_percpu_next_cr3, set_this_core_pid, this_core_index, this_core_pid,
-    IDLE_TSC_TOTAL, KERNEL_CR3, KERNEL_HLT_ENTRY_TSC, KERNEL_LAST_WAS_IDLE, KERNEL_SKIP_STREAK,
-    MAX_KERNEL_SKIP, PROCESS_TABLE, PROCESS_TABLE_LOCK, TICK_COUNT,
+    record_tier_hit, refresh_balanced_system_mode, scheduler_system_state, set_percpu_fpu_ptr,
+    set_percpu_next_cr3, set_this_core_pid, this_core_index, this_core_pid, transition_core_state,
+    update_core_load_ewma, update_park_hysteresis, SchedulerCoreState, SchedulerSystemState,
+    SchedulerTransitionReason, IDLE_TSC_TOTAL, KERNEL_CR3, KERNEL_HLT_ENTRY_TSC,
+    KERNEL_LAST_WAS_IDLE, KERNEL_SKIP_STREAK, MAX_KERNEL_SKIP, PROCESS_TABLE, PROCESS_TABLE_LOCK,
+    TICK_COUNT,
 };
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
+use crate::cpu::per_cpu::MAX_CPUS;
+use crate::process::signals::SignalAction;
 use crate::process::{
     BlockReason, CpuContext, ProcessPolicyClass, ProcessPowerMode, ProcessState, MAX_PROCESSES,
 };
-use crate::process::signals::SignalAction;
-use crate::cpu::per_cpu::MAX_CPUS;
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::Ordering;
 
@@ -441,7 +440,12 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
     }
 
     #[inline(always)]
-    fn pick_score(system_state: SchedulerSystemState, p: &crate::process::Process, delta: usize, core_idx: u32) -> i32 {
+    fn pick_score(
+        system_state: SchedulerSystemState,
+        p: &crate::process::Process,
+        delta: usize,
+        core_idx: u32,
+    ) -> i32 {
         let importance = (clamped_importance(p.importance_16) as i32) * 8;
         let wait_bonus = (p.sched_wait_ticks.min(64) / 4) as i32;
         let rr_locality = 64 - (delta as i32).min(64);

@@ -4,11 +4,11 @@
 //! ASM-backed SDHCI implementation. Hardware-touching logic will be added in
 //! assembly primitives; Rust keeps orchestration/state/error surfaces stable.
 
+use crate::asm::core::mmio;
+use crate::asm::core::tsc;
 use crate::driver::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
-use crate::asm::core::mmio;
-use crate::asm::core::tsc;
 
 extern "win64" {
     fn asm_sdhci_read_caps(mmio_base: u64) -> u32;
@@ -163,8 +163,7 @@ impl SdhciDriver {
 
         // CMD8: interface condition; if it fails, assume legacy SDSC.
         let mut supports_v2 = false;
-        if let Ok(r7) = self.send_cmd(8, 0x0000_01AA, CMD_RESP_SHORT | CMD_CRC | CMD_INDEX, 100)
-        {
+        if let Ok(r7) = self.send_cmd(8, 0x0000_01AA, CMD_RESP_SHORT | CMD_CRC | CMD_INDEX, 100) {
             supports_v2 = (r7 & 0xFFF) == 0x1AA;
         }
 
@@ -238,10 +237,10 @@ impl SdhciDriver {
             tsc_freq: config.tsc_freq,
             _caps: caps,
             info: BlockDeviceInfo {
-            total_sectors: u32::MAX as u64,
-            sector_size: 512,
-            max_sectors_per_request: 128,
-            read_only: true,
+                total_sectors: u32::MAX as u64,
+                sector_size: 512,
+                max_sectors_per_request: 128,
+                read_only: true,
             },
             high_capacity: true,
             rca: 0,
@@ -314,9 +313,8 @@ impl BlockDriver for SdhciDriver {
                     .checked_mul(self.info.sector_size as u64)
                     .ok_or(BlockError::InvalidSector)?
             };
-            let rc = unsafe {
-                asm_sdhci_read_block_pio(self.mmio_base, arg, curr_dst, self.tsc_freq)
-            };
+            let rc =
+                unsafe { asm_sdhci_read_block_pio(self.mmio_base, arg, curr_dst, self.tsc_freq) };
             if rc != 0 {
                 return Err(match rc {
                     1 | 2 | 3 | 4 => BlockError::Timeout,

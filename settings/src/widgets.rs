@@ -2,8 +2,6 @@
 // no canvas abstraction. no trait dispatch. just pointer math and pixel writes.
 // this is a standalone process with its own mapped surface.
 
-
-
 // vga 8x16 font constants
 pub const FONT_W: u32 = 8;
 pub const FONT_H: u32 = 16;
@@ -19,7 +17,17 @@ pub fn put_pixel(surface: *mut u32, stride: u32, x: u32, y: u32, color: u32) {
     }
 }
 
-pub fn fill_rect(surface: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, color: u32, fb_w: u32, fb_h: u32) {
+pub fn fill_rect(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     // clamp to bounds
     let x1 = x.min(fb_w);
     let y1 = y.min(fb_h);
@@ -39,7 +47,17 @@ pub fn fill_rect(surface: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32,
     }
 }
 
-pub fn draw_char(surface: *mut u32, stride: u32, x: u32, y: u32, ch: u8, fg: u32, bg: u32, fb_w: u32, fb_h: u32) {
+pub fn draw_char(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    ch: u8,
+    fg: u32,
+    bg: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     let idx = if ch >= 0x20 && ch <= 0x7E {
         (ch - 0x20) as usize
     } else {
@@ -60,13 +78,25 @@ pub fn draw_char(surface: *mut u32, stride: u32, x: u32, y: u32, ch: u8, fg: u32
             }
             let color = if (bits >> (7 - col)) & 1 == 1 { fg } else { bg };
             unsafe {
-                surface.offset((py * stride + px) as isize).write_volatile(color);
+                surface
+                    .offset((py * stride + px) as isize)
+                    .write_volatile(color);
             }
         }
     }
 }
 
-pub fn draw_str(surface: *mut u32, stride: u32, x: u32, y: u32, s: &str, fg: u32, bg: u32, fb_w: u32, fb_h: u32) {
+pub fn draw_str(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    s: &str,
+    fg: u32,
+    bg: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     let mut cx = x;
     for &b in s.as_bytes() {
         if cx + FONT_W > fb_w {
@@ -78,7 +108,18 @@ pub fn draw_str(surface: *mut u32, stride: u32, x: u32, y: u32, s: &str, fg: u32
 }
 
 // draw string with max width (truncates with ".." if too long)
-pub fn draw_str_trunc(surface: *mut u32, stride: u32, x: u32, y: u32, s: &str, fg: u32, bg: u32, fb_w: u32, fb_h: u32, max_chars: usize) {
+pub fn draw_str_trunc(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    s: &str,
+    fg: u32,
+    bg: u32,
+    fb_w: u32,
+    fb_h: u32,
+    max_chars: usize,
+) {
     if max_chars == 0 {
         return;
     }
@@ -114,21 +155,67 @@ pub fn draw_str_trunc(surface: *mut u32, stride: u32, x: u32, y: u32, s: &str, f
 }
 
 // horizontal line
-pub fn hline(surface: *mut u32, stride: u32, x: u32, y: u32, w: u32, color: u32, fb_w: u32, fb_h: u32) {
+pub fn hline(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    color: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     fill_rect(surface, stride, x, y, w, 1, color, fb_w, fb_h);
 }
 
 // vertical line
-pub fn vline(surface: *mut u32, stride: u32, x: u32, y: u32, h: u32, color: u32, fb_w: u32, fb_h: u32) {
+pub fn vline(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    h: u32,
+    color: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     fill_rect(surface, stride, x, y, 1, h, color, fb_w, fb_h);
 }
 
 // outlined rectangle
-pub fn rect_outline(surface: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, color: u32, fb_w: u32, fb_h: u32) {
+pub fn rect_outline(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     hline(surface, stride, x, y, w, color, fb_w, fb_h);
-    hline(surface, stride, x, y + h.saturating_sub(1), w, color, fb_w, fb_h);
+    hline(
+        surface,
+        stride,
+        x,
+        y + h.saturating_sub(1),
+        w,
+        color,
+        fb_w,
+        fb_h,
+    );
     vline(surface, stride, x, y, h, color, fb_w, fb_h);
-    vline(surface, stride, x + w.saturating_sub(1), y, h, color, fb_w, fb_h);
+    vline(
+        surface,
+        stride,
+        x + w.saturating_sub(1),
+        y,
+        h,
+        color,
+        fb_w,
+        fb_h,
+    );
 }
 
 // integer to decimal string — no alloc, no format!, no core::fmt.
@@ -197,7 +284,9 @@ pub fn format_mac(mac: &[u8; 6], buf: &mut [u8]) -> usize {
     let hex = b"0123456789ABCDEF";
     let mut pos = 0;
     for (i, &b) in mac.iter().enumerate() {
-        if pos + 2 > buf.len() { break; }
+        if pos + 2 > buf.len() {
+            break;
+        }
         buf[pos] = hex[(b >> 4) as usize];
         buf[pos + 1] = hex[(b & 0x0F) as usize];
         pos += 2;
@@ -227,25 +316,63 @@ pub fn format_uptime(ms: u64, buf: &mut [u8]) -> usize {
     }
     let n = u64_to_str(hours % 24, &mut buf[pos..]);
     pos += n;
-    if pos < buf.len() { buf[pos] = b'h'; pos += 1; }
-    if pos < buf.len() { buf[pos] = b' '; pos += 1; }
+    if pos < buf.len() {
+        buf[pos] = b'h';
+        pos += 1;
+    }
+    if pos < buf.len() {
+        buf[pos] = b' ';
+        pos += 1;
+    }
     let n = u64_to_str(mins % 60, &mut buf[pos..]);
     pos += n;
-    if pos < buf.len() { buf[pos] = b'm'; pos += 1; }
-    if pos < buf.len() { buf[pos] = b' '; pos += 1; }
+    if pos < buf.len() {
+        buf[pos] = b'm';
+        pos += 1;
+    }
+    if pos < buf.len() {
+        buf[pos] = b' ';
+        pos += 1;
+    }
     let n = u64_to_str(secs % 60, &mut buf[pos..]);
     pos += n;
-    if pos < buf.len() { buf[pos] = b's'; pos += 1; }
+    if pos < buf.len() {
+        buf[pos] = b's';
+        pos += 1;
+    }
     pos
 }
 
 // percentage bar — a horizontal bar filled proportionally
-pub fn draw_bar(surface: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32,
-                fraction: u32, max: u32, fg: u32, bg: u32, border: u32, fb_w: u32, fb_h: u32) {
+pub fn draw_bar(
+    surface: *mut u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    fraction: u32,
+    max: u32,
+    fg: u32,
+    bg: u32,
+    border: u32,
+    fb_w: u32,
+    fb_h: u32,
+) {
     rect_outline(surface, stride, x, y, w, h, border, fb_w, fb_h);
     let inner_w = w.saturating_sub(2);
     let inner_h = h.saturating_sub(2);
-    fill_rect(surface, stride, x + 1, y + 1, inner_w, inner_h, bg, fb_w, fb_h);
+    fill_rect(
+        surface,
+        stride,
+        x + 1,
+        y + 1,
+        inner_w,
+        inner_h,
+        bg,
+        fb_w,
+        fb_h,
+    );
     if max > 0 {
         let fill = (inner_w as u64 * fraction as u64 / max as u64) as u32;
         if fill > 0 {

@@ -52,7 +52,8 @@ pub(super) unsafe fn set_activation_context(dma: morpheus_network::dma::DmaRegio
     USER_NET_TSC_FREQ = tsc_freq;
 }
 
-pub(super) unsafe fn activation_context() -> Option<(&'static morpheus_network::dma::DmaRegion, u64)> {
+pub(super) unsafe fn activation_context() -> Option<(&'static morpheus_network::dma::DmaRegion, u64)>
+{
     let dma = USER_NET_DMA.as_ref()?;
     Some((dma, USER_NET_TSC_FREQ))
 }

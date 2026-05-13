@@ -109,6 +109,8 @@ pub fn run_desktop(_display_info: &FramebufferInfo) -> ! {
         }
     };
 
+    morpheus_hwinit::cpu::ap_boot::release_parked_aps();
+
     let _init_pid = match unsafe {
         morpheus_hwinit::process::scheduler::spawn_user_process("init", &elf_data, &[], 0, false)
     } {

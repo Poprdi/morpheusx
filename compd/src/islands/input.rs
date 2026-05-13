@@ -102,7 +102,12 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
 
     // panel is visually over windows (z3 overlay), so input there belongs to shelld.
     if msg.in_panel {
-        enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: msg.buttons });
+        enqueue_mouse_route(
+            state,
+            MouseZRouteMsg::Desktop {
+                buttons: msg.buttons,
+            },
+        );
         state.last_buttons = msg.buttons;
         return;
     }
@@ -145,7 +150,12 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                 HitRegion::Content => {}
             }
         } else {
-            enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: msg.buttons });
+            enqueue_mouse_route(
+                state,
+                MouseZRouteMsg::Desktop {
+                    buttons: msg.buttons,
+                },
+            );
             state.last_buttons = msg.buttons;
             return;
         }

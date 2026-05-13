@@ -110,11 +110,17 @@ impl NetObsChamber {
             self.gateway = cfg.gateway;
             self.dns1 = cfg.dns_primary;
             self.dns2 = cfg.dns_secondary;
-            self.mac = [cfg.mac[0], cfg.mac[1], cfg.mac[2], cfg.mac[3], cfg.mac[4], cfg.mac[5]];
+            self.mac = [
+                cfg.mac[0], cfg.mac[1], cfg.mac[2], cfg.mac[3], cfg.mac[4], cfg.mac[5],
+            ];
             self.mtu = cfg.mtu;
 
             // hostname
-            let hlen = cfg.hostname.iter().position(|&b| b == 0).unwrap_or(cfg.hostname.len());
+            let hlen = cfg
+                .hostname
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(cfg.hostname.len());
             self.hostname[..hlen].copy_from_slice(&cfg.hostname[..hlen]);
             self.hostname_len = hlen;
 
@@ -157,12 +163,17 @@ impl NetObsChamber {
 
     fn sync_edit_from_live(&mut self) {
         // hostname
-        self.edit_hostname[..self.hostname_len].copy_from_slice(&self.hostname[..self.hostname_len]);
+        self.edit_hostname[..self.hostname_len]
+            .copy_from_slice(&self.hostname[..self.hostname_len]);
         self.edit_hostname_len = self.hostname_len;
 
         // ip
         self.edit_ip_len = widgets::format_ip(self.ip, &mut self.edit_ip);
-        self.edit_prefix = if self.prefix_len == 0 { 24 } else { self.prefix_len };
+        self.edit_prefix = if self.prefix_len == 0 {
+            24
+        } else {
+            self.prefix_len
+        };
         self.edit_gw_len = widgets::format_ip(self.gateway, &mut self.edit_gateway);
         self.edit_dns1_len = widgets::format_ip(self.dns1, &mut self.edit_dns1);
         self.edit_dns2_len = widgets::format_ip(self.dns2, &mut self.edit_dns2);
@@ -265,7 +276,10 @@ fn run_dhcp_request(app: &mut SettingsApp, source: &'static str) -> bool {
 
 #[inline]
 fn is_text_field(idx: usize) -> bool {
-    matches!(idx, FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2)
+    matches!(
+        idx,
+        FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2
+    )
 }
 
 pub fn activate(app: &mut SettingsApp, idx: usize) {
@@ -470,12 +484,24 @@ pub fn render(app: &SettingsApp) {
     cy += r4;
 
     let link_str = if net.link_up { "UP" } else { "DOWN" };
-    let link_color = if net.link_up { t.success } else { t.destructive };
+    let link_color = if net.link_up {
+        t.success
+    } else {
+        t.destructive
+    };
     layout::draw_kv(app, px, cy, "Link:", link_str, link_color);
     cy += r2;
 
-    let stack_str = if net.stack_available { "ONLINE" } else { "OFFLINE" };
-    let stack_color = if net.stack_available { t.success } else { t.warning };
+    let stack_str = if net.stack_available {
+        "ONLINE"
+    } else {
+        "OFFLINE"
+    };
+    let stack_color = if net.stack_available {
+        t.success
+    } else {
+        t.warning
+    };
     layout::draw_kv(app, px, cy, "IP Stack:", stack_str, stack_color);
     cy += r2;
 
@@ -508,7 +534,14 @@ pub fn render(app: &SettingsApp) {
     cy += r8;
 
     // explicit activation control — always visible near top.
-    layout::draw_button_row(app, px, cy, "Activate Networking", FIELD_ACTIVATE, t.warning);
+    layout::draw_button_row(
+        app,
+        px,
+        cy,
+        "Activate Networking",
+        FIELD_ACTIVATE,
+        t.warning,
+    );
     cy += r8;
 
     // configuration section
@@ -516,21 +549,44 @@ pub fn render(app: &SettingsApp) {
     cy += r4;
 
     // mode selector + explicit DHCP action
-    let dhcp_label = if net.edit_dhcp { "[X] Mode: DHCP" } else { "[ ] Mode: DHCP" };
-    let static_label = if net.edit_dhcp { "[ ] Mode: Static" } else { "[X] Mode: Static" };
+    let dhcp_label = if net.edit_dhcp {
+        "[X] Mode: DHCP"
+    } else {
+        "[ ] Mode: DHCP"
+    };
+    let static_label = if net.edit_dhcp {
+        "[ ] Mode: Static"
+    } else {
+        "[X] Mode: Static"
+    };
     layout::draw_button_row(app, px, cy, dhcp_label, FIELD_MODE_DHCP, t.glyph);
     cy += r8;
     layout::draw_button_row(app, px, cy, static_label, FIELD_MODE_STATIC, t.glyph);
     cy += r8;
 
-    layout::draw_button_row(app, px, cy, "Request IP (DHCP)", FIELD_DHCP_REQUEST, t.warning);
+    layout::draw_button_row(
+        app,
+        px,
+        cy,
+        "Request IP (DHCP)",
+        FIELD_DHCP_REQUEST,
+        t.warning,
+    );
     cy += r8;
 
     // hostname
     let hn = core::str::from_utf8(&net.edit_hostname[..net.edit_hostname_len]).unwrap_or("");
     let hn_display = if hn.is_empty() { "(none)" } else { hn };
     let hn_editing = net.editing_field == Some(FIELD_HOSTNAME);
-    draw_editable_field(app, px, cy, "Hostname:", hn_display, FIELD_HOSTNAME, hn_editing);
+    draw_editable_field(
+        app,
+        px,
+        cy,
+        "Hostname:",
+        hn_display,
+        FIELD_HOSTNAME,
+        hn_editing,
+    );
     cy += r8;
 
     if !net.edit_dhcp {
@@ -546,7 +602,8 @@ pub fn render(app: &SettingsApp) {
         layout::draw_field_row(app, px, cy, "Prefix Len:", pfx_str, false, FIELD_PREFIX);
         cy += r8;
 
-        let gw_str = core::str::from_utf8(&net.edit_gateway[..net.edit_gw_len]).unwrap_or("0.0.0.0");
+        let gw_str =
+            core::str::from_utf8(&net.edit_gateway[..net.edit_gw_len]).unwrap_or("0.0.0.0");
         let gw_editing = net.editing_field == Some(FIELD_GATEWAY);
         draw_editable_field(app, px, cy, "Gateway:", gw_str, FIELD_GATEWAY, gw_editing);
         cy += r8;
@@ -558,7 +615,15 @@ pub fn render(app: &SettingsApp) {
 
         let d2_str = core::str::from_utf8(&net.edit_dns2[..net.edit_dns2_len]).unwrap_or("0.0.0.0");
         let d2_editing = net.editing_field == Some(FIELD_DNS2);
-        draw_editable_field(app, px, cy, "DNS Secondary:", d2_str, FIELD_DNS2, d2_editing);
+        draw_editable_field(
+            app,
+            px,
+            cy,
+            "DNS Secondary:",
+            d2_str,
+            FIELD_DNS2,
+            d2_editing,
+        );
         cy += r8;
     } else {
         // show current DHCP-assigned values as read-only
@@ -580,7 +645,11 @@ pub fn render(app: &SettingsApp) {
         layout::draw_kv(app, px, cy, "DNS:", d1_str, t.immutable);
         cy += r4;
 
-        let dhcp_flag = if (net.flags & net::NET_FLAG_DHCP) != 0 { "yes" } else { "no" };
+        let dhcp_flag = if (net.flags & net::NET_FLAG_DHCP) != 0 {
+            "yes"
+        } else {
+            "no"
+        };
         layout::draw_kv(app, px, cy, "DHCP Active:", dhcp_flag, t.telemetry);
         cy += r8;
     }
@@ -616,7 +685,15 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "RX Bytes:", rx_b, t.telemetry);
 }
 
-fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &str, field_idx: usize, editing: bool) {
+fn draw_editable_field(
+    app: &SettingsApp,
+    x: u32,
+    y: u32,
+    label: &str,
+    value: &str,
+    field_idx: usize,
+    editing: bool,
+) {
     let s = app.surface;
     let st = app.fb_stride;
     let w = app.fb_w;
@@ -624,7 +701,13 @@ fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &s
     let t = &app.theme;
 
     let is_focused = !app.focus_in_rail && app.pane_focus == field_idx;
-    let bg = if editing { t.input_bg } else if is_focused { t.surface } else { t.substrate };
+    let bg = if editing {
+        t.input_bg
+    } else if is_focused {
+        t.surface
+    } else {
+        t.substrate
+    };
     let row_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
     let row_h = layout::row_step(app, 4);
     app.register_widget_hitbox(x, y, row_w, row_h, field_idx);
@@ -642,10 +725,32 @@ fn draw_editable_field(app: &SettingsApp, x: u32, y: u32, label: &str, value: &s
     let ty = y + row_h.saturating_sub(widgets::FONT_H) / 2;
     let label_w = (row_w / 3).clamp(12 * widgets::FONT_W, 22 * widgets::FONT_W);
     let label_chars = label_w.saturating_sub(8) / widgets::FONT_W;
-    widgets::draw_str_trunc(s, st, x + 4, ty, label, t.glyph_dim, bg, w, h, label_chars as usize);
+    widgets::draw_str_trunc(
+        s,
+        st,
+        x + 4,
+        ty,
+        label,
+        t.glyph_dim,
+        bg,
+        w,
+        h,
+        label_chars as usize,
+    );
     let vx = x + label_w;
     let value_chars = row_w.saturating_sub(label_w + 6) / widgets::FONT_W;
-    widgets::draw_str_trunc(s, st, vx, ty, value, t.glyph, bg, w, h, value_chars as usize);
+    widgets::draw_str_trunc(
+        s,
+        st,
+        vx,
+        ty,
+        value,
+        t.glyph,
+        bg,
+        w,
+        h,
+        value_chars as usize,
+    );
 
     // cursor
     if editing {

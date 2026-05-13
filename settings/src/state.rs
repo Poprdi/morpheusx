@@ -1,11 +1,9 @@
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 
-
 use crate::chambers::{
-    archive::ArchiveChamber, gateway::GatewayChamber, hall::HallChamber,
-    mirror::MirrorChamber, mist::MistChamber, net_obs::NetObsChamber,
-    sys_obs::SysObsChamber,
+    archive::ArchiveChamber, gateway::GatewayChamber, hall::HallChamber, mirror::MirrorChamber,
+    mist::MistChamber, net_obs::NetObsChamber, sys_obs::SysObsChamber,
 };
 use crate::layout;
 use crate::theme::OneiricTheme;
@@ -197,13 +195,7 @@ impl SettingsApp {
         }
     }
 
-    pub fn new(
-        surface: *mut u32,
-        fb_w: u32,
-        fb_h: u32,
-        fb_stride: u32,
-        is_bgrx: bool,
-    ) -> Self {
+    pub fn new(surface: *mut u32, fb_w: u32, fb_h: u32, fb_stride: u32, is_bgrx: bool) -> Self {
         Self {
             surface,
             fb_w,
@@ -243,13 +235,15 @@ impl SettingsApp {
 
             tick_count: 0,
 
-            hitboxes: RefCell::new([Hitbox {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-                widget_idx: 0,
-            }; 128]),
+            hitboxes: RefCell::new(
+                [Hitbox {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                    widget_idx: 0,
+                }; 128],
+            ),
             hitbox_count: Cell::new(0),
         }
     }
@@ -260,7 +254,10 @@ impl SettingsApp {
         self.net_obs.refresh();
         self.sys_obs.refresh();
         self.mist.refresh();
-        self.set_status("Tab switch focus, W/S move, Enter activate, 1-7 jump sections", false);
+        self.set_status(
+            "Tab switch focus, W/S move, Enter activate, 1-7 jump sections",
+            false,
+        );
     }
 
     pub fn tick(&mut self) {
@@ -490,7 +487,9 @@ impl SettingsApp {
     }
 
     pub fn has_pending_for(&self, route: Route) -> bool {
-        self.pending.iter().any(|p| p.chamber == route && p.state == FieldState::Edited)
+        self.pending
+            .iter()
+            .any(|p| p.chamber == route && p.state == FieldState::Edited)
     }
 
     pub fn has_any_pending(&self) -> bool {
@@ -643,7 +642,13 @@ impl SettingsApp {
         self.frame_dirty = true;
     }
 
-    pub fn log_change(&mut self, chamber: Route, field: &'static str, desc: &str, destructive: bool) {
+    pub fn log_change(
+        &mut self,
+        chamber: Route,
+        field: &'static str,
+        desc: &str,
+        destructive: bool,
+    ) {
         let ts = libmorpheus::time::uptime_ms();
         let mut buf = [0u8; 128];
         let n = desc.len().min(128);
@@ -660,7 +665,11 @@ impl SettingsApp {
 
     pub fn mark_edited(&mut self, chamber: Route, field: &'static str) {
         // upsert
-        if let Some(p) = self.pending.iter_mut().find(|p| p.chamber == chamber && p.field_name == field) {
+        if let Some(p) = self
+            .pending
+            .iter_mut()
+            .find(|p| p.chamber == chamber && p.field_name == field)
+        {
             p.state = FieldState::Edited;
         } else {
             self.pending.push(PendingChange {

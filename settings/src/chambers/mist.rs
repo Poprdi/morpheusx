@@ -179,7 +179,17 @@ pub fn render(app: &SettingsApp) {
     };
     widgets::draw_str(s, st, px, cy, packing, t.immutable, t.substrate, w, h);
     cy += r2;
-    widgets::draw_str(s, st, px, cy, "addr = base + (y * stride) + (x * 4)", t.glyph_dim, t.substrate, w, h);
+    widgets::draw_str(
+        s,
+        st,
+        px,
+        cy,
+        "addr = base + (y * stride) + (x * 4)",
+        t.glyph_dim,
+        t.substrate,
+        w,
+        h,
+    );
     cy += r12;
 
     layout::draw_button_row(app, px, cy, "Refresh Display Info", FIELD_REFRESH, t.glyph);

@@ -1,13 +1,13 @@
 use super::state::{
-    clear_waiter_all, sample_idle_tsc_total, sample_per_core_idle_tsc as state_sample_per_core_idle_tsc,
-    set_percpu_fpu_ptr, set_this_core_pid, this_core_pid, KERNEL_CR3,
-    KERNEL_HLT_ENTRY_TSC, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY,
-    TIMED_BLOCK_COUNT, TSC_FREQUENCY,
+    clear_waiter_all, sample_idle_tsc_total,
+    sample_per_core_idle_tsc as state_sample_per_core_idle_tsc, set_percpu_fpu_ptr,
+    set_this_core_pid, this_core_pid, KERNEL_CR3, KERNEL_HLT_ENTRY_TSC, LIVE_COUNT, PROCESS_TABLE,
+    PROCESS_TABLE_LOCK, SCHEDULER_READY, TIMED_BLOCK_COUNT, TSC_FREQUENCY,
 };
 use crate::cpu::gdt::{KERNEL_CS, KERNEL_DS};
 use crate::process::{
     BlockReason, CpuContext, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal,
-    SCHED_CAP_DEFAULT, MAX_PROCESSES,
+    MAX_PROCESSES, SCHED_CAP_DEFAULT,
 };
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::Ordering;

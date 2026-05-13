@@ -63,7 +63,7 @@ pub struct PerCpu {
     // 0x48+ — less hot fields below, not accessed from ASM
     /// True while this core is inside scheduler_tick.
     pub in_tick: bool,
-    /// True once this core has finished init and entered the scheduler.
+    /// True once this core has finished CPU-local init.
     pub online: bool,
     /// AP's original kernel stack top (set during AP boot, never changed).
     /// Used to restore RSP when the AP returns to the idle loop after
@@ -143,7 +143,7 @@ unsafe fn lapic_id_to_index(lapic_id: u32) -> Option<u32> {
     None
 }
 
-/// Number of cores that have completed init.
+/// Number of cores that have completed CPU-local init.
 pub static AP_ONLINE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 static SHUTDOWN_QUIESCE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -261,8 +261,6 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
     wrmsr(IA32_GS_BASE, addr);
     wrmsr(IA32_KERNEL_GS_BASE, 0);
 
-    
-
     // AP bring-up is noisy on many-core systems; summary is logged by SMP phase.
 }
 
@@ -373,10 +371,7 @@ pub fn wait_for_shutdown_quiesce(timeout_ms: u64) -> bool {
     let tsc_hz = crate::process::scheduler::tsc_frequency();
     let deadline = if tsc_hz > 0 {
         let ticks_per_ms = (tsc_hz / 1000).max(1);
-        Some(
-            crate::cpu::tsc::read_tsc()
-                .saturating_add(timeout_ms.saturating_mul(ticks_per_ms)),
-        )
+        Some(crate::cpu::tsc::read_tsc().saturating_add(timeout_ms.saturating_mul(ticks_per_ms)))
     } else {
         None
     };
