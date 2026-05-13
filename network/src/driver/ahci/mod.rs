@@ -33,10 +33,10 @@ pub mod init;
 pub mod port;
 pub mod regs;
 
+use crate::boot::read_tsc_raw;
 use crate::driver::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
-use crate::boot::read_tsc_raw;
 use core::ptr;
 
 // Re-exports

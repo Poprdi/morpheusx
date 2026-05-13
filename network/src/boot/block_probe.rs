@@ -915,7 +915,8 @@ pub unsafe fn create_unified_from_detected(
                 identify_cpu: config.ahci_identify_cpu,
                 identify_phys: config.ahci_identify_phys,
             };
-            let driver = AhciDriver::new(info.abar, ahci_config).map_err(UnifiedBlockError::AhciError)?;
+            let driver =
+                AhciDriver::new(info.abar, ahci_config).map_err(UnifiedBlockError::AhciError)?;
             Ok(UnifiedBlockDevice::Ahci(driver))
         }
         DetectedBlockDevice::Sdhci(info) => {

@@ -1,4 +1,3 @@
-
 use super::prepare::{
     register_poweroff_handler, register_prepare_handler, register_restart_handler, TransitionKind,
 };
@@ -16,7 +15,8 @@ fn prepare_disable_pci_bus_mastering(_kind: TransitionKind) -> bool {
 
             touched += clear_bus_master_on_function(addr) as u32;
 
-            let header_type = crate::pci::pci_cfg_read16(addr, crate::pci::offset::HEADER_TYPE) as u8;
+            let header_type =
+                crate::pci::pci_cfg_read16(addr, crate::pci::offset::HEADER_TYPE) as u8;
             if (header_type & 0x80) != 0 {
                 for function in 1..8u8 {
                     let faddr = crate::pci::PciAddr::new(bus, device, function);

@@ -24,7 +24,11 @@ pub fn tick(state: &mut ShellState) {
     );
 
     // START button
-    let (sr, sg, sb) = if state.launcher_open { state.start_active_rgb } else { state.start_rgb };
+    let (sr, sg, sb) = if state.launcher_open {
+        state.start_active_rgb
+    } else {
+        state.start_rgb
+    };
     let start_bg = state.pack(sr, sg, sb);
     raw_fill(
         state.surface_ptr,
@@ -36,7 +40,11 @@ pub fn tick(state: &mut ShellState) {
         start_bg,
     );
     let start_fg = (255u8, 255u8, 255u8);
-    let start_bg_rgb = if state.launcher_open { state.start_active_rgb } else { state.start_rgb };
+    let start_bg_rgb = if state.launcher_open {
+        state.start_active_rgb
+    } else {
+        state.start_rgb
+    };
     draw_text(state, 10, panel_y + 7, "START", start_fg, start_bg_rgb);
 
     // status label

@@ -1,8 +1,8 @@
 use super::state::{
     this_core_pid, EARLIEST_DEADLINE, PROCESS_TABLE, PROCESS_TABLE_LOCK, TIMED_BLOCK_COUNT,
 };
-use crate::process::{BlockReason, Process, ProcessState, PROCESS_KERNEL_STACK_SIZE};
 use crate::memory::{global_registry_mut, is_registry_initialized, PAGE_SIZE};
+use crate::process::{BlockReason, Process, ProcessState, PROCESS_KERNEL_STACK_SIZE};
 use core::sync::atomic::Ordering;
 
 pub unsafe fn block_sleep(deadline: u64) -> u64 {
@@ -15,7 +15,15 @@ pub unsafe fn block_sleep(deadline: u64) -> u64 {
         loop {
             let current_earliest = EARLIEST_DEADLINE.load(Ordering::Relaxed);
             if deadline < current_earliest {
-                if EARLIEST_DEADLINE.compare_exchange(current_earliest, deadline, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+                if EARLIEST_DEADLINE
+                    .compare_exchange(
+                        current_earliest,
+                        deadline,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
                     break;
                 }
             } else {

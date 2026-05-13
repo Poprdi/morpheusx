@@ -17,7 +17,11 @@ unsafe fn activate_network_from_userspace() -> i64 {
         return -1;
     };
 
-    morpheus_hwinit::serial::log_info("NET", 943, "probing NIC via network::probe_and_create_driver");
+    morpheus_hwinit::serial::log_info(
+        "NET",
+        943,
+        "probing NIC via network::probe_and_create_driver",
+    );
     let driver = match probe_and_create_driver(dma, tsc_freq) {
         Ok(ProbeResult::VirtIO(v)) => {
             morpheus_hwinit::serial::log_info("NET", 949, "probe selected virtio NIC");
@@ -28,7 +32,11 @@ unsafe fn activate_network_from_userspace() -> i64 {
             UnifiedNetDevice::Intel(i)
         }
         Err(ProbeError::NoDevice) => {
-            morpheus_hwinit::serial::log_error("NET", 944, "probe failed: no supported NIC detected");
+            morpheus_hwinit::serial::log_error(
+                "NET",
+                944,
+                "probe failed: no supported NIC detected",
+            );
             nic::log_pci_network_candidates();
             return -2;
         }

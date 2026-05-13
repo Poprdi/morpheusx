@@ -111,7 +111,17 @@ fn render_rail(app: &SettingsApp) {
 
         // focus ring
         if is_focused {
-            widgets::rect_outline(s, st, 0, y, RAIL_WIDTH - 1, RAIL_ITEM_HEIGHT, t.focus_ring, w, h);
+            widgets::rect_outline(
+                s,
+                st,
+                0,
+                y,
+                RAIL_WIDTH - 1,
+                RAIL_ITEM_HEIGHT,
+                t.focus_ring,
+                w,
+                h,
+            );
         }
 
         // sigil + label
@@ -119,7 +129,18 @@ fn render_rail(app: &SettingsApp) {
         let label = route.label();
         let fg = if is_current { t.glyph } else { t.glyph_dim };
         widgets::draw_str(s, st, 4, y + 2, sigil, t.signal, bg, w, h);
-        widgets::draw_str_trunc(s, st, 4 + 2 * widgets::FONT_W, y + 4, label, fg, bg, w, h, 14);
+        widgets::draw_str_trunc(
+            s,
+            st,
+            4 + 2 * widgets::FONT_W,
+            y + 4,
+            label,
+            fg,
+            bg,
+            w,
+            h,
+            14,
+        );
 
         // keyboard hint (1-7)
         let mut hint = [0u8; 1];
@@ -195,7 +216,11 @@ fn render_bar(app: &SettingsApp) {
     // status message (right-aligned in bar)
     if app.status_len > 0 {
         let msg = core::str::from_utf8(&app.status_msg[..app.status_len]).unwrap_or("");
-        let fg = if app.status_is_error { t.destructive } else { t.success };
+        let fg = if app.status_is_error {
+            t.destructive
+        } else {
+            t.success
+        };
         let sx = w.saturating_sub((msg.len() as u32 + 1) * widgets::FONT_W);
         widgets::draw_str(s, st, sx, btn_y, msg, fg, t.bar_bg, w, h);
     }
@@ -212,7 +237,16 @@ pub fn draw_section(app: &SettingsApp, x: u32, y: u32, title: &str) {
     widgets::draw_str(s, st, x, y, title, t.signal, t.substrate, w, h);
     let line_x = x + (title.len() as u32 + 1) * widgets::FONT_W;
     let line_w = (w - RAIL_WIDTH).saturating_sub(line_x - RAIL_WIDTH + PANE_PAD);
-    widgets::hline(s, st, line_x, y + widgets::FONT_H / 2, line_w, t.contour, w, h);
+    widgets::hline(
+        s,
+        st,
+        line_x,
+        y + widgets::FONT_H / 2,
+        line_w,
+        t.contour,
+        w,
+        h,
+    );
 }
 
 // labeled value row — "Label: value" with alignment
@@ -227,11 +261,30 @@ pub fn draw_kv(app: &SettingsApp, x: u32, y: u32, key: &str, val: &str, val_colo
     let vx = x + (key.len() as u32 + 1) * widgets::FONT_W;
     let pane_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
     let max_chars = pane_w.saturating_sub(vx.saturating_sub(x)) / widgets::FONT_W;
-    widgets::draw_str_trunc(s, st, vx, y, val, val_color, t.substrate, w, h, max_chars as usize);
+    widgets::draw_str_trunc(
+        s,
+        st,
+        vx,
+        y,
+        val,
+        val_color,
+        t.substrate,
+        w,
+        h,
+        max_chars as usize,
+    );
 }
 
 // focusable field row — highlighted when focused
-pub fn draw_field_row(app: &SettingsApp, x: u32, y: u32, label: &str, value: &str, _focused: bool, field_idx: usize) {
+pub fn draw_field_row(
+    app: &SettingsApp,
+    x: u32,
+    y: u32,
+    label: &str,
+    value: &str,
+    _focused: bool,
+    field_idx: usize,
+) {
     let s = app.surface;
     let st = app.fb_stride;
     let w = app.fb_w;
@@ -254,14 +307,43 @@ pub fn draw_field_row(app: &SettingsApp, x: u32, y: u32, label: &str, value: &st
 
     let label_w = (row_w / 3).clamp(12 * widgets::FONT_W, 22 * widgets::FONT_W);
     let label_chars = label_w.saturating_sub(8) / widgets::FONT_W;
-    widgets::draw_str_trunc(s, st, x + 4, ty, label, t.glyph_dim, bg, w, h, label_chars as usize);
+    widgets::draw_str_trunc(
+        s,
+        st,
+        x + 4,
+        ty,
+        label,
+        t.glyph_dim,
+        bg,
+        w,
+        h,
+        label_chars as usize,
+    );
     let vx = x + label_w;
     let value_chars = row_w.saturating_sub(label_w + 6) / widgets::FONT_W;
-    widgets::draw_str_trunc(s, st, vx, ty, value, t.glyph, bg, w, h, value_chars as usize);
+    widgets::draw_str_trunc(
+        s,
+        st,
+        vx,
+        ty,
+        value,
+        t.glyph,
+        bg,
+        w,
+        h,
+        value_chars as usize,
+    );
 }
 
 // button row — rendered as a text button
-pub fn draw_button_row(app: &SettingsApp, x: u32, y: u32, label: &str, field_idx: usize, color: u32) {
+pub fn draw_button_row(
+    app: &SettingsApp,
+    x: u32,
+    y: u32,
+    label: &str,
+    field_idx: usize,
+    color: u32,
+) {
     let s = app.surface;
     let st = app.fb_stride;
     let w = app.fb_w;
@@ -276,10 +358,31 @@ pub fn draw_button_row(app: &SettingsApp, x: u32, y: u32, label: &str, field_idx
     app.register_widget_hitbox(x, y, btn_w, btn_h, field_idx);
 
     widgets::fill_rect(s, st, x, y, btn_w, btn_h, bg, w, h);
-    widgets::rect_outline(s, st, x, y, btn_w, btn_h, if is_focused { t.focus_ring } else { t.contour }, w, h);
+    widgets::rect_outline(
+        s,
+        st,
+        x,
+        y,
+        btn_w,
+        btn_h,
+        if is_focused { t.focus_ring } else { t.contour },
+        w,
+        h,
+    );
     let label_chars = btn_w.saturating_sub(4 * widgets::FONT_W) / widgets::FONT_W;
     let ty = y + btn_h.saturating_sub(widgets::FONT_H) / 2;
-    widgets::draw_str_trunc(s, st, x + 2 * widgets::FONT_W, ty, label, color, bg, w, h, label_chars as usize);
+    widgets::draw_str_trunc(
+        s,
+        st,
+        x + 2 * widgets::FONT_W,
+        ty,
+        label,
+        color,
+        bg,
+        w,
+        h,
+        label_chars as usize,
+    );
 }
 
 // risk band — a warning banner for destructive context

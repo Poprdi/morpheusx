@@ -326,7 +326,11 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
 pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
     let rsdp_phys = RSDP_PHYS_OVERRIDE.load(Ordering::Acquire);
     if rsdp_phys == 0 {
-        crate::serial::log_warn("ACPI", 760, "UEFI RSDP pointer unavailable; MADT discovery unavailable");
+        crate::serial::log_warn(
+            "ACPI",
+            760,
+            "UEFI RSDP pointer unavailable; MADT discovery unavailable",
+        );
         return ApLapicIds::empty();
     }
 

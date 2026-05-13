@@ -71,7 +71,11 @@ pub(super) unsafe fn net_poll_drive(timestamp_ms: u64) -> i64 {
     stack.device_mut().refill_rx_queue();
     let activity = stack.poll(timestamp_ms);
     stack.device_mut().collect_tx_completions();
-    if activity { 1 } else { 0 }
+    if activity {
+        1
+    } else {
+        0
+    }
 }
 
 pub(super) unsafe fn net_poll_stats(buf: *mut u8) -> i64 {

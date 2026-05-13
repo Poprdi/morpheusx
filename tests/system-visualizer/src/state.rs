@@ -291,7 +291,8 @@ impl SystemState {
         self.load_history[self.load_head % HISTORY_LEN] = used_pct;
         self.cpu_history[self.load_head % HISTORY_LEN] = (self.total_cpu_pct as u8).min(100);
         for core in 0..live_cores {
-            self.per_core_history[core][self.load_head % HISTORY_LEN] = self.per_core_util_pct[core];
+            self.per_core_history[core][self.load_head % HISTORY_LEN] =
+                self.per_core_util_pct[core];
         }
         self.load_head = self.load_head.wrapping_add(1);
     }

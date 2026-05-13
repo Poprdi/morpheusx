@@ -1,11 +1,10 @@
 use super::lifecycle::terminate_process_inner;
-use crate::process::{
-    BlockReason, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal,
-    MAX_PROCESSES,
-};
 use crate::cpu::per_cpu::MAX_CPUS;
+use crate::process::{
+    BlockReason, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal, MAX_PROCESSES,
+};
 use crate::serial::{put_hex32, puts};
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,18 +56,30 @@ pub(super) static KERNEL_LAST_WAS_IDLE: core::sync::atomic::AtomicBool =
 pub(super) static KERNEL_SKIP_STREAK: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
 pub(super) const MAX_KERNEL_SKIP: u32 = 1;
-pub(super) static SCHED_SYSTEM_STATE: AtomicU8 = AtomicU8::new(SchedulerSystemState::Balanced as u8);
-pub(super) static PER_CORE_STATE: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(SchedulerCoreState::Active as u8) }; MAX_CPUS];
-pub(super) static PER_CORE_LOAD_EWMA: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_IDLE_TICKS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_IDLE_ENTRY_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_IDLE_ACCUM_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_LAST_ACTIVE_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_PARK_CANDIDATE: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_IDLE_STREAK: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_ACTIVE_STREAK: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_LAST_STATE_CHANGE_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
-pub(super) static PER_CORE_LAST_TRANSITION_REASON: [AtomicU8; MAX_CPUS] = [const { AtomicU8::new(SchedulerTransitionReason::TickWork as u8) }; MAX_CPUS];
+pub(super) static SCHED_SYSTEM_STATE: AtomicU8 =
+    AtomicU8::new(SchedulerSystemState::Balanced as u8);
+pub(super) static PER_CORE_STATE: [AtomicU8; MAX_CPUS] =
+    [const { AtomicU8::new(SchedulerCoreState::Active as u8) }; MAX_CPUS];
+pub(super) static PER_CORE_LOAD_EWMA: [AtomicU32; MAX_CPUS] =
+    [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_TICKS: [AtomicU64; MAX_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_ENTRY_TSC: [AtomicU64; MAX_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_ACCUM_TSC: [AtomicU64; MAX_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_LAST_ACTIVE_TSC: [AtomicU64; MAX_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_PARK_CANDIDATE: [AtomicU8; MAX_CPUS] =
+    [const { AtomicU8::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_IDLE_STREAK: [AtomicU32; MAX_CPUS] =
+    [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_ACTIVE_STREAK: [AtomicU32; MAX_CPUS] =
+    [const { AtomicU32::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_LAST_STATE_CHANGE_TSC: [AtomicU64; MAX_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_CPUS];
+pub(super) static PER_CORE_LAST_TRANSITION_REASON: [AtomicU8; MAX_CPUS] =
+    [const { AtomicU8::new(SchedulerTransitionReason::TickWork as u8) }; MAX_CPUS];
 pub(super) static SCHED_TIER_HITS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 pub(super) static THERMAL_LEVEL: AtomicU8 = AtomicU8::new(0);
 pub(super) static THERMAL_CONFIDENCE: AtomicU8 = AtomicU8::new(0);
@@ -86,7 +97,11 @@ static FUTEX_WAITERS: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
 
 #[inline(always)]
 fn pid_mask(pid: u32) -> u64 {
-    if pid < 64 { 1u64 << pid } else { 0 }
+    if pid < 64 {
+        1u64 << pid
+    } else {
+        0
+    }
 }
 
 #[inline(always)]

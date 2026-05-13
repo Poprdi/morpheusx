@@ -283,7 +283,11 @@ pub fn reboot_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                 return 0;
             }
             _ => {
-                con.write_colored(fb, &format!("reboot: unknown option: {}\n", arg), (170, 0, 0));
+                con.write_colored(
+                    fb,
+                    &format!("reboot: unknown option: {}\n", arg),
+                    (170, 0, 0),
+                );
                 return 1;
             }
         }
@@ -366,7 +370,11 @@ pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 
     }
 
     if force && panic_mode {
-        con.write_colored(fb, "shutdown: -f and -p are mutually exclusive\n", (170, 0, 0));
+        con.write_colored(
+            fb,
+            "shutdown: -f and -p are mutually exclusive\n",
+            (170, 0, 0),
+        );
         return 1;
     }
 
@@ -466,7 +474,11 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                 return 0;
             }
             _ => {
-                con.write_colored(fb, &format!("netup: unknown option: {}\n", arg), (170, 0, 0));
+                con.write_colored(
+                    fb,
+                    &format!("netup: unknown option: {}\n", arg),
+                    (170, 0, 0),
+                );
                 return 1;
             }
         }
@@ -534,7 +546,11 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
             0
         }
         Err(e) => {
-            con.write_colored(fb, &format!("netup: activation failed: 0x{:x}\n", e), (170, 0, 0));
+            con.write_colored(
+                fb,
+                &format!("netup: activation failed: 0x{:x}\n", e),
+                (170, 0, 0),
+            );
             1
         }
     }

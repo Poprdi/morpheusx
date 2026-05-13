@@ -25,7 +25,10 @@ pub(super) unsafe fn net_tcp_connect_impl(handle: i64, ip: u32, port: u16) -> i6
         return -1;
     };
 
-    if stack.tcp_connect(socket, state::ip_from_nbo(ip), port).is_ok() {
+    if stack
+        .tcp_connect(socket, state::ip_from_nbo(ip), port)
+        .is_ok()
+    {
         0
     } else {
         -1

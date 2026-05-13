@@ -426,7 +426,11 @@ impl Keyboard {
             Self::io_delay();
         }
         if !reset_ok {
-            morpheus_hwinit::serial::log_warn("INPUT", 938, "keyboard reset/BAT failed after retries");
+            morpheus_hwinit::serial::log_warn(
+                "INPUT",
+                938,
+                "keyboard reset/BAT failed after retries",
+            );
         }
 
         // 6) Program known scan behavior (set 1) and verify.
@@ -465,7 +469,11 @@ impl Keyboard {
         if self.initialized {
             morpheus_hwinit::serial::log_ok("INPUT", 930, "PS/2 keyboard ready (full reset path)");
         } else {
-            morpheus_hwinit::serial::log_warn("INPUT", 941, "PS/2 keyboard init failed (full reset path)");
+            morpheus_hwinit::serial::log_warn(
+                "INPUT",
+                941,
+                "PS/2 keyboard init failed (full reset path)",
+            );
         }
     }
 

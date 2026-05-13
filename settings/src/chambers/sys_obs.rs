@@ -75,56 +75,48 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             app.sys_obs.refresh();
             app.set_status("Telemetry refreshed", false);
         }
-        FIELD_REBOOT => {
-            match app.sys_obs.reboot_arm {
-                ArmState::Disarmed => {
-                    app.sys_obs.reboot_arm = ArmState::Armed;
-                    app.set_status("Reboot ARMED. Press again to confirm.", false);
-                }
-                ArmState::Armed => {
-                    app.sys_obs.reboot_arm = ArmState::Confirmed;
-                    app.log_change(Route::SysObservatory, "power", "Graceful reboot", true);
-                    let _ = sys::reboot(false);
-                }
-                ArmState::Confirmed => {}
+        FIELD_REBOOT => match app.sys_obs.reboot_arm {
+            ArmState::Disarmed => {
+                app.sys_obs.reboot_arm = ArmState::Armed;
+                app.set_status("Reboot ARMED. Press again to confirm.", false);
             }
-        }
-        FIELD_SHUTDOWN => {
-            match app.sys_obs.shutdown_arm {
-                ArmState::Disarmed => {
-                    app.sys_obs.shutdown_arm = ArmState::Armed;
-                    app.set_status("Shutdown ARMED. Press again to confirm.", false);
-                }
-                ArmState::Armed => {
-                    app.sys_obs.shutdown_arm = ArmState::Confirmed;
-                    app.log_change(Route::SysObservatory, "power", "Graceful shutdown", true);
-                    let _ = sys::shutdown(false);
-                }
-                ArmState::Confirmed => {}
+            ArmState::Armed => {
+                app.sys_obs.reboot_arm = ArmState::Confirmed;
+                app.log_change(Route::SysObservatory, "power", "Graceful reboot", true);
+                let _ = sys::reboot(false);
             }
-        }
-        FIELD_FORCE_REBOOT => {
-            match app.sys_obs.reboot_arm {
-                ArmState::Armed => {
-                    app.log_change(Route::SysObservatory, "power", "Force reboot", true);
-                    let _ = sys::reboot(true);
-                }
-                _ => {
-                    app.set_status("Arm reboot first (Enter on Reboot)", false);
-                }
+            ArmState::Confirmed => {}
+        },
+        FIELD_SHUTDOWN => match app.sys_obs.shutdown_arm {
+            ArmState::Disarmed => {
+                app.sys_obs.shutdown_arm = ArmState::Armed;
+                app.set_status("Shutdown ARMED. Press again to confirm.", false);
             }
-        }
-        FIELD_FORCE_SHUTDOWN => {
-            match app.sys_obs.shutdown_arm {
-                ArmState::Armed => {
-                    app.log_change(Route::SysObservatory, "power", "Force shutdown", true);
-                    let _ = sys::shutdown(true);
-                }
-                _ => {
-                    app.set_status("Arm shutdown first (Enter on Shutdown)", false);
-                }
+            ArmState::Armed => {
+                app.sys_obs.shutdown_arm = ArmState::Confirmed;
+                app.log_change(Route::SysObservatory, "power", "Graceful shutdown", true);
+                let _ = sys::shutdown(false);
             }
-        }
+            ArmState::Confirmed => {}
+        },
+        FIELD_FORCE_REBOOT => match app.sys_obs.reboot_arm {
+            ArmState::Armed => {
+                app.log_change(Route::SysObservatory, "power", "Force reboot", true);
+                let _ = sys::reboot(true);
+            }
+            _ => {
+                app.set_status("Arm reboot first (Enter on Reboot)", false);
+            }
+        },
+        FIELD_FORCE_SHUTDOWN => match app.sys_obs.shutdown_arm {
+            ArmState::Armed => {
+                app.log_change(Route::SysObservatory, "power", "Force shutdown", true);
+                let _ = sys::shutdown(true);
+            }
+            _ => {
+                app.set_status("Arm shutdown first (Enter on Shutdown)", false);
+            }
+        },
         _ => {}
     }
 }
@@ -179,8 +171,28 @@ pub fn render(app: &SettingsApp) {
     } else {
         0
     };
-    let bar_color = if pct > 90 { t.destructive } else if pct > 70 { t.warning } else { t.signal };
-    widgets::draw_bar(s, st, px, cy, bar_w, 10, pct, 100, bar_color, t.substrate, t.contour, w, h);
+    let bar_color = if pct > 90 {
+        t.destructive
+    } else if pct > 70 {
+        t.warning
+    } else {
+        t.signal
+    };
+    widgets::draw_bar(
+        s,
+        st,
+        px,
+        cy,
+        bar_w,
+        10,
+        pct,
+        100,
+        bar_color,
+        t.substrate,
+        t.contour,
+        w,
+        h,
+    );
     cy += (r4 / 2).max(10);
 
     // heap section
@@ -244,7 +256,14 @@ pub fn render(app: &SettingsApp) {
     if matches!(sys.reboot_arm, ArmState::Armed) {
         layout::draw_risk_band(app, px, cy, "System will restart. Unsaved work is lost.");
         cy += r4;
-        layout::draw_button_row(app, px, cy, "Force Reboot (skip cleanup)", FIELD_FORCE_REBOOT, t.destructive);
+        layout::draw_button_row(
+            app,
+            px,
+            cy,
+            "Force Reboot (skip cleanup)",
+            FIELD_FORCE_REBOOT,
+            t.destructive,
+        );
         cy += r4;
     }
 
@@ -263,8 +282,20 @@ pub fn render(app: &SettingsApp) {
     cy += r4;
 
     if matches!(sys.shutdown_arm, ArmState::Armed) {
-        layout::draw_risk_band(app, px, cy, "System will power off. No recovery without physical restart.");
+        layout::draw_risk_band(
+            app,
+            px,
+            cy,
+            "System will power off. No recovery without physical restart.",
+        );
         cy += r4;
-        layout::draw_button_row(app, px, cy, "Force Shutdown (immediate)", FIELD_FORCE_SHUTDOWN, t.destructive);
+        layout::draw_button_row(
+            app,
+            px,
+            cy,
+            "Force Shutdown (immediate)",
+            FIELD_FORCE_SHUTDOWN,
+            t.destructive,
+        );
     }
 }

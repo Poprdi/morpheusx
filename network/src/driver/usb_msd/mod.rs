@@ -198,16 +198,22 @@ impl core::fmt::Display for UsbMsdInitError {
             Self::InvalidConfig => write!(f, "Invalid USB MSD configuration"),
             Self::ControllerInitFailed => write!(f, "USB xHCI controller init failed"),
             Self::ControllerProbeFailed => write!(f, "USB xHCI probe failed (dead/invalid BAR)"),
-            Self::ControllerResetFailed => write!(f, "USB xHCI reset failed (halt/reset/cnr timeout)"),
+            Self::ControllerResetFailed => {
+                write!(f, "USB xHCI reset failed (halt/reset/cnr timeout)")
+            }
             Self::ControllerScratchpadUnsupported => {
                 write!(f, "USB xHCI requires too many scratchpad buffers")
             }
             Self::ControllerStartFailed => write!(f, "USB xHCI start failed (HCH never cleared)"),
-            Self::HubUnsupported => write!(f, "USB hub detected but hub traversal is not implemented"),
+            Self::HubUnsupported => {
+                write!(f, "USB hub detected but hub traversal is not implemented")
+            }
             Self::PortResetFailed => write!(f, "USB port reset failed"),
             Self::PortResetTimeout => write!(f, "USB port reset timed out"),
             Self::PortResetHotCmdTimeout => write!(f, "USB hot reset command did not complete"),
-            Self::PortResetHotSettleTimeout => write!(f, "USB hot reset completed but link did not settle"),
+            Self::PortResetHotSettleTimeout => {
+                write!(f, "USB hot reset completed but link did not settle")
+            }
             Self::PortResetWarmTimeout => write!(f, "USB warm reset did not complete"),
             Self::PortResetNoLink => write!(f, "USB reset completed but link never became usable"),
             Self::EnableSlotFailed => write!(f, "USB enable-slot command failed"),
@@ -715,8 +721,12 @@ impl UsbMsdDriver {
                 dbg(" PORTSC=");
                 dbg_hex32(ps);
                 dbg(" CCS=1");
-                if ps & PORTSC_PED != 0 { dbg(" PED"); }
-                if ps & PORTSC_PP != 0 { dbg(" PP"); }
+                if ps & PORTSC_PED != 0 {
+                    dbg(" PED");
+                }
+                if ps & PORTSC_PP != 0 {
+                    dbg(" PP");
+                }
                 dbg(" speed=");
                 crate::serial_u32((ps >> PORTSC_SPEED_SHIFT) & 0xF);
                 dbg("\n");
@@ -807,9 +817,7 @@ impl UsbMsdDriver {
                 }
 
                 let speed_hint = (ps >> PORTSC_SPEED_SHIFT) & 0xF;
-                let candidate = (ps & PORTSC_CCS != 0)
-                    || (ps & PORTSC_PED != 0)
-                    || speed_hint != 0;
+                let candidate = (ps & PORTSC_CCS != 0) || (ps & PORTSC_PED != 0) || speed_hint != 0;
                 if !candidate {
                     // Some controllers don't expose CCS/speed promptly; try once anyway.
                     if ps != 0 && ps != u32::MAX {
@@ -883,7 +891,11 @@ impl UsbMsdDriver {
         self.try_port_with_mode(port, false)
     }
 
-    unsafe fn try_port_with_mode(&mut self, port: u8, force_reset: bool) -> Result<(), UsbMsdInitError> {
+    unsafe fn try_port_with_mode(
+        &mut self,
+        port: u8,
+        force_reset: bool,
+    ) -> Result<(), UsbMsdInitError> {
         let ps0 = mmio::read32(self.portsc(port));
         let mut speed = ((ps0 >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
         let connected = (ps0 & PORTSC_CCS) != 0;
@@ -932,11 +944,18 @@ impl UsbMsdDriver {
             loop {
                 let ps = mmio::read32(self.portsc(port));
                 let s = ((ps >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
-                if s != 0 { speed = s; break; }
-                if tsc::read_tsc().wrapping_sub(start) > timeout { break; }
+                if s != 0 {
+                    speed = s;
+                    break;
+                }
+                if tsc::read_tsc().wrapping_sub(start) > timeout {
+                    break;
+                }
                 core::hint::spin_loop();
             }
-            if speed == 0 { speed = 1; }
+            if speed == 0 {
+                speed = 1;
+            }
         }
 
         let slot = self
@@ -1144,13 +1163,11 @@ impl UsbMsdDriver {
 
         // warm reset only for superspeed/CAS/stuck-link cases
         let psw = mmio::read32(addr);
-        let hot_cmd_timed_out = matches!(
-            stage_timeout,
-            Some(UsbMsdInitError::PortResetHotCmdTimeout)
-        );
+        let hot_cmd_timed_out =
+            matches!(stage_timeout, Some(UsbMsdInitError::PortResetHotCmdTimeout));
         let speedw = ((psw >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
-        let warm_fallback = hot_cmd_timed_out
-            && ((psw & (PORTSC_CCS | PORTSC_PED)) != 0 || speedw != 0);
+        let warm_fallback =
+            hot_cmd_timed_out && ((psw & (PORTSC_CCS | PORTSC_PED)) != 0 || speedw != 0);
         if warm_reset_needed(psw) || warm_fallback {
             portsc_write(addr, psw, PORTSC_WPR, 0);
             let start_w = tsc::read_tsc();
@@ -1258,11 +1275,7 @@ impl UsbMsdDriver {
         Ok(slot)
     }
 
-    unsafe fn cmd_address_device(
-        &mut self,
-        port: u8,
-        speed: u8,
-    ) -> Result<(), UsbMsdInitError> {
+    unsafe fn cmd_address_device(&mut self, port: u8, speed: u8) -> Result<(), UsbMsdInitError> {
         let cs = self.ctx_size as u64;
         let in_ctx = self.dma_base + OFF_IN_CTX as u64;
 
@@ -1283,7 +1296,10 @@ impl UsbMsdDriver {
         // EP0 context at index 2
         let ep0 = in_ctx + 2 * cs;
         // dword 1: CErr=3, EP type=4 (Control), max packet size
-        vw32(ep0 + 4, (3u32 << 1) | (4u32 << 3) | ((max_pkt_ep0 as u32) << 16));
+        vw32(
+            ep0 + 4,
+            (3u32 << 1) | (4u32 << 3) | ((max_pkt_ep0 as u32) << 16),
+        );
         // dword 2-3: TR dequeue pointer | DCS=1
         let ring_phys = self.dma_base + OFF_XFER_EP0 as u64;
         vw32(ep0 + 8, (ring_phys as u32 & !0xF) | 1);
@@ -1330,7 +1346,10 @@ impl UsbMsdDriver {
         // bulk-in endpoint context
         let ep_in = in_ctx + ((dci_in as u64) + 1) * cs;
         // EP type 6 = Bulk IN, CErr=3
-        vw32(ep_in + 4, (3u32 << 1) | (6u32 << 3) | ((mpkt_in as u32) << 16));
+        vw32(
+            ep_in + 4,
+            (3u32 << 1) | (6u32 << 3) | ((mpkt_in as u32) << 16),
+        );
         let ring_in = self.dma_base + OFF_XFER_BIN as u64;
         vw32(ep_in + 8, (ring_in as u32 & !0xF) | 1);
         vw32(ep_in + 12, (ring_in >> 32) as u32);
@@ -1339,7 +1358,10 @@ impl UsbMsdDriver {
         // bulk-out endpoint context
         let ep_out = in_ctx + ((dci_out as u64) + 1) * cs;
         // EP type 2 = Bulk OUT, CErr=3
-        vw32(ep_out + 4, (3u32 << 1) | (2u32 << 3) | ((mpkt_out as u32) << 16));
+        vw32(
+            ep_out + 4,
+            (3u32 << 1) | (2u32 << 3) | ((mpkt_out as u32) << 16),
+        );
         let ring_out = self.dma_base + OFF_XFER_BOUT as u64;
         vw32(ep_out + 8, (ring_out as u32 & !0xF) | 1);
         vw32(ep_out + 12, (ring_out >> 32) as u32);
@@ -1476,10 +1498,7 @@ impl UsbMsdDriver {
                 }
                 // update ERDP, clear EHB
                 let new_erdp = base + (self.evt_deq as u64) * 16;
-                mmio::write32(
-                    self.rt_base + IR0_ERDP,
-                    (new_erdp as u32 & !0xF) | 0x08,
-                );
+                mmio::write32(self.rt_base + IR0_ERDP, (new_erdp as u32 & !0xF) | 0x08);
                 mmio::write32(self.rt_base + IR0_ERDP + 4, (new_erdp >> 32) as u32);
 
                 if (ctrl & TRB_TYPE_MASK) == expected {
@@ -1540,7 +1559,12 @@ impl UsbMsdDriver {
         if data_len > 0 {
             let data_buf = self.dma_base + OFF_DATA as u64;
             if data_in {
-                self.xfer_enqueue(Ring::BulkIn, data_buf, data_len, TRB_NORMAL | TRB_IOC | TRB_ISP);
+                self.xfer_enqueue(
+                    Ring::BulkIn,
+                    data_buf,
+                    data_len,
+                    TRB_NORMAL | TRB_IOC | TRB_ISP,
+                );
                 mmio::write32(
                     self.db_base + (self.slot_id as u64) * 4,
                     self.dci_bulk_in as u32,
@@ -1578,11 +1602,7 @@ impl UsbMsdDriver {
     }
 
     /// SCSI READ(10) via BOT — reads `count` sectors at `lba` into OFF_DATA.
-    unsafe fn scsi_read_sectors(
-        &mut self,
-        lba: u64,
-        count: u32,
-    ) -> Result<(), UsbMsdInitError> {
+    unsafe fn scsi_read_sectors(&mut self, lba: u64, count: u32) -> Result<(), UsbMsdInitError> {
         let byte_count = count * self.info.sector_size;
         let mut cmd = [0u8; 10];
         cmd[0] = SCSI_READ_10;
@@ -1642,8 +1662,9 @@ impl UsbMsdDriver {
                 {
                     saw_mass_storage_non_bot = true;
                 }
-                in_msc =
-                    cls == USB_CLASS_MASS_STORAGE && sub == USB_SUBCLASS_SCSI && proto == USB_PROTOCOL_BOT;
+                in_msc = cls == USB_CLASS_MASS_STORAGE
+                    && sub == USB_SUBCLASS_SCSI
+                    && proto == USB_PROTOCOL_BOT;
             }
             if btype == 5 && blen >= 7 && in_msc {
                 // endpoint descriptor

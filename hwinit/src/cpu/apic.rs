@@ -16,9 +16,6 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 /// 0 = not yet calibrated (do full calibration).
 static LAPIC_TIMER_INIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
-
-
-
 // ── LAPIC register offsets ───────────────────────────────────────────────
 
 const LAPIC_ID: u32 = 0x020;
@@ -289,8 +286,8 @@ pub unsafe fn setup_timer(target_hz: u32) {
     // LAPIC frequency by several microseconds → timer runs 5-15% fast
     // → delay_us finishes early → AP SIPI delays too short.
     let v = crate::cpu::pio::inb(0x61) & 0xFE;
-    outb(0x61, v);       // gate LOW
-    outb(0x61, v | 1);   // gate HIGH — PIT countdown restarts NOW
+    outb(0x61, v); // gate LOW
+    outb(0x61, v | 1); // gate HIGH — PIT countdown restarts NOW
 
     // Start LAPIC timer immediately after PIT gate goes high so both
     // timers run from the same instant.
@@ -364,7 +361,11 @@ pub unsafe fn send_init_assert(target_apic_id: u32) {
 
     // level-triggered assert. 0xC500 — matches linux/xv6/every OS ever shipped.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_ASSERT);
+    lapic_write(
+        base,
+        LAPIC_ICR_LO,
+        ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_ASSERT,
+    );
     wait_icr_idle(base);
 }
 
@@ -383,7 +384,11 @@ pub unsafe fn send_init_deassert(target_apic_id: u32) {
 
     // level-triggered deassert. trigger MUST be level or KVM treats it as assert.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT);
+    lapic_write(
+        base,
+        LAPIC_ICR_LO,
+        ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT,
+    );
     wait_icr_idle(base);
 }
 
@@ -453,8 +458,7 @@ pub unsafe fn delay_us(us: u64) {
         // conservative estimate of 10 cycles/iteration so the watchdog
         // never fires before the TSC target is actually reached.
         let iters_per_us = (cycles_per_us / 10).max(1);
-        let max_spins_u64 = us.saturating_mul(iters_per_us)
-            .clamp(10_000, 1_000_000_000);
+        let max_spins_u64 = us.saturating_mul(iters_per_us).clamp(10_000, 1_000_000_000);
         let max_spins = max_spins_u64 as u32;
         let mut spins = 0u32;
         while crate::cpu::tsc::read_tsc() < target {

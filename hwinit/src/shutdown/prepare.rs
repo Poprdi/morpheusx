@@ -18,8 +18,10 @@ static SHUTDOWN_HANDLER_LOCK: RawSpinLock = RawSpinLock::new();
 
 static mut PREPARE_HANDLERS: [Option<PrepareHandler>; MAX_PREPARE_HANDLERS] =
     [None; MAX_PREPARE_HANDLERS];
-static mut RESTART_HANDLERS: [Option<FinalHandler>; MAX_FINAL_HANDLERS] = [None; MAX_FINAL_HANDLERS];
-static mut POWEROFF_HANDLERS: [Option<FinalHandler>; MAX_FINAL_HANDLERS] = [None; MAX_FINAL_HANDLERS];
+static mut RESTART_HANDLERS: [Option<FinalHandler>; MAX_FINAL_HANDLERS] =
+    [None; MAX_FINAL_HANDLERS];
+static mut POWEROFF_HANDLERS: [Option<FinalHandler>; MAX_FINAL_HANDLERS] =
+    [None; MAX_FINAL_HANDLERS];
 
 fn register_in_table<T: Copy + PartialEq>(table: &mut [Option<T>], handler: T) {
     for slot in table.iter_mut() {
@@ -67,9 +69,7 @@ fn deadline_from_timeout_ms(timeout_ms: u64) -> Option<u64> {
         return None;
     }
     let ticks_per_ms = (tsc_hz / 1000).max(1);
-    Some(
-        crate::cpu::tsc::read_tsc().saturating_add(timeout_ms.saturating_mul(ticks_per_ms)),
-    )
+    Some(crate::cpu::tsc::read_tsc().saturating_add(timeout_ms.saturating_mul(ticks_per_ms)))
 }
 
 pub fn run_prepare_handlers(kind: TransitionKind, timeout_ms: u64) -> bool {

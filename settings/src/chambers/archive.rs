@@ -117,15 +117,71 @@ pub fn render(app: &SettingsApp) {
         let search_str = core::str::from_utf8(&arch.search_buf[..arch.search_len]).unwrap_or("");
         let search_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
         app.register_widget_hitbox(px, cy, search_w, widgets::FONT_H + 4, 2);
-        widgets::fill_rect(s, st, px, cy, search_w, widgets::FONT_H + 4, t.input_bg, w, h);
+        widgets::fill_rect(
+            s,
+            st,
+            px,
+            cy,
+            search_w,
+            widgets::FONT_H + 4,
+            t.input_bg,
+            w,
+            h,
+        );
         widgets::rect_outline(s, st, px, cy, search_w, widgets::FONT_H + 4, t.signal, w, h);
-        widgets::draw_str(s, st, px + 4, cy + 2, "Search: ", t.glyph_dim, t.input_bg, w, h);
-        widgets::draw_str(s, st, px + 68, cy + 2, search_str, t.glyph, t.input_bg, w, h);
+        widgets::draw_str(
+            s,
+            st,
+            px + 4,
+            cy + 2,
+            "Search: ",
+            t.glyph_dim,
+            t.input_bg,
+            w,
+            h,
+        );
+        widgets::draw_str(
+            s,
+            st,
+            px + 68,
+            cy + 2,
+            search_str,
+            t.glyph,
+            t.input_bg,
+            w,
+            h,
+        );
         let cursor_x = px + 68 + arch.search_len as u32 * widgets::FONT_W;
-        widgets::fill_rect(s, st, cursor_x, cy + 2, 2, widgets::FONT_H, t.focus_ring, w, h);
+        widgets::fill_rect(
+            s,
+            st,
+            cursor_x,
+            cy + 2,
+            2,
+            widgets::FONT_H,
+            t.focus_ring,
+            w,
+            h,
+        );
     } else {
-        app.register_widget_hitbox(px, cy, (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD), widgets::FONT_H + 4, 2);
-        widgets::draw_str(s, st, px, cy, "Press '/' or activate to search", t.glyph_dim, t.substrate, w, h);
+        app.register_widget_hitbox(
+            px,
+            cy,
+            (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD),
+            widgets::FONT_H + 4,
+            2,
+        );
+        widgets::draw_str(
+            s,
+            st,
+            px,
+            cy,
+            "Press '/' or activate to search",
+            t.glyph_dim,
+            t.substrate,
+            w,
+            h,
+        );
     }
     cy += r8;
 
@@ -141,9 +197,28 @@ pub fn render(app: &SettingsApp) {
     cy += r4;
 
     // column header
-    widgets::draw_str(s, st, px, cy, "#   Section        Field      Value", t.glyph_dim, t.substrate, w, h);
+    widgets::draw_str(
+        s,
+        st,
+        px,
+        cy,
+        "#   Section        Field      Value",
+        t.glyph_dim,
+        t.substrate,
+        w,
+        h,
+    );
     cy += r2;
-    widgets::hline(s, st, px, cy, (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD), t.contour, w, h);
+    widgets::hline(
+        s,
+        st,
+        px,
+        cy,
+        (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD),
+        t.contour,
+        w,
+        h,
+    );
     cy += 2;
 
     // entries
@@ -184,21 +259,68 @@ pub fn render(app: &SettingsApp) {
         // route
         let route_str = entry.chamber.label();
         let route_chars = (col_field.saturating_sub(col_route + 2)) / widgets::FONT_W;
-        widgets::draw_str_trunc(s, st, col_route, cy, route_str, t.glyph, row_bg, w, h, route_chars as usize);
+        widgets::draw_str_trunc(
+            s,
+            st,
+            col_route,
+            cy,
+            route_str,
+            t.glyph,
+            row_bg,
+            w,
+            h,
+            route_chars as usize,
+        );
 
         // field
         let field_chars = (col_value.saturating_sub(col_field + 2)) / widgets::FONT_W;
-        widgets::draw_str_trunc(s, st, col_field, cy, entry.field_name, t.telemetry, row_bg, w, h, field_chars as usize);
+        widgets::draw_str_trunc(
+            s,
+            st,
+            col_field,
+            cy,
+            entry.field_name,
+            t.telemetry,
+            row_bg,
+            w,
+            h,
+            field_chars as usize,
+        );
 
         // value
         let val = core::str::from_utf8(&entry.description[..entry.desc_len]).unwrap_or("?");
-        let val_color = if entry.destructive { t.destructive } else { t.success };
+        let val_color = if entry.destructive {
+            t.destructive
+        } else {
+            t.success
+        };
         let value_chars = (row_w.saturating_sub(col_value - px + 3)) / widgets::FONT_W;
-        widgets::draw_str_trunc(s, st, col_value, cy, val, val_color, row_bg, w, h, value_chars as usize);
+        widgets::draw_str_trunc(
+            s,
+            st,
+            col_value,
+            cy,
+            val,
+            val_color,
+            row_bg,
+            w,
+            h,
+            value_chars as usize,
+        );
 
         // destructive marker
         if entry.destructive {
-            widgets::draw_str(s, st, px + row_w - 24, cy, "!!", t.destructive, row_bg, w, h);
+            widgets::draw_str(
+                s,
+                st,
+                px + row_w - 24,
+                cy,
+                "!!",
+                t.destructive,
+                row_bg,
+                w,
+                h,
+            );
         }
 
         cy += r2;
@@ -206,14 +328,33 @@ pub fn render(app: &SettingsApp) {
     }
 
     if displayed == 0 {
-        widgets::draw_str(s, st, px + 4, cy, "(no entries)", t.glyph_dim, t.substrate, w, h);
+        widgets::draw_str(
+            s,
+            st,
+            px + 4,
+            cy,
+            "(no entries)",
+            t.glyph_dim,
+            t.substrate,
+            w,
+            h,
+        );
         cy += r2;
     }
 
     // detail panel for selected entry
     if arch.selected < changelog_len {
         cy += 8;
-        widgets::hline(s, st, px, cy, (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD), t.contour, w, h);
+        widgets::hline(
+            s,
+            st,
+            px,
+            cy,
+            (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD),
+            t.contour,
+            w,
+            h,
+        );
         cy += 4;
 
         let entry = &app.changelog[arch.selected];
@@ -227,7 +368,11 @@ pub fn render(app: &SettingsApp) {
         cy += r2;
 
         let val = core::str::from_utf8(&entry.description[..entry.desc_len]).unwrap_or("?");
-        let dc = if entry.destructive { t.destructive } else { t.success };
+        let dc = if entry.destructive {
+            t.destructive
+        } else {
+            t.success
+        };
         layout::draw_kv(app, px, cy, "Value:", val, dc);
         cy += r2;
 
@@ -265,5 +410,9 @@ fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[inline(always)]
 fn to_lower(b: u8) -> u8 {
-    if b >= b'A' && b <= b'Z' { b + 32 } else { b }
+    if b >= b'A' && b <= b'Z' {
+        b + 32
+    } else {
+        b
+    }
 }

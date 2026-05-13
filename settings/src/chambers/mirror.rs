@@ -76,7 +76,10 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             app.mirror.dark_mode = !app.mirror.dark_mode;
             rebuild_theme(app);
             if let Err(code) = sync_global_from_local(app) {
-                libmorpheus::println!("[settings/mirror] de appearance sync failed err=0x{:x}", code);
+                libmorpheus::println!(
+                    "[settings/mirror] de appearance sync failed err=0x{:x}",
+                    code
+                );
                 app.set_status("DE appearance sync failed", true);
             }
             app.mark_edited(Route::MirrorBasin, "theme_mode");
@@ -89,7 +92,10 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             };
             rebuild_theme(app);
             if let Err(code) = sync_global_from_local(app) {
-                libmorpheus::println!("[settings/mirror] de appearance sync failed err=0x{:x}", code);
+                libmorpheus::println!(
+                    "[settings/mirror] de appearance sync failed err=0x{:x}",
+                    code
+                );
                 app.set_status("DE appearance sync failed", true);
             }
             app.mark_edited(Route::MirrorBasin, "accent");
@@ -98,7 +104,10 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             app.mirror.accent_idx = (app.mirror.accent_idx + 1) % ACCENT_COUNT;
             rebuild_theme(app);
             if let Err(code) = sync_global_from_local(app) {
-                libmorpheus::println!("[settings/mirror] de appearance sync failed err=0x{:x}", code);
+                libmorpheus::println!(
+                    "[settings/mirror] de appearance sync failed err=0x{:x}",
+                    code
+                );
                 app.set_status("DE appearance sync failed", true);
             }
             app.mark_edited(Route::MirrorBasin, "accent");
@@ -113,7 +122,10 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                     app.log_change(Route::MirrorBasin, "appearance", accent_name, false);
                 }
                 Err(code) => {
-                    libmorpheus::println!("[settings/mirror] de appearance apply failed err=0x{:x}", code);
+                    libmorpheus::println!(
+                        "[settings/mirror] de appearance apply failed err=0x{:x}",
+                        code
+                    );
                     app.set_status("DE appearance apply failed", true);
                 }
             }
@@ -211,7 +223,17 @@ pub fn render(app: &SettingsApp) {
         let c = crate::theme::pack(r, g, b);
         let sx = px + i as u32 * 28;
         let swatch_y = cy;
-        widgets::fill_rect(app.surface, app.fb_stride, sx, swatch_y, 24, 16, c, app.fb_w, app.fb_h);
+        widgets::fill_rect(
+            app.surface,
+            app.fb_stride,
+            sx,
+            swatch_y,
+            24,
+            16,
+            c,
+            app.fb_w,
+            app.fb_h,
+        );
         if i == mirror.accent_idx {
             widgets::rect_outline(
                 app.surface,
@@ -228,10 +250,27 @@ pub fn render(app: &SettingsApp) {
     }
     cy += 20;
 
-    widgets::draw_str(app.surface, app.fb_stride, px, cy, name, accent, t.substrate, app.fb_w, app.fb_h);
+    widgets::draw_str(
+        app.surface,
+        app.fb_stride,
+        px,
+        cy,
+        name,
+        accent,
+        t.substrate,
+        app.fb_w,
+        app.fb_h,
+    );
     cy += r4;
 
-    layout::draw_button_row(app, px, cy, "<< Previous Accent", FIELD_ACCENT_PREV, t.glyph);
+    layout::draw_button_row(
+        app,
+        px,
+        cy,
+        "<< Previous Accent",
+        FIELD_ACCENT_PREV,
+        t.glyph,
+    );
     cy += r4;
     layout::draw_button_row(app, px, cy, ">> Next Accent", FIELD_ACCENT_NEXT, t.glyph);
     cy += r12;
@@ -253,8 +292,28 @@ pub fn render(app: &SettingsApp) {
     ];
 
     for (name, color) in &tokens {
-        widgets::fill_rect(app.surface, app.fb_stride, px, cy, 16, 12, *color, app.fb_w, app.fb_h);
-        widgets::draw_str(app.surface, app.fb_stride, px + 20, cy, name, t.glyph, t.substrate, app.fb_w, app.fb_h);
+        widgets::fill_rect(
+            app.surface,
+            app.fb_stride,
+            px,
+            cy,
+            16,
+            12,
+            *color,
+            app.fb_w,
+            app.fb_h,
+        );
+        widgets::draw_str(
+            app.surface,
+            app.fb_stride,
+            px + 20,
+            cy,
+            name,
+            t.glyph,
+            t.substrate,
+            app.fb_w,
+            app.fb_h,
+        );
         cy += r2;
     }
 

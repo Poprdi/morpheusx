@@ -46,7 +46,10 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             SafetyMode::Safe => {
                 if app.severe_arm == ArmState::Disarmed {
                     app.severe_arm = ArmState::Armed;
-                    app.set_status("Severe mode ARMED — press Enter to confirm, Esc to disarm", true);
+                    app.set_status(
+                        "Severe mode ARMED — press Enter to confirm, Esc to disarm",
+                        true,
+                    );
                 } else if app.severe_arm == ArmState::Armed {
                     app.safety = SafetyMode::Severe;
                     app.severe_arm = ArmState::Confirmed;
@@ -107,9 +110,29 @@ pub fn render(app: &SettingsApp) {
     let r12 = layout::row_step(app, 12);
 
     // welcome header
-    widgets::draw_str(s, st, px, cy, "General Settings", t.signal, t.substrate, w, h);
+    widgets::draw_str(
+        s,
+        st,
+        px,
+        cy,
+        "General Settings",
+        t.signal,
+        t.substrate,
+        w,
+        h,
+    );
     cy += r4;
-    widgets::draw_str(s, st, px, cy, "System configuration interface", t.glyph_dim, t.substrate, w, h);
+    widgets::draw_str(
+        s,
+        st,
+        px,
+        cy,
+        "System configuration interface",
+        t.glyph_dim,
+        t.substrate,
+        w,
+        h,
+    );
     cy += r12;
 
     // mode gate
@@ -125,7 +148,12 @@ pub fn render(app: &SettingsApp) {
 
     // armed warning
     if app.severe_arm == ArmState::Armed {
-        layout::draw_risk_band(app, px, cy, "WARNING: Severe mode unlocks destructive system controls. Press Enter to confirm.");
+        layout::draw_risk_band(
+            app,
+            px,
+            cy,
+            "WARNING: Severe mode unlocks destructive system controls. Press Enter to confirm.",
+        );
         cy += r12;
     }
 
@@ -157,7 +185,17 @@ pub fn render(app: &SettingsApp) {
         widgets::draw_str(s, st, px + 4, ty, num_str, t.glyph_dim, bg, w, h);
 
         // sigil
-        widgets::draw_str(s, st, px + 3 * widgets::FONT_W, ty, sigil, t.signal, bg, w, h);
+        widgets::draw_str(
+            s,
+            st,
+            px + 3 * widgets::FONT_W,
+            ty,
+            sigil,
+            t.signal,
+            bg,
+            w,
+            h,
+        );
 
         // label
         widgets::draw_str(s, st, px + 5 * widgets::FONT_W, ty, label, fg, bg, w, h);

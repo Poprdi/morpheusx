@@ -543,7 +543,9 @@ impl<D: NetworkDevice> NetInterface<D> {
     /// Start listening for inbound TCP on `port`.
     pub fn tcp_listen(&mut self, handle: SocketHandle, port: u16) -> Result<()> {
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
-        socket.listen(port).map_err(|_| NetworkError::ConnectionFailed)
+        socket
+            .listen(port)
+            .map_err(|_| NetworkError::ConnectionFailed)
     }
 
     /// Returns true if the socket is currently in listening state.
@@ -598,7 +600,9 @@ impl<D: NetworkDevice> NetInterface<D> {
     /// Bind a UDP socket to local port.
     pub fn udp_bind(&mut self, handle: SocketHandle, port: u16) -> Result<()> {
         let socket = self.sockets.get_mut::<UdpSocket>(handle);
-        socket.bind(port).map_err(|_| NetworkError::ConnectionFailed)
+        socket
+            .bind(port)
+            .map_err(|_| NetworkError::ConnectionFailed)
     }
 
     /// Send a UDP datagram.
@@ -694,4 +698,3 @@ impl<D: NetworkDevice> NetInterface<D> {
         &mut self.device.inner
     }
 }
-

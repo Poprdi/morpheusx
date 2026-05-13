@@ -97,7 +97,11 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
 fn apply_theme_preview(app: &mut SettingsApp) {
     let sel = app.hall.selected;
     let p = &PRESETS[sel];
-    let base = if p.dark { OneiricTheme::dark() } else { OneiricTheme::light() };
+    let base = if p.dark {
+        OneiricTheme::dark()
+    } else {
+        OneiricTheme::light()
+    };
     let accent = theme::pack(p.accent_r, p.accent_g, p.accent_b);
 
     app.theme = base;
@@ -142,7 +146,17 @@ pub fn render(app: &SettingsApp) {
     layout::draw_section(app, px, cy, "Profiles");
     cy += r4;
 
-    widgets::draw_str(s, st, px, cy, "Select a preset to preview, then Apply to commit.", t.glyph_dim, t.substrate, w, h);
+    widgets::draw_str(
+        s,
+        st,
+        px,
+        cy,
+        "Select a preset to preview, then Apply to commit.",
+        t.glyph_dim,
+        t.substrate,
+        w,
+        h,
+    );
     cy += r8;
 
     // preset cards
@@ -176,11 +190,31 @@ pub fn render(app: &SettingsApp) {
         widgets::draw_str(s, st, px + 24, cy + 4, p.name, name_color, card_bg, w, h);
 
         // description
-        widgets::draw_str(s, st, px + 24, cy + 4 + widgets::FONT_H + 2, p.desc, t.glyph_dim, card_bg, w, h);
+        widgets::draw_str(
+            s,
+            st,
+            px + 24,
+            cy + 4 + widgets::FONT_H + 2,
+            p.desc,
+            t.glyph_dim,
+            card_bg,
+            w,
+            h,
+        );
 
         // selection marker
         if is_selected {
-            widgets::draw_str(s, st, px + card_w - 28, cy + 4, ">>", t.signal, card_bg, w, h);
+            widgets::draw_str(
+                s,
+                st,
+                px + card_w - 28,
+                cy + 4,
+                ">>",
+                t.signal,
+                card_bg,
+                w,
+                h,
+            );
         }
 
         cy += card_h + 4;
@@ -209,7 +243,15 @@ pub fn render(app: &SettingsApp) {
     }
 
     // apply button
-    let apply_label = if hall.preview_active { "Apply This Mask" } else { "Select a Mask First" };
-    let apply_color = if hall.preview_active { t.signal } else { t.glyph_dim };
+    let apply_label = if hall.preview_active {
+        "Apply This Mask"
+    } else {
+        "Select a Mask First"
+    };
+    let apply_color = if hall.preview_active {
+        t.signal
+    } else {
+        t.glyph_dim
+    };
     layout::draw_button_row(app, px, cy, apply_label, FIELD_APPLY, apply_color);
 }

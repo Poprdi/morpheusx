@@ -439,7 +439,13 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     // layered panel shell
     fb.fill_rect(gx, gy, gw, gh, COL_PANEL);
     fb.fill_rect(gx + 1, gy + 1, gw.saturating_sub(2), 1, 0x001E2834);
-    fb.fill_rect(gx + 1, gy + gh.saturating_sub(2), gw.saturating_sub(2), 1, 0x000E131A);
+    fb.fill_rect(
+        gx + 1,
+        gy + gh.saturating_sub(2),
+        gw.saturating_sub(2),
+        1,
+        0x000E131A,
+    );
     hline(fb, gx, gy, gw);
     fb.draw_str(gx + 2, gy + 2, "CORE UTILIZATION", COL_ACCENT);
 
@@ -557,7 +563,11 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
             // Area fill.
             for dy in 0..h {
                 let py = y0 + row_h - 1 - dy;
-                let col = if dy + 1 == h || dy + 2 == h { hi_col } else { base_col };
+                let col = if dy + 1 == h || dy + 2 == h {
+                    hi_col
+                } else {
+                    base_col
+                };
                 fb.put(graph_x + x, py, col);
             }
 
@@ -580,8 +590,8 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
         }
 
         // Peak-hold marker for this row.
-        let peak_y = y0 + row_h.saturating_sub(1)
-            - ((row_h.saturating_sub(1) * peak_h.min(100)) / 100);
+        let peak_y =
+            y0 + row_h.saturating_sub(1) - ((row_h.saturating_sub(1) * peak_h.min(100)) / 100);
         for x in (graph_x..(graph_x + graph_w)).step_by(6) {
             fb.put(x, peak_y, 0x00F0E070);
         }
