@@ -155,7 +155,7 @@ run_qemu() {
     local verbose="$6"
     local serial_log="$7"
     
-    local qemu_args=(
+    local qemu_args=(-smp 4 
         -m 512M
         -bios "$ovmf"
         -drive "format=raw,file=$esp_img"

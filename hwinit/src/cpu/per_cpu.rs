@@ -261,7 +261,7 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
     wrmsr(IA32_GS_BASE, addr);
     wrmsr(IA32_KERNEL_GS_BASE, 0);
 
-    AP_ONLINE_COUNT.fetch_add(1, Ordering::SeqCst);
+    
 
     // AP bring-up is noisy on many-core systems; summary is logged by SMP phase.
 }

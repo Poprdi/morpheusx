@@ -9,7 +9,12 @@
 use crate::cpu::per_cpu;
 use crate::cpu::pio::outb;
 use crate::serial::{log_info, log_ok, log_warn};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+/// LAPIC timer init count calibrated by BSP — shared with all APs.
+/// APs read this and skip the PIT calibration race.
+/// 0 = not yet calibrated (do full calibration).
+static LAPIC_TIMER_INIT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 
 
@@ -251,6 +256,18 @@ pub unsafe fn send_eoi() {
 pub unsafe fn setup_timer(target_hz: u32) {
     let base = lapic_base();
 
+    // APs skip PIT calibration — they use the BSP's result directly.
+    // multiple APs racing on PIT channel 2 simultaneously will reset each
+    // other's countdown → all get stuck in the spin loop forever.
+    // BSP stores init_count after successful calibration. APs load it.
+    let cached = LAPIC_TIMER_INIT_COUNT.load(Ordering::Acquire);
+    if cached != 0 {
+        lapic_write(base, LAPIC_LVT_TIMER, TIMER_PERIODIC | TIMER_VECTOR as u32);
+        lapic_write(base, LAPIC_TIMER_DIV, 0x03);
+        lapic_write(base, LAPIC_TIMER_INIT, cached);
+        return;
+    }
+
     // divide configuration: divide by 16
     lapic_write(base, LAPIC_TIMER_DIV, 0x03); // 0b0011 = divide by 16
 
@@ -305,6 +322,10 @@ pub unsafe fn setup_timer(target_hz: u32) {
     let init_count = (ticks_per_second / target_hz as u64) as u32;
 
     let _ = (elapsed, init_count, target_hz);
+
+    // store for APs before arming so they never touch the PIT
+    LAPIC_TIMER_INIT_COUNT.store(init_count, Ordering::Release);
+
     if crate::cpu::per_cpu::current_core_index() == 0 {
         log_ok("LAPIC", 724, "timer configured");
     }
@@ -327,36 +348,42 @@ pub unsafe fn disable_pic8259() {
 
 // ── IPI ──────────────────────────────────────────────────────────────────
 
-/// Send an INIT IPI to target APIC ID.
-pub unsafe fn send_init_ipi(target_apic_id: u32) {
+/// Assert INIT IPI to target APIC ID.
+/// Caller MUST wait >= 200µs then call `send_init_deassert`.
+pub unsafe fn send_init_assert(target_apic_id: u32) {
     let base = lapic_base();
 
     if x2apic_enabled() {
-        // x2APIC uses MSR 0x830 for ICR writes; MMIO ICR can wedge on some hw.
-        let init_assert = (target_apic_id as u64) << 32 | (ICR_INIT | ICR_LEVEL_ASSERT) as u64;
-        wrmsr(IA32_X2APIC_ICR_MSR, init_assert);
-        wait_icr_idle(base);
-
-        let init_deassert = (target_apic_id as u64) << 32
-            | (ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT) as u64;
-        wrmsr(IA32_X2APIC_ICR_MSR, init_deassert);
+        // level-triggered + assert + INIT = 0xC500
+        let icr = (target_apic_id as u64) << 32
+            | (ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_ASSERT) as u64;
+        wrmsr(IA32_X2APIC_ICR_MSR, icr);
         wait_icr_idle(base);
         return;
     }
 
-    // INIT assert
+    // level-triggered assert. 0xC500 — matches linux/xv6/every OS ever shipped.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_LEVEL_ASSERT);
+    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_ASSERT);
     wait_icr_idle(base);
+}
 
-    // INIT deassert — trigger mode MUST be level (bit 15) with level=0.
-    // edge-triggered deassert is treated as another INIT assertion by KVM.
+/// Deassert INIT IPI to target APIC ID.
+/// Call after holding INIT assert for >= 200µs.
+pub unsafe fn send_init_deassert(target_apic_id: u32) {
+    let base = lapic_base();
+
+    if x2apic_enabled() {
+        let icr = (target_apic_id as u64) << 32
+            | (ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT) as u64;
+        wrmsr(IA32_X2APIC_ICR_MSR, icr);
+        wait_icr_idle(base);
+        return;
+    }
+
+    // level-triggered deassert. trigger MUST be level or KVM treats it as assert.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
-    lapic_write(
-        base,
-        LAPIC_ICR_LO,
-        ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT,
-    );
+    lapic_write(base, LAPIC_ICR_LO, ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_DEASSERT);
     wait_icr_idle(base);
 }
 
