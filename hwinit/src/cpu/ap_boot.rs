@@ -16,7 +16,6 @@ use crate::cpu::per_cpu::{self, MAX_CPUS};
 use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
 use crate::serial::{log_error, log_info, log_ok, log_warn};
 use core::sync::atomic::Ordering;
-
 /// Physical address where the AP trampoline is copied.
 /// Must be page-aligned, below 1 MiB, and not in use by anything else.
 /// 0x8000 is the traditional choice (page 8).
@@ -28,8 +27,14 @@ const AP_TRAMPOLINE_PAGE: u8 = (AP_TRAMPOLINE_PHYS / 0x1000) as u8;
 /// AP kernel stack size (64 KiB per core).
 const AP_STACK_SIZE: u64 = 64 * 1024;
 
-// ── Trampoline data area offsets ─────────────────────────────────────────
-// These must match the .data section layout at the end of ap_trampoline.s.
+// Brute-force LAPIC probing is a fallback path. Keep it bounded so one bad
+// topology guess doesn't make boot look dead on real hardware.
+const AP_WAIT_STEP_US: u64 = 50;
+const AP_WAIT_TIMEOUT_US: u64 = 20_000;
+const AP_BRUTE_SCAN_BUDGET_US: u64 = 3_000_000;
+const AP_MADT_SCAN_BUDGET_US: u64 = 1_000_000;
+
+// These must match the .data section layout at the end of ap_trampoline.s.lapic_id
 // The trampoline data block starts at AP_TRAMPOLINE_PHYS + TRAMPOLINE_DATA_OFFSET.
 const TRAMPOLINE_DATA_OFFSET: u64 = 0xF00; // within the 4K page
 const TD_CR3: u64 = TRAMPOLINE_DATA_OFFSET + 0x00;
@@ -85,6 +90,14 @@ unsafe fn setup_trampoline() -> bool {
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
     let kernel_cr3 = cr3 & 0x000F_FFFF_FFFF_F000;
 
+    // The 32-bit protected mode trampoline loads CR3 via `mov eax, [0x8F00]`
+    // which only reads the low 32 bits.  If the kernel page tables are above
+    // 4 GB, the AP would load a truncated CR3 and triple-fault immediately.
+    if kernel_cr3 > 0xFFFF_FFFF {
+        log_error("AP", 514, "kernel CR3 above 4GB; AP trampoline cannot load it in 32-bit mode");
+        return false;
+    }
+
     // read current GDT for APs to load (temporary, until per-core GDT)
     let mut gdt_buf = [0u8; 10];
     core::arch::asm!("sgdt [{}]", in(reg) gdt_buf.as_mut_ptr(), options(nostack));
@@ -128,23 +141,23 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     let before = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
 
     // INIT IPI
-    apic::send_init_ipi(lapic_id);
+    apic::send_init_assert(lapic_id);
     apic::delay_us(10_000); // 10ms
 
     // SIPI #1
     apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
-    apic::delay_us(200); // 200µs
+    apic::delay_us(10_000); // 10ms
 
     // SIPI #2 (per Intel spec, send twice for reliability)
     apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
-    apic::delay_us(200);
+    apic::delay_us(10_000); // 10ms
 
-    // wait for AP to come online (up to 100ms)
-    let mut waited = 0u32;
+    // wait for AP to come online (bounded; fallback path must stay snappy)
+    let mut waited_us = 0u64;
     while per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) <= before {
-        apic::delay_us(100);
-        waited += 1;
-        if waited > 1000 {
+        apic::delay_us(AP_WAIT_STEP_US);
+        waited_us += AP_WAIT_STEP_US;
+        if waited_us >= AP_WAIT_TIMEOUT_US {
             break;
         }
     }
@@ -152,7 +165,6 @@ unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     if per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) > before {
         true
     } else {
-        log_warn("AP", 502, "ap did not respond to INIT+SIPI; freeing stack");
         // don't leak 64KB per ghost core
         let _ = global_registry_mut().free_pages(stack_base, stack_pages);
         false
@@ -185,13 +197,30 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
     }
 
     let mut core_idx: u32 = 1; // 0 = BSP
+    let mut budget_used_us: u64 = 0;
+    let x2_mode = apic::is_x2apic_mode();
     for &lapic_id in ap_lapic_ids {
         if core_idx as usize >= MAX_CPUS {
             break;
         }
+
+        if !x2_mode && lapic_id > 0xFF {
+            // xAPIC destination field is 8-bit. without x2APIC mode this target is unreachable.
+            log_warn("AP", 513, "skipping MADT x2APIC ID in xAPIC mode");
+            continue;
+        }
+
+        if budget_used_us >= AP_MADT_SCAN_BUDGET_US {
+            log_warn("AP", 512, "MADT AP bring-up budget exhausted; continuing with discovered cores");
+            break;
+        }
+
         if boot_single_ap(core_idx, lapic_id) {
             core_idx += 1;
         }
+
+        // same per-attempt upper bound used by brute-force path.
+        budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
 
     log_ok("AP", 505, "MADT AP bring-up pass complete");
@@ -225,6 +254,7 @@ pub unsafe fn start_aps() {
 
     let mut core_idx: u32 = 1; // 0 = BSP
     let mut online: u32 = 0;
+    let mut scan_budget_used_us: u64 = 0;
     for lapic_id in 0u32..256 {
         if lapic_id == bsp_lapic_id {
             continue;
@@ -237,11 +267,23 @@ pub unsafe fn start_aps() {
             break;
         }
 
+        if scan_budget_used_us >= AP_BRUTE_SCAN_BUDGET_US {
+            log_warn("AP", 510, "brute-force AP scan budget exhausted; continuing with discovered cores");
+            break;
+        }
+
+        if (lapic_id & 0x1F) == 0 {
+            log_info("AP", 511, "AP scan progress checkpoint");
+        }
+
         if boot_single_ap(core_idx, lapic_id) {
             // only consume a core slot on success
             core_idx += 1;
             online += 1;
         }
+
+        // upper bound for one probe: INIT delay + SIPI delays + wait timeout
+        scan_budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
 
     log_ok("AP", 509, "brute-force AP bring-up pass complete");
@@ -266,10 +308,10 @@ pub unsafe fn start_aps() {
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     // 1. Set up per-core GDT + TSS
-    // get the current stack we're running on (allocated by BSP)
-    let rsp: u64;
-    core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
-    let stack_top = (rsp + 0x1000) & !0xFFF; // round up to page boundary
+    // Read the exact stack_top from the trampoline data area.
+    // The BSP wrote the precise value to TD_STACK; rounding RSP up
+    // can overshoot if RSP is near a page boundary.
+    let stack_top = *((AP_TRAMPOLINE_PHYS + TD_STACK) as *const u64);
     gdt::init_gdt_for_ap(stack_top, core_idx);
 
     // 2. Load the shared IDT
@@ -289,7 +331,8 @@ pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
 
     // 6. Initialize LAPIC + timer on this core
     apic::init_ap();
-    apic::setup_timer(100); // 100 Hz, same as BSP
+    apic::setup_timer(100);
+    crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
 
     // 7. Signal we're online (done in init_ap via per_cpu::init_ap)
 

@@ -212,14 +212,24 @@ const IST1_STATIC_STACK_SIZE: usize = 32 * 1024;
 #[repr(C, align(16))]
 struct StaticStack([u8; IST1_STATIC_STACK_SIZE]);
 
-/// The actual stack bytes.  Zeroed by the BSS loader; no runtime init needed.
-static mut IST1_STATIC_STACK: StaticStack = StaticStack([0; IST1_STATIC_STACK_SIZE]);
+/// Per-core IST1 stacks.  Each CPU needs its own IST1 so concurrent
+/// double-faults on different cores don't corrupt each other's exception
+/// frames.  BSP uses index 0, APs use 1..MAX_CPUS-1.
+/// Zeroed by the BSS loader; no runtime init needed.
+static mut IST1_STACKS: [StaticStack; MAX_CPUS] =
+    [const { StaticStack([0; IST1_STATIC_STACK_SIZE]) }; MAX_CPUS];
 
-/// Public accessor: returns a pointer to the TOP of the static IST1 stack
-/// (stacks grow downward on x86-64).  Written into TSS.IST[0] once at boot.
-pub fn ist1_static_stack_top() -> u64 {
+/// Returns a pointer to the TOP of the per-core IST1 stack
+/// (stacks grow downward on x86-64).
+pub fn ist1_stack_top_for_core(core_idx: usize) -> u64 {
+    let idx = if core_idx < MAX_CPUS { core_idx } else { 0 };
     // SAFETY: read-only pointer arithmetic on a static array.
-    unsafe { IST1_STATIC_STACK.0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64 }
+    unsafe { IST1_STACKS[idx].0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64 }
+}
+
+/// Backwards-compatible accessor for BSP (core 0).
+pub fn ist1_static_stack_top() -> u64 {
+    ist1_stack_top_for_core(0)
 }
 
 /// Our GDT (static, page-aligned for safety)
@@ -388,7 +398,7 @@ pub unsafe fn init_gdt_for_ap(stack_top: u64, core_idx: u32) {
 
     // set up this AP's TSS
     AP_TSS[idx].rsp0 = stack_top;
-    AP_TSS[idx].ist[0] = ist1_static_stack_top(); // share the IST1 stack (double-fault only)
+    AP_TSS[idx].ist[0] = ist1_stack_top_for_core(idx); // per-core IST1 stack
 
     // point the GDT's TSS descriptor at this AP's TSS
     let tss_addr = &AP_TSS[idx] as *const Tss as u64;

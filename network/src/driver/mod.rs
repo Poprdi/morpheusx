@@ -24,9 +24,11 @@ pub mod ahci;
 pub mod block_io_adapter;
 pub mod block_traits;
 pub mod intel;
+pub mod sdhci;
 pub mod traits;
 pub mod unified;
 pub mod unified_block_io;
+pub mod usb_msd;
 pub mod virtio;
 pub mod virtio_blk;
 // Future:
@@ -51,6 +53,8 @@ pub use virtio_blk::{VirtioBlkConfig, VirtioBlkDriver, VirtioBlkInitError};
 
 // Re-exports - Block (AHCI/SATA for real hardware)
 pub use ahci::{AhciConfig, AhciDriver, AhciInitError};
+pub use sdhci::{SdhciConfig, SdhciDriver, SdhciInitError};
+pub use usb_msd::{UsbMsdConfig, UsbMsdDriver, UsbMsdInitError};
 
 // Re-exports - BlockIo adapters (for filesystem compatibility)
 pub use block_io_adapter::{BlockIoError, VirtioBlkBlockIo};

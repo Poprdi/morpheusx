@@ -10,6 +10,3 @@ path = "src/main.rs"
 [dependencies]
 libmorpheus = { path = "../libmorpheus" }
 
-[profile.release]
-opt-level = 3
-lto       = true
