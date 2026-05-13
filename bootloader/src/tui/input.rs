@@ -301,6 +301,8 @@ pub struct Keyboard {
     initialized: bool,
     /// Active keymap
     layout: KeyLayout,
+    /// Some controllers mis-tag keyboard bytes as AUX; fallback mode accepts both tags.
+    aux_as_kbd: bool,
 }
 
 impl Keyboard {
@@ -328,6 +330,7 @@ impl Keyboard {
             extended: false,
             initialized: false,
             layout: KeyLayout::Us,
+            aux_as_kbd: false,
         };
 
         unsafe { kb.init_controller() };
@@ -354,47 +357,141 @@ impl Keyboard {
         self.alt
     }
 
-    unsafe fn init_controller(&mut self) {
-        // OVMF already configured the 8042 — don't send 0xAA/0xFF as they clear
-        // Translation (bit 6), causing set-2 bytes to arrive instead of set-1.
-        // RMW the config byte: keep translation on, disable IRQs (we poll).
-
-        asm_ps2_flush();
-
-        asm_ps2_write_cmd(0xAD); // disable port 1 scanning
-        Self::io_delay();
-        asm_ps2_flush();
-
-        asm_ps2_write_cmd(0x20); // read config byte
-        let config = Self::wait_response(50_000).unwrap_or(0x45);
-        let new_config = (config | 0x40) & !0x03; // set translation, clear IRQs
-
-        asm_ps2_write_cmd(0x60); // write config byte
-        asm_ps2_write_data(new_config);
-        Self::io_delay();
-
-        asm_ps2_write_cmd(0xAE); // re-enable port 1
-        Self::io_delay();
-
-        asm_ps2_write_data(0xF4); // enable scanning
-        let _ = Self::wait_response(50_000);
-
-        asm_ps2_flush();
-
-        self.initialized = true;
-        morpheus_hwinit::serial::log_ok("INPUT", 930, "PS/2 keyboard ready");
+    pub fn aux_as_kbd(&self) -> bool {
+        self.aux_as_kbd
     }
 
-    /// Spin-wait for a response byte from port 0x60, with bounded timeout.
-    unsafe fn wait_response(max_spins: u32) -> Option<u8> {
+    unsafe fn init_controller(&mut self) {
+        // Full i8042+keyboard reinit. No partial-trust path.
+        morpheus_hwinit::serial::log_info("INPUT", 935, "keyboard controller init begin");
+        self.aux_as_kbd = false;
+        self.initialized = false;
+
+        // 1) Hard-stop both channels and drain everything.
+        asm_ps2_write_cmd(0xAD); // disable keyboard port
+        Self::io_delay();
+        asm_ps2_write_cmd(0xA7); // disable aux port
+        Self::io_delay();
+        Self::drain_all(512);
+
+        // 2) Put controller in known config: IRQs off, clocks on, translation off.
+        asm_ps2_write_cmd(0x20);
+        let mut cfg = self.wait_kbd_byte(100_000).unwrap_or(0x00);
+        cfg &= !0x43; // clear IRQ1, IRQ12, translation
+        cfg &= !0x30; // enable both clocks (bits are disable flags)
+        asm_ps2_write_cmd(0x60);
+        asm_ps2_write_data(cfg);
+        Self::io_delay();
+        Self::drain_all(128);
+
+        // 3) Controller and interface tests.
+        asm_ps2_write_cmd(0xAA);
+        let ctl_ok = self.wait_kbd_byte(200_000) == Some(0x55);
+        if !ctl_ok {
+            morpheus_hwinit::serial::log_warn("INPUT", 936, "8042 self-test failed");
+        }
+
+        // Self-test may rewrite config on some controllers. Re-assert config.
+        asm_ps2_write_cmd(0x60);
+        asm_ps2_write_data(cfg);
+        Self::io_delay();
+
+        asm_ps2_write_cmd(0xAB);
+        let port1_ok = self.wait_kbd_byte(100_000) == Some(0x00);
+        if !port1_ok {
+            morpheus_hwinit::serial::log_warn("INPUT", 937, "8042 port1 test failed");
+        }
+
+        // 4) Enable keyboard port only for deterministic bring-up.
+        asm_ps2_write_cmd(0xAE);
+        Self::io_delay();
+        asm_ps2_write_cmd(0xA7);
+        Self::io_delay();
+        Self::drain_all(128);
+
+        // 5) Reset keyboard with retries.
+        let mut reset_ok = false;
+        for _ in 0..3 {
+            asm_ps2_write_data(0xFF);
+            let ack = self.wait_kbd_byte(150_000);
+            let bat = self.wait_kbd_byte(300_000);
+            if ack == Some(0xFA) && bat == Some(0xAA) {
+                reset_ok = true;
+                break;
+            }
+            Self::drain_all(128);
+            asm_ps2_write_cmd(0xAD);
+            Self::io_delay();
+            asm_ps2_write_cmd(0xAE);
+            Self::io_delay();
+        }
+        if !reset_ok {
+            morpheus_hwinit::serial::log_warn("INPUT", 938, "keyboard reset/BAT failed after retries");
+        }
+
+        // 6) Program known scan behavior (set 1) and verify.
+        let mut scan_ok = true;
+
+        asm_ps2_write_data(0xF5); // disable scanning
+        scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
+
+        asm_ps2_write_data(0xF6); // defaults
+        scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
+
+        asm_ps2_write_data(0xF0); // set scancode cmd
+        scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
+        asm_ps2_write_data(0x01); // set 1
+        scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
+
+        // Query to verify set-1 actually latched.
+        asm_ps2_write_data(0xF0);
+        scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
+        asm_ps2_write_data(0x00);
+        scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
+        let set_id = self.wait_kbd_byte(100_000);
+        scan_ok &= set_id == Some(0x01);
+
+        asm_ps2_write_data(0xF4); // enable scanning
+        let f4_ack = self.wait_kbd_byte(100_000);
+        scan_ok &= f4_ack == Some(0xFA);
+
+        if !scan_ok {
+            morpheus_hwinit::serial::log_warn("INPUT", 931, "keyboard scan-set programming failed");
+        }
+
+        Self::drain_all(128);
+
+        self.initialized = ctl_ok && port1_ok && reset_ok && scan_ok;
+        if self.initialized {
+            morpheus_hwinit::serial::log_ok("INPUT", 930, "PS/2 keyboard ready (full reset path)");
+        } else {
+            morpheus_hwinit::serial::log_warn("INPUT", 941, "PS/2 keyboard init failed (full reset path)");
+        }
+    }
+
+    unsafe fn wait_kbd_byte(&mut self, max_spins: u32) -> Option<u8> {
         for _ in 0..max_spins {
-            let r = asm_ps2_poll();
-            if r & 0x100 != 0 {
+            let r = asm_ps2_poll_any();
+            let tag = r & 0x300;
+            if tag == 0x100 {
                 return Some((r & 0xFF) as u8);
+            }
+            if tag == 0x300 {
+                // mouse/aux byte while doing keyboard bring-up; drop it.
+                continue;
             }
             core::hint::spin_loop();
         }
         None
+    }
+
+    unsafe fn drain_all(max_reads: u32) {
+        for _ in 0..max_reads {
+            if asm_ps2_poll_any() == 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
     }
 
     /// Tiny delay between commands (write to unused port 0x80, like PIC does).
@@ -414,8 +511,9 @@ impl Keyboard {
     /// key-press event was decoded, `None` if the buffer was empty or
     /// only a modifier/break code was processed.
     pub fn read_key(&mut self) -> Option<InputKey> {
-        let raw = unsafe { asm_ps2_poll() };
-        if raw & 0x100 == 0 {
+        let raw = unsafe { asm_ps2_poll_any() };
+        let tag = raw & 0x300;
+        if tag != 0x100 && !(self.aux_as_kbd && tag == 0x300) {
             return None;
         }
         let byte = (raw & 0xFF) as u8;
@@ -435,14 +533,28 @@ impl Keyboard {
     /// near-zero power draw while waiting and immediate wakeup on keypress.
     pub fn wait_for_key(&mut self) -> InputKey {
         loop {
-            if let Some(key) = self.read_key() {
-                return key;
+            let raw = unsafe { asm_ps2_poll_any() };
+            let tag = raw & 0x300;
+            if tag == 0x100 || (self.aux_as_kbd && tag == 0x300) {
+                let byte = (raw & 0xFF) as u8;
+
+                if let Some(key) = self.decode(byte) {
+                    return key;
+                }
+
+                // Boot gate should continue on any non-break keyboard make byte,
+                // even if it's a modifier or currently unmapped key.
+                if byte != EXTENDED_PREFIX && (byte & BREAK_FLAG) == 0 {
+                    return InputKey {
+                        scan_code: SCAN_NULL,
+                        unicode_char: 0,
+                    };
+                }
             }
-            // Halt the CPU until the next interrupt (IRQ1 = PS/2 keyboard).
-            // Eliminates busy-waiting with no latency cost on actual keypresses.
-            // SAFETY: sti/hlt/cli is safe in bare-metal bootloader context.
-            unsafe {
-                core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
+
+            // Do not rely on interrupt wakeups at this stage; poll with short backoff.
+            for _ in 0..4096 {
+                core::hint::spin_loop();
             }
         }
     }

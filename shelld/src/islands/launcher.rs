@@ -125,8 +125,8 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
                 Ok(_pid) => {
                     io::println("shelld: spawned msh");
                 }
-                Err(_) => {
-                    io::println("shelld: failed to spawn msh");
+                Err(e) => {
+                    libmorpheus::println!("shelld: failed to spawn msh err=0x{:x}", e);
                 }
             }
             // close launcher after spawning

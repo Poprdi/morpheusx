@@ -1,0 +1,39 @@
+; SDHCI register definitions (SD Host Controller Spec)
+
+%ifndef SDHCI_REGS_INCLUDED
+%define SDHCI_REGS_INCLUDED
+
+SDHCI_REG_CAPABILITIES      equ 0x40
+SDHCI_REG_BLOCK_SIZE        equ 0x04
+SDHCI_REG_BLOCK_COUNT       equ 0x06
+SDHCI_REG_ARGUMENT          equ 0x08
+SDHCI_REG_TRANSFER_MODE     equ 0x0C
+SDHCI_REG_COMMAND           equ 0x0E
+SDHCI_REG_BUFFER_DATA       equ 0x20
+SDHCI_REG_PRESENT_STATE     equ 0x24
+SDHCI_REG_POWER_CTRL        equ 0x29
+SDHCI_REG_CLOCK_CTRL        equ 0x2C
+SDHCI_REG_TIMEOUT_CTRL      equ 0x2E
+SDHCI_REG_SOFTWARE_RESET    equ 0x2F
+SDHCI_REG_INT_STATUS        equ 0x30
+
+SDHCI_PRESENT_CARD_INSERTED equ (1 << 16)
+SDHCI_PRESENT_CMD_INHIBIT   equ (1 << 0)
+SDHCI_PRESENT_DAT_INHIBIT   equ (1 << 1)
+
+SDHCI_RESET_ALL             equ 0x01
+
+SDHCI_INT_CMD_COMPLETE      equ (1 << 0)
+SDHCI_INT_XFER_COMPLETE     equ (1 << 1)
+SDHCI_INT_BUF_READ_READY    equ (1 << 5)
+SDHCI_INT_ERROR             equ (1 << 15)
+
+SDHCI_TRNS_BLK_CNT_EN       equ (1 << 1)
+SDHCI_TRNS_READ             equ (1 << 4)
+
+SDHCI_CMD_RESP_SHORT        equ 0x02
+SDHCI_CMD_CRC               equ 0x08
+SDHCI_CMD_INDEX             equ 0x10
+SDHCI_CMD_DATA              equ 0x20
+
+%endif

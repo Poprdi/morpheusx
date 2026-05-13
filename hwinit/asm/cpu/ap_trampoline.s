@@ -11,13 +11,17 @@
 ; DATA AREA at offset 0xF00 within this page is filled by ap_boot.rs
 ; before each AP is woken.  Layout must match the TD_* constants there.
 ;
-; DEBUG markers are intentionally disabled in normal builds to keep
-; early-boot logs readable on SMP.
+    ; DEBUG markers are ENABLED for real-hardware bring-up diagnosis.
+; Each emits a single char to COM1 showing where the AP reached.
+;
 ;
 ; ═══════════════════════════════════════════════════════════════════════════
 
-; ── COM1 debug macro ─────────────────────────────────────────────────────
+; ── COM1 debug macros ────────────────────────────────────────────────────
 ; direct port I/O, no LSR check — QEMU's virtual UART is always ready.
+; real UART is fast enough for single-byte markers.
+
+; 16-bit real mode version
 %macro SERIAL_MARKER 1
     push    ax
     push    dx
@@ -26,6 +30,28 @@
     out     dx, al
     pop     dx
     pop     ax
+%endmacro
+
+; 32-bit protected mode version (uses eax/edx)
+%macro SERIAL_MARKER32 1
+    push    eax
+    push    edx
+    mov     dx, 0x3F8
+    mov     al, %1
+    out     dx, al
+    pop     edx
+    pop     eax
+%endmacro
+
+; 64-bit long mode version (uses rax/rdx)
+%macro SERIAL_MARKER64 1
+    push    rax
+    push    rdx
+    mov     dx, 0x3F8
+    mov     al, %1
+    out     dx, al
+    pop     rdx
+    pop     rax
 %endmacro
 
 bits 16
@@ -45,7 +71,7 @@ ap_start:
     mov     ss, ax
     xor     sp, sp          ; stack at top of segment (wraps to 0xFFFF)
 
-    ; SERIAL_MARKER '1'       ; marker 1: real mode entry alive
+    ; SERIAL_MARKER '1'         ; marker 1: real mode entry alive
 
     ; ── load a TEMPORARY GDT that lives inside this trampoline page ──────
     ; The BSP's GDT is above 4 GB (PE BSS at 0x140xxxxxx).  In 16-bit
@@ -68,7 +94,7 @@ ap_start:
 ; ───────────────────────────────────────────────────────────────────────────
 bits 32
 ap_pm32:
-    ; marker disabled
+    ; SERIAL_MARKER32 '2'       ; marker 2: protected mode reached
 
     ; load data segments with kernel data selector (0x10)
     mov     ax, 0x10
@@ -78,16 +104,20 @@ ap_pm32:
     mov     gs, ax
     mov     ss, ax
 
-    ; ── enable PAE (required for long mode) ───────────────────────────────
+    ; ── enable PAE + SSE support (required before Rust code) ─────────────
+    ; PAE:        long mode prerequisite.
+    ; OSFXSR:     OS supports FXSAVE/FXRSTOR — without this, SSE = #UD.
+    ; OSXMMEXCPT: OS handles SIMD FP exceptions.
+    ; UEFI sets these on the BSP. INIT resets CR4 to 0. we fix it here.
     mov     eax, cr4
-    or      eax, (1 << 5)   ; CR4.PAE
+    or      eax, (1 << 5) | (1 << 9) | (1 << 10) ; PAE + OSFXSR + OSXMMEXCPT
     mov     cr4, eax
 
     ; ── load kernel CR3 from data area ────────────────────────────────────
     mov     eax, dword [0x8F00]     ; TD_CR3 low 32 bits (phys address < 4GB)
     mov     cr3, eax
 
-    ; marker disabled
+    ; SERIAL_MARKER32 '3'       ; marker 3: CR3 loaded, about to enable LM
 
     ; ── enable long mode via IA32_EFER.LME + NXE ──────────────────────────
     ; NXE (bit 11) is MANDATORY: the kernel page tables have NX bits (bit 63)
@@ -98,12 +128,17 @@ ap_pm32:
     or      eax, (1 << 8) | (1 << 11) ; LME + NXE
     wrmsr
 
-    ; ── enable paging → activates long mode ───────────────────────────────
+    ; ── enable paging + caching → activates long mode ─────────────────────
+    ; INIT leaves CR0 = 0x60000011 (CD=1, NW=1). if we just OR in PG the AP
+    ; runs with caches OFF — every fetch hits DRAM. clear CD+NW here.
+    ; also set MP (monitor coprocessor) and NE (numeric exceptions) so the
+    ; FPU/SSE doesn't trip over legacy x87 emulation traps.
     mov     eax, cr0
-    or      eax, (1 << 31)          ; CR0.PG
+    and     eax, 0x9FFFFFF3         ; clear CD(30), NW(29), TS(3), EM(2)
+    or      eax, (1 << 31) | (1 << 1) | (1 << 5) ; PG + MP + NE
     mov     cr0, eax
 
-    ; marker disabled
+    ; SERIAL_MARKER32 '4'       ; marker 4: paging enabled, about to jump LM64
 
     ; far jump to 64-bit long mode code.
     ; selector 0x18 = temp GDT's 64-bit code descriptor (L=1, D=0).
@@ -115,7 +150,9 @@ ap_pm32:
 ; ───────────────────────────────────────────────────────────────────────────
 bits 64
 ap_lm64:
-    ; marker disabled
+    ; load the stack FIRST so pushes work!
+    mov rsp, qword [0x8F10]
+    ; SERIAL_MARKER64 '5'       ; marker 5: 64-bit long mode reached
 
     ; reload data segments for 64-bit mode
     mov     ax, 0x10
@@ -141,7 +178,6 @@ ap_lm64:
     ; RSP is 0 from the real-mode `xor sp, sp`. push/retfq would write
     ; to 0xFFFFFFFF_FFFFFFF8 which is unmapped → #PF → triple fault.
     ; load the real stack first so the retfq has somewhere to push.
-    mov     rsp, qword [0x8F10]     ; TD_STACK
 
     ; reload CS via a far return trick — push selector:offset, retfq
     lea     rax, [rel .cs_reloaded]
@@ -156,7 +192,7 @@ ap_lm64:
     mov     esi, dword [0x8F1C]     ; TD_LAPIC_ID → RSI (arg2, SysV x64)
 
     ; ── jump to Rust entry point ──────────────────────────────────────────
-    ; marker disabled
+    ; SERIAL_MARKER64 '6'       ; marker 6: about to jump to Rust entry
 
     mov     rax, qword [0x8F08]     ; TD_ENTRY64
     jmp     rax                     ; ap_rust_entry(core_idx, lapic_id) — never returns

@@ -30,8 +30,10 @@ pub const INTEL_VENDOR_ID: u16 = 0x8086;
 /// This list covers the most common Intel GbE controllers found in
 /// ThinkPads and QEMU emulation.
 pub const E1000E_DEVICE_IDS: &[u16] = &[
+    0x100E, // 82540EM (QEMU e1000)
     0x1502, // I218-LM (ThinkPad T450s, T440s, X240, etc.)
     0x1503, // I218-V (Consumer variant)
+    0x155A, // I218-LM (ThinkPad T450s variant)
     0x10D3, // 82574L (QEMU e1000e emulation)
     0x10EA, // 82577LM
     0x10EB, // 82577LC
@@ -55,11 +57,11 @@ pub fn is_supported_device(vendor_id: u16, device_id: u16) -> bool {
     vendor_id == INTEL_VENDOR_ID && E1000E_DEVICE_IDS.contains(&device_id)
 }
 
-/// PCI class code for Ethernet controller.
-pub const PCI_CLASS_NETWORK_ETHERNET: u32 = 0x020000;
+/// PCI class code for Ethernet controller (class:subclass at bits 31:16).
+pub const PCI_CLASS_NETWORK_ETHERNET: u32 = 0x0200_0000;
 
-/// Mask for PCI class code (ignore revision).
-pub const PCI_CLASS_MASK: u32 = 0xFFFF00;
+/// Mask for PCI class/subclass (ignore prog-if and revision).
+pub const PCI_CLASS_MASK: u32 = 0xFFFF_0000;
 
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, PciAddr};
 

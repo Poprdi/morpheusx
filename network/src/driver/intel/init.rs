@@ -287,9 +287,8 @@ pub unsafe fn init_e1000e(
     write32(mmio_base + regs::TDT as u64, 0);
     let _ = read32(mmio_base + regs::STATUS as u64); // flush
 
-    // Clear RAR[0] - don't trust firmware MAC, will reprogram later
-    write32(mmio_base + regs::RAL0 as u64, 0);
-    write32(mmio_base + regs::RAH0 as u64, 0);
+    // Keep RAR[0] intact until Phase 8 MAC read.
+    // Some parts expose MAC via RAL/RAH + AV and EEPROM path can be fragile.
 
     // Clear loopback mode explicitly
     let rctl = read32(mmio_base + regs::RCTL as u64);
