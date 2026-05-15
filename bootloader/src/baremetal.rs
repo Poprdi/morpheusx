@@ -577,6 +577,8 @@ pub unsafe fn enter_baremetal(config: BaremetalEntryConfig) -> ! {
         format: fb_info.format,
     });
 
+    morpheus_hwinit::cpu::ap_boot::release_parked_aps();
+
     log_info("BOOT", 910, "launching desktop");
     crate::tui::desktop::run_desktop(&display_info);
 }

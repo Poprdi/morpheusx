@@ -15,7 +15,7 @@ use crate::cpu::gdt;
 use crate::cpu::per_cpu::{self, MAX_CPUS};
 use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
 use crate::serial::{log_error, log_info, log_ok, log_warn};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 /// Physical address where the AP trampoline is copied.
 /// Must be page-aligned, below 1 MiB, and not in use by anything else.
 /// 0x8000 is the traditional choice (page 8).
@@ -35,7 +35,18 @@ const AP_BRUTE_SCAN_BUDGET_US: u64 = 3_000_000;
 const AP_MADT_SCAN_BUDGET_US: u64 = 1_000_000;
 
 static AP_SCHEDULER_RELEASED: AtomicBool = AtomicBool::new(false);
-static AP_PARKED_COUNT: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApBootError {
+    StackAllocFailed,
+    OnlineTimeout,
+}
+
+struct ApStack {
+    base: u64,
+    pages: u64,
+    top: u64,
+}
 
 // These must match the .data section layout at the end of ap_trampoline.s.lapic_id
 // The trampoline data block starts at AP_TRAMPOLINE_PHYS + TRAMPOLINE_DATA_OFFSET.
@@ -127,64 +138,77 @@ unsafe fn setup_trampoline() -> bool {
 /// Returns true if the AP responded within the timeout.
 /// On failure, frees the allocated stack — no leak.
 unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
-    // allocate a kernel stack for this AP
-    let stack_pages = AP_STACK_SIZE / PAGE_SIZE;
-    let stack_base = match global_registry_mut().allocate_pages(
-        AllocateType::AnyPages,
-        MemoryType::AllocatedStack,
-        stack_pages,
-    ) {
-        Ok(base) => base,
-        Err(_) => {
+    let stack = match allocate_ap_stack() {
+        Ok(stack) => stack,
+        Err(ApBootError::StackAllocFailed) => {
             log_error("AP", 501, "stack allocation failed");
             return false;
         }
+        Err(_) => return false,
     };
-    let stack_top = stack_base + AP_STACK_SIZE;
 
-    // fill per-AP trampoline data
-    *((AP_TRAMPOLINE_PHYS + TD_STACK) as *mut u64) = stack_top;
-    *((AP_TRAMPOLINE_PHYS + TD_CORE_IDX) as *mut u32) = core_idx;
-    *((AP_TRAMPOLINE_PHYS + TD_LAPIC_ID) as *mut u32) = lapic_id;
-    core::sync::atomic::fence(Ordering::SeqCst);
-    *((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32) = 0;
+    write_trampoline_handoff(&stack, core_idx, lapic_id);
 
     let before = per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst);
+    send_init_sipi_sequence(lapic_id);
 
-    // INIT IPI
-    apic::send_init_assert(lapic_id);
-    apic::delay_us(10_000); // 10ms
-
-    // SIPI #1
-    apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
-    apic::delay_us(10_000); // 10ms
-
-    // SIPI #2 (per Intel spec, send twice for reliability)
-    apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
-    apic::delay_us(10_000); // 10ms
-
-    // wait for AP to come online (bounded; fallback path must stay snappy)
-    let mut waited_us = 0u64;
-    while per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) <= before {
-        apic::delay_us(AP_WAIT_STEP_US);
-        waited_us += AP_WAIT_STEP_US;
-        if waited_us >= AP_WAIT_TIMEOUT_US {
-            break;
+    match wait_ap_online(before) {
+        Ok(()) => true,
+        Err(ApBootError::OnlineTimeout) => {
+            let _ = global_registry_mut().free_pages(stack.base, stack.pages);
+            false
         }
-    }
-
-    if per_cpu::AP_ONLINE_COUNT.load(Ordering::SeqCst) > before {
-        true
-    } else {
-        // don't leak 64KB per ghost core
-        let _ = global_registry_mut().free_pages(stack_base, stack_pages);
-        false
+        Err(_) => false,
     }
 }
 
-fn park_until_scheduler_release() {
-    AP_PARKED_COUNT.fetch_add(1, Ordering::Release);
+unsafe fn allocate_ap_stack() -> Result<ApStack, ApBootError> {
+    let pages = AP_STACK_SIZE / PAGE_SIZE;
+    let base = global_registry_mut()
+        .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedStack, pages)
+        .map_err(|_| ApBootError::StackAllocFailed)?;
 
+    Ok(ApStack {
+        base,
+        pages,
+        top: base + AP_STACK_SIZE,
+    })
+}
+
+unsafe fn write_trampoline_handoff(stack: &ApStack, core_idx: u32, lapic_id: u32) {
+    *((AP_TRAMPOLINE_PHYS + TD_STACK) as *mut u64) = stack.top;
+    *((AP_TRAMPOLINE_PHYS + TD_CORE_IDX) as *mut u32) = core_idx;
+    *((AP_TRAMPOLINE_PHYS + TD_LAPIC_ID) as *mut u32) = lapic_id;
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32, 0);
+    // SIPI is not a memory barrier; AP must not fetch stale handoff data.
+    core::sync::atomic::fence(Ordering::SeqCst);
+}
+
+unsafe fn send_init_sipi_sequence(lapic_id: u32) {
+    apic::send_init_assert(lapic_id);
+    apic::delay_us(10_000);
+
+    apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
+    apic::delay_us(10_000);
+
+    apic::send_sipi(lapic_id, AP_TRAMPOLINE_PAGE);
+    apic::delay_us(10_000);
+}
+
+unsafe fn wait_ap_online(before: u32) -> Result<(), ApBootError> {
+    let mut waited_us = 0u64;
+    while per_cpu::AP_ONLINE_COUNT.load(Ordering::Acquire) <= before {
+        apic::delay_us(AP_WAIT_STEP_US);
+        waited_us += AP_WAIT_STEP_US;
+        if waited_us >= AP_WAIT_TIMEOUT_US {
+            return Err(ApBootError::OnlineTimeout);
+        }
+    }
+
+    Ok(())
+}
+
+fn park_until_scheduler_release() {
     while !AP_SCHEDULER_RELEASED.load(Ordering::Acquire) {
         core::hint::spin_loop();
     }
@@ -196,8 +220,9 @@ fn park_until_scheduler_release() {
 /// interrupts disabled until the BSP is done with driver init and is about to
 /// hand off to userland.
 pub fn release_parked_aps() {
-    AP_SCHEDULER_RELEASED.store(true, Ordering::Release);
-    log_ok("AP", 530, "parked APs released for scheduling");
+    if !AP_SCHEDULER_RELEASED.swap(true, Ordering::Release) {
+        log_ok("AP", 530, "parked APs released for scheduling");
+    }
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
@@ -377,7 +402,7 @@ pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     apic::init_ap();
     log_ok("AP", 526, "lapic_init done");
 
-    *((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32) = 1;
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32, 1);
     // Release publishes all AP-local CPU init before the BSP observes this core.
     crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, Ordering::Release);
     log_ok("AP", 527, "ap parked before scheduler release");

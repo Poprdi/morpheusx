@@ -204,6 +204,20 @@ check_disk_tools() { has_cmd qemu-img && has_cmd parted && has_cmd mkfs.vfat && 
 # Distribution checks removed - network downloader handles ISO acquisition
 check_disk_50g()   { [[ -f "${TESTING_DIR}/test-disk-50g.img" ]]; }
 
+ensure_loop_node() {
+    local node
+    node=$(sudo losetup -f 2>/dev/null) || return 1
+    [[ -n "$node" ]] || return 1
+    [[ -b "$node" ]] && return 0
+
+    local minor="${node#/dev/loop}"
+    [[ "$minor" =~ ^[0-9]+$ ]] || return 1
+
+    sudo mknod -m 0660 "$node" b 7 "$minor" 2>/dev/null || true
+    sudo chown root:disk "$node" 2>/dev/null || true
+    [[ -b "$node" ]]
+}
+
 ensure_dirs() {
     mkdir -p "${ESP_DIR}/EFI/BOOT"
     mkdir -p "${TESTING_DIR}"
@@ -435,6 +449,8 @@ do_build_user_apps() {
 do_inject_apps() {
     log_step "Deploying Apps to HelixFS"
 
+    ensure_dirs
+
     local disk_img="${TESTING_DIR}/test-disk-50g.img"
     
     # If disk doesn't exist, create it first
@@ -444,6 +460,8 @@ do_inject_apps() {
         do_create_disk
     fi
 
+    [[ -f "$disk_img" ]] || die "Unified disk image missing after create: ${disk_img}"
+
     # Build morpheus-cli on the host (fast, native target)
     log_info "Building morpheus-cli (host)..."
     cargo build --release -p morpheus-cli 2>&1 || { log_error "morpheus-cli build failed"; return 1; }
@@ -451,6 +469,7 @@ do_inject_apps() {
     # Unified image layout: p1=ESP, p2=HelixFS data region.
     local loopdev=""
     local data_part=""
+    ensure_loop_node || die "No usable loop block device node; check loop driver/devtmpfs"
     loopdev=$(sudo losetup --find --show --partscan "$disk_img") || {
         log_error "Failed to attach loop device for unified image"
         return 1
@@ -504,6 +523,7 @@ sync_unified_esp() {
     local esp_part=""
     local mnt=""
 
+    ensure_loop_node || return 1
     loopdev=$(sudo losetup --find --show --partscan "$disk_img")
     if [[ -z "$loopdev" ]]; then
         rc=1
@@ -561,6 +581,8 @@ sync_unified_esp() {
 
 do_create_disk() {
     log_step "Creating Test Disk"
+
+    ensure_dirs
     
     if check_disk_50g && [[ "${FORCE_MODE}" != "true" ]]; then
         log_success "Test disk already exists"
@@ -583,6 +605,7 @@ do_create_disk() {
     parted "$disk_img" --script mkpart HELIX 513MiB 100%
 
     local loopdev
+    ensure_loop_node || die "No usable loop block device node; check loop driver/devtmpfs"
     loopdev=$(sudo losetup --find --show --partscan "$disk_img") || die "Failed to attach unified disk loop device"
     local esp_part="${loopdev}p1"
     for _ in {1..50}; do
@@ -1355,4 +1378,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

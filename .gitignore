@@ -33,3 +33,4 @@ crates.io
 .env
 .env.local
 /cavealloc
+.continue 
