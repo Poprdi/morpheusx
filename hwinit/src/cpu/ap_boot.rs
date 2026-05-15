@@ -96,11 +96,9 @@ unsafe fn setup_trampoline() -> bool {
         }
     }
 
-    // copy trampoline code to low memory
-    let trampoline_len = AP_TRAMPOLINE_BIN.len().min(0xF00);
+    let trampoline_len = AP_TRAMPOLINE_BIN.len();
     let dest = AP_TRAMPOLINE_PHYS as *mut u8;
     core::ptr::copy_nonoverlapping(AP_TRAMPOLINE_BIN.as_ptr(), dest, trampoline_len);
-    // zero the data area
     core::ptr::write_bytes(dest.add(trampoline_len), 0, 0x1000 - trampoline_len);
 
     // read current CR3 for the trampoline to use
@@ -124,11 +122,10 @@ unsafe fn setup_trampoline() -> bool {
     let mut gdt_buf = [0u8; 10];
     core::arch::asm!("sgdt [{}]", in(reg) gdt_buf.as_mut_ptr(), options(nostack));
 
-    // fill shared trampoline data
     let gdt_ptr_dest = (AP_TRAMPOLINE_PHYS + TD_GDT_PTR) as *mut u8;
     core::ptr::copy_nonoverlapping(gdt_buf.as_ptr(), gdt_ptr_dest, 10);
-    *((AP_TRAMPOLINE_PHYS + TD_CR3) as *mut u64) = kernel_cr3;
-    *((AP_TRAMPOLINE_PHYS + TD_ENTRY64) as *mut u64) = ap_rust_entry as u64;
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_CR3) as *mut u64, kernel_cr3);
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_ENTRY64) as *mut u64, ap_rust_entry as u64);
 
     true
 }
@@ -176,11 +173,10 @@ unsafe fn allocate_ap_stack() -> Result<ApStack, ApBootError> {
 }
 
 unsafe fn write_trampoline_handoff(stack: &ApStack, core_idx: u32, lapic_id: u32) {
-    *((AP_TRAMPOLINE_PHYS + TD_STACK) as *mut u64) = stack.top;
-    *((AP_TRAMPOLINE_PHYS + TD_CORE_IDX) as *mut u32) = core_idx;
-    *((AP_TRAMPOLINE_PHYS + TD_LAPIC_ID) as *mut u32) = lapic_id;
     core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32, 0);
-    // SIPI is not a memory barrier; AP must not fetch stale handoff data.
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_STACK) as *mut u64, stack.top);
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_CORE_IDX) as *mut u32, core_idx);
+    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_LAPIC_ID) as *mut u32, lapic_id);
     core::sync::atomic::fence(Ordering::SeqCst);
 }
 
@@ -369,56 +365,27 @@ pub unsafe fn start_aps() {
 /// 5. Enter the idle loop (scheduler will assign work)
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
-    log_ok("AP", 520, "ap_rust_entry: entering");
+    log_ok("AP", 520, "AP {} (LAPIC {}) booting");
 
-    // 1. Set up per-core GDT + TSS
-    // Read the exact stack_top from the trampoline data area.
-    // The BSP wrote the precise value to TD_STACK; rounding RSP up
-    // can overshoot if RSP is near a page boundary.
-    let stack_top = *((AP_TRAMPOLINE_PHYS + TD_STACK) as *const u64);
+    let stack_top = core::ptr::read_volatile((AP_TRAMPOLINE_PHYS + TD_STACK) as *const u64);
     gdt::init_gdt_for_ap(stack_top, core_idx);
-    log_ok("AP", 521, "gdt_init done");
-
-    // 2. Load the shared IDT
     crate::cpu::idt::load_idt_for_ap();
-    log_ok("AP", 522, "idt_load done");
-
-    // 3. Initialize per-CPU data — use probed base, not the default constant
-    per_cpu::init_ap(core_idx, lapic_id, apic::lapic_base());
-    log_ok("AP", 523, "percpu_init done");
-
-    // 4. Enable SSE on this core
+    per_cpu::init_ap(core_idx, lapic_id, apic::lapic_base(), stack_top);
     crate::cpu::sse::enable_sse();
-    log_ok("AP", 524, "sse_init done");
-
-    // 5. Set up SYSCALL MSRs for this core
     extern "C" {
         fn syscall_init();
     }
     syscall_init();
-    log_ok("AP", 525, "syscall_init done");
-
-    // 6. Initialize LAPIC on this core. Timer stays masked until release.
     apic::init_ap();
-    log_ok("AP", 526, "lapic_init done");
 
     core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32, 1);
-    // Release publishes all AP-local CPU init before the BSP observes this core.
     crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, Ordering::Release);
-    log_ok("AP", 527, "ap parked before scheduler release");
+    log_ok("AP", 527, "AP {} online and parked");
 
     park_until_scheduler_release();
-    log_ok("AP", 528, "scheduler release observed");
-
-    // 7. Arm the timer only after the BSP releases AP scheduling.
     apic::setup_timer(100);
-    log_ok("AP", 529, "lapic_timer armed");
-
-    // 8. Enable interrupts and enter AP idle loop.
     core::arch::asm!("sti", options(nostack, nomem));
 
-    // AP idle loop — the LAPIC timer will fire and call scheduler_tick,
-    // which will pick a process for this core to run.
     loop {
         core::arch::asm!("hlt", options(nostack, nomem));
     }

@@ -235,9 +235,16 @@ pub unsafe fn init_bsp(lapic_id: u32, lapic_base: u64) {
 ///
 /// Called from the AP's Rust entry point after GDT/TSS are loaded.
 ///
+/// `stack_top` must be the exact top of the AP's kernel stack as allocated
+/// by the BSP — i.e., `base + AP_STACK_SIZE`. This value is stored in
+/// `boot_kernel_rsp` and used by the scheduler to restore the AP's idle RSP
+/// after descheduling a user process. Passing a wrong value here will cause
+/// a triple-fault on the first scheduler tick that returns an AP to idle.
+///
 /// # Safety
 /// Called exactly once per AP, on the AP's own stack, interrupts disabled.
-pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
+/// `stack_top` must be the valid mapped top of this AP's kernel stack.
+pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64, stack_top: u64) {
     let idx = core_idx as usize;
     assert!(idx < MAX_CPUS);
 
@@ -249,11 +256,11 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64) {
     pcpu.core_index = core_idx;
     pcpu.online = true;
 
-    // save the AP's kernel stack top so the scheduler can restore it
-    // when the AP returns to idle after running a user process.
-    let rsp: u64;
-    core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack, nomem));
-    pcpu.boot_kernel_rsp = (rsp + 0x1000) & !0xFFF;
+    // Store the exact stack top the BSP allocated. The scheduler restores
+    // RSP to this value when the AP returns to its idle loop. Using the
+    // current RSP (mid-stack at this call depth) would give a wrong value
+    // and triple-fault on first idle return after running a user process.
+    pcpu.boot_kernel_rsp = stack_top;
 
     map_lapic_id(lapic_id, idx as u8);
 
