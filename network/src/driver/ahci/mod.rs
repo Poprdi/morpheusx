@@ -178,6 +178,75 @@ pub const ATA_STS_DRQ: u8 = 1 << 3;
 pub const ATA_STS_ERR: u8 = 1 << 0;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// BIOS/OS HANDOFF
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Intel AHCI BIOS/OS Handoff — AHCI spec §10.6.
+///
+/// If `CAP2.BOH` is set, the BIOS owns the controller. We must request OS
+/// ownership and wait for BIOS to release before touching `GHC`. Skipping
+/// this on Intel PCH causes `GHC.HR` to stall the bus indefinitely because
+/// the PCH's internal state machine never completes the handshake, blocking
+/// every subsequent MMIO read including the TSC-based reset timeout.
+///
+/// Safe to call even when BOH is not supported — reads CAP2 and returns
+/// early if the feature bit is clear (QEMU, non-Intel controllers, etc.).
+unsafe fn ahci_bios_handoff(abar: u64, tsc_freq: u64) {
+    // AHCI generic host control register offsets (BAR5-relative).
+    const AHCI_CAP2: u64 = 0x24;
+    const AHCI_BOHC: u64 = 0x28;
+
+    // CAP2 bit 0: BIOS/OS Handoff supported.
+    const CAP2_BOH: u32 = 1 << 0;
+    // BOHC bit 1: OS Ownership Set   — we write this to claim ownership.
+    const BOHC_OOS: u32 = 1 << 1;
+    // BOHC bit 0: BIOS Ownership Semaphore — wait for BIOS to clear this.
+    const BOHC_BOS: u32 = 1 << 0;
+    // BOHC bit 4: BIOS Busy — AHCI §10.6.4 step 7, wait for this to clear.
+    const BOHC_BB:  u32 = 1 << 4;
+
+    // If BOH not supported, nothing to do — return immediately.
+    let cap2 = core::ptr::read_volatile((abar + AHCI_CAP2) as *const u32);
+    if cap2 & CAP2_BOH == 0 {
+        return;
+    }
+
+    // Set OOS — signal to BIOS that OS wants ownership.
+    let bohc = core::ptr::read_volatile((abar + AHCI_BOHC) as *const u32);
+    core::ptr::write_volatile((abar + AHCI_BOHC) as *mut u32, bohc | BOHC_OOS);
+
+    // Phase 1: wait up to 25 ms for BIOS to release BOS (AHCI §10.6.4 step 5).
+    // If BIOS doesn't release in time we proceed anyway; the HBA reset that
+    // follows will force the controller into a clean state regardless.
+    let deadline_bos = read_tsc_raw().wrapping_add(tsc_freq / 40); // 1/40 s = 25 ms
+    loop {
+        let b = core::ptr::read_volatile((abar + AHCI_BOHC) as *const u32);
+        if b & BOHC_BOS == 0 {
+            break;
+        }
+        if read_tsc_raw() >= deadline_bos {
+            // BIOS didn't release semaphore; proceed and let reset sort it out.
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    // Phase 2: wait up to 2 s for BIOS Busy to clear (AHCI §10.6.4 step 7).
+    // Some BIOSes do cleanup work after releasing BOS; BB stays set until done.
+    let deadline_bb = read_tsc_raw().wrapping_add(tsc_freq.saturating_mul(2));
+    loop {
+        let b = core::ptr::read_volatile((abar + AHCI_BOHC) as *const u32);
+        if b & BOHC_BB == 0 {
+            break;
+        }
+        if read_tsc_raw() >= deadline_bb {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // REQUEST TRACKING
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -269,16 +338,29 @@ impl AhciDriver {
         let tsc_freq = config.tsc_freq;
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 0: BIOS/OS handoff — must happen before any GHC access.
+        // Intel PCH stalls GHC reads until BIOS releases ownership.
+        // See AHCI 1.3.1 §10.6. Skipping this caused boot hang on real HW.
+        // ═══════════════════════════════════════════════════════════════════
+        crate::serial_str("[AHCI] step 0: bios handoff\n");
+        ahci_bios_handoff(abar, tsc_freq);
+        crate::serial_str("[AHCI] step 0: done\n");
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 1: Reset HBA to known state, then enable AHCI mode
         // ═══════════════════════════════════════════════════════════════════
+        crate::serial_str("[AHCI] step 1: hba reset\n");
         if asm_ahci_hba_reset(abar, tsc_freq) != 0 {
+            crate::serial_str("[AHCI] step 1: TIMEOUT\n");
             return Err(AhciInitError::ResetFailed);
         }
+        crate::serial_str("[AHCI] step 1: done\n");
         asm_ahci_enable(abar);
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 2: Read capabilities
         // ═══════════════════════════════════════════════════════════════════
+        crate::serial_str("[AHCI] step 2: read caps\n");
         let _cap = asm_ahci_read_cap(abar);
         let num_slots = asm_ahci_get_num_cmd_slots(abar);
         let ports_impl = asm_ahci_read_pi(abar);
@@ -292,11 +374,13 @@ impl AhciDriver {
         // ═══════════════════════════════════════════════════════════════════
         // STEP 3: Disable interrupts (we use polling)
         // ═══════════════════════════════════════════════════════════════════
+        crate::serial_str("[AHCI] step 3: disable irq\n");
         asm_ahci_disable_interrupts(abar);
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 4: Build candidate port list (strict ATA first, then fallback)
         // ═══════════════════════════════════════════════════════════════════
+        crate::serial_str("[AHCI] step 4: port scan\n");
         let mut strict_ports = [u32::MAX; 32];
         let mut strict_count = 0usize;
         let mut fallback_ports = [u32::MAX; 32];
@@ -390,6 +474,7 @@ impl AhciDriver {
         // ═══════════════════════════════════════════════════════════════════
         // STEP 5-7: Try candidates until one IDENTIFY succeeds
         // ═══════════════════════════════════════════════════════════════════
+        crate::serial_str("[AHCI] step 5: try candidates\n");
         let mut last_err = AhciInitError::NoDeviceFound;
 
         for i in 0..candidate_count {

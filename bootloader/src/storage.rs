@@ -784,7 +784,17 @@ pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
         }
 
         let is_ahci = matches!(detected, DetectedBlockDevice::Ahci(_));
-        let device = match create_unified_from_detected(detected, &config) {
+
+        // Disable BSP interrupts for the duration of hardware driver init.
+        // The BSP LAPIC timer fires at 100 Hz; a timer ISR during PCH MMIO
+        // access can extend bus cycles on real Intel hardware (same root
+        // cause as the AHCI BIOS/OS handoff stall). AHCI and VirtIO init
+        // use TSC-based polling exclusively — no interrupts required.
+        morpheus_hwinit::disable_interrupts();
+        let device_result = create_unified_from_detected(detected, &config);
+        morpheus_hwinit::enable_interrupts();
+
+        let device = match device_result {
             Ok(dev) => dev,
             Err(err) => {
                 match err {
