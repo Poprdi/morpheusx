@@ -13,6 +13,7 @@ use crate::cpu::sse::enable_sse;
 use crate::cpu::tsc::calibrate_tsc_pit;
 use crate::dma::DmaRegion;
 use crate::heap::init_heap;
+use crate::input;
 use crate::memory::{
     fallback_allocator, global_registry_mut, init_global_registry, AllocateType, MemoryType,
     PhysicalAllocator,
@@ -22,6 +23,8 @@ use crate::pci::{offset, pci_cfg_read16, pci_cfg_read8, pci_cfg_write16, PciAddr
 use crate::process::scheduler::init_scheduler;
 use crate::serial::{checkpoint, log_error, log_info, log_ok, log_warn};
 use crate::syscall::init_syscall;
+use crate::usb::controller::XhciController;
+use crate::usb::enumerate::enumerate_and_bind_inputs;
 
 // CONSTANTS
 
@@ -133,7 +136,7 @@ pub unsafe fn platform_init_selfcontained(
     log_info("BOOT", 100, "taking ownership of platform init");
 
     // phase 1: memory
-    log_info("BOOT", 101, "phase 1/12: memory");
+    log_info("BOOT", 101, "phase 1/13: memory");
 
     // ── Collect every page the CPU is actively using ──────────────
     //
@@ -268,7 +271,7 @@ pub unsafe fn platform_init_selfcontained(
     }
 
     // phase 2: cpu
-    log_info("BOOT", 102, "phase 2/12: cpu state");
+    log_info("BOOT", 102, "phase 2/13: cpu state");
     checkpoint("phase2-begin");
 
     // Allocate kernel stack inside a narrow scope so GLOBAL_REGISTRY
@@ -317,14 +320,14 @@ pub unsafe fn platform_init_selfcontained(
     }
 
     // phase 3: interrupts
-    log_info("BOOT", 103, "phase 3/12: pic");
+    log_info("BOOT", 103, "phase 3/13: pic");
     checkpoint("phase3-pic");
 
     init_pic();
     checkpoint("phase3-done");
 
     // phase 4: heap
-    log_info("BOOT", 104, "phase 4/12: heap");
+    log_info("BOOT", 104, "phase 4/13: heap");
     checkpoint("phase4-heap-begin");
 
     // init_heap allocates from registry itself.
@@ -337,7 +340,7 @@ pub unsafe fn platform_init_selfcontained(
     checkpoint("phase4-heap-done");
 
     // phase 5: tsc
-    log_info("BOOT", 105, "phase 5/12: tsc");
+    log_info("BOOT", 105, "phase 5/13: tsc");
     checkpoint("phase5-tsc-calibrate");
 
     let tsc_freq = calibrate_tsc_pit();
@@ -392,7 +395,7 @@ pub unsafe fn platform_init_selfcontained(
     crate::process::scheduler::set_tsc_frequency(tsc_freq);
 
     // phase 6: dma
-    log_info("BOOT", 106, "phase 6/12: dma");
+    log_info("BOOT", 106, "phase 6/13: dma");
     checkpoint("phase6-dma-alloc");
 
     let dma_pages = DMA_SIZE.div_ceil(4096) as u64;
@@ -416,14 +419,14 @@ pub unsafe fn platform_init_selfcontained(
     let dma_region = DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE);
 
     // phase 7: pci
-    log_info("BOOT", 107, "phase 7/12: pci");
+    log_info("BOOT", 107, "phase 7/13: pci");
     checkpoint("phase7-pci-begin");
 
     enable_all_pci_devices();
     checkpoint("phase7-done");
 
     // phase 8: paging
-    log_info("BOOT", 108, "phase 8/12: paging");
+    log_info("BOOT", 108, "phase 8/13: paging");
     checkpoint("phase8-paging-begin");
 
     init_kernel_page_table();
@@ -435,15 +438,93 @@ pub unsafe fn platform_init_selfcontained(
     crate::cpu::apic::init_bsp();
     checkpoint("phase8-done");
 
-    // phase 9: scheduler
-    log_info("BOOT", 109, "phase 9/12: scheduler");
-    checkpoint("phase9-scheduler");
+    // phase 9: USB input enumeration
+    // USB host controllers and devices must be enumerated BEFORE the scheduler
+    // is enabled. This ensures all input devices are registered and ready before
+    // any user processes start. This is a synchronous, deterministic phase.
+    log_info("BOOT", 109, "phase 9/13: USB input init");
+    checkpoint("phase9-usb-begin");
+
+    {
+        use crate::usb;
+
+        // Initialize the unified input subsystem first
+        input::init();
+
+        // Scan PCI for xHCI controllers
+        let mut usb_init_count = 0usize;
+        for bus in 0..=255u8 {
+            for device in 0..32u8 {
+                let addr = PciAddr::new(bus, device, 0);
+                let class = pci_cfg_read8(addr, 0x0B);
+                let subclass = pci_cfg_read8(addr, 0x0A);
+                let prog_if = pci_cfg_read8(addr, 0x09);
+
+                // Class 0x0C (Serial Bus) / Subclass 0x03 (USB)
+                if class == 0x0C && subclass == 0x03 {
+                    // Check for xHCI (programmable interface 0x30 or 0x00 for EHCI fallback)
+                    // xHCI has prog_if 0x30, we'll try it first
+                    let base_addr = pci_cfg_read32(addr, offset::BAR0) & !0x0F;
+                    if base_addr != 0 && base_addr != 0xFFFFFFFF {
+                        // Get TSC frequency for timing
+                        let tsc_freq = calibrate_tsc_pit();
+                        if tsc_freq == 0 {
+                            log_warn("USB", 901, "TSC calibration failed for USB");
+                            continue;
+                        }
+                        
+                        // Initialize xHCI controller
+                        match unsafe { XhciController::new(base_addr as u64, tsc_freq) } {
+                            Ok(mut controller) => {
+                                // Enumerate and bind input devices
+                                match unsafe { enumerate_and_bind_inputs(&mut controller) } {
+                                    Ok(result) => {
+                                        if result.keyboard.is_some() {
+                                            log_ok("USB", 910, "USB keyboard detected");
+                                            usb_init_count += 1;
+                                        }
+                                        if result.mouse.is_some() {
+                                            log_ok("USB", 911, "USB mouse detected");
+                                            usb_init_count += 1;
+                                        }
+                                        if result.keyboard.is_none() && result.mouse.is_none() {
+                                            log_info("USB", 912, "USB device found but no HID interface");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log_warn("USB", 920, "USB enumeration failed");
+                                        let _ = e;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log_warn("USB", 921, "xHCI controller init failed");
+                                let _ = e;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // PS/2 devices remain as fallback if no USB devices found
+        if usb_init_count == 0 {
+            log_info("USB", 930, "no USB input devices; PS/2 remains primary");
+        } else {
+            log_ok("USB", 931, "USB input initialization complete");
+        }
+    }
+    checkpoint("phase9-usb-done");
+
+    // phase 10: scheduler
+    log_info("BOOT", 110, "phase 10/13: scheduler");
+    checkpoint("phase10-scheduler");
 
     init_scheduler();
-    checkpoint("phase9-done");
+    checkpoint("phase10-done");
 
-    // phase 10: syscalls
-    log_info("BOOT", 110, "phase 10/12: syscalls");
+    // phase 11: syscalls
+    log_info("BOOT", 111, "phase 11/13: syscalls");
     checkpoint("phase10-syscall");
 
     init_syscall();
@@ -480,7 +561,7 @@ pub unsafe fn platform_init_selfcontained(
     // write FreeNode into them — doing so corrupts the live PML4/PDPT/PD/PT
     // and the very next instruction that triggers a TLB miss will #GP or #PF.
     // Collect them first, sort, and pass as an exclusion set.
-    log_info("BOOT", 111, "phase 10.5/12: reclaim boot services ram");
+    log_info("BOOT", 111, "phase 10.5/13: reclaim boot services ram");
     checkpoint("phase10.5-reclaim-begin");
     // Keep this whole critical section non-preemptible. The timer IRQ is live
     // after phase 10; reclaim/reserve mutates allocator + paging metadata.
@@ -514,7 +595,7 @@ pub unsafe fn platform_init_selfcontained(
     checkpoint("phase10.5-done");
 
     // phase 11: filesystem
-    log_info("BOOT", 112, "phase 11/12: helixfs");
+    log_info("BOOT", 112, "phase 11/13: helixfs");
     checkpoint("phase11-fs-alloc");
     {
         const ROOT_FS_SIZE: usize = 16 * 1024 * 1024; // 16 MB
@@ -550,7 +631,7 @@ pub unsafe fn platform_init_selfcontained(
     }
 
     // phase 12: SMP — bring up Application Processors
-    log_info("BOOT", 113, "phase 12/12: smp");
+    log_info("BOOT", 113, "phase 12/13: smp");
     checkpoint("phase12-smp-begin");
 
     {
