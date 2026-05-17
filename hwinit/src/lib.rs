@@ -89,6 +89,7 @@ pub mod cpu;
 pub mod dma;
 pub mod elf;
 pub mod heap;
+pub mod input;
 pub mod memory;
 pub mod mouse;
 pub mod paging;
@@ -176,6 +177,22 @@ pub use paging::{
 
 pub use pci::{pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
 pub use pci::{pci_cfg_write16, pci_cfg_write32, pci_cfg_write8};
+
+// INPUT SUBSYSTEM RE-EXPORTS
+
+pub use input::{
+    drain_mouse,
+    has_keyboard,
+    has_mouse,
+    init as init_input,
+    poll_keyboard,
+    poll_mouse,
+    push_keyboard_event_internal,
+    push_mouse_event_internal,
+    register_keyboard_handler,
+    register_mouse_handler,
+    InputEvent,
+};
 
 // PROCESS RE-EXPORTS
 
