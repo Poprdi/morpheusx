@@ -137,8 +137,6 @@ pub fn push_mouse_event_internal(event: InputEvent) {
     }
 }
 
-/// Poll the next keyboard event from the unified queue.
-/// Returns None if no events are pending.
 pub fn poll_keyboard() -> Option<InputEvent> {
     let mut head = KEYBOARD_HEAD.lock();
     let mut tail = KEYBOARD_TAIL.lock();
@@ -157,8 +155,6 @@ pub fn poll_keyboard() -> Option<InputEvent> {
     event
 }
 
-/// Poll the next mouse event from the unified queue.
-/// Returns None if no events are pending.
 pub fn poll_mouse() -> Option<InputEvent> {
     let mut head = MOUSE_HEAD.lock();
     let mut tail = MOUSE_TAIL.lock();
@@ -177,9 +173,7 @@ pub fn poll_mouse() -> Option<InputEvent> {
     event
 }
 
-/// Drain all pending mouse events and return aggregated state.
-/// Returns (total_dx, total_dy, buttons).
-/// Buttons is a bitmask: bit 0 = left, bit 1 = right, bit 2 = middle.
+/// (dx, dy, buttons) — buttons is bit0=L, bit1=R, bit2=M.
 pub fn drain_mouse() -> (i32, i32, u8) {
     let mut dx: i32 = 0;
     let mut dy: i32 = 0;
@@ -199,13 +193,8 @@ pub fn drain_mouse() -> (i32, i32, u8) {
                 }
             }
             Some(InputEvent::Wheel(delta)) => {
-                // Wheel events can be accumulated separately if needed
-                // For now, include sign in dx for apps that read it that way
-                if delta > 0 {
-                    dx += delta as i32;
-                } else {
-                    dx += delta as i32;
-                }
+                // Folded into dx; no dedicated wheel channel yet.
+                dx += delta as i32;
             }
             None => break,
             _ => {}
@@ -215,21 +204,16 @@ pub fn drain_mouse() -> (i32, i32, u8) {
     (dx, dy, buttons)
 }
 
-/// Check if a keyboard device is registered.
 pub fn has_keyboard() -> bool {
     KEYBOARD_REGISTERED.lock().clone()
 }
 
-/// Check if a mouse device is registered.
 pub fn has_mouse() -> bool {
     MOUSE_REGISTERED.lock().clone()
 }
 
-// LEGACY COMPATIBILITY STUBS
-// These allow existing PS/2 and stdin code to work without modification
+// Legacy PS/2 thunks — kept so existing call sites compile unchanged.
 
-/// Legacy PS/2 keyboard scan code handler.
-/// Translates PS/2 scan codes to the unified input layer.
 pub fn ps2_keyboard_handler(scan_code: u8, pressed: bool) {
     let handler = KEYBOARD_HANDLERS.lock();
     if let Some(h) = *handler {
@@ -237,8 +221,6 @@ pub fn ps2_keyboard_handler(scan_code: u8, pressed: bool) {
     }
 }
 
-/// Legacy PS/2 mouse handler.
-/// Translates PS/2 mouse data to the unified input layer.
 pub fn ps2_mouse_handler(dx: i16, dy: i16, buttons: u8) {
     let handler = MOUSE_HANDLERS.lock();
     if let Some(h) = *handler {

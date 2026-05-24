@@ -1,31 +1,12 @@
-//! Persistent storage subsystem.
+//! Persistent storage probe + RawBlockDevice bridge to HelixFS.
 //!
-//! Probes for a real block device (VirtIO-blk or AHCI) via the unified
-//! block device layer in `morpheus-network`, then bridges it to HelixFS
-//! through a [`RawBlockDevice`] function-pointer vtable.
-//!
-//! On success, replaces the RAM-disk root filesystem with the persistent
-//! device.  If no block device is found, the RAM-disk stays in place.
-//!
-//! # DMA Layout (within hwinit 2 MB DMA region)
-//!
-//! ```text
-//! Offset     Size     Purpose
-//! 0x00000    512 B    VirtIO descriptor table (32 entries × 16 B)
-//! 0x00200    70 B     VirtIO available ring
-//! 0x00400    262 B    VirtIO used ring
-//! 0x01000    512 B    VirtIO request headers (page-aligned)
-//! 0x01200    32 B     VirtIO status bytes
-//! 0x02000    1 KB     AHCI command list (1 KB-aligned)
-//! 0x02400    256 B    AHCI FIS receive buffer
-//! 0x02800    8 KB     AHCI command tables (128-byte aligned)
-//! 0x04800    512 B    AHCI IDENTIFY buffer
-//! 0x10000    64 KB    I/O DMA buffer (for UnifiedBlockIo transfers)
-//! Total      ≈ 128 KB (well within 2 MB)
-//! ```
+//! DMA layout within hwinit's 2 MB region:
+//!   0x00000  VirtIO desc/avail/used/headers/status  (≤ 0x01400)
+//!   0x02000  AHCI cmd_list/FIS/cmd_tables/IDENTIFY  (≤ 0x05000)
+//!   0x10000  64 KB I/O buffer for UnifiedBlockIo
 
 use morpheus_helix::device::{MemBlockDevice, RawBlockDevice};
-/// In-RAM copy of the selected Helix partition (if RAM staging succeeds).
+/// In-RAM staged Helix partition (Some after successful RAM staging).
 static mut RAM_HELIX_DEVICE: Option<MemBlockDevice> = None;
 use morpheus_hwinit::dma::DmaRegion;
 use morpheus_hwinit::memory::{global_registry_mut, AllocateType, MemoryType};
@@ -39,34 +20,23 @@ use morpheus_network::{
     UsbMsdInitError, VirtioBlkInitError,
 };
 
-// DMA LAYOUT CONSTANTS
-
 const VIRTIO_QUEUE_SIZE: u16 = 32;
 
-// VirtIO virtqueue structures
 const OFF_VIRTIO_DESC: usize = 0x0_0000;
 const OFF_VIRTIO_AVAIL: usize = 0x0_0200;
 const OFF_VIRTIO_USED: usize = 0x0_0400;
 const OFF_VIRTIO_HEADERS: usize = 0x0_1000; // page-aligned
 const OFF_VIRTIO_STATUS: usize = 0x0_1200;
 
-// AHCI structures
-const OFF_AHCI_CMD_LIST: usize = 0x0_2000; // 1 KB-aligned
-const OFF_AHCI_FIS: usize = 0x0_2400; // 256-byte aligned
-const OFF_AHCI_CMD_TABLES: usize = 0x0_2800; // 128-byte aligned
+const OFF_AHCI_CMD_LIST: usize = 0x0_2000; // 1 KB align
+const OFF_AHCI_FIS: usize = 0x0_2400; // 256 B align
+const OFF_AHCI_CMD_TABLES: usize = 0x0_2800; // 128 B align
 const OFF_AHCI_IDENTIFY: usize = 0x0_4800;
 
-// I/O transfer buffer — used by UnifiedBlockIo for synchronous read/write
 const OFF_IO_BUFFER: usize = 0x1_0000;
-const IO_BUFFER_SIZE: usize = 64 * 1024; // 64 KB = UnifiedBlockIo::MAX_TRANSFER_SIZE
+const IO_BUFFER_SIZE: usize = 64 * 1024; // == UnifiedBlockIo::MAX_TRANSFER_SIZE
 const UNKNOWN_TOTAL_SECTORS: u64 = u32::MAX as u64;
 
-// PCI BUS DUMP (diagnostic)
-
-/// Dump all PCI devices with vendor/device IDs and BARs to serial.
-///
-/// This is invaluable for verifying that VirtIO-blk devices are present
-/// and that OVMF assigned BAR addresses we can actually map.
 unsafe fn dump_pci_devices() {
     puts("[PCI-DUMP] scanning bus 0...\n");
     for dev in 0..32u8 {
@@ -80,7 +50,7 @@ unsafe fn dump_pci_devices() {
                 continue;
             }
             let device_id = pci_cfg_read16(addr, 0x02);
-            let class_code = pci_cfg_read32(addr, 0x08); // rev + class
+            let class_code = pci_cfg_read32(addr, 0x08);
             let cmd = pci_cfg_read16(addr, 0x04);
 
             puts("[PCI-DUMP]   00:");
@@ -92,12 +62,11 @@ unsafe fn dump_pci_devices() {
             puts(" dev=");
             morpheus_hwinit::serial::put_hex32(device_id as u32);
             puts(" class=");
-            morpheus_hwinit::serial::put_hex32(class_code >> 8); // class/subclass/progif
+            morpheus_hwinit::serial::put_hex32(class_code >> 8);
             puts(" cmd=");
             morpheus_hwinit::serial::put_hex32(cmd as u32);
             puts("\n");
 
-            // Print BARs for VirtIO devices (vendor 0x1AF4)
             if vendor_id == 0x1AF4 {
                 let mut bar_i = 0u8;
                 while bar_i < 6 {
@@ -141,21 +110,10 @@ unsafe fn dump_pci_devices() {
     puts("[PCI-DUMP] done\n");
 }
 
-// MMIO BAR MAPPING
-
-/// Identity-map PCI BAR MMIO regions for a VirtIO device with UC flags.
-///
-/// We do NOT rely on UEFI's page table mappings for MMIO space.
-/// Instead we use `map_mmio()` which handles every case:
-///   - Region inside an existing huge page → sets UC bits on it
-///   - Region already mapped as 4K pages → sets UC bits
-///   - Region not mapped at all → creates new identity-mapped UC entries
-///
-/// Each memory BAR gets a 16 KiB mapped region (4 × 4 KiB) — enough for
-/// VirtIO common, ISR, device and notify capability structures.
+/// Identity-map VirtIO BAR MMIO as UC. 16 KiB covers all VirtIO cap regions.
 ///
 /// # Safety
-/// - Paging and MemoryRegistry must be initialized.
+/// Paging and MemoryRegistry must be initialized.
 unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
     if !is_paging_initialized() {
         log_warn(
@@ -167,22 +125,18 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
     }
 
     let addr = PciAddr::new(bus, dev, func);
-    // 16 KiB covers all 4 VirtIO cap regions (each ~4 KiB, contiguous)
     const MAP_SIZE: u64 = 16 * 1024;
 
-    // Walk BAR0..BAR5.  Skip 64-bit BAR high halves.
     let mut bar_idx = 0u8;
     while bar_idx < 6 {
         let bar_offset = 0x10u8 + bar_idx * 4;
         let bar_low = pci_cfg_read32(addr, bar_offset);
 
         if bar_low == 0 || bar_low & 0x01 != 0 {
-            // Absent or I/O BAR — skip
             bar_idx += 1;
             continue;
         }
 
-        // Memory BAR — check type (bits 2:1)
         let bar_type = (bar_low >> 1) & 0x03;
         let base_low = (bar_low & 0xFFFF_FFF0) as u64;
 
@@ -207,29 +161,19 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
     }
 }
 
-// STATIC STATE
-
-/// The unified block device lives here for the kernel's lifetime.
 static mut BLOCK_DEVICE: Option<UnifiedBlockDevice> = None;
-
-/// DMA region reference (Copy — stored from init).
 static mut STORAGE_DMA: Option<DmaRegion> = None;
-
-/// TSC frequency for timeout computation.
 static mut STORAGE_TSC_FREQ: u64 = 0;
-/// Start LBA of selected persistent region (0 = whole disk).
+/// Start LBA of selected region (0 = whole disk).
 static mut STORAGE_LBA_BASE: u64 = 0;
-/// Sector count of selected persistent region.
 static mut STORAGE_REGION_SECTORS: u64 = 0;
-
-/// Whether persistent storage was successfully initialized.
 static mut PERSISTENT_READY: bool = false;
 
 const RAM_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 static mut RAM_STAGE_LAST_REASON: &'static str = "none";
 
 const GPT_SIG: &[u8; 8] = b"EFI PART";
-// EFI System Partition type GUID on disk (little-endian fields).
+/// ESP type GUID, little-endian on-disk.
 const GPT_TYPE_ESP: [u8; 16] = [
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 ];
@@ -328,13 +272,9 @@ fn select_largest_gpt_free_region(
     }
 }
 
-/// Select a writable data region from the currently active block device.
-///
-/// Policy:
-/// - GPT disk: prefer partition immediately after ESP on same disk
-/// - MBR-only disk: prefer partition immediately after EFI partition entry
-/// - Fallback: largest free GPT region, then first non-ESP partition, then largest MBR primary
-/// - No partition table: whole disk is data region
+/// Policy: GPT → partition immediately after ESP, else largest free region,
+/// else first non-ESP; MBR → partition after 0xEF, else largest primary;
+/// no partition table → whole disk.
 unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<DataRegion> {
     let dev = BLOCK_DEVICE.as_mut()?;
     let dma = STORAGE_DMA.as_ref()?;
@@ -392,7 +332,6 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
             let off = idx_in_sector * entry_size;
             let ent = &sec[off..off + entry_size];
 
-            // Empty partition entry if type GUID is all zero.
             if ent[..16].iter().all(|b| *b == 0) {
                 continue;
             }
@@ -431,7 +370,7 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
             }
         }
 
-        // Pair Helix with the same media as the boot ESP: pick next partition after ESP.
+        // Pair Helix with boot ESP's media: prefer the partition right after ESP.
         partitions.sort_unstable_by_key(|p| p.first_lba);
         if let Some((boot_idx, boot_part)) = partitions
             .iter()
@@ -472,7 +411,6 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
             }
         }
 
-        // Legacy fallback when explicit ESP pairing is unavailable.
         if let Some(region) =
             select_largest_gpt_free_region(first_usable, last_usable, &mut used_ranges, sector_size)
         {
@@ -487,7 +425,6 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
     }
 
     if has_mbr {
-        // Prefer the partition entry after EFI partition entry in MBR layout.
         const MBR_PART_OFF: usize = 446;
         const MBR_PART_SIZE: usize = 16;
         const MBR_PARTS: usize = 4;
@@ -500,12 +437,12 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
             let off = MBR_PART_OFF + (i * MBR_PART_SIZE);
             let ptype = first_two[off + 4];
 
-            // 0x00 empty, 0xEE GPT protective, 0xEF EFI system partition.
+            // empty / GPT protective / ESP
             if ptype == 0x00 || ptype == 0xEE || ptype == 0xEF {
                 continue;
             }
 
-            // Extended partition containers are not directly writable data regions.
+            // extended partition containers
             if ptype == 0x05 || ptype == 0x0F || ptype == 0x85 {
                 continue;
             }

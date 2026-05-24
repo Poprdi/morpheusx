@@ -1,4 +1,4 @@
-//! Read operations — read files, temporal access, version listing.
+//! Read, time-travel read, version list.
 
 use crate::crc::fnv1a_64;
 use crate::error::HelixError;
@@ -10,12 +10,7 @@ use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
-/// Read the current (latest) version of a file.
-///
-/// Returns the file contents as a byte vector.
-///
-/// For inline files (≤ 96 bytes), data is returned from the index entry.
-/// For large files, data is read from the extent-mapped data blocks.
+/// Inline (<=96 B) comes straight from the index; larger files traverse extents.
 pub fn read_file<B: BlockIo>(
     block_io: &mut B,
     index: &NamespaceIndex,
@@ -34,7 +29,6 @@ pub fn read_file<B: BlockIo>(
         return Err(HelixError::NotFound);
     }
 
-    // Inline file.
     if entry.flags & entry_flags::IS_INLINE != 0 {
         let size = entry.size as usize;
         let mut data = vec![0u8; size];
@@ -42,7 +36,6 @@ pub fn read_file<B: BlockIo>(
         return Ok(data);
     }
 
-    // Extent-based file — read from data blocks.
     read_extent_data(
         block_io,
         partition_lba_start,
@@ -53,10 +46,7 @@ pub fn read_file<B: BlockIo>(
     )
 }
 
-/// Read a file as it existed at a specific LSN (time-travel read).
-///
-/// Scans the log from the beginning up to `target_lsn` and reconstructs
-/// the file state as of that point.
+/// Replays log from tail up to target_lsn, returning state as of that point.
 pub fn read_file_at_lsn<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,
@@ -68,13 +58,11 @@ pub fn read_file_at_lsn<B: BlockIo>(
 ) -> Result<Vec<u8>, HelixError> {
     let path_hash = fnv1a_64(path.as_bytes());
 
-    // Scan log from the beginning up to target_lsn to find the
-    // most recent Write or Append for this path.
     let mut last_write_data: Option<Vec<u8>> = None;
     let mut last_extent_root: Option<u64> = None;
     let mut last_file_size: Option<u64> = None;
 
-    // Walk only live log segments: tail → head (circular).
+    // Circular walk: tail -> head.
     let segment_count = log.segment_count();
     let tail = log.tail_segment();
     let head = log.head_segment();
@@ -85,25 +73,21 @@ pub fn read_file_at_lsn<B: BlockIo>(
         let mut offset = core::mem::size_of::<LogSegmentHeader>() as u32;
 
         loop {
-            // If we're in the head segment, stop at the head write offset.
             if seg == head && offset >= head_offset {
                 break;
             }
 
             match log.read_record(block_io, seg, offset) {
                 Ok((header, payload)) => {
-                    // Stop once we pass the target LSN.
                     if header.lsn > target_lsn {
                         break;
                     }
 
-                    // Only care about records for this path.
                     if header.path_hash == path_hash {
                         if let Some(op) = LogOp::from_u8(header.op) {
                             match op {
                                 LogOp::Write => {
-                                    // v2 format: [path_len: u16][path][data...]
-                                    // Skip the path prefix to get actual file data.
+                                    // v2 payload: [path_len:u16][path][data...]
                                     let data = if payload.len() >= 2 {
                                         let plen =
                                             u16::from_le_bytes([payload[0], payload[1]]) as usize;
@@ -111,7 +95,7 @@ pub fn read_file_at_lsn<B: BlockIo>(
                                         if start <= payload.len() {
                                             &payload[start..]
                                         } else {
-                                            &payload[..] // fallback: treat entire payload as data
+                                            &payload[..]
                                         }
                                     } else {
                                         &payload[..]
@@ -122,7 +106,6 @@ pub fn read_file_at_lsn<B: BlockIo>(
                                         last_extent_root = None;
                                         last_file_size = None;
                                     } else if data.len() >= 24 {
-                                        // Extent metadata.
                                         last_write_data = None;
                                         let mut phys_bytes = [0u8; 8];
                                         phys_bytes.copy_from_slice(&data[8..16]);
@@ -143,21 +126,19 @@ pub fn read_file_at_lsn<B: BlockIo>(
                         }
                     }
 
-                    // Advance by total_size() which is already 8-byte aligned.
+                    // total_size() is 8-byte aligned.
                     offset += header.total_size() as u32;
                 }
                 Err(_) => break,
             }
         }
 
-        // Done if we've processed the head segment.
         if seg == head {
             break;
         }
         seg = (seg + 1) % segment_count;
     }
 
-    // Return the reconstructed state.
     if let Some(data) = last_write_data {
         return Ok(data);
     }
@@ -177,9 +158,7 @@ pub fn read_file_at_lsn<B: BlockIo>(
     Err(HelixError::NotFound)
 }
 
-/// List all versions (LSNs) of a file.
-///
-/// Returns a vector of (lsn, timestamp_ns, op) tuples.
+/// Returns (lsn, timestamp_ns, op) for every version of `path`.
 pub fn list_versions<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,
@@ -188,7 +167,6 @@ pub fn list_versions<B: BlockIo>(
     let path_hash = fnv1a_64(path.as_bytes());
     let mut versions = Vec::new();
 
-    // Walk only live log segments: tail → head (circular).
     let segment_count = log.segment_count();
     let tail = log.tail_segment();
     let head = log.head_segment();
@@ -199,7 +177,6 @@ pub fn list_versions<B: BlockIo>(
         let mut offset = core::mem::size_of::<LogSegmentHeader>() as u32;
 
         loop {
-            // Stop at head write offset in the head segment.
             if seg == head && offset >= head_offset {
                 break;
             }
@@ -222,7 +199,6 @@ pub fn list_versions<B: BlockIo>(
                         }
                     }
 
-                    // Advance by total_size() which is already 8-byte aligned.
                     offset += header.total_size() as u32;
                 }
                 Err(_) => break,
@@ -242,10 +218,8 @@ pub fn list_versions<B: BlockIo>(
     Ok(versions)
 }
 
-/// Get file metadata from the index.
 pub fn stat_file(index: &NamespaceIndex, path: &str) -> Result<FileStat, HelixError> {
-    // Use flexible lookup: directories are stored with trailing '/' but
-    // user paths typically omit it.
+    // lookup_flex: dirs are stored with trailing '/', callers usually omit it.
     let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
 
     if entry.flags & entry_flags::IS_DELETED != 0 {
@@ -265,7 +239,6 @@ pub fn stat_file(index: &NamespaceIndex, path: &str) -> Result<FileStat, HelixEr
     })
 }
 
-/// Read data from extent-mapped data blocks.
 fn read_extent_data<B: BlockIo>(
     block_io: &mut B,
     partition_lba_start: u64,
@@ -281,19 +254,15 @@ fn read_extent_data<B: BlockIo>(
     let blocks_needed = file_size.div_ceil(BLOCK_SIZE as u64);
     let mut result = Vec::with_capacity(file_size as usize);
 
-    // Scale factor: how many device blocks per FS block.
     let scale = BLOCK_SIZE as u64 / device_block_size as u64;
 
-    // Read contiguous blocks starting from extent_root.
-    // This handles the simple single-extent case.
-    // A full implementation would walk an extent tree for fragmented files.
+    // Single-extent fast path. Fragmented files want a real extent walk.
     for i in 0..blocks_needed {
         let abs_block = data_region_start_block + extent_root + i;
         let lba = Lba(partition_lba_start + abs_block * scale);
 
         let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
 
-        // Read in device-block-sized chunks.
         for j in 0..scale {
             let chunk_lba = Lba(lba.0 + j);
             let start = (j as usize) * device_block_size as usize;

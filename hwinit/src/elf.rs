@@ -6,8 +6,6 @@ use crate::paging::entry::PageFlags;
 use crate::paging::table::PageTableManager;
 use alloc::vec::Vec;
 
-// elf64 constants
-
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const ELFCLASS64: u8 = 2;
 pub const ELFDATA2LSB: u8 = 1;
@@ -22,8 +20,6 @@ pub const PF_R: u32 = 4;
 pub const USER_STACK_PAGES: u64 = 32;
 pub const USER_STACK_SIZE: u64 = USER_STACK_PAGES * PAGE_SIZE;
 pub const USER_STACK_TOP: u64 = 0x0000_007F_FFFF_F000;
-
-// elf64 structures
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -57,8 +53,6 @@ pub struct Elf64Phdr {
     pub p_align: u64,
 }
 
-// error type
-
 #[derive(Debug, Clone, Copy)]
 pub enum ElfError {
     TooSmall,
@@ -73,8 +67,6 @@ pub enum ElfError {
     AllocFailed,
 }
 
-// parsed segment
-
 pub struct LoadedSegment {
     pub vaddr: u64,
     pub phys: u64,
@@ -86,8 +78,6 @@ pub struct ElfImage {
     pub entry: u64,
     pub segments: Vec<LoadedSegment>,
 }
-
-// parsing
 
 pub fn validate_elf64(data: &[u8]) -> Result<&Elf64Ehdr, ElfError> {
     if data.len() < core::mem::size_of::<Elf64Ehdr>() {
@@ -136,12 +126,8 @@ fn elf_flags_to_page_flags(p_flags: u32) -> PageFlags {
     f
 }
 
-// loading into a new address space
-
-/// Load an ELF64 binary into a fresh page table.
-///
-/// Returns the loaded image metadata and the new PageTableManager.
-/// The kernel PML4 entries are cloned so interrupts/syscalls work.
+/// Load an ELF64 image into a fresh PT, cloning kernel PML4 entries so
+/// interrupts/syscalls continue to work in the new address space.
 ///
 /// # Safety
 /// MemoryRegistry and paging must be initialized.
@@ -175,7 +161,6 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
             .allocate_pages(AllocateType::AnyPages, MemoryType::LoaderData, num_pages)
             .map_err(|_| ElfError::AllocFailed)?;
 
-        // Zero the region, then copy file data.
         core::ptr::write_bytes(phys_base as *mut u8, 0, (num_pages * PAGE_SIZE) as usize);
         if ph.p_filesz > 0 {
             let file_off = ph.p_offset as usize;
@@ -191,7 +176,6 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
             );
         }
 
-        // Map each page with USER flag through all paging levels.
         for i in 0..num_pages {
             let virt = vaddr_base + i * PAGE_SIZE;
             let phys = phys_base + i * PAGE_SIZE;
@@ -211,7 +195,6 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
         return Err(ElfError::NoLoadSegments);
     }
 
-    // Allocate and map user stack.
     let stack_phys = global_registry_mut()
         .allocate_pages(
             AllocateType::AnyPages,
@@ -243,9 +226,8 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<(ElfImage, PageTableManager), El
     Ok((image, pt))
 }
 
-/// Copy all 512 PML4 entries from the kernel page table into `dst`.
-/// This gives the user process visibility of kernel memory (without USER bit),
-/// ensuring interrupts and syscalls work in the user address space.
+/// Shallow-copy kernel PML4 entries into `dst`; USER bit stays cleared so
+/// ring-3 cannot walk those mappings directly.
 unsafe fn clone_kernel_mappings(dst: &mut PageTableManager) -> Result<(), ElfError> {
     let src_pml4 = crate::paging::kernel_pml4_phys() as *const crate::paging::entry::PageTable;
     let dst_pml4 = dst.pml4_phys as *mut crate::paging::entry::PageTable;
@@ -258,8 +240,8 @@ unsafe fn clone_kernel_mappings(dst: &mut PageTableManager) -> Result<(), ElfErr
     Ok(())
 }
 
-/// Map a single 4 KiB user page, ensuring all intermediate paging levels
-/// have the USER bit set (required by x86-64 for Ring 3 access).
+/// Maps a 4 KiB user page; all intermediate levels get USER set
+/// (AMD64 Vol 2 §5.4.1: USER must be set at every level for ring-3 access).
 pub(crate) unsafe fn map_user_page(
     pt: &mut PageTableManager,
     virt: u64,
@@ -291,18 +273,12 @@ pub(crate) unsafe fn map_user_page(
     Ok(())
 }
 
-/// Like `ensure_table` but upgrades existing entries with the USER bit
-/// so intermediate levels are accessible from Ring 3.
-///
-/// **Copy-on-write for kernel pages**: When the entry was cloned from the
-/// kernel (no USER bit), we deep-copy the referenced page table page into
-/// a fresh allocation before modifying anything.  This prevents the user
-/// page-table setup from corrupting the kernel's live page tables.
-///
-/// When a 2 MiB huge page is encountered at the PD level, it is **split**
-/// into 512 individual 4 KiB page-table entries so the walk can continue.
-/// This handles the common case where UEFI leaves 2 MiB identity-map pages
-/// covering the low memory range where user code is loaded (e.g. 0x400000).
+/// Walk helper that upgrades intermediate entries to USER. Two quirks:
+///   1. Entries cloned from the kernel (no USER bit) get deep-copied
+///      before mutation so we don't corrupt kernel page tables.
+///   2. 2 MiB / 1 GiB huge entries on the walk are split into a fresh
+///      table — UEFI typically leaves 2 MiB identity maps over 0x400000
+///      where user binaries land.
 unsafe fn ensure_user_table(
     e: &mut crate::paging::entry::PageTableEntry,
     flags: PageFlags,
@@ -312,10 +288,8 @@ unsafe fn ensure_user_table(
 
     if e.is_present() {
         if e.is_huge() {
-            // split a huge page (2 mib or 1 gib) into sub-pages
-            // At this point, the entry `e` resides in a page we OWN (either
-            // the user PML4 or a deep-copied intermediate table), so it is
-            // safe to overwrite it.
+            // Split into sub-pages. `e` lives in a table we own (user PML4 or
+            // a deep-copied intermediate), so overwriting is safe.
             const GIB_1: u64 = 1 << 30;
             const MIB_2: u64 = 1 << 21;
 
@@ -330,7 +304,7 @@ unsafe fn ensure_user_table(
             let sub_flags = PageFlags::PRESENT.with(PageFlags::WRITABLE);
 
             if raw_phys & (GIB_1 - 1) == 0 {
-                // 1 GiB huge page (PDPT level) → split into 512 × 2 MiB PD entries.
+                // 1 GiB at PDPT → 512 × 2 MiB.
                 let base = raw_phys & !(GIB_1 - 1);
                 for i in 0u64..512 {
                     let sub_phys = base + i * MIB_2;
@@ -338,8 +312,7 @@ unsafe fn ensure_user_table(
                         PageTableEntry::new(sub_phys, sub_flags.with(PageFlags::HUGE_PAGE));
                 }
             } else {
-                // 2 MiB huge page (PD level) → split into 512 × 4 KiB PT entries.
-                // For 2 MiB entries, physical base is bits [51:21]; mask off bits [20:12].
+                // 2 MiB at PD → 512 × 4 KiB. Base is bits [51:21].
                 let base = raw_phys & !(MIB_2 - 1);
                 for i in 0u64..512 {
                     let sub_phys = base + i * 4096;
@@ -347,16 +320,11 @@ unsafe fn ensure_user_table(
                 }
             }
 
-            // Replace the huge-page entry with a pointer to the new table.
             *e = PageTableEntry::new(new_table_phys, flags);
             return Ok(new_table_phys);
         }
 
-        // copy-on-write: kernel-shared table page
-        // Entries cloned from the kernel don't have the USER bit.  If we see
-        // such an entry, the page it points to is shared with the kernel's
-        // active page tables.  Deep-copy it so modifications happen on our
-        // private copy and the kernel's mappings remain untouched.
+        // Kernel-shared table page — COW it before mutating.
         if !e.flags().contains(PageFlags::USER) {
             let old_phys = e.phys_addr();
             let new_phys = global_registry_mut()
@@ -371,8 +339,7 @@ unsafe fn ensure_user_table(
             return Ok(new_phys);
         }
 
-        // Already has USER — this is our own private table page.
-        // Upgrade flags if needed (e.g. WRITABLE).
+        // Our own private table page — just upgrade flags if needed.
         let raw = e.raw();
         let needed = flags.0;
         if raw & needed != needed {
@@ -381,7 +348,7 @@ unsafe fn ensure_user_table(
         return Ok(e.phys_addr());
     }
 
-    // Entry not present — allocate a fresh zeroed page table.
+    // Not present — fresh zeroed table.
     let phys = global_registry_mut()
         .allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedPageTable, 1)
         .map_err(|_| ElfError::AllocFailed)?;

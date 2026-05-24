@@ -38,7 +38,6 @@ impl NetworkStatus {
         buf
     }
 
-    /// Check if we have a valid (non-zero) IP address.
     pub fn has_ip(&self) -> bool {
         self.ip_address != [0, 0, 0, 0]
     }
@@ -50,7 +49,6 @@ impl Default for NetworkStatus {
     }
 }
 
-/// Write u8 to buffer, return bytes written.
 fn write_u8(buf: &mut [u8], val: u8) -> usize {
     if val >= 100 {
         buf[0] = b'0' + (val / 100);

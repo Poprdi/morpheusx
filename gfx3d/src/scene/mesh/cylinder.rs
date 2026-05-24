@@ -2,11 +2,7 @@ use super::{Mesh, MeshVertex};
 use crate::math::trig::TrigTable;
 use crate::math::vec::{Vec2, Vec3};
 
-/// Generate a capped cylinder.
-///
-/// `radius`: radius of the cylinder
-/// `height`: total height (from -height/2 to +height/2)
-/// `segments`: number of segments around the circumference
+/// Capped cylinder along Y, centered at origin.
 pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
     let segments = segments.max(3);
 
@@ -17,7 +13,6 @@ pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
     let two_pi = 2.0 * core::f32::consts::PI;
     let half_h = height * 0.5;
 
-    // Generate side vertices
     for i in 0..=segments {
         let i_f = i as f32 / segments as f32;
         let angle = two_pi * i_f;
@@ -26,7 +21,6 @@ pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
         let x = radius * cos_a;
         let z = radius * sin_a;
 
-        // Top vertex
         vertices.push(MeshVertex {
             position: Vec3::new(x, half_h, z),
             normal: Vec3::new(cos_a, 0.0, sin_a),
@@ -34,7 +28,6 @@ pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
             color: [255, 255, 255, 255],
         });
 
-        // Bottom vertex
         vertices.push(MeshVertex {
             position: Vec3::new(x, -half_h, z),
             normal: Vec3::new(cos_a, 0.0, sin_a),
