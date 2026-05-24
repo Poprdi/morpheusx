@@ -3,6 +3,7 @@
 pub mod capability;
 pub mod config;
 pub mod dump;
+pub mod msi;
 
 pub use capability::{
     VirtioCapInfo, VirtioPciCaps, VIRTIO_PCI_CAP_COMMON, VIRTIO_PCI_CAP_DEVICE, VIRTIO_PCI_CAP_ISR,
