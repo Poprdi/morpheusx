@@ -1,13 +1,12 @@
-/// USB HID Keyboard interface implementation
-///
-/// Translates USB HID keyboard reports to the unified input subsystem.
-/// Works alongside PS/2 keyboard - either can be the input source.
+//! Boot-protocol HID keyboard. Translates HID usage codes to PS/2 scancodes
+//! and feeds the unified input layer (PS/2 or USB, never both — see input.rs).
+
 use crate::input::{self, InputEvent};
 use crate::usb::controller::{XhciController, XhciError};
 use crate::usb::dma;
 use crate::usb::hid::HIDInterface;
 
-/// Keyboard report structure (standard 8-byte boot report)
+/// Boot-protocol 8-byte report (HID 1.11 §B.1).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KeyboardReport {
@@ -16,7 +15,6 @@ pub struct KeyboardReport {
     pub keys: [u8; 6],
 }
 
-/// Parse USB HID keyboard report and push events to the unified input layer.
 pub unsafe fn parse_keyboard_report(
     _controller: &mut XhciController,
     _iface: &HIDInterface,
@@ -24,32 +22,22 @@ pub unsafe fn parse_keyboard_report(
 ) -> Result<(), XhciError> {
     let report = &*(report as *const KeyboardReport);
 
-    // Process modifier keys first
+    // Modifier byte: LCtrl/LShift/LAlt/LWin/RCtrl/RShift/RAlt/RWin (bits 0..=7).
     let modifiers = report.modifiers;
-
-    // Left Ctrl (bit 0)
     push_key(InputEvent::Key(0x1D, (modifiers & 0x01) != 0));
-    // Left Shift (bit 1)
     push_key(InputEvent::Key(0x2A, (modifiers & 0x02) != 0));
-    // Left Alt (bit 2)
     push_key(InputEvent::Key(0x38, (modifiers & 0x04) != 0));
-    // Left Win (bit 3)
     push_key(InputEvent::Key(0x5B, (modifiers & 0x08) != 0));
-    // Right Ctrl (bit 4)
     push_key(InputEvent::Key(0x1D, (modifiers & 0x10) != 0));
-    // Right Shift (bit 5)
     push_key(InputEvent::Key(0x36, (modifiers & 0x20) != 0));
-    // Right Alt (bit 6)
     push_key(InputEvent::Key(0x38, (modifiers & 0x40) != 0));
-    // Right Win (bit 7)
     push_key(InputEvent::Key(0x5C, (modifiers & 0x80) != 0));
 
-    // Process key codes
     for key in report.keys.iter() {
         if *key != 0 {
             let scan_code = translate_hid_to_ps2(*key);
             if scan_code != 0 {
-                push_key(InputEvent::Key(scan_code, true)); // Pressed
+                push_key(InputEvent::Key(scan_code, true));
             }
         }
     }
@@ -57,13 +45,11 @@ pub unsafe fn parse_keyboard_report(
     Ok(())
 }
 
-/// Push a keyboard event to the unified input layer.
 fn push_key(event: InputEvent) {
     input::push_keyboard_event_internal(event);
 }
 
-/// Translate USB HID usage codes to PS/2 scan codes.
-/// This creates a unified scancode space regardless of input source.
+/// Unifies scancode space across PS/2 and USB. HID usage tables §10.
 fn translate_hid_to_ps2(hid_code: u8) -> u8 {
     match hid_code {
         // Letters
@@ -166,43 +152,22 @@ fn translate_hid_to_ps2(hid_code: u8) -> u8 {
     }
 }
 
-/// Register this keyboard driver with the unified input layer.
 pub fn register_handler() {
-    // This function is called during enumeration to register
-    // the USB keyboard handler as a valid input source
     input::register_keyboard_handler(usb_keyboard_handler);
 }
 
-/// USB keyboard event handler for the unified input system.
-/// Called when USB keyboard data is received.
+/// Passthrough — events flow through push_keyboard_event_internal directly.
 fn usb_keyboard_handler(scan_code: u8, pressed: bool) {
-    // The unified input system already handles this
-    // This is a passthrough for legacy compatibility
     let _ = scan_code;
     let _ = pressed;
 }
 
-/// Handle keyboard input event from USB HID interrupt endpoint.
-/// Reads the keyboard report and parses it into input events.
+/// TODO: real interrupt-in handling. Currently parses whatever's already in OFF_REPORT.
 pub unsafe fn handle_interrupt_transfer(
     controller: &mut XhciController,
     iface: &HIDInterface,
 ) -> Result<(), XhciError> {
     let report_buf = controller.dma_base + dma::OFF_REPORT as u64;
-
-    // Submit interrupt IN transfer to read keyboard report
-    // This is a blocking read for simplicity during boot enumeration
-
-    // For now, we use a simple approach:
-    // The actual interrupt transfer would be queued and completed
-    // asynchronously, but during boot we can poll for completion
-
-    // TODO: Implement proper interrupt transfer handling
-
-    // Simulate processing a report buffer
-    // In real implementation, the controller's EP ring would have
-    // the transfer completion event
-
     let report = report_buf as *const KeyboardReport;
     parse_keyboard_report(controller, iface, report)
 }

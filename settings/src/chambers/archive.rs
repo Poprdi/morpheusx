@@ -1,6 +1,4 @@
-// archive of echoes — changelog timeline viewer.
-// every change ever applied in this session, searchable, with destructive markers.
-// the system's memory. read-only — you cannot un-echo what has been spoken.
+// Read-only changelog viewer for the current session.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::SettingsApp;
@@ -37,7 +35,7 @@ impl ArchiveChamber {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
             1 => {
-                // scroll down — can't check max without changelog len, just increment
+                // Caller bounds-clamps against changelog_len during render.
                 self.scroll_offset += 1;
             }
             2 => {
@@ -105,14 +103,12 @@ pub fn render(app: &SettingsApp) {
     layout::draw_section(app, px, cy, "Activity Log");
     cy += r4;
 
-    // entry count
     let mut buf = [0u8; 8];
     let n = widgets::u64_to_str(changelog_len as u64, &mut buf);
     let count_str = core::str::from_utf8(&buf[..n]).unwrap_or("0");
     layout::draw_kv(app, px, cy, "Total entries:", count_str, t.telemetry);
     cy += r4;
 
-    // search bar
     if arch.searching {
         let search_str = core::str::from_utf8(&arch.search_buf[..arch.search_len]).unwrap_or("");
         let search_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
@@ -185,7 +181,6 @@ pub fn render(app: &SettingsApp) {
     }
     cy += r8;
 
-    // scroll indicators
     let can_up = arch.scroll_offset > 0;
     let can_down = changelog_len > arch.scroll_offset + VISIBLE_ENTRIES;
     let up_color = if can_up { t.glyph } else { t.contour };
@@ -196,7 +191,6 @@ pub fn render(app: &SettingsApp) {
     widgets::draw_str(s, st, px + 80, cy, "vv Down", dn_color, t.substrate, w, h);
     cy += r4;
 
-    // column header
     widgets::draw_str(
         s,
         st,
@@ -221,14 +215,12 @@ pub fn render(app: &SettingsApp) {
     );
     cy += 2;
 
-    // entries
     let search_term = &arch.search_buf[..arch.search_len];
     let mut displayed = 0;
     let end = changelog_len.min(arch.scroll_offset + VISIBLE_ENTRIES);
     for i in arch.scroll_offset..end {
         let entry = &app.changelog[i];
 
-        // search filter
         if arch.search_len > 0 {
             let field_bytes = entry.field_name.as_bytes();
             let value_bytes = &entry.description[..entry.desc_len];
@@ -246,7 +238,6 @@ pub fn render(app: &SettingsApp) {
         app.register_widget_hitbox(px, cy, row_w, widgets::FONT_H + 2, 3 + displayed);
         widgets::fill_rect(s, st, px, cy, row_w, widgets::FONT_H + 2, row_bg, w, h);
 
-        // index
         let mut nbuf = [0u8; 4];
         let nl = widgets::u64_to_str(i as u64, &mut nbuf);
         let ns = core::str::from_utf8(&nbuf[..nl]).unwrap_or("?");
@@ -256,7 +247,6 @@ pub fn render(app: &SettingsApp) {
         let col_field = px + row_w / 3;
         let col_value = px + (row_w * 2) / 3;
 
-        // route
         let route_str = entry.chamber.label();
         let route_chars = (col_field.saturating_sub(col_route + 2)) / widgets::FONT_W;
         widgets::draw_str_trunc(
@@ -272,7 +262,6 @@ pub fn render(app: &SettingsApp) {
             route_chars as usize,
         );
 
-        // field
         let field_chars = (col_value.saturating_sub(col_field + 2)) / widgets::FONT_W;
         widgets::draw_str_trunc(
             s,
@@ -287,7 +276,6 @@ pub fn render(app: &SettingsApp) {
             field_chars as usize,
         );
 
-        // value
         let val = core::str::from_utf8(&entry.description[..entry.desc_len]).unwrap_or("?");
         let val_color = if entry.destructive {
             t.destructive
@@ -308,7 +296,6 @@ pub fn render(app: &SettingsApp) {
             value_chars as usize,
         );
 
-        // destructive marker
         if entry.destructive {
             widgets::draw_str(
                 s,
@@ -342,7 +329,6 @@ pub fn render(app: &SettingsApp) {
         cy += r2;
     }
 
-    // detail panel for selected entry
     if arch.selected < changelog_len {
         cy += 8;
         widgets::hline(
@@ -389,7 +375,7 @@ fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
-    // case-insensitive substring search
+    // Case-insensitive substring scan.
     let nlen = needle.len();
     for i in 0..=(haystack.len() - nlen) {
         let mut matched = true;

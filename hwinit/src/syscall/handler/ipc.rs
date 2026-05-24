@@ -1,42 +1,14 @@
-// SYS_SHM_GRANT (73) — grant shared physical pages to another process
+// SYS_SHM_GRANT: unidirectional grant of phys frames owned by the caller into
+// the target's address space. Target VMA owns_phys=false — only the granter's
+// munmap frees. Caps capability: must know PID and own a matching VMA.
 //
-// Exokernel shared memory primitive.  The caller specifies physical pages
-// it owns (via SYS_MMAP or SYS_DMA_ALLOC), and the kernel maps those same
-// physical frames into the target process's address space.
-//
-// This is *unidirectional grant*, not symmetric attach.  The granting
-// process retains its own mapping.  The target receives a new VMA with
-// `owns_phys = false` so that munmap in the target does NOT free the
-// physical pages (the granter still owns them).
-//
-// # Arguments
-//
-//   a1 = target_pid (u32)
-//   a2 = source virtual address (must be start of a VMA in the caller)
-//   a3 = number of 4 KiB pages (must match the VMA exactly)
-//   a4 = flags: bit 0 = writable, bit 1 = executable
-//
-// # Returns
-//
-//   Virtual address in the target process, or error code.
-//
-// # Security model
-//
-//   - Only processes that OWN physical pages can grant them (owns_phys=true)
-//   - The target process cannot free the underlying physical memory
-//   - The granter can munmap its side, but the target's mapping persists
-//     until the target munmaps or exits
-//   - There is no ambient authority: you must know the PID and possess
-//     a valid VMA
+// args: target_pid, src_vaddr (VMA base), pages (must match), flags (W=1, X=2).
 
-/// Protection flags for SYS_SHM_GRANT and SYS_MPROTECT.
-pub const PROT_READ: u64 = 0; // Read-only (no additional bits)
-pub const PROT_WRITE: u64 = 1; // Writable
-pub const PROT_EXEC: u64 = 2; // Executable (clears NX)
+pub const PROT_READ: u64 = 0;
+pub const PROT_WRITE: u64 = 1;
+pub const PROT_EXEC: u64 = 2;
 
-/// `SYS_SHM_GRANT(target_pid, src_vaddr, pages, flags) → target_vaddr`
 pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
-    // argument validation
     if pages == 0 || pages > 1024 {
         return EINVAL;
     }

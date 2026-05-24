@@ -165,12 +165,18 @@ impl XhciController {
 
         // EP context for the interrupt-IN endpoint at DCI = dci_in.
         let ep_in = in_ctx + ((dci_in as u64) + 1) * cs;
-        // DW0 [23:16] Interval. For HS, units are 2^(N) × 125 μs; for LS/FS,
-        // units are simply N × 1 ms after xHC translates the field. Setting 4
-        // gives 2 ms for HS and ~4 ms for LS/FS — fast enough for keystrokes
-        // and safely under the device's bInterval ceiling. A proper driver
-        // would derive this from the endpoint descriptor's bInterval.
-        vw32(ep_in, 4u32 << 16);
+        // DW0 [23:16] Interval. Always 2^N × 125 μs microframes regardless
+        // of device speed (xHCI 6.2.3.6). For LS endpoints the USB spec
+        // minimum is 10 ms (= 80 microframes), so values below N=7 are out
+        // of spec and real Intel xHCs simply refuse to schedule the transfer —
+        // the endpoint is configured but never polled, and our `wait_xfer`
+        // sees no events forever.
+        //
+        // N=7 → 128 microframes = 16 ms polling. Safe for any LS/FS HID
+        // keyboard (typical bInterval is 8–32 ms). For HS this would be
+        // overly slow but no HS keyboards exist in practice. A proper
+        // driver would compute N from the endpoint descriptor's bInterval.
+        vw32(ep_in, 7u32 << 16);
         // DW1: CErr=3, EP Type=7 (Interrupt IN), Max Packet Size.
         vw32(
             ep_in + 4,

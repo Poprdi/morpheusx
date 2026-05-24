@@ -1,4 +1,4 @@
-// mirror basin — DE appearance controls.
+// DE appearance: theme mode + accent color.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{Route, SettingsApp};

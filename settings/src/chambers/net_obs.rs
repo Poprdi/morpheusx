@@ -1,6 +1,4 @@
-// network observatory — operational connectivity controls.
-// DHCP/static toggle, hostname, DNS, link status, MAC, stats.
-// the most syscall-heavy chamber. exercises SYS_NET_CFG and SYS_NIC_INFO.
+// DHCP/static, hostname, DNS, link, MAC, stats. SYS_NET_CFG + SYS_NIC_INFO.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{Route, SettingsApp};
@@ -10,7 +8,6 @@ use libmorpheus::net;
 
 const ENODEV: u64 = u64::MAX - 19;
 
-// editable field indices
 const FIELD_MODE_DHCP: usize = 0;
 const FIELD_MODE_STATIC: usize = 1;
 const FIELD_DHCP_REQUEST: usize = 2;
@@ -26,7 +23,6 @@ const FIELD_REFRESH: usize = 11;
 const FIELD_COUNT: usize = 12;
 
 pub struct NetObsChamber {
-    // live state from kernel
     pub state: u32,
     pub flags: u32,
     pub ip: u32,
@@ -41,13 +37,12 @@ pub struct NetObsChamber {
     pub mtu: u32,
     pub stack_available: bool,
 
-    // stats
     pub tx_packets: u64,
     pub rx_packets: u64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
 
-    // edited fields (for pending change tracking)
+    // Edited values, kept separate from live so pending state can be detected.
     pub edit_dhcp: bool,
     pub edit_hostname: [u8; 64],
     pub edit_hostname_len: usize,
@@ -61,7 +56,6 @@ pub struct NetObsChamber {
     pub edit_dns2: [u8; 16],
     pub edit_dns2_len: usize,
 
-    // which text field is being edited (cursor active)
     pub editing_field: Option<usize>,
 }
 
@@ -115,7 +109,6 @@ impl NetObsChamber {
             ];
             self.mtu = cfg.mtu;
 
-            // hostname
             let hlen = cfg
                 .hostname
                 .iter()
@@ -124,12 +117,12 @@ impl NetObsChamber {
             self.hostname[..hlen].copy_from_slice(&cfg.hostname[..hlen]);
             self.hostname_len = hlen;
 
-            // keep DHCP default-on when stack is still unconfigured.
+            // Leave DHCP default-on while stack is unconfigured.
             if cfg.state != 0 {
                 self.edit_dhcp = (cfg.flags & net::NET_FLAG_DHCP) != 0;
             }
 
-            // Don't clobber in-progress typing with periodic refresh.
+            // Don't trample in-flight edits.
             if self.editing_field.is_none() {
                 self.sync_edit_from_live();
             }
@@ -152,7 +145,7 @@ impl NetObsChamber {
             }
         }
 
-        // Prefer NIC hardware counters when available.
+        // HW counters beat software-side numbers when both exist.
         if let Ok(hw) = net::nic_hw_stats() {
             self.tx_packets = hw.tx_packets;
             self.rx_packets = hw.rx_packets;
@@ -162,12 +155,10 @@ impl NetObsChamber {
     }
 
     fn sync_edit_from_live(&mut self) {
-        // hostname
         self.edit_hostname[..self.hostname_len]
             .copy_from_slice(&self.hostname[..self.hostname_len]);
         self.edit_hostname_len = self.hostname_len;
 
-        // ip
         self.edit_ip_len = widgets::format_ip(self.ip, &mut self.edit_ip);
         self.edit_prefix = if self.prefix_len == 0 {
             24
@@ -222,13 +213,13 @@ impl NetObsChamber {
 }
 
 fn run_dhcp_request(app: &mut SettingsApp, source: &'static str) -> bool {
-    // force mode to DHCP for this action regardless of previous UI mode.
+    // Force DHCP regardless of UI mode for this action.
     app.net_obs.edit_dhcp = true;
     libmorpheus::println!("[settings/net] dhcp request source={}", source);
 
     match net::net_dhcp() {
         Ok(()) => {
-            // keep driving the stack for a short burst to surface lease progress.
+            // Pump the stack to surface lease progress.
             for _ in 0..256 {
                 let _ = net::nic_refill();
                 let _ = net::net_poll_drive(libmorpheus::time::uptime_ms());
@@ -259,7 +250,7 @@ fn run_dhcp_request(app: &mut SettingsApp, source: &'static str) -> bool {
         }
         Err(e) => {
             if e == ENODEV {
-                // NIC path is active, but stack ops are not registered in kernel yet.
+                // NIC up, but kernel-side IP stack ops aren't registered.
                 libmorpheus::println!(
                     "[settings/net] dhcp unavailable: ip stack not registered err=0x{:x}",
                     e
@@ -342,7 +333,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
 }
 
 pub fn apply(app: &mut SettingsApp) -> bool {
-    // hostname — copy to local buf so we don't hold a borrow on app across log_change
+    // Copy hostname locally to release the borrow before log_change.
     let hl = app.net_obs.edit_hostname_len;
     if hl > 0 {
         let mut hn_buf = [0u8; 64];
@@ -362,6 +353,7 @@ pub fn apply(app: &mut SettingsApp) -> bool {
         }
         app.log_change(Route::NetObservatory, "mode", "Switched to DHCP", false);
     } else {
+        // Static path.
         let ip_len = app.net_obs.edit_ip_len;
         let gw_len = app.net_obs.edit_gw_len;
         let mut prefix = app.net_obs.edit_prefix;
@@ -447,7 +439,7 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
         return;
     }
 
-    // start text editing immediately when the focused field gets typed into.
+    // Drop into edit mode on first keystroke when a text field is focused.
     if is_text_field(app.pane_focus) {
         match scancode {
             0x0E => {
@@ -479,7 +471,6 @@ pub fn render(app: &SettingsApp) {
     let r8 = layout::row_step(app, 8);
     let r12 = layout::row_step(app, 12);
 
-    // link status section
     layout::draw_section(app, px, cy, "Link Status");
     cy += r4;
 
@@ -517,7 +508,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "MTU:", mtu_str, t.telemetry);
     cy += r8;
 
-    // state
     let state_str = match net.state {
         0 => "Unconfigured",
         1 => "DHCP Discovering",
@@ -533,7 +523,7 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "State:", state_str, state_color);
     cy += r8;
 
-    // explicit activation control — always visible near top.
+    // Always-visible activation control.
     layout::draw_button_row(
         app,
         px,
@@ -544,11 +534,9 @@ pub fn render(app: &SettingsApp) {
     );
     cy += r8;
 
-    // configuration section
     layout::draw_section(app, px, cy, "Configuration");
     cy += r4;
 
-    // mode selector + explicit DHCP action
     let dhcp_label = if net.edit_dhcp {
         "[X] Mode: DHCP"
     } else {
@@ -574,7 +562,6 @@ pub fn render(app: &SettingsApp) {
     );
     cy += r8;
 
-    // hostname
     let hn = core::str::from_utf8(&net.edit_hostname[..net.edit_hostname_len]).unwrap_or("");
     let hn_display = if hn.is_empty() { "(none)" } else { hn };
     let hn_editing = net.editing_field == Some(FIELD_HOSTNAME);
@@ -590,7 +577,6 @@ pub fn render(app: &SettingsApp) {
     cy += r8;
 
     if !net.edit_dhcp {
-        // static ip fields
         let ip_str = core::str::from_utf8(&net.edit_ip[..net.edit_ip_len]).unwrap_or("0.0.0.0");
         let ip_editing = net.editing_field == Some(FIELD_IP);
         draw_editable_field(app, px, cy, "IP Address:", ip_str, FIELD_IP, ip_editing);
@@ -626,7 +612,7 @@ pub fn render(app: &SettingsApp) {
         );
         cy += r8;
     } else {
-        // show current DHCP-assigned values as read-only
+        // Read-only display of DHCP-assigned values.
         let mut ip_buf = [0u8; 16];
         let ip_len = widgets::format_ip(net.ip, &mut ip_buf);
         let ip_str = core::str::from_utf8(&ip_buf[..ip_len]).unwrap_or("0.0.0.0");
@@ -654,13 +640,11 @@ pub fn render(app: &SettingsApp) {
         cy += r8;
     }
 
-    // action buttons
     layout::draw_button_row(app, px, cy, "Apply Network Config", FIELD_APPLY, t.signal);
     cy += r8;
     layout::draw_button_row(app, px, cy, "Refresh", FIELD_REFRESH, t.glyph);
     cy += r12;
 
-    // traffic stats section
     layout::draw_section(app, px, cy, "Traffic");
     cy += r4;
 
@@ -752,7 +736,6 @@ fn draw_editable_field(
         value_chars as usize,
     );
 
-    // cursor
     if editing {
         let cursor_x = vx + value.len() as u32 * widgets::FONT_W;
         widgets::fill_rect(s, st, cursor_x, ty, 2, widgets::FONT_H, t.focus_ring, w, h);
@@ -816,8 +799,8 @@ fn parse_ipv4_strict(buf: &[u8]) -> Result<u32, ()> {
     Ok(u32::from_be_bytes(octets))
 }
 
+/// PS/2 set-1 scancode to ASCII (no shift/locks).
 pub fn scancode_to_char(sc: u8) -> Option<u8> {
-    // Input here is keyboard scancode, not ASCII. Map explicitly.
     match sc {
         0x02..=0x0A => Some(b'1' + (sc - 0x02)),
         0x0B => Some(b'0'),

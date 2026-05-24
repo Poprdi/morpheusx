@@ -1,5 +1,4 @@
-// oneiric gateway — the entry chamber.
-// safe/severe mode gate, quick-jump links, last-visited recall.
+// Entry chamber: safe/severe mode gate, quick-jump links, recent visits.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{ArmState, Route, SafetyMode, SettingsApp};
@@ -109,7 +108,6 @@ pub fn render(app: &SettingsApp) {
     let r8 = layout::row_step(app, 8);
     let r12 = layout::row_step(app, 12);
 
-    // welcome header
     widgets::draw_str(
         s,
         st,
@@ -135,7 +133,6 @@ pub fn render(app: &SettingsApp) {
     );
     cy += r12;
 
-    // mode gate
     layout::draw_section(app, px, cy, "Mode");
     cy += r4;
 
@@ -146,7 +143,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_button_row(app, px, cy, mode_label, 0, mode_color);
     cy += r8;
 
-    // armed warning
     if app.severe_arm == ArmState::Armed {
         layout::draw_risk_band(
             app,
@@ -157,7 +153,6 @@ pub fn render(app: &SettingsApp) {
         cy += r12;
     }
 
-    // chamber links
     layout::draw_section(app, px, cy, "Sections");
     cy += r4;
 
@@ -178,13 +173,11 @@ pub fn render(app: &SettingsApp) {
 
         let ty = cy + r4.saturating_sub(widgets::FONT_H) / 2;
 
-        // number key hint
         let mut num_buf = [0u8; 1];
         num_buf[0] = b'1' + i as u8;
         let num_str = core::str::from_utf8(&num_buf).unwrap_or("?");
         widgets::draw_str(s, st, px + 4, ty, num_str, t.glyph_dim, bg, w, h);
 
-        // sigil
         widgets::draw_str(
             s,
             st,
@@ -197,13 +190,11 @@ pub fn render(app: &SettingsApp) {
             h,
         );
 
-        // label
         widgets::draw_str(s, st, px + 5 * widgets::FONT_W, ty, label, fg, bg, w, h);
 
         cy += r4;
     }
 
-    // recent chambers
     if app.gateway.recent_count > 0 {
         cy += 8;
         layout::draw_section(app, px, cy, "Recent");

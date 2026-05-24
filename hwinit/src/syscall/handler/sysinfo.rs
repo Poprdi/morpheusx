@@ -1,24 +1,19 @@
 
-// SYS_PS (65) — list all processes
-
-/// Process info returned by SYS_PS.
-/// Must match `libmorpheus::process::PsEntry` exactly.
+/// Must match `libmorpheus::process::PsEntry` byte-for-byte.
+/// state: 0 Ready, 1 Running, 2 Blocked, 3 Zombie, 4 Terminated.
 #[repr(C)]
 pub struct PsEntry {
     pub pid: u32,
     pub ppid: u32,
-    pub state: u32, // 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated
+    pub state: u32,
     pub priority: u32,
     pub cpu_ticks: u64,
-    /// Accumulated TSC cycles actively running (HLT idle excluded for PID 0).
+    /// Running-TSC only; HLT idle excluded for PID 0.
     pub cpu_tsc: u64,
     pub pages_alloc: u64,
-    pub name: [u8; 32], // NUL-terminated
+    pub name: [u8; 32],
 }
 
-/// `SYS_PS(buf_ptr, max_count) → count`
-///
-/// List all processes.  Writes up to `max_count` `PsEntry` structs to `buf_ptr`.
 pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
     if max_count == 0 || buf_ptr == 0 {
         return SCHEDULER.live_count() as u64;
@@ -29,7 +24,6 @@ pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
         return EFAULT;
     }
 
-    // Use the scheduler's snapshot_processes to get ProcessInfo array.
     let max = max_count.min(64) as usize;
     let mut infos = [crate::process::scheduler::ProcessInfo::zeroed(); 64];
     let count = SCHEDULER.snapshot_processes(&mut infos[..max]);
@@ -46,7 +40,7 @@ pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
         };
         let mut entry = PsEntry {
             pid: pi.pid,
-            ppid: 0, // ProcessInfo doesn't carry ppid; 0 is fine
+            ppid: 0, // ProcessInfo lacks ppid; leave 0.
             state: state_u32,
             priority: pi.priority as u32,
             cpu_ticks: pi.cpu_ticks,
@@ -63,20 +57,13 @@ pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
     count as u64
 }
 
-// SYS_SIGACTION (66) — register a signal handler
-
-/// `SYS_SIGACTION(signum, handler_addr) → old_handler`
-///
-/// Register a handler function for the given signal.
-/// `handler_addr` = 0 means SIG_DFL (default action).
-/// `handler_addr` = 1 means SIG_IGN (ignore).
-/// Returns the previous handler address, or EINVAL for invalid signals.
+/// `handler`: 0 = SIG_DFL, 1 = SIG_IGN, otherwise user fn address.
 pub unsafe fn sys_sigaction(signum: u64, handler: u64) -> u64 {
     let sig = match Signal::from_u8(signum as u8) {
         Some(s) => s,
         None => return EINVAL,
     };
-    // SIGKILL and SIGSTOP cannot be caught or ignored.
+    // POSIX: SIGKILL/SIGSTOP are uncatchable.
     if matches!(sig, Signal::SIGKILL | Signal::SIGSTOP) {
         return EINVAL;
     }
@@ -88,13 +75,7 @@ pub unsafe fn sys_sigaction(signum: u64, handler: u64) -> u64 {
     old
 }
 
-// SYS_SETPRIORITY (67) — set process scheduling priority
-
-/// `SYS_SETPRIORITY(pid, priority) → 0`
-///
-/// Set the scheduling priority of a process.
-/// pid = 0 means current process.
-/// priority: 0-255 (0 = highest, 255 = lowest).
+/// pid=0 means current. priority 0..255 (0=highest).
 pub unsafe fn sys_setpriority(pid: u64, priority: u64) -> u64 {
     if priority > 255 {
         return EINVAL;
@@ -110,11 +91,6 @@ pub unsafe fn sys_setpriority(pid: u64, priority: u64) -> u64 {
     }
 }
 
-// SYS_GETPRIORITY (68) — get process scheduling priority
-
-/// `SYS_GETPRIORITY(pid) → priority`
-///
-/// Get the scheduling priority.  pid = 0 means current process.
 pub unsafe fn sys_getpriority(pid: u64) -> u64 {
     let target_pid = if pid == 0 {
         SCHEDULER.current_pid()
@@ -127,9 +103,6 @@ pub unsafe fn sys_getpriority(pid: u64) -> u64 {
     }
 }
 
-// SYS_CPUID (69) — execute CPUID instruction
-
-/// CPUID result.
 #[repr(C)]
 pub struct CpuidResult {
     pub eax: u32,
@@ -138,10 +111,6 @@ pub struct CpuidResult {
     pub edx: u32,
 }
 
-/// `SYS_CPUID(leaf, subleaf, result_ptr) → 0`
-///
-/// Execute the CPUID instruction with the given leaf/subleaf and write
-/// the 4 result registers to `result_ptr`.
 pub unsafe fn sys_cpuid(leaf: u64, subleaf: u64, result_ptr: u64) -> u64 {
     let size = core::mem::size_of::<CpuidResult>() as u64;
     if !validate_user_buf(result_ptr, size) {
@@ -175,20 +144,13 @@ pub unsafe fn sys_cpuid(leaf: u64, subleaf: u64, result_ptr: u64) -> u64 {
     0
 }
 
-// SYS_RDTSC (70) — read TSC with frequency info
-
-/// TSC result struct.
 #[repr(C)]
 pub struct TscResult {
     pub tsc: u64,
     pub frequency: u64,
 }
 
-/// `SYS_RDTSC(result_ptr) → tsc_value`
-///
-/// Read the Time Stamp Counter.  If `result_ptr` is non-zero, also
-/// writes a `TscResult` struct with both the TSC value and calibrated
-/// frequency in Hz.
+/// Writes `TscResult` if `result_ptr` is set; returns the TSC.
 pub unsafe fn sys_rdtsc(result_ptr: u64) -> u64 {
     let tsc = crate::cpu::tsc::read_tsc();
     let freq = crate::process::scheduler::tsc_frequency();
@@ -209,15 +171,9 @@ pub unsafe fn sys_rdtsc(result_ptr: u64) -> u64 {
     tsc
 }
 
-// SYS_BOOT_LOG (71) — read kernel boot log
-
-/// `SYS_BOOT_LOG(buf_ptr, buf_len) → bytes_written`
-///
-/// Copy the kernel boot log (serial output captured during init) into
-/// the user buffer.  Returns the number of bytes written.
+/// `buf_len == 0` returns total log size without copying.
 pub unsafe fn sys_boot_log(buf_ptr: u64, buf_len: u64) -> u64 {
     if buf_len == 0 {
-        // Return total log size.
         return crate::serial::boot_log().len() as u64;
     }
     if !validate_user_buf(buf_ptr, buf_len) {
@@ -231,9 +187,6 @@ pub unsafe fn sys_boot_log(buf_ptr: u64, buf_len: u64) -> u64 {
     copy_len as u64
 }
 
-// SYS_MEMMAP (72) — read physical memory map
-
-/// Memory map entry returned by SYS_MEMMAP.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MemmapEntry {
@@ -243,10 +196,7 @@ pub struct MemmapEntry {
     pub _pad: u32,
 }
 
-/// `SYS_MEMMAP(buf_ptr, max_entries) → count`
-///
-/// Copy the physical memory map into the user buffer.
-/// If `buf_ptr` is 0, returns the total number of entries.
+/// `buf_ptr == 0` returns total entry count.
 pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
     let registry = crate::memory::global_registry();
     let (_key, total) = registry.get_memory_map();

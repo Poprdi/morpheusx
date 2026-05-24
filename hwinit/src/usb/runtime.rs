@@ -44,8 +44,7 @@ pub unsafe fn install_runtime(controller: XhciController, keyboard: Option<UsbIn
         let mut k = USB_KEYBOARD.lock();
         *k = keyboard;
     }
-    // Visibility line so the framebuffer shows whether runtime install
-    // actually happened, with the slot/endpoint info we'll poll.
+    // Mirror to framebuffer; confirms runtime install path on serial-less boards.
     if let Some(kb) = keyboard {
         crate::serial::puts("[USB-DBG] runtime install: slot=");
         crate::serial::puts_dec_u8(kb.slot_id);
@@ -114,9 +113,8 @@ pub unsafe fn poll_keyboard() -> bool {
             let buf = controller.dma_base + dma::OFF_REPORT as u64;
             let report_ptr = buf as *const KeyboardReport;
 
-            // parse_keyboard_report ignores its controller/iface args — its
-            // signature predates this polling layer — but we pass real values
-            // anyway in case the upstream parser starts using them.
+            // parse_keyboard_report currently ignores ctl/iface (predates this
+            // polling layer); passed anyway for forward compat.
             let iface = HIDInterface {
                 interface_num: kb.interface_num,
                 protocol: kb.protocol,

@@ -1,7 +1,4 @@
-//! DNS resolution state — resolves hostname to IP address.
-//!
-//! Uses smoltcp's DNS socket for resolution. Falls back to direct
-//! IP address parsing when hostname is already an IP.
+//! Hostname → IPv4 via smoltcp DNS socket; short-circuits on literal IPs.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -19,10 +16,9 @@ use crate::mainloop::state::{State, StepResult};
 
 use super::{ConnectState, FailedState};
 
-/// Static storage for DNS queries (smoltcp requirement).
+/// smoltcp DNS socket requires a caller-provided query slot array.
 static mut DNS_QUERIES: [Option<smoltcp::socket::dns::DnsQuery>; 1] = [None];
 
-/// DNS resolution state.
 pub struct DnsState {
     start_tsc: u64,
     query_handle: Option<QueryHandle>,

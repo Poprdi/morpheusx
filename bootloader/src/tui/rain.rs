@@ -2,7 +2,6 @@ use super::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_LIGHTGREEN};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-// Global rain toggle
 static RAIN_ENABLED: AtomicBool = AtomicBool::new(false);
 static mut GLOBAL_RAIN: Option<MatrixRain> = None;
 
@@ -29,7 +28,7 @@ pub fn render_rain(screen: &mut Screen) {
     }
 }
 
-// Simple PRNG for rain animation (LCG algorithm)
+/// Knuth/glibc LCG.
 pub struct Rng {
     state: u32,
 }
@@ -57,8 +56,8 @@ pub struct RainColumn {
     pub y: isize,
     pub length: usize,
     pub speed: usize,
-    pub tick_delay: u32,   // Frames to wait before next update
-    pub tick_counter: u32, // Current frame counter
+    pub tick_delay: u32,
+    pub tick_counter: u32,
 }
 
 impl RainColumn {
@@ -68,25 +67,22 @@ impl RainColumn {
             y: -(rng.range(15) as isize),
             length: (rng.range(6) + 4) as usize,
             speed: 1,
-            tick_delay: if rng.range(3) == 0 { 2 } else { 1 }, // Mostly 1, occasionally 2
+            tick_delay: if rng.range(3) == 0 { 2 } else { 1 },
             tick_counter: 0,
         }
     }
 
     pub fn update(&mut self, max_y: usize, rng: &mut Rng) {
-        // Increment tick counter
         self.tick_counter += 1;
 
-        // Only update position when tick counter reaches delay
         if self.tick_counter >= self.tick_delay {
-            self.tick_counter = 0; // Reset counter
+            self.tick_counter = 0;
             self.y += self.speed as isize;
 
-            // Reset column when it goes off screen
             if self.y > max_y as isize + self.length as isize {
                 self.y = -(rng.range(10) as isize);
                 self.length = (rng.range(6) + 4) as usize;
-                self.tick_delay = if rng.range(3) == 0 { 2 } else { 1 }; // Mostly 1, occasionally 2
+                self.tick_delay = if rng.range(3) == 0 { 2 } else { 1 };
             }
         }
     }
@@ -103,14 +99,12 @@ pub struct MatrixRain {
 impl MatrixRain {
     pub fn new(screen_width: usize, screen_height: usize) -> Self {
         let mut rng = Rng::new(0x1337BEEF);
-        // One column per character position for dense rain
         let num_cols = screen_width;
 
         let mut columns = Vec::new();
 
-        // Create a column for every x position with heavily staggered start positions
+        // Stagger initial Y so the columns form continuous flow at t=0.
         for x in 0..num_cols {
-            // Spread initial positions across a large range to create continuous flow
             let max_offset = screen_height * 2;
             let y_offset = (x * max_offset / num_cols) as isize;
 
@@ -133,16 +127,9 @@ impl MatrixRain {
         }
     }
 
-    /// Frame pacing delay using TSC for consistent timing.
-    ///
-    /// PERF FIX: Replaced 40M-iteration busy loop with TSC-based delay.
-    /// Old approach burned ~40M iterations of `black_box()` per frame —
-    /// wasting CPU cycles on pure busywork. Uses HLT-based idle with TSC
-    /// exit condition so the core enters C1 sleep between timer interrupts
-    /// instead of spinning at full speed.
-    /// Targets ~30ms per frame (~33 FPS) for smooth rain animation.
+    /// TSC-paced ~30 ms/frame; HLT between checks so the core sleeps in C1.
+    /// Target cycles assume ~1 GHz; precise rate not critical here.
     fn delay(&self) {
-        // Use TSC for frame pacing: ~30ms delay for ~33 FPS animation
         let start: u64;
         unsafe {
             let lo: u32;
@@ -150,8 +137,6 @@ impl MatrixRain {
             core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
             start = ((hi as u64) << 32) | (lo as u64);
         }
-        // ~30ms at 1 GHz ≈ 30_000_000 cycles; scales with actual CPU frequency.
-        // This is an approximation — exact timing isn't critical for animation.
         let target_cycles: u64 = 30_000_000;
         loop {
             let now: u64;
@@ -164,8 +149,6 @@ impl MatrixRain {
             if now.wrapping_sub(start) >= target_cycles {
                 break;
             }
-            // PERF FIX: HLT instead of spin_loop(). CPU enters C1 sleep,
-            // wakes on the next interrupt (PIT/UEFI timer), then re-checks TSC.
             unsafe {
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }
@@ -175,12 +158,11 @@ impl MatrixRain {
     pub fn render_frame(&mut self, screen: &mut Screen) {
         self.frame_count = self.frame_count.wrapping_add(1);
 
-        // Update all column positions
         for col in &mut self.columns {
             col.update(self.screen_height, &mut self.rng);
         }
 
-        // Render each column - IGNORING mask to eat through UI
+        // Renders over the UI; intentional.
         for col in &self.columns {
             for i in 0..col.length {
                 let y = col.y - i as isize;
@@ -189,21 +171,17 @@ impl MatrixRain {
                     let y_pos = y as usize;
                     let x_pos = col.x;
 
-                    // Easter egg mode: render rain OVER everything, eating the UI
                     let (ch, color) = if i == 0 {
-                        // Head: bright green binary
                         (
                             if self.rng.range(2) == 0 { '1' } else { '0' },
                             EFI_LIGHTGREEN,
                         )
                     } else if i < 3 {
-                        // Middle: normal green binary
                         (
                             if self.rng.range(2) == 0 { '1' } else { '0' },
                             EFI_DARKGREEN,
                         )
                     } else {
-                        // Tail: dim green dots for cosmic trail effect
                         (
                             if self.rng.range(3) == 0 { '.' } else { ' ' },
                             EFI_DARKGREEN,
@@ -214,7 +192,6 @@ impl MatrixRain {
             }
         }
 
-        // Built-in delay for smooth animation
         self.delay();
     }
 }

@@ -174,57 +174,38 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
 }
 
-// SYS_YIELD — voluntary context switch
-
-/// Yield. STI+HLT is atomic on x86-64 — no surprise interrupts.
+/// STI+HLT is atomic on x86-64 — no surprise IRQ between them.
 pub unsafe fn sys_yield() -> u64 {
     core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
     0
 }
 
-// SYS_GETPID
-
 pub unsafe fn sys_getpid() -> u64 {
     SCHEDULER.current_pid() as u64
 }
 
-// SYS_KILL — send a signal to a process
-
-/// `SYS_KILL(pid: u32, signal: u8)` — send signal to process.
 pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
     let sig = match Signal::from_u8(signum as u8) {
         Some(s) => s,
-        None => return u64::MAX - 22, // -EINVAL
+        None => return u64::MAX - 22, // EINVAL
     };
     match SCHEDULER.send_signal(pid as u32, sig) {
         Ok(_) => 0,
-        Err(_) => u64::MAX - 3, // -ESRCH
+        Err(_) => u64::MAX - 3, // ESRCH
     }
 }
 
-// SYS_WAIT — wait for a child process to exit
-
-/// `SYS_WAIT(pid)` — block until child `pid` exits, then return its exit code.
-///
-/// If the child is already a Zombie, reaps immediately.
-/// If `pid` is not a child of the caller, returns -ESRCH.
 pub unsafe fn sys_wait(pid: u64) -> u64 {
     crate::process::scheduler::wait_for_child(pid as u32)
 }
 
-// SYS_SLEEP — sleep for N milliseconds
-
-/// `SYS_SLEEP(millis)` — suspend the calling process for at least `millis` ms.
-///
-/// Computes a TSC deadline and blocks with `BlockReason::Sleep(deadline)`.
-/// The scheduler unblocks the process once the deadline has passed.
 pub unsafe fn sys_sleep(millis: u64) -> u64 {
     if millis == 0 {
         return 0;
     }
     let tsc_freq = crate::process::scheduler::tsc_frequency();
     if tsc_freq == 0 {
-        // TSC not calibrated — cannot compute deadline; return success anyway.
+        // TSC uncalibrated — best-effort no-op.
         return 0;
     }
     let ticks_per_ms = tsc_freq / 1000;
@@ -233,7 +214,7 @@ pub unsafe fn sys_sleep(millis: u64) -> u64 {
 }
 
 pub unsafe fn sys_system_control(mode: u64) -> u64 {
-    // single transition owner. concurrent reboot/shutdown callers get EBUSY.
+    // Single owner — racing reboot/shutdown callers get EBUSY.
     if SYSTEM_CONTROL_IN_PROGRESS
         .compare_exchange(
             false,
@@ -254,7 +235,7 @@ pub unsafe fn sys_system_control(mode: u64) -> u64 {
         SYSCTL_REBOOT_FORCE => hard_reset_now(crate::shutdown::TransitionKind::RebootForce),
         SYSCTL_SHUTDOWN_FORCE => hard_reset_now(crate::shutdown::TransitionKind::ShutdownForce),
         SYSCTL_SHUTDOWN_PANIC => {
-            // Show crash screen, then reset from exception handler path.
+            // Take the crash-handler path: shows BSOD, then resets.
             crate::cpu::idt::set_reset_on_crash(true);
             core::arch::asm!("ud2", options(noreturn));
         }
@@ -291,7 +272,7 @@ unsafe fn graceful_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
     crate::serial::fb_puts("[INFO] [SHUTDOWN] draining processes\n");
     crate::serial::checkpoint("shutdown-drain-begin");
 
-    // Best-effort graceful drain: TERM first, then KILL survivors.
+    // TERM half the rounds, then KILL survivors.
     for round in 0..DRAIN_ROUNDS {
         let mut procs = [crate::process::scheduler::ProcessInfo::zeroed(); MAX_SNAPSHOT];
         let n = SCHEDULER.snapshot_processes(&mut procs);
@@ -322,8 +303,7 @@ unsafe fn graceful_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
             break;
         }
 
-        // No HLT here. if local timer IRQ is masked/misrouted this would hang forever.
-        // We still make forward progress to reset even if teardown is partial.
+        // No HLT — a masked/misrouted timer IRQ would deadlock the reset path.
         if round == (DRAIN_ROUNDS / 2) {
             crate::serial::checkpoint("shutdown-drain-escalate-sigkill");
         }
@@ -335,7 +315,7 @@ unsafe fn graceful_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
     crate::serial::fb_puts("[INFO] [SHUTDOWN] entering reset sequence\n");
     crate::serial::checkpoint("shutdown-reset-seq");
 
-    // Do not block here on VFS lock during teardown; reset path must always complete.
+    // No VFS lock here — reset must always complete.
     hard_reset_now(kind)
 }
 

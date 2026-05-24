@@ -279,7 +279,7 @@ pub fn read_file<B: BlockIo>(
 
         if !found {
             return Err(Fat32Error::IoError);
-        } // Path not found
+        }
     }
 
     Err(Fat32Error::IoError)
@@ -296,13 +296,12 @@ fn read_file_data<B: BlockIo>(
     let mut data_offset = 0;
     let cluster_size = (ctx.sectors_per_cluster * SECTOR_SIZE as u32) as usize;
 
-    // Follow cluster chain
+    // Walk cluster chain until EOC (>= 0x0FFFFFF8).
     let mut current_file_cluster = first_cluster;
     while current_file_cluster < 0x0FFFFFF8 {
         let sector = ctx.cluster_to_sector(current_file_cluster);
         let bytes_to_read = (file_size - data_offset).min(cluster_size);
 
-        // Read cluster data
         let mut cluster_data = vec![0u8; cluster_size];
         for sec_offset in 0..ctx.sectors_per_cluster {
             let start = (sec_offset * SECTOR_SIZE as u32) as usize;
@@ -323,7 +322,6 @@ fn read_file_data<B: BlockIo>(
             break;
         }
 
-        // Get next cluster from FAT
         current_file_cluster =
             ctx.read_fat_entry(block_io, partition_start, current_file_cluster)?;
     }
@@ -371,7 +369,7 @@ pub fn file_exists<B: BlockIo>(
 
                     if entry.name == test_entry.name {
                         if is_last {
-                            return Ok(entry.attr & ATTR_DIRECTORY == 0); // True if it's a file
+                            return Ok(entry.attr & ATTR_DIRECTORY == 0);
                         } else {
                             current_cluster = entry.first_cluster();
                             found = true;

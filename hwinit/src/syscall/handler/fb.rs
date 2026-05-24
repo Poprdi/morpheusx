@@ -1,10 +1,5 @@
 
-// SYS_FB_INFO (63) — get framebuffer information
-
-/// `SYS_FB_INFO(buf_ptr) → 0`
-///
-/// Copy the `FbInfo` struct to the user buffer.  Returns -ENODEV if
-/// no framebuffer has been registered.
+/// Copies `FbInfo` to user; ENODEV if no framebuffer registered.
 pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
     let size = core::mem::size_of::<FbInfo>() as u64;
     if !validate_user_buf(buf_ptr, size) {
@@ -19,18 +14,13 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
     }
 }
 
-// SYS_FB_LOCK (85) / SYS_FB_UNLOCK (86) — exclusive framebuffer access
-
-/// PID that currently holds exclusive framebuffer access (0 = unlocked).
+/// 0 = unlocked.
 static FB_LOCK_PID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-// COMPOSITOR — the compositor PID owns the real back buffer.
-// Non-compositor processes get per-process offscreen surfaces.
-
-/// PID of the registered compositor process (0 = no compositor).
+/// 0 = no compositor. Compositor owns the real back buffer; others get
+/// per-process offscreen surfaces.
 static COMPOSITOR_PID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-/// Returns true if a compositor is active and the caller is NOT the compositor.
 #[inline]
 pub unsafe fn is_composited_client() -> bool {
     use core::sync::atomic::Ordering::Relaxed;
@@ -38,7 +28,6 @@ pub unsafe fn is_composited_client() -> bool {
     cpid != 0 && SCHEDULER.current_pid() != cpid
 }
 
-/// Returns true when a compositor process is registered.
 #[inline]
 pub unsafe fn compositor_active() -> bool {
     COMPOSITOR_PID.load(core::sync::atomic::Ordering::Relaxed) != 0
@@ -47,11 +36,9 @@ pub unsafe fn compositor_active() -> bool {
 pub unsafe fn release_fb_lock_if_holder(pid: u32) {
     use core::sync::atomic::Ordering::Relaxed;
     let _ = FB_LOCK_PID.compare_exchange(pid, 0, Relaxed, Relaxed);
-    // If the compositor exits, kill all composited children so they don't
-    // continue writing to invisible per-process surfaces.  Without this,
-    // children's already-mapped pointers target their private surface
-    // while sys_fb_present/blit falls through to the legacy path that
-    // operates on the real back buffer — the children's display freezes.
+    // Compositor exit: SIGKILL all composited children. Otherwise they keep
+    // writing to invisible surfaces while present/blit silently target the
+    // real back buffer (children's display freezes).
     if COMPOSITOR_PID.load(Relaxed) == pid {
         use crate::process::scheduler::PROCESS_TABLE;
         for proc in PROCESS_TABLE.iter().flatten() {
@@ -63,12 +50,7 @@ pub unsafe fn release_fb_lock_if_holder(pid: u32) {
     }
 }
 
-/// `SYS_FB_LOCK() → 0`
-///
-/// Claim exclusive framebuffer access. Other processes should check
-/// `fb_is_locked()` before writing to the framebuffer.
-/// When a compositor is active, non-compositor processes get a no-op
-/// (they have their own private surface — no contention).
+/// No-op for composited clients (private surfaces don't contend).
 pub unsafe fn sys_fb_lock() -> u64 {
     use core::sync::atomic::Ordering::Relaxed;
     if is_composited_client() {
@@ -83,10 +65,7 @@ pub unsafe fn sys_fb_lock() -> u64 {
     0
 }
 
-/// `SYS_FB_UNLOCK() → 0`
-///
-/// Release exclusive framebuffer access. Only the lock holder can unlock.
-/// No-op for composited clients.
+/// Only the holder can unlock. No-op for composited clients.
 pub unsafe fn sys_fb_unlock() -> u64 {
     use core::sync::atomic::Ordering::Relaxed;
     if is_composited_client() {
@@ -101,8 +80,7 @@ pub unsafe fn sys_fb_unlock() -> u64 {
     0
 }
 
-/// `SYS_FB_IS_LOCKED()` — returns holder PID.
-/// Composited clients always see 0 (unlocked from their perspective).
+/// Holder PID. Composited clients always see 0.
 pub fn fb_lock_holder() -> u32 {
     use core::sync::atomic::Ordering::Relaxed;
     let cpid = COMPOSITOR_PID.load(Relaxed);
@@ -112,28 +90,16 @@ pub fn fb_lock_holder() -> u32 {
     FB_LOCK_PID.load(Relaxed)
 }
 
-/// Best-effort display ownership release for shutdown paths.
-///
-/// Clears framebuffer lock and compositor owner so no stale holder state
-/// survives into teardown and reset.
+/// Shutdown helper: drops FB lock and compositor ownership.
 pub unsafe fn shutdown_release_display_ownership() {
     use core::sync::atomic::Ordering::Relaxed;
     FB_LOCK_PID.store(0, Relaxed);
     COMPOSITOR_PID.store(0, Relaxed);
 }
 
-// SYS_FB_MAP (64) — map the back buffer into user virtual address space
-
-/// `SYS_FB_MAP() → virt_addr`
-///
-/// When no compositor is active (legacy mode): allocates a shared back buffer
-/// and shadow buffer, maps the back buffer into the caller's address space.
-///
-/// When a compositor IS active:
-///   - Compositor itself → gets the real back buffer (unchanged).
-///   - All other processes → get a private per-process offscreen surface
-///     (same dimensions as the real framebuffer).  The compositor reads
-///     these surfaces to composite windows.
+/// Legacy: maps the shared back buffer. With a compositor active, the
+/// compositor still gets the real buffer; other processes get a private
+/// per-process surface that the compositor reads from.
 pub unsafe fn sys_fb_map() -> u64 {
     let info = match fb_registered() {
         Some(i) => i,
@@ -143,22 +109,19 @@ pub unsafe fn sys_fb_map() -> u64 {
         }
     };
 
-    // Compositor mode: non-compositor processes get their own surface.
     if is_composited_client() {
         crate::serial::log_info("FB", 791, "mapped private composited surface");
         return sys_fb_map_surface(&info);
     }
 
-    // Compositor or legacy mode: map the real back buffer.
     crate::serial::log_info("FB", 792, "mapped real back buffer");
-    // Allocate back + shadow buffers on first call.
     if FB_BACK_PHYS.load(core::sync::atomic::Ordering::Relaxed) == 0 {
         if let Err(e) = fb_map_alloc_buffers(&info) {
             return e;
         }
     }
 
-    // Map back buffer as writable cacheable (flag 0x01 = writable, no 0x02 uncacheable).
+    // 0x01 = writable cacheable.
     sys_map_phys(
         FB_BACK_PHYS.load(core::sync::atomic::Ordering::Relaxed),
         FB_BACK_PAGES.load(core::sync::atomic::Ordering::Relaxed),
@@ -166,20 +129,16 @@ pub unsafe fn sys_fb_map() -> u64 {
     )
 }
 
-/// Allocate a per-process framebuffer surface for a composited client.
-/// Same dimensions as the real framebuffer, zeroed.
+/// Per-process surface for composited clients. Dimensions match VRAM.
 unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
     let proc = SCHEDULER.current_memory_leader_mut();
 
-    // If this process already has a surface, just re-map it.
     if proc.fb_surface_phys != 0 {
         return sys_map_phys(proc.fb_surface_phys, proc.fb_surface_pages, 0x01);
     }
 
-    // Allocate physical pages for the surface.
-    // CRITICAL: registry guard must be dropped BEFORE sys_map_phys.
-    // sys_map_phys → ensure_user_table → global_registry_mut() would
-    // self-deadlock on GLOBAL_REGISTRY if we still hold it here.
+    // Drop registry before sys_map_phys — ensure_user_table re-acquires
+    // GLOBAL_REGISTRY and would deadlock otherwise.
     let pages = info.size.div_ceil(4096);
     let phys = {
         let mut registry = crate::memory::global_registry_mut();
@@ -191,36 +150,28 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
             Ok(p) => p,
             Err(_) => return ENOMEM,
         }
-        // registry dropped here. lock released. interrupts restored.
     };
 
-    // Zero the surface (start with black).
     {
         let _guard = crate::memory::KernelCr3Guard::enter();
         core::ptr::write_bytes(phys as *mut u8, 0, info.size as usize);
     }
 
-    // Record in process struct. Update pages_allocated for proper cleanup
-    // via free_process_resources which only frees VMA-tracked pages with
-    // owns_phys=true. We track the surface separately and clean it up
-    // explicitly.
+    // Surface tracked here, freed explicitly — VMA cleanup only frees
+    // owns_phys=true entries.
     let proc = SCHEDULER.current_process_mut();
     proc.fb_surface_phys = phys;
     proc.fb_surface_pages = pages;
     proc.fb_surface_dirty = false;
 
-    // Map into the process's address space.
-    // GLOBAL_REGISTRY is NOT held here. sys_map_phys can freely allocate
-    // page-table pages via ensure_user_table without deadlocking.
     sys_map_phys(phys, pages, 0x01)
 }
 
-/// Allocate back + shadow buffers, copy VRAM content into both.
+/// Allocate back + shadow, seed both from VRAM.
 unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
     let pages = info.size.div_ceil(4096);
     let mut registry = crate::memory::global_registry_mut();
 
-    // allocate_pages handles CR3 switching internally.
     let back_phys = registry
         .allocate_pages(
             crate::memory::AllocateType::AnyPages,
@@ -241,8 +192,7 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
         }
     };
 
-    // VRAM and allocated buffers are at physical addresses accessed via
-    // identity mapping — need kernel CR3.
+    // Identity-mapped phys access requires kernel CR3.
     {
         let _guard = crate::memory::KernelCr3Guard::enter();
         core::ptr::copy_nonoverlapping(
@@ -257,16 +207,15 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
         );
     }
 
-    // store pages first so readers see valid page count once phys is non-zero
+    // Store pages first so readers see a valid count once phys becomes nonzero.
     FB_BACK_PAGES.store(pages, core::sync::atomic::Ordering::Relaxed);
     FB_SHADOW_PHYS.store(shadow_phys, core::sync::atomic::Ordering::Relaxed);
     FB_BACK_PHYS.store(back_phys, core::sync::atomic::Ordering::Release);
     Ok(())
 }
 
-/// Push back-buffer delta to VRAM (called from timer ISR).
-/// Compares back buffer vs shadow and writes only changed pixels.
-/// Gated by FB_DIRTY; no syscall.
+/// Timer-ISR-driven delta present: back vs shadow → VRAM.
+/// Skipped when FB_LOCK_PID != 0 (holder calls SYS_FB_PRESENT directly).
 pub unsafe fn fb_present_tick() {
     use core::sync::atomic::Ordering::Relaxed;
     let back = FB_BACK_PHYS.load(Relaxed);
@@ -274,13 +223,9 @@ pub unsafe fn fb_present_tick() {
     if back == 0 || shadow == 0 {
         return;
     }
-    // If a process holds the FB lock it manages presents itself via
-    // SYS_FB_PRESENT — skip the automatic timer-driven present to
-    // avoid redundant full-screen scans.
     if FB_LOCK_PID.load(Relaxed) != 0 {
         return;
     }
-    // atomic swap: if dirty was false we skip; if true we clear and proceed
     if !FB_DIRTY.swap(false, Relaxed) {
         return;
     }
@@ -290,7 +235,6 @@ pub unsafe fn fb_present_tick() {
         None => return,
     };
 
-    // Buffers are at identity-mapped physical addresses — need kernel CR3.
     let _guard = crate::memory::KernelCr3Guard::enter();
 
     let stride_pixels = info.stride / 4;
@@ -306,10 +250,8 @@ pub unsafe fn fb_present_tick() {
     );
 }
 
-/// SYS_FB_PRESENT (88) — on-demand framebuffer present.
-///
-/// Compositor/legacy: runs the delta presenter synchronously.
-/// Composited client: marks the per-process surface as dirty (no VRAM write).
+/// Synchronous delta present (compositor/legacy). Composited clients
+/// just mark their surface dirty.
 pub unsafe fn sys_fb_present() -> u64 {
     if is_composited_client() {
         let proc = SCHEDULER.current_process_mut();
@@ -345,10 +287,7 @@ pub unsafe fn sys_fb_present() -> u64 {
     0
 }
 
-/// SYS_FB_BLIT (89) — full-screen memcpy present (no delta).
-///
-/// Compositor/legacy: copies the entire back buffer directly to VRAM.
-/// Composited client: marks the per-process surface as dirty.
+/// Full-screen memcpy present, no delta.
 pub unsafe fn sys_fb_blit() -> u64 {
     if is_composited_client() {
         let proc = SCHEDULER.current_process_mut();
@@ -374,8 +313,7 @@ pub unsafe fn sys_fb_blit() -> u64 {
 
     core::ptr::copy_nonoverlapping(back_ptr, vram, bytes);
 
-    // Keep shadow in sync so delta presents (e.g. after app releases
-    // the fb lock) don't see stale data and over-copy.
+    // Keep shadow in sync — a later delta present would otherwise over-copy.
     let shadow = FB_SHADOW_PHYS.load(Relaxed);
     if shadow != 0 {
         let shadow_ptr = shadow as *mut u8;

@@ -1,4 +1,4 @@
-//! VirtIO driver orchestration.
+//! VirtIO-net driver.
 
 pub mod config;
 pub mod driver;
@@ -7,7 +7,6 @@ pub mod rx;
 pub mod transport;
 pub mod tx;
 
-// Re-exports
 pub use config::{features, is_virtio_net, negotiate_features, status, VirtioConfig};
 pub use config::{VIRTIO_NET_DEVICE_IDS, VIRTIO_VENDOR_ID};
 pub use driver::VirtioNetDriver;

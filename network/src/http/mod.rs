@@ -1,11 +1,4 @@
-//! HTTP message handling
-//!
-//! TODO: Implement HTTP protocol
-//! - Request building (GET, POST, HEAD, etc.)
-//! - Response parsing
-//! - Header management
-//! - Status codes
-//! - Message formatting
+//! HTTP request/response building and parsing.
 
 pub mod headers;
 pub mod request;

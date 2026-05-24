@@ -1,6 +1,4 @@
-//! Core ASM primitive bindings.
-//!
-//! These are the fundamental building blocks used by all drivers.
+//! Shared low-level asm primitives.
 
 pub mod barriers;
 pub mod cache;

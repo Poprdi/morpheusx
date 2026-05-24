@@ -1,4 +1,4 @@
-//! DHCP state — acquires IP address via DHCP.
+//! DHCPv4 lease acquisition (RFC 2131).
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -16,7 +16,6 @@ use crate::mainloop::state::{State, StepResult};
 
 use super::{DnsState, FailedState};
 
-/// DHCP acquisition state.
 pub struct DhcpState {
     start_tsc: u64,
     got_ip: bool,
@@ -67,7 +66,6 @@ impl<D: NetworkDriver> State<D> for DhcpState {
             return (Box::new(DnsState::new()), StepResult::Transition);
         }
 
-        // Get DHCP handle from context
         let dhcp_handle = match ctx.dhcp_handle {
             Some(h) => h,
             None => {
@@ -85,7 +83,6 @@ impl<D: NetworkDriver> State<D> for DhcpState {
             match event {
                 DhcpEvent::Configured(config) => {
                     let addr = config.address;
-                    // Ipv4Address.0 is [u8; 4]
                     let ip_bytes = addr.address().0;
                     serial::print("[DHCP] Got IP: ");
                     serial::print_ipv4(&ip_bytes);
@@ -106,7 +103,6 @@ impl<D: NetworkDriver> State<D> for DhcpState {
                         iface.routes_mut().add_default_ipv4_route(router).ok();
                     }
 
-                    // Store DNS servers in context
                     for (i, dns) in config.dns_servers.iter().enumerate() {
                         serial::print("[DHCP] DNS ");
                         serial::print_u32(i as u32);

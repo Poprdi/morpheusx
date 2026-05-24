@@ -43,34 +43,31 @@ impl Mouse {
     unsafe fn init(&mut self) {
         asm_ps2_flush();
 
-        // Enable aux port (port 2)
+        // Enable aux port.
         asm_ps2_write_cmd(0xA8);
         io_delay();
 
-        // RMW config: enable aux IRQ (bit 1), clear aux clock-disable (bit 5)
+        // RMW config: enable aux IRQ (bit1), clear aux clock-disable (bit5);
+        // keep translation + kbd IRQ on.
         asm_ps2_write_cmd(0x20);
         let config = wait_kbd_data(50_000).unwrap_or(0x45);
-        // Keep translation on and keyboard IRQ enabled; just bring mouse path up.
         let new_config = (config | 0x43) & !0x30;
         asm_ps2_write_cmd(0x60);
         asm_ps2_write_data(new_config);
         io_delay();
 
-        // Reset mouse (0xFF via aux)
         let ack_reset = mouse_cmd(0xFF);
         if ack_reset != 0xFA {
             morpheus_hwinit::serial::log_warn("INPUT", 931, "mouse reset ACK missing");
         }
-        // eat BAT result + device ID
+        // eat BAT + device ID
         drain(100_000);
 
-        // Set defaults
         let ack_defaults = mouse_cmd(0xF6);
         if ack_defaults != 0xFA {
             morpheus_hwinit::serial::log_warn("INPUT", 932, "mouse defaults ACK missing");
         }
 
-        // Enable streaming
         let ack_stream = mouse_cmd(0xF4);
         if ack_stream != 0xFA {
             morpheus_hwinit::serial::log_warn("INPUT", 933, "mouse stream ACK missing");
@@ -82,22 +79,13 @@ impl Mouse {
         morpheus_hwinit::serial::log_ok("INPUT", 934, "PS/2 mouse ready");
     }
 
-    /// Feed one raw byte from PS/2 aux port. Returns packet when 3 bytes complete.
-    ///
-    /// Sync strategy:
-    ///   - Byte 0 MUST have bit 3 set (PS/2 always-1 status bit).
-    ///   - If bit 3 is not set and we're waiting for byte 0, increment
-    ///     `desync_count`.  After `RESYNC_THRESHOLD` failures, force-reset
-    ///     the packet assembler to re-establish sync.
-    ///   - Overflow (status bits 6-7) is handled by clamping deltas to
-    ///     max magnitude (±255) instead of discarding the packet.
+    /// Returns a packet once 3 aux-port bytes are accumulated.
+    /// Byte 0 must have bit 3 set (PS/2 always-1); resync on RESYNC_THRESHOLD misses.
     pub fn feed(&mut self, byte: u8) -> Option<MousePacket> {
-        // Byte 0 must have bit 3 set (always-1 in PS/2 status byte)
         if self.fill == 0 {
             if byte & 0x08 == 0 {
                 self.desync_count = self.desync_count.saturating_add(1);
                 if self.desync_count >= RESYNC_THRESHOLD {
-                    // Force resync — reset state machine
                     self.desync_count = 0;
                 }
                 return None;
@@ -117,8 +105,7 @@ impl Mouse {
         let raw_dx = self.buf[1];
         let raw_dy = self.buf[2];
 
-        // bit3-only sync is too weak when stale bytes exist at boot.
-        // reject packets whose sign bits cannot describe the data bytes.
+        // Bit-3-only sync is too weak with stale bytes at boot; cross-check sign bits.
         if !packet_sign_bits_match(status, raw_dx, raw_dy) {
             self.desync_count = self.desync_count.saturating_add(1);
             if self.desync_count >= RESYNC_THRESHOLD {
@@ -130,11 +117,10 @@ impl Mouse {
         self.desync_count = 0;
         let buttons = status & 0x07;
 
-        // 9-bit sign extension using status byte sign bits.
-        // Bit 4 = X sign, bit 5 = Y sign.
+        // 9-bit sign extend from status bits 4 (X) and 5 (Y).
         let mut dx = self.buf[1] as i16;
         if status & 0x10 != 0 {
-            dx |= !0xFF; // sign-extend: 0xFF00 | dx
+            dx |= !0xFF;
         }
 
         let mut dy = self.buf[2] as i16;
@@ -142,21 +128,17 @@ impl Mouse {
             dy |= !0xFF;
         }
 
-        // Handle overflow: status bits 6 (X overflow) and 7 (Y overflow).
-        // On overflow the delta byte is meaningless. Clamp to max magnitude
-        // in the direction indicated by the sign bit.
+        // Overflow (bits 6/7): delta byte is meaningless, clamp by sign.
         if status & 0x40 != 0 {
-            // X overflow
             dx = if status & 0x10 != 0 { -255 } else { 255 };
         }
         if status & 0x80 != 0 {
-            // Y overflow
             dy = if status & 0x20 != 0 { -255 } else { 255 };
         }
 
         Some(MousePacket {
             dx,
-            dy: -dy, // PS/2 Y is inverted vs screen coords
+            dy: -dy, // PS/2 Y is inverted vs screen
             buttons,
         })
     }
@@ -164,7 +146,7 @@ impl Mouse {
 
 #[inline(always)]
 fn packet_sign_bits_match(status: u8, dx: u8, dy: u8) -> bool {
-    // If overflow is set, data bytes are not reliable for sign checks.
+    // Overflow makes data bytes unreliable; treat the check as passing.
     let x_overflow = (status & 0x40) != 0;
     let y_overflow = (status & 0x80) != 0;
     let x_ok = x_overflow || (((status & 0x10) != 0) == ((dx & 0x80) != 0));
@@ -172,7 +154,7 @@ fn packet_sign_bits_match(status: u8, dx: u8, dy: u8) -> bool {
     x_ok && y_ok
 }
 
-/// Send a command byte to the mouse (via 0xD4 → aux port), wait for ACK.
+/// 0xD4 routes the next data byte to the aux port; returns ACK.
 unsafe fn mouse_cmd(byte: u8) -> u8 {
     asm_ps2_write_cmd(0xD4);
     asm_ps2_write_data(byte);
@@ -180,7 +162,6 @@ unsafe fn mouse_cmd(byte: u8) -> u8 {
     wait_aux_data(50_000)
 }
 
-/// Spin-read one byte from port 0x60.
 unsafe fn wait_data(max_spins: u32) -> u8 {
     for _ in 0..max_spins {
         let r = asm_ps2_poll_any();
@@ -192,7 +173,7 @@ unsafe fn wait_data(max_spins: u32) -> u8 {
     0
 }
 
-/// Spin-read one keyboard-tagged byte (0x1xx) from port 0x60.
+/// Spin-read one kbd-tagged byte (0x1xx) from 0x60.
 unsafe fn wait_kbd_data(max_spins: u32) -> Option<u8> {
     for _ in 0..max_spins {
         let r = asm_ps2_poll_any();
@@ -204,7 +185,7 @@ unsafe fn wait_kbd_data(max_spins: u32) -> Option<u8> {
     None
 }
 
-/// Spin-read one aux-port byte (mouse channel, tagged as 0x3xx).
+/// Spin-read one aux-tagged byte (0x3xx) from 0x60.
 unsafe fn wait_aux_data(max_spins: u32) -> u8 {
     for _ in 0..max_spins {
         let r = asm_ps2_poll_any();
@@ -216,7 +197,6 @@ unsafe fn wait_aux_data(max_spins: u32) -> u8 {
     0
 }
 
-/// Drain a few responses (eat BAT, device IDs, etc.)
 unsafe fn drain(max_spins: u32) {
     for _ in 0..max_spins {
         let r = asm_ps2_poll_any();

@@ -1,50 +1,35 @@
 
-// PERSISTENCE — Key-Value store backed by HelixFS /persist/ directory
-//
-// The persistent KV store maps keys to files under `/persist/<key>`.
-// Backend is HelixFS today, but the `morpheus-persistent` crate's
-// `PersistenceBackend` trait allows swapping to ESP/TPM/NVRAM later.
-//
-// This gives userland apps a dead-simple "survive reboots" mechanism:
-//   persist_put("settings", &config_bytes);
-//   persist_get("settings", &mut buf);
+// KV persistence under /persist/<key>; HelixFS-backed for now, swappable via
+// the morpheus-persistent::PersistenceBackend trait (ESP/TPM/NVRAM later).
 
-/// Persistence subsystem info.
-/// Must match `libmorpheus::persist::PersistInfo` exactly.
+/// Must match `libmorpheus::persist::PersistInfo`.
 #[repr(C)]
 pub struct PersistInfo {
-    /// Bitmask of active backends: bit 0 = HelixFS
+    /// bit 0 = HelixFS
     pub backend_flags: u32,
     pub _pad0: u32,
-    /// Number of keys currently stored
     pub num_keys: u64,
-    /// Total bytes used by values
     pub used_bytes: u64,
 }
 
-/// Binary format info returned by `SYS_PE_INFO`.
-/// Must match `libmorpheus::persist::BinaryInfo` exactly.
+/// Must match `libmorpheus::persist::BinaryInfo`.
+/// format: 0 unknown / 1 ELF64 / 2 PE32+.
+/// arch: 0 unknown / 1 x86_64 / 2 aarch64 / 3 arm.
 #[repr(C)]
 pub struct BinaryInfo {
-    /// Format: 0=unknown, 1=ELF64, 2=PE32+
     pub format: u32,
-    /// Architecture: 0=unknown, 1=x86_64, 2=aarch64, 3=arm
     pub arch: u32,
-    /// Entry point address (RVA for PE, virtual for ELF)
+    /// PE: RVA; ELF: virtual.
     pub entry_point: u64,
-    /// PE ImageBase (0 for ELF)
+    /// PE only; 0 on ELF.
     pub image_base: u64,
-    /// Total file size in bytes
     pub image_size: u64,
-    /// Number of sections (PE) or program headers (ELF)
+    /// PE sections or ELF program headers.
     pub num_sections: u32,
     pub _pad0: u32,
 }
 
-/// Build `/persist/<key>` path in a stack buffer.
-/// Returns the path as `&str`, or `None` if the key is invalid.
-///
-/// Keys must be 1-255 bytes, no `/` or `\0`.
+/// Keys: 1-255 bytes, no `/` or NUL.
 unsafe fn persist_path<'a>(key: &str, buf: &'a mut [u8; 272]) -> Option<&'a str> {
     const PREFIX: &[u8] = b"/persist/";
     if key.is_empty() || key.len() > 255 || key.contains('/') || key.contains('\0') {
@@ -55,7 +40,7 @@ unsafe fn persist_path<'a>(key: &str, buf: &'a mut [u8; 272]) -> Option<&'a str>
     core::str::from_utf8(&buf[..PREFIX.len() + key.len()]).ok()
 }
 
-/// Ensure the `/persist` directory exists. Idempotent — ignores AlreadyExists.
+/// Idempotent — swallows AlreadyExists.
 unsafe fn ensure_persist_dir() {
     if let Some(mut _vfs_guard) = vfs_lock() {
         let fs = &mut *_vfs_guard.fs;

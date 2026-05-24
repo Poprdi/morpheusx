@@ -1,4 +1,4 @@
-//! TCP connection state — establishes TCP connection to server.
+//! Open TCP connection to resolved target.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -16,7 +16,6 @@ use crate::mainloop::state::{State, StepResult};
 
 use super::{FailedState, HttpState};
 
-/// TCP connection state.
 pub struct ConnectState {
     start_tsc: u64,
     connect_started: bool,
@@ -89,7 +88,6 @@ impl<D: NetworkDriver> State<D> for ConnectState {
             }
         };
 
-        // Get TCP handle from context
         let tcp_handle = match ctx.tcp_handle {
             Some(h) => h,
             None => {
@@ -133,7 +131,6 @@ impl<D: NetworkDriver> State<D> for ConnectState {
             TcpState::Established => {
                 serial::println("[TCP] Connected!");
                 serial::println("[TCP] -> HTTP");
-                // Create HTTP state with disk writing if enabled
                 let http_state = if ctx.should_write_to_disk() {
                     HttpState::with_disk_write(tcp_handle, ctx.config.target_start_sector)
                 } else {

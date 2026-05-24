@@ -1,20 +1,10 @@
 
-// NETWORK STACK — function-pointer bridge (TCP, DNS, config, poll)
-//
-// Like NicOps, the bootloader registers these after initialising the smoltcp
-// stack.  hwinit has zero dependency on smoltcp — everything crosses the
-// boundary as raw u64 / pointers / packed IPv4.
-//
-// Socket handles are opaque i64 values (smoltcp SocketHandle ordinals).
-// Negative returns indicate errors.
-//
-// The raw NIC layer (32-37) + NIC_CTRL gives userspace full hardware
-// control — userspace can build entirely custom protocol stacks from
-// scratch.  The NET/DNS/CFG/POLL layer (38-41) is the *convenience*
-// smoltcp-backed stack for programs that want TCP/IP without writing
-// their own.  Both coexist; neither depends on the other.
+// smoltcp bridge by function pointers; hwinit doesn't link smoltcp. Sockets
+// are opaque i64 handles. The raw NIC syscalls (32-37) let userspace build a
+// stack from scratch; this convenience layer (38-41) is for programs that
+// just want TCP/IP. They coexist.
 
-// sub-commands for sys_net (38)
+// SYS_NET sub-commands
 pub const NET_TCP_SOCKET: u64 = 0;
 pub const NET_TCP_CONNECT: u64 = 1;
 pub const NET_TCP_SEND: u64 = 2;
@@ -26,55 +16,45 @@ pub const NET_TCP_ACCEPT: u64 = 7;
 pub const NET_TCP_SHUTDOWN: u64 = 8;
 pub const NET_TCP_NODELAY: u64 = 9;
 pub const NET_TCP_KEEPALIVE: u64 = 10;
-// udp sub-commands for sys_net (38)
+// UDP
 pub const NET_UDP_SOCKET: u64 = 11;
 pub const NET_UDP_SEND_TO: u64 = 12;
 pub const NET_UDP_RECV_FROM: u64 = 13;
 pub const NET_UDP_CLOSE: u64 = 14;
 
-// sub-commands for sys_dns (39)
+// SYS_DNS
 pub const DNS_START: u64 = 0;
 pub const DNS_RESULT: u64 = 1;
 pub const DNS_SET_SERVERS: u64 = 2;
 
-// sub-commands for sys_net_cfg (40)
+// SYS_NET_CFG
 pub const NET_CFG_GET: u64 = 0;
 pub const NET_CFG_DHCP: u64 = 1;
 pub const NET_CFG_STATIC: u64 = 2;
 pub const NET_CFG_HOSTNAME: u64 = 3;
 pub const NET_CFG_ACTIVATE: u64 = 4;
 
-// sub-commands for sys_net_poll (41)
+// SYS_NET_POLL
 pub const NET_POLL_DRIVE: u64 = 0;
 pub const NET_POLL_STATS: u64 = 1;
 
-/// Network stack configuration snapshot, returned by NET_CFG_GET.
-///
-/// Packed C layout — userspace casts the result buffer to this.
+/// state: 0 unconfigured / 1 dhcp_discovering / 2 ready / 3 error.
+/// flags: bit0 DHCP, bit1 gateway, bit2 DNS. All IPs in network byte order.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct NetConfigInfo {
-    /// Stack state: 0=unconfigured, 1=dhcp_discovering, 2=ready, 3=error.
     pub state: u32,
-    /// Bit 0: DHCP active, bit 1: has gateway, bit 2: has DNS.
     pub flags: u32,
-    /// IPv4 address (network byte order).
     pub ipv4_addr: u32,
-    /// CIDR prefix length.
     pub prefix_len: u8,
     pub _pad0: [u8; 3],
-    /// Gateway IPv4 (network byte order).
     pub gateway: u32,
-    /// Primary DNS (network byte order).
     pub dns_primary: u32,
-    /// Secondary DNS (network byte order).
     pub dns_secondary: u32,
-    /// Current MAC address (6 bytes).
     pub mac: [u8; 6],
     pub _pad1: [u8; 2],
-    /// Current MTU.
     pub mtu: u32,
-    /// NUL-terminated hostname (max 63 + NUL).
+    /// NUL-terminated, ≤63 chars.
     pub hostname: [u8; 64],
 }
 

@@ -1,7 +1,5 @@
-/// USB HID Mouse interface implementation
-///
-/// Translates USB HID mouse reports to the unified input subsystem.
-/// Works alongside PS/2 mouse - either can be the input source.
+//! Boot-protocol HID mouse. PS/2 and USB are mutually exclusive (see input.rs).
+
 use crate::input::{self, InputEvent};
 use crate::usb::controller::{XhciController, XhciError};
 use crate::usb::dma;

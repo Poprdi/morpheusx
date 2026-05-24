@@ -1,8 +1,5 @@
-// SYS_NIC_INFO (32) — get NIC information
-
 const ENODEV: u64 = u64::MAX - 19;
 
-/// `SYS_NIC_INFO(buf_ptr) → 0`
 pub unsafe fn sys_nic_info(buf_ptr: u64) -> u64 {
     let size = core::mem::size_of::<NicInfo>() as u64;
     if !validate_user_buf(buf_ptr, size) {
@@ -26,15 +23,12 @@ pub unsafe fn sys_nic_info(buf_ptr: u64) -> u64 {
     0
 }
 
-// SYS_NIC_TX (33) — transmit a raw Ethernet frame
-
-/// `SYS_NIC_TX(frame_ptr, frame_len) → 0`
 pub unsafe fn sys_nic_tx(frame_ptr: u64, frame_len: u64) -> u64 {
     if !validate_user_buf(frame_ptr, frame_len) {
         return EFAULT;
     }
     if !(14..=9000).contains(&frame_len) {
-        return EINVAL; // min Ethernet header, max jumbo frame
+        return EINVAL; // 14B Ethernet header .. 9000B jumbo
     }
     match NIC_OPS.tx {
         Some(tx_fn) => {
@@ -49,9 +43,6 @@ pub unsafe fn sys_nic_tx(frame_ptr: u64, frame_len: u64) -> u64 {
     }
 }
 
-// SYS_NIC_RX (34) — receive a raw Ethernet frame
-
-/// `SYS_NIC_RX(buf_ptr, buf_len) → bytes_received`
 pub unsafe fn sys_nic_rx(buf_ptr: u64, buf_len: u64) -> u64 {
     if !validate_user_buf(buf_ptr, buf_len) {
         return EFAULT;

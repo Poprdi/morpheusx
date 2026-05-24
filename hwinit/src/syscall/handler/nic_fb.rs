@@ -1,58 +1,33 @@
 
-// NIC REGISTRATION — function-pointer bridge for network drivers
-//
-// hwinit does not depend on morpheus-network, so the NIC driver is
-// registered by the bootloader via function pointers.
+// NIC function-pointer bridge. hwinit doesn't depend on morpheus-network;
+// bootloader registers ops after init.
 
-/// NIC operations function-pointer table.  The bootloader fills this in
-/// after initialising the network driver, before entering the event loop.
 #[repr(C)]
 pub struct NicOps {
-    /// Transmit a raw Ethernet frame.  Returns 0 on success, -1 on error.
     pub tx: Option<unsafe fn(frame: *const u8, len: usize) -> i64>,
-    /// Receive a raw Ethernet frame into `buf`.  Returns bytes received, 0 if none.
     pub rx: Option<unsafe fn(buf: *mut u8, buf_len: usize) -> i64>,
-    /// Get link status.  Returns 1 if link is up, 0 if down.
     pub link_up: Option<unsafe fn() -> i64>,
-    /// Get 6-byte MAC address.  Writes to `out`.  Returns 0 on success.
+    /// Writes 6 bytes to `out`.
     pub mac: Option<unsafe fn(out: *mut u8) -> i64>,
-    /// Refill RX descriptor ring.
     pub refill: Option<unsafe fn() -> i64>,
-    /// Hardware control — set promisc, MAC, VLAN, offloads, etc.
-    /// `cmd` selects the operation, `arg` is command-specific.
-    /// Returns 0 on success, negative on error.
+    /// cmd → NIC_CTRL_*; arg is per-cmd.
     pub ctrl: Option<unsafe fn(cmd: u32, arg: u64) -> i64>,
 }
 
-// nic_ctrl command constants
-/// Enable/disable promiscuous mode.  arg: 1=on, 0=off.
-pub const NIC_CTRL_PROMISC: u32 = 1;
-/// Set MAC address (arg = pointer to 6 bytes).
-pub const NIC_CTRL_MAC_SET: u32 = 2;
-/// Get hardware statistics (arg = pointer to NicHwStats).
-pub const NIC_CTRL_STATS: u32 = 3;
-/// Reset hardware statistics counters.
+pub const NIC_CTRL_PROMISC: u32 = 1; // arg: 1=on/0=off
+pub const NIC_CTRL_MAC_SET: u32 = 2; // arg: *const [u8; 6]
+pub const NIC_CTRL_STATS: u32 = 3; // arg: *mut NicHwStats
 pub const NIC_CTRL_STATS_RESET: u32 = 4;
-/// Set MTU.  arg = new MTU value.
 pub const NIC_CTRL_MTU: u32 = 5;
-/// Enable/disable multicast (arg: 1=accept all, 0=filter).
-pub const NIC_CTRL_MULTICAST: u32 = 6;
-/// Set VLAN tag (arg: 0=disable, 1..4095=VLAN ID).
-pub const NIC_CTRL_VLAN: u32 = 7;
-/// Enable/disable TX checksum offload (arg: 1=on, 0=off).
+pub const NIC_CTRL_MULTICAST: u32 = 6; // arg: 1=accept-all/0=filter
+pub const NIC_CTRL_VLAN: u32 = 7; // arg: 0=off, 1..4095=VID
 pub const NIC_CTRL_TX_CSUM: u32 = 8;
-/// Enable/disable RX checksum offload (arg: 1=on, 0=off).
 pub const NIC_CTRL_RX_CSUM: u32 = 9;
-/// Enable/disable TCP segmentation offload (arg: 1=on, 0=off).
 pub const NIC_CTRL_TSO: u32 = 10;
-/// Set RX ring buffer size (arg: number of descriptors).
 pub const NIC_CTRL_RX_RING_SIZE: u32 = 11;
-/// Set TX ring buffer size (arg: number of descriptors).
 pub const NIC_CTRL_TX_RING_SIZE: u32 = 12;
-/// Set interrupt coalescing (arg: microseconds between interrupts).
-pub const NIC_CTRL_IRQ_COALESCE: u32 = 13;
-/// Get NIC capabilities bitmask (arg = pointer to u64 out).
-pub const NIC_CTRL_CAPS: u32 = 14;
+pub const NIC_CTRL_IRQ_COALESCE: u32 = 13; // arg: µs
+pub const NIC_CTRL_CAPS: u32 = 14; // arg: *mut u64
 
 /// Hardware NIC statistics (returned by NIC_CTRL_STATS).
 #[repr(C)]
