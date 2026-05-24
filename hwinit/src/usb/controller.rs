@@ -123,6 +123,33 @@ impl XhciController {
         }
         Self::tsc_delay(tsc_freq, 50);
 
+        // Halt the controller before reconfiguring DCBAAP / CRCR / ERST.
+        // xHCI spec §5.4.5/§5.4.6: writes to those registers are silently
+        // ignored by the xHC while the controller is running. UEFI typically
+        // hands off with USBCMD.R/S = 1 (and the conditional soft-restart
+        // above is skipped when ports already have link state), so without
+        // this halt the ring-pointer writes below would be no-ops on real
+        // hardware and ENABLE_SLOT would time out with no completion event.
+        // HCRST is NOT asserted — connected port state is preserved.
+        {
+            let cmd = mmio::read32(op_base + OP_USBCMD);
+            if cmd & CMD_RS != 0 {
+                mmio::write32(op_base + OP_USBCMD, cmd & !CMD_RS);
+            }
+            let h_start = tsc::read_tsc();
+            let h_timeout = tsc_freq; // 1 second
+            loop {
+                let sts = mmio::read32(op_base + OP_USBSTS);
+                if sts & STS_HCH != 0 {
+                    break;
+                }
+                if tsc::read_tsc().wrapping_sub(h_start) > h_timeout {
+                    return Err(XhciError::ResetFailed);
+                }
+                core::hint::spin_loop();
+            }
+        }
+
         // scratchpad buffers
         if n_scratch > dma::MAX_SCRATCH {
             return Err(XhciError::ScratchpadUnsupported);
@@ -251,13 +278,21 @@ impl XhciController {
     }
 
     /// Wait for a command completion event. Returns (slot_id, completion_code).
+    ///
+    /// Drains every event TRB it sees, returning only when one matches
+    /// `TRB_CMD_COMPLETE`. This is required on real silicon, where port reset
+    /// posts multiple `Port Status Change Event` TRBs that arrive in the
+    /// ring ahead of the command completion — without draining them, we
+    /// would spin on the first PSCEC forever.
     pub unsafe fn wait_cmd(&mut self, timeout_ms: u64) -> Result<(u8, u8), XhciError> {
         let start = tsc::read_tsc();
         let timeout = self.tsc_freq.saturating_mul(timeout_ms) / 1000;
         loop {
             if let Some((_, status, ctrl)) = self.evt_ring.peek() {
-                if (ctrl & Self::TYPE_MASK) == TRB_CMD_COMPLETE {
-                    self.evt_ring.advance();
+                let ty = ctrl & Self::TYPE_MASK;
+                self.evt_ring.advance();
+                if ty == TRB_CMD_COMPLETE {
+                    self.update_erdp();
                     let cc = (status >> 24) as u8;
                     let sid = (ctrl >> 24) as u8;
                     if cc != 1 {
@@ -265,6 +300,8 @@ impl XhciController {
                     }
                     return Ok((sid, cc));
                 }
+                // non-target event (PSCEC, transfer, etc.) — drained, keep looking
+                continue;
             }
             if tsc::read_tsc().wrapping_sub(start) > timeout {
                 return Err(XhciError::CommandTimeout);
@@ -274,27 +311,33 @@ impl XhciController {
     }
 
     /// Wait for a transfer event matching the slot/ep. Returns remaining byte count.
+    ///
+    /// Same draining discipline as [`wait_cmd`] — advances past every event,
+    /// returns only on a `TRB_TRANSFER_EVENT` for the requested slot.
     pub unsafe fn wait_xfer(
         &mut self,
         slot_id: u8,
         ep_dci: u32,
         timeout_ms: u64,
     ) -> Result<u32, XhciError> {
+        let _ = ep_dci;
         let start = tsc::read_tsc();
         let timeout = self.tsc_freq.saturating_mul(timeout_ms) / 1000;
         loop {
             if let Some((_, status, ctrl)) = self.evt_ring.peek() {
-                if (ctrl & Self::TYPE_MASK) == TRB_TRANSFER_EVENT {
-                    let sid = (ctrl >> 24) as u8;
-                    if sid == slot_id {
-                        self.evt_ring.advance();
-                        let cc = (status >> 24) as u8;
-                        if cc != 1 && cc != 13 {
-                            return Err(XhciError::IoError);
-                        }
-                        return Ok(status & 0x00FF_FFFF);
+                let ty = ctrl & Self::TYPE_MASK;
+                let sid = (ctrl >> 24) as u8;
+                self.evt_ring.advance();
+                if ty == TRB_TRANSFER_EVENT && sid == slot_id {
+                    self.update_erdp();
+                    let cc = (status >> 24) as u8;
+                    if cc != 1 && cc != 13 {
+                        return Err(XhciError::IoError);
                     }
+                    return Ok(status & 0x00FF_FFFF);
                 }
+                // unrelated event — drained, keep looking
+                continue;
             }
             if tsc::read_tsc().wrapping_sub(start) > timeout {
                 return Err(XhciError::CommandTimeout);
