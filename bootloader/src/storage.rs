@@ -647,12 +647,20 @@ fn spinner_done() {
 /// - `dma` must be a valid 2 MB DMA region from hwinit Phase 6.
 /// - `tsc_freq` must be the calibrated TSC frequency.
 /// - Must be called exactly once, after hwinit completes.
-pub unsafe fn init_persistent_storage(dma: &DmaRegion, tsc_freq: u64) {
+pub unsafe fn init_persistent_storage(
+    dma: &DmaRegion,
+    tsc_freq: u64,
+    pre_ebs_helix: Option<crate::boot::PreEbsHelixImage>,
+) {
     log_info("STORAGE", 822, "probing block devices");
 
-    if let Some((base, size, sector_size)) = crate::baremetal::take_pre_ebs_helix_image() {
+    if let Some(img) = pre_ebs_helix {
         log_info("STORAGE", 822, "using pre-EBS staged Helix image");
-        RAM_HELIX_DEVICE = Some(MemBlockDevice::new(base as *mut u8, size, sector_size));
+        RAM_HELIX_DEVICE = Some(MemBlockDevice::new(
+            img.base as *mut u8,
+            img.size,
+            img.sector_size,
+        ));
         if let Some(mem_dev) = RAM_HELIX_DEVICE.as_mut() {
             match morpheus_helix::vfs::global::replace_root_device(
                 MemBlockDevice::into_raw(mem_dev),

@@ -4,9 +4,9 @@ use crate::cpu::mmio;
 use crate::cpu::tsc;
 use crate::usb::asm;
 use crate::usb::dma;
+use crate::usb::dma::{EVT_RING_LEN, XFER_RING_LEN};
 use crate::usb::regs::*;
-use crate::usb::rings::{vw32, vw64, CmdRing, EvtRing, XferRing, EVT_RING_LEN, XFER_RING_LEN};
-
+use crate::usb::rings::{vw32, vw64, CmdRing, EvtRing, XferRing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XhciError {
@@ -81,7 +81,6 @@ impl XhciController {
         let cap_len = (probe & 0xFF) as u64;
         let op_base = mmio_base + cap_len;
 
-
         let hcsparams1 = mmio::read32(mmio_base + CAP_HCSPARAMS1);
         let hcsparams2 = mmio::read32(mmio_base + CAP_HCSPARAMS2);
         let hccparams1 = mmio::read32(mmio_base + CAP_HCCPARAMS1);
@@ -114,7 +113,6 @@ impl XhciController {
                 linked += 1;
             }
         }
-
 
         // Soft restart if all ports are dead
         if linked == 0 {
@@ -216,12 +214,12 @@ impl XhciController {
     }
 
     #[inline(always)]
-    fn portsc(&self, port: u8) -> u64 {
+    pub fn portsc(&self, port: u8) -> u64 {
         self.op_base + PORT_REG_BASE + (port as u64) * PORT_REG_STRIDE
     }
 
     /// Write PORTSC preserving RO+RWS bits.
-    fn portsc_write(addr: u64, current: u32, set: u32, clear: u32) {
+    unsafe fn portsc_write(addr: u64, current: u32, set: u32, clear: u32) {
         const RO: u32 = (1 << 0) | (1 << 3) | (0xF << 10) | (1 << 30);
         const RWS: u32 = (0xF << 5) | (1 << 9) | (0x3 << 14) | (0x7 << 25);
         let v = (current & (RO | RWS)) & !clear | set;
@@ -276,7 +274,12 @@ impl XhciController {
     }
 
     /// Wait for a transfer event matching the slot/ep. Returns remaining byte count.
-    pub unsafe fn wait_xfer(&mut self, slot_id: u8, ep_dci: u32, timeout_ms: u64) -> Result<u32, XhciError> {
+    pub unsafe fn wait_xfer(
+        &mut self,
+        slot_id: u8,
+        ep_dci: u32,
+        timeout_ms: u64,
+    ) -> Result<u32, XhciError> {
         let start = tsc::read_tsc();
         let timeout = self.tsc_freq.saturating_mul(timeout_ms) / 1000;
         loop {

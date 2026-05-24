@@ -34,7 +34,10 @@ impl XhciController {
         core::ptr::write_volatile((cbw) as *mut u32, CBW_SIG);
         core::ptr::write_volatile((cbw + 4) as *mut u32, tag);
         core::ptr::write_volatile((cbw + 8) as *mut u32, data_len);
-        core::ptr::write_volatile((cbw + 12) as *mut u8, if data_in && data_len > 0 { 0x80 } else { 0 });
+        core::ptr::write_volatile(
+            (cbw + 12) as *mut u8,
+            if data_in && data_len > 0 { 0x80 } else { 0 },
+        );
         core::ptr::write_volatile((cbw + 14) as *mut u8, scsi_cb.len().min(16) as u8);
         for (i, &b) in scsi_cb.iter().take(16).enumerate() {
             core::ptr::write_volatile((cbw + 15 + i as u64) as *mut u8, b);
@@ -45,19 +48,27 @@ impl XhciController {
         self.ring_xfer_doorbell(self.dci_bulk_out as u32);
         self.wait_xfer(self.slot_id, self.dci_bulk_out as u32, 5000)?;
 
-
         // ── data phase ──
         let mut transferred = 0u32;
         if data_len > 0 {
             let buf = self.dma_base + dma::OFF_DATA as u64;
             if data_in {
-                self.bin.enqueue(buf, data_len, TRB_NORMAL | TRB_IOC | TRB_ISP);
+                self.bin
+                    .enqueue(buf, data_len, TRB_NORMAL | TRB_IOC | TRB_ISP);
                 self.ring_xfer_doorbell(self.dci_bulk_in as u32);
             } else {
                 self.bout.enqueue(buf, data_len, TRB_NORMAL | TRB_IOC);
                 self.ring_xfer_doorbell(self.dci_bulk_out as u32);
             }
-            let residue = self.wait_xfer(self.slot_id, if data_in { self.dci_bulk_in as u32 } else { self.dci_bulk_out as u32 }, 10000)?;
+            let residue = self.wait_xfer(
+                self.slot_id,
+                if data_in {
+                    self.dci_bulk_in as u32
+                } else {
+                    self.dci_bulk_out as u32
+                },
+                10000,
+            )?;
             transferred = data_len.saturating_sub(residue);
         }
 
@@ -65,8 +76,8 @@ impl XhciController {
         let csw = self.dma_base + dma::OFF_CSW as u64;
         core::ptr::write_bytes(csw as *mut u8, 0, 13);
         self.bin.enqueue(csw, 13, TRB_NORMAL | TRB_IOC);
-        self.ring_xfer_doorbell(self.dci_bulk_in() as u32);
-        self.wait_xfer(self.slot_id, self.dci_bulk_in() as u32, 5000)?;
+        self.ring_xfer_doorbell(self.dci_bulk_in as u32);
+        self.wait_xfer(self.slot_id, self.dci_bulk_in as u32, 5000)?;
 
         let sig = vr32(csw);
         let csw_tag = vr32(csw + 4);
@@ -79,9 +90,7 @@ impl XhciController {
     }
 
     /// Read capacity — returns (last_lba, block_size).
-    pub unsafe fn scsi_read_capacity(
-        &mut self,
-    ) -> Result<(u64, u32), XhciError> {
+    pub unsafe fn scsi_read_capacity(&mut self) -> Result<(u64, u32), XhciError> {
         let cmd = [SCSI_READ_CAPACITY_10, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         self.bot_command(&cmd, 8, true)?;
         let data = self.dma_base + dma::OFF_DATA as u64;
@@ -91,11 +100,7 @@ impl XhciController {
     }
 
     /// Read sectors into OFF_DATA.
-    pub unsafe fn scsi_read_sectors(
-        &mut self,
-        lba: u64,
-        count: u32,
-    ) -> Result<(), XhciError> {
+    pub unsafe fn scsi_read_sectors(&mut self, lba: u64, count: u32) -> Result<(), XhciError> {
         let byte_count = count * 512;
         let mut cmd = [0u8; 10];
         cmd[0] = SCSI_READ_10;
@@ -113,16 +118,5 @@ impl XhciController {
         let cmd = [SCSI_TEST_UNIT_READY, 0, 0, 0, 0, 0];
         self.bot_command(&cmd, 0, false)?;
         Ok(true)
-    }
-
-    /// DCI for bulk-in and bulk-out must be set by the enumeration layer.
-    fn dci_bulk_in(&self) -> u8 {
-        let off = self.dma_base + dma::OFF_DESC as u64;
-        let addr = core::ptr::read_volatile((off) as *const u8);
-        let ep_in = core::ptr::read_volatile((off) as *const u8); // placeholder
-        ep_in
-    }
-    fn dci_bulk_out(&self) -> u8 {
-        0
     }
 }

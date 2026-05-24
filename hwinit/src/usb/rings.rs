@@ -1,5 +1,6 @@
 //! TRB structs and ring management.
 
+use crate::usb::dma::{CMD_RING_LEN, EVT_RING_LEN};
 use crate::usb::regs::*;
 
 /// xHCI Transfer Request Block — 16 bytes, little-endian.
@@ -62,7 +63,12 @@ pub struct CmdRing {
 
 impl CmdRing {
     pub fn new(base: u64) -> Self {
-        Self { base, enq: 0, cycle: 1, len: CMD_RING_LEN }
+        Self {
+            base,
+            enq: 0,
+            cycle: 1,
+            len: CMD_RING_LEN,
+        }
     }
 
     /// Enqueue a TRB and advance producer. Wraps if ring is full.
@@ -90,7 +96,12 @@ pub struct XferRing {
 
 impl XferRing {
     pub fn new(base: u64, len: u8) -> Self {
-        Self { base, enq: 0, cycle: 1, len }
+        Self {
+            base,
+            enq: 0,
+            cycle: 1,
+            len,
+        }
     }
 
     #[inline(always)]
@@ -122,7 +133,12 @@ pub struct EvtRing {
 
 impl EvtRing {
     pub fn new(base: u64) -> Self {
-        Self { base, deq: 0, cycle: 1, len: EVT_RING_LEN }
+        Self {
+            base,
+            deq: 0,
+            cycle: 1,
+            len: EVT_RING_LEN,
+        }
     }
 
     /// Read the current event TRB without advancing (for inspection).

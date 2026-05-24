@@ -53,7 +53,7 @@ pub enum InputEvent {
 
 /// Keyboard handler function type
 type KeyboardHandler = fn(scan_code: u8, pressed: bool);
-/// Mouse handler function type  
+/// Mouse handler function type
 type MouseHandler = fn(dx: i16, dy: i16, buttons: u8);
 
 // INTERNAL STATE
@@ -61,12 +61,8 @@ type MouseHandler = fn(dx: i16, dy: i16, buttons: u8);
 static KEYBOARD_HANDLERS: SpinLock<Option<KeyboardHandler>> = SpinLock::new(None);
 static MOUSE_HANDLERS: SpinLock<Option<MouseHandler>> = SpinLock::new(None);
 
-static KEYBOARD_EVENTS: SpinLock<[Option<InputEvent>; 32]> = SpinLock::new(
-    [None; 32]
-);
-static MOUSE_EVENTS: SpinLock<[Option<InputEvent>; 16]> = SpinLock::new(
-    [None; 16]
-);
+static KEYBOARD_EVENTS: SpinLock<[Option<InputEvent>; 32]> = SpinLock::new([None; 32]);
+static MOUSE_EVENTS: SpinLock<[Option<InputEvent>; 16]> = SpinLock::new([None; 16]);
 
 static KEYBOARD_HEAD: SpinLock<usize> = SpinLock::new(0);
 static KEYBOARD_TAIL: SpinLock<usize> = SpinLock::new(0);
@@ -138,11 +134,11 @@ pub fn register_mouse_handler(handler: MouseHandler) {
 /// Called by registered keyboard handlers.
 fn push_keyboard_event(event: InputEvent) {
     const MASK: usize = 31;
-    
+
     let mut head = KEYBOARD_HEAD.lock();
     let mut tail = KEYBOARD_TAIL.lock();
     let next = (*head + 1) & MASK;
-    
+
     if next != *tail {
         let mut events = KEYBOARD_EVENTS.lock();
         events[*head] = Some(event);
@@ -152,11 +148,11 @@ fn push_keyboard_event(event: InputEvent) {
 
 fn push_mouse_event(event: InputEvent) {
     const MASK: usize = 15;
-    
+
     let mut head = MOUSE_HEAD.lock();
     let mut tail = MOUSE_TAIL.lock();
     let next = (*head + 1) & MASK;
-    
+
     if next != *tail {
         let mut events = MOUSE_EVENTS.lock();
         events[*head] = Some(event);
@@ -168,11 +164,11 @@ fn push_mouse_event(event: InputEvent) {
 /// Used by drivers to inject events into the unified queue.
 pub fn push_keyboard_event_internal(event: InputEvent) {
     const MASK: usize = 31;
-    
+
     let mut head = KEYBOARD_HEAD.lock();
     let mut tail = KEYBOARD_TAIL.lock();
     let next = (*head + 1) & MASK;
-    
+
     if next != *tail {
         let mut events = KEYBOARD_EVENTS.lock();
         events[*head] = Some(event);
@@ -184,11 +180,11 @@ pub fn push_keyboard_event_internal(event: InputEvent) {
 /// Used by drivers to inject events into the unified queue.
 pub fn push_mouse_event_internal(event: InputEvent) {
     const MASK: usize = 15;
-    
+
     let mut head = MOUSE_HEAD.lock();
     let mut tail = MOUSE_TAIL.lock();
     let next = (*head + 1) & MASK;
-    
+
     if next != *tail {
         let mut events = MOUSE_EVENTS.lock();
         events[*head] = Some(event);
@@ -201,18 +197,18 @@ pub fn push_mouse_event_internal(event: InputEvent) {
 pub fn poll_keyboard() -> Option<InputEvent> {
     let mut head = KEYBOARD_HEAD.lock();
     let mut tail = KEYBOARD_TAIL.lock();
-    
+
     if *head == *tail {
         return None;
     }
-    
-    let events = KEYBOARD_EVENTS.lock();
+
+    let mut events = KEYBOARD_EVENTS.lock();
     let event = events[*tail].take();
     *tail = (*tail + 1) & 31;
     drop(events);
     drop(tail);
     drop(head);
-    
+
     event
 }
 
@@ -221,18 +217,18 @@ pub fn poll_keyboard() -> Option<InputEvent> {
 pub fn poll_mouse() -> Option<InputEvent> {
     let mut head = MOUSE_HEAD.lock();
     let mut tail = MOUSE_TAIL.lock();
-    
+
     if *head == *tail {
         return None;
     }
-    
-    let events = MOUSE_EVENTS.lock();
+
+    let mut events = MOUSE_EVENTS.lock();
     let event = events[*tail].take();
     *tail = (*tail + 1) & 15;
     drop(events);
     drop(tail);
     drop(head);
-    
+
     event
 }
 
@@ -243,7 +239,7 @@ pub fn drain_mouse() -> (i32, i32, u8) {
     let mut dx: i32 = 0;
     let mut dy: i32 = 0;
     let mut buttons: u8 = 0;
-    
+
     loop {
         match poll_mouse() {
             Some(InputEvent::Move(dx_i, dy_i)) => {
@@ -270,7 +266,7 @@ pub fn drain_mouse() -> (i32, i32, u8) {
             _ => {}
         }
     }
-    
+
     (dx, dy, buttons)
 }
 
@@ -304,4 +300,3 @@ pub fn ps2_mouse_handler(dx: i16, dy: i16, buttons: u8) {
         h(dx, dy, buttons);
     }
 }
-"

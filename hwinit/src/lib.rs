@@ -104,6 +104,7 @@ pub mod stdin;
 pub mod stdout;
 pub mod sync;
 pub mod syscall;
+pub mod usb;
 
 // CPU RE-EXPORTS
 
@@ -181,17 +182,9 @@ pub use pci::{pci_cfg_write16, pci_cfg_write32, pci_cfg_write8};
 // INPUT SUBSYSTEM RE-EXPORTS
 
 pub use input::{
-    drain_mouse,
-    has_keyboard,
-    has_mouse,
-    init as init_input,
-    poll_keyboard,
-    poll_mouse,
-    push_keyboard_event_internal,
-    push_mouse_event_internal,
-    register_keyboard_handler,
-    register_mouse_handler,
-    InputEvent,
+    drain_mouse, has_keyboard, has_mouse, init as init_input, poll_keyboard, poll_mouse,
+    push_keyboard_event_internal, push_mouse_event_internal, register_keyboard_handler,
+    register_mouse_handler, InputEvent,
 };
 
 // PROCESS RE-EXPORTS

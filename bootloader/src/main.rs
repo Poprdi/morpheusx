@@ -1,8 +1,14 @@
-//! Morpheus — UEFI trampoline.
+//! Morpheus bootloader binary crate.
 //!
-//! Queries GOP, hands off to baremetal::enter_baremetal(). That's it.
-//! The only UEFI interaction in the entire system happens here and in
-//! enter_baremetal's EBS call. Everything after is ours.
+//! The authoritative boot sequence lives in `boot.rs` — this file is a
+//! thin shell that:
+//!
+//! 1. Declares the helper modules.
+//! 2. Re-exports the UEFI FFI types the global allocator depends on.
+//! 3. Provides the language-required `#[panic_handler]`.
+//!
+//! `efi_main` itself is defined in `boot.rs` with `#[no_mangle]` so the
+//! UEFI linker picks it up directly — no indirection through main.
 
 #![no_std]
 #![no_main]
@@ -14,34 +20,28 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
-mod baremetal;
 mod baremetal_ops;
+mod boot;
 mod bsod;
 mod storage;
 mod tui;
 mod uefi_allocator;
 
-// UEFI FFI — minimal subset: just enough to locate GOP and feed the allocator
+// ─────────────────────────────────────────────────────────────────────────
+// UEFI BootServices layout
+// ─────────────────────────────────────────────────────────────────────────
+//
+// The hybrid allocator (`uefi_allocator`) needs to call `allocate_pool`
+// and `free_pool` while UEFI is still alive. Both this module and
+// `boot::EfiBootServices` type-pun the same UEFI spec layout, but the
+// allocator was written against the type defined here, so we keep the
+// shape (with just the two fields the allocator touches publicly).
 
-/// Only field we read is boot_services. Everything else is padding.
-#[repr(C)]
-struct SystemTable {
-    _header: [u8; 24],
-    _firmware_vendor: *const u16,
-    _firmware_revision: u32,
-    _console_in_handle: *const (),
-    _con_in: *mut (),
-    _console_out_handle: *const (),
-    _con_out: *mut (),
-    _stderr_handle: *const (),
-    _stderr: *const (),
-    _runtime_services: *const (),
-    boot_services: *const BootServices,
-}
-
-/// Pre-EBS allocator uses allocate_pool/free_pool.
-/// efi_main uses locate_protocol for GOP.
-/// Layout must match UEFI spec offset-for-offset up through locate_protocol.
+/// UEFI BootServices subset, exposed for `uefi_allocator`.
+///
+/// The layout up to `locate_protocol` must match the UEFI specification
+/// byte-for-byte. Fields not used by the allocator are left as `usize`
+/// padding.
 #[repr(C)]
 pub struct BootServices {
     _header: [u8; 24],
@@ -85,93 +85,9 @@ pub struct BootServices {
     pub locate_protocol: extern "efiapi" fn(*const [u8; 16], *const (), *mut *mut ()) -> usize,
 }
 
-// GOP — just enough to read the framebuffer address
-
-const GOP_GUID: [u8; 16] = [
-    0xDE, 0xA9, 0x42, 0x90, 0xDC, 0x23, 0x38, 0x4A, 0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A,
-];
-
-#[repr(C)]
-struct GopModeInfo {
-    _version: u32,
-    horizontal_resolution: u32,
-    vertical_resolution: u32,
-    pixel_format: u32,
-    _pixel_bitmask: [u32; 4],
-    pixels_per_scan_line: u32,
-}
-
-#[repr(C)]
-struct GopMode {
-    _max_mode: u32,
-    _mode: u32,
-    info: *const GopModeInfo,
-    _size_of_info: usize,
-    frame_buffer_base: u64,
-    frame_buffer_size: usize,
-}
-
-#[repr(C)]
-struct Gop {
-    _query_mode: usize,
-    _set_mode: usize,
-    _blt: usize,
-    mode: *mut GopMode,
-}
-
-// ENTRY
-
-#[no_mangle]
-pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) -> usize {
-    unsafe {
-        // Raw COM1 write — needs zero init, works from first instruction.
-        // If you see this on serial, OVMF found and loaded our binary.
-        morpheus_hwinit::serial::log_info("UEFI", 900, "efi_main entry");
-
-        let st = &*(system_table as *const SystemTable);
-        let bs = &*st.boot_services;
-
-        // Pre-EBS allocator needs BootServices for allocate_pool/free_pool
-        uefi_allocator::set_boot_services(st.boot_services);
-
-        // Query GOP for framebuffer info
-        let mut gop_ptr: *mut Gop = core::ptr::null_mut();
-        let status = (bs.locate_protocol)(
-            &GOP_GUID,
-            core::ptr::null(),
-            &mut gop_ptr as *mut _ as *mut *mut (),
-        );
-
-        let fb = if status == 0 && !gop_ptr.is_null() {
-            let mode = &*(*gop_ptr).mode;
-            let info = &*mode.info;
-            baremetal::FramebufferInfo {
-                base: mode.frame_buffer_base,
-                size: mode.frame_buffer_size,
-                width: info.horizontal_resolution,
-                height: info.vertical_resolution,
-                stride: info.pixels_per_scan_line,
-                format: info.pixel_format,
-            }
-        } else {
-            baremetal::FramebufferInfo {
-                base: 0,
-                size: 0,
-                width: 0,
-                height: 0,
-                stride: 0,
-                format: 0,
-            }
-        };
-
-        // Cross the border. Never returns.
-        baremetal::enter_baremetal(baremetal::BaremetalEntryConfig {
-            image_handle,
-            system_table,
-            framebuffer: fb,
-        })
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────
+// Panic handler
+// ─────────────────────────────────────────────────────────────────────────
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -202,7 +118,7 @@ fn panic(info: &PanicInfo) -> ! {
     }
     morpheus_hwinit::serial::puts(" — PANIC (spinning)\n");
 
-    // Show BSoD panic screen on the framebuffer.
+    // Show BSoD panic screen on the framebuffer (uses boot::published_framebuffer()).
     if let Some(loc) = info.location() {
         unsafe {
             bsod::show_panic_screen(loc.file(), loc.line(), loc.column());
