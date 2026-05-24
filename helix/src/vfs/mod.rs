@@ -19,7 +19,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 
-
 /// A mounted HelixFS instance.
 pub struct HelixInstance {
     /// The current superblock.
@@ -53,7 +52,6 @@ impl HelixInstance {
         }
     }
 }
-
 
 /// Entry in the mount table.
 pub struct MountEntry {
@@ -147,7 +145,6 @@ impl MountTable {
     }
 }
 
-
 /// Per-process file descriptor table.
 #[derive(Clone, Copy)]
 pub struct FdTable {
@@ -213,7 +210,6 @@ impl FdTable {
         Ok(())
     }
 }
-
 
 /// Open a file or directory.
 ///

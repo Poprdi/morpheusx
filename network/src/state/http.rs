@@ -33,7 +33,6 @@ use super::{StateError, StepResult, TscTimestamp};
 use crate::http::Headers;
 use crate::url::Url;
 
-
 /// HTTP-specific errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HttpError {
@@ -86,7 +85,6 @@ impl From<HttpError> for StateError {
     }
 }
 
-
 /// Information extracted from HTTP response headers.
 #[derive(Debug, Clone)]
 pub struct HttpResponseInfo {
@@ -116,7 +114,6 @@ impl HttpResponseInfo {
     }
 }
 
-
 /// Download progress information.
 #[derive(Debug, Clone, Copy)]
 pub struct HttpProgress {
@@ -138,7 +135,6 @@ impl HttpProgress {
         })
     }
 }
-
 
 /// Internal state for accumulating headers.
 #[derive(Debug)]
@@ -276,7 +272,6 @@ impl HeaderAccumulator {
         }
     }
 }
-
 
 /// HTTP download state machine.
 ///

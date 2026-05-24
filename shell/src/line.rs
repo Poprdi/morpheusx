@@ -61,19 +61,19 @@ impl LineEditor {
                 }
                 0x03 => return None, // Ctrl+C
                 0x0C => {
-                    // Ctrl+L: clear and reprint
+                    // Ctrl+L
                     io::print("\x1b[2J\x1b[H");
                     return Some(String::from("\x0c"));
                 }
                 0x15 => {
-                    // Ctrl+U: kill line
+                    // Ctrl+U
                     while self.len > 0 {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
                 }
                 0x17 => {
-                    // Ctrl+W: kill word
+                    // Ctrl+W
                     while self.len > 0 && self.buf[self.len - 1] == b' ' {
                         self.len -= 1;
                         io::print("\x08 \x08");
@@ -88,7 +88,7 @@ impl LineEditor {
                         self.buf[self.len] = c;
                         self.len += 1;
                         let s = &self.buf[self.len - 1..self.len];
-                        // Safety: single ASCII byte is valid UTF-8
+                        // SAFETY: ASCII byte.
                         io::print(unsafe { core::str::from_utf8_unchecked(s) });
                     }
                 }
@@ -119,7 +119,6 @@ impl LineEditor {
     }
 }
 
-/// Read a line using the framebuffer console.
 pub fn read_line_fb(
     fb: &Framebuffer,
     con: &mut Console,
@@ -166,7 +165,7 @@ pub fn read_line_fb(
                 con.kill_to_start(fb, prompt_col);
             }
             0x17 => {
-                // Ctrl+W: kill word
+                // Ctrl+W
                 while len > 0 && buf[len - 1] == b' ' {
                     len -= 1;
                     con.backspace(fb);

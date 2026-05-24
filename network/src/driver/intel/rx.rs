@@ -10,12 +10,10 @@ use crate::asm::drivers::intel::{
 };
 use crate::mainloop::serial::{serial_print, serial_print_hex, serial_println};
 
-
 /// Size of a single RX descriptor in bytes.
 pub const RX_DESC_SIZE: usize = 16;
 
 pub const DEFAULT_BUFFER_SIZE: usize = 2048;
-
 
 /// RX errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +28,6 @@ pub enum RxError {
     /// Packet had hardware errors.
     PacketError(u8),
 }
-
 
 /// RX descriptor ring.
 ///

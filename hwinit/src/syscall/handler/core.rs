@@ -1,6 +1,4 @@
-// Syscall handlers. args come in as u64, result goes out as u64.
-// Negative = errno, 0 = ok, positive = data. MS x64 ABI.
-
+// All syscalls: u64 args, u64 return. High bits = errno (u64::MAX - n).
 use crate::process::scheduler::{exit_process, SCHEDULER};
 use crate::process::signals::Signal;
 use crate::serial::puts;
@@ -15,24 +13,13 @@ const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
 static SYSTEM_CONTROL_IN_PROGRESS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-// SYS_EXIT — terminate the current process
-
-/// `SYS_EXIT(code: i32)` — terminate the calling process.
-///
-/// Never returns.
+/// `SYS_EXIT(code)` — never returns.
 pub unsafe fn sys_exit(code: u64) -> u64 {
     exit_process(code as i32);
 }
 
-// SYS_WRITE — fd-aware write (serial for fd 1/2, VFS for fd >= 3)
-
-/// `SYS_WRITE(fd, ptr, len)` — write bytes.
-///
-/// For fds 0, 1, 2: if the fd has been redirected via dup2 (e.g. to a pipe
-/// or file), writes to that target.  Otherwise fd 1/2 fall through to the
-/// serial console, and fd 0 returns EBADF.
-///
-/// fd >= 3: pipe write or VFS file write.
+/// fd 0/1/2: dup2'd target (pipe/file) if set; else fd 1/2 go to serial,
+/// fd 0 returns EBADF. fd >= 3: pipe or VFS.
 pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
@@ -41,8 +28,7 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
         return EFAULT;
     }
 
-    // For ALL fds (including 0, 1, 2): check the fd_table first.
-    // If the fd has been explicitly opened/redirected (pipe, file), use it.
+    // Redirected fds (via dup2) take precedence over stdio defaults.
     {
         let fd_table = SCHEDULER.current_fd_table_mut();
         if let Ok(desc) = fd_table.get(fd as usize) {
@@ -56,7 +42,6 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 crate::process::scheduler::wake_pipe_readers(pipe_idx);
                 return n as u64;
             }
-            // Regular file — fall through to VFS write.
             let mut _vfs_guard = match vfs_lock() {
                 Some(g) => g,
                 None => return ENOSYS,
@@ -79,11 +64,10 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
         }
     }
 
-    // fd_table has no entry for this fd — legacy fallback.
+    // Default stdio routing.
     match fd {
         1 | 2 => {
             let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-            // Capture output for the desktop shell widget
             crate::stdout::push(bytes);
             if let Ok(s) = core::str::from_utf8(bytes) {
                 puts(s);
@@ -99,15 +83,7 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     }
 }
 
-// SYS_READ — fd-aware read (VFS for fd >= 3)
-
-/// `SYS_READ(fd, ptr, len)` — read bytes.
-///
-/// For fds 0, 1, 2: if the fd has been redirected via dup2 (e.g. to a pipe
-/// or file), reads from that target.  Otherwise fd 0 falls through to the
-/// kernel keyboard ring buffer, and fd 1/2 return EBADF.
-///
-/// fd >= 3: pipe read or VFS file read.
+/// fd 0/1/2 honor dup2 redirects; else fd 0 reads stdin ring, fd 1/2 EBADF.
 pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
@@ -116,8 +92,6 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
         return EFAULT;
     }
 
-    // For ALL fds (including 0, 1, 2): check the fd_table first.
-    // If the fd has been explicitly opened/redirected (pipe, file), use it.
     {
         let fd_table = SCHEDULER.current_fd_table_mut();
         if let Ok(desc) = fd_table.get(fd as usize) {
@@ -126,7 +100,6 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
                 return sys_pipe_read_blocking(pipe_idx, buf);
             }
-            // Regular file — fall through to VFS read.
             let mut _vfs_guard = match vfs_lock() {
                 Some(g) => g,
                 None => return ENOSYS,
@@ -147,22 +120,13 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
         }
     }
 
-    // fd_table has no entry for this fd — legacy fallback.
     match fd {
         0 => {
-            // stdin — where does the data come from?
-            //
-            // Composited clients: per-process input buffer, populated by
-            // the compositor via SYS_FORWARD_INPUT.  No pipes, no global
-            // ring buffer, no hoping some intermediary remembered to forward
-            // your keystrokes.
-            //
-            // Everyone else: global keyboard ring buffer (stdin), populated
-            // by the PS/2 keyboard ISR.
+            // Composited clients: per-process input buf fed by SYS_FORWARD_INPUT.
+            // Others: global stdin ring fed by the PS/2 ISR.
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
 
             if is_composited_client() {
-                // Read from per-process input buffer.
                 loop {
                     let proc = SCHEDULER.current_process_mut();
                     let mut n = 0usize;
@@ -174,12 +138,10 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                     if n > 0 {
                         return n as u64;
                     }
-                    // No data — check for pending signals before blocking.
                     if !proc.pending_signals.is_empty() {
                         return 0;
                     }
-                    // Park until the compositor sends us something.
-                     crate::process::scheduler::mark_input_waiter(proc.pid);
+                    crate::process::scheduler::mark_input_waiter(proc.pid);
                     proc.state = crate::process::ProcessState::Blocked(
                         crate::process::BlockReason::InputRead,
                     );
@@ -187,7 +149,6 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 }
             }
 
-            // Non-composited: global stdin ring buffer.
             loop {
                 let n = crate::stdin::read(buf);
                 if n > 0 {
@@ -201,7 +162,7 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 }
                 {
                     let proc = SCHEDULER.current_process_mut();
-                     crate::process::scheduler::mark_stdin_waiter(proc.pid);
+                    crate::process::scheduler::mark_stdin_waiter(proc.pid);
                     proc.state = crate::process::ProcessState::Blocked(
                         crate::process::BlockReason::StdinRead,
                     );

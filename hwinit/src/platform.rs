@@ -404,33 +404,32 @@ pub unsafe fn platform_init_selfcontained(
 
                         match unsafe { XhciController::new(base_addr as u64, tsc_freq) } {
                             Ok(mut controller) => {
-                                let kbd_for_runtime = match unsafe {
-                                    enumerate_and_bind_inputs(&mut controller)
-                                } {
-                                    Ok(result) => {
-                                        if result.keyboard.is_some() {
-                                            log_ok("USB", 910, "USB keyboard detected");
-                                            usb_init_count += 1;
+                                let kbd_for_runtime =
+                                    match unsafe { enumerate_and_bind_inputs(&mut controller) } {
+                                        Ok(result) => {
+                                            if result.keyboard.is_some() {
+                                                log_ok("USB", 910, "USB keyboard detected");
+                                                usb_init_count += 1;
+                                            }
+                                            if result.mouse.is_some() {
+                                                log_ok("USB", 911, "USB mouse detected");
+                                                usb_init_count += 1;
+                                            }
+                                            if result.keyboard.is_none() && result.mouse.is_none() {
+                                                log_info(
+                                                    "USB",
+                                                    912,
+                                                    "USB device found but no HID interface",
+                                                );
+                                            }
+                                            result.keyboard
                                         }
-                                        if result.mouse.is_some() {
-                                            log_ok("USB", 911, "USB mouse detected");
-                                            usb_init_count += 1;
+                                        Err(e) => {
+                                            log_warn("USB", 920, "USB enumeration failed");
+                                            let _ = e;
+                                            None
                                         }
-                                        if result.keyboard.is_none() && result.mouse.is_none() {
-                                            log_info(
-                                                "USB",
-                                                912,
-                                                "USB device found but no HID interface",
-                                            );
-                                        }
-                                        result.keyboard
-                                    }
-                                    Err(e) => {
-                                        log_warn("USB", 920, "USB enumeration failed");
-                                        let _ = e;
-                                        None
-                                    }
-                                };
+                                    };
                                 // Hand the xHC to the runtime polling module
                                 // so the input loop can fetch reports later.
                                 // Without this, `controller` drops here and

@@ -41,7 +41,6 @@ fn futex_wake(addr: &AtomicU32, count: u32) -> u32 {
     }
 }
 
-
 /// Futex-based mutex. No spinning, no alloc, no nonsense.
 ///
 /// State word: 0 = unlocked, 1 = locked (no waiters), 2 = locked (waiters).
@@ -132,7 +131,6 @@ impl<T> Drop for MutexGuard<'_, T> {
     }
 }
 
-
 /// Condition variable. Pair with a Mutex for classic wait/notify.
 pub struct Condvar {
     seq: AtomicU32,
@@ -173,7 +171,6 @@ impl Condvar {
         futex_wake(&self.seq, u32::MAX);
     }
 }
-
 
 /// Run-once initialization. Like std::sync::OnceLock.
 ///
@@ -233,7 +230,6 @@ impl<T> OnceLock<T> {
         }
     }
 }
-
 
 /// Reader-writer lock.  Multiple readers or one writer.
 ///
@@ -370,7 +366,6 @@ impl<T> Drop for RwLockWriteGuard<'_, T> {
         futex_wake(&self.lock.state, u32::MAX);
     }
 }
-
 
 /// Multi-producer, single-consumer channel.
 ///

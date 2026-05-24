@@ -188,7 +188,6 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
     }
 }
 
-
 /// Ring buffer size for packet counters (must be power of 2 for efficient masking)
 const PACKET_COUNTER_SIZE: usize = 256;
 
@@ -238,7 +237,6 @@ static RX_PACKET_COUNTER: PacketCounterRing = PacketCounterRing::new();
 
 // Debug marker for tracing initialization steps
 static DEBUG_INIT_STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
 
 /// Maximum length of a single debug message
 const DEBUG_MSG_LEN: usize = 64;

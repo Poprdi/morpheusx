@@ -8,7 +8,6 @@
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-
 /// DNS-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DnsError {
@@ -29,7 +28,6 @@ impl From<DnsError> for StateError {
         StateError::DnsError
     }
 }
-
 
 /// DNS resolution state machine.
 ///
@@ -176,7 +174,6 @@ impl Default for DnsResolveState {
         Self::new()
     }
 }
-
 
 /// Lookup hostname in hardcoded table.
 ///

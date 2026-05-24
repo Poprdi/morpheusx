@@ -28,7 +28,6 @@ use super::tcp::TcpSocketState;
 use super::{Progress, StateError, StepResult, TscTimestamp};
 use crate::url::Url;
 
-
 /// Errors during ISO download.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadError {
@@ -77,7 +76,6 @@ impl From<DownloadError> for StateError {
     }
 }
 
-
 /// Configuration for ISO download.
 #[derive(Debug, Clone)]
 pub struct DownloadConfig {
@@ -123,7 +121,6 @@ impl DownloadConfig {
         self
     }
 }
-
 
 /// Overall download progress.
 #[derive(Debug, Clone, Copy)]
@@ -188,7 +185,6 @@ impl From<DownloadProgress> for Progress {
     }
 }
 
-
 /// Result of successful download.
 #[derive(Debug, Clone)]
 pub struct DownloadResult {
@@ -201,7 +197,6 @@ pub struct DownloadResult {
     /// Number of sectors written
     pub sectors_written: u64,
 }
-
 
 /// ISO download orchestration state machine.
 ///

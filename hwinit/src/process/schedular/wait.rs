@@ -11,7 +11,7 @@ pub unsafe fn block_sleep(deadline: u64) -> u64 {
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid) {
         proc.state = ProcessState::Blocked(BlockReason::Sleep(deadline));
         TIMED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
-        // update earliest deadline for fast wake-path early exit
+        // Race-free min update — used by tick fast-path.
         loop {
             let current_earliest = EARLIEST_DEADLINE.load(Ordering::Relaxed);
             if deadline < current_earliest {
@@ -67,8 +67,7 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
         if child_state == ProcessState::Zombie {
             let result = reap_child(child_pid);
             PROCESS_TABLE_LOCK.unlock();
-            // Zombie observed but still running on some core; wait until
-            // scheduler deschedules it before freeing CR3/page tables.
+            // Reap deferred — child is Zombie but still on another core's CPU.
             if result == u64::MAX - 11 {
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
                 continue;
@@ -125,9 +124,7 @@ pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
 
 unsafe fn reap_child(pid: u32) -> u64 {
     if let Some(Some(child)) = PROCESS_TABLE.get_mut(pid as usize) {
-        // A process may be Zombie but still executing on another core until
-        // that core takes a scheduler tick and switches away. Reaping early
-        // would free its page tables while CR3 still points at them.
+        // Don't free page tables while another core's CR3 still points at them.
         if child.running_on != u32::MAX {
             return u64::MAX - 11;
         }

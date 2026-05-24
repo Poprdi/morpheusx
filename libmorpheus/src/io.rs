@@ -436,7 +436,6 @@ impl<R: Read> BufRead for BufReader<R> {
     }
 }
 
-
 /// Wraps a [`Write`] with an internal buffer to batch small writes.
 pub struct BufWriter<W: Write> {
     inner: W,
@@ -520,7 +519,6 @@ impl<W: Write> Drop for BufWriter<W> {
     }
 }
 
-
 /// Copy all bytes from `reader` to `writer`.  Returns total bytes copied.
 pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64> {
     let mut buf = [0u8; 4096];
@@ -534,7 +532,6 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
         total += n as u64;
     }
 }
-
 
 const IOCTL_FIONREAD: u64 = 0x541B;
 const IOCTL_TIOCGWINSZ: u64 = 0x5413;

@@ -30,7 +30,6 @@ use crate::error::{NetworkError, Result};
 pub mod pci;
 pub mod registers;
 
-
 /// Unified network device interface MorpheusX drivers must implement.
 pub trait NetworkDevice {
     /// MAC address of the interface.
@@ -51,7 +50,6 @@ pub trait NetworkDevice {
     /// is available, or an error on failure.
     fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>>;
 }
-
 
 /// Unified network device that works with both VirtIO and Intel e1000e.
 ///
@@ -199,7 +197,6 @@ impl NetworkDevice for UnifiedNetDevice {
         }
     }
 }
-
 
 use crate::driver::ahci::{AhciDriver, AhciInitError};
 use crate::driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver, BlockError};
@@ -376,7 +373,6 @@ impl BlockDriver for UnifiedBlockDevice {
         }
     }
 }
-
 
 /// Placeholder NIC that does nothing. Useful for early bring-up.
 pub struct NullDevice;

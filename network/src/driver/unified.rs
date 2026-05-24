@@ -23,7 +23,6 @@ use crate::driver::traits::{NetworkDriver, RxError, TxError};
 use crate::driver::virtio::{VirtioInitError, VirtioNetDriver};
 use crate::types::MacAddress;
 
-
 /// Errors during unified driver initialization.
 #[derive(Debug, Clone, Copy)]
 pub enum UnifiedDriverError {
@@ -51,7 +50,6 @@ impl From<E1000eError> for UnifiedDriverError {
     }
 }
 
-
 /// Unified network driver that wraps all supported NIC drivers.
 ///
 /// This enum provides a single type that can represent any supported NIC,
@@ -72,7 +70,6 @@ impl UnifiedNetworkDriver {
         }
     }
 }
-
 
 impl NetworkDriver for UnifiedNetworkDriver {
     fn mac_address(&self) -> MacAddress {

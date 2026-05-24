@@ -513,57 +513,45 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
     })
 }
 
-// spinner
-
 static mut SPIN_ACTIVE: bool = false;
 static mut SPIN_FRAME: usize = 0;
 static mut SPIN_LAST_TSC: u64 = 0;
 
 const SPIN_FRAMES: [u8; 4] = [b'|', b'/', b'-', b'\\'];
 
-/// Start a spinner on both serial and the framebuffer. The initial frame
-/// appears on the same line after the last log message.
 fn spinner_start() {
     unsafe {
         SPIN_ACTIVE = true;
         SPIN_FRAME = 0;
         SPIN_LAST_TSC = morpheus_hwinit::tsc::read_tsc();
-        // Serial: write the opening frame (no newline — we'll overwrite in place)
         morpheus_hwinit::serial::serial_puts("   ");
         morpheus_hwinit::serial::serial_putc(SPIN_FRAMES[0]);
-        // Framebuffer: same
         morpheus_hwinit::serial::fb_puts("   ");
         morpheus_hwinit::serial::fb_putc(SPIN_FRAMES[0]);
     }
 }
 
-/// Advance the spinner frame if ~100 ms have passed.
-/// Called at the top of every raw_read / raw_write so it fires naturally
-/// during helix I/O without needing a separate timer or thread.
+/// Advances every ~100 ms; called from raw_read/raw_write so I/O drives the animation.
 fn spinner_tick() {
     unsafe {
         if !SPIN_ACTIVE || STORAGE_TSC_FREQ == 0 {
             return;
         }
         let now = morpheus_hwinit::tsc::read_tsc();
-        let interval = STORAGE_TSC_FREQ / 10; // 100 ms
+        let interval = STORAGE_TSC_FREQ / 10;
         if now.wrapping_sub(SPIN_LAST_TSC) < interval {
             return;
         }
         SPIN_LAST_TSC = now;
         SPIN_FRAME = (SPIN_FRAME + 1) % SPIN_FRAMES.len();
         let frame = SPIN_FRAMES[SPIN_FRAME];
-        // Serial: backspace over previous frame, write new one
         morpheus_hwinit::serial::serial_putc(b'\x08');
         morpheus_hwinit::serial::serial_putc(frame);
-        // Framebuffer: same
         morpheus_hwinit::serial::fb_putc(b'\x08');
         morpheus_hwinit::serial::fb_putc(frame);
     }
 }
 
-/// Stop the spinner. \r returns cursor to col 0 on both serial and framebuffer
-/// so the next `puts()` call overwrites the spinner line with the result.
 fn spinner_done() {
     unsafe {
         SPIN_ACTIVE = false;
@@ -572,18 +560,8 @@ fn spinner_done() {
     morpheus_hwinit::serial::fb_puts("\r");
 }
 
-// PUBLIC API
-
-/// Probe for a persistent block device and mount HelixFS on it.
-///
-/// If a device is found, replaces the in-memory root FS with the persistent
-/// one.  If no device is found, logs a warning and leaves the RAM-disk
-/// in place.
-///
 /// # Safety
-/// - `dma` must be a valid 2 MB DMA region from hwinit Phase 6.
-/// - `tsc_freq` must be the calibrated TSC frequency.
-/// - Must be called exactly once, after hwinit completes.
+/// `dma` must be the hwinit Phase 6 DMA region; `tsc_freq` calibrated; call once after hwinit.
 pub unsafe fn init_persistent_storage(
     dma: &DmaRegion,
     tsc_freq: u64,
@@ -626,25 +604,19 @@ pub unsafe fn init_persistent_storage(
         }
     }
 
-    // Dump PCI bus to serial for device identification diagnostics
-    // (Commenting out PCI dump — enable if debugging PCI device discovery)
-    // dump_pci_devices();
+    // dump_pci_devices(); // enable when debugging device discovery
 
     STORAGE_DMA = Some(*dma);
     STORAGE_TSC_FREQ = tsc_freq;
 
-    // NOTE: The DMA region is fully zeroed by hwinit Phase 6 at allocation
-    // time, so VirtIO queue structures (desc, avail, used, headers, status)
-    // are already clean.  No additional zeroing needed here.
+    // DMA region is zeroed by hwinit Phase 6; VirtIO queue structs are clean.
 
-    // build blockdmaconfig from the dma region
     let base_cpu = dma.cpu_base();
     let base_bus = dma.bus_base();
 
     let config = BlockDmaConfig {
         tsc_freq,
 
-        // VirtIO-blk
         virtio_desc_cpu: base_cpu.add(OFF_VIRTIO_DESC),
         virtio_desc_phys: base_bus + OFF_VIRTIO_DESC as u64,
         virtio_avail_cpu: base_cpu.add(OFF_VIRTIO_AVAIL),
@@ -655,10 +627,9 @@ pub unsafe fn init_persistent_storage(
         virtio_headers_phys: base_bus + OFF_VIRTIO_HEADERS as u64,
         virtio_status_cpu: base_cpu.add(OFF_VIRTIO_STATUS),
         virtio_status_phys: base_bus + OFF_VIRTIO_STATUS as u64,
-        virtio_notify_addr: 0, // Filled by driver from PCI caps
+        virtio_notify_addr: 0, // driver fills from PCI caps
         queue_size: VIRTIO_QUEUE_SIZE,
 
-        // AHCI
         ahci_cmd_list_cpu: base_cpu.add(OFF_AHCI_CMD_LIST),
         ahci_cmd_list_phys: base_bus + OFF_AHCI_CMD_LIST as u64,
         ahci_fis_cpu: base_cpu.add(OFF_AHCI_FIS),
@@ -669,7 +640,6 @@ pub unsafe fn init_persistent_storage(
         ahci_identify_phys: base_bus + OFF_AHCI_IDENTIFY as u64,
     };
 
-    // scan all block devices on pci bus
     let (devices, dev_count) = scan_all_block_devices();
 
     if dev_count == 0 {
@@ -683,7 +653,7 @@ pub unsafe fn init_persistent_storage(
         "block devices detected; selecting data disk",
     );
 
-    // Try each device: skip boot disks (GPT/MBR), use the first blank or HelixFS one.
+    // Skip boot disks (GPT/MBR), accept first blank or HelixFS device.
     let mut found_data_disk = false;
     let mut saw_unimplemented_backend = false;
     'device_scan: for i in 0..dev_count {
@@ -707,34 +677,29 @@ pub unsafe fn init_persistent_storage(
             }
         }
 
-        // Map high-address MMIO BARs before driver init touches them
+        // Map BARs UC before driver touches them.
         if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
             map_virtio_bars(pci_addr.bus, pci_addr.device, pci_addr.function);
         } else if let DetectedBlockDevice::Ahci(info) = detected {
             if is_paging_initialized() {
-                // ABAR covers generic HBA regs + up to 32 ports × 0x80 = 0x1100.
-                // 0x2000 rounds to 2 pages; UC flags set by kmap_mmio.
+                // ABAR: HBA regs + 32 ports × 0x80 = 0x1100, round to 2 pages.
                 let _ = kmap_mmio(info.abar, 0x2000);
             }
         } else if let DetectedBlockDevice::Sdhci(info) = detected {
             if is_paging_initialized() {
-                // SDHCI register space is typically < 4KB, map one page.
                 let _ = kmap_mmio(info.mmio_base, 0x1000);
             }
         } else if let DetectedBlockDevice::UsbMsd(info) = detected {
             if is_paging_initialized() {
-                // xHCI operational + runtime windows vary by controller; map a conservative range.
                 let _ = kmap_mmio(info.mmio_base, 0x4000);
             }
         }
 
         let is_ahci = matches!(detected, DetectedBlockDevice::Ahci(_));
 
-        // Disable BSP interrupts for the duration of hardware driver init.
-        // The BSP LAPIC timer fires at 100 Hz; a timer ISR during PCH MMIO
-        // access can extend bus cycles on real Intel hardware (same root
-        // cause as the AHCI BIOS/OS handoff stall). AHCI and VirtIO init
-        // use TSC-based polling exclusively — no interrupts required.
+        // Mask BSP interrupts across driver init: 100 Hz LAPIC timer ISRs
+        // mid-PCH-MMIO extend bus cycles on real Intel silicon (same root
+        // cause as the AHCI BIOS/OS handoff stall). Init polls on TSC.
         morpheus_hwinit::disable_interrupts();
         let device_result = create_unified_from_detected(detected, &config);
         morpheus_hwinit::enable_interrupts();
@@ -1027,7 +992,7 @@ pub unsafe fn init_persistent_storage(
 
         let info = device.info();
 
-        // Store temporarily to check if it's a boot disk.
+        // Park here so select_data_region/recovery probes can use it.
         BLOCK_DEVICE = Some(device);
 
         let region = match select_data_region(info.sector_size, info.total_sectors) {
@@ -1051,10 +1016,9 @@ pub unsafe fn init_persistent_storage(
             continue;
         }
 
-        // Candidate selected. We only commit once it proves to hold HelixFS.
+        // Commit only after proving the candidate holds HelixFS.
         log_ok("STORAGE", 827, "selected data-disk candidate");
 
-        // try to recover or format helixfs
         let mut raw_dev = make_raw_block_device();
 
         let needs_format = {
@@ -1065,7 +1029,7 @@ pub unsafe fn init_persistent_storage(
                 info.sector_size,
             ) {
                 Ok(sb) => {
-                    // Version mismatch: v2 changed the log payload format.
+                    // v2 changed the log payload format.
                     if sb.version != morpheus_helix::types::HELIX_VERSION {
                         log_warn(
                             "STORAGE",
@@ -1082,8 +1046,7 @@ pub unsafe fn init_persistent_storage(
         };
 
         if needs_format {
-            // Bring-up safety: never auto-format random host disks at boot.
-            // Keep scanning until we find an existing HelixFS root.
+            // Bring-up safety: never auto-format unknown disks. Keep scanning.
             log_warn(
                 "STORAGE",
                 829,
@@ -1229,23 +1192,11 @@ fn root_path_exists(path: &str) -> bool {
     morpheus_helix::vfs::vfs_stat(&fs.mount_table, path).is_ok()
 }
 
-/// Whether persistent storage is active (vs RAM-disk fallback).
 pub fn is_persistent() -> bool {
     unsafe { PERSISTENT_READY }
 }
 
-// BOOT DISK DETECTION
-
-/// Check if the currently probed block device is a boot disk (GPT or MBR).
-///
-/// We NEVER format a disk that has an existing partition table — it's
-/// almost certainly the system ESP or a user disk with data.
-///
-/// Checks:
-/// 1. LBA 0 bytes [510..512] == 0xAA55 (MBR signature)
-/// 2. LBA 1 bytes [0..8] == "EFI PART" (GPT header magic)
-///
-/// Returns `true` if partition table detected → disk should be skipped.
+/// True if LBA0/1 holds an MBR sig or GPT magic — never auto-format these.
 unsafe fn is_boot_disk(sector_size: u32) -> bool {
     let dev = match BLOCK_DEVICE.as_mut() {
         Some(d) => d,
@@ -1266,7 +1217,6 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
         Err(_) => return false,
     };
 
-    // Read first 2 sectors (need LBA 0 for MBR, LBA 1 for GPT).
     let read_size = (sector_size as usize) * 2;
     let mut buf = alloc::vec![0u8; read_size];
 
@@ -1276,12 +1226,10 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
         return false;
     }
 
-    // Check MBR signature at offset 510-511
     if buf.len() >= 512 && buf[510] == 0x55 && buf[511] == 0xAA {
         return true;
     }
 
-    // Check GPT header at LBA 1
     let gpt_offset = sector_size as usize;
     if buf.len() >= gpt_offset + 8 && &buf[gpt_offset..gpt_offset + 8] == b"EFI PART" {
         return true;
@@ -1290,7 +1238,7 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
     false
 }
 
-/// Copy selected Helix partition content into RAM and expose it as RawBlockDevice.
+/// Copy selected Helix partition into RAM, return a RawBlockDevice over it.
 unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevice> {
     RAM_STAGE_LAST_REASON = "none";
     log_info("STORAGE", 843, "RAM stage attempt begin");
@@ -1305,7 +1253,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
         }
     };
 
-    // Stage only live filesystem footprint, not full partition capacity.
+    // Live FS footprint only, not full partition capacity.
     let mut stage_blocks = 2u64;
     let log_hi = sb.log_end_block.saturating_add(1);
     if log_hi > stage_blocks {
@@ -1429,10 +1377,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
     Some(MemBlockDevice::into_raw(mem_dev))
 }
 
-/// Create the standard initFS directory structure.
-///
-/// Idempotent — silently ignores directories that already exist.
-/// Called after the root FS is mounted (whether RAM-disk or persistent).
+/// Idempotent; call after root FS is mounted.
 pub fn create_init_directories() {
     use morpheus_hwinit::cpu::tsc::read_tsc;
 
@@ -1462,17 +1407,10 @@ pub fn create_init_directories() {
     log_ok("INITFS", 842, "directory structure ready");
 }
 
-// RAW BLOCK DEVICE BRIDGE
-//
-// We create a `RawBlockDevice` whose function pointers call through
-// the network crate's `UnifiedBlockIo` adapter for each operation.
-// This reuses 100% of the existing synchronous DMA read/write logic
-// (chunked transfers, timeout, completion polling) without duplication.
+// RawBlockDevice fn-ptr vtable → UnifiedBlockIo, reuses chunked DMA r/w + timeout.
 
-/// Build a `RawBlockDevice` backed by the static `BLOCK_DEVICE`.
-///
 /// # Safety
-/// `BLOCK_DEVICE` must be `Some` before calling this.
+/// `BLOCK_DEVICE` must be `Some`.
 unsafe fn make_raw_block_device() -> RawBlockDevice {
     let dev = BLOCK_DEVICE.as_ref().unwrap();
     let info = dev.info();
@@ -1483,7 +1421,7 @@ unsafe fn make_raw_block_device() -> RawBlockDevice {
     };
 
     RawBlockDevice::new(
-        core::ptr::null_mut(), // ctx unused — we access statics directly
+        core::ptr::null_mut(), // ctx unused; callbacks access statics
         total,
         info.sector_size,
         raw_read,
@@ -1492,10 +1430,6 @@ unsafe fn make_raw_block_device() -> RawBlockDevice {
     )
 }
 
-/// Read callback for `RawBlockDevice`.
-///
-/// Creates a temporary `UnifiedBlockIo` from the static device + DMA
-/// region, then delegates to the existing chunked read_blocks() impl.
 unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
     spinner_tick();
     let dev = match BLOCK_DEVICE.as_mut() {
@@ -1510,7 +1444,7 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
     let io_cpu = dma.cpu_base().add(OFF_IO_BUFFER);
     let io_phys = dma.bus_at(OFF_IO_BUFFER);
     let io_buf = core::slice::from_raw_parts_mut(io_cpu, IO_BUFFER_SIZE);
-    let timeout = STORAGE_TSC_FREQ * 5; // 5 second timeout
+    let timeout = STORAGE_TSC_FREQ * 5;
 
     let mut bio = match UnifiedBlockIo::new(dev, io_buf, io_phys, timeout) {
         Ok(b) => b,
@@ -1525,7 +1459,6 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
         .is_ok()
 }
 
-/// Write callback for `RawBlockDevice`.
 unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool {
     spinner_tick();
     let dev = match BLOCK_DEVICE.as_mut() {
@@ -1555,7 +1488,6 @@ unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool
         .is_ok()
 }
 
-/// Flush callback for `RawBlockDevice`.
 unsafe fn raw_flush(_ctx: *mut u8) -> bool {
     let dev = match BLOCK_DEVICE.as_mut() {
         Some(d) => d,

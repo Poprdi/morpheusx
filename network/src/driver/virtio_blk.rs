@@ -17,7 +17,6 @@ use crate::driver::virtio::transport::{TransportType, VirtioTransport};
 use crate::types::VirtqueueState;
 use core::ptr;
 
-
 extern "win64" {
     fn asm_virtio_blk_read_capacity(mmio_base: u64) -> u64;
     fn asm_virtio_blk_read_blk_size(mmio_base: u64) -> u32;
@@ -59,7 +58,6 @@ extern "win64" {
         queue_size: u32,
     ) -> u32;
 }
-
 
 /// Result from asm_virtio_blk_poll_complete
 #[repr(C)]
@@ -114,7 +112,6 @@ const REQUIRED_FEATURES: u64 = VIRTIO_F_VERSION_1;
 
 /// Desired features
 const DESIRED_FEATURES: u64 = VIRTIO_BLK_F_BLK_SIZE | VIRTIO_BLK_F_FLUSH;
-
 
 /// VirtIO-blk driver configuration.
 #[derive(Debug, Clone)]
@@ -174,7 +171,6 @@ impl From<super::virtio::init::VirtioInitError> for VirtioBlkInitError {
     }
 }
 
-
 /// Track in-flight request.
 #[derive(Debug, Clone, Copy, Default)]
 struct InFlightRequest {
@@ -185,7 +181,6 @@ struct InFlightRequest {
     /// Is this slot in use?
     active: bool,
 }
-
 
 /// Maximum in-flight requests (queue_size / 3 since each request uses 3 descriptors)
 const MAX_IN_FLIGHT: usize = 32;

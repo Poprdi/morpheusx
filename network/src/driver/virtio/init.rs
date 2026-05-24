@@ -88,7 +88,6 @@ pub unsafe fn virtio_net_init(
         return Err(VirtioInitError::FeaturesRejected);
     }
 
-
     // Setup RX queue (index 0)
     let rx_queue = setup_queue(mmio_base, 0, config)?;
 
@@ -205,7 +204,6 @@ fn generate_local_mac() -> MacAddress {
     [0x02, 0x00, 0x00, 0x00, 0x00, 0x01]
 }
 
-
 /// Initialize VirtIO network device using transport abstraction.
 ///
 /// This function auto-selects the correct initialization path based
@@ -236,7 +234,6 @@ pub unsafe fn virtio_net_init_transport(
         transport.set_status(status::FAILED);
         return Err(VirtioInitError::FeaturesRejected);
     }
-
 
     // Setup RX queue (index 0)
     let rx_queue = setup_queue_transport(transport, 0, config)?;

@@ -1,12 +1,9 @@
-// FAT32 filesystem context and FAT operations
-
 use super::super::Fat32Error;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
 const SECTOR_SIZE: usize = 512;
 
-/// FAT32 filesystem context
 pub struct Fat32Context {
     pub sectors_per_cluster: u32,
     pub reserved_sectors: u32,
@@ -26,7 +23,6 @@ impl Fat32Context {
             .read_blocks(Lba(partition_start), &mut boot_sector)
             .map_err(|_| Fat32Error::IoError)?;
 
-        // Parse boot sector
         let sectors_per_cluster = boot_sector[0x0D] as u32;
         let reserved_sectors = u16::from_le_bytes([boot_sector[0x0E], boot_sector[0x0F]]) as u32;
         let num_fats = boot_sector[0x10] as u32;
@@ -79,7 +75,7 @@ impl Fat32Context {
             sector[entry_offset + 1],
             sector[entry_offset + 2],
             sector[entry_offset + 3],
-        ]) & 0x0FFFFFFF; // FAT32 uses only 28 bits
+        ]) & 0x0FFFFFFF; // 28-bit entries
 
         Ok(entry)
     }
@@ -123,14 +119,14 @@ impl Fat32Context {
         partition_start: u64,
         start_from: u32,
     ) -> Result<u32, Fat32Error> {
-        // Simple linear search for free cluster
+        // Linear scan; no FSInfo hint optimization.
         for cluster in start_from..0x0FFFFFF7 {
             let entry = self.read_fat_entry(block_io, partition_start, cluster)?;
             if entry == 0 {
                 return Ok(cluster);
             }
         }
-        Err(Fat32Error::IoError) // No free clusters
+        Err(Fat32Error::IoError)
     }
 
     pub fn allocate_cluster<B: BlockIo>(
@@ -139,7 +135,7 @@ impl Fat32Context {
         partition_start: u64,
     ) -> Result<u32, Fat32Error> {
         let cluster = self.find_free_cluster(block_io, partition_start, 2)?;
-        self.write_fat_entry(block_io, partition_start, cluster, 0x0FFFFFF8)?; // EOC marker
+        self.write_fat_entry(block_io, partition_start, cluster, 0x0FFFFFF8)?;
         Ok(cluster)
     }
 }

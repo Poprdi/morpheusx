@@ -310,7 +310,6 @@ impl<'a> BlockIo for UnifiedBlockIo<'a> {
     }
 }
 
-
 /// Generic BlockIo adapter for any `BlockDriver` implementation.
 ///
 /// This allows creating a synchronous BlockIo wrapper around any driver

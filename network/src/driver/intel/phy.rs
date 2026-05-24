@@ -10,7 +10,6 @@ use crate::asm::drivers::intel::{
 
 use super::regs;
 
-
 /// Link speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkSpeed {
@@ -72,7 +71,6 @@ impl From<LinkStatusResult> for LinkStatus {
         }
     }
 }
-
 
 /// PHY manager for an e1000e device.
 pub struct PhyManager {

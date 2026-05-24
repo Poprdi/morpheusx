@@ -302,7 +302,6 @@ pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
     count
 }
 
-
 /// A process builder, providing fine-grained control over how a new
 /// process is configured.
 pub struct Command {

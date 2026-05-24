@@ -2,11 +2,10 @@
 ///
 /// Translates USB HID mouse reports to the unified input subsystem.
 /// Works alongside PS/2 mouse - either can be the input source.
-
 use crate::input::{self, InputEvent};
 use crate::usb::controller::{XhciController, XhciError};
-use crate::usb::hid::HIDInterface;
 use crate::usb::dma;
+use crate::usb::hid::HIDInterface;
 
 /// Mouse report structure (standard 4-byte boot report)
 #[repr(C)]
@@ -81,12 +80,12 @@ pub unsafe fn handle_interrupt_transfer(
     iface: &HIDInterface,
 ) -> Result<(), XhciError> {
     let report_buf = controller.dma_base + dma::OFF_REPORT as u64;
-    
+
     // Submit interrupt IN transfer to read mouse report
     // This is a blocking read for simplicity during boot enumeration
-    
+
     // TODO: Implement proper interrupt transfer handling
-    
+
     // Simulate processing a report buffer
     let report = report_buf as *const MouseReport;
     parse_mouse_report(controller, iface, report)

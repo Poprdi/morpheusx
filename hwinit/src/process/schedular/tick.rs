@@ -19,7 +19,7 @@ use crate::serial::{put_hex32, puts};
 use core::sync::atomic::Ordering;
 
 const STARVATION_FORCE_TICKS: u32 = 64;
-const STALE_WAITER_CLEANUP_INTERVAL: u32 = 1024; // low-cost cleanup every ~1k ticks
+const STALE_WAITER_CLEANUP_INTERVAL: u32 = 1024;
 
 static mut AP_IDLE_CTX: [CpuContext; MAX_CPUS] = [const { CpuContext::empty() }; MAX_CPUS];
 
@@ -85,7 +85,6 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     PROCESS_TABLE_LOCK.lock();
 
-    // proactive stale waiter cleanup every 1k ticks. prevents bit accumulation on long uptime.
     if core_idx == 0 && tick % STALE_WAITER_CLEANUP_INTERVAL == 0 {
         cleanup_stale_waiters();
     }
@@ -174,7 +173,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
     if let Some(Some(cur)) = PROCESS_TABLE.get_mut(cur_pid) {
         cur.context = *current_ctx;
 
-        // user-mode SS must keep RPL=3.
+        // Ring-3 frames need RPL=3 on SS.
         if cur.context.cs & 3 == 3 {
             cur.context.ss |= 3;
         }
@@ -336,7 +335,7 @@ pub(super) unsafe fn wake_expired_sleepers() {
         }
     }
 
-    // update earliest deadline for next wake check. helps avoid redundant O(N) scans.
+    // Refresh earliest so the next tick can fast-path skip the O(N) scan.
     if found_any {
         super::state::EARLIEST_DEADLINE.store(new_earliest, Ordering::Relaxed);
     } else {
@@ -357,7 +356,7 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
 
     #[inline(always)]
     fn priority_weight(priority: u8) -> u8 {
-        // 0 = highest priority. map to 8..1 weight buckets.
+        // priority 0 = highest; map to weight buckets 8..=1.
         1 + ((255u16.saturating_sub(priority as u16) >> 5) as u8)
     }
 
@@ -380,7 +379,7 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
                 ProcessPowerMode::Eco => 0,
                 ProcessPowerMode::ThermalClamp => -8,
             },
-            // default mode stays neutral; power hint interpretation happens later via syscalls.
+            // Balanced: neutral; power hints applied later via syscalls.
             SchedulerSystemState::Balanced => 0,
             SchedulerSystemState::EcoBias => match mode {
                 ProcessPowerMode::Performance => 0,
@@ -465,7 +464,7 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
         skip_kernel
     };
 
-    // BSP ages ready tasks once per global tick to keep starvation bounded.
+    // BSP ages ready tasks each tick; bounds starvation.
     if is_bsp {
         for proc in PROCESS_TABLE.iter_mut().flatten() {
             if proc.state == ProcessState::Ready && proc.running_on == u32::MAX {
@@ -489,10 +488,9 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
         refresh_balanced_system_mode();
     }
 
-    // tier 0: safety/eligibility pass entered.
     record_tier_hit(0);
 
-    // Hard starvation bound: any long-waiting ready task preempts RR order.
+    // Hard starvation bound: any long-waiting ready task preempts RR.
     let mut forced_starving: Option<usize> = None;
     for delta in 1..=n {
         let candidate = (current + delta) % n;
@@ -530,7 +528,7 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
         return candidate;
     }
 
-    // tier 2-4: thermal/system/process-policy weighted pass.
+    // Weighted pass: thermal × system × policy.
     record_tier_hit(2);
     record_tier_hit(3);
     record_tier_hit(4);

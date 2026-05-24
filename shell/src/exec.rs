@@ -21,11 +21,9 @@ pub fn run(pipeline: &Pipeline, cwd: &str) -> i32 {
 fn run_single(cmd: &SimpleCommand, cwd: &str) -> i32 {
     let has_redirect = cmd.stdout_file.is_some() || cmd.stdin_file.is_some();
 
-    // If there are redirects, try running via builtin with fd-level I/O
-    // (the serial dispatch uses fd 1, so redirects work naturally)
+    // Builtins write to fd 1, so fd-level redirects work directly.
     if has_redirect {
         if let Some(first) = cmd.argv.first() {
-            // Check if it's a builtin before doing path lookup
             if is_builtin(first) {
                 let saved_in = save_fd(0);
                 let saved_out = save_fd(1);
@@ -105,33 +103,27 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
     let mut children: Vec<u32> = Vec::with_capacity(n);
 
     for (i, cmd) in commands.iter().enumerate() {
-        // Wire stdin from previous pipe
         if i > 0 {
             let _ = process::dup2(pipes[i - 1].0, 0);
         }
 
-        // Wire stdout to next pipe
         if i < n - 1 {
             let _ = process::dup2(pipes[i].1, 1);
         } else {
-            // Last command: restore original stdout
             if let Some(ref saved) = saved_out {
                 let _ = process::dup2(*saved, 1);
             }
         }
 
-        // Handle per-command redirects
         let _ = setup_redirects(cmd, cwd);
 
-        // Try builtin first — serial dispatch writes to fd 1, so pipe redirects work
         if let Some(_code) = builtin::dispatch(&cmd.argv, cwd) {
-            // Builtin ran, output went through fd 1 into the pipe
+            // Builtin output went through fd 1.
         } else {
             let binary = match path::which(&cmd.argv[0], cwd) {
                 Some(p) => p,
                 None => {
                     libmorpheus::eprintln!("msh: command not found: {}", cmd.argv[0]);
-                    // Restore fds before continuing
                     if let Some(ref s) = saved_in {
                         let _ = process::dup2(*s, 0);
                     }
@@ -147,7 +139,6 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
             }
         }
 
-        // Restore shell's own fds for next iteration
         if let Some(ref s) = saved_in {
             let _ = process::dup2(*s, 0);
         }
@@ -156,13 +147,11 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
         }
     }
 
-    // Close all pipe fds in the shell
     for (r, w) in &pipes {
         let _ = fs::close(*r as usize);
         let _ = fs::close(*w as usize);
     }
 
-    // Wait for all children, return last exit code
     let mut last_status = 0i32;
     for pid in &children {
         match process::wait(*pid) {
@@ -212,18 +201,8 @@ fn spawn_child(binary: &str, argv: &[String]) -> Option<u32> {
     }
 }
 
-/// Spawn a child for compositor mode.
-///
-/// No pipes.  No dup2 dance.  No refcount nightmares.
-///
-/// The child's stdin (`SYS_READ(fd=0)` with no fd_table entry) transparently
-/// reads from its per-process input buffer, populated by the compositor via
-/// `SYS_FORWARD_INPUT`.  The kernel knows the child is a composited client
-/// (because `COMPOSITOR_PID != 0 && pid != COMPOSITOR_PID`) and routes
-/// accordingly.  This is the Wayland model — the compositor IS the input
-/// router, and the kernel provides the plumbing.
-///
-/// Returns `Some(pid)` on success.
+/// Spawn under compositor input routing. Child's fd 0 reads from its
+/// per-process input buffer populated by SYS_FORWARD_INPUT.
 pub fn spawn_composited(binary: &str, args: &[&str]) -> Option<u32> {
     let pid = match process::spawn_with_args(binary, args) {
         Ok(pid) => pid,

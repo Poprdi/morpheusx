@@ -1,20 +1,16 @@
-// GPT operations using gpt-disk-rs
-
 use super::{find_free_space, GptError};
 use gpt_disk_io::BlockIo;
 
-/// Scan disk for GPT and populate partition table
+/// Round up to 1 MiB boundary.
 pub fn align_lba(lba: u64, block_size_bytes: u32) -> u64 {
-    let alignment = (1024 * 1024) / block_size_bytes as u64; // 1MB alignment
+    let alignment = (1024 * 1024) / block_size_bytes as u64;
     lba.div_ceil(alignment) * alignment
 }
 
-/// Calculate size in LBA from MB
 pub fn mb_to_lba(size_mb: u64, block_size_bytes: u32) -> u64 {
     (size_mb * 1024 * 1024) / block_size_bytes as u64
 }
 
-/// Calculate total free space on disk in MB
 pub fn calculate_total_free_space<B: BlockIo>(
     block_io: B,
     block_size_bytes: usize,
@@ -26,6 +22,5 @@ pub fn calculate_total_free_space<B: BlockIo>(
         total_free_lba += region.size_lba();
     }
 
-    // Convert to MB
     Ok((total_free_lba * 512) / (1024 * 1024))
 }

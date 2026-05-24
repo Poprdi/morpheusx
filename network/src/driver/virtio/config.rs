@@ -13,7 +13,6 @@ pub mod features {
     /// Checksum offload (host handles).
     pub const VIRTIO_NET_F_CSUM: u64 = 1 << 0;
 
-
     pub const VIRTIO_NET_F_GUEST_TSO4: u64 = 1 << 7;
 
     pub const VIRTIO_NET_F_GUEST_TSO6: u64 = 1 << 8;

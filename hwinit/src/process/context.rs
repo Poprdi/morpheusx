@@ -1,45 +1,8 @@
-//! CPU Context — saved register state for a process.
-//!
-//! `CpuContext` is laid out in `#[repr(C)]` so that the assembly context-switch
-//! stub (`context_switch.s`) can push/pop registers at known, fixed offsets.
-//!
-//! ## Field order (matches ASM stub offsets)
-//!
-//! ```text
-//! Offset  Register
-//!  0x00   rax
-//!  0x08   rbx
-//!  0x10   rcx
-//!  0x18   rdx
-//!  0x20   rsi
-//!  0x28   rdi
-//!  0x30   rbp
-//!  0x38   r8
-//!  0x40   r9
-//!  0x48   r10
-//!  0x50   r11
-//!  0x58   r12
-//!  0x60   r13
-//!  0x68   r14
-//!  0x70   r15
-//!  0x78   rip
-//!  0x80   rflags
-//!  0x88   rsp
-//!  0x90   cs
-//!  0x98   ss
-//! ```
-//!
-//! Total size: 0xA0 = 160 bytes.
-//!
-//! ## FPU / SSE state (`FpuState`)
-//!
-//! Saved and restored separately via FXSAVE/FXRSTOR in the timer ISR.
-//! 512 bytes, 16-byte aligned — stored per-process, NOT inside CpuContext.
+//! `CpuContext` is `repr(C)` to match offsets used by `context_switch.s`:
+//! rax..r15 @ 0x00..0x78, rip/rflags/rsp/cs/ss @ 0x78..0xA0. Size = 0xA0.
+//! `FpuState` is the 512 B FXSAVE area; saved separately by the timer ISR.
 
-/// FXSAVE/FXRSTOR area — holds x87, MMX, and SSE register state.
-///
-/// 512 bytes, 16-byte aligned as required by the FXSAVE instruction.
-/// Each process owns one; the timer ISR saves/restores it on context switch.
+/// FXSAVE area (AMD64 Vol 1 §11.5.6). 16-byte alignment required.
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 pub struct FpuState {
@@ -47,28 +10,21 @@ pub struct FpuState {
 }
 
 impl FpuState {
-    /// Clean initial FPU state for a new process.
-    ///
-    /// - x87 FCW = 0x037F  (all x87 exceptions masked, 64-bit precision)
-    /// - MXCSR   = 0x1F80  (all SSE exceptions masked, round-to-nearest)
-    /// - All XMM registers = 0
+    /// FCW=0x037F (mask all x87 exc, 64-bit prec), MXCSR=0x1F80 (mask all
+    /// SSE exc, RN), XMMs zeroed.
     pub const fn new() -> Self {
         let mut data = [0u8; 512];
-        // Bytes 0-1: x87 FPU Control Word
         data[0] = 0x7F;
         data[1] = 0x03;
-        // Bytes 24-27: MXCSR (little-endian u32)
         data[24] = 0x80;
         data[25] = 0x1F;
         Self { data }
     }
 }
 
-/// Full CPU register state saved at a context switch or interrupt boundary.
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct CpuContext {
-    // General-purpose registers
     pub rax: u64,
     pub rbx: u64,
     pub rcx: u64,
@@ -84,11 +40,9 @@ pub struct CpuContext {
     pub r13: u64,
     pub r14: u64,
     pub r15: u64,
-    // Control flow
     pub rip: u64,
     pub rflags: u64,
     pub rsp: u64,
-    // Segment selectors (stored as u64 to keep alignment simple)
     pub cs: u64,
     pub ss: u64,
 }
@@ -112,18 +66,13 @@ impl CpuContext {
             r14: 0,
             r15: 0,
             rip: 0,
-            rflags: 0x202, // IF=1, reserved bit 1 always set
+            rflags: 0x202, // IF=1, bit 1 always set
             rsp: 0,
             cs: 0,
             ss: 0,
         }
     }
 
-    /// Construct a context that will begin execution at `entry_fn` on the
-    /// given kernel stack, with the kernel code/data selectors.
-    ///
-    /// `kernel_cs` / `kernel_ss` come from your GDT (e.g. `KERNEL_CS` / `KERNEL_DS`
-    /// from `hwinit::cpu::gdt`).
     pub fn new_kernel_thread(
         entry_fn: u64,
         kernel_stack_top: u64,
@@ -133,7 +82,7 @@ impl CpuContext {
         Self {
             rip: entry_fn,
             rsp: kernel_stack_top,
-            rflags: 0x202, // IF=1 (interrupts enabled), reserved bit
+            rflags: 0x202,
             cs: kernel_cs,
             ss: kernel_ss,
             ..Self::empty()
@@ -151,8 +100,7 @@ impl core::fmt::Debug for CpuContext {
     }
 }
 
-// COMPILE-TIME OFFSET ASSERTIONS (keep in sync with context_switch.s)
-
+// Keep in sync with context_switch.s.
 const _: () = {
     use core::mem::offset_of;
     assert!(offset_of!(CpuContext, rax) == 0x00);

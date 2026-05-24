@@ -76,7 +76,9 @@ unsafe fn arm_keyboard_transfer() {
     let mpkt = kb.max_packet_size as u32;
 
     controller.slot_id = kb.slot_id;
-    controller.bin.enqueue(buf, mpkt, TRB_NORMAL | TRB_IOC | TRB_ISP);
+    controller
+        .bin
+        .enqueue(buf, mpkt, TRB_NORMAL | TRB_IOC | TRB_ISP);
 
     // DCI = endpoint_number * 2 + (IN ? 1 : 0). For our keyboard interrupt-IN
     // endpoint with bEndpointAddress = 0x81, ep number = 1, IN = 1, DCI = 3.
@@ -126,7 +128,11 @@ pub unsafe fn poll_keyboard() -> bool {
 
             // Re-arm immediately so we never miss a report.
             controller.slot_id = kb.slot_id;
-            controller.bin.enqueue(buf, kb.max_packet_size as u32, TRB_NORMAL | TRB_IOC | TRB_ISP);
+            controller.bin.enqueue(
+                buf,
+                kb.max_packet_size as u32,
+                TRB_NORMAL | TRB_IOC | TRB_ISP,
+            );
             controller.ring_xfer_doorbell(dci);
 
             true

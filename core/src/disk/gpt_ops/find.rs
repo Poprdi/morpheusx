@@ -1,9 +1,7 @@
-// GPT operations using gpt-disk-rs
-
 use super::{FreeRegion, GptError};
 use gpt_disk_io::{BlockIo, Disk};
 
-/// Scan disk for GPT and populate partition table
+/// Returns up to 16 gaps between used partitions, sorted by start LBA.
 pub fn find_free_space<B: BlockIo>(
     block_io: B,
     block_size_bytes: usize,
@@ -17,12 +15,10 @@ pub fn find_free_space<B: BlockIo>(
     let first_usable = header.first_usable_lba.to_u64();
     let last_usable = header.last_usable_lba.to_u64();
 
-    // Get partition layout
     let layout = header
         .get_partition_entry_array_layout()
         .map_err(|_| GptError::InvalidHeader)?;
 
-    // Read partitions to find used ranges
     let mut entry_buf = [0u8; 4096];
     let entry_buffer = &mut entry_buf[..block_size_bytes];
 
@@ -49,7 +45,7 @@ pub fn find_free_space<B: BlockIo>(
     let mut regions = [None; 16];
     let mut region_count = 0;
 
-    // Sort by start LBA
+    // O(n^2) sort; n<=16.
     for i in 0..used_count {
         for j in i + 1..used_count {
             if used_ranges[j].0 < used_ranges[i].0 {
@@ -58,7 +54,6 @@ pub fn find_free_space<B: BlockIo>(
         }
     }
 
-    // Find gaps
     let mut current = first_usable;
 
     for i in 0..used_count {
@@ -75,7 +70,6 @@ pub fn find_free_space<B: BlockIo>(
         current = end + 1;
     }
 
-    // Add final region if space left
     if current <= last_usable && region_count < 16 {
         regions[region_count] = Some(FreeRegion {
             start_lba: current,

@@ -220,17 +220,11 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
     (pages, count)
 }
 
-/// Reserve every page that the currently-active CR3 page table hierarchy
-/// uses, so that the memory registry never hands them out.
-///
-/// Must be called after `init_global_registry()` but **before** any
-/// `allocate_pages()` calls that use `MaxAddress` or `AnyPages` with
-/// the free-list path — otherwise the allocator might return a page that
-/// is actively part of the live page table tree.
+/// Pin every live PT page in the registry. Must run after registry init but
+/// before any free-list allocation, or we risk handing out a live PT page.
 ///
 /// # Safety
-/// - Identity-mapped, long-mode, paging active.
-/// - Memory registry must be initialized.
+/// Identity-mapped long mode, registry initialized.
 pub unsafe fn reserve_page_table_pages() -> usize {
     use crate::memory::{global_registry_mut, AllocateType, MemoryType};
 
@@ -249,8 +243,7 @@ pub unsafe fn reserve_page_table_pages() -> usize {
                 reserved += 1;
             }
             Err(_) => {
-                // Page might already be in a non-free region (e.g. RuntimeServices).
-                // That's fine — it just means the allocator can't hand it out anyway.
+                // Already non-free (e.g. RuntimeServices) — allocator can't hand it out.
             }
         }
     }

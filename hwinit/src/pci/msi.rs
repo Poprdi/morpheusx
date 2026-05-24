@@ -69,7 +69,11 @@ impl MsiCapability {
     }
 
     fn data_off(self) -> u8 {
-        if self.is_64bit { 0x0C } else { 0x08 }
+        if self.is_64bit {
+            0x0C
+        } else {
+            0x08
+        }
     }
 
     /// Program a single vector and enable MSI. Caller must call `disable_intx`
@@ -86,7 +90,11 @@ impl MsiCapability {
         }
 
         // 3. Data (16-bit, low half of the LAPIC delivery word).
-        pci_cfg_write16(self.addr, self.cap_off + self.data_off(), msi_data(vector) as u16);
+        pci_cfg_write16(
+            self.addr,
+            self.cap_off + self.data_off(),
+            msi_data(vector) as u16,
+        );
 
         // 4. Multi-message enable = 0 (single vector), then set enable.
         let mut mc = self.msg_ctrl();
@@ -250,7 +258,12 @@ pub unsafe fn enable_msix_single(
     cap.set_enable(false);
 
     // 2. Program entry 0.
-    cap.program_entry(0, lapic_msi_addr(target_apic_id), vector, /*masked=*/ false);
+    cap.program_entry(
+        0,
+        lapic_msi_addr(target_apic_id),
+        vector,
+        /*masked=*/ false,
+    );
 
     // 3. Disable legacy INTx so the device does not double-signal.
     disable_intx(addr);

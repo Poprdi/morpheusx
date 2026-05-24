@@ -58,7 +58,6 @@ fn dbg_hex8(v: u8) {
     crate::serial_byte(HEX[(v & 0xF) as usize]);
 }
 
-
 /// VirtIO vendor ID
 const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
 /// VirtIO-blk device ID (transitional)
@@ -77,7 +76,6 @@ const PCI_CLASS_SATA_AHCI: u32 = 0x0601;
 const PCI_CLASS_SUBCLASS_SDHCI: u32 = 0x0805;
 /// PCI subclass/prog-if for USB xHCI: 0x03/0x30.
 const PCI_CLASS_USB_XHCI: u32 = 0x0330;
-
 
 /// Probe and initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,7 +119,6 @@ impl From<UsbMsdInitError> for BlockProbeError {
         BlockProbeError::UsbMsdInitFailed
     }
 }
-
 
 /// Information about a detected block device.
 #[derive(Debug, Clone, Copy)]
@@ -180,7 +177,6 @@ pub enum BlockProbeResult {
     /// USB mass-storage block driver
     UsbMsd(UsbMsdDriver),
 }
-
 
 /// Maximum block devices we can discover in a single scan.
 const MAX_BLOCK_DEVICES: usize = 32;
@@ -624,7 +620,6 @@ fn find_virtio_blk() -> Option<(PciAddr, u64)> {
 
     None
 }
-
 
 /// Block DMA region configuration.
 ///
@@ -1192,7 +1187,6 @@ pub unsafe fn create_unified_from_detected_ahci_port(
         _ => Err(UnifiedBlockError::NoDevice),
     }
 }
-
 
 /// Detected block device type for handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

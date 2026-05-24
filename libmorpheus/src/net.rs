@@ -768,7 +768,6 @@ pub fn udp_close(handle: u64) -> Result<(), u64> {
     }
 }
 
-
 /// An IPv4 address.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Ipv4Addr {
@@ -834,7 +833,6 @@ impl core::fmt::Display for SocketAddr {
         write!(f, "{}:{}", self.ip, self.port)
     }
 }
-
 
 /// A connected TCP stream.  Closes the socket on drop.
 ///
@@ -992,7 +990,6 @@ impl Drop for TcpStream {
     }
 }
 
-
 /// A TCP listener that accepts incoming connections.
 pub struct TcpListener {
     handle: TcpHandle,
@@ -1045,7 +1042,6 @@ impl Drop for TcpListener {
         tcp_close(self.handle);
     }
 }
-
 
 /// A UDP socket.  Closes on drop.
 pub struct UdpSocket {

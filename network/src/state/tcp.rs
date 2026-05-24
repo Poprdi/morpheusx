@@ -39,7 +39,6 @@
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-
 /// TCP socket state (simplified from smoltcp).
 ///
 /// Used to communicate socket state from smoltcp to our state machine.
@@ -89,7 +88,6 @@ impl TcpSocketState {
     }
 }
 
-
 /// TCP-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TcpError {
@@ -118,7 +116,6 @@ impl From<TcpError> for StateError {
     }
 }
 
-
 /// Information about an established connection.
 #[derive(Debug, Clone, Copy)]
 pub struct TcpConnectionInfo {
@@ -129,7 +126,6 @@ pub struct TcpConnectionInfo {
     /// Remote port
     pub remote_port: u16,
 }
-
 
 /// TCP connection state machine.
 ///

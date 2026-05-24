@@ -44,7 +44,6 @@ use crate::tui::input::Keyboard;
 use crate::tui::mouse::Mouse;
 use crate::{baremetal_ops, bsod, storage, tui, uefi_allocator};
 
-
 /// Raw framebuffer info from GOP.
 ///
 /// `stride` is `pixels_per_scan_line` from GOP — **not** bytes. Conversions
@@ -213,7 +212,6 @@ unsafe fn live_console_putc(b: u8) {
         con.write_char(b as char);
     }
 }
-
 
 const LOADED_IMAGE_PROTOCOL_GUID: [u8; 16] = [
     0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11, 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B,
@@ -387,7 +385,6 @@ struct Gop {
     mode: *mut GopMode,
 }
 
-
 /// EFI entry point. UEFI invokes this; we never return except via reset.
 ///
 /// All the actual work is in `run()`. This wrapper exists solely to honor
@@ -442,7 +439,6 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     stage_e1_release_aps();
     stage_e2_enter_userspace(&ctx);
 }
-
 
 /// A1. Hand the global allocator the UEFI BootServices pointer so that
 /// pre-EBS allocations go through `allocate_pool`.
@@ -731,7 +727,6 @@ unsafe fn stage_a7_fetch_memory_map(ctx: &mut BootContext) {
     log_ok("EBS", 915, "memory map captured");
 }
 
-
 static EBS_MAP_KEY: AtomicUsize = AtomicUsize::new(0);
 
 /// B1. Call `ExitBootServices`. After this point UEFI services are dead.
@@ -808,7 +803,6 @@ fn stage_b6_publish_framebuffer(ctx: &BootContext) {
     publish_framebuffer(&ctx.framebuffer);
 }
 
-
 /// C1. Hand the memory map + boot stack + image bounds + ACPI RSDP to
 /// hwinit. After this returns, GDT/IDT/PIC→APIC/heap/TSC/DMA/PCI/paging/
 /// USB-input/scheduler/syscalls/SMP are all live.
@@ -853,7 +847,6 @@ fn stage_c3_record_platform_outputs(
     ctx.platform_dma_size = dma.size();
     ctx.tsc_freq = platform.tsc_freq();
 }
-
 
 /// D1. Register the userspace-triggered network activation callback. The
 /// network stack stays offline until userspace explicitly opts in via
@@ -905,7 +898,6 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
     });
     log_ok("DISPLAY", 941, "framebuffer registered with syscall layer");
 }
-
 
 /// E1. Release the parked APs. From this point on, the system is fully SMP.
 ///
@@ -971,7 +963,6 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     log_info("BOOT", 962, "entering input forwarding loop");
     input_forwarding_loop(&mut keyboard, &mut mouse);
 }
-
 
 /// Wait for any keypress before tearing down the live console.
 ///
@@ -1158,7 +1149,6 @@ fn forward_keyboard_byte(input: crate::tui::input::InputKey) {
     morpheus_hwinit::stdin::push(ch);
     unsafe { morpheus_hwinit::process::wake_stdin_waiters() };
 }
-
 
 /// Unrecoverable boot error. Logs and halts the BSP. APs are either still
 /// parked (pre-E1) or will quiesce on their next tick; either way the

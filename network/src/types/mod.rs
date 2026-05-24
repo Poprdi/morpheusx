@@ -14,7 +14,6 @@ pub use repr_c::{DriverState, RxPollResult, RxResult, TxPollResult, VirtqDesc, V
 pub use result::AsmResult;
 pub use virtio_hdr::{VirtioNetHdr, VIRTIO_NET_HDR_GSO_NONE};
 
-
 /// HTTP method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpMethod {

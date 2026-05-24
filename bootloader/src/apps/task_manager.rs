@@ -1,29 +1,13 @@
-//! Task Manager Application
-//!
-//! Displays all live processes, their states, CPU ticks, memory usage and
-//! priority.  Allows the user to send SIGTERM / SIGKILL to selected processes.
-//!
-//! # Controls
-//!
-//! | Key | Action |
-//! |-----|--------|
-//! | Up / Down | Move selection |
-//! | T | Send SIGTERM (graceful shutdown) |
-//! | K | Send SIGKILL (immediate termination) |
-//! | S | Send SIGSTOP (pause) |
-//! | C | Send SIGCONT (resume) |
-//! | R | Force refresh |
-//! | Esc | Close window |
+//! Task manager: list processes, send signals. Keys: T/K/S/C, R, Esc.
 
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 
-// Use top-level hwinit re-exports.
 use morpheus_hwinit::serial::puts;
 use morpheus_hwinit::{ProcessInfo, ProcessState, Signal, SCHEDULER};
 
-/// Maximum snapshot capacity — matches MAX_PROCESSES (64).
+/// Matches hwinit MAX_PROCESSES.
 const SNAP_CAP: usize = 64;
 
 use morpheus_ui::app::{App, AppEntry, AppRegistry, AppResult};
@@ -35,22 +19,18 @@ use morpheus_ui::event::{Event, Key};
 use morpheus_ui::font;
 use morpheus_ui::theme::Theme;
 
-// LAYOUT CONSTANTS
-
 const HEADER_H: u32 = 40;
 const ROW_H: u32 = 16;
 const TABLE_PAD: u32 = 8;
 const STATUS_H: u32 = 24;
 
-// Column x-offsets (relative to TABLE_PAD)
+// Column offsets from TABLE_PAD.
 const COL_PID: u32 = 0;
 const COL_NAME: u32 = 40;
 const COL_STATE: u32 = 136;
 const COL_TICKS: u32 = 200;
 const COL_MEM: u32 = 288;
 const COL_PRIO: u32 = 368;
-
-// STATE DISPLAY HELPERS
 
 fn state_name(s: ProcessState) -> &'static str {
     match s {
@@ -72,13 +52,11 @@ fn state_color(s: ProcessState) -> Color {
     }
 }
 
-/// Convert a `[u8; 32]` name (null-terminated) to a `&str` slice.
 fn name_str(name: &[u8; 32]) -> &str {
     let end = name.iter().position(|&b| b == 0).unwrap_or(32);
     core::str::from_utf8(&name[..end]).unwrap_or("???")
 }
 
-/// Format a u64 tick count into a compact string.
 fn fmt_ticks(ticks: u64) -> String {
     if ticks < 1_000 {
         format!("{}", ticks)
@@ -89,17 +67,14 @@ fn fmt_ticks(ticks: u64) -> String {
     }
 }
 
-/// Format page count as kilobytes.
 fn fmt_pages(pages: u64) -> String {
-    let kb = pages * 4; // 4KiB per page
+    let kb = pages * 4;
     if kb < 1024 {
         format!("{}k", kb)
     } else {
         format!("{}M", kb / 1024)
     }
 }
-
-// APP STRUCT
 
 pub struct TaskManager {
     procs: [ProcessInfo; SNAP_CAP],
@@ -181,17 +156,12 @@ impl TaskManager {
     fn set_status(&mut self, msg: &str) {
         self.status_msg.clear();
         self.status_msg.push_str(msg);
-        self.status_ttl = 80; // ~0.8 s at 100 Hz
+        self.status_ttl = 80; // ~0.8 s @ 100 Hz
     }
-
-    // layout helper
 
     fn table_top(&self) -> u32 {
-        // title bar height + col-label row + 1-px separator
         font::FONT_HEIGHT + 6 + ROW_H + 3
     }
-
-    // rendering
 
     fn draw_header(&self, canvas: &mut dyn Canvas, theme: &Theme) {
         let w = canvas.width();
@@ -358,8 +328,6 @@ impl TaskManager {
     }
 }
 
-// APP TRAIT IMPL
-
 impl App for TaskManager {
     fn title(&self) -> &str {
         "Task Manager"
@@ -387,7 +355,6 @@ impl App for TaskManager {
         match event {
             Event::Tick => {
                 self.refresh();
-                // Count down status message TTL.
                 if self.status_ttl > 0 {
                     self.status_ttl -= 1;
                 }
@@ -443,8 +410,6 @@ impl App for TaskManager {
         }
     }
 }
-
-// REGISTRATION
 
 pub fn register(registry: &mut AppRegistry) {
     registry.register(AppEntry {

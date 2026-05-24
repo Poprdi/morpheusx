@@ -2,12 +2,7 @@ use super::{Mesh, MeshVertex};
 use crate::math::trig::TrigTable;
 use crate::math::vec::{Vec2, Vec3};
 
-/// Generate a UV sphere (latitude-longitude).
-///
-/// `stacks`: number of vertical divisions (default 16 gives good quality)
-/// `slices`: number of horizontal divisions (default 32)
-///
-/// A unit sphere: radius 1.0, centered at origin.
+/// Unit UV sphere (lat-lon).
 pub fn sphere(stacks: usize, slices: usize) -> Mesh {
     let stacks = stacks.max(3);
     let slices = slices.max(3);
@@ -19,15 +14,14 @@ pub fn sphere(stacks: usize, slices: usize) -> Mesh {
     let pi = core::f32::consts::PI;
     let two_pi = 2.0 * pi;
 
-    // Generate vertices
     for stack in 0..=stacks {
         let stack_f = stack as f32 / stacks as f32;
-        let lat = pi * stack_f; // 0 to π
+        let lat = pi * stack_f;
         let (sin_lat, cos_lat) = trig.sin_cos(lat);
 
         for slice in 0..=slices {
             let slice_f = slice as f32 / slices as f32;
-            let lon = two_pi * slice_f; // 0 to 2π
+            let lon = two_pi * slice_f;
             let (sin_lon, cos_lon) = trig.sin_cos(lon);
 
             let x = cos_lon * sin_lat;
@@ -39,14 +33,13 @@ pub fn sphere(stacks: usize, slices: usize) -> Mesh {
 
             vertices.push(MeshVertex {
                 position: Vec3::new(x, y, z),
-                normal: Vec3::new(x, y, z), // Already normalized (unit sphere)
+                normal: Vec3::new(x, y, z),
                 uv: Vec2::new(u, v),
                 color: [255, 255, 255, 255],
             });
         }
     }
 
-    // Generate indices (two triangles per quad)
     for stack in 0..stacks {
         for slice in 0..slices {
             let a = (stack * (slices + 1)) + slice;
@@ -60,12 +53,10 @@ pub fn sphere(stacks: usize, slices: usize) -> Mesh {
                 u16::try_from(c),
                 u16::try_from(d),
             ) {
-                // First triangle
                 indices.push(av);
                 indices.push(cv);
                 indices.push(bv);
 
-                // Second triangle
                 indices.push(bv);
                 indices.push(cv);
                 indices.push(dv);

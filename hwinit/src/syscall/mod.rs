@@ -96,8 +96,7 @@ pub mod handler;
 use crate::process::scheduler::SCHEDULER;
 use handler::*;
 
-// SYSCALL NUMBERS — core (0-9)
-
+// Core (0-9)
 pub const SYS_EXIT: u64 = 0;
 pub const SYS_WRITE: u64 = 1;
 pub const SYS_READ: u64 = 2;
@@ -109,7 +108,7 @@ pub const SYS_KILL: u64 = 7;
 pub const SYS_WAIT: u64 = 8;
 pub const SYS_SLEEP: u64 = 9;
 
-// helixfs file system syscalls (10-21)
+// HelixFS (10-21)
 pub const SYS_OPEN: u64 = 10;
 pub const SYS_CLOSE: u64 = 11;
 pub const SYS_SEEK: u64 = 12;
@@ -123,7 +122,7 @@ pub const SYS_SYNC: u64 = 19;
 pub const SYS_SNAPSHOT: u64 = 20;
 pub const SYS_VERSIONS: u64 = 21;
 
-// system / process / memory (22-31)
+// System / process / memory (22-31)
 pub const SYS_CLOCK: u64 = 22;
 pub const SYS_SYSINFO: u64 = 23;
 pub const SYS_GETPPID: u64 = 24;
@@ -135,7 +134,7 @@ pub const SYS_SYSLOG: u64 = 29;
 pub const SYS_GETCWD: u64 = 30;
 pub const SYS_CHDIR: u64 = 31;
 
-// networking (32-41) — raw nic primitives (exokernel)
+// Networking (32-41) — raw NIC primitives.
 pub const SYS_NIC_INFO: u64 = 32;
 pub const SYS_NIC_TX: u64 = 33;
 pub const SYS_NIC_RX: u64 = 34;
@@ -147,13 +146,13 @@ pub const SYS_DNS: u64 = 39;
 pub const SYS_NET_CFG: u64 = 40;
 pub const SYS_NET_POLL: u64 = 41;
 
-// device / mount (42-45) — reserved stubs
+// Device / mount (42-45) — stubs.
 pub const SYS_IOCTL: u64 = 42;
 pub const SYS_MOUNT: u64 = 43;
 pub const SYS_UMOUNT: u64 = 44;
 pub const SYS_POLL: u64 = 45;
 
-// persistence / introspection (46-51)
+// Persistence / introspection (46-51)
 pub const SYS_PERSIST_PUT: u64 = 46;
 pub const SYS_PERSIST_GET: u64 = 47;
 pub const SYS_PERSIST_DEL: u64 = 48;
@@ -161,7 +160,7 @@ pub const SYS_PERSIST_LIST: u64 = 49;
 pub const SYS_PERSIST_INFO: u64 = 50;
 pub const SYS_PE_INFO: u64 = 51;
 
-// hardware primitives — exokernel essentials (52-62)
+// Raw hardware primitives (52-62)
 pub const SYS_PORT_IN: u64 = 52;
 pub const SYS_PORT_OUT: u64 = 53;
 pub const SYS_PCI_CFG_READ: u64 = 54;
@@ -174,47 +173,45 @@ pub const SYS_IRQ_ATTACH: u64 = 60;
 pub const SYS_IRQ_ACK: u64 = 61;
 pub const SYS_CACHE_FLUSH: u64 = 62;
 
-// display (63-64)
+// Display (63-64)
 pub const SYS_FB_INFO: u64 = 63;
 pub const SYS_FB_MAP: u64 = 64;
 
-// process management (65-68)
+// Process management (65-68)
 pub const SYS_PS: u64 = 65;
 pub const SYS_SIGACTION: u64 = 66;
 pub const SYS_SETPRIORITY: u64 = 67;
 pub const SYS_GETPRIORITY: u64 = 68;
 
-// cpu features / diagnostics (69-72)
+// CPU features / diagnostics (69-72)
 pub const SYS_CPUID: u64 = 69;
 pub const SYS_RDTSC: u64 = 70;
 pub const SYS_BOOT_LOG: u64 = 71;
 pub const SYS_MEMMAP: u64 = 72;
 
-// memory sharing / protection (73-74)
+// Memory sharing / protection (73-74)
 pub const SYS_SHM_GRANT: u64 = 73;
 pub const SYS_MPROTECT: u64 = 74;
 
-// shell / ipc primitives (75-78)
+// Shell / IPC (75-78)
 pub const SYS_PIPE: u64 = 75;
 pub const SYS_DUP2: u64 = 76;
 pub const SYS_SET_FG: u64 = 77;
 pub const SYS_GETARGS: u64 = 78;
 
-// synchronization (79)
+// Sync (79)
 pub const SYS_FUTEX: u64 = 79;
 
-// threading (80-82)
+// Threads (80-82)
 pub const SYS_THREAD_CREATE: u64 = 80;
 pub const SYS_THREAD_EXIT: u64 = 81;
 pub const SYS_THREAD_JOIN: u64 = 82;
 
-// signal return (83)
 pub const SYS_SIGRETURN: u64 = 83;
 
-// input (84)
 pub const SYS_MOUSE_READ: u64 = 84;
 
-// framebuffer control (85-89)
+// Framebuffer control (85-90)
 pub const SYS_FB_LOCK: u64 = 85;
 pub const SYS_FB_UNLOCK: u64 = 86;
 pub const SYS_FB_IS_LOCKED: u64 = 87;
@@ -222,7 +219,7 @@ pub const SYS_FB_PRESENT: u64 = 88;
 pub const SYS_FB_BLIT: u64 = 89;
 pub const SYS_FB_MARK_DIRTY: u64 = 90;
 
-// compositor (91-94)
+// Compositor (91-98)
 pub const SYS_COMPOSITOR_SET: u64 = 91;
 pub const SYS_WIN_SURFACE_LIST: u64 = 92;
 pub const SYS_WIN_SURFACE_MAP: u64 = 93;
@@ -232,24 +229,17 @@ pub const SYS_TRY_WAIT: u64 = 96;
 pub const SYS_FORWARD_INPUT: u64 = 97;
 pub const SYS_SYSTEM_CONTROL: u64 = 98;
 
-// EXTERN ASM FUNCTIONS
-
 extern "C" {
-    /// Set up IA32_STAR / IA32_LSTAR / IA32_FMASK MSRs.
+    /// Program IA32_STAR / IA32_LSTAR / IA32_FMASK.
     pub fn syscall_init();
 }
 
-/// Standard ENOSYS return value (used for stubs and unknown syscalls).
 const ENOSYS_RET: u64 = u64::MAX - 37;
 
-// DISPATCH — called from syscall.s (MS x64 ABI)
-
-/// Main syscall dispatcher.  Called by the `syscall_entry` ASM stub with the
-/// syscall number in `nr` and up to 5 arguments in `a1`..`a5`.
+/// Dispatched from `syscall_entry` (MS x64 ABI). All args are user-controlled.
 ///
 /// # Safety
-/// Called from ASM with MS x64 ABI.  Arguments come directly from user/kernel
-/// registers and must be validated before use.
+/// Called from asm; arguments unvalidated.
 #[no_mangle]
 pub unsafe extern "C" fn syscall_dispatch(
     nr: u64,
@@ -270,7 +260,6 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_KILL => sys_kill(a1, a2),
         SYS_WAIT => sys_wait(a1),
         SYS_SLEEP => sys_sleep(a1),
-        // helixfs syscalls
         SYS_OPEN => sys_fs_open(a1, a2, a3),
         SYS_CLOSE => sys_fs_close(a1),
         SYS_SEEK => sys_fs_seek(a1, a2, a3),
@@ -283,7 +272,6 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_SYNC => sys_fs_sync(),
         SYS_SNAPSHOT => sys_fs_snapshot(a1, a2),
         SYS_VERSIONS => sys_fs_versions(a1, a2, a3, a4),
-        // system / process / memory
         SYS_CLOCK => sys_clock(),
         SYS_SYSINFO => sys_sysinfo(a1),
         SYS_GETPPID => sys_getppid(),
@@ -294,7 +282,6 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_SYSLOG => sys_syslog(a1, a2),
         SYS_GETCWD => sys_getcwd(a1, a2),
         SYS_CHDIR => sys_chdir(a1, a2),
-        // networking stubs
         SYS_NIC_INFO => sys_nic_info(a1),
         SYS_NIC_TX => sys_nic_tx(a1, a2),
         SYS_NIC_RX => sys_nic_rx(a1, a2),
@@ -305,18 +292,16 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_DNS => sys_dns(a1, a2, a3),
         SYS_NET_CFG => sys_net_cfg(a1, a2, a3, a4),
         SYS_NET_POLL => sys_net_poll(a1, a2),
-        // device / mount
         SYS_IOCTL => sys_ioctl(a1, a2, a3),
         SYS_MOUNT => sys_mount(a1, a2, a3, a4),
         SYS_UMOUNT => sys_umount(a1, a2),
-        SYS_POLL => sys_poll(a1, a2, a3), // persistence / introspection
+        SYS_POLL => sys_poll(a1, a2, a3),
         SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
         SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
         SYS_PERSIST_DEL => sys_persist_del(a1, a2),
         SYS_PERSIST_LIST => sys_persist_list(a1, a2, a3),
         SYS_PERSIST_INFO => sys_persist_info(a1),
         SYS_PE_INFO => sys_pe_info(a1, a2, a3),
-        // hardware primitives (exokernel)
         SYS_PORT_IN => sys_port_in(a1, a2),
         SYS_PORT_OUT => sys_port_out(a1, a2, a3),
         SYS_PCI_CFG_READ => sys_pci_cfg_read(a1, a2, a3),
@@ -328,23 +313,18 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_IRQ_ATTACH => sys_irq_attach(a1),
         SYS_IRQ_ACK => sys_irq_ack(a1),
         SYS_CACHE_FLUSH => sys_cache_flush(a1, a2),
-        // display
         SYS_FB_INFO => sys_fb_info(a1),
         SYS_FB_MAP => sys_fb_map(),
-        // process management
         SYS_PS => sys_ps(a1, a2),
         SYS_SIGACTION => sys_sigaction(a1, a2),
         SYS_SETPRIORITY => sys_setpriority(a1, a2),
         SYS_GETPRIORITY => sys_getpriority(a1),
-        // cpu features / diagnostics
         SYS_CPUID => sys_cpuid(a1, a2, a3),
         SYS_RDTSC => sys_rdtsc(a1),
         SYS_BOOT_LOG => sys_boot_log(a1, a2),
         SYS_MEMMAP => sys_memmap(a1, a2),
-        // memory sharing / protection
         SYS_SHM_GRANT => sys_shm_grant(a1, a2, a3, a4),
         SYS_MPROTECT => sys_mprotect(a1, a2, a3),
-        // shell / ipc primitives
         SYS_PIPE => sys_pipe(a1),
         SYS_DUP2 => sys_dup2(a1, a2),
         SYS_SET_FG => sys_set_fg(a1),
@@ -385,14 +365,12 @@ pub unsafe extern "C" fn syscall_dispatch(
     }
 }
 
-// SYS_ALLOC / SYS_FREE  (physical page allocation)
-
 unsafe fn sys_alloc(pages: u64) -> u64 {
     if pages == 0 || pages > 1024 {
-        return u64::MAX; // -EINVAL
+        return u64::MAX; // EINVAL
     }
     if !crate::memory::is_registry_initialized() {
-        return u64::MAX; // -ENOMEM
+        return u64::MAX; // ENOMEM
     }
     let mut registry = crate::memory::global_registry_mut();
     registry
@@ -406,26 +384,20 @@ unsafe fn sys_alloc(pages: u64) -> u64 {
 
 unsafe fn sys_free(phys_base: u64, pages: u64) -> u64 {
     if phys_base == 0 || pages == 0 || pages > 1024 {
-        return u64::MAX; // -EINVAL
+        return u64::MAX;
     }
     if !crate::memory::is_registry_initialized() {
-        return u64::MAX; // -ENOMEM
+        return u64::MAX;
     }
     let mut registry = crate::memory::global_registry_mut();
     match registry.free_pages(phys_base, pages) {
         Ok(()) => 0,
-        Err(_) => u64::MAX, // -EINVAL
+        Err(_) => u64::MAX,
     }
 }
 
-// INITIALIZATION
-
-/// Initialize the SYSCALL/SYSRET mechanism and install the timer ISR.
-///
-/// Call once, after IDT and PIC are configured.
-///
 /// # Safety
-/// Must be called in long mode with interrupts disabled.
+/// Long mode, interrupts disabled, after IDT/PIC.
 pub unsafe fn init_syscall() {
     syscall_init();
     crate::serial::log_ok("SYSCALL", 800, "syscall/sysret path enabled");

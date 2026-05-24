@@ -4,7 +4,6 @@
 
 use super::config::{pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
 
-
 extern "win64" {
     /// Check if device has capability list.
     fn asm_pci_has_capabilities(bus: u8, device: u8, function: u8) -> u32;
@@ -36,7 +35,6 @@ extern "win64" {
         -> u32;
 }
 
-
 /// PCI capability ID: Vendor-specific (used by VirtIO).
 pub const PCI_CAP_ID_VNDR: u8 = 0x09;
 
@@ -52,7 +50,6 @@ pub const VIRTIO_PCI_CAP_DEVICE: u8 = 4;
 
 /// VirtIO PCI capability type: PCI config access alternative.
 pub const VIRTIO_PCI_CAP_PCI_CFG: u8 = 5;
-
 
 /// Parsed VirtIO PCI capability information.
 ///
@@ -134,7 +131,6 @@ impl VirtioPciCaps {
             .map(|i| self.bar_addrs[i.bar as usize] + i.offset as u64)
     }
 }
-
 
 /// Check if a PCI device supports capability list.
 pub fn has_capabilities(addr: PciAddr) -> bool {
@@ -302,7 +298,6 @@ pub fn probe_virtio_caps(addr: PciAddr) -> VirtioPciCaps {
     caps
 }
 
-
 /// Walk capability chain in pure Rust (fallback).
 pub fn walk_capabilities_rust(addr: PciAddr) -> impl Iterator<Item = (u8, u8)> {
     WalkCaps::new(addr)
@@ -353,7 +348,6 @@ impl Iterator for WalkCaps {
         Some((offset, cap_id))
     }
 }
-
 
 /// Dump all capabilities to serial (uses crate's serial_println if available).
 #[cfg(feature = "serial_debug")]

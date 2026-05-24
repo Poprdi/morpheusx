@@ -168,7 +168,6 @@ impl Console {
         self.cursor_visible = false;
         let px = self.cx * font::FONT_WIDTH as u32;
         let py = self.cy * font::FONT_HEIGHT as u32;
-        // Erase cursor with blank cell
         fb.draw_glyph(font::get_glyph_or_space(' '), px, py, FG, BG);
     }
 

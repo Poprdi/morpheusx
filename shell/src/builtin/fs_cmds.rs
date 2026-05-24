@@ -9,7 +9,6 @@ use crate::path;
 
 pub fn ls(args: &[String], cwd: &str) -> i32 {
     let (long, target) = parse_ls_args(args, cwd);
-    // If target is a file, show just that entry
     if let Ok(m) = libmorpheus::fs::metadata(&target) {
         if m.is_file() {
             let name = path::basename(&target);
@@ -55,7 +54,6 @@ pub fn ls(args: &[String], cwd: &str) -> i32 {
 
 pub fn ls_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) -> i32 {
     let (long, target) = parse_ls_args(args, cwd);
-    // If target is a file, show just that entry
     if let Ok(m) = libmorpheus::fs::metadata(&target) {
         if m.is_file() {
             let name = path::basename(&target);
@@ -119,12 +117,11 @@ fn parse_ls_args<'a>(args: &'a [String], cwd: &str) -> (bool, String) {
 
     for a in args {
         if a.starts_with('-') && a.len() > 1 && a.as_bytes()[1] != b'-' {
-            // Parse combined short flags: -l, -la, -al, etc.
+            // Combined short flags: -l, -la, etc. -a is a no-op.
             for ch in a[1..].chars() {
                 if ch == 'l' {
                     long = true;
                 }
-                // -a is accepted but no-op (we always show all files)
             }
         } else if a == "--long" {
             long = true;

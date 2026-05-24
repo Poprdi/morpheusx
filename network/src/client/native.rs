@@ -194,7 +194,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-
     /// Resolve hostname to IP address using DNS or hardcoded fallbacks.
     pub fn resolve_host(&mut self, host: &str) -> Result<Ipv4Addr> {
         crate::stack::debug_log(40, "resolve_host start");
@@ -276,7 +275,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Err(NetworkError::DnsResolutionFailed)
     }
 
-
     /// Connect to a remote host.
     fn connect(&mut self, ip: Ipv4Addr, port: u16) -> Result<()> {
         crate::stack::debug_log(50, "TCP connect start");
@@ -337,7 +335,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-
     /// Send all data and wait for transmission to complete.
     fn send_all(&mut self, data: &[u8]) -> Result<()> {
         let handle = self.socket.ok_or(NetworkError::NotConnected)?;
@@ -386,7 +383,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             crate::device::pci::tsc_delay_us(1000); // 1ms
         }
     }
-
 
     /// Read HTTP headers until \r\n\r\n found.
     fn read_headers(&mut self) -> Result<Vec<u8>> {
@@ -499,7 +495,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(total)
     }
 
-
     /// Execute a basic HTTP request and return full response.
     fn do_request(&mut self, request: &Request) -> Result<Response> {
         let ip = self.resolve_host(&request.url.host)?;
@@ -548,7 +543,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
         Ok(Request::get(new_url))
     }
-
 
     /// Simple GET request returning full response.
     pub fn get(&mut self, url: &str) -> Result<Response> {
@@ -617,7 +611,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.stream_response_body(initial_body, content_length, callback)
     }
 
-
     /// Close any active connection.
     pub fn close(&mut self) {
         if let Some(handle) = self.socket.take() {
@@ -667,7 +660,6 @@ impl<D: NetworkDevice> HttpClient for NativeHttpClient<D> {
         self.iface.has_ip()
     }
 }
-
 
 /// Find the end of HTTP headers (\r\n\r\n).
 fn find_header_end(data: &[u8]) -> Option<usize> {

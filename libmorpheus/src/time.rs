@@ -23,7 +23,6 @@ pub fn uptime_us() -> u64 {
     clock_gettime() / 1_000
 }
 
-
 /// A span of time, measured in nanoseconds.
 ///
 /// 64-bit nanoseconds → max ~584 years.  Plenty.
@@ -161,7 +160,6 @@ impl fmt::Display for Duration {
     }
 }
 
-
 /// A measurement of a monotonically increasing clock.
 ///
 /// Useful for measuring elapsed time.
@@ -232,7 +230,6 @@ impl fmt::Debug for Instant {
         write!(f, "Instant({}ns)", self.nanos)
     }
 }
-
 
 /// Sleep for a [`Duration`].
 pub fn sleep(duration: Duration) {

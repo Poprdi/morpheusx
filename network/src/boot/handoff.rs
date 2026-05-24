@@ -10,7 +10,6 @@
 
 use core::fmt;
 
-
 /// Magic number: "MORPHEUS" in ASCII (little-endian)
 pub const HANDOFF_MAGIC: u64 = 0x5355_4548_5052_4F4D;
 
@@ -26,14 +25,12 @@ pub const MIN_TSC_FREQ: u64 = 1_000_000_000;
 /// Maximum TSC frequency (10 GHz - sanity check)
 pub const MAX_TSC_FREQ: u64 = 10_000_000_000;
 
-
 pub const NIC_TYPE_NONE: u8 = 0;
 pub const NIC_TYPE_VIRTIO: u8 = 1;
 /// Intel e1000/i210/i225
 pub const NIC_TYPE_INTEL: u8 = 2;
 pub const NIC_TYPE_REALTEK: u8 = 3;
 pub const NIC_TYPE_BROADCOM: u8 = 4;
-
 
 /// No block device
 pub const BLK_TYPE_NONE: u8 = 0;
@@ -42,11 +39,9 @@ pub const BLK_TYPE_NVME: u8 = 2;
 /// AHCI/SATA device (future)
 pub const BLK_TYPE_AHCI: u8 = 3;
 
-
 pub const TRANSPORT_MMIO: u8 = 0;
 pub const TRANSPORT_PCI_MODERN: u8 = 1;
 pub const TRANSPORT_PCI_LEGACY: u8 = 2;
-
 
 /// Errors during handoff validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,7 +87,6 @@ impl fmt::Display for HandoffError {
         }
     }
 }
-
 
 /// Data passed from UEFI boot phase to bare-metal phase.
 ///
@@ -434,7 +428,6 @@ impl fmt::Debug for BootHandoff {
             .finish()
     }
 }
-
 
 /// TSC calibration result.
 #[derive(Debug, Clone, Copy)]

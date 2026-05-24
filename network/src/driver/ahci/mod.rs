@@ -138,7 +138,7 @@ unsafe fn ahci_bios_handoff(abar: u64, tsc_freq: u64) {
     const CAP2_BOH: u32 = 1 << 0;
     const BOHC_OOS: u32 = 1 << 1;
     const BOHC_BOS: u32 = 1 << 0;
-    const BOHC_BB:  u32 = 1 << 4;
+    const BOHC_BB: u32 = 1 << 4;
 
     let cap2 = core::ptr::read_volatile((abar + AHCI_CAP2) as *const u32);
     if cap2 & CAP2_BOH == 0 {
@@ -625,13 +625,8 @@ impl BlockDriver for AhciDriver {
 
             let slot_mask = 1u32 << slot;
             // 30 s — FLUSH CACHE can stall on large dirty queues.
-            let poll_result = asm_ahci_poll_cmd(
-                self.abar,
-                self.port_num,
-                slot_mask,
-                self.tsc_freq,
-                30000,
-            );
+            let poll_result =
+                asm_ahci_poll_cmd(self.abar, self.port_num, slot_mask, self.tsc_freq, 30000);
 
             if poll_result != 0 {
                 return Err(BlockError::Timeout);

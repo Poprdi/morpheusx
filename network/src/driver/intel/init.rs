@@ -6,23 +6,10 @@
 //! via STATUS read; every poll is TSC-bounded; interrupts stay masked (polled).
 
 use crate::asm::drivers::intel::{
-    acquire_swflag,
-    asm_intel_clear_mta,
-    asm_intel_disable_interrupts,
-    asm_intel_enable_rx,
-    asm_intel_enable_tx,
-    asm_intel_read_mac,
-    asm_intel_reset,
-    asm_intel_set_link_up,
-    asm_intel_setup_rx_ring,
-    asm_intel_setup_tx_ring,
-    asm_intel_write_mac,
-    disable_ulp,
-    phy_is_accessible,
-    phy_read,
-    phy_write,
-    release_swflag,
-    toggle_lanphypc,
+    acquire_swflag, asm_intel_clear_mta, asm_intel_disable_interrupts, asm_intel_enable_rx,
+    asm_intel_enable_tx, asm_intel_read_mac, asm_intel_reset, asm_intel_set_link_up,
+    asm_intel_setup_rx_ring, asm_intel_setup_tx_ring, asm_intel_write_mac, disable_ulp,
+    phy_is_accessible, phy_read, phy_write, release_swflag, toggle_lanphypc,
 };
 use crate::dma::DmaRegion;
 use crate::mainloop::serial::{serial_print, serial_print_decimal, serial_println};
@@ -331,7 +318,6 @@ pub fn generate_fallback_mac(seed: u64) -> MacAddress {
     mac
 }
 
-
 /// Ensure PHY is accessible, with recovery via LANPHYPC toggle.
 ///
 /// This is CRITICAL for I218-LM/V (ThinkPad T450s, etc.) - after ULP disable,
@@ -394,7 +380,6 @@ unsafe fn ensure_phy_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
     // Final check after all recovery attempts
     phy_is_accessible(mmio_base, tsc_freq)
 }
-
 
 /// Wake PHY from power-down mode, reset it, and restart auto-negotiation.
 ///

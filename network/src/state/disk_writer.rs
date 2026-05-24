@@ -21,7 +21,6 @@
 use super::StepResult;
 use crate::driver::block_traits::{BlockCompletion, BlockDriver, BlockError};
 
-
 /// Maximum number of in-flight write requests.
 const MAX_PENDING_WRITES: usize = 16;
 
@@ -29,7 +28,6 @@ const MAX_PENDING_WRITES: usize = 16;
 pub const SECTORS_PER_CHUNK: u32 = 128;
 
 pub const CHUNK_SIZE: usize = 65536;
-
 
 /// Disk writer errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +52,6 @@ impl From<BlockError> for DiskWriterError {
     }
 }
 
-
 /// Pending write request.
 #[derive(Debug, Clone, Copy, Default)]
 struct PendingWrite {
@@ -69,7 +66,6 @@ struct PendingWrite {
     /// Whether this request is active.
     active: bool,
 }
-
 
 /// Disk writer configuration.
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +87,6 @@ impl Default for DiskWriterConfig {
         }
     }
 }
-
 
 /// Disk write progress.
 #[derive(Debug, Clone, Copy, Default)]
@@ -129,7 +124,6 @@ impl DiskWriterProgress {
         self.bytes_submitted.saturating_sub(self.bytes_written)
     }
 }
-
 
 /// Disk writer state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,7 +239,6 @@ impl DiskWriterState {
     pub fn has_pending(&self) -> bool {
         self.pending_count > 0
     }
-
 
     /// Start the writer.
     ///
@@ -430,7 +423,6 @@ impl DiskWriterState {
         self.pending.iter().position(|p| !p.active)
     }
 
-
     pub fn next_sector(&self) -> u64 {
         self.current_sector
     }
@@ -454,7 +446,6 @@ impl DiskWriterState {
         self.config.total_bytes = total;
     }
 }
-
 
 /// Write chunk descriptor for queuing.
 ///
@@ -582,7 +573,6 @@ impl Default for ChunkQueue {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

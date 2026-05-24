@@ -90,7 +90,6 @@ pub fn write_superblock<B: BlockIo>(
     Ok(())
 }
 
-
 /// Decode the v2 path prefix from a log payload.
 ///
 /// v2 format: `[path_len: u16 LE][path: path_len bytes][rest...]`

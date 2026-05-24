@@ -30,7 +30,6 @@ use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::pci::capability::probe_virtio_caps;
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, PciAddr};
 
-
 /// VirtIO vendor ID
 const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
 /// VirtIO-net device ID range start
@@ -40,7 +39,6 @@ const VIRTIO_NET_MODERN: u16 = 0x1041;
 
 /// Intel vendor ID
 const INTEL_VENDOR_ID: u16 = 0x8086;
-
 
 /// Probe and initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +67,6 @@ impl From<E1000eError> for ProbeError {
     }
 }
 
-
 /// Information about a detected network device.
 #[derive(Debug, Clone, Copy)]
 pub enum DetectedNic {
@@ -86,7 +83,6 @@ pub enum ProbeResult {
     /// Intel e1000e driver
     Intel(E1000eDriver),
 }
-
 
 /// Scan PCI bus for supported network devices.
 ///
@@ -163,7 +159,6 @@ fn find_virtio_nic() -> Option<(PciAddr, u64)> {
 
     None
 }
-
 
 /// Probe for network device and create appropriate driver.
 ///
@@ -284,7 +279,6 @@ pub unsafe fn create_virtio_driver(
 
     VirtioNetDriver::new(mmio_base, config)
 }
-
 
 /// Detected NIC type for handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

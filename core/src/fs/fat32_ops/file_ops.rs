@@ -1,5 +1,3 @@
-// FAT32 file read/write operations
-
 use super::super::Fat32Error;
 use super::context::Fat32Context;
 use super::directory::add_dir_entry_to_cluster;
@@ -14,9 +12,7 @@ use alloc::vec::Vec;
 
 const SECTOR_SIZE: usize = 512;
 
-/// Helper to allocate and free a temporary buffer using UEFI
-/// Pre-EBS: uses UEFI allocate_pages
-/// Must provide boot_services_alloc when calling from pre-EBS context
+/// Pre-EBS temp buffer via UEFI allocate_pages.
 unsafe fn with_temp_buffer<F>(
     size: usize,
     boot_services_alloc: uefi_alloc::AllocatePages,
@@ -37,7 +33,6 @@ where
     result
 }
 
-/// Helper to write data to a cluster's sectors
 fn write_cluster_data<B: BlockIo>(
     block_io: &mut B,
     ctx: &Fat32Context,
@@ -50,7 +45,6 @@ fn write_cluster_data<B: BlockIo>(
     bytes_written: &mut usize,
     progress: &mut Option<&mut dyn FnMut(usize, usize, &str)>,
 ) -> Result<(), Fat32Error> {
-    // Clear buffer and copy data
     cluster_data.fill(0);
     cluster_data[..chunk_size].copy_from_slice(data_chunk);
 
@@ -67,7 +61,6 @@ fn write_cluster_data<B: BlockIo>(
 
         *bytes_written += SECTOR_SIZE.min(total_size - *bytes_written);
 
-        // Report progress after each sector
         if let Some(ref mut cb) = progress {
             cb(*bytes_written, total_size, "Writing...");
         }
@@ -116,8 +109,8 @@ pub fn write_file_in_directory_with_progress<B: BlockIo>(
     )
 }
 
-/// UEFI-aware write that can use pre-EBS allocations
-/// When boot_services is Some, uses UEFI allocate_pages for temporary buffers
+/// Pre-EBS path: passes UEFI allocate_pages for the cluster buffer.
+/// Post-EBS: pass `None` to use the global heap.
 pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
     block_io: &mut B,
     partition_start: u64,
@@ -131,20 +124,17 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
 ) -> Result<(), Fat32Error> {
     let total_size = data.len();
 
-    // Report start
     if let Some(ref mut cb) = progress {
         cb(0, total_size, "Allocating clusters...");
     }
 
-    // Allocate clusters for file data
     let cluster_size = (ctx.sectors_per_cluster * SECTOR_SIZE as u32) as usize;
     let clusters_needed = ((data.len() + cluster_size - 1) / cluster_size).max(1);
 
-    // Use fixed-size array instead of Vec - no heap allocation pre-EBS
-    // 512 clusters * 4KB = 2MB max file size (enough for bootloader EFI)
+    // 512 * 4 KiB = 2 MiB cap, enough for our bootloader EFI.
     const MAX_CLUSTERS: usize = 512;
     if clusters_needed > MAX_CLUSTERS {
-        return Err(Fat32Error::IoError); // File too large
+        return Err(Fat32Error::IoError);
     }
 
     let mut file_clusters = [0u32; MAX_CLUSTERS];
@@ -153,7 +143,6 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
         file_clusters[i] = cluster;
     }
 
-    // Chain clusters together in FAT
     for i in 0..clusters_needed - 1 {
         ctx.write_fat_entry(
             block_io,
@@ -162,10 +151,8 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
             file_clusters[i + 1],
         )?;
     }
-    // Last cluster is already marked with EOC by allocate_cluster
+    // allocate_cluster already set EOC on the last cluster.
 
-    // Write file data to clusters with progress reporting
-    // Use UEFI allocation if provided (pre-EBS), otherwise use global heap (post-EBS)
     let mut bytes_written = 0;
     for i in 0..clusters_needed {
         let cluster = file_clusters[i];
@@ -173,9 +160,7 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
         let data_end = (data_offset + cluster_size).min(data.len());
         let chunk_size = data_end - data_offset;
 
-        // Choose allocation strategy based on available UEFI services
         if let (Some(alloc_fn), Some(free_fn)) = (boot_services_alloc, boot_services_free) {
-            // Pre-EBS: use UEFI allocate_pages
             unsafe {
                 with_temp_buffer(cluster_size, alloc_fn, free_fn, |cluster_data| {
                     write_cluster_data(
@@ -193,7 +178,6 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
                 })?;
             }
         } else {
-            // Post-EBS: use global heap allocator (Vec)
             let mut cluster_data = vec![0u8; cluster_size];
             write_cluster_data(
                 block_io,
@@ -210,7 +194,6 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
         }
     }
 
-    // Add directory entry
     add_dir_entry_to_cluster(
         block_io,
         partition_start,
@@ -222,7 +205,6 @@ pub fn write_file_in_directory_with_progress_uefi<B: BlockIo>(
         ATTR_ARCHIVE,
     )?;
 
-    // Report completion
     if let Some(ref mut cb) = progress {
         cb(total_size, total_size, "Write complete");
     }
@@ -270,9 +252,8 @@ pub fn read_file<B: BlockIo>(
 
                     if entry.name == test_entry.name {
                         if is_last {
-                            // Found the file - read its data
                             if entry.attr & ATTR_DIRECTORY != 0 {
-                                return Err(Fat32Error::IoError); // Can't read directory as file
+                                return Err(Fat32Error::IoError);
                             }
 
                             return read_file_data(

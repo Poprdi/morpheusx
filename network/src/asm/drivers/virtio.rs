@@ -4,7 +4,6 @@
 
 use crate::types::repr_c::{RxResult, VirtqueueState};
 
-
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
     /// Verify VirtIO magic value (0x74726976 = "virt").
@@ -37,7 +36,6 @@ extern "win64" {
     /// Returns 0 on success, 1 if MAC feature not negotiated.
     fn asm_virtio_read_mac(mmio_base: u64, mac_out: *mut [u8; 6]) -> u32;
 }
-
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -92,7 +90,6 @@ extern "win64" {
     );
 }
 
-
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
     /// Submit buffer to TX queue.
@@ -118,7 +115,6 @@ extern "win64" {
     fn asm_vq_rx_pending(vq: *mut VirtqueueState) -> u16;
 }
 
-
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
     /// Notify device about queue activity (uses vq.notify_addr).
@@ -133,7 +129,6 @@ extern "win64" {
     /// Set notify address in VirtqueueState.
     fn asm_vq_set_notify_addr(vq: *mut VirtqueueState, addr: u64);
 }
-
 
 /// VirtIO device operations.
 pub mod device {

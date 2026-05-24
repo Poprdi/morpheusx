@@ -89,7 +89,7 @@ pub(super) static mut SCHEDULER_READY: bool = false;
 pub(super) static mut KERNEL_CR3: u64 = 0;
 pub(super) static mut TSC_FREQUENCY: u64 = 0;
 
-// lock-light waiter indexes for fast wake paths.
+// Lock-free PID bitmaps for fast wake paths.
 static STDIN_WAITERS: AtomicU64 = AtomicU64::new(0);
 static INPUT_WAITERS: AtomicU64 = AtomicU64::new(0);
 static PIPE_WAITERS: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
@@ -169,16 +169,14 @@ pub(crate) fn clear_waiter_all(pid: u32) {
     }
 }
 
-/// Proactive stale waiter cleanup. Clears waiter bits for processes that are no longer
-/// actually blocked on that resource. Low cost when called infrequently (every ~1k ticks).
-/// Prevents bit accumulation over long system uptime.
+/// Clears waiter bits whose processes are no longer blocked on that resource.
+/// Cheap if called sparingly (~1k ticks); bounds long-uptime accumulation.
 pub(crate) unsafe fn cleanup_stale_waiters() {
     let mut stdin_mask = STDIN_WAITERS.load(Ordering::Relaxed);
     let mut input_mask = INPUT_WAITERS.load(Ordering::Relaxed);
     let mut stale_stdin = 0u64;
     let mut stale_input = 0u64;
 
-    // detect stale stdin waiter bits
     while stdin_mask != 0 {
         let bit = stdin_mask.trailing_zeros() as u32;
         stdin_mask &= stdin_mask - 1;
@@ -191,7 +189,6 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
         }
     }
 
-    // detect stale input waiter bits
     while input_mask != 0 {
         let bit = input_mask.trailing_zeros() as u32;
         input_mask &= input_mask - 1;
@@ -211,7 +208,6 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
         INPUT_WAITERS.fetch_and(!stale_input, Ordering::Relaxed);
     }
 
-    // scan pipe waiter array
     for (pipe_idx, waiter_set) in PIPE_WAITERS.iter().enumerate() {
         let mut mask = waiter_set.load(Ordering::Relaxed);
         let mut stale = 0u64;
@@ -235,7 +231,6 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
         }
     }
 
-    // scan futex waiter array
     for waiter_set in FUTEX_WAITERS.iter() {
         let mut mask = waiter_set.load(Ordering::Relaxed);
         let mut stale = 0u64;
@@ -275,7 +270,7 @@ pub fn set_scheduler_system_state(state: SchedulerSystemState) {
 }
 
 pub fn refresh_balanced_system_mode() {
-    // Thermal hooks own state selection when confidence is non-zero.
+    // Thermal hooks override state when confidence > 0.
     if THERMAL_CONFIDENCE.load(Ordering::Relaxed) != 0 {
         return;
     }
@@ -295,7 +290,7 @@ pub fn update_core_load_ewma(core_idx: u32, ready_count: u32) {
     if idx >= MAX_CPUS {
         return;
     }
-    // ewma = (7/8 * old) + (1/8 * sample)
+    // EWMA: 7/8 old + 1/8 sample.
     let old = PER_CORE_LOAD_EWMA[idx].load(Ordering::Relaxed);
     let ewma = old.saturating_mul(7).saturating_add(ready_count) >> 3;
     PER_CORE_LOAD_EWMA[idx].store(ewma, Ordering::Relaxed);
@@ -344,7 +339,7 @@ pub fn transition_core_state(
         return true;
     }
 
-    // force a staging state when waking a parked core.
+    // Stage parked→active through UnparkPending.
     if current == SchedulerCoreState::Parked && target == SchedulerCoreState::Active {
         PER_CORE_STATE[idx].store(SchedulerCoreState::UnparkPending as u8, Ordering::Relaxed);
         PER_CORE_LAST_STATE_CHANGE_TSC[idx].store(now_tsc, Ordering::Relaxed);
@@ -453,7 +448,7 @@ pub fn set_thermal_signal(level: u8, source_tsc: u64, confidence: u8) {
     THERMAL_CONFIDENCE.store(confidence, Ordering::Relaxed);
     THERMAL_SOURCE_TSC.store(source_tsc, Ordering::Relaxed);
 
-    // 0 = normal, 1 = warm, 2 = high, 3+ = emergency
+    // level: 0 normal, 1 warm, 2 high, 3+ emergency
     let state = if confidence == 0 {
         SchedulerSystemState::Balanced
     } else if level >= 3 {
@@ -771,7 +766,7 @@ impl Scheduler {
 
         match sig {
             Signal::SIGKILL => {
-                // running_on != MAX means another core may hold &mut Process.
+                // Another core may hold &mut Process — defer terminate.
                 if slot.running_on != u32::MAX {
                     slot.pending_signals.raise(Signal::SIGKILL);
                 } else {

@@ -1,6 +1,4 @@
-//! Public scheduler facade.
-//!
-//! Internal implementation lives in `process/schedular/*`.
+//! Scheduler facade; implementation in `process/schedular/*`.
 
 pub use super::schedular::{
     block_sleep, exit_process, get_earliest_deadline, get_kernel_cr3, idle_tsc_total,

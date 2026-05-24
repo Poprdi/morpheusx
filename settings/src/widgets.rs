@@ -1,12 +1,9 @@
-// direct framebuffer text and shape primitives.
-// no canvas abstraction. no trait dispatch. just pointer math and pixel writes.
-// this is a standalone process with its own mapped surface.
+// Direct framebuffer primitives. No canvas, no trait dispatch.
 
-// vga 8x16 font constants
 pub const FONT_W: u32 = 8;
 pub const FONT_H: u32 = 16;
 
-// embedded vga font — 95 printable ascii glyphs (0x20..=0x7E)
+// Embedded VGA font, printable ASCII (0x20..=0x7E).
 pub static FONT_DATA: [[u8; 16]; 95] = include!("font_data.inc");
 
 #[inline(always)]
@@ -28,7 +25,6 @@ pub fn fill_rect(
     fb_w: u32,
     fb_h: u32,
 ) {
-    // clamp to bounds
     let x1 = x.min(fb_w);
     let y1 = y.min(fb_h);
     let x2 = (x + w).min(fb_w);
@@ -61,7 +57,7 @@ pub fn draw_char(
     let idx = if ch >= 0x20 && ch <= 0x7E {
         (ch - 0x20) as usize
     } else {
-        0 // space fallback
+        0 // fall back to space
     };
     let glyph = &FONT_DATA[idx];
 
@@ -107,7 +103,7 @@ pub fn draw_str(
     }
 }
 
-// draw string with max width (truncates with ".." if too long)
+/// Draws `s`, truncating with `..` when it exceeds `max_chars`.
 pub fn draw_str_trunc(
     surface: *mut u32,
     stride: u32,
@@ -140,7 +136,7 @@ pub fn draw_str_trunc(
             }
             end = bi;
         }
-        // include last kept character boundary
+        // Push `end` past the last kept char.
         if keep > 0 {
             if let Some((bi, ch)) = s.char_indices().nth(keep - 1) {
                 end = bi + ch.len_utf8();
@@ -154,7 +150,6 @@ pub fn draw_str_trunc(
     }
 }
 
-// horizontal line
 pub fn hline(
     surface: *mut u32,
     stride: u32,
@@ -168,7 +163,6 @@ pub fn hline(
     fill_rect(surface, stride, x, y, w, 1, color, fb_w, fb_h);
 }
 
-// vertical line
 pub fn vline(
     surface: *mut u32,
     stride: u32,
@@ -182,7 +176,6 @@ pub fn vline(
     fill_rect(surface, stride, x, y, 1, h, color, fb_w, fb_h);
 }
 
-// outlined rectangle
 pub fn rect_outline(
     surface: *mut u32,
     stride: u32,
@@ -218,8 +211,7 @@ pub fn rect_outline(
     );
 }
 
-// integer to decimal string — no alloc, no format!, no core::fmt.
-// returns the number of bytes written to `buf`.
+/// Write decimal digits of `val` into `buf`; returns byte count.
 pub fn u64_to_str(val: u64, buf: &mut [u8]) -> usize {
     if val == 0 {
         if !buf.is_empty() {
@@ -242,7 +234,6 @@ pub fn u64_to_str(val: u64, buf: &mut [u8]) -> usize {
     len
 }
 
-// format bytes as human readable (KB/MB/GB)
 pub fn format_bytes(bytes: u64, buf: &mut [u8]) -> usize {
     if bytes < 1024 {
         let n = u64_to_str(bytes, buf);
@@ -264,7 +255,7 @@ pub fn format_bytes(bytes: u64, buf: &mut [u8]) -> usize {
     end
 }
 
-// format ip address (network byte order u32 -> dotted decimal)
+/// Network-order u32 to dotted-decimal.
 pub fn format_ip(ip: u32, buf: &mut [u8]) -> usize {
     let octets = ip.to_be_bytes();
     let mut pos = 0;
@@ -279,7 +270,6 @@ pub fn format_ip(ip: u32, buf: &mut [u8]) -> usize {
     pos
 }
 
-// format mac address
 pub fn format_mac(mac: &[u8; 6], buf: &mut [u8]) -> usize {
     let hex = b"0123456789ABCDEF";
     let mut pos = 0;
@@ -298,7 +288,6 @@ pub fn format_mac(mac: &[u8; 6], buf: &mut [u8]) -> usize {
     pos
 }
 
-// format uptime from ticks
 pub fn format_uptime(ms: u64, buf: &mut [u8]) -> usize {
     let secs = ms / 1000;
     let mins = secs / 60;
@@ -343,7 +332,6 @@ pub fn format_uptime(ms: u64, buf: &mut [u8]) -> usize {
     pos
 }
 
-// percentage bar — a horizontal bar filled proportionally
 pub fn draw_bar(
     surface: *mut u32,
     stride: u32,

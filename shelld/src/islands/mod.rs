@@ -9,24 +9,18 @@ pub const LAUNCHER_H: u32 = 220;
 pub const ICON_SIZE: u32 = 56;
 
 pub struct ShellState {
-    // surface buffer — private offscreen FB given by kernel because compd owns the real one
     pub surface_ptr: *mut u32,
     pub fb_w: u32,
     pub fb_h: u32,
-    pub fb_stride: u32, // stride in PIXELS (fb_info.stride / 4). yes confusing. no we can't change it.
+    pub fb_stride: u32, // pixels (fb_info.stride / 4)
     pub is_bgrx: bool,
 
-    // wallpaper island
     pub wallpaper_dirty: bool,
-
-    // panel island
     pub panel_dirty: bool,
 
-    // launcher island
     pub launcher_open: bool,
     pub launcher_dirty: bool,
 
-    // shared DE appearance profile
     pub desktop_rgb: (u8, u8, u8),
     pub panel_rgb: (u8, u8, u8),
     pub start_rgb: (u8, u8, u8),
@@ -35,7 +29,6 @@ pub struct ShellState {
     pub icon_bg_rgb: (u8, u8, u8),
     pub icon_inner_rgb: (u8, u8, u8),
 
-    // input state — shelld reads forwarded mouse from compd
     pub mouse_x: i32,
     pub mouse_y: i32,
     pub last_buttons: u8,
@@ -66,14 +59,13 @@ impl ShellState {
             launcher_bg_rgb: (28, 30, 42),
             icon_bg_rgb: (40, 60, 90),
             icon_inner_rgb: (18, 24, 40),
-            // init at center. same as compd. so when compd forwards deltas, our position tracks.
+            // Centered to match compd's initial cursor so forwarded deltas track.
             mouse_x: (fb_w / 2) as i32,
             mouse_y: (fb_h / 2) as i32,
             last_buttons: 0,
         }
     }
 
-    // pack the pixel. bgrx not rgbx. the b comes first because uefi said so and uefi answers to no one.
     #[inline(always)]
     pub fn pack(&self, r: u8, g: u8, b: u8) -> u32 {
         if self.is_bgrx {
@@ -117,8 +109,6 @@ fn lighten(rgb: (u8, u8, u8), pct: u8) -> (u8, u8, u8) {
         (rgb.2 as u16 + ((255 - rgb.2 as u16) * p) / 100) as u8,
     )
 }
-
-// --- raw pixel primitives for writing into shelld's own surface buffer ---
 
 #[inline(always)]
 pub fn raw_fill(buf: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, px: u32) {

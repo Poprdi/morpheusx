@@ -77,7 +77,6 @@ fn main() -> i32 {
             continue;
         }
 
-        // Ctrl+L: clear and restart
         if trimmed == "\x0c" {
             con.clear(&framebuffer);
             continue;
@@ -92,7 +91,7 @@ fn main() -> i32 {
             let cmd = &pipeline.commands[0];
             let has_redirects = cmd.stdin_file.is_some() || cmd.stdout_file.is_some();
 
-            // If there are redirects, always go through exec (handles fd-level I/O)
+            // Redirects route through exec for fd-level I/O.
             if !has_redirects {
                 if let Some(code) = builtin::dispatch_fb(&cmd.argv, &cwd, &framebuffer, &mut con) {
                     if code == builtin::EXIT_SENTINEL {
@@ -103,7 +102,6 @@ fn main() -> i32 {
                 }
             }
 
-            // Single external command → compositor-aware spawn.
             let binary = match path::which(&cmd.argv[0], &cwd) {
                 Some(p) => p,
                 None => {
@@ -123,18 +121,12 @@ fn main() -> i32 {
 
             match exec::spawn_composited(&binary, &args) {
                 Some(pid) => {
-                    // Track as a compositor child window.
                     comp.add_child(pid, &cmd.argv[0]);
 
-                    // Remember whether any surface was mapped before the loop.
-                    // Non-graphical commands (ls, echo, etc.) exit without
-                    // mapping a surface, so we can skip the console repaint.
-
-                    // Enter compositor loop — returns when all children exit.
+                    // Returns when all children exit.
                     last_status = compositor::compositor_loop(&framebuffer, &mut comp);
 
-                    // Restore the shell console only if the compositor actually
-                    // painted over the framebuffer.
+                    // Repaint console only if compositor touched the framebuffer.
                     if comp.did_compose {
                         con.clear(&framebuffer);
                         comp.did_compose = false;
@@ -150,7 +142,7 @@ fn main() -> i32 {
             continue;
         }
 
-        // Multi-command pipeline — use blocking exec (no compositor).
+        // Pipeline path: blocking exec, no compositor.
         let status = exec::run(&pipeline, &cwd);
         if status == 127 {
             let cmd_name = pipeline

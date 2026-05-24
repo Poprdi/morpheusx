@@ -2,7 +2,6 @@
 //!
 //! Thin wrappers around ASM functions for PCI config space read/write.
 
-
 extern "win64" {
     /// Read 8-bit value from PCI config space.
     fn asm_pci_cfg_read8(bus: u8, device: u8, function: u8, offset: u8) -> u8;
@@ -22,7 +21,6 @@ extern "win64" {
     /// Write 32-bit value to PCI config space.
     fn asm_pci_cfg_write32(bus: u8, device: u8, function: u8, offset: u8, value: u32);
 }
-
 
 /// PCI device address (bus/device/function).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +76,6 @@ pub fn pci_cfg_write16(addr: PciAddr, offset: u8, value: u16) {
 pub fn pci_cfg_write32(addr: PciAddr, offset: u8, value: u32) {
     unsafe { asm_pci_cfg_write32(addr.bus, addr.device, addr.function, offset, value) }
 }
-
 
 /// PCI configuration space standard offsets.
 pub mod offset {

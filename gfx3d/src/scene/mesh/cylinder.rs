@@ -36,7 +36,6 @@ pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
         });
     }
 
-    // Center vertices for caps
     let top_center = vertices.len();
     vertices.push(MeshVertex {
         position: Vec3::new(0.0, half_h, 0.0),
@@ -53,7 +52,6 @@ pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
         color: [255, 255, 255, 255],
     });
 
-    // Side indices (quads as two triangles)
     for i in 0..segments {
         let top1 = i * 2;
         let bot1 = top1 + 1;
@@ -66,12 +64,10 @@ pub fn cylinder(radius: f32, height: f32, segments: usize) -> Mesh {
             u16::try_from(top2),
             u16::try_from(bot2),
         ) {
-            // First triangle
             indices.push(t1);
             indices.push(t2);
             indices.push(b1);
 
-            // Second triangle
             indices.push(b1);
             indices.push(t2);
             indices.push(b2);

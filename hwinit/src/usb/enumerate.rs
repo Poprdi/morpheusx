@@ -81,9 +81,7 @@ pub unsafe fn enumerate_and_bind_inputs(
             continue;
         }
 
-        if let Err(_e) =
-            enumerate_device(controller, root_port, speed, 0, 0, None, &mut result)
-        {
+        if let Err(_e) = enumerate_device(controller, root_port, speed, 0, 0, None, &mut result) {
             crate::serial::log_warn("USB", 201, "port enumeration failed");
         }
     }
@@ -156,9 +154,7 @@ unsafe fn enumerate_device(
         Some(p) => (p.slot_id, p.port_num),
         None => (0, 0),
     };
-    if let Err(e) =
-        controller.address_device(root_port, speed, route, parent_slot, parent_port)
-    {
+    if let Err(e) = controller.address_device(root_port, speed, route, parent_slot, parent_port) {
         crate::serial::log_warn("USB", 213, "step: address_device failed");
         return Err(e);
     }

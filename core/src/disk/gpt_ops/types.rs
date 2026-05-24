@@ -1,5 +1,3 @@
-// Common types for GPT operations
-
 #[derive(Copy, Clone, Debug)]
 pub enum GptError {
     IoError,
@@ -11,7 +9,6 @@ pub enum GptError {
     AlignmentError,
 }
 
-/// Represents a free space region on disk
 #[derive(Copy, Clone, Debug)]
 pub struct FreeRegion {
     pub start_lba: u64,

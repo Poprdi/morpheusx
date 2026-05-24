@@ -27,7 +27,6 @@ use crate::state::disk_writer::{
 };
 use crate::state::StepResult;
 
-
 /// Persistence orchestrator configuration.
 #[derive(Clone)]
 pub struct PersistenceConfig<'a> {
@@ -57,7 +56,6 @@ impl<'a> Default for PersistenceConfig<'a> {
         }
     }
 }
-
 
 /// Orchestrator error types.
 #[derive(Debug, Clone, Copy)]
@@ -94,7 +92,6 @@ impl From<BlockError> for OrchestratorError {
     }
 }
 
-
 /// Orchestrator step result.
 #[derive(Debug, Clone, Copy)]
 pub enum OrchestratorResult {
@@ -122,7 +119,6 @@ pub struct PersistenceResult {
     /// Write duration in TSC ticks.
     pub write_ticks: u64,
 }
-
 
 /// Combined progress tracking.
 #[derive(Debug, Clone, Copy, Default)]
@@ -156,7 +152,6 @@ pub enum PersistencePhase {
     Done,
     Failed,
 }
-
 
 /// Orchestrator state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -462,7 +457,6 @@ impl PersistenceOrchestrator {
         &mut self.disk_writer
     }
 }
-
 
 #[cfg(test)]
 mod tests {

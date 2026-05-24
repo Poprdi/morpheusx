@@ -1,15 +1,4 @@
-//! PS/2 mouse driver — 3-byte packet decoder, relative motion.
-//!
-//! This is the single authoritative mouse driver for MorpheusX.
-//! The bootloader event loop (`desktop.rs`) polls `asm_ps2_poll_any()`
-//! and feeds aux-port bytes here via `Mouse::feed()`.
-//!
-//! Robustness features:
-//!   - Byte-0 sync validation (bit 3 must be set)
-//!   - Resync after 3 consecutive failed sync bytes (drops partial state)
-//!   - Overflow detection (status bits 6-7) — clamp to ±255 instead of
-//!     silently discarding the packet
-//!   - Proper 9-bit sign extension using status-byte sign bits (4, 5)
+//! PS/2 mouse: 3-byte packet decoder with byte-0 sync, overflow clamp, 9-bit sign extend.
 
 use super::input::{asm_ps2_flush, asm_ps2_poll_any, asm_ps2_write_cmd, asm_ps2_write_data};
 
@@ -17,26 +6,22 @@ use super::input::{asm_ps2_flush, asm_ps2_poll_any, asm_ps2_write_cmd, asm_ps2_w
 pub struct MousePacket {
     pub dx: i16,
     pub dy: i16,
-    /// Bit 0 = left, bit 1 = right, bit 2 = middle
+    /// bit0 L, bit1 R, bit2 M
     pub buttons: u8,
 }
 
-/// Maximum number of out-of-sync bytes before we force a state reset.
-/// After this many failed byte-0 syncs in a row, any partial packet is
-/// discarded and we restart from byte 0.
+/// Consecutive byte-0 sync failures before resetting the packet assembler.
 const RESYNC_THRESHOLD: u8 = 3;
 
 pub struct Mouse {
     buf: [u8; 3],
     fill: usize,
-    /// Consecutive byte-0 sync failures (bit 3 not set).
     desync_count: u8,
 }
 
 impl Mouse {
-    /// Decoder-only construction — skips PS/2 aux-port init. For systems
-    /// without a working PS/2 mouse (real hardware), avoids the flood of
-    /// `mouse_cmd` timeouts that the full init path produces.
+    /// Skip aux-port init; for hardware with no working PS/2 mouse where the
+    /// init path floods `mouse_cmd` timeouts.
     pub fn new_decoder_only() -> Self {
         Self {
             buf: [0; 3],

@@ -96,7 +96,6 @@ where
     })
 }
 
-
 /// Thread builder.  Allows setting stack size before spawning.
 pub struct Builder {
     stack_pages: u64,

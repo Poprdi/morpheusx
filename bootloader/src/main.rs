@@ -82,7 +82,6 @@ pub struct BootServices {
     pub locate_protocol: extern "efiapi" fn(*const [u8; 16], *const (), *mut *mut ()) -> usize,
 }
 
-
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     // Emit as much as possible to serial. Never use alloc here (may be OOM).

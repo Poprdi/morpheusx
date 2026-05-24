@@ -1,32 +1,14 @@
-//! PCI configuration space access bindings.
-//!
-//! Thin wrappers around ASM functions for PCI config space read/write.
-
-// ASM BINDINGS
+//! PCI config-space access via 0xCF8/0xCFC (asm thunks).
 
 extern "win64" {
-    /// Read 8-bit value from PCI config space.
     fn asm_pci_cfg_read8(bus: u8, device: u8, function: u8, offset: u8) -> u8;
-
-    /// Read 16-bit value from PCI config space.
     fn asm_pci_cfg_read16(bus: u8, device: u8, function: u8, offset: u8) -> u16;
-
-    /// Read 32-bit value from PCI config space.
     fn asm_pci_cfg_read32(bus: u8, device: u8, function: u8, offset: u8) -> u32;
-
-    /// Write 8-bit value to PCI config space.
     fn asm_pci_cfg_write8(bus: u8, device: u8, function: u8, offset: u8, value: u8);
-
-    /// Write 16-bit value to PCI config space.
     fn asm_pci_cfg_write16(bus: u8, device: u8, function: u8, offset: u8, value: u16);
-
-    /// Write 32-bit value to PCI config space.
     fn asm_pci_cfg_write32(bus: u8, device: u8, function: u8, offset: u8, value: u32);
 }
 
-// SAFE WRAPPERS
-
-/// PCI device address (bus/device/function).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PciAddr {
     pub bus: u8,
@@ -35,7 +17,6 @@ pub struct PciAddr {
 }
 
 impl PciAddr {
-    /// Create new PCI address.
     pub const fn new(bus: u8, device: u8, function: u8) -> Self {
         Self {
             bus,
@@ -45,45 +26,37 @@ impl PciAddr {
     }
 }
 
-/// Read 8-bit value from PCI configuration space.
 #[inline]
 pub fn pci_cfg_read8(addr: PciAddr, offset: u8) -> u8 {
     unsafe { asm_pci_cfg_read8(addr.bus, addr.device, addr.function, offset) }
 }
 
-/// Read 16-bit value from PCI configuration space.
 #[inline]
 pub fn pci_cfg_read16(addr: PciAddr, offset: u8) -> u16 {
     unsafe { asm_pci_cfg_read16(addr.bus, addr.device, addr.function, offset) }
 }
 
-/// Read 32-bit value from PCI configuration space.
 #[inline]
 pub fn pci_cfg_read32(addr: PciAddr, offset: u8) -> u32 {
     unsafe { asm_pci_cfg_read32(addr.bus, addr.device, addr.function, offset) }
 }
 
-/// Write 8-bit value to PCI configuration space.
 #[inline]
 pub fn pci_cfg_write8(addr: PciAddr, offset: u8, value: u8) {
     unsafe { asm_pci_cfg_write8(addr.bus, addr.device, addr.function, offset, value) }
 }
 
-/// Write 16-bit value to PCI configuration space.
 #[inline]
 pub fn pci_cfg_write16(addr: PciAddr, offset: u8, value: u16) {
     unsafe { asm_pci_cfg_write16(addr.bus, addr.device, addr.function, offset, value) }
 }
 
-/// Write 32-bit value to PCI configuration space.
 #[inline]
 pub fn pci_cfg_write32(addr: PciAddr, offset: u8, value: u32) {
     unsafe { asm_pci_cfg_write32(addr.bus, addr.device, addr.function, offset, value) }
 }
 
-// PCI STANDARD OFFSETS
-
-/// PCI configuration space standard offsets.
+/// Standard PCI config-space offsets (PCI 3.0 §6).
 pub mod offset {
     pub const VENDOR_ID: u8 = 0x00;
     pub const DEVICE_ID: u8 = 0x02;
@@ -110,7 +83,6 @@ pub mod offset {
     pub const INT_PIN: u8 = 0x3D;
 }
 
-/// PCI status register bits.
 pub mod status {
     pub const CAP_LIST: u16 = 1 << 4;
 }

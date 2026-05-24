@@ -146,11 +146,7 @@ impl XhciController {
 
         // Zero the input control + slot + EP contexts up through dci_in.
         // Layout: ctrl[0] slot[cs] ep0[2*cs] ep1[3*cs] ... ep_dci[(dci_in+1)*cs]
-        core::ptr::write_bytes(
-            in_ctx as *mut u8,
-            0,
-            ((dci_in as u64 + 2) * cs) as usize,
-        );
+        core::ptr::write_bytes(in_ctx as *mut u8, 0, ((dci_in as u64 + 2) * cs) as usize);
 
         // Add Context flags: A0 (slot context) + the specific EP DCI.
         let add_flags = (1u32 << 0) | (1u32 << dci_in);

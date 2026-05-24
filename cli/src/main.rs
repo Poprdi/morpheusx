@@ -31,7 +31,6 @@ use morpheus_helix::types::*;
 use morpheus_helix::vfs::{self};
 use morpheus_helix::vfs::{FdTable, HelixInstance, MountTable};
 
-
 const SECTOR_SIZE: u32 = 512;
 
 struct FileBlockDevice {
@@ -95,7 +94,6 @@ impl BlockIo for FileBlockDevice {
         self.file.flush().map_err(|_| FileIoError)
     }
 }
-
 
 fn usage() {
     eprintln!("morpheus-cli — MorpheusX HelixFS host utility");
@@ -305,7 +303,6 @@ fn rebuild_bitmap(instance: &mut HelixInstance) {
     }
 }
 
-
 fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     println!("[inject] disk   : {}", disk);
     println!("[inject] binary : {}", binary);
@@ -361,7 +358,6 @@ fn dest_name(dest: &str) -> &str {
     dest.rsplit('/').next().unwrap_or(dest)
 }
 
-
 fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     let (_dev, mt) = mount(disk)?;
     let entries =
@@ -375,7 +371,6 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 fn cmd_format(disk: &str) -> Result<(), String> {
     let mut dev =
@@ -396,7 +391,6 @@ fn cmd_mkbin(disk: &str) -> Result<(), String> {
         Err(e) => Err(format!("vfs_mkdir: {:?}", e)),
     }
 }
-
 
 fn main() {
     let args: Vec<String> = env::args().collect();

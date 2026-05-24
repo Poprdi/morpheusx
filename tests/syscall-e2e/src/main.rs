@@ -16,7 +16,6 @@ use libmorpheus::raw::*;
 
 entry!(main);
 
-
 static mut PASS: u32 = 0;
 static mut FAIL: u32 = 0;
 static mut TOTAL: u32 = 0;
@@ -86,7 +85,6 @@ fn print_hex(val: u64) {
     let s = unsafe { core::str::from_utf8_unchecked(&buf) };
     print(s);
 }
-
 
 fn main() -> i32 {
     // Explicitly zero counters — BSS may not be zeroed by ELF loader
@@ -267,7 +265,6 @@ fn print_u32(v: u32) {
     let s = unsafe { core::str::from_utf8_unchecked(&buf[i..]) };
     print(s);
 }
-
 
 // ── SYS_WRITE (1) ────────────────────────────────────────────────────────
 fn test_write() {
@@ -1136,7 +1133,6 @@ fn test_mprotect() {
     }
 }
 
-
 fn test_pipe() {
     match libmorpheus::process::pipe() {
         Ok((read_fd, write_fd)) => {
@@ -1172,7 +1168,6 @@ fn test_pipe() {
         }
     }
 }
-
 
 fn test_dup2() {
     match libmorpheus::process::pipe() {
@@ -1211,7 +1206,6 @@ fn test_dup2() {
     }
 }
 
-
 fn test_set_fg() {
     // Set foreground to ourselves — should not fail.
     let pid = libmorpheus::process::getpid();
@@ -1223,7 +1217,6 @@ fn test_set_fg() {
     check("SYS_SET_FG(reset)", true, "");
 }
 
-
 fn test_getargs() {
     // We were spawned without args, so argc should be 0.
     let c = libmorpheus::process::argc();
@@ -1234,7 +1227,6 @@ fn test_getargs() {
     let c2 = libmorpheus::process::getargs(&mut buf);
     check("SYS_GETARGS(buf)", c2 == 0, "expected 0 args");
 }
-
 
 fn test_futex() {
     use core::sync::atomic::AtomicU32;
@@ -1273,7 +1265,6 @@ fn test_futex() {
 
     ok("SYS_FUTEX(basic)");
 }
-
 
 fn test_thread_create_join() {
     use core::sync::atomic::{AtomicU32, Ordering};
@@ -1324,7 +1315,6 @@ fn test_thread_shared_memory() {
         _ => fail("THREAD(shared_mem)", "spawn failed"),
     }
 }
-
 
 fn test_async_block_on() {
     // block_on a simple async block that returns a value.

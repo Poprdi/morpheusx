@@ -33,7 +33,6 @@
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-
 /// DHCP-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DhcpError {
@@ -54,7 +53,6 @@ impl From<DhcpError> for StateError {
     }
 }
 
-
 /// DHCP configuration obtained from server.
 #[derive(Debug, Clone, Copy)]
 pub struct DhcpConfig {
@@ -67,7 +65,6 @@ pub struct DhcpConfig {
     /// Primary DNS server
     pub dns: Option<Ipv4Addr>,
 }
-
 
 /// DHCP client state machine.
 ///

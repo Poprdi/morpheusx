@@ -10,7 +10,6 @@ use crate::asm::drivers::intel::{
 };
 use crate::mainloop::serial::{serial_print, serial_print_hex, serial_println};
 
-
 /// Size of a single TX descriptor in bytes.
 pub const TX_DESC_SIZE: usize = 16;
 
@@ -18,7 +17,6 @@ pub const TX_DESC_SIZE: usize = 16;
 pub const MAX_FRAME_SIZE: usize = 1514;
 
 pub const DEFAULT_BUFFER_SIZE: usize = 2048;
-
 
 /// TX errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +31,6 @@ pub enum TxError {
         max: usize,
     },
 }
-
 
 /// TX descriptor ring.
 ///

@@ -85,7 +85,7 @@ fn parse_kill_args(args: &[String]) -> Option<(u32, u8)> {
         return None;
     }
     let first = &args[0];
-    // `kill -9 <pid>` syntax: first arg starts with '-' and rest is a number
+    // `kill -<sig> <pid>` form.
     if first.starts_with('-') && first.len() > 1 {
         if let Some(sig) = parse_u32(&first[1..]) {
             if sig <= 255 {
@@ -97,7 +97,7 @@ fn parse_kill_args(args: &[String]) -> Option<(u32, u8)> {
             }
         }
     }
-    // `kill <pid> [signal]` syntax
+    // `kill <pid> [sig]` form.
     let pid = parse_u32(first)?;
     let sig = if let Some(s) = args.get(1) {
         let n = parse_u32(s)?;

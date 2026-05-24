@@ -150,7 +150,11 @@ pub fn puts_hex_u32(val: u32) {
     let mut buf = [b'0'; 8];
     for i in 0..8 {
         let nyb = ((val >> ((7 - i) * 4)) & 0xF) as u8;
-        buf[i] = if nyb < 10 { b'0' + nyb } else { b'a' + (nyb - 10) };
+        buf[i] = if nyb < 10 {
+            b'0' + nyb
+        } else {
+            b'a' + (nyb - 10)
+        };
     }
     if let Ok(s) = core::str::from_utf8(&buf) {
         puts(s);

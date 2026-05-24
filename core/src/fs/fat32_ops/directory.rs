@@ -1,5 +1,3 @@
-// FAT32 directory operations
-
 use super::super::Fat32Error;
 use super::context::Fat32Context;
 use super::types::{DirEntry, ATTR_DIRECTORY};
@@ -8,7 +6,6 @@ use gpt_disk_types::Lba;
 
 const SECTOR_SIZE: usize = 512;
 
-/// Compare two 8.3 names case-insensitively
 fn names_match_case_insensitive(a: &[u8; 11], b: &[u8; 11]) -> bool {
     for i in 0..11 {
         let ca = if a[i] >= b'a' && a[i] <= b'z' {
@@ -28,16 +25,13 @@ fn names_match_case_insensitive(a: &[u8; 11], b: &[u8; 11]) -> bool {
     true
 }
 
-/// Check if entry name matches an LFN short name pattern.
-/// For example, entry "ISO~1   " matches target "ISO" (for ".iso" directory).
-/// This handles the case where Windows/Linux creates a long filename entry
-/// with a short name alias containing ~N suffix.
+/// Match an LFN short-name alias like "ISO~1   " against base "ISO".
+/// Handles the Windows/Linux long-filename short-name fallback.
 fn entry_matches_lfn_short_name(entry_name: &[u8; 11], target: &[u8]) -> bool {
     if target.is_empty() {
         return false;
     }
 
-    // Get the base part of entry name (before ~ or space)
     let mut base_end = 0;
     for i in 0..8 {
         if entry_name[i] == b'~' || entry_name[i] == b' ' {
@@ -50,7 +44,6 @@ fn entry_matches_lfn_short_name(entry_name: &[u8; 11], target: &[u8]) -> bool {
         return false;
     }
 
-    // Compare base parts (case-insensitive)
     let entry_base = &entry_name[..base_end];
     let target_len = target.len().min(base_end);
 
@@ -74,8 +67,6 @@ fn entry_matches_lfn_short_name(entry_name: &[u8; 11], target: &[u8]) -> bool {
         }
     }
 
-    // Check that entry has ~N suffix pattern (LFN short name)
-    // Entry like "ISO~1   " - we matched "ISO", now verify ~digit follows
     if base_end < 8 && entry_name[base_end] == b'~' {
         return true;
     }
@@ -90,17 +81,14 @@ pub fn ensure_directory_exists<B: BlockIo>(
     parent_cluster: u32,
     name: &str,
 ) -> Result<u32, Fat32Error> {
-    // Read parent directory
     let sector = ctx.cluster_to_sector(parent_cluster);
     let entries_per_sector = SECTOR_SIZE / core::mem::size_of::<DirEntry>();
 
-    // Prepare target name for comparison (uppercase, 8.3 format)
     let mut test_entry = DirEntry::empty();
     test_entry.set_name(name);
     let target_name = test_entry.name;
 
-    // Also prepare a version to match LFN short names like "ISO~1   "
-    // For ".iso", the LFN short name would be "ISO~1   " not "        ISO"
+    // For ".iso", LFN short name is "ISO~1   " — strip leading dot, match base.
     let name_upper = name.to_uppercase();
     let name_upper = name_upper.trim_start_matches('.');
 
@@ -117,18 +105,13 @@ pub fn ensure_directory_exists<B: BlockIo>(
             core::slice::from_raw_parts(sector_data.as_ptr() as *const DirEntry, entries_per_sector)
         };
 
-        // Check if directory already exists
         for entry in entries {
             if !entry.is_free() && entry.attr & ATTR_DIRECTORY != 0 {
                 let entry_name = entry.name;
 
-                // Direct match (case-insensitive since both are uppercase)
                 if names_match_case_insensitive(&entry_name, &target_name) {
                     return Ok(entry.first_cluster());
                 }
-
-                // Also check for LFN short name format (e.g., "ISO~1   " for ".iso")
-                // The short name starts with the uppercase base and may have ~N suffix
                 if entry_matches_lfn_short_name(&entry_name, name_upper.as_bytes()) {
                     return Ok(entry.first_cluster());
                 }
@@ -136,7 +119,6 @@ pub fn ensure_directory_exists<B: BlockIo>(
         }
     }
 
-    // Directory doesn't exist - create it
     create_directory_in_parent(block_io, partition_start, ctx, parent_cluster, name)
 }
 
@@ -149,22 +131,16 @@ pub fn create_directory_in_parent<B: BlockIo>(
 ) -> Result<u32, Fat32Error> {
     let new_cluster = ctx.allocate_cluster(block_io, partition_start)?;
 
-    // Initialize new directory cluster with . and .. entries
-    // Use sector-sized stack buffer instead of vec! to avoid heap allocation
-
-    // Create '.' entry (points to self)
     let mut dot_entry = DirEntry::empty();
-    dot_entry.name = *b".          "; // '.' padded with spaces
+    dot_entry.name = *b".          ";
     dot_entry.attr = ATTR_DIRECTORY;
     dot_entry.set_first_cluster(new_cluster);
 
-    // Create '..' entry (points to parent)
     let mut dotdot_entry = DirEntry::empty();
-    dotdot_entry.name = *b"..         "; // '..' padded with spaces
+    dotdot_entry.name = *b"..         ";
     dotdot_entry.attr = ATTR_DIRECTORY;
     dotdot_entry.set_first_cluster(parent_cluster);
 
-    // Write first sector with . and .. entries
     let mut sector_data = [0u8; SECTOR_SIZE];
     let entries =
         unsafe { core::slice::from_raw_parts_mut(sector_data.as_mut_ptr() as *mut DirEntry, 2) };
@@ -173,12 +149,10 @@ pub fn create_directory_in_parent<B: BlockIo>(
 
     let sector = ctx.cluster_to_sector(new_cluster);
 
-    // Write first sector (with . and .. entries)
     block_io
         .write_blocks(Lba(partition_start + sector as u64), &sector_data)
         .map_err(|_| Fat32Error::IoError)?;
 
-    // Write remaining sectors as zeros
     let zero_sector = [0u8; SECTOR_SIZE];
     for sec_offset in 1..ctx.sectors_per_cluster {
         block_io
@@ -189,7 +163,6 @@ pub fn create_directory_in_parent<B: BlockIo>(
             .map_err(|_| Fat32Error::IoError)?;
     }
 
-    // Add entry to parent directory
     add_dir_entry_to_cluster(
         block_io,
         partition_start,
@@ -234,7 +207,6 @@ pub fn add_dir_entry_to_cluster<B: BlockIo>(
             )
         };
 
-        // Find first free entry
         for entry in entries.iter_mut() {
             if entry.is_free() {
                 entry.set_name(name);
@@ -254,7 +226,7 @@ pub fn add_dir_entry_to_cluster<B: BlockIo>(
         }
     }
 
-    Err(Fat32Error::IoError) // Directory full
+    Err(Fat32Error::IoError) // dir full
 }
 
 pub fn create_directory<B: BlockIo>(
@@ -265,13 +237,12 @@ pub fn create_directory<B: BlockIo>(
 ) -> Result<(), Fat32Error> {
     let path = path.trim_start_matches('/');
 
-    // Use fixed array instead of Vec for path parts (no heap allocation)
     const MAX_PATH_PARTS: usize = 8;
     let mut parts: [&str; MAX_PATH_PARTS] = [""; MAX_PATH_PARTS];
     let mut parts_count = 0;
     for part in path.split('/') {
         if parts_count >= MAX_PATH_PARTS {
-            return Err(Fat32Error::IoError); // Path too deep
+            return Err(Fat32Error::IoError);
         }
         parts[parts_count] = part;
         parts_count += 1;

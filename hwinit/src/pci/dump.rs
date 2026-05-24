@@ -1,13 +1,6 @@
-//! PCI USB host controller inventory dump.
-//!
-//! Phase-0 visibility for real-hardware bring-up. Walks the entire PCI bus
-//! (all 256 buses × 32 devices × multi-function awareness) and prints every
-//! controller it finds with class 0x0C / subclass 0x03 (USB) to the boot log,
-//! including the prog_if byte so the operator can tell xHCI from EHCI/UHCI/OHCI.
-//!
-//! Output is rendered via `serial::puts`, which the bootloader mirrors to the
-//! framebuffer once the live putc hook is installed — so this works on boards
-//! with no serial console.
+//! Phase-0 USB host controller inventory dump. Class 0x0C/sub 0x03; prog_if
+//! distinguishes xHCI/EHCI/UHCI/OHCI. Output via `serial::puts`, mirrored to
+//! the framebuffer on serial-less boards.
 
 use super::config::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, PciAddr};
 use crate::serial::puts;
@@ -46,7 +39,11 @@ fn put_hex_nybble(buf: &mut [u8], off: usize, nyb: u8) -> usize {
     if off >= buf.len() {
         return off;
     }
-    buf[off] = if nyb < 10 { b'0' + nyb } else { b'a' + (nyb - 10) };
+    buf[off] = if nyb < 10 {
+        b'0' + nyb
+    } else {
+        b'a' + (nyb - 10)
+    };
     off + 1
 }
 
@@ -151,16 +148,11 @@ fn dump_summary(total: u16, xhci: u16, ehci: u16, uhci: u16, ohci: u16, other: u
     flush(&buf, o);
 }
 
-/// Walk the entire PCI bus and print every USB host controller found.
-///
-/// Designed for real-hardware bring-up where the runtime PCI scan in
-/// `platform_init_selfcontained` only finds xHCI controllers and silently
-/// ignores EHCI/UHCI/OHCI. This dump shows the ground truth.
+/// Bus-wide USB controller dump. The runtime scan in
+/// `platform_init_selfcontained` only finds xHCI; this exposes the rest.
 ///
 /// # Safety
-/// Reads PCI configuration space via I/O ports (0xCF8 / 0xCFC). Safe to call
-/// once Phase 7 (PCI bus mastering enable) has completed; can also be called
-/// earlier — config-space reads do not depend on bus-mastering state.
+/// Config-space I/O on 0xCF8/0xCFC; bus-mastering state is irrelevant.
 pub unsafe fn dump_usb_controllers() {
     puts("[USB-PCI] ==== USB host controller inventory ====\n");
 
@@ -179,9 +171,8 @@ pub unsafe fn dump_usb_controllers() {
                 continue;
             }
 
-            // Bit 7 of HEADER_TYPE indicates a multi-function device. Only walk
-            // function 1..=7 if multi-function — otherwise reading them can
-            // return aliased values on some chipsets.
+            // HEADER_TYPE bit 7 = multi-function. Single-fn devices alias on
+            // some chipsets when probed beyond fn0.
             let header_type = pci_cfg_read8(addr0, offset::HEADER_TYPE);
             let max_fn: u8 = if (header_type & 0x80) != 0 { 8 } else { 1 };
 
@@ -216,6 +207,13 @@ pub unsafe fn dump_usb_controllers() {
         }
     }
 
-    dump_summary(total, count_xhci, count_ehci, count_uhci, count_ohci, count_other);
+    dump_summary(
+        total,
+        count_xhci,
+        count_ehci,
+        count_uhci,
+        count_ohci,
+        count_other,
+    );
     puts("[USB-PCI] ==== end inventory ====\n");
 }

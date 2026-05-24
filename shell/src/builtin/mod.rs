@@ -174,7 +174,6 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
         },
         Some(p) => path::resolve(cwd, p),
     };
-    // Root always exists — skip metadata check
     if target != "/" {
         match libmorpheus::fs::metadata(&target) {
             Ok(m) => {
@@ -215,7 +214,6 @@ fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         },
         Some(p) => path::resolve(cwd, p),
     };
-    // Root always exists — skip metadata check
     if target != "/" {
         match libmorpheus::fs::metadata(&target) {
             Ok(m) => {

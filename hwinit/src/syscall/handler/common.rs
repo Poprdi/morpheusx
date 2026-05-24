@@ -1,6 +1,4 @@
 
-// HelixFS Syscall Implementations
-
 const ENOSYS: u64 = u64::MAX - 37;
 const EINVAL: u64 = u64::MAX;
 const EPERM: u64 = u64::MAX - 1;
@@ -14,30 +12,21 @@ const ENOTDIR: u64 = u64::MAX - 20;
 const EPIPE: u64 = u64::MAX - 32;
 const EBUSY: u64 = u64::MAX - 16;
 
-// USER-POINTER VALIDATION
-
-/// Maximum canonical user virtual address (lower-half).
+/// Canonical lower-half limit (AMD64 Vol 2 §5.3).
 const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
 
-/// Validate a user pointer + length.
-///
-/// Returns `true` if the range `[ptr .. ptr+len)` is entirely in the
-/// user-accessible lower half of the canonical address space and does
-/// not wrap around.  Returns `false` (and the syscall should return
-/// `-EFAULT`) otherwise.
+/// True iff `[ptr, ptr+len)` lies entirely in the lower-half canonical region.
 #[inline]
 fn validate_user_buf(ptr: u64, len: u64) -> bool {
     if ptr == 0 || len == 0 {
         return false;
     }
-    let end = ptr.checked_add(len);
-    match end {
+    match ptr.checked_add(len) {
         Some(e) => e <= USER_ADDR_LIMIT,
-        None => false, // overflow
+        None => false,
     }
 }
 
-/// Extract a path `&str` from a user pointer+length, with validation.
 unsafe fn user_path(ptr: u64, len: u64) -> Option<&'static str> {
     if ptr == 0 || len == 0 || len > 255 {
         return None;
@@ -68,11 +57,10 @@ fn helix_err_to_errno(_e: morpheus_helix::error::HelixError) -> u64 {
     }
 }
 
-// smp: serializes all filesystem operations. without this, two cores get aliased
-// &mut FsGlobal from the static mut and the whole vfs corrupts itself. ask me how i know.
+// SMP serialization for FsGlobal. Two cores aliasing the static mut corrupts
+// the VFS — confirmed empirically.
 static VFS_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
 
-// raii guard — unlocks VFS_LOCK on drop so early returns don't leak the lock.
 struct VfsGuard {
     fs: &'static mut morpheus_helix::vfs::global::FsGlobal,
 }
@@ -83,8 +71,7 @@ impl Drop for VfsGuard {
     }
 }
 
-/// Acquire exclusive vfs access. returns None if fs not initialized.
-/// lock auto-releases when the guard drops — early returns are safe.
+/// Returns None if FS isn't initialized. Lock drops with the guard.
 unsafe fn vfs_lock() -> Option<VfsGuard> {
     VFS_LOCK.lock();
     match morpheus_helix::vfs::global::fs_global_mut() {

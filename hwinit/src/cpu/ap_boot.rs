@@ -96,7 +96,10 @@ unsafe fn setup_trampoline() -> bool {
     let gdt_ptr_dest = (AP_TRAMPOLINE_PHYS + TD_GDT_PTR) as *mut u8;
     core::ptr::copy_nonoverlapping(gdt_buf.as_ptr(), gdt_ptr_dest, 10);
     core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_CR3) as *mut u64, kernel_cr3);
-    core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_ENTRY64) as *mut u64, ap_rust_entry as u64);
+    core::ptr::write_volatile(
+        (AP_TRAMPOLINE_PHYS + TD_ENTRY64) as *mut u64,
+        ap_rust_entry as u64,
+    );
 
     true
 }

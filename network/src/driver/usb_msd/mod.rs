@@ -10,7 +10,6 @@ use crate::driver::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
 
-
 extern "win64" {
     /// Reads CAPLENGTH + HCIVERSION.  0 = dead controller.
     /// Low byte = CAPLENGTH, bits 31:16 = HCIVERSION.
@@ -20,7 +19,6 @@ extern "win64" {
     /// Walk extended caps, claim ownership from BIOS/SMM.  0 = ok.
     fn asm_xhci_bios_handoff(mmio_base: u64, hccparams1: u64, tsc_freq: u64) -> u32;
 }
-
 
 const OP_USBCMD: u64 = 0x00;
 const OP_USBSTS: u64 = 0x04;
@@ -65,7 +63,6 @@ const PLS_INACTIVE: u32 = 0x6 << 5;
 const PLS_POLLING: u32 = 0x7 << 5;
 const PLS_COMPLIANCE: u32 = 0xA << 5;
 
-
 const TRB_NORMAL: u32 = 1 << 10;
 const TRB_SETUP: u32 = 2 << 10;
 const TRB_DATA: u32 = 3 << 10;
@@ -88,7 +85,6 @@ const TRB_TRT_IN: u32 = 3 << 16;
 
 const TRB_TYPE_MASK: u32 = 0x3F << 10;
 
-
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_CLASS_HUB: u8 = 0x09;
 const USB_SUBCLASS_SCSI: u8 = 0x06;
@@ -99,7 +95,6 @@ const CSW_SIG: u32 = 0x5342_5355;
 const SCSI_TEST_UNIT_READY: u8 = 0x00;
 const SCSI_READ_CAPACITY_10: u8 = 0x25;
 const SCSI_READ_10: u8 = 0x28;
-
 
 const DMA_SIZE: usize = 0x48000;
 const CMD_RING_LEN: u8 = 32;
@@ -128,7 +123,6 @@ const MAX_SCRATCH: usize = 64;
 struct XhciDma([u8; DMA_SIZE]);
 
 static mut XHCI_DMA: XhciDma = XhciDma([0u8; DMA_SIZE]);
-
 
 /// USB mass-storage configuration.
 #[derive(Debug, Clone)]
@@ -223,7 +217,6 @@ impl core::fmt::Display for UsbMsdInitError {
     }
 }
 
-
 #[derive(Clone, Copy)]
 enum Ring {
     Ep0,
@@ -243,7 +236,6 @@ enum ConfigParse {
     MassStorageUnsupported,
     None,
 }
-
 
 pub struct UsbMsdDriver {
     // xHCI register bases
@@ -277,7 +269,6 @@ pub struct UsbMsdDriver {
     last_completion: Option<BlockCompletion>,
     bot_tag: u32,
 }
-
 
 #[inline(always)]
 unsafe fn vr32(a: u64) -> u32 {
@@ -342,7 +333,6 @@ fn warm_reset_needed(ps: u32) -> bool {
         || pls == PLS_INACTIVE
         || speed >= 4
 }
-
 
 // serial and framebuffer diagnostics via console hook
 fn dbg(s: &str) {
@@ -1705,7 +1695,6 @@ impl UsbMsdDriver {
     }
 }
 
-
 impl BlockDriverInit for UsbMsdDriver {
     type Error = UsbMsdInitError;
     type Config = UsbMsdConfig;
@@ -1722,7 +1711,6 @@ impl BlockDriverInit for UsbMsdDriver {
         Self::new(mmio_base, config)
     }
 }
-
 
 impl BlockDriver for UsbMsdDriver {
     fn info(&self) -> BlockDeviceInfo {

@@ -512,7 +512,6 @@ fn read_tsc() -> u64 {
     0
 }
 
-
 /// Write a manifest for an existing ISO without using the state machine.
 ///
 /// Use case: Recreate a manifest for an ISO that was previously downloaded

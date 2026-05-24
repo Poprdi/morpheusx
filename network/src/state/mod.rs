@@ -37,7 +37,6 @@ pub mod tcp;
 use crate::time::TimeoutConfig;
 use core::fmt;
 
-
 /// Result of a state machine step.
 ///
 /// Each call to `step()` returns one of these values to indicate
@@ -85,7 +84,6 @@ impl StepResult {
         matches!(self, Self::Timeout | Self::Failed)
     }
 }
-
 
 /// Common error type for state machines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +139,6 @@ impl fmt::Display for StateError {
     }
 }
 
-
 /// TSC timestamp wrapper for timeout calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TscTimestamp(u64);
@@ -179,7 +176,6 @@ impl From<u64> for TscTimestamp {
     }
 }
 
-
 /// Context passed to state machine step functions.
 ///
 /// Contains timing information and configuration needed by all state machines.
@@ -211,7 +207,6 @@ impl StepContext {
         start.is_expired(self.now_tsc, timeout_ticks)
     }
 }
-
 
 /// Progress information for long-running operations.
 #[derive(Debug, Clone, Copy, Default)]
@@ -269,7 +264,6 @@ impl Progress {
         }
     }
 }
-
 
 pub use dhcp::DhcpState;
 pub use dns::DnsResolveState;

@@ -1,7 +1,7 @@
 //! Control transfers (EP0): setup → optional data → status.
 
 use crate::usb::regs::*;
-use crate::usb::rings::{write_trb, vr32, vw32};
+use crate::usb::rings::{vr32, vw32, write_trb};
 
 /// USB setup packet packed into a 64-bit value for IDT TRBs.
 ///   bits  7:0  = bmRequestType
