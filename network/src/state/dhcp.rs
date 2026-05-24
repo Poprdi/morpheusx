@@ -29,16 +29,10 @@
 //!     }
 //! }
 //! ```
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5.3
 
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DHCP ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// DHCP-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +54,6 @@ impl From<DhcpError> for StateError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DHCP CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// DHCP configuration obtained from server.
 #[derive(Debug, Clone, Copy)]
@@ -77,9 +68,6 @@ pub struct DhcpConfig {
     pub dns: Option<Ipv4Addr>,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DHCP STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// DHCP client state machine.
 ///
@@ -116,10 +104,6 @@ impl DhcpState {
         DhcpState::Init
     }
 
-    /// Start DHCP discovery.
-    ///
-    /// # Arguments
-    /// - `now_tsc`: Current TSC timestamp
     pub fn start(&mut self, now_tsc: u64) {
         *self = DhcpState::Discovering {
             start_tsc: TscTimestamp::new(now_tsc),
@@ -127,17 +111,6 @@ impl DhcpState {
     }
 
     /// Step the state machine.
-    ///
-    /// # Arguments
-    /// - `dhcp_config`: Current DHCP config from smoltcp (None if not yet configured)
-    /// - `now_tsc`: Current TSC value
-    /// - `timeout_ticks`: DHCP timeout in TSC ticks
-    ///
-    /// # Returns
-    /// - `Pending`: Still discovering
-    /// - `Done`: Bound, call `config()` to get configuration
-    /// - `Timeout`: Discovery timed out
-    /// - `Failed`: Discovery failed
     pub fn step(
         &mut self,
         dhcp_config: Option<DhcpConfig>,
@@ -207,7 +180,6 @@ impl DhcpState {
         self.config().and_then(|c| c.dns)
     }
 
-    /// Get error (if failed).
     pub fn error(&self) -> Option<DhcpError> {
         match self {
             DhcpState::Failed { error } => Some(*error),
@@ -220,12 +192,10 @@ impl DhcpState {
         matches!(self, DhcpState::Bound { .. } | DhcpState::Failed { .. })
     }
 
-    /// Check if successfully bound.
     pub fn is_bound(&self) -> bool {
         matches!(self, DhcpState::Bound { .. })
     }
 
-    /// Check if still discovering.
     pub fn is_discovering(&self) -> bool {
         matches!(self, DhcpState::Discovering { .. })
     }

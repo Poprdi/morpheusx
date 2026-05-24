@@ -1,7 +1,4 @@
 //! Main loop runner.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §6.2
 
 use super::phases::{phase1_rx_refill, phase5_tx_completions, TX_BUDGET};
 use crate::driver::NetworkDriver;
@@ -47,13 +44,6 @@ pub enum IterationResult {
 ///
 /// This is a building block - the full main loop calls this repeatedly.
 /// Useful for testing and integration.
-///
-/// # Arguments
-/// - `device`: Network device
-/// - `config`: Loop configuration
-///
-/// # Returns
-/// Whether to continue looping.
 #[cfg(target_arch = "x86_64")]
 pub fn run_iteration<D: NetworkDriver>(
     device: &mut D,
@@ -85,7 +75,6 @@ pub fn run_iteration<D: NetworkDriver>(
     IterationResult::Continue
 }
 
-/// Get current TSC value.
 #[cfg(target_arch = "x86_64")]
 pub fn get_tsc() -> u64 {
     crate::asm::core::tsc::read_tsc()

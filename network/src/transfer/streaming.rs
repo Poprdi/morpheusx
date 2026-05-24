@@ -14,23 +14,6 @@
 //! │   (HTTP)    │     │  (progress)  │     │ (file/buffer)│
 //! └─────────────┘     └──────────────┘     └──────────────┘
 //! ```
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use morpheus_network::transfer::StreamReader;
-//!
-//! let mut reader = StreamReader::new(1024 * 64); // 64KB chunks
-//! reader.set_expected_size(Some(1024 * 1024)); // 1MB expected
-//! reader.set_progress_callback(|transferred, total| {
-//!     println!("Progress: {}/{:?}", transferred, total);
-//! });
-//!
-//! while !reader.is_complete() {
-//!     let chunk = fetch_next_chunk();
-//!     reader.feed(&chunk)?;
-//! }
-//! ```
 
 use crate::error::{NetworkError, Result};
 use crate::types::ProgressCallback;
@@ -153,22 +136,18 @@ impl StreamReader {
         self.expected_size = size;
     }
 
-    /// Get expected total size.
     pub fn expected_size(&self) -> Option<usize> {
         self.expected_size
     }
 
-    /// Set progress callback.
     pub fn set_progress_callback(&mut self, callback: ProgressCallback) {
         self.progress_callback = Some(callback);
     }
 
-    /// Get current state.
     pub fn state(&self) -> StreamState {
         self.state
     }
 
-    /// Check if transfer is complete.
     pub fn is_complete(&self) -> bool {
         self.state == StreamState::Complete
     }
@@ -178,7 +157,6 @@ impl StreamReader {
         self.cancelled || self.state == StreamState::Cancelled
     }
 
-    /// Get bytes received so far.
     pub fn bytes_received(&self) -> usize {
         self.bytes_received
     }
@@ -194,7 +172,6 @@ impl StreamReader {
         })
     }
 
-    /// Cancel the transfer.
     pub fn cancel(&mut self) {
         self.cancelled = true;
         self.state = StreamState::Cancelled;
@@ -259,17 +236,14 @@ impl StreamReader {
         self.state = StreamState::Failed;
     }
 
-    /// Get accumulated data.
     pub fn data(&self) -> &[u8] {
         &self.buffer
     }
 
-    /// Take ownership of accumulated data.
     pub fn take_data(self) -> Vec<u8> {
         self.buffer
     }
 
-    /// Clear buffer but keep state.
     pub fn clear_buffer(&mut self) {
         self.buffer.clear();
     }
@@ -319,11 +293,6 @@ pub struct StreamWriter {
 
 impl StreamWriter {
     /// Create a new stream writer.
-    ///
-    /// # Arguments
-    ///
-    /// * `total_size` - Total bytes to be sent
-    /// * `chunk_size` - Size of each chunk to send
     pub fn new(total_size: usize, chunk_size: usize) -> Self {
         Self {
             total_size,
@@ -335,7 +304,6 @@ impl StreamWriter {
         }
     }
 
-    /// Set progress callback.
     pub fn set_progress_callback(&mut self, callback: ProgressCallback) {
         self.progress_callback = Some(callback);
     }
@@ -360,7 +328,6 @@ impl StreamWriter {
         Some(&source[start..end])
     }
 
-    /// Mark chunk as sent.
     pub fn chunk_sent(&mut self, bytes: usize) {
         self.bytes_sent += bytes;
         self.bytes_since_progress += bytes;
@@ -376,17 +343,14 @@ impl StreamWriter {
         self.bytes_sent >= self.total_size
     }
 
-    /// Get bytes sent so far.
     pub fn bytes_sent(&self) -> usize {
         self.bytes_sent
     }
 
-    /// Get remaining bytes.
     pub fn remaining(&self) -> usize {
         self.total_size.saturating_sub(self.bytes_sent)
     }
 
-    /// Get progress percentage.
     pub fn progress_percent(&self) -> u8 {
         if self.total_size == 0 {
             100
@@ -433,12 +397,10 @@ impl ProgressTracker {
         }
     }
 
-    /// Set progress callback.
     pub fn set_callback(&mut self, callback: ProgressCallback) {
         self.callback = Some(callback);
     }
 
-    /// Set reporting interval.
     pub fn set_interval(&mut self, interval: usize) {
         self.interval = interval;
     }
@@ -454,14 +416,12 @@ impl ProgressTracker {
         }
     }
 
-    /// Force a progress report.
     pub fn report(&self) {
         if let Some(callback) = self.callback {
             callback(self.transferred, self.total);
         }
     }
 
-    /// Get bytes transferred.
     pub fn transferred(&self) -> usize {
         self.transferred
     }
@@ -477,12 +437,10 @@ impl ProgressTracker {
         })
     }
 
-    /// Check if transfer is complete.
     pub fn is_complete(&self) -> bool {
         self.total.is_some_and(|t| self.transferred >= t)
     }
 
-    /// Reset tracker.
     pub fn reset(&mut self) {
         self.transferred = 0;
         self.since_report = 0;

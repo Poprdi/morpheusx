@@ -40,7 +40,6 @@ pub struct ChunkReader {
 }
 
 impl ChunkReader {
-    /// Create a reader from a manifest
     pub fn from_manifest(manifest: &IsoManifest) -> Result<Self, IsoError> {
         if manifest.chunks.count == 0 {
             return Err(IsoError::ManifestNotFound);
@@ -55,7 +54,6 @@ impl ChunkReader {
         })
     }
 
-    /// Create a reader from a chunk set
     pub fn from_chunks(chunks: ChunkSet, chunk_size: u64) -> Self {
         let total_size = chunks.total_size;
         Self {
@@ -67,7 +65,6 @@ impl ChunkReader {
         }
     }
 
-    /// Get total ISO size
     pub fn total_size(&self) -> u64 {
         self.total_size
     }
@@ -77,12 +74,10 @@ impl ChunkReader {
         self.position
     }
 
-    /// Get number of chunks
     pub fn num_chunks(&self) -> usize {
         self.chunks.count
     }
 
-    /// Seek to a position
     pub fn seek(&mut self, position: u64) -> Result<(), IsoError> {
         if position > self.total_size {
             return Err(IsoError::ReadOverflow);
@@ -235,7 +230,6 @@ impl ChunkReader {
         Ok(total_read)
     }
 
-    /// Get chunk info by index
     pub fn get_chunk(&self, index: usize) -> Option<&ChunkInfo> {
         self.chunks.get(index)
     }
@@ -263,7 +257,6 @@ pub struct IsoReadContext {
 }
 
 impl IsoReadContext {
-    /// Create from a manifest
     pub fn from_manifest(manifest: &IsoManifest) -> Self {
         let mut chunk_lbas = [(0u64, 0u64); MAX_CHUNKS];
         let mut chunk_sizes = [0u64; MAX_CHUNKS];
@@ -282,7 +275,6 @@ impl IsoReadContext {
         }
     }
 
-    /// Create from a ChunkReader
     pub fn from_reader(reader: &ChunkReader) -> Self {
         let mut chunk_lbas = [(0u64, 0u64); MAX_CHUNKS];
         let mut chunk_sizes = [0u64; MAX_CHUNKS];

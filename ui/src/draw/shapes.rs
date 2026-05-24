@@ -27,14 +27,10 @@ pub fn rect_outline(
         return;
     }
     let t = thickness.min(w / 2).min(h / 2).max(1);
-    // Top edge
     canvas.fill_rect(x, y, w, t, color);
-    // Bottom edge
     canvas.fill_rect(x, y.saturating_add(h).saturating_sub(t), w, t, color);
-    // Left edge (between top and bottom)
     if h > t * 2 {
         canvas.fill_rect(x, y + t, t, h - t * 2, color);
-        // Right edge
         canvas.fill_rect(
             x.saturating_add(w).saturating_sub(t),
             y + t,
@@ -144,18 +140,17 @@ pub fn rounded_rect_fill(
         return;
     }
 
-    // Straight middle section (between corner rows)
+    // Middle strip, between top and bottom corner arcs.
     if h > r * 2 {
         canvas.fill_rect(x, y + r, w, h - r * 2, color);
     }
 
-    // Corner arcs via midpoint circle scanlines
+    // Midpoint circle: emit one scanline per octant step.
     let mut cx_i = 0i32;
     let mut cy_i = r as i32;
     let mut d = 1 - r as i32;
 
     while cx_i <= cy_i {
-        // Top corners
         let top_y1 = y + r - cy_i as u32;
         let top_y2 = y + r - cx_i as u32;
         let bot_y1 = y + h - 1 - r + cy_i as u32;
@@ -164,7 +159,6 @@ pub fn rounded_rect_fill(
         let x_span1 = cx_i as u32;
         let x_span2 = cy_i as u32;
 
-        // Horizontal fills for the rounded sections
         canvas.fill_rect(x + r - x_span1, top_y1, w - 2 * (r - x_span1), 1, color);
         canvas.fill_rect(x + r - x_span2, top_y2, w - 2 * (r - x_span2), 1, color);
         canvas.fill_rect(x + r - x_span1, bot_y1, w - 2 * (r - x_span1), 1, color);
@@ -199,7 +193,6 @@ pub fn rounded_rect_outline(
         return;
     }
 
-    // Straight edges
     if w > r * 2 {
         hline(canvas, x + r, y, w - r * 2, color);
         hline(canvas, x + r, y + h - 1, w - r * 2, color);
@@ -209,7 +202,6 @@ pub fn rounded_rect_outline(
         vline(canvas, x + w - 1, y + r, h - r * 2, color);
     }
 
-    // Corner arcs
     let mut cx_i = 0i32;
     let mut cy_i = r as i32;
     let mut d = 1 - r as i32;

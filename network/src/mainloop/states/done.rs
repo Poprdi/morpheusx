@@ -168,7 +168,6 @@ impl FailedState {
         }
     }
 
-    /// Get failure reason.
     pub fn reason(&self) -> &'static str {
         self.reason
     }

@@ -1,6 +1,4 @@
-//! ISO9660 extensions support
+//! ISO 9660 extensions. Joliet decoding lives in `volume/supplementary.rs`.
 
 #[cfg(feature = "rock-ridge")]
 pub mod rock_ridge;
-
-// Joliet support is in volume/supplementary.rs

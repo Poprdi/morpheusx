@@ -1,13 +1,7 @@
-//! UEFI SimpleTextOutput passthrough backend.
-//!
-//! This is the pre-ExitBootServices backend that forwards all calls
-//! to the UEFI firmware's SimpleTextOutput protocol.
+//! Pre-ExitBootServices passthrough to EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL.
 
 use crate::TextOutput;
 
-/// UEFI Simple Text Output Protocol interface.
-///
-/// This matches the EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL structure.
 #[repr(C)]
 pub struct SimpleTextOutputProtocol {
     pub reset: unsafe extern "efiapi" fn(*mut Self, bool) -> usize,
@@ -22,7 +16,6 @@ pub struct SimpleTextOutputProtocol {
     pub mode: *mut SimpleTextOutputMode,
 }
 
-/// UEFI Simple Text Output Mode.
 #[repr(C)]
 pub struct SimpleTextOutputMode {
     pub max_mode: i32,
@@ -33,7 +26,6 @@ pub struct SimpleTextOutputMode {
     pub cursor_visible: bool,
 }
 
-/// UEFI-based text output that passes through to firmware.
 pub struct UefiTextOutput {
     protocol: *mut SimpleTextOutputProtocol,
     cols: usize,
@@ -41,16 +33,11 @@ pub struct UefiTextOutput {
 }
 
 impl UefiTextOutput {
-    /// Create a new UEFI text output from a protocol pointer.
-    ///
-    /// # Safety
-    /// The protocol pointer must be valid and remain valid for the lifetime
-    /// of this struct. Must only be used before ExitBootServices.
+    /// SAFETY: `protocol` must be valid and used only before ExitBootServices.
     pub unsafe fn new(protocol: *mut SimpleTextOutputProtocol) -> Self {
         let mut cols: usize = 80;
         let mut rows: usize = 25;
 
-        // Query current mode dimensions
         let mode = (*protocol).mode;
         if !mode.is_null() {
             let current_mode = (*mode).mode as usize;
@@ -64,8 +51,7 @@ impl UefiTextOutput {
         }
     }
 
-    /// Convert a Rust &str to a UCS-2 buffer on the stack.
-    /// Returns the buffer and its length (including null terminator).
+    /// UCS-2 stack buffer including trailing null.
     fn str_to_ucs2<const N: usize>(s: &str) -> [u16; N] {
         let mut buf = [0u16; N];
         for (i, c) in s.chars().take(N - 1).enumerate() {
@@ -112,14 +98,14 @@ impl TextOutput for UefiTextOutput {
     }
 
     fn write_str(&mut self, s: &str) {
-        // Process in chunks to avoid large stack allocations
+        // Chunked to keep stack frame small.
         const CHUNK_SIZE: usize = 128;
         let mut buf = [0u16; CHUNK_SIZE];
         let mut idx = 0;
 
         for c in s.chars() {
             if c == '\n' {
-                // UEFI needs \r\n for newlines
+                // UEFI requires CRLF.
                 if idx > 0 {
                     buf[idx] = 0;
                     unsafe {

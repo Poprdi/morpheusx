@@ -1,7 +1,4 @@
 //! Buffer pool management.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §3.5
 
 use super::buffer::DmaBuffer;
 use super::ownership::BufferOwnership;
@@ -27,12 +24,6 @@ pub struct BufferPool {
 
 impl BufferPool {
     /// Create a new buffer pool from DMA region.
-    ///
-    /// # Arguments
-    /// - `cpu_base`: CPU pointer to buffer region start
-    /// - `bus_base`: Bus address of buffer region start
-    /// - `buffer_size`: Size of each buffer (should be >= 1526 for RX)
-    /// - `count`: Number of buffers (max 32)
     ///
     /// # Safety
     /// - `cpu_base` must point to valid DMA-capable memory
@@ -84,9 +75,6 @@ impl BufferPool {
     }
 
     /// Return a buffer to the pool.
-    ///
-    /// # Arguments
-    /// - `index`: Buffer index (must be valid and driver-owned)
     pub fn free(&mut self, index: u16) {
         let idx = index as usize;
         assert!(idx < self.total_count, "Invalid buffer index");
@@ -113,9 +101,6 @@ impl BufferPool {
     }
 
     /// Get mutable reference to buffer by index.
-    ///
-    /// # Panics
-    /// Panics if index is out of range.
     pub fn get_mut(&mut self, index: u16) -> Option<&mut DmaBuffer> {
         let idx = index as usize;
         if idx >= self.total_count {
@@ -158,7 +143,6 @@ impl BufferPool {
         self.free_count == self.total_count
     }
 
-    /// Get buffer size.
     pub fn buffer_size(&self) -> usize {
         self.buffer_size
     }

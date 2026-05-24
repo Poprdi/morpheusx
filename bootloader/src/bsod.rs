@@ -9,21 +9,15 @@ mod bsod_bg_data_v1;
 use morpheus_display::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
 use morpheus_hwinit::serial::puts;
 
-use crate::baremetal;
+use crate::boot;
 
-// FRAMEBUFFER PRIMITIVES (no alloc, direct pixel writes)
-
-/// Write a single pixel to the framebuffer.
-///
-/// `stride` is pixels_per_scan_line (from GOP), NOT bytes.
-/// `format`: 0=RGBX, 1=BGRX.
+/// `stride` is pixels-per-scanline from GOP, not bytes. `format`: 0=RGBX, 1=BGRX.
 #[inline(always)]
 unsafe fn put_pixel(fb: *mut u32, stride: u32, x: u32, y: u32, rgb: u32) {
     let offset = (y as usize) * (stride as usize) + (x as usize);
     fb.add(offset).write_volatile(rgb);
 }
 
-/// Fill a rectangle with a solid color.
 unsafe fn fill_rect(fb: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, rgb: u32) {
     for row in y..y + h {
         for col in x..x + w {
@@ -32,41 +26,31 @@ unsafe fn fill_rect(fb: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, r
     }
 }
 
-/// Convert 0x00RRGGBB → framebuffer pixel value according to format.
 #[inline(always)]
 fn to_fb_pixel(rgb: u32, format: u32) -> u32 {
     let r = (rgb >> 16) & 0xFF;
     let g = (rgb >> 8) & 0xFF;
     let b = rgb & 0xFF;
     if format == 0 {
-        // RGBX: R in low byte
         (r) | (g << 8) | (b << 16)
     } else {
-        // BGRX (most common): B in low byte
         (b) | (g << 8) | (r << 16)
     }
 }
 
-// BACKGROUND IMAGE RENDERING
-
-/// Expand a palette index (0x0RGB, 4-bit/channel) to 0x00RRGGBB.
+/// 0x0RGB (4 bits/channel) → 0x00RRGGBB via nibble doubling.
 #[inline(always)]
 fn palette_to_rgb(color: u16) -> u32 {
     let r4 = ((color >> 8) & 0xF) as u32;
     let g4 = ((color >> 4) & 0xF) as u32;
     let b4 = (color & 0xF) as u32;
-    // Expand 4-bit to 8-bit: 0xN → 0xNN
     let r = (r4 << 4) | r4;
     let g = (g4 << 4) | g4;
     let b = (b4 << 4) | b4;
     (r << 16) | (g << 8) | b
 }
 
-/// Decode palette+RLE background image, scaled to fill the screen.
-/// Uses nearest-neighbor scaling from thumbnail to screen resolution.
-///
-/// v2 format: palette `[u16; N]` + RLE `[u8; M]` where each pair is
-/// `(count: u8, palette_index: u8)`.
+/// Nearest-neighbor scale of palette+RLE thumbnail to full screen.
 unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, format: u32) {
     let src_w = bsod_bg_data::BG_WIDTH;
     let src_h = bsod_bg_data::BG_HEIGHT;
@@ -74,12 +58,10 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
     let rle = &bsod_bg_data::BG_RLE_DATA;
     let rle_len = rle.len();
 
-    // RLE cursor state
-    let mut rle_byte_idx: usize = 0; // byte index into BG_RLE_DATA (steps by 2)
-    let mut rle_pos: u8 = 0; // position within current run
-    let mut src_pixel_idx: usize = 0; // linear source pixel index
+    let mut rle_byte_idx: usize = 0;
+    let mut rle_pos: u8 = 0;
+    let mut src_pixel_idx: usize = 0;
 
-    // Helper: read current run (count, palette_index) from RLE
     #[inline(always)]
     fn rle_run(rle: &[u8], byte_idx: usize) -> (u8, u8) {
         if byte_idx + 1 < rle.len() {
@@ -94,7 +76,6 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
         let target_row_start = (sy * src_w) as usize;
         let target_row_end = target_row_start + src_w as usize;
 
-        // Advance RLE cursor to start of this source row
         while src_pixel_idx < target_row_start && rle_byte_idx < rle_len {
             let (count, _idx) = rle_run(rle, rle_byte_idx);
             let remaining = count - rle_pos;
@@ -109,8 +90,7 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
             }
         }
 
-        // Extract source pixels for this row (on the stack — 120 × 4 = 480 bytes)
-        let mut row_buf = [0u32; 120]; // BG_WIDTH = 120
+        let mut row_buf = [0u32; 120]; // BG_WIDTH
         let mut ri = 0usize;
         let mut tmp_byte_idx = rle_byte_idx;
         let mut tmp_pos = rle_pos;
@@ -136,14 +116,12 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
             }
         }
 
-        // Blit source row → output row with nearest-neighbor X scaling
         for ox in 0..width {
             let sx = (ox as u64 * src_w as u64 / width as u64) as usize;
             let rgb = if sx < src_w as usize { row_buf[sx] } else { 0 };
             put_pixel(fb, stride, ox, oy, to_fb_pixel(rgb, format));
         }
 
-        // Advance master cursor if the next output row maps to a different source row
         let next_sy = if oy + 1 < height {
             ((oy + 1) as u64 * src_h as u64 / height as u64) as u32
         } else {
@@ -167,9 +145,6 @@ unsafe fn draw_background(fb: *mut u32, stride: u32, width: u32, height: u32, fo
     }
 }
 
-// TEXT RENDERING (8×16 VGA font, directly to framebuffer)
-
-/// Draw a character at (x, y) pixel position.
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_char(
     fb: *mut u32,
@@ -192,7 +167,6 @@ unsafe fn draw_char(
         let bits = glyph[row as usize];
         for col in 0..FONT_WIDTH as u32 {
             if bits & (0x80 >> col) != 0 {
-                // Draw scaled pixel block
                 for sy in 0..scale {
                     for sx in 0..scale {
                         let px = x + col * scale + sx;
@@ -207,7 +181,7 @@ unsafe fn draw_char(
     }
 }
 
-/// Draw a string at (x, y), returning the next Y position.
+/// Returns the next Y position after the drawn string.
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_string(
     fb: *mut u32,
@@ -245,9 +219,6 @@ unsafe fn draw_string(
     cy + char_h + 2
 }
 
-// SAD FACE DRAWING
-
-/// Draw a sad face emoticon centered at (cx, cy) with given radius.
 #[allow(clippy::too_many_arguments)]
 unsafe fn draw_sad_face(
     fb: *mut u32,
@@ -265,15 +236,11 @@ unsafe fn draw_sad_face(
     let cxi = cx as i64;
     let cyi = cy as i64;
 
-    // Draw circle outline (Bresenham-ish thick circle)
     for angle_step in 0..720 {
-        // Use integer approximation of circle
-        // x = cx + r*cos(theta), y = cy + r*sin(theta)
-        // We'll use the midpoint circle algorithm instead
         let _ = angle_step;
     }
 
-    // Midpoint circle - outline with thickness 3
+    // Midpoint circle, thickness 3
     for thickness in 0..3i64 {
         let tr = r - thickness;
         if tr <= 0 {
@@ -283,7 +250,6 @@ unsafe fn draw_sad_face(
         let mut y = tr;
         let mut d = 1 - tr;
         while x <= y {
-            // Draw 8 octants
             for &(px, py) in &[
                 (cxi + x, cyi + y),
                 (cxi + y, cyi + x),
@@ -308,7 +274,6 @@ unsafe fn draw_sad_face(
         }
     }
 
-    // Left eye: filled circle at (-r/3, -r/4) with radius r/6
     let eye_r = (r / 6).max(3);
     let left_eye_x = cxi - r / 3;
     let left_eye_y = cyi - r / 4;
@@ -352,9 +317,9 @@ unsafe fn draw_sad_face(
         }
     }
 
-    // Sad mouth: arc (frown) - draw an upside-down arc below center
+    // Frown: upside-down arc below center
     let mouth_r = (r * 2 / 5).max(4);
-    let mouth_cy = cyi + r / 3 + mouth_r; // center of frown arc (below the visible part)
+    let mouth_cy = cyi + r / 3 + mouth_r;
     for thickness in 0..2i64 {
         let mr = mouth_r - thickness;
         if mr <= 0 {
@@ -364,14 +329,12 @@ unsafe fn draw_sad_face(
         let mut y = mr;
         let mut d = 1 - mr;
         while x <= y {
-            // Only draw the top half of the circle (the frown part)
             for &(px, py) in &[
                 (cxi + x, mouth_cy - y),
                 (cxi + y, mouth_cy - x),
                 (cxi - x, mouth_cy - y),
                 (cxi - y, mouth_cy - x),
             ] {
-                // Only within the mouth region
                 let in_range = py >= cyi + r / 4 && py <= cyi + r / 2 + r / 4;
                 if in_range
                     && px >= 0
@@ -393,8 +356,6 @@ unsafe fn draw_sad_face(
     }
 }
 
-// HEX FORMATTING (no alloc)
-
 fn hex64(val: u64, buf: &mut [u8; 18]) -> &str {
     buf[0] = b'0';
     buf[1] = b'x';
@@ -402,7 +363,7 @@ fn hex64(val: u64, buf: &mut [u8; 18]) -> &str {
     for i in 0..16 {
         buf[2 + i] = digits[((val >> (60 - i * 4)) & 0xF) as usize];
     }
-    // Safety: all bytes are ASCII
+    // SAFETY: all bytes are ASCII.
     unsafe { core::str::from_utf8_unchecked(&buf[..18]) }
 }
 
@@ -432,9 +393,6 @@ fn dec32(val: u32, buf: &mut [u8; 10]) -> &str {
     unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
 }
 
-// PUBLIC API — CRASH SCREEN
-
-/// Exception names for the crash screen (kept for show_panic_screen / future use).
 #[allow(dead_code)]
 const EXCEPTION_NAMES: [&str; 32] = [
     "DIVIDE_BY_ZERO",
@@ -471,7 +429,7 @@ const EXCEPTION_NAMES: [&str; 32] = [
     "RESERVED",
 ];
 
-/// Zero-alloc inline string builder for formatting crash screen lines.
+/// Fixed-buffer string builder for crash-screen lines.
 struct Line {
     buf: [u8; 96],
     pos: usize,
@@ -503,16 +461,10 @@ impl Line {
     }
 }
 
-/// Display the full crash screen (BSoD) on the framebuffer.
-///
-/// Receives a rich [`morpheus_hwinit::CrashInfo`] containing all registers,
-/// process context, human-readable explanation, and a kernel-mode backtrace.
-///
 /// # Safety
-/// Must only be called when the system is in a fatal state.
-/// Does not allocate — writes directly to the framebuffer.
+/// Only valid in a fatal state. Writes directly to the framebuffer, no alloc.
 pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
-    let fb_info = match baremetal::get_framebuffer_info() {
+    let fb_info = match boot::published_framebuffer() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => {
             puts("[BSOD] No framebuffer available\n");
@@ -528,10 +480,9 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
 
     puts("[BSOD] Drawing crash screen...\n");
 
-    // 1. Background image (scaled Morpheus thumbnail)
     draw_background(fb, stride, w, h, fmt);
 
-    // 2. Semi-transparent dark overlay panel
+    // Dark overlay panel (1/3 brightness blend)
     let panel_w = w * 4 / 5;
     let panel_h = h * 5 / 6;
     let panel_x = (w - panel_w) / 2;
@@ -549,7 +500,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         }
     }
 
-    // 3. Border
     let border_color = to_fb_pixel(0x661111, fmt);
     for t in 0..2u32 {
         for col in panel_x..panel_x + panel_w {
@@ -562,7 +512,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         }
     }
 
-    // Layout parameters
     let scale = if w >= 1920 { 2u32 } else { 1 };
     let margin = 24u32 * scale;
     let text_x = panel_x + margin;
@@ -578,7 +527,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     let mut dbuf = [0u8; 10];
     let mut line = Line::new();
 
-    // 4. Sad face + title
     let face_size = if w >= 1920 { 50u32 } else { 30 };
     let face_cx = text_x + face_size;
     let face_cy = text_y + face_size;
@@ -600,7 +548,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y = text_y.max(face_cy + face_size + 10);
 
-    // 5. Subtitle
     text_y = draw_string(
         fb,
         stride,
@@ -615,7 +562,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y += 6 * scale;
 
-    // 6. Process identification
     line.clear();
     line.push("Process: ");
     let name_end = info.process_name.iter().position(|&b| b == 0).unwrap_or(32);
@@ -642,7 +588,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y += 6 * scale;
 
-    // 7. Exception stop code
     line.clear();
     line.push("*** ");
     line.push(info.exception_name);
@@ -667,7 +612,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         scale,
     );
 
-    // 8. Explanation
     if info.explanation_len > 0 {
         if let Ok(s) = core::str::from_utf8(&info.explanation[..info.explanation_len as usize]) {
             text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, s, yellow, scale);
@@ -675,7 +619,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     }
     text_y += 6 * scale;
 
-    // 9. Exception frame
     text_y = draw_string(
         fb,
         stride,
@@ -762,7 +705,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         scale,
     );
 
-    // Page fault bit decode
+    // #PF error-code bit decode
     if info.vector == 14 {
         line.clear();
         line.push("Flags: ");
@@ -802,7 +745,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     }
     text_y += 4 * scale;
 
-    // 10. All general-purpose registers (2 per line)
     text_y = draw_string(
         fb,
         stride,
@@ -862,7 +804,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y += 4 * scale;
 
-    // 11. Backtrace (kernel-mode only, if available)
     if info.backtrace_depth > 0 {
         text_y = draw_string(
             fb,
@@ -876,7 +817,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
             gray,
             scale,
         );
-        let show = (info.backtrace_depth as usize).min(10); // cap to avoid overflow
+        let show = (info.backtrace_depth as usize).min(10);
         for i in 0..show {
             line.clear();
             line.push("#");
@@ -899,7 +840,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         text_y += 4 * scale;
     }
 
-    // 12. Footer
     let _ = draw_string(
         fb,
         stride,
@@ -916,12 +856,10 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     puts("[BSOD] Crash screen rendered\n");
 }
 
-/// Display a panic screen with source location.
-///
 /// # Safety
 /// Same constraints as `show_crash_screen`.
 pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
-    let fb_info = match baremetal::get_framebuffer_info() {
+    let fb_info = match boot::published_framebuffer() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => return,
     };
@@ -932,10 +870,8 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     let h = fb_info.height;
     let fmt = fb_info.format;
 
-    // Draw background
     draw_background(fb, stride, w, h, fmt);
 
-    // Dark overlay
     let panel_w = w * 3 / 4;
     let panel_h = h * 3 / 4;
     let panel_x = (w - panel_w) / 2;
@@ -953,7 +889,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         }
     }
 
-    // Border
     let border_color = to_fb_pixel(0x661111, fmt);
     for t in 0..2u32 {
         for c in panel_x..panel_x + panel_w {
@@ -975,7 +910,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     let red = 0xFF4444;
     let gray = 0x999999;
 
-    // Sad face
     let face_size = if w >= 1920 { 50u32 } else { 30 };
     draw_sad_face(
         fb,
@@ -989,7 +923,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         white,
     );
 
-    // Title
     let title_x = text_x + face_size * 2 + 30;
     text_y = draw_string(
         fb,
@@ -1033,7 +966,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     );
     text_y += 8 * scale;
 
-    // File location
     text_y = draw_string(
         fb,
         stride,
@@ -1047,7 +979,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         scale,
     );
 
-    // File name (may be long, just print as-is)
     text_y = draw_string(
         fb,
         stride,
@@ -1061,7 +992,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         scale,
     );
 
-    // Line number
     let mut buf32 = [0u8; 10];
     let mut line_info = [0u8; 20];
     line_info[..6].copy_from_slice(b"Line: ");

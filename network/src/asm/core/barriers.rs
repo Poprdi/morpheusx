@@ -1,7 +1,4 @@
 //! Memory barrier bindings.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.2.1, §2.4
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

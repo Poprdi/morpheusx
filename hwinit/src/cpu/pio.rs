@@ -2,9 +2,6 @@
 //!
 //! # Safety
 //! Port must be valid I/O port for the operation.
-//!
-//! # Reference
-//! ARCHITECTURE_V3.md - PIO layer
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

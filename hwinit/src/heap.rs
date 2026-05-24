@@ -187,9 +187,6 @@ unsafe fn try_grow_heap(state: &mut HeapState, needed: usize) -> bool {
 
 /// Initialize the heap allocator.
 ///
-/// # Arguments
-/// - `initial_size`: Initial heap size in bytes (will be rounded up to page size)
-///
 /// # Safety
 /// - Must be called after memory registry is initialized
 /// - Must be called exactly once
@@ -265,12 +262,10 @@ pub unsafe fn init_heap_with_buffer(buffer: *mut u8, size: usize) -> Result<(), 
     Ok(())
 }
 
-/// Check if heap is initialized.
 pub fn is_heap_initialized() -> bool {
     unsafe { HEAP_INITIALIZED }
 }
 
-/// Get heap statistics.
 pub fn heap_stats() -> Option<(usize, usize, usize)> {
     let guard = HEAP.lock();
     guard

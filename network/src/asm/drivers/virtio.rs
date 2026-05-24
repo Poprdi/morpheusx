@@ -1,15 +1,9 @@
 //! VirtIO ASM bindings.
 //!
 //! Complete bindings for VirtIO device initialization and virtqueue operations.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.2.2, §4
 
 use crate::types::repr_c::{RxResult, VirtqueueState};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Device Initialization Functions
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -44,9 +38,6 @@ extern "win64" {
     fn asm_virtio_read_mac(mmio_base: u64, mac_out: *mut [u8; 6]) -> u32;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Virtqueue Configuration Functions
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -101,9 +92,6 @@ extern "win64" {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TX/RX Operations
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -130,9 +118,6 @@ extern "win64" {
     fn asm_vq_rx_pending(vq: *mut VirtqueueState) -> u16;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Queue Notification
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -149,9 +134,6 @@ extern "win64" {
     fn asm_vq_set_notify_addr(vq: *mut VirtqueueState, addr: u64);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Safe Rust Wrappers
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// VirtIO device operations.
 pub mod device {
@@ -163,13 +145,11 @@ pub mod device {
         unsafe { asm_virtio_verify_magic(mmio_base) == 1 }
     }
 
-    /// Get device version (2 = modern VirtIO 1.0+).
     #[cfg(target_arch = "x86_64")]
     pub fn get_version(mmio_base: u64) -> u32 {
         unsafe { asm_virtio_get_version(mmio_base) }
     }
 
-    /// Get device type ID (1 = network).
     #[cfg(target_arch = "x86_64")]
     pub fn get_device_id(mmio_base: u64) -> u32 {
         unsafe { asm_virtio_get_device_id(mmio_base) }
@@ -181,25 +161,21 @@ pub mod device {
         unsafe { asm_virtio_reset(mmio_base) == 0 }
     }
 
-    /// Set device status bits.
     #[cfg(target_arch = "x86_64")]
     pub fn set_status(mmio_base: u64, status: u8) {
         unsafe { asm_virtio_set_status(mmio_base, status) }
     }
 
-    /// Get current device status.
     #[cfg(target_arch = "x86_64")]
     pub fn get_status(mmio_base: u64) -> u8 {
         unsafe { asm_virtio_get_status(mmio_base) }
     }
 
-    /// Read device feature bits.
     #[cfg(target_arch = "x86_64")]
     pub fn read_features(mmio_base: u64) -> u64 {
         unsafe { asm_virtio_read_features(mmio_base) }
     }
 
-    /// Write driver-accepted feature bits.
     #[cfg(target_arch = "x86_64")]
     pub fn write_features(mmio_base: u64, features: u64) {
         unsafe { asm_virtio_write_features(mmio_base, features) }
@@ -255,13 +231,11 @@ pub mod device {
 pub mod queue {
     use super::*;
 
-    /// Select a virtqueue by index.
     #[cfg(target_arch = "x86_64")]
     pub fn select(mmio_base: u64, queue_idx: u16) {
         unsafe { asm_vq_select(mmio_base, queue_idx) }
     }
 
-    /// Get max queue size for selected queue.
     #[cfg(target_arch = "x86_64")]
     pub fn get_max_size(mmio_base: u64) -> u16 {
         unsafe { asm_vq_get_max_size(mmio_base) }
@@ -273,7 +247,6 @@ pub mod queue {
         unsafe { asm_vq_get_max_size(mmio_base) }
     }
 
-    /// Set queue size.
     #[cfg(target_arch = "x86_64")]
     pub fn set_size(mmio_base: u64, size: u16) {
         unsafe { asm_vq_set_size(mmio_base, size) }
@@ -285,13 +258,11 @@ pub mod queue {
         unsafe { asm_vq_set_desc(mmio_base, addr) }
     }
 
-    /// Set driver (available) ring address.
     #[cfg(target_arch = "x86_64")]
     pub fn set_driver_addr(mmio_base: u64, addr: u64) {
         unsafe { asm_vq_set_driver(mmio_base, addr) }
     }
 
-    /// Set device (used) ring address.
     #[cfg(target_arch = "x86_64")]
     pub fn set_device_addr(mmio_base: u64, addr: u64) {
         unsafe { asm_vq_set_device(mmio_base, addr) }
@@ -303,7 +274,6 @@ pub mod queue {
         unsafe { asm_vq_enable(mmio_base) }
     }
 
-    /// Full queue setup.
     #[cfg(target_arch = "x86_64")]
     pub fn setup(
         mmio_base: u64,
@@ -392,7 +362,6 @@ pub mod tx {
         }
     }
 
-    /// Get number of available TX slots.
     #[cfg(target_arch = "x86_64")]
     pub fn available_slots(vq: &mut VirtqueueState) -> u16 {
         unsafe { asm_vq_tx_avail_slots(vq) }
@@ -471,7 +440,6 @@ pub mod notify {
         unsafe { asm_vq_notify(vq) }
     }
 
-    /// Direct notify with explicit address.
     #[cfg(target_arch = "x86_64")]
     pub fn notify_direct(notify_addr: u64, queue_idx: u16) {
         unsafe { asm_vq_notify_direct(notify_addr, queue_idx) }

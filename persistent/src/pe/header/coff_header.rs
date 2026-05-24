@@ -66,7 +66,6 @@ impl CoffHeader {
         }
     }
 
-    /// Get machine name
     pub fn machine_name(&self) -> &'static str {
         match self.machine {
             Self::MACHINE_AMD64 => "x86_64 (AMD64)",

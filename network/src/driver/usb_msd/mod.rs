@@ -10,9 +10,6 @@ use crate::driver::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ASM externs
-// ═══════════════════════════════════════════════════════════════════════════
 
 extern "win64" {
     /// Reads CAPLENGTH + HCIVERSION.  0 = dead controller.
@@ -24,9 +21,6 @@ extern "win64" {
     fn asm_xhci_bios_handoff(mmio_base: u64, hccparams1: u64, tsc_freq: u64) -> u32;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// xHCI register offsets (operational, from op_base)
-// ═══════════════════════════════════════════════════════════════════════════
 
 const OP_USBCMD: u64 = 0x00;
 const OP_USBSTS: u64 = 0x04;
@@ -71,9 +65,6 @@ const PLS_INACTIVE: u32 = 0x6 << 5;
 const PLS_POLLING: u32 = 0x7 << 5;
 const PLS_COMPLIANCE: u32 = 0xA << 5;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TRB types (pre-shifted to bits 15:10)
-// ═══════════════════════════════════════════════════════════════════════════
 
 const TRB_NORMAL: u32 = 1 << 10;
 const TRB_SETUP: u32 = 2 << 10;
@@ -97,9 +88,6 @@ const TRB_TRT_IN: u32 = 3 << 16;
 
 const TRB_TYPE_MASK: u32 = 0x3F << 10;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// USB / SCSI / BOT constants
-// ═══════════════════════════════════════════════════════════════════════════
 
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
 const USB_CLASS_HUB: u8 = 0x09;
@@ -112,9 +100,6 @@ const SCSI_TEST_UNIT_READY: u8 = 0x00;
 const SCSI_READ_CAPACITY_10: u8 = 0x25;
 const SCSI_READ_10: u8 = 0x28;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DMA region layout — all offsets 64-byte aligned inside a 64KB-aligned buf
-// ═══════════════════════════════════════════════════════════════════════════
 
 const DMA_SIZE: usize = 0x48000;
 const CMD_RING_LEN: u8 = 32;
@@ -144,9 +129,6 @@ struct XhciDma([u8; DMA_SIZE]);
 
 static mut XHCI_DMA: XhciDma = XhciDma([0u8; DMA_SIZE]);
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Public types (kept wire-compatible with scaffold)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// USB mass-storage configuration.
 #[derive(Debug, Clone)]
@@ -241,9 +223,6 @@ impl core::fmt::Display for UsbMsdInitError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Transfer ring identifier
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[derive(Clone, Copy)]
 enum Ring {
@@ -265,9 +244,6 @@ enum ConfigParse {
     None,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Driver state
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub struct UsbMsdDriver {
     // xHCI register bases
@@ -302,9 +278,6 @@ pub struct UsbMsdDriver {
     bot_tag: u32,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Volatile helpers (DMA RAM, NOT mmio)
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[inline(always)]
 unsafe fn vr32(a: u64) -> u32 {
@@ -370,9 +343,6 @@ fn warm_reset_needed(ps: u32) -> bool {
         || speed >= 4
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Implementation
-// ═══════════════════════════════════════════════════════════════════════════
 
 // serial and framebuffer diagnostics via console hook
 fn dbg(s: &str) {
@@ -1735,9 +1705,6 @@ impl UsbMsdDriver {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BlockDriverInit
-// ═══════════════════════════════════════════════════════════════════════════
 
 impl BlockDriverInit for UsbMsdDriver {
     type Error = UsbMsdInitError;
@@ -1756,9 +1723,6 @@ impl BlockDriverInit for UsbMsdDriver {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BlockDriver
-// ═══════════════════════════════════════════════════════════════════════════
 
 impl BlockDriver for UsbMsdDriver {
     fn info(&self) -> BlockDeviceInfo {

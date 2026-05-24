@@ -1,11 +1,8 @@
 //! PCI enumeration and configuration access.
-//!
-//! # Reference
-//! - PCI Local Bus Spec 3.0
-//! - VirtIO Spec 1.2 §4.1.4
 
 pub mod capability;
 pub mod config;
+pub mod dump;
 
 pub use capability::{
     VirtioCapInfo, VirtioPciCaps, VIRTIO_PCI_CAP_COMMON, VIRTIO_PCI_CAP_DEVICE, VIRTIO_PCI_CAP_ISR,

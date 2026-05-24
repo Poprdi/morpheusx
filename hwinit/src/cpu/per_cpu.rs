@@ -292,19 +292,16 @@ pub unsafe fn by_index(idx: u32) -> &'static mut PerCpu {
     &mut PER_CPU_ARRAY[idx as usize]
 }
 
-/// Get PerCpu by LAPIC ID.
 #[inline(always)]
 pub unsafe fn by_lapic_id(lapic_id: u32) -> Option<&'static mut PerCpu> {
     lapic_id_to_index(lapic_id).map(|idx| &mut PER_CPU_ARRAY[idx as usize])
 }
 
-/// Current core's sequential index (0 = BSP).
 #[inline(always)]
 pub unsafe fn current_core_index() -> u32 {
     current().core_index
 }
 
-/// Current core's LAPIC ID.
 #[inline(always)]
 pub unsafe fn current_lapic_id() -> u32 {
     let id: u32;
@@ -316,7 +313,6 @@ pub unsafe fn current_lapic_id() -> u32 {
     id
 }
 
-/// PID running on the current core.
 #[inline(always)]
 pub unsafe fn current_pid() -> u32 {
     let pid: u32;
@@ -328,7 +324,6 @@ pub unsafe fn current_pid() -> u32 {
     pid
 }
 
-/// Set the PID running on the current core.
 #[inline(always)]
 pub unsafe fn set_current_pid(pid: u32) {
     core::arch::asm!(

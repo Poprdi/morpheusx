@@ -16,7 +16,6 @@ impl TimeoutConfig {
         }
     }
 
-    /// DHCP timeout (30 seconds)
     #[inline]
     pub fn dhcp(&self) -> u64 {
         30_000 * self.ticks_per_ms
@@ -28,25 +27,21 @@ impl TimeoutConfig {
         5_000 * self.ticks_per_ms
     }
 
-    /// TCP connect timeout (30 seconds)
     #[inline]
     pub fn tcp_connect(&self) -> u64 {
         30_000 * self.ticks_per_ms
     }
 
-    /// TCP close timeout (10 seconds)
     #[inline]
     pub fn tcp_close(&self) -> u64 {
         10_000 * self.ticks_per_ms
     }
 
-    /// HTTP send timeout (30 seconds)
     #[inline]
     pub fn http_send(&self) -> u64 {
         30_000 * self.ticks_per_ms
     }
 
-    /// HTTP receive timeout (60 seconds)
     #[inline]
     pub fn http_receive(&self) -> u64 {
         60_000 * self.ticks_per_ms
@@ -64,19 +59,16 @@ impl TimeoutConfig {
         5 * self.ticks_per_ms
     }
 
-    /// Device reset timeout (100ms)
     #[inline]
     pub fn device_reset(&self) -> u64 {
         100 * self.ticks_per_ms
     }
 
-    /// Convert milliseconds to ticks
     #[inline]
     pub fn ms_to_ticks(&self, ms: u64) -> u64 {
         ms * self.ticks_per_ms
     }
 
-    /// Convert ticks to milliseconds
     #[inline]
     pub fn ticks_to_ms(&self, ticks: u64) -> u64 {
         ticks / self.ticks_per_ms

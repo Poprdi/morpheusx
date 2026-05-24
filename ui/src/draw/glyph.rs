@@ -18,7 +18,7 @@ pub fn draw_glyph(
             break;
         }
 
-        // Fast path: entire row is one color
+        // Solid rows: single fill_rect.
         if row_bits == 0x00 {
             if gx + 8 <= cw {
                 canvas.fill_rect(gx, py, 8, 1, bg);
@@ -32,7 +32,7 @@ pub fn draw_glyph(
             continue;
         }
 
-        // Run-length encode: collapse consecutive same-color pixels
+        // Mixed: emit each run as one fill_rect.
         let mut x = 0u32;
         while x < 8 {
             if gx + x >= cw {
@@ -67,7 +67,7 @@ pub fn draw_char(
     let glyph = if (0x20..=0x7E).contains(&idx) {
         &font_data[idx - 0x20]
     } else {
-        &font_data[0] // space fallback
+        &font_data[0]
     };
     draw_glyph(canvas, x, y, glyph, fg, bg);
 }

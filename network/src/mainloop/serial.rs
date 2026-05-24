@@ -59,7 +59,6 @@ pub fn println(s: &str) {
     print("\r\n");
 }
 
-/// Print a byte as two hex digits.
 pub fn print_hex_byte(value: u8) {
     let hi = value >> 4;
     let lo = value & 0xF;
@@ -74,7 +73,6 @@ pub fn print_hex_byte(value: u8) {
     }
 }
 
-/// Print a u64 as hex with 0x prefix.
 pub fn print_hex(value: u64) {
     print("0x");
     let mut buf = [0u8; 16];
@@ -94,7 +92,6 @@ pub fn print_hex(value: u64) {
     }
 }
 
-/// Print a u32 as decimal.
 pub fn print_u32(value: u32) {
     if value == 0 {
         write_byte(b'0');
@@ -127,7 +124,6 @@ pub fn print_u32(value: u32) {
     }
 }
 
-/// Print MAC address in XX:XX:XX:XX:XX:XX format.
 pub fn print_mac(mac: &[u8; 6]) {
     for (i, byte) in mac.iter().enumerate() {
         if i > 0 {
@@ -137,7 +133,6 @@ pub fn print_mac(mac: &[u8; 6]) {
     }
 }
 
-/// Print IPv4 address in dotted decimal.
 pub fn print_ipv4(octets: &[u8; 4]) {
     for (i, octet) in octets.iter().enumerate() {
         if i > 0 {

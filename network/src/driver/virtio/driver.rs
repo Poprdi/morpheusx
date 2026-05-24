@@ -1,7 +1,4 @@
 //! VirtIO driver implementation.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §4, §8.4
 
 use super::config::{VirtioConfig, VIRTIO_NET_DEVICE_IDS, VIRTIO_VENDOR_ID};
 use super::init::{virtio_net_init, virtio_net_init_transport, VirtioInitError};
@@ -33,10 +30,6 @@ pub struct VirtioNetDriver {
 
 impl VirtioNetDriver {
     /// Create a new VirtIO driver (legacy MMIO path).
-    ///
-    /// # Arguments
-    /// - `mmio_base`: Device MMIO base address
-    /// - `config`: DMA configuration
     ///
     /// # Safety
     /// - `mmio_base` must be valid VirtIO MMIO address
@@ -80,11 +73,6 @@ impl VirtioNetDriver {
     /// Create a new VirtIO driver using transport abstraction.
     ///
     /// This constructor auto-selects MMIO or PCI Modern based on the transport.
-    ///
-    /// # Arguments
-    /// - `transport`: Transport handle (pre-configured)
-    /// - `config`: DMA configuration
-    /// - `tsc_freq`: TSC frequency for timeout calculations
     ///
     /// # Safety
     /// - Transport addresses must be valid
@@ -130,17 +118,14 @@ impl VirtioNetDriver {
         Ok(driver)
     }
 
-    /// Get negotiated features.
     pub fn features(&self) -> u64 {
         self.features
     }
 
-    /// Get base address.
     pub fn mmio_base(&self) -> u64 {
         self.base_addr
     }
 
-    /// Get transport.
     pub fn transport(&self) -> &VirtioTransport {
         &self.transport
     }
@@ -155,12 +140,10 @@ impl VirtioNetDriver {
         &self.tx_state
     }
 
-    /// Get number of available RX buffers.
     pub fn rx_buffers_available(&self) -> usize {
         self.rx_pool.available()
     }
 
-    /// Get number of available TX buffers.
     pub fn tx_buffers_available(&self) -> usize {
         self.tx_pool.available()
     }

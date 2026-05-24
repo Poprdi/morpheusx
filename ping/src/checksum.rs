@@ -54,7 +54,6 @@ pub fn partial_checksum(data: &[u8], initial: u32) -> u32 {
     sum
 }
 
-/// Finalize a partial checksum
 pub fn finalize_checksum(sum: u32) -> u16 {
     let mut s = sum;
     while s >> 16 != 0 {

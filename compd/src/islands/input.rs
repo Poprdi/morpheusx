@@ -4,7 +4,7 @@ use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, TI
 use crate::messages::{InputMsg, MouseSpatialMsg, MouseZRouteMsg};
 use libmorpheus::{compositor as compsys, hw, io, process};
 
-const CTRL_BRACKET: u8 = 0x1D; // Ctrl+] — focus cycle scancode
+const CTRL_BRACKET: u8 = 0x1D; // Ctrl+] cycles focus.
 
 pub fn poll(state: &mut CompState) {
     poll_keyboard(state);
@@ -32,13 +32,11 @@ fn poll_keyboard(state: &mut CompState) {
     }
 
     if has_cycle {
-        // send focus cycle to focus island via channel
         if let Err(_) = state.ch_input_to_focus.send(InputMsg::FocusCycleRequest) {
-            // channel full. focus cycle dropped. user presses again. not the end of the world.
+            // Drop on full channel; user will press again.
         }
     }
 
-    // forward remaining keyboard bytes to focused window
     let mut fwd = [0u8; 32];
     let mut fi = 0usize;
     for b in kb.iter().take(n) {
@@ -62,7 +60,6 @@ fn poll_mouse(state: &mut CompState) {
         return;
     }
 
-    // clamped. because the mouse delta from the kernel is signed and the universe is cruel.
     let fb_w = state.fb_w as i32;
     let fb_h = state.fb_h as i32;
     state.mouse_x = (state.mouse_x + ms.dx as i32).clamp(0, fb_w - 1);
@@ -93,14 +90,14 @@ fn poll_mouse(state: &mut CompState) {
 }
 
 fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
-    // always keep desktop cursor in sync with absolute position.
+    // Keep desktop cursor in sync with absolute position every sample.
     enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 });
 
     if msg.left_released {
         state.capture = None;
     }
 
-    // panel is visually over windows (z3 overlay), so input there belongs to shelld.
+    // Panel is z3 overlay — input there goes to shelld, not the window beneath.
     if msg.in_panel {
         enqueue_mouse_route(
             state,
@@ -220,7 +217,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
 #[inline(always)]
 fn enqueue_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
     if let Err(msg) = state.ch_mouse_route.send(msg) {
-        // channel full. handle inline so no route decision gets dropped.
+        // Channel full: dispatch inline so no route decision is dropped.
         dispatch_mouse_route(state, msg);
     }
 }
@@ -251,7 +248,7 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
     }
 }
 
-/// forward mouse to shelld (desktop surface), derived from absolute global cursor.
+/// Forward mouse to shelld's desktop surface, mapped from absolute global cursor.
 fn forward_to_desktop(state: &mut CompState, buttons: u8) {
     if let Some(di) = state.desktop_idx {
         if let Some(ref mut dw) = state.windows[di] {
@@ -276,7 +273,7 @@ fn map_global_to_local(mx: i32, my: i32, win: &crate::islands::ChildWindow) -> (
     let sw = win.src_w.max(1) as i32;
     let sh = win.src_h.max(1) as i32;
 
-    // z0 is desktop-space; z1 is window content-space.
+    // z0 maps in desktop-space; z1 maps relative to window origin.
     let (rel_x, rel_y, ww, wh) = if win.z_layer == 0 {
         let ww = sw.max(1);
         let wh = sh.max(1);
@@ -310,15 +307,14 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
     let mut candidates: [Option<usize>; MAX_WINDOWS] = [None; MAX_WINDOWS];
     let mut cn = 0usize;
 
-    // focused window gets priority (checked first)
+    // Focused first, then topmost unfocused (highest index) downward.
     if let Some(fi) = state.focused {
         candidates[cn] = Some(fi);
         cn += 1;
     }
-    // then all others in reverse order (topmost unfocused = highest index)
     for (i, w) in state.windows.iter().enumerate().rev() {
         if let Some(ref win) = w {
-            // only hit-test z_layer 1 windows. desktop (z0) is not a window.
+            // z0 desktop is not hit-testable.
             if win.z_layer == 1 && state.focused != Some(i) {
                 candidates[cn] = Some(i);
                 cn += 1;
@@ -346,7 +342,6 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
                     continue;
                 }
 
-                // close button
                 let tb_x = outer_x + BORDER as i32;
                 let tb_y = outer_y + BORDER as i32;
                 let tb_w = win.w as i32;
@@ -360,19 +355,17 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
                     return Some((idx, HitRegion::Close));
                 }
 
-                // resize handle (bottom-right 14x14)
+                // 14x14 bottom-right resize grip.
                 let resize_x = win.x + win.w as i32 - 14;
                 let resize_y = win.y + win.h as i32 - 14;
                 if mx >= resize_x && my >= resize_y {
                     return Some((idx, HitRegion::Resize));
                 }
 
-                // title bar
                 if my >= tb_y && my < tb_y + TITLE_H as i32 {
                     return Some((idx, HitRegion::Title));
                 }
 
-                // content area
                 if mx >= win.x
                     && mx < win.x + win.w as i32
                     && my >= win.y

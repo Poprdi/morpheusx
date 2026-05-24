@@ -5,10 +5,9 @@ use libmorpheus::compositor as compsys;
 use libmorpheus::io;
 static COMPOSE_LOGGED: AtomicBool = AtomicBool::new(false);
 
-/// painter's algorithm with z-layers:
-///   z0: desktop background (shelld wallpaper) — fullscreen, no decorations
-///   z1: normal app windows — cascaded, decorations, unfocused first + focused last
-///   z3: panel overlay — re-blit bottom PANEL_H px from desktop surface above everything
+/// Painter's algorithm: z0 desktop (shelld fullscreen), z1 app windows
+/// (unfocused first, focused last), z3 panel re-blitted on top from the
+/// desktop surface so the taskbar stays visible.
 pub fn compose(state: &mut CompState) {
     if !COMPOSE_LOGGED.swap(true, Ordering::Relaxed) {
         if state.desktop_idx.is_some() {
@@ -19,8 +18,7 @@ pub fn compose(state: &mut CompState) {
     }
     let fb_ptr = state.fb_ptr;
 
-    // --- z-layer 0: desktop background ---
-    // if shelld is alive, blit its fullscreen surface. otherwise fall back to solid color.
+    // z0: desktop or solid fallback.
     let mut drew_desktop = false;
     if let Some(di) = state.desktop_idx {
         if let Some(ref dw) = state.windows[di] {
@@ -55,8 +53,7 @@ pub fn compose(state: &mut CompState) {
         );
     }
 
-    // --- z-layer 1: normal app windows ---
-    // build z-order: unfocused z1 windows first, focused z1 window last
+    // z1: unfocused first, focused last.
     let mut order = [0u16; MAX_WINDOWS];
     let mut n = 0usize;
     for (i, w) in state.windows.iter().enumerate() {
@@ -82,9 +79,7 @@ pub fn compose(state: &mut CompState) {
         draw_window(state, idx, is_focused);
     }
 
-    // --- z-layer 3: panel overlay ---
-    // re-blit bottom PANEL_H pixels from desktop surface OVER windows.
-    // ensures the taskbar is always visible even when windows overlap it.
+    // z3: panel overlay — bottom PANEL_H from desktop, on top of windows.
     if let Some(di) = state.desktop_idx {
         if let Some(ref dw) = state.windows[di] {
             if dw.mapped && !dw.surface_ptr.is_null() {
@@ -106,10 +101,8 @@ pub fn compose(state: &mut CompState) {
 
     draw_cursor(state, fb_ptr);
 
-    // present to hardware
     let _ = libmorpheus::hw::fb_present();
 
-    // clear dirty flags
     for win in state.windows.iter().flatten() {
         let _ = compsys::surface_dirty_clear(win.pid);
     }
@@ -118,7 +111,7 @@ pub fn compose(state: &mut CompState) {
 fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     let fb_ptr = state.fb_ptr;
 
-    // read all fields we need from the window before doing any rendering
+    // Snapshot fields before any rendering call mutates state.
     let (
         win_x,
         win_y,
@@ -164,9 +157,8 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     let outer_w = win_w + BORDER * 2;
     let outer_h = win_h + TITLE_H + BORDER * 2;
 
-    // border: top
+    // Border: top, left, right, bottom.
     clip_fill(state, fb_ptr, outer_x, outer_y, outer_w, BORDER, br, bg, bb);
-    // border: left
     clip_fill(
         state,
         fb_ptr,
@@ -178,7 +170,6 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         bg,
         bb,
     );
-    // border: right
     clip_fill(
         state,
         fb_ptr,
@@ -190,7 +181,6 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         bg,
         bb,
     );
-    // border: bottom
     clip_fill(
         state,
         fb_ptr,
@@ -203,13 +193,11 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         bb,
     );
 
-    // title bar
     let tb_x = outer_x + BORDER as i32;
     let tb_y = outer_y + BORDER as i32;
     let tb_w = outer_w - BORDER * 2;
     clip_fill(state, fb_ptr, tb_x, tb_y, tb_w, TITLE_H, tb_r, tb_g, tb_b);
 
-    // title text
     let title_str = core::str::from_utf8(&title_buf[..title_len]).unwrap_or("?");
     let text_x = (tb_x + 6).max(0);
     let text_y = (tb_y + (TITLE_H as i32 - 16) / 2).max(0);
@@ -223,7 +211,6 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         (tb_r, tb_g, tb_b),
     );
 
-    // close button "[X]"
     let close_x = (tb_x + tb_w as i32 - 32).max(0);
     draw_text(
         state,
@@ -235,7 +222,7 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         (tb_r, tb_g, tb_b),
     );
 
-    // resize handle
+    // Resize handle (12x12 bottom-right).
     clip_fill(
         state,
         fb_ptr,
@@ -248,7 +235,6 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         bb,
     );
 
-    // blit surface pixels
     if win_mapped && !win_surface_ptr.is_null() {
         blit_surface(
             state,
@@ -266,8 +252,7 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     }
 }
 
-/// Scale full source surface into the window rectangle.
-/// Bilinear sampling keeps resized windows from looking like crunchy nearest-neighbor soup.
+/// Bilinear scale source surface into dest rect; clipped to fb bounds.
 fn blit_surface(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -289,7 +274,6 @@ fn blit_surface(
     let fb_stride = state.fb_stride;
     let mapped_pixels = (surface_pages as usize).saturating_mul(4096 / 4);
 
-    // clip destination rect to framebuffer bounds
     let x0 = dst_x.max(0) as u32;
     let y0 = dst_y.max(0) as u32;
     let x1 = ((dst_x as i64 + dst_w as i64).min(state.fb_w as i64)).max(0) as u32;
@@ -298,9 +282,9 @@ fn blit_surface(
         return;
     }
 
+    // 16.16 fixed-point blend, t in [0, 65535].
     #[inline(always)]
     fn lerp8(a: u32, b: u32, t: u32) -> u32 {
-        // fixed-point blend, t in [0, 65535]
         ((a * (65535 - t)) + (b * t)) >> 16
     }
 
@@ -337,7 +321,7 @@ fn blit_surface(
         b | (g << 8) | (r << 16)
     }
 
-    // map each destination pixel into source space so windows resize live.
+    // SAFETY: dst and src bounds checked per-pixel against fb_stride and mapped_pixels.
     unsafe {
         for dy in y0..y1 {
             let dst_row = dy * fb_stride;
@@ -385,8 +369,7 @@ fn blit_surface(
     }
 }
 
-/// blit a horizontal strip from source surface directly to framebuffer. 1:1 copy, no scaling.
-/// used for the panel overlay (z-layer 3) — blit bottom N rows from shelld's surface over windows.
+/// 1:1 copy of a horizontal strip from source to framebuffer. Used for z3 panel overlay.
 fn blit_strip(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -403,6 +386,7 @@ fn blit_strip(
     let x1 = (x + w).min(state.fb_w);
     let y1 = (y + h).min(state.fb_h);
 
+    // SAFETY: src offsets bounded by mapped_pixels; dst within fb_stride * fb_h.
     unsafe {
         for row in y..y1 {
             let src_row_off = (row * src_stride) as usize;
@@ -478,7 +462,7 @@ fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
     let cy = state.mouse_y;
     let px = state.pack(CURSOR_RGB.0, CURSOR_RGB.1, CURSOR_RGB.2);
 
-    // crosshair cursor. 9px arm span.
+    // 9px crosshair with single-pixel black outline at the tips.
     for d in -4i32..=4 {
         raw_put(
             fb_ptr,
@@ -523,12 +507,11 @@ fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
     }
 }
 
-// --- raw pixel primitives ---
-
 #[inline(always)]
 fn raw_fill(buf: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, px: u32) {
     for row in y..y + h {
         let off = (row * stride + x) as usize;
+        // SAFETY: caller clips (x, y, w, h) to fb bounds; off + w fits in fb_stride * fb_h.
         unsafe {
             let ptr = buf.add(off);
             for col in 0..w as usize {
@@ -540,8 +523,8 @@ fn raw_fill(buf: *mut u32, stride: u32, x: u32, y: u32, w: u32, h: u32, px: u32)
 
 #[inline(always)]
 fn raw_put(buf: *mut u32, stride: u32, w: u32, h: u32, x: i32, y: i32, px: u32) {
-    // clamped. because the mouse delta from the kernel is signed and the universe is cruel.
     if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h {
+        // SAFETY: bounds checked above.
         unsafe {
             buf.add((y as u32 * stride + x as u32) as usize).write(px);
         }
@@ -567,6 +550,7 @@ fn raw_glyph(
         let base = (py * stride + gx) as usize;
         for col in 0u32..8 {
             let is_fg = (bits >> (7 - col)) & 1 == 1;
+            // SAFETY: caller ensures gx + 8 fits in stride and py < fb_h.
             unsafe {
                 buf.add(base + col as usize)
                     .write(if is_fg { fg } else { bg });

@@ -62,13 +62,11 @@ use crate::stack::{NetConfig, NetInterface, NetState};
 use crate::types::{HttpMethod, ProgressCallback};
 use crate::url::Url;
 
-/// Default timeout for operations (milliseconds).
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 /// Maximum response size (10GB for ISOs).
 pub const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024 * 1024;
 
-/// Maximum redirects to follow.
 pub const MAX_REDIRECTS: u32 = 10;
 
 /// Native HTTP client configuration.
@@ -102,7 +100,6 @@ impl Default for NativeClientConfig {
 }
 
 impl NativeClientConfig {
-    /// Config for downloading large files.
     pub fn for_large_downloads() -> Self {
         Self {
             connect_timeout_ms: 60_000,
@@ -136,12 +133,6 @@ pub struct NativeHttpClient<D: NetworkDevice> {
 
 impl<D: NetworkDevice> NativeHttpClient<D> {
     /// Create a new native HTTP client.
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - Network device to use
-    /// * `net_config` - IP configuration (DHCP or static)
-    /// * `get_time_ms` - Function returning current time in milliseconds
     pub fn new(device: D, net_config: NetConfig, get_time_ms: fn() -> u64) -> Self {
         let iface = NetInterface::new(device, net_config);
         Self {
@@ -178,12 +169,10 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.iface.poll(self.now());
     }
 
-    /// Check if network is ready (has IP address).
     pub fn is_network_ready(&self) -> bool {
         self.iface.has_ip()
     }
 
-    /// Get current IP address.
     pub fn ip_address(&self) -> Option<Ipv4Addr> {
         self.iface.ipv4_addr()
     }
@@ -205,9 +194,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    // ========================================================================
-    // DNS Resolution
-    // ========================================================================
 
     /// Resolve hostname to IP address using DNS or hardcoded fallbacks.
     pub fn resolve_host(&mut self, host: &str) -> Result<Ipv4Addr> {
@@ -290,9 +276,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Err(NetworkError::DnsResolutionFailed)
     }
 
-    // ========================================================================
-    // TCP Connection Management
-    // ========================================================================
 
     /// Connect to a remote host.
     fn connect(&mut self, ip: Ipv4Addr, port: u16) -> Result<()> {
@@ -354,9 +337,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    // ========================================================================
-    // Data Transfer
-    // ========================================================================
 
     /// Send all data and wait for transmission to complete.
     fn send_all(&mut self, data: &[u8]) -> Result<()> {
@@ -407,9 +387,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    // ========================================================================
-    // HTTP Response Reading
-    // ========================================================================
 
     /// Read HTTP headers until \r\n\r\n found.
     fn read_headers(&mut self) -> Result<Vec<u8>> {
@@ -522,9 +499,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(total)
     }
 
-    // ========================================================================
-    // HTTP Request Execution
-    // ========================================================================
 
     /// Execute a basic HTTP request and return full response.
     fn do_request(&mut self, request: &Request) -> Result<Response> {
@@ -575,9 +549,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(Request::get(new_url))
     }
 
-    // ========================================================================
-    // Public HTTP Methods
-    // ========================================================================
 
     /// Simple GET request returning full response.
     pub fn get(&mut self, url: &str) -> Result<Response> {
@@ -646,9 +617,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.stream_response_body(initial_body, content_length, callback)
     }
 
-    // ========================================================================
-    // Connection Management
-    // ========================================================================
 
     /// Close any active connection.
     pub fn close(&mut self) {
@@ -700,9 +668,6 @@ impl<D: NetworkDevice> HttpClient for NativeHttpClient<D> {
     }
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 /// Find the end of HTTP headers (\r\n\r\n).
 fn find_header_end(data: &[u8]) -> Option<usize> {

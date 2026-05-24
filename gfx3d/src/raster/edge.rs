@@ -2,7 +2,6 @@ use super::span::Span;
 use super::triangle::Vertex;
 use crate::math::fixed::Fx16;
 
-/// no_std ceil for f32.
 #[inline(always)]
 fn float_ceil(x: f32) -> i32 {
     let i = x as i32;
@@ -13,14 +12,7 @@ fn float_ceil(x: f32) -> i32 {
     }
 }
 
-/// DDA edge stepper for triangle rasterization.
-///
-/// Digital Differential Analyzer: steps an edge from vertex A to vertex B
-/// one scanline at a time, producing interpolated attribute values.
-///
-/// This is the same approach as Quake 1's r_edge.c but with perspective-correct
-/// attributes (pre-divided by w) and fixed-point stepping for zero FPU traffic
-/// in the inner loop.
+/// DDA edge walker. Attributes are pre-divided by w; steps are 16.16 fixed.
 #[derive(Debug, Clone, Copy)]
 pub struct Edge {
     pub y_start: i32,
@@ -51,10 +43,7 @@ pub struct Edge {
 }
 
 impl Edge {
-    /// Build edge from vertex A (top) to vertex B (bottom).
-    ///
-    /// Pre-computes per-scanline stepping increments for all attributes.
-    /// Uses a single fixed-point reciprocal of dy to compute all steps.
+    /// A is top, B is bottom. Computes y-prestep so the first scanline lies on a pixel.
     pub fn new(a: &Vertex, b: &Vertex) -> Self {
         let y_start = float_ceil(a.pos.y);
         let y_end = float_ceil(b.pos.y);
@@ -71,7 +60,6 @@ impl Edge {
         let x = Fx16::from_f32(a.pos.x + prestep * x_step_f);
         let x_step = Fx16::from_f32(x_step_f);
 
-        // All attributes are pre-divided by clip_w in the vertex
         let inv_w_a = a.pos.w;
         let inv_w_b = b.pos.w;
         let _inv_w_step_f = (inv_w_b - inv_w_a) * inv_dy;
@@ -142,7 +130,6 @@ impl Edge {
         }
     }
 
-    /// Advance all interpolants by one scanline.
     #[inline(always)]
     pub fn step(&mut self) {
         self.x += self.x_step;
@@ -156,7 +143,6 @@ impl Edge {
         self.fog += self.fog_step;
     }
 
-    /// Produce a span from left and right edges at the current scanline.
     #[inline]
     pub fn make_span(left: &Edge, right: &Edge, y: u32) -> Span {
         Span {
@@ -175,25 +161,13 @@ impl Edge {
     }
 }
 
-/// Rasterize a triangle into spans (scanline segments).
-///
-/// Classic top-down triangle rasterization with long-edge / short-edge split:
-/// 1. Sort vertices by y (top to bottom)
-/// 2. The longest edge spans the entire triangle height
-/// 3. Two shorter edges split at the middle vertex
-/// 4. For each scanline, step the long edge and the current short edge
-///
-/// This produces one Span per visible scanline. The caller then fills each
-/// span using the inner pixel loop (span.rs).
-///
-/// Pre-allocated `spans` slice avoids heap allocation in the render loop.
-/// Returns the number of spans written.
+/// Long-edge / short-edge split. `spans` must hold at least the triangle's height.
+/// Returns spans written.
 pub fn rasterize_triangle_to_spans(
     tri: &[Vertex; 3],
     spans: &mut [Span],
     viewport_h: u32,
 ) -> usize {
-    // Sort by y (insertion sort on 3 elements = branchless-optimal)
     let mut sorted = *tri;
     if sorted[0].pos.y > sorted[1].pos.y {
         sorted.swap(0, 1);
@@ -205,26 +179,24 @@ pub fn rasterize_triangle_to_spans(
         sorted.swap(0, 1);
     }
 
-    let v0 = &sorted[0]; // top
-    let v1 = &sorted[1]; // middle
-    let v2 = &sorted[2]; // bottom
+    let v0 = &sorted[0];
+    let v1 = &sorted[1];
+    let v2 = &sorted[2];
 
     let total_height = v2.pos.y - v0.pos.y;
     if total_height < 0.5 {
         return 0;
     }
 
-    // Long edge: v0 → v2
     let mut long_edge = Edge::new(v0, v2);
 
-    // Determine which side the long edge is on.
-    // If mid-vertex is to the LEFT of the long edge, long edge is on the right.
+    // Place mid vertex relative to the long edge to pick the left/right slot.
     let mid_x_on_long = v0.pos.x + (v1.pos.y - v0.pos.y) / total_height * (v2.pos.x - v0.pos.x);
     let long_on_right = v1.pos.x < mid_x_on_long;
 
     let mut count = 0;
 
-    // Top half: v0 → v1
+    // Top half v0→v1.
     let mut short = Edge::new(v0, v1);
     let y_start = (short.y_start.max(0) as u32).min(viewport_h);
     let y_mid = (short.y_end.max(0) as u32).min(viewport_h);

@@ -2,9 +2,6 @@
 //!
 //! ECAM (Enhanced Configuration Access Mechanism) provides memory-mapped
 //! access to the full 4KB PCIe configuration space.
-//!
-//! # Reference
-//! ARCHITECTURE_V3.md - PCI layer
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

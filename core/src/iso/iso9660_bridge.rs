@@ -50,21 +50,14 @@ pub struct IsoBlockIoAdapter<'a, B: BlockIo> {
 }
 
 impl<'a, B: BlockIo> IsoBlockIoAdapter<'a, B> {
-    /// Create a new adapter
-    ///
-    /// # Arguments
-    /// * `ctx` - ISO read context from IsoStorageManager
-    /// * `block_io` - Underlying disk block device
     pub fn new(ctx: IsoReadContext, block_io: &'a mut B) -> Self {
         Self { ctx, block_io }
     }
 
-    /// Get total size in bytes
     pub fn total_size(&self) -> u64 {
         self.ctx.total_size
     }
 
-    /// Get total number of ISO sectors (2048-byte sectors)
     pub fn total_iso_sectors(&self) -> u64 {
         self.ctx.total_size / ISO_SECTOR_SIZE as u64
     }
@@ -223,7 +216,6 @@ impl<'a, B: BlockIo> ChunkedIso<'a, B> {
         &mut self.adapter
     }
 
-    /// Get ISO total size
     pub fn total_size(&self) -> u64 {
         self.adapter.total_size()
     }

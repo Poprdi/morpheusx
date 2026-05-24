@@ -36,8 +36,7 @@ pub struct Shell {
     scroll_top: usize,
     cwd: String,
     prompt: String,
-    /// Optional hook called for every line of output (e.g. serial echo).
-    /// The UI crate has no deps, so the bootloader sets this to a serial puts fn.
+    /// Per-line echo (e.g. serial mirror); keeps ui crate dependency-free.
     echo_hook: Option<fn(&str)>,
 }
 
@@ -69,18 +68,15 @@ impl Shell {
         self.scroll_to_bottom_internal();
     }
 
-    /// Register a hook that receives every line of shell output.
-    /// Intended for serial console mirroring.
     pub fn set_echo_hook(&mut self, hook: fn(&str)) {
         self.echo_hook = Some(hook);
     }
 
-    /// Current working directory.
     pub fn cwd(&self) -> &str {
         &self.cwd
     }
 
-    /// Update the working directory.  Called by the desktop after VFS verification.
+    /// Caller must have verified the path is a directory.
     pub fn set_cwd(&mut self, path: &str) {
         self.cwd.clear();
         self.cwd.push_str(path);

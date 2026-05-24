@@ -1,9 +1,6 @@
 //! PCI Legacy (CF8/CFC) configuration space bindings.
 //!
 //! Uses I/O ports 0xCF8 (address) and 0xCFC (data) for PCI config access.
-//!
-//! # Reference
-//! ARCHITECTURE_V3.md - PCI layer
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

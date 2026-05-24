@@ -105,7 +105,6 @@ impl SignalSet {
         self.0 |= sig.bit();
     }
 
-    /// Clear a signal bit.
     #[inline]
     pub fn clear(&mut self, sig: Signal) {
         self.0 &= !sig.bit();

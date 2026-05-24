@@ -80,20 +80,6 @@ impl core::fmt::Display for UnifiedBlockIoError {
 /// and using a DMA-capable buffer for transfers. Works with both:
 /// - **VirtIO-blk** (QEMU, cloud VMs)
 /// - **AHCI SATA** (real hardware like ThinkPad T450s)
-///
-/// # Example
-///
-/// ```ignore
-/// // Create unified device via probe
-/// let mut device = UnifiedBlockDevice::probe(&config)?;
-///
-/// // Wrap with BlockIo adapter
-/// let mut bio = UnifiedBlockIo::new(&mut device, dma_buf, dma_phys, timeout)?;
-///
-/// // Use with filesystem layer
-/// let info = bio.block_size();
-/// bio.read_blocks(Lba(0), &mut buffer)?;
-/// ```
 pub struct UnifiedBlockIo<'a> {
     /// The underlying unified block device
     device: &'a mut UnifiedBlockDevice,
@@ -112,15 +98,6 @@ impl<'a> UnifiedBlockIo<'a> {
     pub const MAX_TRANSFER_SIZE: usize = 64 * 1024;
 
     /// Create a new unified BlockIo adapter.
-    ///
-    /// # Arguments
-    /// * `device` - Unified block device (VirtIO-blk or AHCI)
-    /// * `dma_buffer` - DMA-capable buffer (must be at least MAX_TRANSFER_SIZE bytes)
-    /// * `dma_buffer_phys` - Physical address of DMA buffer
-    /// * `timeout_ticks` - Timeout for I/O operations in TSC ticks
-    ///
-    /// # Returns
-    /// New adapter or error if buffer too small or device not ready
     pub fn new(
         device: &'a mut UnifiedBlockDevice,
         dma_buffer: &'a mut [u8],
@@ -333,26 +310,11 @@ impl<'a> BlockIo for UnifiedBlockIo<'a> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// GENERIC BLOCKIO ADAPTER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Generic BlockIo adapter for any `BlockDriver` implementation.
 ///
 /// This allows creating a synchronous BlockIo wrapper around any driver
 /// that implements the `BlockDriver` trait, not just `UnifiedBlockDevice`.
-///
-/// # Example
-///
-/// ```ignore
-/// // Works with AHCI driver directly
-/// let mut ahci = AhciDriver::new(abar, config)?;
-/// let mut bio = GenericBlockIo::new(&mut ahci, dma_buf, dma_phys, timeout)?;
-///
-/// // Or VirtIO-blk directly
-/// let mut virtio = VirtioBlkDriver::new(mmio_base, config)?;
-/// let mut bio = GenericBlockIo::new(&mut virtio, dma_buf, dma_phys, timeout)?;
-/// ```
 pub struct GenericBlockIo<'a, D: BlockDriver> {
     /// The underlying block driver
     driver: &'a mut D,

@@ -1,7 +1,4 @@
 //! DMA buffer with ownership tracking.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §3.5
 
 use super::ownership::BufferOwnership;
 
@@ -38,9 +35,6 @@ impl DmaBuffer {
     }
 
     /// Get buffer data as slice.
-    ///
-    /// # Panics
-    /// Panics if buffer is not DriverOwned.
     pub fn as_slice(&self) -> &[u8] {
         assert!(
             self.ownership == BufferOwnership::DriverOwned,
@@ -51,9 +45,6 @@ impl DmaBuffer {
     }
 
     /// Get buffer data as mutable slice.
-    ///
-    /// # Panics
-    /// Panics if buffer is not DriverOwned.
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         assert!(
             self.ownership == BufferOwnership::DriverOwned,
@@ -64,9 +55,6 @@ impl DmaBuffer {
     }
 
     /// Get the first `len` bytes as mutable slice.
-    ///
-    /// # Panics
-    /// Panics if buffer is not DriverOwned or len > capacity.
     pub fn as_mut_slice_len(&mut self, len: usize) -> &mut [u8] {
         assert!(
             len <= self.capacity,
@@ -85,12 +73,10 @@ impl DmaBuffer {
         self.cpu_ptr
     }
 
-    /// Get buffer index.
     pub fn index(&self) -> u16 {
         self.index
     }
 
-    /// Get buffer capacity.
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -105,12 +91,10 @@ impl DmaBuffer {
         self.ownership.is_free()
     }
 
-    /// Check if buffer is owned by driver.
     pub fn is_driver_owned(&self) -> bool {
         self.ownership.can_access()
     }
 
-    /// Check if buffer is owned by device.
     pub fn is_device_owned(&self) -> bool {
         self.ownership.is_device_owned()
     }

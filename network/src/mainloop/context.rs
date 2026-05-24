@@ -19,22 +19,18 @@ impl Timeouts {
         Self { tsc_freq }
     }
 
-    /// DHCP timeout (10 seconds).
     pub fn dhcp(&self) -> u64 {
         self.tsc_freq * 10
     }
 
-    /// DNS timeout (5 seconds).
     pub fn dns(&self) -> u64 {
         self.tsc_freq * 5
     }
 
-    /// TCP connect timeout (10 seconds).
     pub fn tcp_connect(&self) -> u64 {
         self.tsc_freq * 10
     }
 
-    /// HTTP idle timeout (30 seconds).
     pub fn http_idle(&self) -> u64 {
         self.tsc_freq * 30
     }
@@ -137,7 +133,6 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    /// Create new context.
     pub fn new(config: DownloadConfig<'a>, tsc_freq: u64) -> Self {
         let start_sector = config.target_start_sector;
         Self {
@@ -172,7 +167,6 @@ impl<'a> Context<'a> {
         self.config.url
     }
 
-    /// Check if disk write is enabled.
     pub fn should_write_to_disk(&self) -> bool {
         self.config.write_to_disk && self.blk_device.is_some()
     }

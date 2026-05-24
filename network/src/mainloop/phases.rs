@@ -9,9 +9,6 @@
 //!
 //! Target: <1ms per iteration
 //! Maximum: 5ms per iteration
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §6.2, §6.3
 
 use crate::driver::NetworkDriver;
 

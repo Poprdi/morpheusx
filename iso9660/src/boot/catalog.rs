@@ -1,50 +1,40 @@
-//! Boot catalog parsing
-//!
-//! El Torito Boot Catalog structure and parsing.
+//! El Torito boot catalog parsing.
 
 use super::entry::BootEntry;
 use super::validation::ValidationEntry;
 use crate::error::{Iso9660Error, Result};
 
-/// Boot Catalog
-///
-/// The boot catalog starts with a validation entry followed by
-/// an initial/default entry, then optional section entries.
+/// Boot catalog view: validation entry followed by the initial/default entry.
+/// Section entries past byte 64 are not modeled.
 pub struct BootCatalog<'a> {
-    /// Validation entry (first 32 bytes)
+    /// Validation entry (first 32 bytes).
     pub validation: &'a ValidationEntry,
-
-    /// Initial/default boot entry (next 32 bytes)
+    /// Initial/default boot entry (bytes 32..64).
     pub initial: &'a BootEntry,
 }
 
 impl<'a> BootCatalog<'a> {
-    /// Catalog entry size (32 bytes)
+    /// Each catalog entry is 32 bytes.
     pub const ENTRY_SIZE: usize = 32;
 
-    /// Minimum catalog size (validation + initial entry)
+    /// Validation + initial entry.
     pub const MIN_SIZE: usize = Self::ENTRY_SIZE * 2;
 
-    /// Parse boot catalog from sector data
-    ///
-    /// # Arguments
-    /// * `data` - Raw sector data (at least 64 bytes)
-    ///
-    /// # Returns
-    /// Parsed boot catalog with validation and initial entries
+    /// Parse the first two entries of a boot catalog from sector data.
     pub fn parse(data: &'a [u8]) -> Result<Self> {
         if data.len() < Self::MIN_SIZE {
             return Err(Iso9660Error::InvalidBootCatalog);
         }
 
-        // Parse validation entry (first 32 bytes)
+        // SAFETY: length checked above; ValidationEntry is repr(C, packed) of 32 bytes
+        // and borrows from `data` for the returned lifetime.
         let validation = unsafe { &*(data.as_ptr() as *const ValidationEntry) };
 
         if !validation.is_valid() {
             return Err(Iso9660Error::ChecksumFailed);
         }
 
-        // Parse initial/default entry (next 32 bytes)
+        // SAFETY: same as above, offset 32 within the validated slice.
         let initial = unsafe { &*(data[32..].as_ptr() as *const BootEntry) };
 
         Ok(Self {
@@ -53,12 +43,12 @@ impl<'a> BootCatalog<'a> {
         })
     }
 
-    /// Check if the catalog contains a bootable entry
+    /// Whether the initial entry is marked bootable.
     pub fn is_bootable(&self) -> bool {
         self.initial.is_bootable()
     }
 
-    /// Get the platform ID from the validation entry
+    /// Platform ID from the validation entry.
     pub fn platform_id(&self) -> u8 {
         self.validation.platform_id
     }

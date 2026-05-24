@@ -99,7 +99,6 @@ impl ChunkSet {
         Some(idx)
     }
 
-    /// Get a chunk by index
     pub fn get(&self, index: usize) -> Option<&ChunkInfo> {
         if index < self.count {
             Some(&self.chunks[index])
@@ -130,7 +129,6 @@ impl ChunkSet {
         None
     }
 
-    /// Calculate total capacity of all chunks
     pub fn total_capacity(&self) -> u64 {
         let mut total = 0u64;
         for i in 0..self.count {

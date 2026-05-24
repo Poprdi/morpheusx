@@ -66,7 +66,6 @@ pub struct ManifestConfig {
 }
 
 impl ManifestConfig {
-    /// Get ISO name as string slice.
     pub fn iso_name(&self) -> &str {
         core::str::from_utf8(&self.iso_name_buf[..self.iso_name_len]).unwrap_or("unknown")
     }
@@ -166,7 +165,6 @@ impl ManifestState {
         }
     }
 
-    /// Create from context after download.
     pub fn from_context(ctx: &Context<'_>) -> Self {
         let iso_size = ctx.bytes_downloaded;
         // Use actual_start_sector (set by GPT prep) rather than config
@@ -514,21 +512,11 @@ fn read_tsc() -> u64 {
     0
 }
 
-// ============================================================================
-// Standalone API for manifest regeneration
-// ============================================================================
 
 /// Write a manifest for an existing ISO without using the state machine.
 ///
 /// Use case: Recreate a manifest for an ISO that was previously downloaded
 /// but whose manifest was lost or corrupted.
-///
-/// # Arguments
-/// * `blk` - Block device to write to
-/// * `config` - Manifest configuration describing the ISO location
-///
-/// # Returns
-/// `true` if manifest was written successfully
 pub fn write_manifest_standalone(blk: &mut UnifiedBlockDevice, config: &ManifestConfig) -> bool {
     let state = ManifestState::new(config.clone());
 
@@ -545,16 +533,6 @@ pub fn write_manifest_standalone(blk: &mut UnifiedBlockDevice, config: &Manifest
 /// Regenerate manifest for an existing ISO on disk.
 ///
 /// Convenience wrapper that creates the config and writes the manifest.
-///
-/// # Arguments
-/// * `blk` - Block device
-/// * `iso_name` - Name of the ISO (e.g., "tails-6.10.iso")
-/// * `iso_size` - Total size in bytes
-/// * `start_sector` - First sector of ISO data
-/// * `end_sector` - End sector (exclusive)
-/// * `partition_uuid` - UUID of the partition containing the ISO
-/// * `esp_start_lba` - ESP start LBA (for FAT32 mode, 0 to skip)
-/// * `manifest_sector` - Raw sector for manifest (for raw mode, 0 to skip)
 pub fn regenerate_manifest(
     blk: &mut UnifiedBlockDevice,
     iso_name: &str,

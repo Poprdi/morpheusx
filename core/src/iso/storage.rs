@@ -115,7 +115,6 @@ impl IsoStorageManager {
         }
     }
 
-    /// Set custom chunk size (must be <= FAT32_MAX_FILE_SIZE)
     pub fn set_chunk_size(&mut self, size: u64) {
         self.chunk_size = size.min(FAT32_MAX_FILE_SIZE);
     }
@@ -134,13 +133,11 @@ impl IsoStorageManager {
         }
     }
 
-    /// Find ISO by name
     pub fn find_by_name(&self, name: &str) -> Option<usize> {
         (0..self.entry_count)
             .find(|&i| self.entries[i].valid && self.entries[i].manifest.name_str() == name)
     }
 
-    /// Calculate chunks needed for an ISO
     pub fn chunks_needed(&self, iso_size: u64) -> usize {
         ((iso_size + self.chunk_size - 1) / self.chunk_size) as usize
     }
@@ -178,7 +175,6 @@ impl IsoStorageManager {
         Ok(index)
     }
 
-    /// Remove an ISO entry by index
     pub fn remove_entry(&mut self, index: usize) -> Result<(), IsoError> {
         if index >= self.entry_count || !self.entries[index].valid {
             return Err(IsoError::ManifestNotFound);
@@ -299,12 +295,10 @@ impl IsoStorageManager {
         result
     }
 
-    /// Get ESP start LBA
     pub fn esp_start_lba(&self) -> u64 {
         self.esp_start_lba
     }
 
-    /// Get chunk size
     pub fn chunk_size(&self) -> u64 {
         self.chunk_size
     }
@@ -353,7 +347,6 @@ pub struct PartitionRequest {
 }
 
 impl PartitionRequest {
-    /// Create a request for a chunk partition
     pub fn for_chunk(chunk_index: usize, data_size: u64) -> Self {
         let mut name = [0u8; 32];
         let prefix = b"ISO_CHUNK_";

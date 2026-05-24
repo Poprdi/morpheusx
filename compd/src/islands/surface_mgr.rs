@@ -51,7 +51,6 @@ pub fn update(state: &mut CompState) {
             continue;
         }
 
-        // see if we already track this pid
         let slot = state
             .windows
             .iter()
@@ -67,8 +66,7 @@ pub fn update(state: &mut CompState) {
                             win.surface_pages = entry.pages;
                             win.src_w = entry.width;
                             win.src_h = entry.height;
-                            // Keep historical behavior: entry stride comes from shared
-                            // metadata path in bytes, convert to pixels for blit math.
+                            // entry.stride is bytes; blit math wants pixels.
                             win.src_stride = (entry.stride / 4).max(entry.width.max(1));
                             win.mapped = true;
                         }
@@ -119,8 +117,8 @@ pub fn update(state: &mut CompState) {
                 state.desktop_idx = Some(idx);
             } else {
                 let step = CASCADE_STEP * (state.cascade_n % 5);
-                // Open at source size when possible, but clamp to visible work area
-                // so move/resize affordances remain reachable.
+                // Open at source size, clamped to visible work area so the title
+                // bar and resize grip stay reachable.
                 let max_w = state.fb_w.saturating_sub(40).max(160);
                 let max_h = state.fb_h.saturating_sub(TITLE_H + PANEL_H + 40).max(120);
                 let w = entry.width.max(1).min(max_w);
@@ -154,7 +152,7 @@ pub fn update(state: &mut CompState) {
                     z_layer: 1,
                 });
 
-                // seed app-local cursor at spawn so first click lands where the cursor already is.
+                // Seed app-local cursor so the first click lands at the right local position.
                 if let Some(ref mut win) = state.windows[idx] {
                     let (local_x, local_y) =
                         map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);

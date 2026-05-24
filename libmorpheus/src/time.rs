@@ -23,9 +23,6 @@ pub fn uptime_us() -> u64 {
     clock_gettime() / 1_000
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Duration
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A span of time, measured in nanoseconds.
 ///
@@ -164,21 +161,10 @@ impl fmt::Display for Duration {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Instant
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A measurement of a monotonically increasing clock.
 ///
 /// Useful for measuring elapsed time.
-///
-/// # Example
-/// ```ignore
-/// let start = Instant::now();
-/// do_work();
-/// let elapsed = start.elapsed();
-/// println!("took {:?}", elapsed);
-/// ```
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant {
     nanos: u64,
@@ -203,14 +189,12 @@ impl Instant {
         Duration::from_nanos(self.nanos.saturating_sub(earlier.nanos))
     }
 
-    /// Checked addition.
     pub fn checked_add(&self, duration: Duration) -> Option<Self> {
         self.nanos
             .checked_add(duration.as_nanos())
             .map(|nanos| Self { nanos })
     }
 
-    /// Checked subtraction.
     pub fn checked_sub(&self, duration: Duration) -> Option<Self> {
         self.nanos
             .checked_sub(duration.as_nanos())
@@ -249,9 +233,6 @@ impl fmt::Debug for Instant {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// sleep with Duration
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Sleep for a [`Duration`].
 pub fn sleep(duration: Duration) {

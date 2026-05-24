@@ -7,9 +7,6 @@
 //! - `core/` - Core primitives (TSC, barriers, MMIO, PIO, cache)
 //! - `pci/` - PCI configuration space access
 //! - `drivers/` - Driver-specific ASM bindings
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2, ARCHITECTURE_V3.md
 
 pub mod core;
 pub mod drivers;

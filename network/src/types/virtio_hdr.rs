@@ -1,7 +1,4 @@
 //! VirtIO network header definitions.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.6, VirtIO Spec §5.1.6
 
 /// VirtIO network header (12 bytes for modern devices).
 ///
@@ -26,7 +23,6 @@ pub struct VirtioNetHdr {
 }
 
 impl VirtioNetHdr {
-    /// Header size in bytes.
     pub const SIZE: usize = 12;
 
     /// Create a zeroed header (correct for all our transmits).
@@ -55,19 +51,13 @@ impl Default for VirtioNetHdr {
 }
 
 // GSO types
-/// No GSO.
 pub const VIRTIO_NET_HDR_GSO_NONE: u8 = 0;
-/// TCP GSO for IPv4.
 pub const VIRTIO_NET_HDR_GSO_TCPV4: u8 = 1;
-/// UDP GSO.
 pub const VIRTIO_NET_HDR_GSO_UDP: u8 = 3;
-/// TCP GSO for IPv6.
 pub const VIRTIO_NET_HDR_GSO_TCPV6: u8 = 4;
-/// ECN flag.
 pub const VIRTIO_NET_HDR_GSO_ECN: u8 = 0x80;
 
 // Header flags
 /// Checksum is valid/needed.
 pub const VIRTIO_NET_HDR_F_NEEDS_CSUM: u8 = 1;
-/// Data is valid (for hash reports).
 pub const VIRTIO_NET_HDR_F_DATA_VALID: u8 = 2;

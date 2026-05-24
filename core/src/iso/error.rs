@@ -1,47 +1,27 @@
-//! ISO storage error types
-//!
-//! Error enum for ISO chunk operations. Follows the same pattern as
-//! `Fat32Error` in the fs module.
+//! ISO chunk-storage errors.
 
-/// Errors that can occur during ISO chunk operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsoError {
-    /// Block I/O operation failed
     IoError,
-    /// Invalid manifest format or magic number
     InvalidManifest,
-    /// Manifest version not supported
     UnsupportedVersion,
-    /// Chunk index out of bounds
     ChunkOutOfBounds,
-    /// Not enough free partitions for chunks
     InsufficientPartitions,
-    /// Partition too small for chunk
     PartitionTooSmall,
-    /// ISO size exceeds maximum supported (16 chunks * 4GB)
+    /// ISO exceeds 16 chunks * 4 GB.
     IsoTooLarge,
-    /// Chunk partition not found by UUID
     ChunkNotFound,
-    /// FAT32 filesystem error on chunk partition
     FilesystemError,
-    /// Write position beyond current chunk
     WriteOverflow,
-    /// Read position beyond ISO size
     ReadOverflow,
-    /// Manifest already exists
     ManifestExists,
-    /// No manifest found for ISO
     ManifestNotFound,
-    /// SHA256 checksum mismatch
     ChecksumMismatch,
-    /// Chunk data corrupted
     DataCorruption,
-    /// Operation not supported
     NotSupported,
 }
 
 impl IsoError {
-    /// Get a human-readable description of the error
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::IoError => "Block I/O operation failed",

@@ -1,15 +1,4 @@
-//! Morpheus Core Library
-//!
-//! Low-level operations for disk, filesystem, networking, and distro management.
-//! Designed to be no_std compatible.
-//!
-//! # Modules
-//!
-//! - [`disk`] - GPT disk operations and partition management
-//! - [`fs`] - FAT32 filesystem operations
-//! - [`iso`] - ISO storage and chunk management
-//! - [`net`] - Network initialization orchestration
-//! - [`logger`] - Logging infrastructure
+//! Morpheus core: disk, FS, ISO, networking. `no_std`.
 
 #![no_std]
 #![allow(dead_code)]

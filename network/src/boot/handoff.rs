@@ -7,26 +7,17 @@
 //! All fields are explicitly sized and aligned for ABI stability.
 //! The structure is `#[repr(C)]` to ensure predictable memory layout
 //! across Rust/ASM boundary.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §7.2
 
 use core::fmt;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Magic number: "MORPHEUS" in ASCII (little-endian)
 pub const HANDOFF_MAGIC: u64 = 0x5355_4548_5052_4F4D;
 
-/// Current structure version
 pub const HANDOFF_VERSION: u32 = 1;
 
-/// Minimum DMA region size (2MB)
 pub const MIN_DMA_SIZE: u64 = 2 * 1024 * 1024;
 
-/// Minimum stack size (64KB)
 pub const MIN_STACK_SIZE: u64 = 64 * 1024;
 
 /// Minimum TSC frequency (1 GHz - sanity check)
@@ -35,48 +26,27 @@ pub const MIN_TSC_FREQ: u64 = 1_000_000_000;
 /// Maximum TSC frequency (10 GHz - sanity check)
 pub const MAX_TSC_FREQ: u64 = 10_000_000_000;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NIC TYPE CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
-/// No NIC detected
 pub const NIC_TYPE_NONE: u8 = 0;
-/// VirtIO-net device
 pub const NIC_TYPE_VIRTIO: u8 = 1;
 /// Intel e1000/i210/i225
 pub const NIC_TYPE_INTEL: u8 = 2;
-/// Realtek RTL8168/8111
 pub const NIC_TYPE_REALTEK: u8 = 3;
-/// Broadcom BCM57xx
 pub const NIC_TYPE_BROADCOM: u8 = 4;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BLOCK DEVICE TYPE CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// No block device
 pub const BLK_TYPE_NONE: u8 = 0;
-/// VirtIO-blk device
 pub const BLK_TYPE_VIRTIO: u8 = 1;
-/// NVMe device (future)
 pub const BLK_TYPE_NVME: u8 = 2;
 /// AHCI/SATA device (future)
 pub const BLK_TYPE_AHCI: u8 = 3;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TRANSPORT TYPE CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
-/// VirtIO MMIO transport
 pub const TRANSPORT_MMIO: u8 = 0;
-/// VirtIO PCI Modern transport (capability-based)
 pub const TRANSPORT_PCI_MODERN: u8 = 1;
-/// VirtIO PCI Legacy transport (I/O ports)
 pub const TRANSPORT_PCI_LEGACY: u8 = 2;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HANDOFF ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Errors during handoff validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,9 +93,6 @@ impl fmt::Display for HandoffError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BOOT HANDOFF STRUCTURE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Data passed from UEFI boot phase to bare-metal phase.
 ///
@@ -139,9 +106,6 @@ impl fmt::Display for HandoffError {
 #[repr(C, align(64))]
 #[derive(Clone, Copy)]
 pub struct BootHandoff {
-    // ═══════════════════════════════════════════════════════════════════════
-    // HEADER (16 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// Magic number for validation: "MORPHEUS" = 0x5355_4548_5052_4F4D
     pub magic: u64,
 
@@ -151,9 +115,6 @@ pub struct BootHandoff {
     /// Structure size in bytes (for forward compatibility)
     pub size: u32,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // NIC INFORMATION (24 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// VirtIO/NIC MMIO base address (from PCI BAR)
     pub nic_mmio_base: u64,
 
@@ -175,9 +136,6 @@ pub struct BootHandoff {
     /// Padding for alignment
     pub _nic_pad: [u8; 2],
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // BLOCK DEVICE INFORMATION (24 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// Block device MMIO base address (legacy) or common_cfg (PCI Modern)
     pub blk_mmio_base: u64,
 
@@ -199,9 +157,6 @@ pub struct BootHandoff {
     /// Block device total sectors
     pub blk_total_sectors: u64,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // DMA REGION (24 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// CPU pointer for software access
     pub dma_cpu_ptr: u64,
 
@@ -211,25 +166,16 @@ pub struct BootHandoff {
     /// Region size in bytes (minimum 2MB)
     pub dma_size: u64,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // TIMING (8 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// Calibrated TSC frequency (ticks per second)
     /// MUST be calibrated at boot using UEFI Stall(). NO HARDCODED VALUES.
     pub tsc_freq: u64,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // STACK (16 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// Top of stack (highest address, stack grows down)
     pub stack_top: u64,
 
     /// Stack size in bytes (minimum 64KB)
     pub stack_size: u64,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // FRAMEBUFFER / DEBUG (24 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// Framebuffer base address for debug output (0 if unavailable)
     pub framebuffer_base: u64,
 
@@ -245,9 +191,6 @@ pub struct BootHandoff {
     /// Framebuffer pixel format: 0=RGB (Rgbx), 1=BGR (Bgrx)
     pub framebuffer_format: u32,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // MEMORY MAP INFO (16 bytes)
-    // ═══════════════════════════════════════════════════════════════════════
     /// Pointer to UEFI memory map (copied before EBS)
     pub memory_map_ptr: u64,
 
@@ -257,9 +200,6 @@ pub struct BootHandoff {
     /// Memory map descriptor size
     pub memory_map_desc_size: u32,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern NIC
-    // ═══════════════════════════════════════════════════════════════════════
     /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub nic_transport_type: u8,
 
@@ -281,9 +221,6 @@ pub struct BootHandoff {
     /// Device cfg address (BAR base + cap offset)
     pub nic_device_cfg: u64,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // PCI MODERN TRANSPORT INFO (48 bytes) - for VirtIO PCI Modern BLK
-    // ═══════════════════════════════════════════════════════════════════════
     /// Transport type: 0=MMIO, 1=PCI Modern, 2=PCI Legacy
     pub blk_transport_type: u8,
 
@@ -305,9 +242,6 @@ pub struct BootHandoff {
     /// Device cfg address (BAR base + cap offset)
     pub blk_device_cfg: u64,
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // RESERVED (8 bytes for future expansion)
-    // ═══════════════════════════════════════════════════════════════════════
     pub _reserved: [u8; 8],
 }
 
@@ -315,13 +249,10 @@ pub struct BootHandoff {
 const _: () = assert!(core::mem::size_of::<BootHandoff>() == 256);
 
 impl BootHandoff {
-    /// Magic number constant
     pub const MAGIC: u64 = HANDOFF_MAGIC;
 
-    /// Current version constant
     pub const VERSION: u32 = HANDOFF_VERSION;
 
-    /// Expected structure size
     pub const SIZE: u32 = 256;
 
     /// Create a zeroed handoff structure with magic and version set.
@@ -379,10 +310,6 @@ impl BootHandoff {
     }
 
     /// Validate the handoff structure.
-    ///
-    /// # Returns
-    /// - `Ok(())` if valid
-    /// - `Err(HandoffError)` describing the first validation failure
     pub fn validate(&self) -> Result<(), HandoffError> {
         // Header validation
         if self.magic != HANDOFF_MAGIC {
@@ -436,14 +363,12 @@ impl BootHandoff {
         self.validate()
     }
 
-    /// Check if block device is configured.
     pub fn has_block_device(&self) -> bool {
         // For PCI Modern, blk_mmio_base is 0 but blk_common_cfg is set
         // For Legacy MMIO, blk_mmio_base is set
         self.blk_type != BLK_TYPE_NONE && (self.blk_mmio_base != 0 || self.blk_common_cfg != 0)
     }
 
-    /// Check if framebuffer is available.
     pub fn has_framebuffer(&self) -> bool {
         self.framebuffer_base != 0 && self.framebuffer_width > 0 && self.framebuffer_height > 0
     }
@@ -510,9 +435,6 @@ impl fmt::Debug for BootHandoff {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TSC CALIBRATION HELPERS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TSC calibration result.
 #[derive(Debug, Clone, Copy)]

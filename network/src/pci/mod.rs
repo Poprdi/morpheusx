@@ -2,11 +2,6 @@
 //!
 //! Provides PCI configuration space access and capability chain walking
 //! for VirtIO PCI Modern device discovery.
-//!
-//! # Reference
-//! - PCI Local Bus Spec 3.0 §6.7 (Capabilities)
-//! - VirtIO Spec 1.2 §4.1.4 (PCI Device Discovery)
-//! - ARCHITECTURE_V3.md - PCI layer
 
 pub mod capability;
 pub mod config;

@@ -188,9 +188,6 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
     }
 }
 
-// ============================================================================
-// Packet Statistics Ring Buffers
-// ============================================================================
 
 /// Ring buffer size for packet counters (must be power of 2 for efficient masking)
 const PACKET_COUNTER_SIZE: usize = 256;
@@ -242,9 +239,6 @@ static RX_PACKET_COUNTER: PacketCounterRing = PacketCounterRing::new();
 // Debug marker for tracing initialization steps
 static DEBUG_INIT_STAGE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-// ============================================================================
-// Debug Log Ring Buffer
-// ============================================================================
 
 /// Maximum length of a single debug message
 const DEBUG_MSG_LEN: usize = 64;
@@ -360,7 +354,6 @@ pub fn debug_log_available() -> bool {
     unsafe { DEBUG_RING.count > 0 }
 }
 
-/// Clear all debug messages
 pub fn debug_log_clear() {
     // Bounded try-lock: in single-threaded context, lock should never be held
     if DEBUG_RING_LOCK.swap(true, core::sync::atomic::Ordering::Acquire) {
@@ -377,7 +370,6 @@ pub fn debug_log_clear() {
     DEBUG_RING_LOCK.store(false, core::sync::atomic::Ordering::Release);
 }
 
-/// Set debug init stage and log it
 pub fn set_debug_stage(stage: u32) {
     DEBUG_INIT_STAGE.store(stage, core::sync::atomic::Ordering::Relaxed);
 
@@ -400,7 +392,6 @@ pub fn set_debug_stage(stage: u32) {
     debug_log(stage, desc);
 }
 
-/// Get current debug init stage.
 pub fn debug_stage() -> u32 {
     DEBUG_INIT_STAGE.load(core::sync::atomic::Ordering::Relaxed)
 }

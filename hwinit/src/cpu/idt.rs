@@ -5,23 +5,20 @@ use crate::cpu::gdt::KERNEL_CS;
 use crate::serial::{newline, put_hex32, put_hex64, put_hex8, puts};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-// IDT ENTRY
-
-/// IDT entry (16 bytes in long mode)
+/// 16-byte long-mode IDT entry.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct IdtEntry {
     offset_low: u16,
     selector: u16,
-    ist: u8,       // IST index (0 = no IST)
-    type_attr: u8, // Type and attributes
+    ist: u8,
+    type_attr: u8,
     offset_mid: u16,
     offset_high: u32,
     reserved: u32,
 }
 
 impl IdtEntry {
-    /// Create a null/absent entry
     pub const fn missing() -> Self {
         Self {
             offset_low: 0,
@@ -34,18 +31,12 @@ impl IdtEntry {
         }
     }
 
-    /// Create an interrupt gate entry
-    ///
-    /// # Arguments
-    /// - `handler`: Handler function address
-    /// - `ist`: IST index (1-7) or 0 for no IST
-    /// - `dpl`: Descriptor privilege level (0-3)
+    /// Interrupt gate. `ist`=0 disables IST, `dpl` 0-3.
     pub fn interrupt_gate(handler: u64, ist: u8, dpl: u8) -> Self {
         Self {
             offset_low: handler as u16,
             selector: KERNEL_CS,
             ist: ist & 0x7,
-            // Present | DPL | Interrupt Gate (0xE)
             type_attr: 0x80 | ((dpl & 3) << 5) | 0x0E,
             offset_mid: (handler >> 16) as u16,
             offset_high: (handler >> 32) as u32,
@@ -53,13 +44,12 @@ impl IdtEntry {
         }
     }
 
-    /// Create a trap gate entry (doesn't disable interrupts)
+    /// Trap gate. Doesn't clear IF on entry (use for #BP).
     pub fn trap_gate(handler: u64, ist: u8, dpl: u8) -> Self {
         Self {
             offset_low: handler as u16,
             selector: KERNEL_CS,
             ist: ist & 0x7,
-            // Present | DPL | Trap Gate (0xF)
             type_attr: 0x80 | ((dpl & 3) << 5) | 0x0F,
             offset_mid: (handler >> 16) as u16,
             offset_high: (handler >> 32) as u32,
@@ -68,18 +58,13 @@ impl IdtEntry {
     }
 }
 
-// IDT POINTER
-
-/// IDT pointer for lidt instruction
 #[repr(C, packed)]
 pub struct IdtPtr {
     pub limit: u16,
     pub base: u64,
 }
 
-// EXCEPTION FRAME
-
-/// Exception stack frame pushed by CPU
+/// Hardware-pushed exception frame.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct ExceptionFrame {
@@ -90,7 +75,7 @@ pub struct ExceptionFrame {
     pub ss: u64,
 }
 
-/// Extended exception frame with error code
+/// Exception frame with hardware-pushed error code.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct ExceptionFrameWithError {
@@ -102,14 +87,8 @@ pub struct ExceptionFrameWithError {
     pub ss: u64,
 }
 
-// IDT TABLE
-
-// CRASH DIAGNOSTICS — rich crash info for the BSoD
-
-/// Saved general-purpose registers — layout matches push order in `exception_common`.
-///
-/// Push order: rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15.
-/// Stack grows down → r15 at lowest address.
+/// GPR snapshot matching `exception_common` push order
+/// (rax,rbx,rcx,rdx,rsi,rdi,rbp,r8..r15; stack grows down so r15 lowest).
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SavedRegs {
@@ -130,35 +109,23 @@ pub struct SavedRegs {
     pub rax: u64,
 }
 
-/// Rich crash diagnostic — built entirely on the kernel stack, **zero allocation**.
-///
-/// Contains everything a developer needs to diagnose what went wrong:
-/// exception identity, all CPU registers, process context, human-readable
-/// explanation, and a best-effort kernel-mode stack backtrace.
+/// Stack-resident crash diagnostic. Zero allocation.
 #[repr(C)]
 pub struct CrashInfo {
-    // exception identity
-    /// CPU exception vector (0–31) or interrupt number.
     pub vector: u64,
-    /// Hardware error code pushed by the CPU (0 if none).
     pub error_code: u64,
-    /// Human-readable exception name (e.g. "Page Fault").
     pub exception_name: &'static str,
 
-    // cpu exception frame (pushed by hardware)
     pub rip: u64,
     pub cs: u64,
     pub rflags: u64,
     pub rsp: u64,
     pub ss: u64,
 
-    // control registers
-    /// CR2: faulting linear address (meaningful only for #PF, vector 14).
+    /// CR2 meaningful only for #PF.
     pub cr2: u64,
-    /// CR3: page-table root physical address.
     pub cr3: u64,
 
-    // general-purpose registers at the instant of the fault
     pub rax: u64,
     pub rbx: u64,
     pub rcx: u64,
@@ -175,85 +142,57 @@ pub struct CrashInfo {
     pub r14: u64,
     pub r15: u64,
 
-    // process context (lock-free, best-effort read)
-    /// PID of the process executing when the fault occurred.
     pub pid: u32,
-    /// Process name, NUL-terminated.  "[kernel]" for PID 0 / unknown.
     pub process_name: [u8; 32],
-    /// True if the fault originated in user mode (CPL 3).
     pub is_user_mode: bool,
 
-    // stack backtrace (kernel-mode only, best-effort rbp walk)
-    /// Return addresses from the RBP frame chain (most recent first).
     pub backtrace: [u64; 16],
-    /// Number of valid entries in `backtrace`.
     pub backtrace_depth: u8,
 
-    // human-readable diagnostic
-    /// One-line explanation of what went wrong.
     pub explanation: [u8; 256],
-    /// Length of the explanation text.
     pub explanation_len: u16,
 }
 
-/// Crash hook callback — receives a reference to the rich crash diagnostics.
-///
-/// # Safety
-/// Called from exception context with interrupts disabled.  Must not
-/// allocate or acquire any lock.  The reference points to a stack-local
-/// struct inside the exception handler frame.
+/// Crash hook. Runs in exception context, IF=0. No alloc, no locks.
 pub type CrashHookFn = unsafe fn(&CrashInfo);
 
 static mut CRASH_HOOK: Option<CrashHookFn> = None;
 static RESET_ON_CRASH: AtomicBool = AtomicBool::new(false);
 
-/// Register the crash screen callback (typically called during boot init).
+/// Install the BSoD hook.
 ///
 /// # Safety
-/// Must be called during single-threaded init.
+/// Single-threaded init only.
 pub unsafe fn set_crash_hook(hook: CrashHookFn) {
     CRASH_HOOK = Some(hook);
 }
 
-/// If set, fatal exceptions reset the machine after the crash hook runs.
 pub fn set_reset_on_crash(enable: bool) {
     RESET_ON_CRASH.store(enable, Ordering::Relaxed);
 }
 
-/// Number of IDT entries
 const IDT_ENTRIES: usize = 256;
 
-/// The IDT
 #[repr(C, align(16))]
 pub struct Idt {
     entries: [IdtEntry; IDT_ENTRIES],
 }
 
 impl Idt {
-    /// Create empty IDT
     pub const fn new() -> Self {
         Self {
             entries: [IdtEntry::missing(); IDT_ENTRIES],
         }
     }
 
-    /// Set handler for a vector
     pub fn set_handler(&mut self, vector: u8, entry: IdtEntry) {
         self.entries[vector as usize] = entry;
     }
 }
 
-// GLOBAL STATE
-
-/// Our IDT
 static mut IDT: Idt = Idt::new();
-
-/// IDT initialized flag
 static mut IDT_INITIALIZED: bool = false;
 
-// EXCEPTION HANDLERS
-
-/// Exception names for debugging
 const EXCEPTION_NAMES: [&str; 32] = [
     "Divide Error",
     "Debug",
@@ -289,9 +228,7 @@ const EXCEPTION_NAMES: [&str; 32] = [
     "Reserved",
 ];
 
-// crash diagnostic helpers (zero-alloc)
-
-/// Tiny stack-only buffer writer for building diagnostic strings.
+/// Stack-only buffer writer for crash strings.
 struct BufWriter<'a> {
     buf: &'a mut [u8],
     pos: usize,
@@ -322,7 +259,7 @@ impl<'a> BufWriter<'a> {
     }
 }
 
-/// Build a human-readable explanation of the exception.
+/// One-line explanation of the exception.
 fn build_explanation(vec: u64, ec: u64, cr2: u64, user: bool, buf: &mut [u8; 256]) -> u16 {
     let mut w = BufWriter::new(buf);
     match vec {
@@ -384,12 +321,11 @@ fn build_explanation(vec: u64, ec: u64, cr2: u64, user: bool, buf: &mut [u8; 256
     w.len() as u16
 }
 
-/// Walk the RBP frame chain (kernel-mode only) to collect return addresses.
+/// Kernel-mode RBP frame walk. Strict alignment + range check to avoid faulting.
 unsafe fn walk_stack(rbp: u64, out: &mut [u64; 16]) -> u8 {
     let mut fp = rbp;
     let mut depth: u8 = 0;
     for _ in 0..16u8 {
-        // Sanity: aligned, non-null, in a plausible kernel range
         if fp == 0 || !fp.is_multiple_of(8) || !(0x1000..=0x0000_7FFF_FFFF_FFFF).contains(&fp) {
             break;
         }
@@ -401,17 +337,14 @@ unsafe fn walk_stack(rbp: u64, out: &mut [u64; 16]) -> u8 {
         out[depth as usize] = ret;
         depth += 1;
         if prev <= fp {
-            break;
-        } // prevent loops
+            break; // loop guard
+        }
         fp = prev;
     }
     depth
 }
 
-/// Unified exception handler — builds a rich [`CrashInfo`] and invokes the BSoD hook.
-///
-/// Called from the `exception_common` ASM stub for ALL CPU exceptions (vectors 0–21).
-/// Arguments arrive via MS x64 ABI: rcx=vector, rdx=error_code, r8=&frame, r9=&saved.
+/// Entry from `exception_common` (MS x64: rcx=vec, rdx=ec, r8=&frame, r9=&regs).
 #[no_mangle]
 pub extern "C" fn exception_handler(
     vector: u64,
@@ -419,7 +352,7 @@ pub extern "C" fn exception_handler(
     frame: &ExceptionFrame,
     saved: &SavedRegs,
 ) {
-    // serial dump (always, before anything that could re-fault)
+    // Serial dump first; runs even if everything else faults.
     let exc_name = if (vector as usize) < EXCEPTION_NAMES.len() {
         EXCEPTION_NAMES[vector as usize]
     } else {
@@ -444,7 +377,6 @@ pub extern "C" fn exception_handler(
     put_hex64(frame.cs);
     newline();
 
-    // Control registers
     let (cr2, cr3): (u64, u64);
     unsafe {
         core::arch::asm!("mov {}, cr2", out(reg) cr2);
@@ -459,7 +391,7 @@ pub extern "C" fn exception_handler(
     put_hex64(cr3);
     newline();
 
-    // Process context (lock-free read — safe even pre-scheduler-init)
+    // Lock-free read; safe pre-scheduler-init.
     let pid = crate::process::SCHEDULER.current_pid();
     let mut proc_name = [0u8; 32];
     unsafe {
@@ -484,7 +416,6 @@ pub extern "C" fn exception_handler(
         " [KERNEL]\n"
     });
 
-    // GPR dump
     puts("  RAX: ");
     put_hex64(saved.rax);
     puts("  RBX: ");
@@ -916,7 +847,6 @@ pub unsafe fn load_idt_for_ap() {
     // intentionally quiet on AP path to avoid N-core boot spam.
 }
 
-/// Enable interrupts
 #[inline(always)]
 pub fn enable_interrupts() {
     unsafe {
@@ -924,7 +854,6 @@ pub fn enable_interrupts() {
     }
 }
 
-/// Disable interrupts
 #[inline(always)]
 pub fn disable_interrupts() {
     unsafe {
@@ -932,7 +861,6 @@ pub fn disable_interrupts() {
     }
 }
 
-/// Check if interrupts are enabled
 pub fn interrupts_enabled() -> bool {
     let rflags: u64;
     unsafe {

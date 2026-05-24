@@ -1,26 +1,21 @@
-//! Checksum calculations for validation
+//! El Torito 16-bit wrapping checksum.
 
-/// Calculate 16-bit checksum (sum of 16-bit words)
-///
-/// Used for El Torito validation entry
+/// Wrapping sum of little-endian 16-bit words. Trailing odd byte ignored.
 pub fn checksum_16(data: &[u8]) -> u16 {
     let mut sum = 0u16;
-
-    // Process pairs of bytes as 16-bit words
     for chunk in data.chunks_exact(2) {
         let word = u16::from_le_bytes([chunk[0], chunk[1]]);
         sum = sum.wrapping_add(word);
     }
-
     sum
 }
 
-/// Verify checksum is zero (validation check)
+/// El Torito validation passes when the running sum is zero.
 pub fn verify_checksum_16(data: &[u8]) -> bool {
     checksum_16(data) == 0
 }
 
-/// Calculate checksum that makes total sum zero
+/// Value that, when added, makes the total sum zero.
 pub fn calculate_complement_16(data: &[u8]) -> u16 {
     let sum = checksum_16(data);
     0u16.wrapping_sub(sum)

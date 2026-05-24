@@ -1,28 +1,28 @@
-//! Sector alignment and calculation utilities
+//! Sector alignment helpers.
 
 use crate::types::SECTOR_SIZE;
 
-/// Align value to sector boundary (round up)
+/// Round `value` up to the next 2048-byte boundary.
 pub fn align_to_sector(value: usize) -> usize {
     (value + SECTOR_SIZE - 1) & !(SECTOR_SIZE - 1)
 }
 
-/// Convert byte offset to sector number
+/// Sector containing `byte_offset`.
 pub fn byte_to_sector(byte_offset: u64) -> u32 {
     (byte_offset / SECTOR_SIZE as u64) as u32
 }
 
-/// Convert sector number to byte offset
+/// Start byte of sector `sector`.
 pub fn sector_to_byte(sector: u32) -> u64 {
     sector as u64 * SECTOR_SIZE as u64
 }
 
-/// Calculate number of sectors needed for byte count
+/// Sectors required to cover `byte_count`, rounded up.
 pub fn sectors_for_bytes(byte_count: u32) -> u32 {
     byte_count.div_ceil(SECTOR_SIZE as u32)
 }
 
-/// Check if value is sector-aligned
+/// True if `value` is a multiple of the sector size.
 pub fn is_sector_aligned(value: usize) -> bool {
     value & (SECTOR_SIZE - 1) == 0
 }

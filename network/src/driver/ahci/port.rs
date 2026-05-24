@@ -1,16 +1,12 @@
-//! AHCI port management types.
+//! AHCI port status types (PxSSTS decode).
 
-/// Port detection status.
+/// PxSSTS.DET.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PortDetection {
-    /// No device detected
     None = 0,
-    /// Device present but no PHY communication
     Present = 1,
-    /// Device present and PHY communication established
     Ready = 3,
-    /// PHY in offline mode
     Offline = 4,
 }
 
@@ -26,18 +22,13 @@ impl From<u32> for PortDetection {
     }
 }
 
-/// Device type detected from signature.
+/// Decoded PxSIG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceType {
-    /// ATA hard drive or SSD
     Ata,
-    /// ATAPI device (CD/DVD)
     Atapi,
-    /// Enclosure Management Bridge
     Semb,
-    /// Port Multiplier
     PortMultiplier,
-    /// Unknown device type
     Unknown(u32),
 }
 
@@ -53,16 +44,12 @@ impl From<u32> for DeviceType {
     }
 }
 
-/// Link speed.
+/// PxSSTS.SPD: SATA Gen1/2/3 = 1.5/3/6 Gbps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkSpeed {
-    /// No speed negotiated
     None,
-    /// SATA Gen1 (1.5 Gbps)
     Gen1,
-    /// SATA Gen2 (3.0 Gbps)
     Gen2,
-    /// SATA Gen3 (6.0 Gbps)
     Gen3,
 }
 
@@ -78,19 +65,12 @@ impl From<u32> for LinkSpeed {
     }
 }
 
-/// Port status information.
 #[derive(Debug, Clone, Copy)]
 pub struct PortStatus {
-    /// Detection status
     pub detection: PortDetection,
-    /// Link speed
     pub speed: LinkSpeed,
-    /// Device type (from signature)
     pub device_type: DeviceType,
-    /// Is device busy
     pub busy: bool,
-    /// Data request pending
     pub drq: bool,
-    /// Error occurred
     pub error: bool,
 }

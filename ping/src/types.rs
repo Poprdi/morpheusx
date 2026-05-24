@@ -28,13 +28,10 @@ impl Ipv4Addr {
     /// Broadcast address (255.255.255.255)
     pub const BROADCAST: Self = Self([255, 255, 255, 255]);
 
-    /// Localhost (127.0.0.1)
     pub const LOCALHOST: Self = Self([127, 0, 0, 1]);
 
-    /// Cloudflare DNS (1.1.1.1) - primary connectivity target
     pub const CLOUDFLARE_DNS: Self = Self([1, 1, 1, 1]);
 
-    /// Google DNS (8.8.8.8)
     pub const GOOGLE_DNS: Self = Self([8, 8, 8, 8]);
 
     /// Check if unspecified
@@ -69,10 +66,8 @@ impl MacAddress {
         Self(bytes)
     }
 
-    /// Broadcast MAC address
     pub const BROADCAST: Self = Self([0xFF; 6]);
 
-    /// Zero MAC address
     pub const ZERO: Self = Self([0x00; 6]);
 
     /// Get raw bytes
@@ -227,12 +222,10 @@ impl PingStats {
         }
     }
 
-    /// Record a sent packet
     pub fn record_sent(&mut self) {
         self.sent = self.sent.saturating_add(1);
     }
 
-    /// Record a successful reply
     pub fn record_reply(&mut self, rtt_ms: u32) {
         self.received = self.received.saturating_add(1);
         self.rtt_sum_ms = self.rtt_sum_ms.saturating_add(rtt_ms as u64);
@@ -245,7 +238,6 @@ impl PingStats {
         }
     }
 
-    /// Record a lost packet (timeout)
     pub fn record_lost(&mut self) {
         self.lost = self.lost.saturating_add(1);
     }
@@ -273,7 +265,6 @@ impl PingStats {
         self.received > 0
     }
 
-    /// Reset statistics
     pub fn reset(&mut self) {
         *self = Self::new();
     }

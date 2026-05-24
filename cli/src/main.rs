@@ -9,13 +9,6 @@
 //! morpheus-cli inject <disk-image> <elf-binary> [--dest /bin/name]
 //! ```
 //!
-//! # Examples
-//!
-//! ```bash
-//! # Inject the e2e test binary into the default location
-//! cargo run -p morpheus-cli -- inject testing/helix-data.img \
-//!     target/x86_64-morpheus/release/syscall-e2e
-//!
 //! # Inject with a custom path inside HelixFS
 //! cargo run -p morpheus-cli -- inject testing/helix-data.img \
 //!     target/x86_64-morpheus/release/syscall-e2e --dest /bin/e2e
@@ -38,9 +31,6 @@ use morpheus_helix::types::*;
 use morpheus_helix::vfs::{self};
 use morpheus_helix::vfs::{FdTable, HelixInstance, MountTable};
 
-// ──────────────────────────────────────────────────────────────────────────────
-// FileBlockDevice — wraps a std::fs::File as a block device
-// ──────────────────────────────────────────────────────────────────────────────
 
 const SECTOR_SIZE: u32 = 512;
 
@@ -106,9 +96,6 @@ impl BlockIo for FileBlockDevice {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// CLI commands
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn usage() {
     eprintln!("morpheus-cli — MorpheusX HelixFS host utility");
@@ -318,9 +305,6 @@ fn rebuild_bitmap(instance: &mut HelixInstance) {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// inject command
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     println!("[inject] disk   : {}", disk);
@@ -377,9 +361,6 @@ fn dest_name(dest: &str) -> &str {
     dest.rsplit('/').next().unwrap_or(dest)
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// ls command
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     let (_dev, mt) = mount(disk)?;
@@ -395,13 +376,6 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// mkbin command — pre-create /bin directory
-// ──────────────────────────────────────────────────────────────────────────────
-
-// ──────────────────────────────────────────────────────────────────────────────
-// format command — wipe and reformat HelixFS partition
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn cmd_format(disk: &str) -> Result<(), String> {
     let mut dev =
@@ -423,9 +397,6 @@ fn cmd_mkbin(disk: &str) -> Result<(), String> {
     }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// entry point
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn main() {
     let args: Vec<String> = env::args().collect();

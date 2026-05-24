@@ -1,31 +1,16 @@
-//! PS/2 Keyboard Driver — full ASCII, scan code set 1, US/DE keymaps.
-//!
-//! Keyboard layout is a runtime value — switch with `keyboard.set_layout()`.
-//! Default: `KeyLayout::Us`. German (`KeyLayout::De`) fully supported.
-//!
-//! Architecture mirrors every other driver in this repo:
-//!   ASM primitives (bootloader/asm/keyboard/ps2.s)
-//!     → Rust bindings (extern "win64")
-//!       → Orchestration (init, poll, translate)
-//!
-//! Port 0x60 = data, port 0x64 = status/command.
-//! Status bit 0 (OBF) = data ready. Bit 1 (IBF) = controller busy.
-//!
-//! We track shift, ctrl, alt, capslock, altgr as modifier state and produce
-//! InputKey { scan_code, unicode_char } — same struct the TUI consumes.
-//! scan_code uses EFI-compatible values so main_menu.rs needs zero changes.
+//! PS/2 keyboard — scan set 1, US/DE keymaps, runtime-switchable.
+//! Ports 0x60 (data), 0x64 (status/cmd). Status: bit0 OBF, bit1 IBF.
+//! Emits `InputKey { scan_code, unicode_char }` with EFI-compatible scan codes.
 
 extern "win64" {
     fn asm_ps2_read_status() -> u8;
     pub fn asm_ps2_write_cmd(cmd: u8);
     pub fn asm_ps2_write_data(data: u8);
     fn asm_ps2_poll() -> u32;
-    /// 0=empty, 0x1xx=keyboard byte, 0x3xx=mouse byte
+    /// 0=empty, 0x1xx=kbd byte, 0x3xx=mouse byte.
     pub fn asm_ps2_poll_any() -> u32;
     pub fn asm_ps2_flush();
 }
-
-// PUBLIC KEY TYPE
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -34,7 +19,7 @@ pub struct InputKey {
     pub unicode_char: u16,
 }
 
-// efi-compatible scan codes (main_menu.rs expects these exact values)
+// EFI scan codes — main_menu.rs depends on these exact values.
 
 pub const SCAN_NULL: u16 = 0x00;
 pub const SCAN_UP: u16 = 0x01;
@@ -61,37 +46,18 @@ pub const SCAN_F11: u16 = 0x15;
 pub const SCAN_F12: u16 = 0x16;
 pub const SCAN_ESC: u16 = 0x17;
 
-// ascii codes
-
 pub const KEY_ENTER: u16 = 0x0D;
 pub const KEY_SPACE: u16 = 0x20;
 pub const KEY_TAB: u16 = 0x09;
 pub const KEY_BACKSPACE: u16 = 0x08;
 
-// KEYBOARD LAYOUT
-
-/// Active keyboard layout. Switchable at runtime via `keyboard.set_layout()`.
-///
-/// Affects:
-///   - unshifted table (base layer)
-///   - shifted table   (shift layer)
-///   - altgr table     (AltGr layer — DE only, produces äöüß{[]}|@€ etc.)
-///
-/// US is the default. Switch to DE at any point with `set_layout(KeyLayout::De)`.
 #[derive(Clone, Copy, PartialEq)]
 pub enum KeyLayout {
-    /// Standard US QWERTY (default)
     Us,
-    /// German QWERTZ (de-DE)
     De,
 }
 
-// SCAN CODE SET 1 → ASCII TRANSLATION TABLES
-
-// us qwerty
-
-/// Unshifted ASCII for scan code set 1 make codes 0x00..0x58, US QWERTY.
-/// 0 = no printable character (modifier or special key).
+// Scan set 1 → ASCII, make codes 0x00..0x58. Zero entries = non-printable.
 #[rustfmt::skip]
 static US_UNSHIFTED: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
@@ -120,7 +86,6 @@ static US_UNSHIFTED: [u8; 89] = [
     0,                                                 // F12
 ];
 
-/// Shifted ASCII for scan code set 1 make codes 0x00..0x58, US QWERTY.
 #[rustfmt::skip]
 static US_SHIFTED: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
@@ -149,21 +114,10 @@ static US_SHIFTED: [u8; 89] = [
     0,
 ];
 
-// de qwertz
-//
-// Key divergences from US:
-//   0x15 (US y)  → z      0x2C (US z) → y
-//   0x0C (US -)  → ß      0x0D (US =) → ' (dead accent, emit as apostrophe)
-//   0x1A (US [)  → ü      0x1B (US ]) → +
-//   0x27 (US ;)  → ö      0x28 (US ') → ä
-//   0x29 (US `)  → ^ (dead caret, emit ^)   0x2B (US \) → #
-//   0x33 (US ,)  → ,      0x34 (US .) → .   0x35 (US /) → - (dash)
-//   0x56 (extra) → <   shifted → >   AltGr → |
-//
-// Non-ASCII: ß=0xDF ü=0xFC ö=0xF6 ä=0xE4 Ü=0xDC Ö=0xD6 Ä=0xC4 §=0xA7 µ=0xB5
-// These are their Latin-1 codepoints, all fit in u8.
+// DE QWERTZ divergences vs US: y↔z, ß(0xDF) ü(0xFC) ö(0xF6) ä(0xE4) on the
+// usual keys, dead accent/caret emitted literal, plus the 0x56 < > | extra.
+// Umlauts use Latin-1 codepoints (fit in u8).
 
-/// Unshifted layer for DE QWERTZ.
 #[rustfmt::skip]
 static DE_UNSHIFTED: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
@@ -192,7 +146,6 @@ static DE_UNSHIFTED: [u8; 89] = [
     0,
 ];
 
-/// Shifted layer for DE QWERTZ.
 #[rustfmt::skip]
 static DE_SHIFTED: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
@@ -221,7 +174,7 @@ static DE_SHIFTED: [u8; 89] = [
     0,
 ];
 
-/// AltGr (Right Alt) layer for DE QWERTZ. 0 = no mapping.
+/// DE AltGr layer; 0 = unmapped.
 #[rustfmt::skip]
 static DE_ALTGR: [u8; 89] = [
 //  0x00  0x01  0x02  0x03  0x04  0x05  0x06  0x07
@@ -250,9 +203,6 @@ static DE_ALTGR: [u8; 89] = [
     0,
 ];
 
-// PS/2 SCAN CODE CONSTANTS
-
-// Make codes (key press)
 const SC_ESC: u8 = 0x01;
 const SC_LCTRL: u8 = 0x1D;
 const SC_LSHIFT: u8 = 0x2A;
@@ -264,7 +214,6 @@ const SC_F10: u8 = 0x44;
 const SC_F11: u8 = 0x57;
 const SC_F12: u8 = 0x58;
 
-// Extended (0xE0 prefix) make codes
 const SC_EXT_UP: u8 = 0x48;
 const SC_EXT_DOWN: u8 = 0x50;
 const SC_EXT_LEFT: u8 = 0x4B;
@@ -276,50 +225,43 @@ const SC_EXT_PGDN: u8 = 0x51;
 const SC_EXT_INSERT: u8 = 0x52;
 const SC_EXT_DELETE: u8 = 0x53;
 
-// Break code flag
 const BREAK_FLAG: u8 = 0x80;
-
-// Extended prefix byte
 const EXTENDED_PREFIX: u8 = 0xE0;
 
-// KEYBOARD STATE
-
 pub struct Keyboard {
-    /// Shift held (left or right)
     shift: bool,
-    /// Ctrl held
     ctrl: bool,
-    /// Alt held (left only — right alt = AltGr on DE)
     alt: bool,
-    /// AltGr held (right alt, or Ctrl+LAlt on some firmware)
+    /// Right Alt on US, AltGr on DE.
     altgr: bool,
-    /// Caps lock toggled
     caps_lock: bool,
-    /// Next byte is an extended (0xE0) scancode
     extended: bool,
-    /// Controller initialized
     initialized: bool,
-    /// Active keymap
     layout: KeyLayout,
-    /// Some controllers mis-tag keyboard bytes as AUX; fallback mode accepts both tags.
+    /// Some controllers mis-tag kbd bytes as AUX; fallback accepts both tags.
     aux_as_kbd: bool,
 }
 
 impl Keyboard {
-    /// Initialize the PS/2 keyboard controller.
-    ///
-    /// Sequence:
-    ///   1. Flush stale data (UEFI may have left bytes in buffer)
-    ///   2. Disable scanning so init commands don't get mixed with keycodes
-    ///   3. Controller self-test
-    ///   4. Enable first PS/2 port
-    ///   5. Reset keyboard device
-    ///   6. Set scan code set 1 (explicit — don't trust BIOS/UEFI default)
-    ///   7. Enable scanning
-    ///   8. Flush again (init may have generated ACK/response bytes)
-    ///
-    /// Initialize the PS/2 keyboard controller with the default US layout.
-    /// Call `set_layout(KeyLayout::De)` at any point to switch to German.
+    /// Decoder-only construction — skips the i8042 PS/2 controller init
+    /// sequence. Use when an alternative input source (e.g. USB HID) is
+    /// already known to be available and probing PS/2 hardware would just
+    /// produce a flood of warnings on a board without a PS/2 controller.
+    /// The scan-code decoder itself works without controller init.
+    pub fn new_decoder_only() -> Self {
+        Self {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            altgr: false,
+            caps_lock: false,
+            extended: false,
+            initialized: false,
+            layout: KeyLayout::Us,
+            aux_as_kbd: false,
+        }
+    }
+
     pub fn new() -> Self {
         let mut kb = Self {
             shift: false,
@@ -337,12 +279,10 @@ impl Keyboard {
         kb
     }
 
-    /// Switch keyboard layout at runtime. Takes effect immediately.
     pub fn set_layout(&mut self, layout: KeyLayout) {
         self.layout = layout;
     }
 
-    /// Return the currently active layout.
     pub fn layout(&self) -> KeyLayout {
         self.layout
     }
@@ -367,31 +307,29 @@ impl Keyboard {
         self.aux_as_kbd = false;
         self.initialized = false;
 
-        // 1) Hard-stop both channels and drain everything.
-        asm_ps2_write_cmd(0xAD); // disable keyboard port
+        asm_ps2_write_cmd(0xAD);
         Self::io_delay();
-        asm_ps2_write_cmd(0xA7); // disable aux port
+        asm_ps2_write_cmd(0xA7);
         Self::io_delay();
         Self::drain_all(512);
 
-        // 2) Put controller in known config: IRQs off, clocks on, translation off.
+        // Known config: IRQs off, clocks on, translation off.
         asm_ps2_write_cmd(0x20);
         let mut cfg = self.wait_kbd_byte(100_000).unwrap_or(0x00);
-        cfg &= !0x43; // clear IRQ1, IRQ12, translation
-        cfg &= !0x30; // enable both clocks (bits are disable flags)
+        cfg &= !0x43;
+        cfg &= !0x30; // bits are *disable* flags — clearing enables clocks
         asm_ps2_write_cmd(0x60);
         asm_ps2_write_data(cfg);
         Self::io_delay();
         Self::drain_all(128);
 
-        // 3) Controller and interface tests.
         asm_ps2_write_cmd(0xAA);
         let ctl_ok = self.wait_kbd_byte(200_000) == Some(0x55);
         if !ctl_ok {
             morpheus_hwinit::serial::log_warn("INPUT", 936, "8042 self-test failed");
         }
 
-        // Self-test may rewrite config on some controllers. Re-assert config.
+        // Self-test rewrites config on some 8042s. Re-assert.
         asm_ps2_write_cmd(0x60);
         asm_ps2_write_data(cfg);
         Self::io_delay();
@@ -402,14 +340,12 @@ impl Keyboard {
             morpheus_hwinit::serial::log_warn("INPUT", 937, "8042 port1 test failed");
         }
 
-        // 4) Enable keyboard port only for deterministic bring-up.
         asm_ps2_write_cmd(0xAE);
         Self::io_delay();
         asm_ps2_write_cmd(0xA7);
         Self::io_delay();
         Self::drain_all(128);
 
-        // 5) Reset keyboard with retries.
         let mut reset_ok = false;
         for _ in 0..3 {
             asm_ps2_write_data(0xFF);
@@ -433,21 +369,20 @@ impl Keyboard {
             );
         }
 
-        // 6) Program known scan behavior (set 1) and verify.
+        // Set scan code set 1 and verify it actually latched — BIOS defaults vary.
         let mut scan_ok = true;
 
-        asm_ps2_write_data(0xF5); // disable scanning
+        asm_ps2_write_data(0xF5);
         scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
 
-        asm_ps2_write_data(0xF6); // defaults
+        asm_ps2_write_data(0xF6);
         scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
 
-        asm_ps2_write_data(0xF0); // set scancode cmd
+        asm_ps2_write_data(0xF0);
         scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
-        asm_ps2_write_data(0x01); // set 1
+        asm_ps2_write_data(0x01);
         scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
 
-        // Query to verify set-1 actually latched.
         asm_ps2_write_data(0xF0);
         scan_ok &= self.wait_kbd_byte(100_000) == Some(0xFA);
         asm_ps2_write_data(0x00);
@@ -455,7 +390,7 @@ impl Keyboard {
         let set_id = self.wait_kbd_byte(100_000);
         scan_ok &= set_id == Some(0x01);
 
-        asm_ps2_write_data(0xF4); // enable scanning
+        asm_ps2_write_data(0xF4);
         let f4_ack = self.wait_kbd_byte(100_000);
         scan_ok &= f4_ack == Some(0xFA);
 
@@ -485,8 +420,7 @@ impl Keyboard {
                 return Some((r & 0xFF) as u8);
             }
             if tag == 0x300 {
-                // mouse/aux byte while doing keyboard bring-up; drop it.
-                continue;
+                continue; // mouse byte during kbd bring-up; drop it
             }
             core::hint::spin_loop();
         }
@@ -502,10 +436,9 @@ impl Keyboard {
         }
     }
 
-    /// Tiny delay between commands (write to unused port 0x80, like PIC does).
+    /// Port-0x80 dummy write — classic ~1µs ISA bus settle delay.
     #[inline(always)]
     unsafe fn io_delay() {
-        // Same pattern as hwinit/src/cpu/pic.rs io_wait()
         core::arch::asm!(
             "out 0x80, al",
             out("al") _,
@@ -513,11 +446,7 @@ impl Keyboard {
         );
     }
 
-    // PUBLIC API (unchanged signatures — TUI code needs zero changes)
-
-    /// Non-blocking key read. Returns `Some(InputKey)` if a complete
-    /// key-press event was decoded, `None` if the buffer was empty or
-    /// only a modifier/break code was processed.
+    /// Non-blocking. `None` means empty buffer or modifier/break only.
     pub fn read_key(&mut self) -> Option<InputKey> {
         let raw = unsafe { asm_ps2_poll_any() };
         let tag = raw & 0x300;
@@ -528,17 +457,11 @@ impl Keyboard {
         self.decode(byte)
     }
 
-    /// Feed a raw scan code byte (from asm_ps2_poll_any) through the decoder.
     pub fn feed_raw(&mut self, byte: u8) -> Option<InputKey> {
         self.decode(byte)
     }
 
-    /// Blocking wait — halts until a printable/actionable key arrives.
-    ///
-    /// PERF FIX: Replaced 10K spin_loop iterations with sti/hlt/cli.
-    /// Old approach burned CPU polling at full speed. HLT yields the core
-    /// until the next interrupt (PS/2 IRQ1 fires on every keypress), giving
-    /// near-zero power draw while waiting and immediate wakeup on keypress.
+    /// Blocks until a printable/actionable key arrives.
     pub fn wait_for_key(&mut self) -> InputKey {
         loop {
             let raw = unsafe { asm_ps2_poll_any() };
@@ -550,8 +473,7 @@ impl Keyboard {
                     return key;
                 }
 
-                // Boot gate should continue on any non-break keyboard make byte,
-                // even if it's a modifier or currently unmapped key.
+                // Boot gate accepts any non-break make byte, even unmapped/modifier.
                 if byte != EXTENDED_PREFIX && (byte & BREAK_FLAG) == 0 {
                     return InputKey {
                         scan_code: SCAN_NULL,
@@ -560,22 +482,16 @@ impl Keyboard {
                 }
             }
 
-            // Do not rely on interrupt wakeups at this stage; poll with short backoff.
+            // Interrupt wakeups aren't wired up this early — poll with backoff.
             for _ in 0..4096 {
                 core::hint::spin_loop();
             }
         }
     }
 
-    /// Poll with ~16ms delay for animation loops (~60Hz frame pacing).
-    ///
-    /// PERF FIX: Replaced TSC spin_loop with HLT-based idle.
-    /// CPU enters C1 sleep between timer interrupts, re-checking TSC on each
-    /// wakeup.  Near-zero power draw during the delay window.
+    /// ~16ms-paced poll for ~60Hz animation. HLTs between RDTSC checks.
     pub fn poll_key_with_delay(&mut self) -> Option<InputKey> {
         let key = self.read_key();
-        // TSC-based ~16ms delay for consistent ~60Hz frame pacing.
-        // 16_000_000 cycles ≈ 16ms at 1 GHz; scales proportionally.
         let start: u64 = unsafe {
             let lo: u32;
             let hi: u32;
@@ -593,7 +509,6 @@ impl Keyboard {
             if now.wrapping_sub(start) >= target_cycles {
                 break;
             }
-            // PERF: HLT instead of spin_loop — sleep until next interrupt.
             unsafe {
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }
@@ -601,42 +516,32 @@ impl Keyboard {
         key
     }
 
-    // SCAN CODE DECODER
-
-    /// Decode a single raw byte from port 0x60.
-    ///
-    /// Returns `Some(InputKey)` only on complete key-press events.
-    /// Modifier transitions (shift down/up, ctrl, alt, capslock toggle)
-    /// and break codes return `None` — they update internal state only.
+    /// Returns `Some` only on a complete key-press. Modifiers and break
+    /// codes return `None` after updating state.
     fn decode(&mut self, byte: u8) -> Option<InputKey> {
-        // Extended prefix — remember it, consume the byte
         if byte == EXTENDED_PREFIX {
             self.extended = true;
             return None;
         }
 
         let is_break = byte & BREAK_FLAG != 0;
-        let make = byte & !BREAK_FLAG; // strip break bit to get make code
+        let make = byte & !BREAK_FLAG;
 
         if self.extended {
             self.extended = false;
             return self.decode_extended(make, is_break);
         }
 
-        // break codes (key release) — update modifiers, emit nothing
         if is_break {
             match make {
                 SC_LSHIFT | SC_RSHIFT => self.shift = false,
                 SC_LCTRL => self.ctrl = false,
                 SC_LALT => self.alt = false,
-                _ => {} // ignore other releases
+                _ => {}
             }
             return None;
         }
 
-        // make codes (key press)
-
-        // Modifiers
         match make {
             SC_LSHIFT | SC_RSHIFT => {
                 self.shift = true;
@@ -657,7 +562,6 @@ impl Keyboard {
             _ => {}
         }
 
-        // Escape
         if make == SC_ESC {
             return Some(InputKey {
                 scan_code: SCAN_ESC,
@@ -665,7 +569,6 @@ impl Keyboard {
             });
         }
 
-        // Function keys F1-F10
         if (SC_F1..=SC_F10).contains(&make) {
             let fkey = SCAN_F1 + (make - SC_F1) as u16;
             return Some(InputKey {
@@ -674,7 +577,6 @@ impl Keyboard {
             });
         }
 
-        // F11, F12
         if make == SC_F11 {
             return Some(InputKey {
                 scan_code: SCAN_F11,
@@ -688,11 +590,10 @@ impl Keyboard {
             });
         }
 
-        // ASCII from translation table
         if (make as usize) < US_UNSHIFTED.len() {
             let ch = self.translate_ascii(make);
             if ch != 0 {
-                // Ctrl+letter produces control characters (0x01-0x1A)
+                // Ctrl+letter → 0x01..=0x1A control chars.
                 let unicode = if self.ctrl && ch.is_ascii_lowercase() {
                     (ch - b'a' + 1) as u16
                 } else if self.ctrl && ch.is_ascii_uppercase() {
@@ -707,17 +608,15 @@ impl Keyboard {
             }
         }
 
-        None // unrecognized or non-printable
+        None
     }
 
-    /// Decode an extended (0xE0-prefixed) scancode.
+    /// 0xE0-prefixed scancodes: arrows, nav, right modifiers, numpad enter/slash.
     fn decode_extended(&mut self, make: u8, is_break: bool) -> Option<InputKey> {
-        // Extended modifier releases (right ctrl, right alt)
         if is_break {
             match make {
-                SC_LCTRL => self.ctrl = false, // Right Ctrl shares make code
+                SC_LCTRL => self.ctrl = false,
                 SC_LALT => {
-                    // Right Alt = AltGr on DE; plain Alt on US
                     if self.layout == KeyLayout::De {
                         self.altgr = false;
                     } else {
@@ -729,7 +628,6 @@ impl Keyboard {
             return None;
         }
 
-        // Extended modifier presses
         match make {
             SC_LCTRL => {
                 self.ctrl = true;
@@ -746,7 +644,6 @@ impl Keyboard {
             _ => {}
         }
 
-        // Numpad Enter (E0+1C) → same as main Enter key
         if make == 0x1C {
             return Some(InputKey {
                 scan_code: SCAN_NULL,
@@ -754,7 +651,6 @@ impl Keyboard {
             });
         }
 
-        // Numpad / (E0+35) → forward slash
         if make == 0x35 {
             return Some(InputKey {
                 scan_code: SCAN_NULL,
@@ -762,7 +658,6 @@ impl Keyboard {
             });
         }
 
-        // Navigation keys → EFI scan codes
         let scan = match make {
             SC_EXT_UP => SCAN_UP,
             SC_EXT_DOWN => SCAN_DOWN,
@@ -783,10 +678,7 @@ impl Keyboard {
         })
     }
 
-    /// Look up a character for the given make code, applying the active
-    /// layout, shift, caps lock, and (for DE) AltGr.
-    ///
-    /// Returns 0 if the key has no character in the active layer.
+    /// Layout + shift + caps + AltGr → ASCII. 0 = no char in active layer.
     fn translate_ascii(&self, make: u8) -> u8 {
         let idx = make as usize;
         if idx >= 89 {
@@ -813,16 +705,14 @@ impl Keyboard {
                 }
             }
             KeyLayout::De => {
-                // AltGr layer takes priority over everything else
                 if self.altgr {
-                    let ch = DE_ALTGR[idx];
-                    return ch; // 0 = no AltGr mapping for this key
+                    return DE_ALTGR[idx];
                 }
                 let base = DE_UNSHIFTED[idx];
                 if base == 0 {
                     return 0;
                 }
-                // Letters are still ASCII a-z in DE table; umlauts are not letters
+                // ASCII a-z respect caps; umlauts and symbols only respect shift.
                 let is_ascii_lower = base.is_ascii_lowercase();
                 if is_ascii_lower {
                     if self.shift ^ self.caps_lock {
@@ -830,13 +720,10 @@ impl Keyboard {
                     } else {
                         base
                     }
+                } else if self.shift {
+                    DE_SHIFTED[idx]
                 } else {
-                    // Non-letter (punctuation, umlauts, symbols): shift only
-                    if self.shift {
-                        DE_SHIFTED[idx]
-                    } else {
-                        base
-                    }
+                    base
                 }
             }
         }

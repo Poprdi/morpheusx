@@ -10,19 +10,6 @@ use alloc::string::String;
 ///
 /// FAT32 8.3 format limits names to 8 characters + 3 character extension.
 /// To avoid truncation collisions, we use CRC32 hash of the full ISO name.
-///
-/// # Arguments
-/// * `iso_name` - Full ISO filename (e.g., "tails-6.10.iso", "ubuntu-24.04-desktop.iso")
-///
-/// # Returns
-/// * 8.3 compatible filename (e.g., "4B2A7C3D.MFS")
-///
-/// # Examples
-/// ```
-/// let filename = generate_8_3_manifest_name("tails-6.10.iso");
-/// assert_eq!(filename.len(), 12); // "XXXXXXXX.MFS"
-/// assert!(filename.ends_with(".MFS"));
-/// ```
 pub fn generate_8_3_manifest_name(iso_name: &str) -> String {
     let hash = crc32(iso_name.as_bytes());
     format!("{:08X}.MFS", hash)
@@ -31,12 +18,6 @@ pub fn generate_8_3_manifest_name(iso_name: &str) -> String {
 /// Calculate CRC32 checksum of data.
 ///
 /// Uses standard CRC32 algorithm with polynomial 0xEDB88320.
-///
-/// # Arguments
-/// * `data` - Input bytes to hash
-///
-/// # Returns
-/// * CRC32 checksum as u32
 fn crc32(data: &[u8]) -> u32 {
     const POLYNOMIAL: u32 = 0xEDB88320;
 

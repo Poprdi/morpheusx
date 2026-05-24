@@ -17,16 +17,10 @@
 //!                 │
 //!                 └── Backpressure ◀────────────────┘
 //! ```
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5, §8
 
 use super::StepResult;
 use crate::driver::block_traits::{BlockCompletion, BlockDriver, BlockError};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum number of in-flight write requests.
 const MAX_PENDING_WRITES: usize = 16;
@@ -34,12 +28,8 @@ const MAX_PENDING_WRITES: usize = 16;
 /// Sectors per write chunk (128 sectors = 64KB at 512B/sector).
 pub const SECTORS_PER_CHUNK: u32 = 128;
 
-/// Chunk size in bytes (64KB).
 pub const CHUNK_SIZE: usize = 65536;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ERROR TYPES
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Disk writer errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,9 +54,6 @@ impl From<BlockError> for DiskWriterError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// WRITE REQUEST TRACKING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Pending write request.
 #[derive(Debug, Clone, Copy, Default)]
@@ -83,9 +70,6 @@ struct PendingWrite {
     active: bool,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// WRITER CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Disk writer configuration.
 #[derive(Debug, Clone, Copy)]
@@ -108,9 +92,6 @@ impl Default for DiskWriterConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// WRITER PROGRESS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Disk write progress.
 #[derive(Debug, Clone, Copy, Default)]
@@ -144,15 +125,11 @@ impl DiskWriterProgress {
         self.total_bytes > 0 && self.bytes_written >= self.total_bytes && self.pending_writes == 0
     }
 
-    /// Get bytes still in flight.
     pub fn bytes_in_flight(&self) -> u64 {
         self.bytes_submitted.saturating_sub(self.bytes_written)
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Disk writer state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,12 +212,10 @@ impl DiskWriterState {
         }
     }
 
-    /// Get current state.
     pub fn state(&self) -> WriterState {
         self.state
     }
 
-    /// Get write progress.
     pub fn progress(&self) -> DiskWriterProgress {
         self.progress
     }
@@ -267,14 +242,10 @@ impl DiskWriterState {
         self.state == WriterState::Done
     }
 
-    /// Check if writer has pending writes.
     pub fn has_pending(&self) -> bool {
         self.pending_count > 0
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // STATE TRANSITIONS
-    // ═══════════════════════════════════════════════════════════════════════
 
     /// Start the writer.
     ///
@@ -306,16 +277,6 @@ impl DiskWriterState {
     }
 
     /// Write a chunk of data to disk.
-    ///
-    /// # Arguments
-    /// - `driver`: Block driver to use
-    /// - `buffer_phys`: Physical address of data buffer
-    /// - `len`: Length of data in bytes
-    ///
-    /// # Returns
-    /// - `Ok(())`: Write submitted
-    /// - `Err(QueueFull)`: Backpressure, try again after polling completions
-    /// - `Err(...)`: Write failed
     ///
     /// # Contract
     /// - `len` should be multiple of sector_size for best performance
@@ -399,11 +360,6 @@ impl DiskWriterState {
     /// Step the state machine (poll completions).
     ///
     /// Should be called regularly to process write completions.
-    ///
-    /// # Returns
-    /// - `Pending`: More completions expected
-    /// - `Done`: All writes completed
-    /// - `Failed`: A write failed
     pub fn step<D: BlockDriver>(&mut self, driver: &mut D) -> StepResult {
         // Poll completions
         while let Some(completion) = driver.poll_completion() {
@@ -474,11 +430,7 @@ impl DiskWriterState {
         self.pending.iter().position(|p| !p.active)
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // HELPERS
-    // ═══════════════════════════════════════════════════════════════════════
 
-    /// Get the next sector to write to.
     pub fn next_sector(&self) -> u64 {
         self.current_sector
     }
@@ -503,9 +455,6 @@ impl DiskWriterState {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CHUNK BUFFER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Write chunk descriptor for queuing.
 ///
@@ -566,12 +515,10 @@ impl ChunkQueue {
         }
     }
 
-    /// Check if queue is empty.
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
 
-    /// Check if queue is full.
     pub fn is_full(&self) -> bool {
         self.count >= MAX_PENDING_WRITES
     }
@@ -581,7 +528,6 @@ impl ChunkQueue {
         self.count
     }
 
-    /// Enqueue a chunk.
     pub fn enqueue(&mut self, buffer_phys: u64, buffer_cpu: *const u8, len: usize) -> Option<u32> {
         if self.is_full() {
             return None;
@@ -603,7 +549,6 @@ impl ChunkQueue {
         Some(sequence)
     }
 
-    /// Dequeue a chunk.
     pub fn dequeue(&mut self) -> Option<WriteChunk> {
         if self.is_empty() {
             return None;
@@ -625,7 +570,6 @@ impl ChunkQueue {
         }
     }
 
-    /// Clear the queue.
     pub fn clear(&mut self) {
         self.head = 0;
         self.tail = 0;
@@ -639,9 +583,6 @@ impl Default for ChunkQueue {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {

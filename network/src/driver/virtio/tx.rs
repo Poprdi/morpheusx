@@ -1,9 +1,6 @@
 //! VirtIO TX logic.
 //!
 //! Fire-and-forget transmit - never wait for completion!
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §4.6
 
 use crate::dma::BufferPool;
 use crate::driver::traits::TxError;
@@ -13,15 +10,6 @@ use crate::types::{VirtioNetHdr, VirtqueueState};
 pub const MAX_TX_FRAME_SIZE: usize = VirtioNetHdr::SIZE + 1514;
 
 /// Transmit a packet via VirtIO.
-///
-/// # Arguments
-/// - `tx_state`: TX virtqueue state
-/// - `tx_pool`: TX buffer pool
-/// - `frame`: Ethernet frame (without VirtIO header)
-///
-/// # Returns
-/// - `Ok(())`: Frame queued (fire-and-forget)
-/// - `Err(TxError)`: Transmission failed
 ///
 /// # Contract
 /// - MUST return immediately (no completion wait)

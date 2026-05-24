@@ -78,7 +78,6 @@ impl FeedbackMessage {
         }
     }
 
-    /// Format for display with prefix
     pub fn format_line(&self) -> String {
         use alloc::format;
         let prefix = match self.level {
@@ -106,7 +105,6 @@ impl FeedbackCollector {
         }
     }
 
-    /// Add a message
     pub fn add(&mut self, msg: FeedbackMessage) {
         if self.messages.len() >= self.max_messages {
             self.messages.remove(0); // FIFO - remove oldest
@@ -114,42 +112,34 @@ impl FeedbackCollector {
         self.messages.push(msg);
     }
 
-    /// Add info message
     pub fn info(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::info(category, message));
     }
 
-    /// Add success message
     pub fn success(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::success(category, message));
     }
 
-    /// Add warning message
     pub fn warning(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::warning(category, message));
     }
 
-    /// Add error message
     pub fn error(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::error(category, message));
     }
 
-    /// Add debug message
     pub fn debug(&mut self, category: FeedbackCategory, message: impl Into<String>) {
         self.add(FeedbackMessage::debug(category, message));
     }
 
-    /// Get all messages
     pub fn messages(&self) -> &[FeedbackMessage] {
         &self.messages
     }
 
-    /// Get messages filtered by level
     pub fn messages_by_level(&self, level: FeedbackLevel) -> Vec<&FeedbackMessage> {
         self.messages.iter().filter(|m| m.level == level).collect()
     }
 
-    /// Get messages filtered by category
     pub fn messages_by_category(&self, category: FeedbackCategory) -> Vec<&FeedbackMessage> {
         self.messages
             .iter()
@@ -157,12 +147,10 @@ impl FeedbackCollector {
             .collect()
     }
 
-    /// Clear all messages
     pub fn clear(&mut self) {
         self.messages.clear();
     }
 
-    /// Check if any errors
     pub fn has_errors(&self) -> bool {
         self.messages
             .iter()
@@ -184,7 +172,6 @@ pub struct PeDumpSummary {
 }
 
 impl PeDumpSummary {
-    /// Create from parsed PE headers
     pub fn from_headers(
         headers: &crate::pe::header::PeHeaders,
         actual_load_address: u64,
@@ -204,7 +191,6 @@ impl PeDumpSummary {
         }
     }
 
-    /// Format as lines for display
     pub fn format_lines(&self) -> Vec<String> {
         use alloc::format;
         let mut lines = Vec::new();

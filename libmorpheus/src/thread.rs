@@ -60,15 +60,6 @@ unsafe extern "C" fn thread_trampoline(arg: u64) -> ! {
 ///
 /// Allocates a user stack via SYS_MMAP, boxes the closure on the heap,
 /// and calls SYS_THREAD_CREATE with the trampoline as the entry point.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::thread;
-/// let h = thread::spawn(|| {
-///     libmorpheus::io::println("hello from thread!");
-/// });
-/// h.join().unwrap();
-/// ```
 pub fn spawn<F>(f: F) -> Result<JoinHandle<()>, u64>
 where
     F: FnOnce() + Send + 'static,
@@ -105,20 +96,8 @@ where
     })
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Builder — configure stack size before spawning
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Thread builder.  Allows setting stack size before spawning.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::thread;
-/// let h = thread::Builder::new()
-///     .stack_size(128 * 1024) // 128 KiB
-///     .spawn(|| { /* work */ })?;
-/// h.join()?;
-/// ```
 pub struct Builder {
     stack_pages: u64,
 }
@@ -188,7 +167,6 @@ where
     })
 }
 
-/// Get the current thread's TID.
 pub fn current_tid() -> u32 {
     crate::process::getpid()
 }

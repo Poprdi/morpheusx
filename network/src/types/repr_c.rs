@@ -2,9 +2,6 @@
 //!
 //! CRITICAL: These structures MUST match the ASM layout exactly.
 //! Any changes require corresponding ASM updates.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.6
 
 /// Virtqueue state passed to ASM functions.
 ///
@@ -121,7 +118,6 @@ impl VirtqDesc {
     pub const FLAG_NEXT: u16 = 1;
     /// WRITE flag - buffer is device-writable (for RX).
     pub const FLAG_WRITE: u16 = 2;
-    /// INDIRECT flag - buffer contains indirect descriptor table.
     pub const FLAG_INDIRECT: u16 = 4;
 
     pub const fn new() -> Self {

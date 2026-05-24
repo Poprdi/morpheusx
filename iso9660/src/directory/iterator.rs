@@ -1,6 +1,4 @@
-//! Directory iteration
-//!
-//! Iterator for reading directory entries sequentially.
+//! Sequential iterator over directory records.
 
 use crate::directory::record::DirectoryRecord;
 use crate::error::{Iso9660Error, Result};
@@ -11,7 +9,7 @@ use alloc::string::String;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
-/// Directory iterator
+/// Walks directory records in an extent, one sector at a time.
 pub struct DirectoryIterator<'a, B: BlockIo> {
     block_io: &'a mut B,
     extent_lba: u32,
@@ -22,7 +20,7 @@ pub struct DirectoryIterator<'a, B: BlockIo> {
 }
 
 impl<'a, B: BlockIo> DirectoryIterator<'a, B> {
-    /// Create new directory iterator
+    /// Construct an iterator over the directory extent at `extent_lba`.
     pub fn new(block_io: &'a mut B, extent_lba: u32, extent_len: u32) -> Self {
         Self {
             block_io,
@@ -40,17 +38,14 @@ impl<'a, B: BlockIo> Iterator for DirectoryIterator<'a, B> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // Check if we've read all directory data
             if self.offset >= self.extent_len as usize {
                 return None;
             }
 
-            // Calculate current LBA and offset within sector
             let sector_offset = self.offset / SECTOR_SIZE;
             let lba = self.extent_lba as u64 + sector_offset as u64;
             let offset_in_sector = self.offset % SECTOR_SIZE;
 
-            // Read sector if needed
             if self.current_sector_lba != Some(lba) {
                 if self
                     .block_io
@@ -62,51 +57,39 @@ impl<'a, B: BlockIo> Iterator for DirectoryIterator<'a, B> {
                 self.current_sector_lba = Some(lba);
             }
 
-            // Get remaining data in current sector
             let sector_data = &self.current_sector[offset_in_sector..];
 
-            // Check for zero-length record (skip to next sector)
+            // Records do not straddle sectors; a zero length byte means the
+            // remainder is padding (ISO 9660 §6.8.1.1).
             if sector_data.is_empty() || sector_data[0] == 0 {
-                // Move to next sector
-                let next_sector_offset = (sector_offset + 1) * SECTOR_SIZE;
-                self.offset = next_sector_offset;
+                self.offset = (sector_offset + 1) * SECTOR_SIZE;
                 continue;
             }
 
-            // Parse directory record
             let record = match DirectoryRecord::parse(sector_data) {
                 Ok(r) => r,
                 Err(e) => return Some(Err(e)),
             };
 
-            // Advance offset by record length
             self.offset += record.length as usize;
 
-            // Convert file identifier to string
             let file_id = record.file_identifier();
 
-            // Handle special directory entries
+            // 0x00 = ".", 0x01 = ".." (ISO 9660 §7.6.2)
             let name = if file_id.len() == 1 && file_id[0] == 0 {
                 String::from(".")
             } else if file_id.len() == 1 && file_id[0] == 1 {
                 String::from("..")
             } else {
                 match string::dchars_to_str(file_id) {
-                    Ok(s) => {
-                        // Strip version suffix (e.g., ";1")
-                        let stripped = string::strip_version(s);
-                        String::from(stripped)
-                    }
+                    Ok(s) => String::from(string::strip_version(s)),
                     Err(_) => {
-                        // If not valid UTF-8, use lossy conversion
                         let s = String::from_utf8_lossy(file_id);
-                        let stripped = string::strip_version(&s);
-                        String::from(stripped)
+                        String::from(string::strip_version(&s))
                     }
                 }
             };
 
-            // Build FileEntry
             let entry = FileEntry {
                 name,
                 size: record.get_data_length() as u64,

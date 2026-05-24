@@ -73,7 +73,6 @@ impl LogEngine {
         self.next_lsn
     }
 
-    /// Head segment index.
     pub fn head_segment(&self) -> u64 {
         self.head_segment
     }
@@ -83,12 +82,10 @@ impl LogEngine {
         self.segment_count
     }
 
-    /// Head offset within current segment.
     pub fn head_offset(&self) -> u32 {
         self.head_offset
     }
 
-    /// Tail segment index.
     pub fn tail_segment(&self) -> u64 {
         self.tail_segment
     }

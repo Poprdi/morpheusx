@@ -37,7 +37,6 @@ impl Pipe {
         }
     }
 
-    /// Bytes available to read.
     #[inline]
     pub fn available_read(&self) -> usize {
         (self.head.wrapping_sub(self.tail)) & PIPE_BUF_MASK

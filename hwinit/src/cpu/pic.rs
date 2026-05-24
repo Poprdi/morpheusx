@@ -127,7 +127,6 @@ pub unsafe fn disable_pic() {
 
 // IRQ MANAGEMENT
 
-/// Enable an IRQ.
 pub unsafe fn enable_irq(irq: u8) {
     if irq < 8 {
         PIC_MASK1 &= !(1 << irq);
@@ -143,7 +142,6 @@ pub unsafe fn enable_irq(irq: u8) {
     }
 }
 
-/// Disable an IRQ.
 pub unsafe fn disable_irq(irq: u8) {
     if irq < 8 {
         PIC_MASK1 |= 1 << irq;
@@ -154,7 +152,6 @@ pub unsafe fn disable_irq(irq: u8) {
     }
 }
 
-/// Send end-of-interrupt signal.
 pub unsafe fn send_eoi(irq: u8) {
     if irq >= 8 {
         outb(PIC2_COMMAND, PIC_EOI);
@@ -218,10 +215,8 @@ unsafe fn io_wait() {
 
 // LOCAL APIC (TODO - STUB)
 
-/// Local APIC base address (default)
 pub const LAPIC_BASE: u64 = 0xFEE0_0000;
 
-/// Check if APIC is available (via CPUID)
 pub fn apic_available() -> bool {
     let edx: u32;
     unsafe {
@@ -240,7 +235,6 @@ pub fn apic_available() -> bool {
     (edx & (1 << 9)) != 0 // APIC flag
 }
 
-/// Check if x2APIC is available
 pub fn x2apic_available() -> bool {
     let ecx: u32;
     unsafe {

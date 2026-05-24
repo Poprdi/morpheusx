@@ -3,16 +3,12 @@
 use crate::types::Ipv4Addr;
 use crate::checksum::calculate_checksum;
 
-/// ICMP protocol number in IP header
 pub const ICMP_PROTOCOL: u8 = 1;
 
-/// Minimum IP header size
 pub const IP_HEADER_SIZE: usize = 20;
 
-/// ICMP header size
 pub const ICMP_HEADER_SIZE: usize = 8;
 
-/// Minimum packet size (IP + ICMP headers)
 pub const MIN_PACKET_SIZE: usize = IP_HEADER_SIZE + ICMP_HEADER_SIZE;
 
 /// ICMP message types
@@ -74,19 +70,6 @@ impl UnreachableCode {
     }
 }
 
-/// Build IPv4 header
-///
-/// # Arguments
-/// * `buffer` - Output buffer (at least 20 bytes)
-/// * `src` - Source IP address
-/// * `dst` - Destination IP address
-/// * `total_len` - Total packet length including this header
-/// * `ttl` - Time to live
-/// * `protocol` - Protocol number (1 for ICMP)
-/// * `id` - Identification field
-///
-/// # Returns
-/// Number of bytes written (always 20)
 pub fn build_ip_header(
     buffer: &mut [u8],
     src: Ipv4Addr,
@@ -129,16 +112,6 @@ pub fn build_ip_header(
     IP_HEADER_SIZE
 }
 
-/// Build ICMP Echo Request
-///
-/// # Arguments
-/// * `buffer` - Output buffer (at least 8 + payload_size bytes)
-/// * `id` - Echo identifier
-/// * `sequence` - Sequence number
-/// * `payload_size` - Size of data payload
-///
-/// # Returns
-/// Number of bytes written
 pub fn build_icmp_echo_request(
     buffer: &mut [u8],
     id: u16,
@@ -192,10 +165,6 @@ pub struct ParsedIcmpReply {
     pub ttl: u8,
 }
 
-/// Parse IP header
-///
-/// # Returns
-/// Tuple of (header_length, protocol, ttl, src_ip, dst_ip) or None if invalid
 pub fn parse_ip_header(data: &[u8]) -> Option<(usize, u8, u8, Ipv4Addr, Ipv4Addr)> {
     if data.len() < IP_HEADER_SIZE {
         return None;
@@ -218,13 +187,6 @@ pub fn parse_ip_header(data: &[u8]) -> Option<(usize, u8, u8, Ipv4Addr, Ipv4Addr
     Some((ihl, protocol, ttl, src_ip, dst_ip))
 }
 
-/// Parse ICMP Echo Reply
-///
-/// # Arguments
-/// * `data` - Full packet including IP header
-///
-/// # Returns
-/// Parsed reply information or None if invalid/not an echo reply
 pub fn parse_icmp_reply(data: &[u8]) -> Option<ParsedIcmpReply> {
     // Parse IP header
     let (ihl, protocol, ttl, src_ip, _dst_ip) = parse_ip_header(data)?;

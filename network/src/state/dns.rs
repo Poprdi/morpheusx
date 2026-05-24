@@ -4,16 +4,10 @@
 //!
 //! # States
 //! Init → Resolving → Resolved | Failed
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5.3
 
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DNS ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// DNS-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +30,6 @@ impl From<DnsError> for StateError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DNS RESOLVE STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// DNS resolution state machine.
 ///
@@ -75,11 +66,6 @@ impl DnsResolveState {
         DnsResolveState::Init
     }
 
-    /// Start DNS resolution.
-    ///
-    /// # Arguments
-    /// - `query_handle`: Handle returned from smoltcp's `start_query()`
-    /// - `now_tsc`: Current TSC timestamp
     pub fn start(&mut self, query_handle: usize, now_tsc: u64) {
         *self = DnsResolveState::Resolving {
             query_handle,
@@ -98,20 +84,6 @@ impl DnsResolveState {
     }
 
     /// Step the state machine.
-    ///
-    /// # Arguments
-    /// - `dns_result`: Result from smoltcp's `get_query_result()`:
-    ///   - `Ok(Some(ip))`: Resolved
-    ///   - `Ok(None)`: Still pending
-    ///   - `Err(_)`: Failed
-    /// - `now_tsc`: Current TSC value
-    /// - `timeout_ticks`: DNS timeout in TSC ticks
-    ///
-    /// # Returns
-    /// - `Pending`: Still resolving
-    /// - `Done`: Resolved, call `ip()` to get result
-    /// - `Timeout`: Query timed out
-    /// - `Failed`: Query failed
     pub fn step(
         &mut self,
         dns_result: Result<Option<Ipv4Addr>, ()>,
@@ -163,7 +135,6 @@ impl DnsResolveState {
         }
     }
 
-    /// Get query handle (if resolving).
     pub fn query_handle(&self) -> Option<usize> {
         match self {
             DnsResolveState::Resolving { query_handle, .. } => Some(*query_handle),
@@ -179,7 +150,6 @@ impl DnsResolveState {
         }
     }
 
-    /// Get error (if failed).
     pub fn error(&self) -> Option<DnsError> {
         match self {
             DnsResolveState::Failed { error } => Some(*error),
@@ -207,9 +177,6 @@ impl Default for DnsResolveState {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HARDCODED DNS FALLBACK
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Lookup hostname in hardcoded table.
 ///
@@ -248,7 +215,6 @@ pub fn lookup_hardcoded(hostname: &str) -> Option<Ipv4Addr> {
     None
 }
 
-/// Parse hostname as IP address.
 pub fn parse_ip(hostname: &str) -> Option<Ipv4Addr> {
     hostname.parse().ok()
 }

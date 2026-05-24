@@ -1,14 +1,11 @@
-//! PE Optional Header (PE32+ / 64-bit) structure and parsing
-
 use super::super::{PeError, PeResult};
 use super::utils::{read_u16, read_u32, read_u64};
 
-/// PE Optional Header (PE32+ / 64-bit)
 #[derive(Debug, Clone, Copy)]
 pub struct OptionalHeader64 {
-    pub magic: u16, // 0x20B for PE32+
+    pub magic: u16,
     pub address_of_entry_point: u32,
-    pub image_base: u64, // Load address (UEFI modifies this!)
+    pub image_base: u64, // UEFI rewrites this to the actual load address.
     pub section_alignment: u32,
     pub file_alignment: u32,
     pub size_of_image: u32,
@@ -22,12 +19,9 @@ impl OptionalHeader64 {
     pub const MAGIC_PE32PLUS: u16 = 0x20B;
     pub const IMAGE_BASE_OFFSET: usize = 24;
 
-    /// Parse optional header from memory
-    ///
-    /// # Safety
-    /// Caller must ensure data + offset points to valid optional header
+    /// SAFETY: `data..+size` must be a readable PE image.
     pub unsafe fn parse(data: *const u8, pe_offset: u32, size: usize) -> PeResult<Self> {
-        // Optional header starts at: PE offset + 4 (sig) + 20 (COFF)
+        // Optional header = pe_offset + 4 (sig) + 20 (COFF).
         let opt_offset = pe_offset as usize + 24;
 
         if opt_offset + 96 > size {
@@ -63,27 +57,21 @@ impl OptionalHeader64 {
         })
     }
 
-    /// Patch ImageBase field in a buffer
-    ///
-    /// # Safety
-    /// Caller must ensure data is valid PE with proper DOS/COFF headers
+    /// SAFETY: `data` must be a valid PE with DOS/COFF headers.
     pub unsafe fn patch_image_base(data: &mut [u8], new_image_base: u64) -> PeResult<()> {
         if data.len() < 0x40 {
             return Err(PeError::InvalidOffset);
         }
 
-        // Read e_lfanew to find PE header
         let e_lfanew =
             u32::from_le_bytes([data[0x3C], data[0x3D], data[0x3E], data[0x3F]]) as usize;
 
-        // ImageBase is at: PE offset + 4 (sig) + 20 (COFF) + 24
         let image_base_offset = e_lfanew + 24 + Self::IMAGE_BASE_OFFSET;
 
         if image_base_offset + 8 > data.len() {
             return Err(PeError::InvalidOffset);
         }
 
-        // Write new ImageBase
         let bytes = new_image_base.to_le_bytes();
         data[image_base_offset..image_base_offset + 8].copy_from_slice(&bytes);
 

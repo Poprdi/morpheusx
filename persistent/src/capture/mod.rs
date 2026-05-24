@@ -41,17 +41,6 @@ pub struct MemoryImage {
 
 impl MemoryImage {
     /// Capture running bootloader from UEFI LoadedImage protocol
-    ///
-    /// # Arguments
-    /// * `image_base` - Pointer to loaded image (from LoadedImageProtocol.image_base)
-    /// * `image_size` - Size of loaded image (from LoadedImageProtocol.image_size)
-    ///
-    /// # Returns
-    /// Captured image with relocation information
-    ///
-    /// # Note
-    /// Not yet implemented. See `bootloader/src/installer/operations.rs` for
-    /// the current working implementation.
     pub fn capture_from_memory(
         _image_base: *const u8,
         _image_size: usize,
@@ -64,11 +53,6 @@ impl MemoryImage {
         unimplemented!("Use PeHeaders::unrelocate_image() directly for now")
     }
 
-    /// Create bootable disk image by reversing relocations
-    ///
-    /// # Note
-    /// Not yet implemented. See `PeHeaders::unrelocate_image()` and
-    /// `PeHeaders::rva_to_file_layout()` for the current working implementation.
     pub fn create_bootable_image(&self) -> Result<alloc::vec::Vec<u8>, PeError> {
         // Future implementation would use the RelocationEngine trait
         unimplemented!(
