@@ -1,28 +1,20 @@
-//! Local APIC driver.
-//!
-//! Provides LAPIC initialization, EOI, IPI, and timer setup.
-//! The LAPIC is memory-mapped at 0xFEE0_0000 (default base).
-//! Identity-mapped in our page tables, marked uncacheable.
-//!
-//! For SMP we also handle INIT/SIPI sequences to bring up AP cores.
+//! Local APIC driver: init, EOI, IPI, timer, INIT/SIPI for SMP.
+//! MMIO base from MSR 0x1B (default 0xFEE0_0000), identity-mapped UC.
 
 use crate::cpu::per_cpu;
 use crate::cpu::pio::outb;
 use crate::serial::{log_info, log_ok, log_warn};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-/// LAPIC timer init count calibrated by BSP — shared with all APs.
-/// APs read this and skip the PIT calibration race.
-/// 0 = not yet calibrated (do full calibration).
+/// BSP-calibrated timer init count. APs reuse this to skip the PIT race
+/// (multiple APs on PIT ch2 simultaneously deadlock). 0 = uncalibrated.
 static LAPIC_TIMER_INIT_COUNT: AtomicU32 = AtomicU32::new(0);
-
-// ── LAPIC register offsets ───────────────────────────────────────────────
 
 const LAPIC_ID: u32 = 0x020;
 const LAPIC_VER: u32 = 0x030;
-const LAPIC_TPR: u32 = 0x080; // task priority
+const LAPIC_TPR: u32 = 0x080;
 const LAPIC_EOI: u32 = 0x0B0;
-const LAPIC_SVR: u32 = 0x0F0; // spurious vector
+const LAPIC_SVR: u32 = 0x0F0;
 const LAPIC_ICR_LO: u32 = 0x300;
 const LAPIC_ICR_HI: u32 = 0x310;
 const LAPIC_LVT_TIMER: u32 = 0x320;
@@ -46,18 +38,16 @@ const ICR_LEVEL_DEASSERT: u32 = 0x0000;
 const ICR_TRIGGER_LEVEL: u32 = 1 << 15;
 const ICR_DELIVERY_STATUS: u32 = 1 << 12;
 
-/// Default LAPIC physical base address.
 pub const DEFAULT_LAPIC_BASE: u64 = 0xFEE0_0000;
 
-/// Timer interrupt vector — same as PIT was on (0x20) so the same ISR runs.
+/// Timer vector. Reuses the legacy PIT vector so existing ISR fires.
 pub const TIMER_VECTOR: u8 = 0x20;
 
-/// IA32_APIC_BASE MSR — contains the actual LAPIC physical base address.
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 const IA32_X2APIC_ICR_MSR: u32 = 0x830;
 const IA32_X2APIC_ID_MSR: u32 = 0x802;
 
-/// Actual LAPIC base, probed from MSR 0x1B. written once during BSP init.
+/// Probed from MSR 0x1B during BSP init; read-only after.
 static mut LAPIC_BASE_ACTUAL: u64 = DEFAULT_LAPIC_BASE;
 static X2APIC_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -109,12 +99,10 @@ pub fn is_x2apic_mode() -> bool {
     x2apic_enabled()
 }
 
-/// Probe the LAPIC base address from IA32_APIC_BASE MSR.
-/// Stores the result for all subsequent LAPIC access.
-/// Call once, early BSP init, before any other LAPIC operations.
+/// Read IA32_APIC_BASE, record base + x2APIC mode. Call once on BSP.
 ///
 /// # Safety
-/// Single-threaded BSP init. LAPIC must be identity-mapped (UEFI guarantees this).
+/// Single-threaded BSP init.
 pub unsafe fn probe_lapic_base() -> u64 {
     let lo: u32;
     let hi: u32;
@@ -128,7 +116,6 @@ pub unsafe fn probe_lapic_base() -> u64 {
     let raw = (hi as u64) << 32 | lo as u64;
     let x2 = (raw & (1 << 10)) != 0;
     X2APIC_ENABLED.store(x2, Ordering::Relaxed);
-    // bits [12:N] = base physical address, bits [0:11] = flags
     let base = raw & 0xFFFF_FFFF_FFFF_F000;
     LAPIC_BASE_ACTUAL = base;
 
@@ -139,14 +126,11 @@ pub unsafe fn probe_lapic_base() -> u64 {
     base
 }
 
-/// Get the probed LAPIC base address. returns DEFAULT until probe_lapic_base runs.
+/// Returns DEFAULT_LAPIC_BASE until `probe_lapic_base` runs.
 #[inline(always)]
 pub fn lapic_base() -> u64 {
-    // written once during BSP init, read-only after. no lock needed.
     unsafe { LAPIC_BASE_ACTUAL }
 }
-
-// ── MMIO helpers ─────────────────────────────────────────────────────────
 
 #[inline(always)]
 unsafe fn lapic_read(base: u64, reg: u32) -> u32 {
@@ -160,9 +144,7 @@ unsafe fn lapic_write(base: u64, reg: u32, val: u32) {
     core::ptr::write_volatile(ptr, val);
 }
 
-// ── Public API ───────────────────────────────────────────────────────────
-
-/// Read the current CPU's LAPIC ID from hardware.
+/// Read this CPU's LAPIC ID from hardware.
 pub unsafe fn read_lapic_id() -> u32 {
     if x2apic_enabled() {
         rdmsr(IA32_X2APIC_ID_MSR) as u32
@@ -171,7 +153,7 @@ pub unsafe fn read_lapic_id() -> u32 {
     }
 }
 
-/// Check if APIC is available via CPUID.
+/// CPUID.01h:EDX.APIC[bit 9].
 pub fn apic_available() -> bool {
     let edx: u32;
     unsafe {
@@ -189,26 +171,19 @@ pub fn apic_available() -> bool {
     (edx & (1 << 9)) != 0
 }
 
-/// Initialize the BSP's LAPIC.
-///
-/// Enables the LAPIC via SVR, sets task priority to 0 (accept all),
-/// and identity-maps the LAPIC MMIO page as uncacheable.
+/// SVR.enable + TPR=0; identity-map LAPIC page UC. Call once on BSP after paging.
 ///
 /// # Safety
-/// Call once on BSP, after GDT/IDT/paging are set up.
+/// BSP, post-GDT/IDT/paging.
 pub unsafe fn init_bsp() {
     let base = lapic_base();
 
-    // identity-map the LAPIC MMIO page as uncacheable
     if crate::paging::is_paging_initialized() {
         let _ = crate::paging::kmap_mmio(base, 0x1000);
     }
 
-    // enable LAPIC: set SVR.enable + spurious vector
     let svr = lapic_read(base, LAPIC_SVR);
     lapic_write(base, LAPIC_SVR, svr | SVR_ENABLE | SVR_SPURIOUS_VECTOR);
-
-    // accept all interrupts
     lapic_write(base, LAPIC_TPR, 0);
 
     let _id = lapic_read(base, LAPIC_ID) >> 24;
@@ -216,12 +191,10 @@ pub unsafe fn init_bsp() {
     log_ok("LAPIC", 721, "bsp lapic initialized");
 }
 
-/// Initialize an AP's LAPIC.
-///
-/// Called from the AP's Rust entry point.
+/// Per-AP LAPIC enable, called from `ap_rust_entry`.
 ///
 /// # Safety
-/// Called once per AP on that AP's own stack.
+/// Once per AP on its own stack.
 pub unsafe fn init_ap() {
     let base = lapic_base();
 
@@ -232,31 +205,20 @@ pub unsafe fn init_ap() {
     let _id = lapic_read(base, LAPIC_ID) >> 24;
 }
 
-/// Send end-of-interrupt to the local APIC.
-///
-/// Must be called at the end of every LAPIC-sourced interrupt handler.
-/// Writing any value to the EOI register signals completion.
+/// Write 0 to EOI. Call at end of every LAPIC-sourced ISR.
 #[inline(always)]
 pub unsafe fn send_eoi() {
-    // one load from a write-once global. no branch, no per-cpu lookup.
     lapic_write(lapic_base(), LAPIC_EOI, 0);
 }
 
-/// Calibrate the LAPIC timer against the PIT and start periodic mode.
-///
-/// Uses PIT channel 2 as a reference clock (1.193182 MHz) to measure
-/// how many LAPIC timer ticks elapse in a known period, then sets the
-/// periodic mode divisor for the desired frequency.
+/// Calibrate against PIT ch2 (1.193182 MHz), arm periodic mode.
+/// APs reuse BSP init_count to avoid simultaneous PIT ch2 contention.
 ///
 /// # Safety
-/// Call on each core after LAPIC is enabled.  PIT must be accessible.
+/// Per-core, post LAPIC enable. PIT must be accessible.
 pub unsafe fn setup_timer(target_hz: u32) {
     let base = lapic_base();
 
-    // APs skip PIT calibration — they use the BSP's result directly.
-    // multiple APs racing on PIT channel 2 simultaneously will reset each
-    // other's countdown → all get stuck in the spin loop forever.
-    // BSP stores init_count after successful calibration. APs load it.
     let cached = LAPIC_TIMER_INIT_COUNT.load(Ordering::Acquire);
     if cached != 0 {
         lapic_write(base, LAPIC_LVT_TIMER, TIMER_PERIODIC | TIMER_VECTOR as u32);
@@ -265,46 +227,36 @@ pub unsafe fn setup_timer(target_hz: u32) {
         return;
     }
 
-    // divide configuration: divide by 16
-    lapic_write(base, LAPIC_TIMER_DIV, 0x03); // 0b0011 = divide by 16
+    lapic_write(base, LAPIC_TIMER_DIV, 0x03); // divide by 16
 
-    // ── Calibrate: use PIT channel 2 for a ~10ms window ──────────────────
-    // PIT oscillator = 1,193,182 Hz.  10ms = 11,932 PIT ticks.
+    // PIT oscillator = 1,193,182 Hz; 10ms window.
     const PIT_HZ: u32 = 1_193_182;
     const CALIBRATION_MS: u32 = 10;
     const PIT_TICKS: u32 = (PIT_HZ / 1000) * CALIBRATION_MS;
 
-    // configure PIT channel 2 for one-shot countdown
     outb(0x61, (crate::cpu::pio::inb(0x61) & 0xFD) | 0x01); // gate high, speaker off
-    outb(0x43, 0xB0); // channel 2, lobyte/hibyte, mode 0 (one-shot)
+    outb(0x43, 0xB0); // ch2, lobyte/hibyte, mode 0 (one-shot)
     outb(0x42, (PIT_TICKS & 0xFF) as u8);
     outb(0x42, ((PIT_TICKS >> 8) & 0xFF) as u8);
 
-    // Re-arm the PIT gate BEFORE starting the LAPIC timer.
-    // On real hardware each I/O port access takes ~1µs.  If the LAPIC
-    // timer starts first, the gate re-arm sequence inflates the measured
-    // LAPIC frequency by several microseconds → timer runs 5-15% fast
-    // → delay_us finishes early → AP SIPI delays too short.
+    // Rearm PIT gate BEFORE LAPIC start: each port out is ~1us on real hw;
+    // reversing order inflates the measured LAPIC frequency 5-15% and
+    // shrinks AP SIPI delays below spec.
     let v = crate::cpu::pio::inb(0x61) & 0xFE;
-    outb(0x61, v); // gate LOW
-    outb(0x61, v | 1); // gate HIGH — PIT countdown restarts NOW
+    outb(0x61, v);
+    outb(0x61, v | 1);
 
-    // Start LAPIC timer immediately after PIT gate goes high so both
-    // timers run from the same instant.
     lapic_write(base, LAPIC_TIMER_INIT, 0xFFFF_FFFF);
 
-    // spin until PIT output goes high. if this hangs: PIT gate not armed, or
-    // hardware has no PIT channel 2. the checkpoint tells us we entered the spin.
+    // Hang here => PIT gate not armed or PIT ch2 absent.
     crate::serial::checkpoint("lapic-pit-spin");
     while crate::cpu::pio::inb(0x61) & 0x20 == 0 {
         core::hint::spin_loop();
     }
     crate::serial::checkpoint("lapic-pit-done");
 
-    // read how many LAPIC ticks elapsed
     let elapsed = 0xFFFF_FFFFu32 - lapic_read(base, LAPIC_TIMER_CURRENT);
 
-    // stop the timer
     lapic_write(base, LAPIC_LVT_TIMER, TIMER_MASKED);
 
     if elapsed == 0 {
@@ -312,46 +264,36 @@ pub unsafe fn setup_timer(target_hz: u32) {
         return;
     }
 
-    // ticks per second = elapsed * (1000 / CALIBRATION_MS) * divide_factor
-    // but divide_factor is already applied by hardware.
-    // ticks_per_second = elapsed * (1000 / 10) = elapsed * 100
+    // Hardware applies divisor already; ticks/s = elapsed * (1000 / cal_ms).
     let ticks_per_second = elapsed as u64 * (1000 / CALIBRATION_MS as u64);
     let init_count = (ticks_per_second / target_hz as u64) as u32;
 
     let _ = (elapsed, init_count, target_hz);
 
-    // store for APs before arming so they never touch the PIT
+    // Publish before arming so APs never touch the PIT.
     LAPIC_TIMER_INIT_COUNT.store(init_count, Ordering::Release);
 
     if crate::cpu::per_cpu::current_core_index() == 0 {
         log_ok("LAPIC", 724, "timer configured");
     }
 
-    // configure periodic mode at the target frequency
     lapic_write(base, LAPIC_LVT_TIMER, TIMER_PERIODIC | TIMER_VECTOR as u32);
-    lapic_write(base, LAPIC_TIMER_DIV, 0x03); // divide by 16
+    lapic_write(base, LAPIC_TIMER_DIV, 0x03);
     lapic_write(base, LAPIC_TIMER_INIT, init_count);
 }
 
-/// Disable the 8259 PIC completely.
-///
-/// After switching to LAPIC we never want the PIC to fire.
-/// Mask all IRQs on both chips.
+/// Mask all 8259 IRQs. Required once LAPIC is the interrupt source.
 pub unsafe fn disable_pic8259() {
-    outb(0x21, 0xFF); // master: mask all
-    outb(0xA1, 0xFF); // slave: mask all
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
     log_info("LAPIC", 725, "legacy PIC disabled");
 }
 
-// ── IPI ──────────────────────────────────────────────────────────────────
-
-/// Assert INIT IPI to target APIC ID.
-/// Caller MUST wait >= 200µs then call `send_init_deassert`.
+/// INIT IPI assert. Caller waits >=200us then `send_init_deassert`.
 pub unsafe fn send_init_assert(target_apic_id: u32) {
     let base = lapic_base();
 
     if x2apic_enabled() {
-        // level-triggered + assert + INIT = 0xC500
         let icr = (target_apic_id as u64) << 32
             | (ICR_INIT | ICR_TRIGGER_LEVEL | ICR_LEVEL_ASSERT) as u64;
         wrmsr(IA32_X2APIC_ICR_MSR, icr);
@@ -359,7 +301,6 @@ pub unsafe fn send_init_assert(target_apic_id: u32) {
         return;
     }
 
-    // level-triggered assert. 0xC500 — matches linux/xv6/every OS ever shipped.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
     lapic_write(
         base,
@@ -369,8 +310,7 @@ pub unsafe fn send_init_assert(target_apic_id: u32) {
     wait_icr_idle(base);
 }
 
-/// Deassert INIT IPI to target APIC ID.
-/// Call after holding INIT assert for >= 200µs.
+/// INIT IPI deassert. Trigger MUST stay level or KVM treats it as assert.
 pub unsafe fn send_init_deassert(target_apic_id: u32) {
     let base = lapic_base();
 
@@ -382,7 +322,6 @@ pub unsafe fn send_init_deassert(target_apic_id: u32) {
         return;
     }
 
-    // level-triggered deassert. trigger MUST be level or KVM treats it as assert.
     lapic_write(base, LAPIC_ICR_HI, target_apic_id << 24);
     lapic_write(
         base,
@@ -392,10 +331,7 @@ pub unsafe fn send_init_deassert(target_apic_id: u32) {
     wait_icr_idle(base);
 }
 
-/// Send a Startup IPI (SIPI) to target APIC ID.
-///
-/// `start_page` is the physical address / 0x1000 of the AP trampoline code.
-/// Must be below 1 MiB and page-aligned (e.g., 0x8000 → start_page = 8).
+/// SIPI. `start_page` = trampoline phys / 0x1000 (must be <1 MiB, page-aligned).
 pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
     let base = lapic_base();
     if x2apic_enabled() {
@@ -410,17 +346,14 @@ pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
     wait_icr_idle(base);
 }
 
-/// Wait for the ICR delivery status bit to clear.
+/// Poll ICR delivery-status. x2APIC ICR writes are synchronous (no poll),
+/// and reading MSR 0x830 #GPs on some CPUs.
 #[inline]
 unsafe fn wait_icr_idle(base: u64) {
-    // x2APIC: ICR writes via MSR 0x830 are performed synchronously by
-    // the CPU microcode.  There is no delivery-status bit to poll, and
-    // reading the MSR back can #GP on some implementations.
     if x2apic_enabled() {
         return;
     }
 
-    // xAPIC: poll MMIO ICR_LO for delivery-status bit to clear.
     let mut timeout = 10_000u32;
     while (lapic_read(base, LAPIC_ICR_LO) & ICR_DELIVERY_STATUS) != 0 {
         core::hint::spin_loop();
@@ -432,14 +365,10 @@ unsafe fn wait_icr_idle(base: u64) {
     }
 }
 
-// ── Delay helper ─────────────────────────────────────────────────────────
-
-/// Busy-wait for approximately `us` microseconds using the TSC.
-/// Falls back to a dumb loop if TSC freq is unknown.
+/// TSC-based busy wait. Spin fallback if TSC freq is bogus. Watchdog
+/// caps spin count: bad calibration must not turn a 10 ms wait into hours.
 pub unsafe fn delay_us(us: u64) {
     let freq = crate::process::scheduler::tsc_frequency();
-    // Sanity-window the TSC frequency. Bad calibration here turns a 10ms AP
-    // bring-up delay into a geological epoch on some firmware.
     if (1_000_000..=10_000_000_000).contains(&freq) {
         let cycles_per_us = freq / 1_000_000;
         if cycles_per_us == 0 {
@@ -453,10 +382,8 @@ pub unsafe fn delay_us(us: u64) {
         let delta = cycles_per_us.saturating_mul(us);
         let target = start.saturating_add(delta);
 
-        // Scale watchdog with TSC frequency.  Each loop iteration takes
-        // roughly 10–30 cycles (RDTSC + compare + PAUSE).  Use a
-        // conservative estimate of 10 cycles/iteration so the watchdog
-        // never fires before the TSC target is actually reached.
+        // ~10 cycles/iter (RDTSC+cmp+PAUSE) is the lower bound; using it
+        // ensures the watchdog never trips before the TSC target.
         let iters_per_us = (cycles_per_us / 10).max(1);
         let max_spins_u64 = us.saturating_mul(iters_per_us).clamp(10_000, 1_000_000_000);
         let max_spins = max_spins_u64 as u32;
@@ -470,19 +397,15 @@ pub unsafe fn delay_us(us: u64) {
             }
         }
     } else {
-        // dumb fallback: ~1µs per iteration at ~1GHz
+        // ~1us/iter at ~1 GHz; best effort.
         for _ in 0..(us * 1000) {
             core::hint::spin_loop();
         }
     }
 }
 
-// ── CPU topology via CPUID ───────────────────────────────────────────────
-
-/// Detect the number of logical processors via CPUID.
-///
-/// Tries leaf 0xB (x2APIC topology) first, falls back to leaf 1.
-/// Returns at least 1.
+/// Logical CPU count via CPUID. Leaf 0xB (x2APIC topology) preferred,
+/// falls back to leaf 1. Returns >=1.
 pub fn detect_cpu_count() -> u32 {
     let max_leaf: u32;
     unsafe {
@@ -498,14 +421,13 @@ pub fn detect_cpu_count() -> u32 {
         );
     }
 
-    // try leaf 0xB (extended topology enumeration)
     if max_leaf >= 0xB {
         let ebx: u32;
         unsafe {
             core::arch::asm!(
                 "push rbx",
                 "mov eax, 0xB",
-                "xor ecx, ecx",    // subleaf 0 (SMT level)
+                "xor ecx, ecx",    // SMT level
                 "cpuid",
                 "mov {0:e}, ebx",
                 "pop rbx",
@@ -516,15 +438,13 @@ pub fn detect_cpu_count() -> u32 {
                 options(nostack),
             );
         }
-        // EBX = number of logical processors at this level
         if ebx > 0 {
-            // try subleaf 1 (core level) for total count
             let ebx1: u32;
             unsafe {
                 core::arch::asm!(
                     "push rbx",
                     "mov eax, 0xB",
-                    "mov ecx, 1",   // subleaf 1 (core level)
+                    "mov ecx, 1",   // core level
                     "cpuid",
                     "mov {0:e}, ebx",
                     "pop rbx",
@@ -542,7 +462,7 @@ pub fn detect_cpu_count() -> u32 {
         }
     }
 
-    // fallback: leaf 1, EBX[23:16] = max logical processors
+    // Leaf 1 fallback: EBX[23:16] = max logical processors.
     if max_leaf >= 1 {
         let ebx: u32;
         unsafe {

@@ -1,17 +1,6 @@
 //! HTTP request building and serialization.
 //!
 //! Build HTTP/1.1 requests and serialize them to wire format.
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use morpheus_network::http::Request;
-//! use morpheus_network::url::Url;
-//!
-//! let url = Url::parse("http://example.com/api").unwrap();
-//! let request = Request::get(url);
-//! let wire = request.to_wire_format();
-//! ```
 
 use super::headers::Headers;
 use crate::types::HttpMethod;
@@ -51,7 +40,6 @@ impl Request {
         }
     }
 
-    /// Create a GET request.
     pub fn get(url: Url) -> Self {
         Self::new(HttpMethod::Get, url)
     }
@@ -61,17 +49,14 @@ impl Request {
         Self::new(HttpMethod::Head, url)
     }
 
-    /// Create a POST request.
     pub fn post(url: Url) -> Self {
         Self::new(HttpMethod::Post, url)
     }
 
-    /// Create a PUT request.
     pub fn put(url: Url) -> Self {
         Self::new(HttpMethod::Put, url)
     }
 
-    /// Create a DELETE request.
     pub fn delete(url: Url) -> Self {
         Self::new(HttpMethod::Delete, url)
     }
@@ -83,13 +68,11 @@ impl Request {
         self
     }
 
-    /// Set a header.
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.set(name, value);
         self
     }
 
-    /// Set Content-Type header.
     pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
         self.headers.set_content_type(content_type);
         self

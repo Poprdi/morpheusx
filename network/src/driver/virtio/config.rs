@@ -1,11 +1,7 @@
 //! VirtIO configuration and feature flags.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §4.4, VirtIO Spec §5.1.3
 
 /// VirtIO feature bits.
 pub mod features {
-    /// VirtIO 1.0+ (modern device).
     pub const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 
     /// Device has MAC address in config space.
@@ -17,17 +13,11 @@ pub mod features {
     /// Checksum offload (host handles).
     pub const VIRTIO_NET_F_CSUM: u64 = 1 << 0;
 
-    // ═══════════════════════════════════════════════════════════
-    // FORBIDDEN FEATURES - DO NOT NEGOTIATE
-    // ═══════════════════════════════════════════════════════════
 
-    /// Guest TSO4 - complicates buffer management.
     pub const VIRTIO_NET_F_GUEST_TSO4: u64 = 1 << 7;
 
-    /// Guest TSO6 - complicates buffer management.
     pub const VIRTIO_NET_F_GUEST_TSO6: u64 = 1 << 8;
 
-    /// Guest UFO - complicates buffer management.
     pub const VIRTIO_NET_F_GUEST_UFO: u64 = 1 << 10;
 
     /// Mergeable RX buffers - changes header semantics.
@@ -41,13 +31,10 @@ pub mod features {
 pub mod status {
     /// Driver found device.
     pub const ACKNOWLEDGE: u8 = 0x01;
-    /// Driver knows how to drive device.
     pub const DRIVER: u8 = 0x02;
     /// Driver ready, device may operate.
     pub const DRIVER_OK: u8 = 0x04;
-    /// Feature negotiation complete.
     pub const FEATURES_OK: u8 = 0x08;
-    /// Device error, needs reset.
     pub const DEVICE_NEEDS_RESET: u8 = 0x40;
     /// Driver gave up.
     pub const FAILED: u8 = 0x80;
@@ -56,10 +43,8 @@ pub mod status {
 /// Required features (device must support, else reject).
 pub const REQUIRED_FEATURES: u64 = features::VIRTIO_F_VERSION_1;
 
-/// Desired features (use if available).
 pub const DESIRED_FEATURES: u64 = features::VIRTIO_NET_F_MAC | features::VIRTIO_NET_F_STATUS;
 
-/// Forbidden features (never negotiate).
 pub const FORBIDDEN_FEATURES: u64 = features::VIRTIO_NET_F_GUEST_TSO4
     | features::VIRTIO_NET_F_GUEST_TSO6
     | features::VIRTIO_NET_F_GUEST_UFO
@@ -73,14 +58,6 @@ pub enum FeatureError {
     MissingRequired(u64),
 }
 
-/// Negotiate features with device.
-///
-/// # Arguments
-/// - `device_features`: Features advertised by device
-///
-/// # Returns
-/// - `Ok(u64)`: Negotiated feature set
-/// - `Err(FeatureError)`: Negotiation failed
 pub fn negotiate_features(device_features: u64) -> Result<u64, FeatureError> {
     // Check required features
     if device_features & REQUIRED_FEATURES != REQUIRED_FEATURES {
@@ -94,16 +71,13 @@ pub fn negotiate_features(device_features: u64) -> Result<u64, FeatureError> {
     Ok(our_features)
 }
 
-/// VirtIO PCI vendor ID.
 pub const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
 
-/// VirtIO-net PCI device IDs.
 pub const VIRTIO_NET_DEVICE_IDS: &[u16] = &[
     0x1000, // Legacy virtio-net (transitional)
     0x1041, // Modern virtio-net (virtio 1.0+)
 ];
 
-/// Check if PCI device is VirtIO-net.
 pub fn is_virtio_net(vendor: u16, device: u16) -> bool {
     vendor == VIRTIO_VENDOR_ID && VIRTIO_NET_DEVICE_IDS.contains(&device)
 }
@@ -123,9 +97,7 @@ pub struct VirtioConfig {
 }
 
 impl VirtioConfig {
-    /// Default queue size.
     pub const DEFAULT_QUEUE_SIZE: u16 = 32;
 
-    /// Default buffer size (2KB).
     pub const DEFAULT_BUFFER_SIZE: usize = 2048;
 }

@@ -2,9 +2,6 @@
 //!
 //! # Safety
 //! TSC reads are always safe. Requires invariant TSC (verify via CPUID at boot).
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.2.1
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

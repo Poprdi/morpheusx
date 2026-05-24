@@ -1,18 +1,10 @@
-//! Supplementary Volume Descriptor (Joliet support)
-//!
-//! The Supplementary VD enables Joliet extensions for long Unicode filenames.
+//! Supplementary VD (type 2). Joliet uses UCS-2 strings and escape sequences.
 
-/// Supplementary Volume Descriptor (type 2)
-///
-/// Same structure as Primary VD but uses UCS-2 encoding for strings
-pub struct SupplementaryVolumeDescriptor {
-    // TODO: Same fields as PrimaryVolumeDescriptor
-    // but escape sequences in unused3 field indicate Joliet
-}
+/// Placeholder; fields mirror the PVD when implemented.
+pub struct SupplementaryVolumeDescriptor {}
 
-/// Check if supplementary descriptor is Joliet
+/// Detect Joliet via the escape sequence field at offset 88
+/// (`%/@`, `%/C`, `%/E` for Level 1/2/3). Currently a stub.
 pub fn is_joliet(_data: &[u8]) -> bool {
-    // TODO: Check escape sequences at offset 88:
-    // %/@, %/C, or %/E indicate Joliet Level 1/2/3
     false
 }

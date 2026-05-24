@@ -1,11 +1,4 @@
-//! Filesystem operations — high-level wrappers around FS syscalls.
-//!
-//! # Layers
-//!
-//! - **Raw functions**: [`open`], [`read`], [`write`], [`close`], [`seek`], etc.
-//!   Return `Result<T, u64>` and take raw fds.
-//! - **RAII types**: [`File`], [`OpenOptions`], [`Metadata`], [`ReadDir`]
-//!   Use the structured [`Error`](crate::error::Error) type and auto-close on drop.
+//! Filesystem syscalls and RAII wrappers (`File`, `OpenOptions`, `ReadDir`).
 
 extern crate alloc;
 
@@ -28,7 +21,6 @@ pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;
 pub const SEEK_END: u64 = 2;
 
-/// Open a file. Returns fd or negative error.
 pub fn open(path: &str, flags: u32) -> Result<usize, u64> {
     let ret = unsafe {
         syscall3(
@@ -45,7 +37,6 @@ pub fn open(path: &str, flags: u32) -> Result<usize, u64> {
     }
 }
 
-/// Read from fd into buf. Returns bytes read.
 pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize, u64> {
     let ret = unsafe {
         syscall3(
@@ -62,7 +53,6 @@ pub fn read(fd: usize, buf: &mut [u8]) -> Result<usize, u64> {
     }
 }
 
-/// Write buf to fd. Returns bytes written.
 pub fn write(fd: usize, data: &[u8]) -> Result<usize, u64> {
     let ret = unsafe {
         syscall3(
@@ -157,7 +147,6 @@ pub fn sync() -> Result<(), u64> {
     }
 }
 
-/// Duplicate a file descriptor.  Returns the new fd.
 pub fn dup(old_fd: usize) -> Result<usize, u64> {
     let ret = unsafe { syscall1(SYS_DUP, old_fd as u64) };
     if is_error(ret) {
@@ -167,9 +156,7 @@ pub fn dup(old_fd: usize) -> Result<usize, u64> {
     }
 }
 
-/// Get the current working directory.
-///
-/// Writes the CWD path into `buf` and returns the actual length.
+/// Writes the CWD into `buf`; returns bytes written.
 pub fn getcwd(buf: &mut [u8]) -> Result<usize, u64> {
     let ret = unsafe { syscall2(SYS_GETCWD, buf.as_mut_ptr() as u64, buf.len() as u64) };
     if is_error(ret) {
@@ -179,7 +166,6 @@ pub fn getcwd(buf: &mut [u8]) -> Result<usize, u64> {
     }
 }
 
-/// Change the current working directory.
 pub fn chdir(path: &str) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_CHDIR, path.as_ptr() as u64, path.len() as u64) };
     if is_error(ret) {
@@ -189,10 +175,7 @@ pub fn chdir(path: &str) -> Result<(), u64> {
     }
 }
 
-/// Read directory entries at `path`.
-///
-/// `buf` should point to a buffer large enough for the returned entries.
-/// Returns the number of directory entries.
+/// Returns the number of entries written into `buf`.
 pub fn readdir(path: &str, buf: &mut [u8]) -> Result<usize, u64> {
     let ret = unsafe {
         syscall3(
@@ -209,73 +192,52 @@ pub fn readdir(path: &str, buf: &mut [u8]) -> Result<usize, u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// File — RAII wrapper over a file descriptor
-// ═══════════════════════════════════════════════════════════════════════
-
-/// An open file with automatic close on drop.
-///
-/// Implements [`Read`], [`Write`], and [`Seek`] from `crate::io`.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::fs::File;
-/// let mut f = File::create("/hello.txt")?;
-/// f.write_all(b"Hello MorpheusX!")?;
-/// ```
+/// RAII fd; closed on drop. Implements `Read`, `Write`, `Seek`.
 pub struct File {
     fd: usize,
 }
 
 impl File {
-    /// Open a file for reading.
     pub fn open(path: &str) -> error::Result<Self> {
         let fd = open(path, O_READ).map_err(Error::from_raw)?;
         Ok(Self { fd })
     }
 
-    /// Create (or truncate) a file for writing.
+    /// Create or truncate for writing.
     pub fn create(path: &str) -> error::Result<Self> {
         let fd = open(path, O_WRITE | O_CREATE | O_TRUNC).map_err(Error::from_raw)?;
         Ok(Self { fd })
     }
 
-    /// Open with explicit flags via [`OpenOptions`].
     pub fn options() -> OpenOptions {
         OpenOptions::new()
     }
 
-    /// Wrap a raw fd.  Caller is responsible for the fd being valid.
-    /// The fd will be closed on drop.
+    /// Caller asserts the fd is valid; will be closed on drop.
     pub fn from_raw_fd(fd: usize) -> Self {
         Self { fd }
     }
 
-    /// Return the raw fd without closing it.
+    /// Release ownership of the fd without closing.
     pub fn into_raw_fd(self) -> usize {
         let fd = self.fd;
         core::mem::forget(self);
         fd
     }
 
-    /// The underlying fd.
     pub fn fd(&self) -> usize {
         self.fd
     }
 
-    /// Query file metadata (stat).
     pub fn metadata(&self) -> error::Result<Metadata> {
-        // We'd need fstat(fd) — for now we can't do path-less stat.
-        // Return a stub error.  Users should use `fs::metadata(path)`.
+        // No fstat(fd); use `fs::metadata(path)` instead.
         Err(Error::new(ErrorKind::NotImplemented))
     }
 
-    /// Sync file data to disk.
     pub fn sync_all(&self) -> error::Result<()> {
         sync().map_err(Error::from_raw)
     }
 
-    /// Duplicate this file descriptor.
     pub fn try_clone(&self) -> error::Result<Self> {
         let new_fd = dup(self.fd).map_err(Error::from_raw)?;
         Ok(Self { fd: new_fd })
@@ -294,7 +256,8 @@ impl Write for File {
     }
 
     fn flush(&mut self) -> error::Result<()> {
-        Ok(()) // HelixFS doesn't have per-fd flush; use sync().
+        // HelixFS has no per-fd flush; use `sync()` for the global one.
+        Ok(())
     }
 }
 
@@ -315,20 +278,6 @@ impl Drop for File {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// OpenOptions — builder for File::open variants
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Builder for opening files with precise control over flags.
-///
-/// # Example
-/// ```ignore
-/// let f = OpenOptions::new()
-///     .read(true)
-///     .write(true)
-///     .create(true)
-///     .open("/data.bin")?;
-/// ```
 pub struct OpenOptions {
     read: bool,
     write: bool,
@@ -375,7 +324,6 @@ impl OpenOptions {
         self
     }
 
-    /// Open the file at `path` with the configured options.
     pub fn open(&self, path: &str) -> error::Result<File> {
         let mut flags: u32 = 0;
         if self.read {
@@ -398,78 +346,51 @@ impl OpenOptions {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Metadata — file stat information
-// ═══════════════════════════════════════════════════════════════════════
-
-/// File metadata returned by [`metadata`].
-///
-/// Layout must match kernel's `morpheus_helix::types::FileStat`.
+/// Mirrors `morpheus_helix::types::FileStat` — layout must match.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Metadata {
-    /// Full path hash.
     pub key: u64,
-    /// File size in bytes.
     pub size: u64,
-    /// Is this a directory?
     pub is_dir: bool,
-    /// Creation timestamp (TSC nanoseconds since boot).
+    /// TSC nanoseconds since boot.
     pub created_ns: u64,
-    /// Modification timestamp (TSC nanoseconds since boot).
+    /// TSC nanoseconds since boot.
     pub modified_ns: u64,
-    /// Number of prior versions (HelixFS versioning).
     pub version_count: u32,
-    /// Current log sequence number.
     pub lsn: u64,
-    /// First LSN (creation).
+    /// Creation LSN.
     pub first_lsn: u64,
-    /// Entry flags.
     pub flags: u32,
 }
 
 impl Metadata {
-    /// File size in bytes.
     pub fn len(&self) -> u64 {
         self.size
     }
 
-    /// Is this a zero-length file?
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
 
-    /// Is this a directory?
     pub fn is_dir(&self) -> bool {
         self.is_dir
     }
 
-    /// Is this a regular file?
     pub fn is_file(&self) -> bool {
         !self.is_dir
     }
 }
 
-/// Get metadata for a path.
-///
-/// Calls SYS_STAT and parses the result into [`Metadata`].
 pub fn metadata(path: &str) -> error::Result<Metadata> {
-    // helix FileStat is returned raw.  Allocate enough space.
     let mut buf = [0u8; 128];
     stat(path, &mut buf).map_err(Error::from_raw)?;
-    // The kernel writes morpheus_helix::types::FileStat directly.
-    // We read it as raw bytes and reinterpret.
+    // Kernel writes `FileStat` raw; reinterpret.
     let ptr = buf.as_ptr() as *const Metadata;
     Ok(unsafe { core::ptr::read_unaligned(ptr) })
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// DirEntry + ReadDir
-// ═══════════════════════════════════════════════════════════════════════
-
-/// A single directory entry from [`read_dir`].
-///
-/// Layout matches kernel's `morpheus_helix::types::DirEntry`.
+/// Mirrors `morpheus_helix::types::DirEntry` — layout must match.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct DirEntry {
@@ -482,33 +403,27 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
-    /// The file/directory name (last path component).
     pub fn name(&self) -> &str {
         let len = (self.name_len as usize).min(self.name_buf.len());
         core::str::from_utf8(&self.name_buf[..len]).unwrap_or("")
     }
 
-    /// Is this entry a directory?
     pub fn is_dir(&self) -> bool {
         self.is_dir
     }
 
-    /// Is this entry a file?
     pub fn is_file(&self) -> bool {
         !self.is_dir
     }
 
-    /// File size (0 for directories).
     pub fn size(&self) -> u64 {
         self.size
     }
 
-    /// Last modification timestamp (TSC ns).
     pub fn modified_ns(&self) -> u64 {
         self.modified_ns
     }
 
-    /// Version count in HelixFS.
     pub fn version_count(&self) -> u32 {
         self.version_count
     }
@@ -524,9 +439,6 @@ impl core::fmt::Debug for DirEntry {
     }
 }
 
-/// Iterator over directory entries.
-///
-/// Returned by [`read_dir`].
 pub struct ReadDir {
     entries: Vec<DirEntry>,
     pos: usize,
@@ -551,16 +463,7 @@ impl Iterator for ReadDir {
     }
 }
 
-/// Read all entries in a directory.
-///
-/// # Example
-/// ```ignore
-/// for entry in fs::read_dir("/")? {
-///     println!("{} {}", if entry.is_dir() { "DIR " } else { "FILE" }, entry.name());
-/// }
-/// ```
 pub fn read_dir(path: &str) -> error::Result<ReadDir> {
-    // Allocate buffer for up to 256 entries.
     let entry_size = core::mem::size_of::<DirEntry>();
     let max_entries = 256;
     let mut buf = vec![0u8; entry_size * max_entries];
@@ -577,16 +480,6 @@ pub fn read_dir(path: &str) -> error::Result<ReadDir> {
     Ok(ReadDir { entries, pos: 0 })
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Convenience functions using the error module
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Read an entire file into a byte Vec.
-///
-/// # Example
-/// ```ignore
-/// let data = fs::read("/config.toml")?;
-/// ```
 pub fn read_to_vec(path: &str) -> error::Result<Vec<u8>> {
     let mut f = File::open(path)?;
     let mut buf = Vec::new();
@@ -594,7 +487,6 @@ pub fn read_to_vec(path: &str) -> error::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Read an entire file into a String.
 pub fn read_to_string(path: &str) -> error::Result<String> {
     let mut f = File::open(path)?;
     let mut buf = String::new();
@@ -602,29 +494,25 @@ pub fn read_to_string(path: &str) -> error::Result<String> {
     Ok(buf)
 }
 
-/// Write bytes to a file (creates/truncates).
+/// Truncate-or-create then write.
 pub fn write_bytes(path: &str, data: &[u8]) -> error::Result<()> {
     let mut f = File::create(path)?;
     f.write_all(data)?;
     Ok(())
 }
 
-/// Create a directory.
 pub fn create_dir(path: &str) -> error::Result<()> {
     mkdir(path).map_err(Error::from_raw)
 }
 
-/// Remove a file.
 pub fn remove_file(path: &str) -> error::Result<()> {
     unlink(path).map_err(Error::from_raw)
 }
 
-/// Rename / move a file or directory.
 pub fn rename_path(old: &str, new: &str) -> error::Result<()> {
     rename(old, new).map_err(Error::from_raw)
 }
 
-/// Copy a file from `src` to `dst`.
 pub fn copy(src: &str, dst: &str) -> error::Result<u64> {
     let mut reader = File::open(src)?;
     let mut writer = File::create(dst)?;

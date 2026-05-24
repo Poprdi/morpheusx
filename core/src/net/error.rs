@@ -1,41 +1,24 @@
-//! Network initialization errors.
-//!
-//! Error types for the orchestration layer. Maps errors from underlying
-//! crates into a unified error type for the bootloader.
+//! Network init errors.
 
-/// Network initialization error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetInitError {
-    /// DMA pool initialization failed.
     DmaPoolInit,
-    /// No suitable DMA memory found.
     NoDmaMemory,
-    /// HAL initialization failed.
     HalInit,
-    /// PCI bus scan failed.
     PciScanFailed,
-    /// No network device found on PCI bus.
     NoNetworkDevice,
-    /// VirtIO device initialization failed.
     VirtioInit,
-    /// Network interface creation failed.
     InterfaceCreation,
-    /// DHCP discovery failed.
     DhcpFailed,
-    /// DHCP timeout - no IP address assigned.
     DhcpTimeout,
-    /// Network stack initialization failed.
     StackInit,
-    /// Invalid configuration provided.
     InvalidConfig,
-    /// Operation timed out.
     Timeout,
-    /// API is deprecated - use post-EBS download_with_config() instead.
+    /// Use post-EBS download_with_config() instead.
     Deprecated,
 }
 
 impl NetInitError {
-    /// Get a human-readable description of the error.
     pub fn description(&self) -> &'static str {
         match self {
             Self::DmaPoolInit => "Failed to initialize DMA memory pool",
@@ -55,5 +38,4 @@ impl NetInitError {
     }
 }
 
-/// Result type for network initialization.
 pub type NetInitResult<T> = Result<T, NetInitError>;

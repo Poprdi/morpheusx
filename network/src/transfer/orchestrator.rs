@@ -27,9 +27,6 @@ use crate::state::disk_writer::{
 };
 use crate::state::StepResult;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Persistence orchestrator configuration.
 #[derive(Clone)]
@@ -61,9 +58,6 @@ impl<'a> Default for PersistenceConfig<'a> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ERRORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Orchestrator error types.
 #[derive(Debug, Clone, Copy)]
@@ -100,9 +94,6 @@ impl From<BlockError> for OrchestratorError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RESULT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Orchestrator step result.
 #[derive(Debug, Clone, Copy)]
@@ -132,9 +123,6 @@ pub struct PersistenceResult {
     pub write_ticks: u64,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROGRESS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Combined progress tracking.
 #[derive(Debug, Clone, Copy, Default)]
@@ -169,9 +157,6 @@ pub enum PersistencePhase {
     Failed,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Orchestrator state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,7 +232,6 @@ impl PersistenceOrchestrator {
         }
     }
 
-    /// Get current phase.
     pub fn phase(&self) -> PersistencePhase {
         match self.state {
             OrchestratorState::Init => PersistencePhase::Init,
@@ -261,7 +245,6 @@ impl PersistenceOrchestrator {
         }
     }
 
-    /// Get combined progress.
     pub fn progress(&self) -> PersistenceProgress {
         let disk_progress = self.disk_writer.progress();
 
@@ -290,7 +273,6 @@ impl PersistenceOrchestrator {
         }
     }
 
-    /// Get result (if complete).
     pub fn result(&self) -> Option<PersistenceResult> {
         if self.state == OrchestratorState::Done {
             Some(self.result)
@@ -299,22 +281,18 @@ impl PersistenceOrchestrator {
         }
     }
 
-    /// Get error (if failed).
     pub fn error(&self) -> Option<OrchestratorError> {
         self.error
     }
 
-    /// Check if complete.
     pub fn is_complete(&self) -> bool {
         self.state == OrchestratorState::Done
     }
 
-    /// Check if failed.
     pub fn is_failed(&self) -> bool {
         self.state == OrchestratorState::Failed
     }
 
-    /// Cancel the operation.
     pub fn cancel(&mut self) {
         self.cancelled = true;
     }
@@ -340,7 +318,6 @@ impl PersistenceOrchestrator {
         Ok(())
     }
 
-    /// Signal that DHCP is complete.
     pub fn dhcp_complete(&mut self, now_tsc: u64) {
         if self.state == OrchestratorState::WaitingForDhcp {
             self.state = OrchestratorState::Connecting;
@@ -460,7 +437,6 @@ impl PersistenceOrchestrator {
         self.disk_writer.write_chunk(block_driver, buffer_phys, len)
     }
 
-    /// Signal that HTTP download is complete.
     pub fn http_complete(&mut self) {
         if self.state == OrchestratorState::Streaming {
             self.disk_writer.finish();
@@ -468,7 +444,6 @@ impl PersistenceOrchestrator {
         }
     }
 
-    /// Signal HTTP failure.
     pub fn http_failed(&mut self) {
         self.error = Some(OrchestratorError::HttpFailed);
         self.state = OrchestratorState::Failed;
@@ -479,20 +454,15 @@ impl PersistenceOrchestrator {
         self.disk_writer.can_write()
     }
 
-    /// Get disk writer state.
     pub fn disk_writer(&self) -> &DiskWriterState {
         &self.disk_writer
     }
 
-    /// Get mutable disk writer.
     pub fn disk_writer_mut(&mut self) -> &mut DiskWriterState {
         &mut self.disk_writer
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {

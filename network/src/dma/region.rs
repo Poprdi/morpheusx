@@ -12,9 +12,6 @@
 //! 0x01000     0x10000     RX Buffers (32 × 2KB)
 //! 0x11000     0x10000     TX Buffers (32 × 2KB)
 //! ```
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §3.3
 
 /// DMA-capable memory region.
 ///
@@ -32,29 +29,19 @@ impl DmaRegion {
     /// Minimum region size (2MB).
     pub const MIN_SIZE: usize = 2 * 1024 * 1024;
 
-    /// Default queue size (number of descriptors).
     pub const DEFAULT_QUEUE_SIZE: usize = 32;
 
-    /// Default buffer size (2KB each).
     pub const DEFAULT_BUFFER_SIZE: usize = 2048;
 
     // Layout offsets
 
-    /// RX descriptor table offset.
     pub const RX_DESC_OFFSET: usize = 0x0000;
-    /// RX available ring offset.
     pub const RX_AVAIL_OFFSET: usize = 0x0200;
-    /// RX used ring offset.
     pub const RX_USED_OFFSET: usize = 0x0400;
-    /// TX descriptor table offset.
     pub const TX_DESC_OFFSET: usize = 0x0800;
-    /// TX available ring offset.
     pub const TX_AVAIL_OFFSET: usize = 0x0A00;
-    /// TX used ring offset.
     pub const TX_USED_OFFSET: usize = 0x0C00;
-    /// RX buffers offset.
     pub const RX_BUFFERS_OFFSET: usize = 0x1000;
-    /// TX buffers offset.
     pub const TX_BUFFERS_OFFSET: usize = 0x11000;
 
     /// Create a new DMA region.
@@ -72,17 +59,14 @@ impl DmaRegion {
         }
     }
 
-    /// Get CPU base pointer.
     pub fn cpu_base(&self) -> *mut u8 {
         self.cpu_ptr
     }
 
-    /// Get bus base address.
     pub fn bus_base(&self) -> u64 {
         self.bus_addr
     }
 
-    /// Get total size.
     pub fn size(&self) -> usize {
         self.size
     }
@@ -147,22 +131,18 @@ impl DmaRegion {
         self.bus_addr + Self::TX_USED_OFFSET as u64
     }
 
-    /// Get CPU pointer for RX buffers.
     pub fn rx_buffers_cpu(&self) -> *mut u8 {
         unsafe { self.cpu_ptr.add(Self::RX_BUFFERS_OFFSET) }
     }
 
-    /// Get bus address for RX buffers.
     pub fn rx_buffers_bus(&self) -> u64 {
         self.bus_addr + Self::RX_BUFFERS_OFFSET as u64
     }
 
-    /// Get CPU pointer for TX buffers.
     pub fn tx_buffers_cpu(&self) -> *mut u8 {
         unsafe { self.cpu_ptr.add(Self::TX_BUFFERS_OFFSET) }
     }
 
-    /// Get bus address for TX buffers.
     pub fn tx_buffers_bus(&self) -> u64 {
         self.bus_addr + Self::TX_BUFFERS_OFFSET as u64
     }
@@ -172,7 +152,6 @@ impl DmaRegion {
         unsafe { self.cpu_ptr.add(offset + index * buffer_size) }
     }
 
-    /// Calculate buffer bus address by index.
     pub fn buffer_bus(&self, offset: usize, index: usize, buffer_size: usize) -> u64 {
         self.bus_addr + (offset + index * buffer_size) as u64
     }

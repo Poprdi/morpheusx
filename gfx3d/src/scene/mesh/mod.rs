@@ -71,17 +71,14 @@ impl Mesh {
         torus::torus(major_radius, minor_radius, major_segments, minor_segments)
     }
 
-    /// Generate a square pyramid.
     pub fn pyramid() -> Self {
         pyramid::pyramid()
     }
 
-    /// Generate a flat plane.
     pub fn plane(width: f32, height: f32, segments_x: usize, segments_z: usize) -> Self {
         plane::plane(width, height, segments_x, segments_z)
     }
 
-    /// Generate a capped cylinder.
     pub fn cylinder(radius: f32, height: f32, segments: usize) -> Self {
         cylinder::cylinder(radius, height, segments)
     }

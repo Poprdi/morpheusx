@@ -16,13 +16,10 @@ use super::types::{
 /// Manifest magic: "MXISO\x01\x00\x00" (v1 - compatible with morpheus_core)
 pub const MANIFEST_MAGIC: [u8; 8] = [b'M', b'X', b'I', b'S', b'O', 0x01, 0x00, 0x00];
 
-/// Manifest header size
 pub const MANIFEST_HEADER_SIZE: usize = 128;
 
-/// Chunk entry size  
 pub const CHUNK_ENTRY_SIZE: usize = 48;
 
-/// Maximum manifest size (header + 16 chunks)
 pub const MAX_MANIFEST_SIZE: usize =
     MANIFEST_HEADER_SIZE + (MAX_CHUNK_PARTITIONS * CHUNK_ENTRY_SIZE);
 
@@ -77,12 +74,10 @@ impl ManifestWriter {
         }
     }
 
-    /// Set SHA256 hash
     pub fn set_hash(&mut self, hash: &[u8; 32]) {
         self.sha256.copy_from_slice(hash);
     }
 
-    /// Mark as complete
     pub fn set_complete(&mut self, complete: bool) {
         if complete {
             self.flags |= flags::COMPLETE;
@@ -91,7 +86,6 @@ impl ManifestWriter {
         }
     }
 
-    /// Mark as verified
     pub fn set_verified(&mut self, verified: bool) {
         if verified {
             self.flags |= flags::VERIFIED;
@@ -165,12 +159,6 @@ impl ManifestWriter {
     /// Writes to `/.iso/<name>.manifest` conceptually,
     /// but since we can't do FAT32 file ops without alloc, we write
     /// to a fixed location within the ESP.
-    ///
-    /// # Arguments
-    /// * `block_io` - Block I/O device
-    /// * `esp_start_lba` - Start LBA of ESP partition
-    /// * `manifest_offset` - Sector offset within ESP for manifest storage
-    /// * `chunks` - Chunk information to write
     pub fn write_to_esp<B: BlockIo>(
         &self,
         block_io: &mut B,
@@ -207,11 +195,6 @@ impl ManifestWriter {
     /// # Requirements
     /// - Heap allocator must be initialized (crate::alloc_heap::init_heap())
     /// - ESP must be a valid FAT32 partition
-    ///
-    /// # Arguments
-    /// * `block_io` - Block I/O device
-    /// * `esp_start_lba` - Start LBA of ESP partition
-    /// * `chunks` - Chunk information to write
     #[cfg(feature = "fat32_manifest")]
     pub fn write_to_esp_fat32<B: BlockIo>(
         &self,
@@ -385,7 +368,6 @@ pub struct IsoManifestInfo {
 }
 
 impl IsoManifestInfo {
-    /// Get name as str
     pub fn name_str(&self) -> &str {
         let len = self
             .name
@@ -395,12 +377,10 @@ impl IsoManifestInfo {
         core::str::from_utf8(&self.name[..len]).unwrap_or("")
     }
 
-    /// Check if complete
     pub fn is_complete(&self) -> bool {
         self.flags & flags::COMPLETE != 0
     }
 
-    /// Check if verified
     pub fn is_verified(&self) -> bool {
         self.flags & flags::VERIFIED != 0
     }

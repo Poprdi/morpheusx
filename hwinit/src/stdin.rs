@@ -84,12 +84,10 @@ pub fn available() -> usize {
 /// 0 = no foreground process, Ctrl+C pushed to stdin instead.
 static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
 
-/// Set the foreground process PID.
 pub fn set_foreground_pid(pid: u32) {
     FOREGROUND_PID.store(pid, Ordering::Release);
 }
 
-/// Get the foreground process PID.
 pub fn foreground_pid() -> u32 {
     FOREGROUND_PID.load(Ordering::Acquire)
 }

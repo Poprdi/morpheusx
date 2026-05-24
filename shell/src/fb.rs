@@ -30,7 +30,6 @@ impl Framebuffer {
         self.base
     }
 
-    /// Stride in pixels (= stride_bytes / 4).
     #[inline]
     pub fn stride_px(&self) -> u32 {
         self.stride_px

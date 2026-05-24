@@ -41,9 +41,6 @@ fn futex_wake(addr: &AtomicU32, count: u32) -> u32 {
     }
 }
 
-// -----------------------------------------------------------------------
-// Mutex<T>
-// -----------------------------------------------------------------------
 
 /// Futex-based mutex. No spinning, no alloc, no nonsense.
 ///
@@ -135,9 +132,6 @@ impl<T> Drop for MutexGuard<'_, T> {
     }
 }
 
-// -----------------------------------------------------------------------
-// Condvar
-// -----------------------------------------------------------------------
 
 /// Condition variable. Pair with a Mutex for classic wait/notify.
 pub struct Condvar {
@@ -169,22 +163,17 @@ impl Condvar {
         mutex.lock()
     }
 
-    /// Wake one waiter.
     pub fn notify_one(&self) {
         self.seq.fetch_add(1, Ordering::Release);
         futex_wake(&self.seq, 1);
     }
 
-    /// Wake all waiters.
     pub fn notify_all(&self) {
         self.seq.fetch_add(1, Ordering::Release);
         futex_wake(&self.seq, u32::MAX);
     }
 }
 
-// -----------------------------------------------------------------------
-// OnceLock
-// -----------------------------------------------------------------------
 
 /// Run-once initialization. Like std::sync::OnceLock.
 ///
@@ -245,9 +234,6 @@ impl<T> OnceLock<T> {
     }
 }
 
-// -----------------------------------------------------------------------
-// RwLock<T>
-// -----------------------------------------------------------------------
 
 /// Reader-writer lock.  Multiple readers or one writer.
 ///
@@ -385,22 +371,11 @@ impl<T> Drop for RwLockWriteGuard<'_, T> {
     }
 }
 
-// -----------------------------------------------------------------------
-// mpsc — multi-producer, single-consumer channel
-// -----------------------------------------------------------------------
 
 /// Multi-producer, single-consumer channel.
 ///
 /// Built on `Mutex<VecDeque<T>>` + `Condvar`.  Bounded (backpressure)
 /// or unbounded.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::sync::mpsc;
-/// let (tx, rx) = mpsc::channel();
-/// tx.send(42);
-/// assert_eq!(rx.recv(), Some(42));
-/// ```
 pub mod mpsc {
     use super::*;
 
@@ -480,7 +455,6 @@ pub mod mpsc {
             }
         }
 
-        /// Non-blocking try_recv.
         pub fn try_recv(&self) -> Option<T> {
             self.inner.queue.lock().pop_front()
         }

@@ -1,25 +1,12 @@
 //! VirtIO RX logic.
 //!
 //! Poll-based receive - never block!
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §4.7
 
 use crate::dma::BufferPool;
 use crate::driver::traits::RxError;
 use crate::types::{RxResult, VirtioNetHdr, VirtqueueState};
 
 /// Receive a packet via VirtIO.
-///
-/// # Arguments
-/// - `rx_state`: RX virtqueue state
-/// - `rx_pool`: RX buffer pool
-/// - `out_buffer`: Buffer to copy received frame into
-///
-/// # Returns
-/// - `Ok(Some(len))`: Frame received, `len` bytes copied (without VirtIO header)
-/// - `Ok(None)`: No frame available (normal)
-/// - `Err(RxError)`: Receive error
 ///
 /// # Contract
 /// - MUST return immediately (no blocking)

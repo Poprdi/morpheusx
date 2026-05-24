@@ -1,16 +1,16 @@
-// Global logging system for Morpheus
+//! Ring-buffered static log of `&'static str` messages.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-const MAX_LOG_ENTRIES: usize = 512; // Increased from 64 to support more logs
+const MAX_LOG_ENTRIES: usize = 512;
 
 static mut LOG_BUFFER: [Option<&'static str>; MAX_LOG_ENTRIES] = [None; MAX_LOG_ENTRIES];
-static LOG_HEAD: AtomicUsize = AtomicUsize::new(0); // Next write position (head of ring)
-static LOG_COUNT: AtomicUsize = AtomicUsize::new(0); // Total logs written
+static LOG_HEAD: AtomicUsize = AtomicUsize::new(0);
+static LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub fn log(message: &'static str) {
     let count = LOG_COUNT.fetch_add(1, Ordering::SeqCst);
-    let idx = count % MAX_LOG_ENTRIES; // Ring buffer wrap-around
+    let idx = count % MAX_LOG_ENTRIES;
 
     unsafe {
         LOG_BUFFER[idx] = Some(message);
@@ -19,8 +19,7 @@ pub fn log(message: &'static str) {
     LOG_HEAD.store((count + 1) % MAX_LOG_ENTRIES, Ordering::SeqCst);
 }
 
-/// Returns an iterator over all valid log entries in chronological order
-/// The ring buffer maintains up to MAX_LOG_ENTRIES logs. When full, oldest logs are overwritten.
+/// Iterates entries in chronological order; oldest are overwritten when full.
 pub struct LogIterator {
     start_idx: usize,
     current: usize,
@@ -47,12 +46,9 @@ pub fn get_logs_iter() -> LogIterator {
     let total_count = LOG_COUNT.load(Ordering::SeqCst);
     let num_logs = total_count.min(MAX_LOG_ENTRIES);
 
-    // Calculate start index for reading
     let start_idx = if total_count >= MAX_LOG_ENTRIES {
-        // Buffer has wrapped, start from oldest entry
         total_count % MAX_LOG_ENTRIES
     } else {
-        // Buffer hasn't wrapped yet, start from beginning
         0
     };
 
@@ -63,17 +59,15 @@ pub fn get_logs_iter() -> LogIterator {
     }
 }
 
-/// Get the last N log entries (up to MAX_LOG_ENTRIES)
+/// Last `n` entries, capped at `MAX_LOG_ENTRIES`.
 pub fn get_last_n_logs(n: usize) -> LogIterator {
     let total_count = LOG_COUNT.load(Ordering::SeqCst);
     let available = total_count.min(MAX_LOG_ENTRIES);
     let num_logs = n.min(available);
 
     let start_idx = if total_count >= MAX_LOG_ENTRIES {
-        // Buffer has wrapped
         (total_count - num_logs) % MAX_LOG_ENTRIES
     } else {
-        // Buffer hasn't wrapped
         total_count.saturating_sub(num_logs)
     };
 
@@ -92,7 +86,6 @@ pub fn total_log_count() -> usize {
     LOG_COUNT.load(Ordering::SeqCst)
 }
 
-// Macro for easier logging
 #[macro_export]
 macro_rules! log_info {
     ($msg:expr) => {

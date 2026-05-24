@@ -1,68 +1,52 @@
-//! Directory Record structure
-//!
-//! Directory records describe files and subdirectories.
+//! Directory record header (ISO 9660 §9.1). Variable-length tail follows.
 
 use crate::error::{Iso9660Error, Result};
 use crate::types::FileFlags;
 
-/// Directory Record (variable length)
+/// Fixed 33-byte header of a directory record. The file identifier,
+/// optional pad byte, and system use area follow.
 #[repr(C, packed)]
 pub struct DirectoryRecord {
-    /// Length of directory record (BP 1)
+    /// Total record length in bytes.
     pub length: u8,
-
-    /// Extended attribute record length (BP 2)
+    /// Length of any extended attribute record.
     pub extended_attr_length: u8,
-
-    /// Extent location (both-endian 32-bit) (BP 3-10)
+    /// Both-endian extent LBA (LE first 4 bytes, BE second 4).
     pub extent_lba: [u8; 8],
-
-    /// Data length (both-endian 32-bit) (BP 11-18)
+    /// Both-endian data length.
     pub data_length: [u8; 8],
-
-    /// Recording date and time (7 bytes) (BP 19-25)
+    /// 7-byte recording timestamp (year-1900, mon, day, h, m, s, gmt-offset).
     pub recording_datetime: [u8; 7],
-
-    /// File flags (BP 26)
+    /// File flag bits; see `FileFlags`.
     pub file_flags: u8,
-
-    /// File unit size (interleaved files) (BP 27)
+    /// Interleave file unit size (0 = not interleaved).
     pub file_unit_size: u8,
-
-    /// Interleave gap size (BP 28)
+    /// Interleave gap size.
     pub interleave_gap: u8,
-
-    /// Volume sequence number (both-endian 16-bit) (BP 29-32)
+    /// Both-endian volume sequence number.
     pub volume_sequence: [u8; 4],
-
-    /// File identifier length (BP 33)
+    /// Length of the file identifier that follows the header.
     pub file_id_len: u8,
-    // Followed by:
-    // - File identifier (file_id_len bytes)
-    // - Padding field (1 byte if file_id_len is even)
-    // - System use area (variable)
 }
 
 impl DirectoryRecord {
-    /// Minimum record length (33 bytes header)
+    /// Size of the fixed header before the file identifier.
     pub const MIN_LENGTH: u8 = 33;
 
-    /// Parse directory record from bytes
+    /// Reinterpret a byte slice as a `DirectoryRecord` after structural checks.
     pub fn parse(data: &[u8]) -> Result<&Self> {
-        // Validate minimum length
         if data.len() < Self::MIN_LENGTH as usize {
             return Err(Iso9660Error::InvalidDirectoryRecord);
         }
 
-        // Cast to struct
+        // SAFETY: length checked; the struct is repr(C, packed) with no padding
+        // that requires alignment beyond u8.
         let record = unsafe { &*(data.as_ptr() as *const DirectoryRecord) };
 
-        // Validate record length
         if record.length == 0 || record.length as usize > data.len() {
             return Err(Iso9660Error::InvalidDirectoryRecord);
         }
 
-        // Validate file identifier length
         if record.file_id_len as usize + Self::MIN_LENGTH as usize > record.length as usize {
             return Err(Iso9660Error::InvalidDirectoryRecord);
         }
@@ -70,7 +54,7 @@ impl DirectoryRecord {
         Ok(record)
     }
 
-    /// Get extent LBA (little-endian part of both-endian field)
+    /// Decoded extent LBA (uses the LE half of the both-endian field).
     pub fn get_extent_lba(&self) -> u32 {
         u32::from_le_bytes([
             self.extent_lba[0],
@@ -80,7 +64,6 @@ impl DirectoryRecord {
         ])
     }
 
-    /// Get data length (little-endian part)
     pub fn get_data_length(&self) -> u32 {
         u32::from_le_bytes([
             self.data_length[0],
@@ -90,7 +73,6 @@ impl DirectoryRecord {
         ])
     }
 
-    /// Parse file flags
     pub fn get_flags(&self) -> FileFlags {
         FileFlags {
             hidden: self.file_flags & 0x01 != 0,
@@ -102,18 +84,15 @@ impl DirectoryRecord {
         }
     }
 
-    /// Is this a directory?
     pub fn is_directory(&self) -> bool {
         self.file_flags & 0x02 != 0
     }
 
-    /// Get file identifier bytes
+    /// File identifier bytes immediately after the fixed header.
     pub fn file_identifier(&self) -> &[u8] {
-        // File identifier starts at offset 33 (after fixed header)
         let start = 33;
         let len = self.file_id_len as usize;
-
-        // Safety: we validated file_id_len in parse()
+        // SAFETY: parse() bounds-checked file_id_len against record.length.
         unsafe {
             let base_ptr = self as *const _ as *const u8;
             core::slice::from_raw_parts(base_ptr.add(start), len)

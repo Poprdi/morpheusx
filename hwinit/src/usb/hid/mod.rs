@@ -27,7 +27,6 @@ pub struct HIDInterface {
 }
 
 impl XhciController {
-    /// Fetch HID report descriptor via GET_DESCRIPTOR (type 0x22).
     pub unsafe fn get_hid_report_descriptor(
         &mut self,
         interface_num: u8,
@@ -62,8 +61,35 @@ impl XhciController {
         Ok(())
     }
 
+    /// SET_PROTOCOL(0 = boot) on a HID interface.
+    ///
+    /// The HID 1.11 spec says boot-subclass devices default to boot protocol
+    /// at power-on, but real keyboards routinely come up in report protocol
+    /// anyway (firmware bugs, "modern" defaults, etc.). Linux's usbkbd driver
+    /// always sends this; we do too. Failures are non-fatal — for a properly
+    /// behaved boot-subclass device this is just a no-op.
+    pub unsafe fn set_hid_protocol_boot(&mut self, interface_num: u8) -> Result<(), XhciError> {
+        let slot_id = self.slot_id;
+        // bmRequestType=0x21 (H2D, Class, Interface), bRequest=0x0B (SET_PROTOCOL),
+        // wValue=0 (boot), wIndex=interface_num.
+        let param = pack_setup(0x21, 0x0B, 0, interface_num as u16, 0);
+        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT);
+        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC | TRB_DIR_IN);
+        self.ring_xfer_doorbell(1);
+        self.wait_xfer(slot_id, 1, 2000)?;
+        Ok(())
+    }
+
     /// Find the first HID boot interface from the already-fetched config descriptor.
     /// Returns a HIDInterface if a boot-class keyboard or mouse is found.
+    ///
+    /// Many keyboards expose two HID interfaces: interface 0 = boot-protocol
+    /// keyboard, interface 1 = vendor-defined extras (media keys, fn-key
+    /// extensions). We must commit to the first match and not let a later
+    /// non-boot HID interface clobber our finding — the previous version
+    /// kept `in_hid_boot` as a per-iface flag and tested it in the final
+    /// return, which dropped the captured iface-0 match the moment a
+    /// non-boot iface-1 followed.
     pub unsafe fn find_hid_interface(&self, desc_ptr: *const u8) -> Option<HIDInterface> {
         let d = desc_ptr;
         let total = u16::from_le_bytes([
@@ -89,7 +115,14 @@ impl XhciController {
             }
 
             if btype == 4 && blen >= 9 {
-                // Interface descriptor
+                // New interface boundary. If we already captured an IN
+                // endpoint for an earlier boot HID iface, lock that match
+                // in — any subsequent non-boot iface would otherwise flip
+                // `in_hid_boot` to false and silently kill our result.
+                if ep_in != 0 {
+                    break;
+                }
+
                 let cls = core::ptr::read_volatile(d.add(off + 5));
                 let subcls = core::ptr::read_volatile(d.add(off + 6));
                 let p = core::ptr::read_volatile(d.add(off + 7));
@@ -126,7 +159,7 @@ impl XhciController {
             off += blen;
         }
 
-        if in_hid_boot && ep_in != 0 {
+        if ep_in != 0 {
             Some(HIDInterface {
                 interface_num: iface_num,
                 protocol: proto,

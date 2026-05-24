@@ -328,7 +328,6 @@ fn ensure_parent_dirs(
     Ok(())
 }
 
-/// Delete a file.
 pub fn delete_file(
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
@@ -348,7 +347,6 @@ pub fn delete_file(
     Ok(lsn)
 }
 
-/// Rename a file or directory.
 pub fn rename(
     log: &mut LogEngine,
     index: &mut NamespaceIndex,

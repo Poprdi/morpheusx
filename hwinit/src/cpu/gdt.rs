@@ -1,37 +1,17 @@
-//! Global Descriptor Table (GDT) Management
-//!
-//! Sets up the GDT for long mode operation. UEFI leaves us in long mode
-//! with a valid GDT, but we take ownership and set our own.
-//!
-//! # Segment Layout
-//!
-//! | Index | Selector | Description        |
-//! |-------|----------|--------------------|
-//! | 0     | 0x00     | Null descriptor    |
-//! | 1     | 0x08     | Kernel code (64)   |
-//! | 2     | 0x10     | Kernel data (64)   |
-//! | 3     | 0x18     | User data (64)     |
-//! | 4     | 0x20     | User code (64)     |
-//! | 5     | 0x28     | TSS (16 bytes)     |
+//! Long-mode GDT/TSS. Layout: 0x08 KCS, 0x10 KDS, 0x18 UDS, 0x20 UCS,
+//! 0x28 TSS. UDS-before-UCS order is mandatory for SYSRET (STAR[63:48]+8/+16).
 
 use core::mem::size_of;
 
-// SEGMENT SELECTORS
-
-/// Kernel code segment selector
 pub const KERNEL_CS: u16 = 0x08;
-/// Kernel data segment selector
 pub const KERNEL_DS: u16 = 0x10;
-/// User data segment selector (ring 3) — at 0x18 for SYSRET compatibility
-pub const USER_DS: u16 = 0x18 | 3; // RPL=3
-/// User code segment selector (ring 3) — at 0x20 for SYSRET compatibility
-pub const USER_CS: u16 = 0x20 | 3; // RPL=3
-/// TSS segment selector
+/// SYSRET requires UDS at STAR[63:48]+8.
+pub const USER_DS: u16 = 0x18 | 3;
+/// SYSRET requires UCS at STAR[63:48]+16.
+pub const USER_CS: u16 = 0x20 | 3;
 pub const TSS_SEL: u16 = 0x28;
 
-// GDT ENTRY
-
-/// GDT entry (8 bytes for normal, 16 bytes for TSS in long mode)
+/// 8-byte GDT entry (16-byte TSS descriptor handled separately).
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct GdtEntry {
@@ -44,7 +24,6 @@ pub struct GdtEntry {
 }
 
 impl GdtEntry {
-    /// Null descriptor
     pub const fn null() -> Self {
         Self {
             limit_low: 0,
@@ -56,38 +35,32 @@ impl GdtEntry {
         }
     }
 
-    /// 64-bit code segment
     pub const fn code64(ring: u8) -> Self {
         let dpl = (ring & 3) << 5;
         Self {
             limit_low: 0xFFFF,
             base_low: 0,
             base_mid: 0,
-            // Present | DPL | Code | Executable | Readable
-            access: 0x80 | dpl | 0x18 | 0x02,
-            // Long mode | Granularity
-            granularity: 0x20 | 0x0F,
+            access: 0x80 | dpl | 0x18 | 0x02, // P|DPL|Code|Exec|Read
+            granularity: 0x20 | 0x0F,         // L (long mode) | G
             base_high: 0,
         }
     }
 
-    /// 64-bit data segment
     pub const fn data64(ring: u8) -> Self {
         let dpl = (ring & 3) << 5;
         Self {
             limit_low: 0xFFFF,
             base_low: 0,
             base_mid: 0,
-            // Present | DPL | Data | Writable
-            access: 0x80 | dpl | 0x10 | 0x02,
-            // Granularity
+            access: 0x80 | dpl | 0x10 | 0x02, // P|DPL|Data|Writable
             granularity: 0x0F,
             base_high: 0,
         }
     }
 }
 
-/// TSS descriptor (16 bytes in long mode)
+/// 16-byte long-mode TSS descriptor.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct TssDescriptor {
@@ -102,14 +75,12 @@ pub struct TssDescriptor {
 }
 
 impl TssDescriptor {
-    /// Create TSS descriptor from TSS address
     pub const fn new(tss_addr: u64, tss_size: u16) -> Self {
         Self {
             limit_low: if tss_size > 0 { tss_size - 1 } else { 0 },
             base_low: tss_addr as u16,
             base_mid: (tss_addr >> 16) as u8,
-            // Present | TSS Available (0x9)
-            access: 0x80 | 0x09,
+            access: 0x80 | 0x09, // P | type=Available 64-bit TSS
             granularity: 0,
             base_high: (tss_addr >> 24) as u8,
             base_upper: (tss_addr >> 32) as u32,
@@ -117,7 +88,6 @@ impl TssDescriptor {
         }
     }
 
-    /// Create an empty/invalid descriptor for static initialization
     pub const fn empty() -> Self {
         Self {
             limit_low: 0,
@@ -132,25 +102,19 @@ impl TssDescriptor {
     }
 }
 
-// TASK STATE SEGMENT
-
-/// Task State Segment for long mode
+/// Long-mode TSS.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct Tss {
     reserved0: u32,
-    /// RSP for ring 0 (kernel stack for interrupts from user mode)
+    /// Ring 0 stack used on user->kernel interrupt entry (no IST).
     pub rsp0: u64,
-    /// RSP for ring 1 (unused)
     pub rsp1: u64,
-    /// RSP for ring 2 (unused)
     pub rsp2: u64,
     reserved1: u64,
-    /// Interrupt stack table pointers
     pub ist: [u64; 7],
     reserved2: u64,
     reserved3: u16,
-    /// I/O permission bitmap offset
     pub iopb_offset: u16,
 }
 
@@ -170,136 +134,88 @@ impl Tss {
     }
 }
 
-// GDT TABLE
-
-/// Number of normal GDT entries (before TSS)
 const GDT_ENTRY_COUNT: usize = 5;
 
-/// Full GDT with TSS
 #[repr(C, align(16))]
 pub struct Gdt {
     entries: [GdtEntry; GDT_ENTRY_COUNT],
     tss_desc: TssDescriptor,
 }
 
-/// GDT pointer for lgdt instruction
 #[repr(C, packed)]
 pub struct GdtPtr {
     pub limit: u16,
     pub base: u64,
 }
 
-// GLOBAL STATE
-
-// STATIC IST1 STACK — baked into .bss, never allocated from the heap.
-//
-// The double-fault handler points at this stack via IST[0].  Because it lives
-// in the binary image, it is valid from the very first instruction and stays
-// valid regardless of what the physical memory allocator does.  This is the
-// ONLY thing that prevents a double fault from cascading into a triple fault
-// (which causes an unconditional CPU/QEMU reset with no BSOD).
-//
-// If the double-fault handler itself were to fault (e.g., heap-allocated stack
-// gets corrupted), the CPU switches to this stack for the double fault, the
-// handler runs, and our BSOD is displayed instead of an invisible reset.
-//
-// Size: 32 KiB — generous enough for the BSOD rendering path.
-
+// Per-core IST1 stacks live in .bss so the #DF handler stays runnable even
+// if the heap is wrecked. Without this any double fault triple-faults =>
+// silent CPU/QEMU reset, no BSOD.
 const IST1_STATIC_STACK_SIZE: usize = 32 * 1024;
 
-/// 16-byte aligned wrapper so RSP stays aligned after the CPU pushes the
-/// exception frame (which is 40 or 48 bytes — both leave RSP 16-aligned).
+/// 16-byte aligned so RSP stays aligned after the 40/48-byte CPU exception push.
 #[repr(C, align(16))]
 struct StaticStack([u8; IST1_STATIC_STACK_SIZE]);
 
-/// Per-core IST1 stacks.  Each CPU needs its own IST1 so concurrent
-/// double-faults on different cores don't corrupt each other's exception
-/// frames.  BSP uses index 0, APs use 1..MAX_CPUS-1.
-/// Zeroed by the BSS loader; no runtime init needed.
+/// Per-core to prevent cross-CPU #DF frame corruption. BSS-zeroed.
 static mut IST1_STACKS: [StaticStack; MAX_CPUS] =
     [const { StaticStack([0; IST1_STATIC_STACK_SIZE]) }; MAX_CPUS];
 
-/// Returns a pointer to the TOP of the per-core IST1 stack
-/// (stacks grow downward on x86-64).
+/// Top of per-core IST1 stack (x86_64 stacks grow down).
 pub fn ist1_stack_top_for_core(core_idx: usize) -> u64 {
     let idx = if core_idx < MAX_CPUS { core_idx } else { 0 };
     // SAFETY: read-only pointer arithmetic on a static array.
     unsafe { IST1_STACKS[idx].0.as_ptr().add(IST1_STATIC_STACK_SIZE) as u64 }
 }
 
-/// Backwards-compatible accessor for BSP (core 0).
 pub fn ist1_static_stack_top() -> u64 {
     ist1_stack_top_for_core(0)
 }
 
-/// Our GDT (static, page-aligned for safety)
 static mut GDT: Gdt = Gdt {
     entries: [
-        GdtEntry::null(),    // 0x00: Null
-        GdtEntry::code64(0), // 0x08: Kernel code
-        GdtEntry::data64(0), // 0x10: Kernel data
-        GdtEntry::data64(3), // 0x18: User data  (SYSRET SS = STAR[63:48]+8)
-        GdtEntry::code64(3), // 0x20: User code  (SYSRET CS = STAR[63:48]+16)
+        GdtEntry::null(),
+        GdtEntry::code64(0),
+        GdtEntry::data64(0),
+        GdtEntry::data64(3),
+        GdtEntry::code64(3),
     ],
-    tss_desc: TssDescriptor::empty(), // Placeholder, updated at init
+    tss_desc: TssDescriptor::empty(),
 };
 
-/// Our TSS
 static mut TSS: Tss = Tss::new();
-
-/// GDT initialized flag
 static mut GDT_INITIALIZED: bool = false;
 
-// INITIALIZATION
-
-/// Initialize GDT and TSS.
-///
-/// # Arguments
-/// - `kernel_stack`: Stack pointer for ring 0 (RSP0 — used for interrupts
-///   arriving from user mode when no IST is configured on that vector).
-///
-/// IST[0] (IST1) is always set from `IST1_STATIC_STACK` — it is NEVER
-/// taken from the heap.  This guarantees the double-fault handler can always
-/// run even when the allocator or heap is in an invalid state, preventing the
-/// CPU from silently triple-faulting and resetting.
+/// Load GDT/TSS. IST[0] uses the BSS-resident stack so #DF can never
+/// triple-fault from a bad heap.
 ///
 /// # Safety
-/// - Must be called once
-/// - `kernel_stack` must be a valid, mapped stack top
+/// Once per CPU. `kernel_stack` must be a mapped stack top.
 pub unsafe fn init_gdt(kernel_stack: u64) {
     if GDT_INITIALIZED {
         crate::serial::log_warn("GDT", 710, "already initialized");
         return;
     }
 
-    // Set up TSS
     TSS.rsp0 = kernel_stack;
-    // IST1 — static stack baked into BSS.  Always valid; see comment above.
     TSS.ist[0] = ist1_static_stack_top();
 
-    // Update TSS descriptor in GDT
     let tss_addr = &TSS as *const Tss as u64;
     GDT.tss_desc = TssDescriptor::new(tss_addr, size_of::<Tss>() as u16);
 
-    // Load GDT
     let gdt_ptr = GdtPtr {
         limit: (size_of::<Gdt>() - 1) as u16,
         base: &GDT as *const Gdt as u64,
     };
 
     load_gdt(&gdt_ptr);
-
-    // Reload segment registers
     reload_segments();
-
-    // Load TSS
     load_tss(TSS_SEL);
 
     GDT_INITIALIZED = true;
     crate::serial::log_ok("GDT", 711, "gdt+tss initialized");
 }
 
-/// Load GDT via lgdt instruction
 #[inline(always)]
 unsafe fn load_gdt(ptr: &GdtPtr) {
     core::arch::asm!(
@@ -309,25 +225,18 @@ unsafe fn load_gdt(ptr: &GdtPtr) {
     );
 }
 
-/// Reload segment registers after GDT change
+/// Reload CS via retfq, then data segments.
 #[inline(never)]
 unsafe fn reload_segments() {
-    // Far return to reload CS, then set data segments
-    // retfq pops: RIP from [RSP], then CS from [RSP+8]
-    // So we need: push CS first, then push RIP
     let code_sel: u64 = KERNEL_CS as u64;
     let data_sel: u64 = KERNEL_DS as u64;
 
     core::arch::asm!(
-        // Push CS (will be at RSP+8 after next push)
         "push {code}",
-        // Push return address (will be at RSP)
         "lea {tmp}, [rip + 2f]",
         "push {tmp}",
-        // Far return: pops RIP from RSP, CS from RSP+8
         "retfq",
         "2:",
-        // Now reload data segments
         "mov ds, {data:x}",
         "mov es, {data:x}",
         "mov fs, {data:x}",
@@ -340,7 +249,6 @@ unsafe fn reload_segments() {
     );
 }
 
-/// Load TSS via ltr instruction
 #[inline(always)]
 unsafe fn load_tss(selector: u16) {
     core::arch::asm!(
@@ -350,27 +258,22 @@ unsafe fn load_tss(selector: u16) {
     );
 }
 
-/// Update kernel stack in TSS (for context switches)
+/// Update TSS.rsp0 for context switch.
 ///
 /// # Safety
-/// Stack must be valid.
+/// `stack` must be a valid mapped stack top.
 pub unsafe fn set_kernel_stack(stack: u64) {
     TSS.rsp0 = stack;
 }
 
-/// Get current kernel stack from TSS
 pub fn get_kernel_stack() -> u64 {
     unsafe { TSS.rsp0 }
 }
 
-// ── SMP: per-AP GDT + TSS ───────────────────────────────────────────────
-//
-// Each AP needs its own TSS (RSP0 is per-core) but shares the same segment
-// layout.  We allocate per-AP GDT+TSS pairs from a static array — no heap.
+// Per-AP GDT+TSS: same layout, distinct RSP0/IST. Static array, no heap.
 
 use super::per_cpu::MAX_CPUS;
 
-/// Per-AP GDT.  Index 0 is BSP (uses the static GDT/TSS above).
 static mut AP_TSS: [Tss; MAX_CPUS] = [const { Tss::new() }; MAX_CPUS];
 static mut AP_GDT: [Gdt; MAX_CPUS] = [const {
     Gdt {
@@ -385,26 +288,20 @@ static mut AP_GDT: [Gdt; MAX_CPUS] = [const {
     }
 }; MAX_CPUS];
 
-/// Initialize a per-AP GDT + TSS and load them.
-///
-/// `stack_top` is the AP's kernel stack top (for RSP0).
-/// `core_idx` is the sequential core index (1..MAX_CPUS-1).
+/// Load per-AP GDT/TSS.
 ///
 /// # Safety
-/// Must be called exactly once per AP, on the AP's own stack, CLI'd.
+/// Once per AP, on its own stack, IF=0.
 pub unsafe fn init_gdt_for_ap(stack_top: u64, core_idx: u32) {
     let idx = core_idx as usize;
     assert!(idx < MAX_CPUS);
 
-    // set up this AP's TSS
     AP_TSS[idx].rsp0 = stack_top;
-    AP_TSS[idx].ist[0] = ist1_stack_top_for_core(idx); // per-core IST1 stack
+    AP_TSS[idx].ist[0] = ist1_stack_top_for_core(idx);
 
-    // point the GDT's TSS descriptor at this AP's TSS
     let tss_addr = &AP_TSS[idx] as *const Tss as u64;
     AP_GDT[idx].tss_desc = TssDescriptor::new(tss_addr, size_of::<Tss>() as u16);
 
-    // load this AP's GDT
     let gdt_ptr = GdtPtr {
         limit: (size_of::<Gdt>() - 1) as u16,
         base: &AP_GDT[idx] as *const Gdt as u64,
@@ -417,11 +314,10 @@ pub unsafe fn init_gdt_for_ap(stack_top: u64, core_idx: u32) {
     let _ = (core_idx, stack_top);
 }
 
-/// Update RSP0 in an AP's TSS.  Called during context switch when the
-/// scheduler picks a new process for this core.
+/// Per-core RSP0 update for context switch.
 ///
 /// # Safety
-/// `core_idx` must be valid.
+/// `core_idx` < MAX_CPUS.
 pub unsafe fn set_kernel_stack_for_core(core_idx: u32, stack: u64) {
     if core_idx == 0 {
         TSS.rsp0 = stack;

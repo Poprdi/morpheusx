@@ -1,13 +1,4 @@
-//! Environment — command-line arguments, working directory.
-//!
-//! # Examples
-//! ```ignore
-//! for arg in env::args() {
-//!     println!("arg: {}", arg);
-//! }
-//! let cwd = env::current_dir()?;
-//! env::set_current_dir("/home")?;
-//! ```
+//! Process environment: argv and cwd.
 
 extern crate alloc;
 
@@ -16,7 +7,6 @@ use alloc::vec::Vec;
 
 use crate::error::{self, Error};
 
-/// Iterator over command-line arguments.
 pub struct Args {
     args: Vec<String>,
     pos: usize,
@@ -43,10 +33,7 @@ impl Iterator for Args {
 
 impl ExactSizeIterator for Args {}
 
-/// Get command-line arguments passed to this process.
-///
-/// Returns an iterator over the arguments.  The first argument is
-/// typically the program name/path.
+/// Command-line arguments; argv[0] is typically the program path.
 pub fn args() -> Args {
     let mut buf = [0u8; 4096];
     let n = crate::process::getargs(&mut buf);
@@ -68,12 +55,10 @@ pub fn args() -> Args {
     Args { args, pos: 0 }
 }
 
-/// Get command-line arguments as a collected Vec.
 pub fn args_vec() -> Vec<String> {
     args().collect()
 }
 
-/// Get the current working directory.
 pub fn current_dir() -> error::Result<String> {
     let mut buf = [0u8; 512];
     let n = crate::fs::getcwd(&mut buf).map_err(Error::from_raw)?;
@@ -81,7 +66,6 @@ pub fn current_dir() -> error::Result<String> {
     Ok(String::from(s))
 }
 
-/// Change the current working directory.
 pub fn set_current_dir(path: &str) -> error::Result<()> {
     crate::fs::chdir(path).map_err(Error::from_raw)
 }

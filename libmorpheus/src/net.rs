@@ -93,7 +93,6 @@ pub fn nic_mac() -> Result<[u8; 6], u64> {
     }
 }
 
-/// Refill the NIC's RX descriptor ring.
 pub fn nic_refill() -> Result<(), u64> {
     let ret = unsafe { syscall0(SYS_NIC_REFILL) };
     if crate::is_error(ret) {
@@ -167,7 +166,6 @@ pub fn nic_set_promisc(on: bool) -> Result<(), u64> {
     nic_ctrl(NIC_CTRL_PROMISC, on as u64).map(|_| ())
 }
 
-/// Set (spoof) the NIC's hardware MAC address.
 pub fn nic_set_mac(mac: &[u8; 6]) -> Result<(), u64> {
     nic_ctrl(NIC_CTRL_MAC_SET, mac.as_ptr() as u64).map(|_| ())
 }
@@ -179,12 +177,10 @@ pub fn nic_hw_stats() -> Result<NicHwStats, u64> {
     Ok(stats)
 }
 
-/// Reset NIC hardware statistics counters.
 pub fn nic_stats_reset() -> Result<(), u64> {
     nic_ctrl(NIC_CTRL_STATS_RESET, 0).map(|_| ())
 }
 
-/// Set NIC MTU.
 pub fn nic_set_mtu(mtu: u32) -> Result<(), u64> {
     nic_ctrl(NIC_CTRL_MTU, mtu as u64).map(|_| ())
 }
@@ -194,7 +190,6 @@ pub fn nic_set_multicast(accept_all: bool) -> Result<(), u64> {
     nic_ctrl(NIC_CTRL_MULTICAST, accept_all as u64).map(|_| ())
 }
 
-/// Set VLAN tag (0 = disable).
 pub fn nic_set_vlan(vlan_id: u16) -> Result<(), u64> {
     nic_ctrl(NIC_CTRL_VLAN, vlan_id as u64).map(|_| ())
 }
@@ -289,7 +284,6 @@ impl TcpState {
     }
 }
 
-/// Create a new TCP socket.
 pub fn tcp_socket() -> Result<TcpHandle, u64> {
     let ret = unsafe { syscall1(SYS_NET, NET_TCP_SOCKET) };
     if crate::is_error(ret) {
@@ -364,7 +358,6 @@ pub fn tcp_close(handle: TcpHandle) {
     }
 }
 
-/// Query a TCP socket's current state.
 pub fn tcp_state(handle: TcpHandle) -> Result<TcpState, u64> {
     let ret = unsafe { syscall2(SYS_NET, NET_TCP_STATE, handle) };
     if crate::is_error(ret) {
@@ -407,7 +400,6 @@ pub fn tcp_shutdown(handle: TcpHandle) -> Result<(), u64> {
     }
 }
 
-/// Set TCP_NODELAY (disable Nagle's algorithm).
 pub fn tcp_set_nodelay(handle: TcpHandle, on: bool) -> Result<(), u64> {
     let ret = unsafe { syscall3(SYS_NET, NET_TCP_NODELAY, handle, on as u64) };
     if crate::is_error(ret) {
@@ -417,7 +409,6 @@ pub fn tcp_set_nodelay(handle: TcpHandle, on: bool) -> Result<(), u64> {
     }
 }
 
-/// Set TCP keepalive interval (0 = disable).
 pub fn tcp_set_keepalive(handle: TcpHandle, interval_ms: u64) -> Result<(), u64> {
     let ret = unsafe { syscall3(SYS_NET, NET_TCP_KEEPALIVE, handle, interval_ms) };
     if crate::is_error(ret) {
@@ -557,7 +548,6 @@ pub fn net_config() -> Result<NetConfigInfo, u64> {
     }
 }
 
-/// Switch to DHCP mode.
 pub fn net_dhcp() -> Result<(), u64> {
     let ret = unsafe { syscall1(SYS_NET_CFG, CFG_DHCP) };
     if crate::is_error(ret) {
@@ -769,7 +759,6 @@ pub fn udp_recv_from(handle: u64, buf: &mut [u8]) -> Result<(u64, u32, u16), u64
     }
 }
 
-/// Close a UDP socket.
 pub fn udp_close(handle: u64) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_NET, UDP_CLOSE, handle) };
     if crate::is_error(ret) {
@@ -779,9 +768,6 @@ pub fn udp_close(handle: u64) -> Result<(), u64> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// IPv4 address type
-// ═══════════════════════════════════════════════════════════════════════
 
 /// An IPv4 address.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -849,24 +835,12 @@ impl core::fmt::Display for SocketAddr {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// TcpStream — RAII TCP client socket
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A connected TCP stream.  Closes the socket on drop.
 ///
 /// Implements [`Read`](io::Read) and [`Write`](io::Write).
 /// The kernel's TCP stack is **non-blocking** — reads return 0 if no data
 /// is available, sends may accept fewer bytes than provided.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::net::TcpStream;
-/// let mut stream = TcpStream::connect(Ipv4Addr::new(10,0,2,2), 80)?;
-/// stream.write_all(b"GET / HTTP/1.0\r\n\r\n")?;
-/// let mut buf = [0u8; 1024];
-/// let n = stream.read(&mut buf)?;
-/// ```
 pub struct TcpStream {
     handle: TcpHandle,
 }
@@ -929,7 +903,6 @@ impl TcpStream {
         tcp_set_nodelay(self.handle, on).map_err(Error::from_raw)
     }
 
-    /// Set keepalive interval (0 = disable).
     pub fn set_keepalive(&self, interval_ms: u64) -> error::Result<()> {
         tcp_set_keepalive(self.handle, interval_ms).map_err(Error::from_raw)
     }
@@ -1019,22 +992,8 @@ impl Drop for TcpStream {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// TcpListener — RAII TCP server socket
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A TCP listener that accepts incoming connections.
-///
-/// # Example
-/// ```ignore
-/// let listener = TcpListener::bind(8080)?;
-/// loop {
-///     if let Ok(stream) = listener.accept() {
-///         // handle connection
-///     }
-///     net_poll_drive(0);
-/// }
-/// ```
 pub struct TcpListener {
     handle: TcpHandle,
 }
@@ -1087,18 +1046,8 @@ impl Drop for TcpListener {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// UdpSocket — RAII UDP socket
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A UDP socket.  Closes on drop.
-///
-/// # Example
-/// ```ignore
-/// let sock = UdpSocket::new()?;
-/// sock.send_to(Ipv4Addr::new(10,0,2,2), 53, &query)?;
-/// let (n, src_ip, src_port) = sock.recv_from(&mut buf)?;
-/// ```
 pub struct UdpSocket {
     handle: u64,
 }
@@ -1110,7 +1059,6 @@ impl UdpSocket {
         Ok(Self { handle })
     }
 
-    /// Wrap an existing handle.
     pub fn from_raw_handle(handle: u64) -> Self {
         Self { handle }
     }

@@ -18,8 +18,7 @@ pub const TITLE_TEXT_RGB: (u8, u8, u8) = (255, 255, 255);
 pub const BORDER_UNFOCUSED_RGB: (u8, u8, u8) = (85, 85, 85);
 pub const CURSOR_RGB: (u8, u8, u8) = (255, 255, 255);
 
-// shelld's panel height. hardcoded here so compd can re-blit it above windows.
-// yes it couples us to shelld's layout. no there's no ABI for "tell me your panel height".
+// Couples compd to shelld's layout — no ABI to query panel height.
 pub const PANEL_H: u32 = 30;
 
 pub struct ChildWindow {
@@ -34,13 +33,13 @@ pub struct ChildWindow {
     pub h: u32,
     pub src_w: u32,
     pub src_h: u32,
-    pub src_stride: u32, // in pixels. not bytes. the framebuffer stride IS bytes. yes again.
+    pub src_stride: u32, // pixels (not bytes — fb stride is bytes; mismatch is deliberate).
     pub mouse_local_x: i32,
     pub mouse_local_y: i32,
     pub mouse_local_valid: bool,
     pub title: [u8; 64],
     pub title_len: usize,
-    pub z_layer: u8, // 0=desktop background, 1=normal window, 3=overlay
+    pub z_layer: u8, // 0=bg, 1=window, 3=overlay
 }
 
 #[derive(Clone, Copy)]
@@ -68,23 +67,23 @@ pub enum HitRegion {
 }
 
 pub struct CompState {
-    // --- renderer island owns these ---
+    // renderer
     pub fb_ptr: *mut u32,
     pub fb_w: u32,
     pub fb_h: u32,
-    pub fb_stride: u32, // stride in PIXELS (fb_info.stride / 4). yes confusing. no we can't change it.
+    pub fb_stride: u32, // pixels (fb_info.stride / 4).
     pub is_bgrx: bool,
 
-    // --- surface_mgr island owns these ---
+    // surface_mgr
     pub windows: [Option<ChildWindow>; MAX_WINDOWS],
     pub cascade_n: i32,
     pub surface_buf: [compsys::SurfaceEntry; MAX_WINDOWS],
-    pub desktop_idx: Option<usize>, // slot index of shelld's desktop surface (z_layer 0)
+    pub desktop_idx: Option<usize>, // shelld's z0 surface slot.
 
-    // --- focus island owns these ---
+    // focus
     pub focused: Option<usize>,
 
-    // --- input island owns these ---
+    // input
     pub mouse_x: i32,
     pub mouse_y: i32,
     pub last_buttons: u8,
@@ -94,7 +93,7 @@ pub struct CompState {
     pub title_focused_rgb: (u8, u8, u8),
     pub border_focused_rgb: (u8, u8, u8),
 
-    // --- channels (SPSC) ---
+    // SPSC island channels.
     pub ch_input_to_focus: Channel<InputMsg, 16>,
     pub ch_mouse_spatial: Channel<MouseSpatialMsg, 32>,
     pub ch_mouse_route: Channel<MouseZRouteMsg, 32>,
@@ -127,7 +126,7 @@ impl CompState {
         }
     }
 
-    // pack the pixel. bgrx not rgbx. the b comes first because uefi said so and uefi answers to no one.
+    /// Pack RGB into framebuffer pixel; BGRX byte order on most UEFI GOPs.
     #[inline(always)]
     pub fn pack(&self, r: u8, g: u8, b: u8) -> u32 {
         if self.is_bgrx {

@@ -9,9 +9,6 @@
 //!   1. Request header (16 bytes): type, reserved, sector
 //!   2. Data buffer: read/write data
 //!   3. Status byte: completion status
-//!
-//! # Reference
-//! VirtIO Spec 1.2 §5.2, NETWORK_IMPL_GUIDE.md §6
 
 use crate::driver::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
@@ -20,9 +17,6 @@ use crate::driver::virtio::transport::{TransportType, VirtioTransport};
 use crate::types::VirtqueueState;
 use core::ptr;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ASM BINDINGS
-// ═══════════════════════════════════════════════════════════════════════════
 
 extern "win64" {
     fn asm_virtio_blk_read_capacity(mmio_base: u64) -> u64;
@@ -66,9 +60,6 @@ extern "win64" {
     ) -> u32;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Result from asm_virtio_blk_poll_complete
 #[repr(C)]
@@ -124,9 +115,6 @@ const REQUIRED_FEATURES: u64 = VIRTIO_F_VERSION_1;
 /// Desired features
 const DESIRED_FEATURES: u64 = VIRTIO_BLK_F_BLK_SIZE | VIRTIO_BLK_F_FLUSH;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// VirtIO-blk driver configuration.
 #[derive(Debug, Clone)]
@@ -186,9 +174,6 @@ impl From<super::virtio::init::VirtioInitError> for VirtioBlkInitError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// REQUEST TRACKING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Track in-flight request.
 #[derive(Debug, Clone, Copy, Default)]
@@ -201,9 +186,6 @@ struct InFlightRequest {
     active: bool,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DRIVER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum in-flight requests (queue_size / 3 since each request uses 3 descriptors)
 const MAX_IN_FLIGHT: usize = 32;
@@ -246,9 +228,6 @@ impl VirtioBlkDriver {
             return Err(VirtioBlkInitError::InvalidConfig);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 1: Reset device
-        // ═══════════════════════════════════════════════════════════════════
         asm_virtio_set_status(mmio_base, 0);
 
         // Wait for reset (simple spin - bounded)
@@ -263,19 +242,10 @@ impl VirtioBlkDriver {
             return Err(VirtioBlkInitError::ResetFailed);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 2: Set ACKNOWLEDGE
-        // ═══════════════════════════════════════════════════════════════════
         asm_virtio_set_status(mmio_base, VIRTIO_STATUS_ACKNOWLEDGE);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 3: Set DRIVER
-        // ═══════════════════════════════════════════════════════════════════
         asm_virtio_set_status(mmio_base, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 4: Feature negotiation
-        // ═══════════════════════════════════════════════════════════════════
         let device_features = asm_virtio_read_features(mmio_base);
 
         if device_features & REQUIRED_FEATURES != REQUIRED_FEATURES {
@@ -286,9 +256,6 @@ impl VirtioBlkDriver {
         let our_features = REQUIRED_FEATURES | (DESIRED_FEATURES & device_features);
         asm_virtio_write_features(mmio_base, our_features);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 5: Set FEATURES_OK
-        // ═══════════════════════════════════════════════════════════════════
         asm_virtio_set_status(
             mmio_base,
             VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK,
@@ -301,9 +268,6 @@ impl VirtioBlkDriver {
             return Err(VirtioBlkInitError::FeatureNegotiationFailed);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 6: Setup virtqueue (queue 0)
-        // ═══════════════════════════════════════════════════════════════════
         let result = asm_virtio_setup_queue(
             mmio_base,
             0, // queue index
@@ -318,9 +282,6 @@ impl VirtioBlkDriver {
             return Err(VirtioBlkInitError::QueueSetupFailed);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 7: Set DRIVER_OK
-        // ═══════════════════════════════════════════════════════════════════
         asm_virtio_set_status(
             mmio_base,
             VIRTIO_STATUS_ACKNOWLEDGE
@@ -329,9 +290,6 @@ impl VirtioBlkDriver {
                 | VIRTIO_STATUS_DRIVER_OK,
         );
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 8: Read device info
-        // ═══════════════════════════════════════════════════════════════════
         let capacity = asm_virtio_blk_read_capacity(mmio_base);
         let sector_size = if our_features & VIRTIO_BLK_F_BLK_SIZE != 0 {
             asm_virtio_blk_read_blk_size(mmio_base)
@@ -400,9 +358,6 @@ impl VirtioBlkDriver {
 
         let base = transport.base;
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 1: Reset device
-        // ═══════════════════════════════════════════════════════════════════
         transport.set_status(0);
 
         // Wait for reset (simple spin - bounded)
@@ -417,19 +372,10 @@ impl VirtioBlkDriver {
             return Err(VirtioBlkInitError::ResetFailed);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 2: Set ACKNOWLEDGE
-        // ═══════════════════════════════════════════════════════════════════
         transport.set_status(VIRTIO_STATUS_ACKNOWLEDGE);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 3: Set DRIVER
-        // ═══════════════════════════════════════════════════════════════════
         transport.set_status(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 4: Feature negotiation
-        // ═══════════════════════════════════════════════════════════════════
         let device_features = transport.read_features();
 
         if device_features & REQUIRED_FEATURES != REQUIRED_FEATURES {
@@ -440,9 +386,6 @@ impl VirtioBlkDriver {
         let our_features = REQUIRED_FEATURES | (DESIRED_FEATURES & device_features);
         transport.write_features(our_features);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 5: Set FEATURES_OK
-        // ═══════════════════════════════════════════════════════════════════
         transport.set_status(
             VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK,
         );
@@ -454,9 +397,6 @@ impl VirtioBlkDriver {
             return Err(VirtioBlkInitError::FeatureNegotiationFailed);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 6: Setup virtqueue (queue 0)
-        // ═══════════════════════════════════════════════════════════════════
         let notify_addr = transport.setup_queue(
             0, // queue index
             config.desc_phys,
@@ -465,9 +405,6 @@ impl VirtioBlkDriver {
             config.queue_size,
         )?;
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 7: Set DRIVER_OK
-        // ═══════════════════════════════════════════════════════════════════
         transport.set_status(
             VIRTIO_STATUS_ACKNOWLEDGE
                 | VIRTIO_STATUS_DRIVER
@@ -475,9 +412,6 @@ impl VirtioBlkDriver {
                 | VIRTIO_STATUS_DRIVER_OK,
         );
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 8: Read device info
-        // ═══════════════════════════════════════════════════════════════════
         let capacity = transport.read_blk_capacity();
         let sector_size = if our_features & VIRTIO_BLK_F_BLK_SIZE != 0 {
             transport.read_blk_size()

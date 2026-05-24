@@ -62,16 +62,6 @@ pub trait BlockDriver {
 
     /// Submit a read request.
     ///
-    /// # Arguments
-    /// - `sector`: Starting sector number
-    /// - `buffer_phys`: Physical address of destination buffer
-    /// - `num_sectors`: Number of sectors to read
-    /// - `request_id`: Caller-provided ID for tracking
-    ///
-    /// # Returns
-    /// - `Ok(())`: Request submitted
-    /// - `Err(BlockError)`: Submit failed
-    ///
     /// # Contract
     /// - MUST return immediately (fire-and-forget)
     /// - Buffer must remain valid until completion
@@ -84,16 +74,6 @@ pub trait BlockDriver {
     ) -> Result<(), BlockError>;
 
     /// Submit a write request.
-    ///
-    /// # Arguments
-    /// - `sector`: Starting sector number
-    /// - `buffer_phys`: Physical address of source buffer
-    /// - `num_sectors`: Number of sectors to write
-    /// - `request_id`: Caller-provided ID for tracking
-    ///
-    /// # Returns
-    /// - `Ok(())`: Request submitted
-    /// - `Err(BlockError)`: Submit failed
     fn submit_write(
         &mut self,
         sector: u64,
@@ -103,10 +83,6 @@ pub trait BlockDriver {
     ) -> Result<(), BlockError>;
 
     /// Poll for completed requests.
-    ///
-    /// # Returns
-    /// - `Some(completion)`: A request completed
-    /// - `None`: No completions available
     fn poll_completion(&mut self) -> Option<BlockCompletion>;
 
     /// Notify device that requests are pending.

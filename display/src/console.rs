@@ -1,34 +1,23 @@
-//! Text console with cursor tracking and character rendering.
+//! 8x16 text console over a framebuffer.
 
 use crate::colors::{attr_bg, attr_fg, efi};
 use crate::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
 use crate::framebuffer::Framebuffer;
 use crate::types::Color;
 
-/// Text console that renders characters to a framebuffer.
 pub struct TextConsole {
     fb: Framebuffer,
-    /// Current cursor column (0-indexed).
     cursor_col: usize,
-    /// Current cursor row (0-indexed).
     cursor_row: usize,
-    /// Number of text columns.
     cols: usize,
-    /// Number of text rows.
     rows: usize,
-    /// Current foreground color.
     fg_color: Color,
-    /// Current background color.
     bg_color: Color,
-    /// Current EFI attribute.
     attr: u8,
 }
 
 impl TextConsole {
-    /// Create a new text console from a framebuffer.
-    ///
-    /// # Safety
-    /// The framebuffer must be valid for the lifetime of this console.
+    /// SAFETY: `fb` must remain valid for the console's lifetime.
     pub unsafe fn new(fb: Framebuffer) -> Self {
         let cols = fb.width() as usize / FONT_WIDTH;
         let rows = fb.height() as usize / FONT_HEIGHT;
@@ -45,56 +34,44 @@ impl TextConsole {
         }
     }
 
-    /// Get number of columns.
     pub fn cols(&self) -> usize {
         self.cols
     }
 
-    /// Get number of rows.
     pub fn rows(&self) -> usize {
         self.rows
     }
 
-    /// Set cursor position.
     pub fn set_cursor(&mut self, col: usize, row: usize) {
         self.cursor_col = col.min(self.cols.saturating_sub(1));
         self.cursor_row = row.min(self.rows.saturating_sub(1));
     }
 
-    /// Set text attribute.
     pub fn set_attribute(&mut self, attr: u8) {
         self.attr = attr;
         self.fg_color = attr_fg(attr);
         self.bg_color = attr_bg(attr);
     }
 
-    /// Clear the screen.
     pub fn clear(&mut self) {
         self.fb.clear(self.bg_color);
         self.cursor_col = 0;
         self.cursor_row = 0;
     }
 
-    /// Render a single character at the current cursor position.
-    ///
-    /// PERF FIX: Fill background with fill_rect (single memset32 per row),
-    /// then only write foreground pixels. For typical text (sparse glyphs),
-    /// this reduces per-character writes by ~60-70% since most pixels are
-    /// background. fill_rect uses REP STOSD which is much faster than
-    /// individual put_pixel calls.
+    /// Background fill via REP STOSD (one memset32 per row), then plot fg
+    /// pixels only. Cuts per-glyph writes by ~60-70% vs. per-pixel.
     fn render_char(&mut self, c: char) {
         let glyph = get_glyph_or_space(c);
         let px = (self.cursor_col * FONT_WIDTH) as u32;
         let py = (self.cursor_row * FONT_HEIGHT) as u32;
 
-        // Fill the entire cell with background color first (fast memset32)
         self.fb
             .fill_rect(px, py, FONT_WIDTH as u32, FONT_HEIGHT as u32, self.bg_color);
 
-        // Only write foreground pixels (set bits in glyph)
         for (row_idx, &row_bits) in glyph.iter().enumerate() {
             if row_bits == 0 {
-                continue; // Skip fully-blank rows (common in glyphs)
+                continue;
             }
             for col_idx in 0..FONT_WIDTH {
                 if (row_bits >> (7 - col_idx)) & 1 == 1 {
@@ -105,12 +82,10 @@ impl TextConsole {
         }
     }
 
-    /// Scroll the console up by one line.
     fn scroll_up_one(&mut self) {
         self.fb.scroll_up(FONT_HEIGHT as u32, self.bg_color);
     }
 
-    /// Advance cursor, handling line wrap and scroll.
     fn advance_cursor(&mut self) {
         self.cursor_col += 1;
         if self.cursor_col >= self.cols {
@@ -123,7 +98,6 @@ impl TextConsole {
         }
     }
 
-    /// Handle newline.
     fn newline(&mut self) {
         self.cursor_col = 0;
         self.cursor_row += 1;
@@ -133,20 +107,18 @@ impl TextConsole {
         }
     }
 
-    /// Write a single character.
     pub fn write_char(&mut self, c: char) {
         match c {
             '\n' => self.newline(),
             '\r' => self.cursor_col = 0,
             '\x08' => {
-                // Backspace: move cursor left, erase the cell
                 if self.cursor_col > 0 {
                     self.cursor_col -= 1;
                 }
                 self.render_char(' ');
             }
             '\t' => {
-                // Tab to next 8-column boundary
+                // Round up to next 8-column tabstop.
                 let next_tab = (self.cursor_col + 8) & !7;
                 while self.cursor_col < next_tab && self.cursor_col < self.cols {
                     self.render_char(' ');
@@ -158,14 +130,12 @@ impl TextConsole {
                 self.advance_cursor();
             }
             _ => {
-                // Non-printable: render as space
                 self.render_char(' ');
                 self.advance_cursor();
             }
         }
     }
 
-    /// Write a string.
     pub fn write_str(&mut self, s: &str) {
         for c in s.chars() {
             self.write_char(c);

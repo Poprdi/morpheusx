@@ -6,9 +6,6 @@
 //!
 //! # Safety
 //! TSC reads are always safe. Requires invariant TSC (verify via CPUID at boot).
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.2.1
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {
@@ -62,7 +59,6 @@ pub fn read_tsc_serialized() -> u64 {
 /// Self-contained - uses 8254 PIT hardware directly.
 /// No UEFI dependencies.
 ///
-/// Returns TSC frequency in Hz.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn calibrate_tsc_pit() -> u64 {

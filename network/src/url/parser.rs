@@ -1,16 +1,6 @@
 //! URL parser for HTTP/HTTPS URLs.
 //!
 //! Parses URLs in the format: `scheme://host[:port][/path][?query]`
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use morpheus_network::url::Url;
-//!
-//! let url = Url::parse("http://example.com/path?query=value").unwrap();
-//! assert_eq!(url.host, "example.com");
-//! assert_eq!(url.path, "/path");
-//! ```
 
 use crate::error::{NetworkError, Result};
 use alloc::string::{String, ToString};
@@ -32,7 +22,6 @@ impl Scheme {
         }
     }
 
-    /// Default port for this scheme.
     pub fn default_port(&self) -> u16 {
         match self {
             Scheme::Http => 80,
@@ -74,13 +63,6 @@ impl Url {
     /// - `http://host:port/path`
     /// - `http://host/path?query`
     /// - `https://...` (same patterns)
-    ///
-    /// # Errors
-    ///
-    /// Returns `NetworkError::InvalidUrl` if:
-    /// - Missing or invalid scheme
-    /// - Missing host
-    /// - Invalid port number
     pub fn parse(url: &str) -> Result<Self> {
         // Find scheme separator "://"
         let scheme_end = url.find("://").ok_or(NetworkError::InvalidUrl)?;
@@ -177,7 +159,6 @@ impl Url {
         self.port.unwrap_or_else(|| self.scheme.default_port())
     }
 
-    /// Check if HTTPS.
     pub fn is_https(&self) -> bool {
         self.scheme == Scheme::Https
     }

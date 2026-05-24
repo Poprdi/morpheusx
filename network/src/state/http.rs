@@ -21,9 +21,6 @@
 //!
 //! For large downloads (ISOs), data is passed to a callback function
 //! as it arrives, rather than buffering the entire response.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5.5
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -36,9 +33,6 @@ use super::{StateError, StepResult, TscTimestamp};
 use crate::http::Headers;
 use crate::url::Url;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HTTP ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// HTTP-specific errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,9 +86,6 @@ impl From<HttpError> for StateError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HTTP RESPONSE INFO
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Information extracted from HTTP response headers.
 #[derive(Debug, Clone)]
@@ -125,9 +116,6 @@ impl HttpResponseInfo {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HTTP DOWNLOAD PROGRESS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Download progress information.
 #[derive(Debug, Clone, Copy)]
@@ -151,9 +139,6 @@ impl HttpProgress {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HEADER PARSING STATE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Internal state for accumulating headers.
 #[derive(Debug)]
@@ -292,9 +277,6 @@ impl HeaderAccumulator {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HTTP DOWNLOAD STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// HTTP download state machine.
 ///
@@ -435,20 +417,6 @@ impl HttpDownloadState {
     }
 
     /// Step the state machine.
-    ///
-    /// # Arguments
-    /// - `dns_result`: Result from smoltcp DNS query (if resolving)
-    /// - `tcp_state`: Current TCP socket state (if connected)
-    /// - `recv_data`: Data received from socket (if any)
-    /// - `can_send`: Whether socket can accept more data
-    /// - `now_tsc`: Current TSC value
-    /// - `timeouts`: Timeout configuration (DNS, TCP, HTTP timeouts)
-    ///
-    /// # Returns
-    /// - `Pending`: Still in progress
-    /// - `Done`: Download complete, call `result()` for info
-    /// - `Timeout`: Operation timed out
-    /// - `Failed`: Operation failed, call `error()` for details
     ///
     /// # Callback
     ///
@@ -912,7 +880,6 @@ impl HttpDownloadState {
         }
     }
 
-    /// Get socket handle (if connected).
     pub fn socket_handle(&self) -> Option<usize> {
         match self {
             HttpDownloadState::SendingRequest { socket_handle, .. }
@@ -923,7 +890,6 @@ impl HttpDownloadState {
         }
     }
 
-    /// Get download progress.
     pub fn progress(&self) -> Option<HttpProgress> {
         if let HttpDownloadState::ReceivingBody {
             response_info,
@@ -940,7 +906,6 @@ impl HttpDownloadState {
         }
     }
 
-    /// Get response info (if headers received).
     pub fn response_info(&self) -> Option<&HttpResponseInfo> {
         match self {
             HttpDownloadState::ReceivingBody { response_info, .. }
@@ -949,7 +914,6 @@ impl HttpDownloadState {
         }
     }
 
-    /// Get result (if complete).
     pub fn result(&self) -> Option<(&HttpResponseInfo, usize)> {
         if let HttpDownloadState::Done {
             response_info,
@@ -962,7 +926,6 @@ impl HttpDownloadState {
         }
     }
 
-    /// Get error (if failed).
     pub fn error(&self) -> Option<&HttpError> {
         if let HttpDownloadState::Failed { error } = self {
             Some(error)

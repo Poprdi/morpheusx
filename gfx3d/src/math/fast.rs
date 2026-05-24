@@ -1,13 +1,6 @@
-/// Fast bit-level floating-point tricks.
-///
-/// These are the classic game-engine hacks: Quake III's fast inverse sqrt,
-/// Carmack's fast reciprocal, IEEE-754 log2 approximation. Each trades a
-/// tiny accuracy loss (~0.1-0.5%) for removing a hardware div/sqrt entirely.
+// IEEE-754 bit tricks. Trade ~0.1-0.5% accuracy for no hardware div/sqrt.
 
-/// Quake III fast inverse square root.
-///
-/// Two Newton-Raphson iterations give ~0.0003% max relative error.
-/// One iteration gives ~0.175% which is fine for normals but not for lighting.
+/// Quake III rsqrt with 2 Newton iterations (~0.0003% rel error).
 #[inline(always)]
 pub fn inv_sqrt(x: f32) -> f32 {
     if x <= 0.0 {
@@ -15,33 +8,26 @@ pub fn inv_sqrt(x: f32) -> f32 {
     }
     let half = 0.5 * x;
     let i = f32::to_bits(x);
-    let i = 0x5f37_59df - (i >> 1); // magic constant (Chris Lomont's optimized)
+    let i = 0x5f37_59df - (i >> 1); // Lomont's refined constant
     let y = f32::from_bits(i);
-    let y = y * (1.5 - half * y * y); // 1st Newton iteration
-    y * (1.5 - half * y * y) // 2nd Newton iteration
+    let y = y * (1.5 - half * y * y);
+    y * (1.5 - half * y * y)
 }
 
-/// Fast reciprocal: 1/x using inverse sqrt trick.
-///
-/// Computes inv_sqrt(x) * inv_sqrt(x) * x ... nah, simpler: inv_sqrt(x*x) is
-/// just 1/x when x > 0. But we lose precision for negative x.
-/// Instead, use the IEEE-754 bit trick directly.
+/// 1/x via IEEE-754 seed + 2 Newton iterations.
 #[inline(always)]
 pub fn fast_recip(x: f32) -> f32 {
     if x == 0.0 {
         return 0.0;
     }
     let i = f32::to_bits(x.abs());
-    // Newton-Raphson: start with IEEE-754 trick for initial estimate
     let est = f32::from_bits(0x7ef0_0000 - i);
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    // Two refinement iterations: y = y * (2 - x*y)
     let est = est * (2.0 - x.abs() * est);
     let est = est * (2.0 - x.abs() * est);
     est * sign
 }
 
-/// Fast floor for positive floats.
 #[inline(always)]
 pub fn fast_floor(x: f32) -> i32 {
     let i = x as i32;
@@ -52,10 +38,7 @@ pub fn fast_floor(x: f32) -> i32 {
     }
 }
 
-/// Fast approximate log2 using IEEE-754 exponent extraction.
-///
-/// Used for mipmap level selection: `level = log2(max(du/dx, dv/dy))`.
-/// Error: ±0.08 (more than enough for LOD selection).
+/// IEEE-754 log2 approximation. Error ±0.08 — sufficient for mipmap LOD.
 #[inline(always)]
 pub fn fast_log2(x: f32) -> f32 {
     if x <= 0.0 {
@@ -69,9 +52,7 @@ pub fn fast_log2(x: f32) -> f32 {
     exp + log2_m
 }
 
-/// Fast 2^x using IEEE-754 bit reconstruction.
-///
-/// Used for fog density curves: `fog = 2^(-density * dist)`.
+/// IEEE-754 2^x reconstruction; used for exponential fog.
 #[inline(always)]
 pub fn fast_exp2(x: f32) -> f32 {
     if x < -126.0 {
@@ -82,12 +63,10 @@ pub fn fast_exp2(x: f32) -> f32 {
     }
     let floor = fast_floor(x);
     let frac = x - floor as f32;
-    // Polynomial approximation for 2^frac in [0, 1):
     let poly = 1.0 + frac * (core::f32::consts::LN_2 + frac * (0.2402 + frac * 0.0558));
     f32::from_bits(((floor + 127) as u32) << 23) * poly
 }
 
-/// Clamp float to [0, 1] without branching (uses min/max).
 #[inline(always)]
 pub fn saturate(x: f32) -> f32 {
     let x = if x < 0.0 { 0.0 } else { x };
@@ -98,7 +77,6 @@ pub fn saturate(x: f32) -> f32 {
     }
 }
 
-/// Clamp i32 to u8 range.
 #[inline(always)]
 pub fn clamp_u8(x: i32) -> u8 {
     if x < 0 {
@@ -110,7 +88,7 @@ pub fn clamp_u8(x: i32) -> u8 {
     }
 }
 
-/// Integer lerp for color channels: a + (b - a) * t / 256, where t is [0, 255].
+/// t in [0,255].
 #[inline(always)]
 pub fn ilerp_u8(a: u8, b: u8, t: u8) -> u8 {
     let a = a as u32;

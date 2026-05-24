@@ -99,7 +99,6 @@ impl XhciController {
         Ok((last_lba, blk_size))
     }
 
-    /// Read sectors into OFF_DATA.
     pub unsafe fn scsi_read_sectors(&mut self, lba: u64, count: u32) -> Result<(), XhciError> {
         let byte_count = count * 512;
         let mut cmd = [0u8; 10];

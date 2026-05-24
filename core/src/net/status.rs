@@ -1,28 +1,17 @@
-//! Network initialization status.
-//!
-//! Status information returned after successful network initialization.
+//! Net init status.
 
-/// Network status after successful initialization.
 #[derive(Debug, Clone)]
 pub struct NetworkStatus {
-    /// Assigned IPv4 address.
     pub ip_address: [u8; 4],
-    /// Subnet mask.
     pub subnet_mask: [u8; 4],
-    /// Gateway address.
     pub gateway: [u8; 4],
-    /// DNS server (if provided by DHCP).
     pub dns_server: Option<[u8; 4]>,
-    /// MAC address of the network device.
     pub mac_address: [u8; 6],
-    /// Time taken for initialization in milliseconds.
     pub init_time_ms: u64,
-    /// Whether IP was assigned via DHCP or static.
     pub is_dhcp: bool,
 }
 
 impl NetworkStatus {
-    /// Create a new network status (placeholder for testing).
     pub fn new() -> Self {
         Self {
             ip_address: [0, 0, 0, 0],
@@ -35,9 +24,7 @@ impl NetworkStatus {
         }
     }
 
-    /// Format IP address as string for display.
-    ///
-    /// Returns a fixed-size array that can be converted to &str.
+    /// Dotted-quad, space-padded to 15 bytes.
     pub fn ip_str(&self) -> [u8; 15] {
         let mut buf = [b' '; 15];
         let mut pos = 0;

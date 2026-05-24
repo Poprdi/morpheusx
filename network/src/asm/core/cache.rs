@@ -1,7 +1,4 @@
 //! Cache management bindings.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §3.6 - Cache coherency
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

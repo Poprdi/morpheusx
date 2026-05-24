@@ -18,9 +18,6 @@
 //! 1. DHCP: Obtain network configuration
 //! 2. HTTP: Download ISO with streaming callbacks
 //! 3. Disk: Write chunks to VirtIO-blk as they arrive
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5.6
 
 use alloc::string::{String, ToString};
 use core::net::Ipv4Addr;
@@ -31,9 +28,6 @@ use super::tcp::TcpSocketState;
 use super::{Progress, StateError, StepResult, TscTimestamp};
 use crate::url::Url;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DOWNLOAD ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Errors during ISO download.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,9 +77,6 @@ impl From<DownloadError> for StateError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DOWNLOAD CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Configuration for ISO download.
 #[derive(Debug, Clone)]
@@ -126,7 +117,6 @@ impl DownloadConfig {
         self
     }
 
-    /// Set target disk location.
     pub fn with_disk_location(mut self, start_sector: u64, sector_size: usize) -> Self {
         self.disk_start_sector = start_sector;
         self.sector_size = sector_size;
@@ -134,9 +124,6 @@ impl DownloadConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DOWNLOAD PROGRESS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Overall download progress.
 #[derive(Debug, Clone, Copy)]
@@ -201,9 +188,6 @@ impl From<DownloadProgress> for Progress {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DOWNLOAD RESULT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Result of successful download.
 #[derive(Debug, Clone)]
@@ -218,9 +202,6 @@ pub struct DownloadResult {
     pub sectors_written: u64,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ISO DOWNLOAD STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// ISO download orchestration state machine.
 ///
@@ -326,19 +307,6 @@ impl IsoDownloadState {
     }
 
     /// Step the state machine.
-    ///
-    /// # Arguments
-    /// - `dhcp_event`: DHCP event from smoltcp (if any)
-    /// - `dns_result`: DNS query result (if resolving)
-    /// - `tcp_state`: TCP socket state (if connected)
-    /// - `recv_data`: Data received from HTTP socket
-    /// - `can_send`: Whether socket can send
-    /// - `disk_write_result`: Result of disk write (Ok(written) or Err)
-    /// - `now_tsc`: Current TSC value
-    /// - `timeouts`: Timeout values
-    ///
-    /// # Returns
-    /// StepResult indicating current status
     pub fn step(
         &mut self,
         dhcp_event: Option<Result<DhcpConfig, ()>>,
@@ -626,7 +594,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get current progress.
     pub fn progress(&self) -> DownloadProgress {
         match self {
             IsoDownloadState::Init { .. } => DownloadProgress {
@@ -688,7 +655,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get error (if failed).
     pub fn error(&self) -> Option<&DownloadError> {
         if let IsoDownloadState::Failed { error } = self {
             Some(error)
@@ -697,7 +663,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get network config (if obtained).
     pub fn network_config(&self) -> Option<&DhcpConfig> {
         match self {
             IsoDownloadState::Downloading { network_config, .. } => Some(network_config),
@@ -705,7 +670,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get HTTP socket handle (if downloading).
     pub fn socket_handle(&self) -> Option<usize> {
         if let IsoDownloadState::Downloading { http, .. } = self {
             http.socket_handle()
@@ -714,7 +678,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get bytes to send (if in send phase).
     pub fn pending_send(&self) -> Option<(&[u8], usize)> {
         if let IsoDownloadState::Downloading { http, .. } = self {
             http.request_bytes()
@@ -723,7 +686,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Mark bytes as sent.
     pub fn mark_sent(&mut self, bytes: usize) {
         if let IsoDownloadState::Downloading { http, .. } = self {
             http.mark_sent(bytes);
@@ -769,7 +731,6 @@ impl IsoDownloadState {
         )
     }
 
-    /// Cancel the download.
     pub fn cancel(&mut self) {
         *self = IsoDownloadState::Failed {
             error: DownloadError::Cancelled,

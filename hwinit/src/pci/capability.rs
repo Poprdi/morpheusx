@@ -1,10 +1,6 @@
 //! PCI Capability chain walking and VirtIO capability parsing.
 //!
 //! Provides functions to discover and parse VirtIO PCI Modern capabilities.
-//!
-//! # Reference
-//! - PCI Spec 3.0 §6.7 (Capability List)
-//! - VirtIO Spec 1.2 §4.1.4 (PCI Device Discovery)
 
 use super::config::{pci_cfg_read16, pci_cfg_read8, PciAddr};
 
@@ -47,13 +43,11 @@ extern "win64" {
 /// PCI capability ID: Vendor-specific (used by VirtIO).
 pub const PCI_CAP_ID_VNDR: u8 = 0x09;
 
-/// VirtIO PCI capability type: Common configuration.
 pub const VIRTIO_PCI_CAP_COMMON: u8 = 1;
 
 /// VirtIO PCI capability type: Notification area.
 pub const VIRTIO_PCI_CAP_NOTIFY: u8 = 2;
 
-/// VirtIO PCI capability type: ISR status.
 pub const VIRTIO_PCI_CAP_ISR: u8 = 3;
 
 /// VirtIO PCI capability type: Device-specific configuration.
@@ -128,7 +122,6 @@ impl VirtioPciCaps {
             .map(|n| self.bar_addrs[n.bar as usize] + n.offset as u64)
     }
 
-    /// Get the notify offset multiplier.
     pub fn notify_multiplier(&self) -> u32 {
         self.notify.map(|n| n.notify_off_multiplier).unwrap_or(0)
     }
@@ -163,7 +156,6 @@ pub fn get_cap_ptr(addr: PciAddr) -> Option<u8> {
     }
 }
 
-/// Find a capability by ID.
 pub fn find_cap(addr: PciAddr, cap_id: u8) -> Option<u8> {
     let offset = unsafe { asm_pci_find_cap(addr.bus, addr.device, addr.function, cap_id) };
     if offset != 0 && offset < 256 {
@@ -173,7 +165,6 @@ pub fn find_cap(addr: PciAddr, cap_id: u8) -> Option<u8> {
     }
 }
 
-/// Find a VirtIO capability by cfg_type.
 pub fn find_virtio_cap(addr: PciAddr, cfg_type: u8) -> Option<u8> {
     let offset = unsafe { asm_pci_find_virtio_cap(addr.bus, addr.device, addr.function, cfg_type) };
     if offset != 0 && offset < 256 {
@@ -196,7 +187,6 @@ pub fn parse_virtio_cap(addr: PciAddr, cap_offset: u8) -> Option<VirtioCapInfo> 
     }
 }
 
-/// Read a BAR base address.
 pub fn read_bar(addr: PciAddr, bar_idx: u8) -> u64 {
     unsafe { asm_virtio_pci_read_bar(addr.bus, addr.device, addr.function, bar_idx) }
 }

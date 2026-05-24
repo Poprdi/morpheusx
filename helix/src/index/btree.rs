@@ -190,7 +190,6 @@ impl NamespaceIndex {
         }
     }
 
-    /// Mark an entry as deleted (tombstone).
     pub fn mark_deleted(&mut self, path: &str) -> Result<(), HelixError> {
         // Try exact path first, then alternate form (with/without trailing '/').
         let idx = {

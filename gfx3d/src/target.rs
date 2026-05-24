@@ -1,48 +1,31 @@
 use alloc::vec::Vec;
 
-/// Render target — the abstraction that decouples the 3D engine from any
-/// specific framebuffer or windowing system.
-///
-/// The consumer provides a `RenderTarget` implementation. The pipeline writes
-/// finished pixels here. That's it — zero knowledge of OS, framebuffer format,
-/// memory-mapped I/O, or anything platform-specific.
-///
-/// Two key buffers:
-/// - `color`: packed RGBA pixels (internal format, engine-defined)
-/// - `depth`: Z-buffer values, 16.16 fixed-point or f32
-///
-/// We use our own `TargetPixelFormat` to describe how the consumer's framebuffer
-/// stores pixels, so the pipeline's final color write does the conversion.
+/// Output sink for the pipeline. Color + 16.16 depth buffer.
 pub trait RenderTarget {
     fn width(&self) -> u32;
     fn height(&self) -> u32;
     fn color_buffer_mut(&mut self) -> &mut [u32];
-    fn depth_buffer_mut(&mut self) -> &mut [u32]; // 16.16 fixed-point depth
+    fn depth_buffer_mut(&mut self) -> &mut [u32];
     fn buffers_mut(&mut self) -> (&mut [u32], &mut [u32]);
     fn pixel_format(&self) -> TargetPixelFormat;
 
-    /// Stride in pixels (may differ from width for hardware framebuffers).
+    /// Pixel stride (may exceed width on hardware framebuffers).
     fn stride(&self) -> u32 {
         self.width()
     }
 }
 
-/// The consumer's framebuffer pixel format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetPixelFormat {
-    /// Blue-Green-Red-X (most UEFI framebuffers)
+    /// B[7:0] G[15:8] R[23:16] X[31:24] — most UEFI framebuffers.
     Bgrx,
-    /// Red-Green-Blue-X
+    /// R[7:0] G[15:8] B[23:16] X[31:24].
     Rgbx,
-    /// Our internal format (R=MSB): 0xRRGGBBAA
+    /// 0xRRGGBBAA, R in MSB.
     InternalRgba,
 }
 
-/// Software render target backed by Vec<u32>.
-///
-/// This is the zero-overhead path: color and depth are contiguous allocations,
-/// no syscalls, no MMIO — just raw memory. The consumer blits this to the
-/// real framebuffer as a final step (or writes it to a PNG for testing).
+/// Heap-backed; consumer blits to the real framebuffer.
 pub struct SoftwareTarget {
     pub width: u32,
     pub height: u32,
@@ -58,7 +41,7 @@ impl SoftwareTarget {
             width,
             height,
             color: alloc::vec![0u32; size],
-            depth: alloc::vec![0xFFFF_FFFF; size], // max depth = furthest away (reversed-Z)
+            depth: alloc::vec![0xFFFF_FFFF; size], // far plane (reversed-Z)
             format,
         }
     }
@@ -112,12 +95,7 @@ impl RenderTarget for SoftwareTarget {
     }
 }
 
-/// Render target that writes directly into an externally-owned pixel buffer
-/// (e.g. a memory-mapped framebuffer back buffer).
-///
-/// Eliminates the intermediate copy that `SoftwareTarget` requires.
-/// The depth buffer is still heap-allocated since there's no hardware
-/// equivalent to share.
+/// Writes color into an externally-owned buffer (e.g. MMIO framebuffer). Depth stays on heap.
 pub struct DirectTarget {
     ptr: *mut u32,
     width: u32,
@@ -129,10 +107,8 @@ pub struct DirectTarget {
 }
 
 impl DirectTarget {
-    /// Wrap an externally-owned pixel buffer as a render target.
-    ///
-    /// `ptr` must point to at least `stride_px * height` u32 pixels.
-    /// `stride_px` is measured in pixels (not bytes).
+    /// SAFETY: `ptr` must address ≥ `stride_px * height` valid u32s for the target's lifetime.
+    /// `stride_px` is in pixels, not bytes.
     pub unsafe fn new(
         ptr: *mut u32,
         width: u32,
@@ -204,23 +180,18 @@ impl RenderTarget for DirectTarget {
     }
 }
 
-/// Convert internal RGBA (0xRRGGBBAA) to target pixel format.
+/// 0xRRGGBBAA → target format.
 #[inline(always)]
 pub fn convert_pixel(rgba: u32, format: TargetPixelFormat) -> u32 {
     match format {
         TargetPixelFormat::InternalRgba => rgba,
         TargetPixelFormat::Rgbx => {
-            // RGBA → RGBX: just clear alpha byte and shift
-            // Internal: R[31:24] G[23:16] B[15:8] A[7:0]
-            // RGBX:     R[7:0] G[15:8] B[23:16] X[31:24]
             let r = (rgba >> 24) & 0xFF;
             let g = (rgba >> 16) & 0xFF;
             let b = (rgba >> 8) & 0xFF;
             r | (g << 8) | (b << 16)
         }
         TargetPixelFormat::Bgrx => {
-            // Internal: R[31:24] G[23:16] B[15:8] A[7:0]
-            // BGRX:     B[7:0] G[15:8] R[23:16] X[31:24]
             let r = (rgba >> 24) & 0xFF;
             let g = (rgba >> 16) & 0xFF;
             let b = (rgba >> 8) & 0xFF;

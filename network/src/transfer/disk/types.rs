@@ -2,7 +2,6 @@
 //!
 //! All types are allocation-free and use fixed-size arrays.
 
-/// Sector size in bytes (standard 512-byte sectors)
 pub const SECTOR_SIZE: usize = 512;
 
 /// Maximum number of chunk partitions for an ISO
@@ -11,7 +10,6 @@ pub const MAX_CHUNK_PARTITIONS: usize = 16;
 /// Maximum ISO filename length
 pub const MAX_ISO_NAME_LEN: usize = 64;
 
-/// FAT32 maximum file size (~4GB)
 pub const FAT32_MAX_FILE_SIZE: u64 = 0xFFFF_FFFF;
 
 /// Default chunk size (slightly under 4GB for FAT32 compatibility)
@@ -67,7 +65,6 @@ pub type DiskResult<T> = Result<T, DiskError>;
 
 /// GPT partition type GUIDs
 pub mod guid {
-    /// EFI System Partition
     pub const EFI_SYSTEM: [u8; 16] = [
         0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9,
         0x3B,
@@ -125,7 +122,6 @@ impl PartitionInfo {
         }
     }
 
-    /// Set partition name
     pub fn set_name(&mut self, name: &str) {
         let bytes = name.as_bytes();
         let len = bytes.len().min(35);
@@ -133,12 +129,10 @@ impl PartitionInfo {
         self.name[len] = 0;
     }
 
-    /// Get partition size in sectors
     pub fn size_sectors(&self) -> u64 {
         self.end_lba.saturating_sub(self.start_lba) + 1
     }
 
-    /// Get partition size in bytes
     pub fn size_bytes(&self) -> u64 {
         self.size_sectors() * SECTOR_SIZE as u64
     }
@@ -224,7 +218,6 @@ impl ChunkSet {
         }
     }
 
-    /// Add a chunk partition
     pub fn add(&mut self, chunk: ChunkPartition) -> DiskResult<()> {
         if self.count >= MAX_CHUNK_PARTITIONS {
             return Err(DiskError::WriteOverflow);
@@ -234,7 +227,6 @@ impl ChunkSet {
         Ok(())
     }
 
-    /// Get chunk by index
     pub fn get(&self, index: usize) -> Option<&ChunkPartition> {
         if index < self.count {
             Some(&self.chunks[index])

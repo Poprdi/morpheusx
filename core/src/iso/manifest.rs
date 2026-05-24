@@ -37,13 +37,10 @@ use super::error::IsoError;
 /// Magic number for manifest files: "MXISO\x01\x00\x00"
 pub const MANIFEST_MAGIC: [u8; 8] = [b'M', b'X', b'I', b'S', b'O', 0x01, 0x00, 0x00];
 
-/// Manifest header size (fixed portion)
 pub const MANIFEST_HEADER_SIZE: usize = 128;
 
-/// Chunk entry size in manifest
 pub const CHUNK_ENTRY_SIZE: usize = 48;
 
-/// Maximum manifest size (header + 16 chunks)
 pub const MAX_MANIFEST_SIZE: usize = MANIFEST_HEADER_SIZE + (MAX_CHUNKS * CHUNK_ENTRY_SIZE);
 
 /// Maximum filename length in manifest
@@ -51,7 +48,6 @@ pub const MAX_ISO_NAME_LEN: usize = 64;
 
 /// Manifest flags
 pub mod flags {
-    /// ISO download is complete
     pub const COMPLETE: u8 = 0x01;
     /// SHA256 has been verified
     pub const VERIFIED: u8 = 0x02;
@@ -105,7 +101,6 @@ impl IsoManifest {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
     }
 
-    /// Set the SHA256 hash
     pub fn set_sha256(&mut self, hash: &[u8; 32]) {
         self.sha256.copy_from_slice(hash);
     }
@@ -115,7 +110,6 @@ impl IsoManifest {
         self.flags & flags::COMPLETE != 0
     }
 
-    /// Mark manifest as complete
     pub fn mark_complete(&mut self) {
         self.flags |= flags::COMPLETE;
     }
@@ -125,12 +119,10 @@ impl IsoManifest {
         self.flags & flags::VERIFIED != 0
     }
 
-    /// Mark SHA256 as verified
     pub fn mark_verified(&mut self) {
         self.flags |= flags::VERIFIED;
     }
 
-    /// Add a chunk partition to the manifest
     pub fn add_chunk(
         &mut self,
         partition_uuid: [u8; 16],

@@ -19,9 +19,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 
-// ═══════════════════════════════════════════════════════════════════════
-// Helix instance — one per mounted HelixFS volume
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A mounted HelixFS instance.
 pub struct HelixInstance {
@@ -57,9 +54,6 @@ impl HelixInstance {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Mount table
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Entry in the mount table.
 pub struct MountEntry {
@@ -153,9 +147,6 @@ impl MountTable {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// FD table (per-process)
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Per-process file descriptor table.
 #[derive(Clone, Copy)]
@@ -214,7 +205,6 @@ impl FdTable {
         Ok(desc)
     }
 
-    /// Close a file descriptor.
     pub fn close(&mut self, fd: usize) -> Result<(), HelixError> {
         if fd >= MAX_FDS {
             return Err(HelixError::InvalidFd);
@@ -224,9 +214,6 @@ impl FdTable {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// High-level VFS operations (called by syscall handlers)
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Open a file or directory.
 ///
@@ -469,19 +456,16 @@ pub fn vfs_seek(
     Ok(new_offset)
 }
 
-/// Close a file descriptor.
 pub fn vfs_close(fd_table: &mut FdTable, fd: usize) -> Result<(), HelixError> {
     fd_table.close(fd)
 }
 
-/// Stat a path.
 pub fn vfs_stat(mount_table: &MountTable, path: &str) -> Result<FileStat, HelixError> {
     let (_mount_idx, entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     ops::read::stat_file(&entry.fs.index, path)
 }
 
-/// Read directory contents.
 pub fn vfs_readdir(mount_table: &MountTable, path: &str) -> Result<Vec<DirEntry>, HelixError> {
     let (_mount_idx, entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
@@ -530,7 +514,6 @@ pub fn vfs_unlink(
     Ok(())
 }
 
-/// Rename a file or directory.
 pub fn vfs_rename(
     mount_table: &mut MountTable,
     old_path: &str,

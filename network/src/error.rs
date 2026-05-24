@@ -1,4 +1,4 @@
-//! Network error types
+//! Network error types.
 
 extern crate alloc;
 
@@ -21,29 +21,17 @@ pub enum NetworkError {
     OutOfMemory,
     Cancelled,
     TlsError,
-    /// TLS/HTTPS is not supported - use HTTP URLs
     TlsNotSupported,
-    /// Device-level error with description.
     DeviceError(alloc::string::String),
-    /// Buffer too small for operation.
     BufferTooSmall,
-    /// Response exceeded size limit.
     ResponseTooLarge,
-    /// Too many redirects.
     TooManyRedirects,
-    /// Send operation failed.
     SendFailed,
-    /// Receive operation failed.
     ReceiveFailed,
-    /// Receive error from device.
     ReceiveError,
-    /// Unexpected end of stream.
     UnexpectedEof,
-    /// Device not ready.
     DeviceNotReady,
-    /// All buffers are in use.
     BufferExhausted,
-    /// Packet too large to transmit.
     PacketTooLarge,
     Unknown,
 }

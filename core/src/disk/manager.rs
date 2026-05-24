@@ -38,7 +38,6 @@ impl DiskManager {
         }
     }
 
-    /// Add a disk to the manager
     pub fn add_disk(&mut self, info: DiskInfo) -> Result<(), ()> {
         if self.count >= 8 {
             return Err(());
@@ -49,7 +48,6 @@ impl DiskManager {
         Ok(())
     }
 
-    /// Clear all disks
     pub fn clear(&mut self) {
         self.disks = [None, None, None, None, None, None, None, None];
         self.count = 0;

@@ -1,8 +1,4 @@
-//! Build script for morpheus-bootloader.
-//!
-//! Assembles bootloader-local ASM using NASM.
-//! Pattern mirrors hwinit/build.rs exactly:
-//!   NASM → .o → ar crs libbootloader_asm.a → rustc-link-lib=static
+//! NASM → .o → ar crs libbootloader_asm.a. Mirrors hwinit/build.rs.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -21,7 +17,6 @@ fn main() {
         return;
     }
 
-    // Microsoft x64 ABI — same as hwinit
     let obj_format = "win64";
     println!(
         "cargo:warning=Building keyboard ASM for: {} ({})",
@@ -42,7 +37,6 @@ fn main() {
         return;
     }
 
-    // Pack into libbootloader_asm.a
     let lib = out_dir.join("libbootloader_asm.a");
     let mut args: Vec<String> = vec!["crs".into(), lib.to_str().unwrap().into()];
     args.extend(objects.iter().map(|p| p.to_str().unwrap().into()));

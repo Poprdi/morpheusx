@@ -23,9 +23,6 @@ use crate::driver::traits::{NetworkDriver, RxError, TxError};
 use crate::driver::virtio::{VirtioInitError, VirtioNetDriver};
 use crate::types::MacAddress;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// UNIFIED DRIVER ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Errors during unified driver initialization.
 #[derive(Debug, Clone, Copy)]
@@ -54,9 +51,6 @@ impl From<E1000eError> for UnifiedDriverError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// UNIFIED NETWORK DRIVER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Unified network driver that wraps all supported NIC drivers.
 ///
@@ -79,9 +73,6 @@ impl UnifiedNetworkDriver {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NETWORK DRIVER TRAIT IMPLEMENTATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 impl NetworkDriver for UnifiedNetworkDriver {
     fn mac_address(&self) -> MacAddress {

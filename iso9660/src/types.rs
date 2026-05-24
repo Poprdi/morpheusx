@@ -1,22 +1,19 @@
-//! Common types and constants for ISO9660
+//! ISO 9660 types and constants.
 
-// Vec is imported but not used in current stubs
 #[allow(unused_imports)]
 use alloc::vec::Vec;
 
-/// ISO9660 sector size (always 2048 bytes)
+/// Logical sector size. Fixed by spec.
 pub const SECTOR_SIZE: usize = 2048;
 
-/// Volume descriptor set starts at sector 16
+/// Volume descriptor set begins at sector 16 (ISO 9660 §6.2.1).
 pub const VOLUME_DESCRIPTOR_START: u64 = 16;
 
-/// Maximum path length
 pub const MAX_PATH_LENGTH: usize = 255;
 
-/// Maximum directory depth
 pub const MAX_DIRECTORY_DEPTH: usize = 8;
 
-/// Volume descriptor type codes
+/// Volume descriptor type code (ISO 9660 §8.1.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VolumeDescriptorType {
@@ -24,140 +21,116 @@ pub enum VolumeDescriptorType {
     BootRecord = 0,
     /// Primary Volume Descriptor
     Primary = 1,
-    /// Supplementary Volume Descriptor (Joliet)
+    /// Supplementary (Joliet)
     Supplementary = 2,
     /// Volume Partition Descriptor
     Partition = 3,
-    /// Volume Descriptor Set Terminator
+    /// Set Terminator
     Terminator = 255,
 }
 
-/// Parsed volume information
+/// Parsed volume metadata.
 #[derive(Debug, Clone)]
 pub struct VolumeInfo {
-    /// Volume identifier (32 chars)
+    /// d-characters, space-padded
     pub volume_id: [u8; 32],
-
-    /// Root directory extent location (LBA)
+    /// Root directory extent LBA
     pub root_extent_lba: u32,
-
-    /// Root directory extent length (bytes)
+    /// Root directory extent length in bytes
     pub root_extent_len: u32,
-
-    /// Logical block size (usually 2048)
+    /// Logical block size; almost always 2048
     pub logical_block_size: u16,
-
-    /// Volume space size (total sectors)
+    /// Total sectors in volume
     pub volume_space_size: u32,
-
-    /// El Torito boot catalog LBA (if present)
+    /// El Torito boot catalog LBA, if any
     pub boot_catalog_lba: Option<u32>,
-
-    /// Whether Joliet extensions are present
+    /// Joliet SVD present
     pub has_joliet: bool,
-
-    /// Whether Rock Ridge extensions are present
+    /// Rock Ridge SUSP/RRIP detected
     pub has_rock_ridge: bool,
 }
 
-/// File entry metadata
+/// Directory entry metadata.
 #[derive(Debug, Clone)]
 pub struct FileEntry {
-    /// File identifier (name as UTF-8)
+    /// Decoded name (UTF-8)
     pub name: alloc::string::String,
-
-    /// File size in bytes
+    /// Size in bytes
     pub size: u64,
-
-    /// Extent location (LBA)
+    /// Extent LBA
     pub extent_lba: u32,
-
-    /// Data length (bytes)
+    /// Data length in bytes
     pub data_length: u32,
-
-    /// File flags
+    /// Directory record flag bits
     pub flags: FileFlags,
-
-    /// File unit size (interleaved files)
+    /// Interleave file unit size (0 = not interleaved)
     pub file_unit_size: u8,
-
     /// Interleave gap size
     pub interleave_gap: u8,
 }
 
-/// File flags from directory record
+/// Directory record flag bits (ISO 9660 §9.1.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileFlags {
-    /// Hidden file
+    /// Hidden from normal listings.
     pub hidden: bool,
-
-    /// Directory (not a file)
+    /// Entry describes a directory.
     pub directory: bool,
-
-    /// Associated file
+    /// Associated file (xattr-like).
     pub associated: bool,
-
-    /// Extended attribute record format
+    /// Record format defined in EAR.
     pub extended_format: bool,
-
-    /// Owner/group permissions in extended attributes
+    /// Permissions defined in EAR.
     pub extended_permissions: bool,
-
-    /// Not final directory record for this file
+    /// Multi-extent: more records follow for this file.
     pub not_final: bool,
 }
 
-/// Boot image information (El Torito)
+/// El Torito boot image descriptor.
 #[derive(Debug, Clone)]
 pub struct BootImage {
-    /// Bootable flag
+    /// Bootable flag from the boot entry.
     pub bootable: bool,
-
-    /// Boot media type
+    /// Boot media emulation type.
     pub media_type: BootMediaType,
-
-    /// Load segment (x86)
+    /// x86 real-mode load segment.
     pub load_segment: u16,
-
-    /// System type
+    /// System type byte copied from the partition table.
     pub system_type: u8,
-
-    /// Sector count
+    /// Number of 512-byte virtual sectors loaded.
     pub sector_count: u16,
-
-    /// Virtual disk LBA
+    /// Image LBA on the disc.
     pub load_rba: u32,
-
-    /// Platform ID
+    /// Platform ID from the section header.
     pub platform: BootPlatform,
 }
 
-/// Boot media type
+/// El Torito boot media type (§2.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BootMediaType {
-    /// No emulation
+    /// No emulation; raw load.
     NoEmulation = 0,
-    /// 1.2MB floppy
+    /// 1.2 MB floppy emulation.
     Floppy12M = 1,
-    /// 1.44MB floppy
+    /// 1.44 MB floppy emulation.
     Floppy144M = 2,
-    /// 2.88MB floppy
+    /// 2.88 MB floppy emulation.
     Floppy288M = 3,
-    /// Hard disk
+    /// Hard disk emulation.
     HardDisk = 4,
 }
 
-/// Boot platform ID
+/// El Torito platform ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BootPlatform {
-    /// x86 PC
+    /// 80x86.
     X86 = 0,
-    /// PowerPC
+    /// PowerPC.
     PowerPC = 1,
-    /// Mac
+    /// Mac.
     Mac = 2,
-    /// EFI
+    /// UEFI (0xEF per spec).
     Efi = 0xEF,
 }

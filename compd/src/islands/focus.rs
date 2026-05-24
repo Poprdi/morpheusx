@@ -9,7 +9,7 @@ pub fn process_msgs(state: &mut CompState) {
             }
             InputMsg::WindowClosed { idx, .. } => {
                 if state.focused == Some(idx as usize) {
-                    // refocus next z1 window. desktop (z0) is not focusable.
+                    // Refocus next z1 window (z0 desktop is not focusable).
                     state.focused = state
                         .windows
                         .iter()
@@ -23,7 +23,7 @@ pub fn process_msgs(state: &mut CompState) {
 }
 
 fn cycle_focus(state: &mut CompState) {
-    // round-robin through active z_layer 1 windows. desktop (z0) is not focusable.
+    // Round-robin through z1 windows; skip z0 desktop.
     let start = state.focused.map(|f| f + 1).unwrap_or(0);
     for offset in 0..MAX_WINDOWS {
         let idx = (start + offset) % MAX_WINDOWS;

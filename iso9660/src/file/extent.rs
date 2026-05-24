@@ -1,29 +1,25 @@
-//! File extent management
-//!
-//! Extents represent contiguous data regions on disk.
+//! Contiguous on-disc extent.
 
-/// File extent (contiguous data region)
+/// Contiguous region: starting LBA and byte length.
 #[derive(Debug, Clone, Copy)]
 pub struct Extent {
-    /// Starting LBA
+    /// Start LBA.
     pub lba: u32,
-
-    /// Length in bytes
+    /// Length in bytes.
     pub length: u32,
 }
 
 impl Extent {
-    /// Create new extent
+    /// New extent at `lba` with `length` bytes.
     pub fn new(lba: u32, length: u32) -> Self {
         Self { lba, length }
     }
 
-    /// Number of sectors (2048 bytes each)
     pub fn sector_count(&self) -> u32 {
         self.length.div_ceil(2048)
     }
 
-    /// End LBA (exclusive)
+    /// One past the last sector.
     pub fn end_lba(&self) -> u32 {
         self.lba + self.sector_count()
     }

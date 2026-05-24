@@ -2,9 +2,6 @@
 //!
 //! Rust orchestration layer for PHY operations.
 //! All hardware access is via ASM bindings.
-//!
-//! # Reference
-//! Intel 82579 Datasheet, Section 8 (PHY)
 
 use crate::asm::drivers::intel::{
     asm_intel_link_status, asm_intel_phy_read, asm_intel_phy_write, asm_intel_wait_link,
@@ -13,9 +10,6 @@ use crate::asm::drivers::intel::{
 
 use super::regs;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// LINK STATUS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Link speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +25,6 @@ pub enum LinkSpeed {
 }
 
 impl LinkSpeed {
-    /// Get speed in Mbps.
     pub fn mbps(&self) -> u32 {
         match self {
             LinkSpeed::Speed10 => 10,
@@ -80,9 +73,6 @@ impl From<LinkStatusResult> for LinkStatus {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PHY MANAGER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// PHY manager for an e1000e device.
 pub struct PhyManager {
@@ -116,26 +106,16 @@ impl PhyManager {
         self.cached_status
     }
 
-    /// Check if link is up.
     #[inline]
     pub fn is_link_up(&mut self) -> bool {
         self.link_status().link_up
     }
 
-    /// Get cached link status (no hardware access).
     #[inline]
     pub fn cached_link_status(&self) -> LinkStatus {
         self.cached_status
     }
 
-    /// Wait for link to come up.
-    ///
-    /// # Arguments
-    /// - `timeout_us`: Timeout in microseconds
-    ///
-    /// # Returns
-    /// - `Ok(LinkStatus)`: Link came up
-    /// - `Err(())`: Timeout
     pub fn wait_for_link(&mut self, timeout_us: u64) -> Result<LinkStatus, ()> {
         let result = unsafe { asm_intel_wait_link(self.mmio_base, timeout_us, self.tsc_freq) };
 
@@ -147,14 +127,6 @@ impl PhyManager {
         }
     }
 
-    /// Read a PHY register.
-    ///
-    /// # Arguments
-    /// - `reg`: PHY register address (0-31)
-    ///
-    /// # Returns
-    /// - `Some(value)`: Register value
-    /// - `None`: Error or timeout
     pub fn read_reg(&self, reg: u32) -> Option<u16> {
         let result = unsafe { asm_intel_phy_read(self.mmio_base, reg, self.tsc_freq) };
         if result != 0xFFFFFFFF {
@@ -164,15 +136,6 @@ impl PhyManager {
         }
     }
 
-    /// Write a PHY register.
-    ///
-    /// # Arguments
-    /// - `reg`: PHY register address (0-31)
-    /// - `value`: Value to write
-    ///
-    /// # Returns
-    /// - `Ok(())`: Success
-    /// - `Err(())`: Error or timeout
     pub fn write_reg(&self, reg: u32, value: u16) -> Result<(), ()> {
         let result =
             unsafe { asm_intel_phy_write(self.mmio_base, reg, value as u32, self.tsc_freq) };
@@ -183,11 +146,6 @@ impl PhyManager {
         }
     }
 
-    /// Read PHY identifier.
-    ///
-    /// # Returns
-    /// - `Some((id1, id2))`: PHY ID registers
-    /// - `None`: Error reading PHY
     pub fn read_phy_id(&self) -> Option<(u16, u16)> {
         let id1 = self.read_reg(regs::PHY_PHYID1)?;
         let id2 = self.read_reg(regs::PHY_PHYID2)?;
@@ -201,14 +159,12 @@ impl PhyManager {
         self.read_reg(regs::PHY_BMSR)
     }
 
-    /// Check if auto-negotiation is complete.
     pub fn is_autoneg_complete(&self) -> bool {
         self.read_bmsr()
             .map(|bmsr| bmsr & regs::BMSR_ANEGCOMPLETE != 0)
             .unwrap_or(false)
     }
 
-    /// Restart auto-negotiation.
     pub fn restart_autoneg(&self) -> Result<(), ()> {
         // Read current BMCR
         let bmcr = self.read_reg(regs::PHY_BMCR).ok_or(())?;

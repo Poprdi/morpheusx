@@ -1,32 +1,18 @@
 use super::fast;
-/// Pre-computed sin/cos lookup table.
-///
-/// Instead of calling libm sin/cos (which we don't have in no_std anyway),
-/// we build a 4096-entry table at init time using Bhaskara I's approximation
-/// (7th-century formula, max error 0.0016 radians — tighter than most games need).
-///
-/// Table is indexed by angle × 4096 / (2π), so 4096 entries = full revolution.
-/// This gives 0.088° angular resolution — far beyond what 1024×768 pixels can show.
 use alloc::boxed::Box;
 
+/// 4096-entry sin LUT seeded with Bhaskara I (max error ~0.16%). cos is read at +π/2 offset.
 const TABLE_SIZE: usize = 4096;
 const TABLE_MASK: usize = TABLE_SIZE - 1;
 const INV_TABLE: f32 = TABLE_SIZE as f32 / (2.0 * core::f32::consts::PI);
 const TABLE_TO_RAD: f32 = (2.0 * core::f32::consts::PI) / TABLE_SIZE as f32;
-#[allow(clippy::excessive_precision)] // for the polynomial coefficients
+#[allow(clippy::excessive_precision)]
 
 pub struct TrigTable {
     sin_table: Box<[f32; TABLE_SIZE]>,
 }
 
 impl TrigTable {
-    /// Build the table using Bhaskara I's rational approximation.
-    ///
-    /// For angle θ in [0, π]:
-    ///   sin(θ) ≈ 16θ(π - θ) / (5π² - 4θ(π - θ))
-    ///
-    /// Max error: 0.00163 (0.16%). For comparison, a 256-entry linear-interp
-    /// table (like Doom) has ~0.4% error.
     pub fn new() -> Self {
         let mut table = Box::new([0.0f32; TABLE_SIZE]);
         for i in 0..TABLE_SIZE {
@@ -48,7 +34,6 @@ impl TrigTable {
         cos
     }
 
-    /// sin and cos in one call (avoids redundant index math).
     #[inline]
     pub fn sin_cos(&self, radians: f32) -> (f32, f32) {
         let two_pi = 2.0 * core::f32::consts::PI;
@@ -83,8 +68,7 @@ impl TrigTable {
         (sin, cos)
     }
 
-    /// Atan2 approximation (useful for angle-based effects, not in hot render path).
-    /// Max error ~0.28° — uses the 7th-order polynomial from NVIDIA's GPU gems.
+    /// 7th-order polynomial (GPU Gems), max error ~0.28°.
     pub fn atan2(y: f32, x: f32) -> f32 {
         if x == 0.0 && y == 0.0 {
             return 0.0;
@@ -93,7 +77,6 @@ impl TrigTable {
         let ay = if y < 0.0 { -y } else { y };
         let (mn, mx) = if ax < ay { (ax, ay) } else { (ay, ax) };
         let a = mn / mx;
-        // Polynomial: max error 0.0049 rad = 0.28°
         let s = a * a;
         let r = ((-0.0464964749 * s + 0.15931422) * s - 0.327622764) * s * a + a;
         let r = if ay > ax {
@@ -114,15 +97,11 @@ impl TrigTable {
     }
 }
 
-/// Bhaskara I's sine approximation (7th century CE, India).
-///
-/// For θ in [0, π]: sin(θ) ≈ 16θ(π-θ) / (5π² - 4θ(π-θ))
-/// We extend to full [0, 2π] via symmetry.
+/// sin(θ) ≈ 16θ(π-θ) / (5π² - 4θ(π-θ)) on [0,π]; extended by symmetry.
 fn bhaskara_sin(theta: f32) -> f32 {
     let pi = core::f32::consts::PI;
     let two_pi = 2.0 * pi;
 
-    // Normalize to [0, 2π)
     let mut t = theta % two_pi;
     if t < 0.0 {
         t += two_pi;

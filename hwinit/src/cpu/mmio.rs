@@ -4,9 +4,6 @@
 //! - Address must be valid MMIO address
 //! - Address must be properly aligned
 //! - Address must be mapped with appropriate attributes
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §2.2.1
 
 #[cfg(target_arch = "x86_64")]
 extern "win64" {

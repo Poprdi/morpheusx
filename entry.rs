@@ -1,32 +1,8 @@
-//! C runtime for MorpheusX user processes.
-//!
-//! Provides `_start` (the ELF entry point) and a minimal `#[panic_handler]`.
-//! User binaries define `fn main() -> i32` (or `fn main()`) which this
-//! runtime calls after zeroing BSS.
-//!
-//! # Usage
-//!
-//! In your binary crate:
-//!
-//! ```ignore
-//! #![no_std]
-//! #![no_main]
-//!
-//! use libmorpheus::entry;
-//!
-//! entry!(main);
-//!
-//! fn main() -> i32 {
-//!     libmorpheus::io::println("Hello from userspace!");
-//!     0
-//! }
-//! ```
+//! Userspace C runtime: `_start` and panic handler. User defines `fn main() -> i32`.
 
 use crate::process;
 
-/// The entry-point macro.  Generates `_start` that calls your `main`.
-///
-/// `main` must be `fn() -> i32` or `fn()`.
+/// Emit `_start` that calls `$main` and exits with its return code.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
@@ -38,11 +14,9 @@ macro_rules! entry {
     };
 }
 
-/// Minimal panic handler — prints the message to serial and exits.
 #[cfg(not(test))]
 #[panic_handler]
 fn _panic(_info: &core::panic::PanicInfo) -> ! {
-    // Write a terse panic message to stderr (fd 2) via SYS_WRITE.
     let msg = "User Process shit the bed!\n";
     let _ = unsafe {
         crate::raw::syscall3(

@@ -58,9 +58,6 @@ fn dbg_hex8(v: u8) {
     crate::serial_byte(HEX[(v & 0xF) as usize]);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// VirtIO vendor ID
 const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
@@ -81,9 +78,6 @@ const PCI_CLASS_SUBCLASS_SDHCI: u32 = 0x0805;
 /// PCI subclass/prog-if for USB xHCI: 0x03/0x30.
 const PCI_CLASS_USB_XHCI: u32 = 0x0330;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROBE ERRORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Probe and initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,9 +122,6 @@ impl From<UsbMsdInitError> for BlockProbeError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DETECTED DEVICE INFO
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Information about a detected block device.
 #[derive(Debug, Clone, Copy)]
@@ -190,9 +181,6 @@ pub enum BlockProbeResult {
     UsbMsd(UsbMsdDriver),
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PCI SCANNING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Maximum block devices we can discover in a single scan.
 const MAX_BLOCK_DEVICES: usize = 32;
@@ -438,7 +426,6 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
     (result, count)
 }
 
-/// Scan for AHCI SATA controller.
 pub fn find_ahci_controller() -> Option<AhciInfo> {
     for bus in 0..=255u8 {
         for device in 0..32u8 {
@@ -490,7 +477,6 @@ pub fn find_ahci_controller() -> Option<AhciInfo> {
     None
 }
 
-/// Scan for SDHCI controller.
 pub fn find_sdhci_controller() -> Option<SdhciInfo> {
     for bus in 0..=255u8 {
         for device in 0..32u8 {
@@ -639,9 +625,6 @@ fn find_virtio_blk() -> Option<(PciAddr, u64)> {
     None
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DRIVER CREATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Block DMA region configuration.
 ///
@@ -1210,9 +1193,6 @@ pub unsafe fn create_unified_from_detected_ahci_port(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DEVICE TYPE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Detected block device type for handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

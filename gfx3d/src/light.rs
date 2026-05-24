@@ -2,29 +2,20 @@ use crate::math::fast::saturate;
 use crate::math::vec::Vec3;
 use alloc::vec::Vec;
 
-/// Quake-style lighting: per-vertex Gouraud with Phong-like specular approximation.
-///
-/// The key optimization: all lighting is computed PER VERTEX in world/view space,
-/// then interpolated across triangles during rasterization. This means the lighting
-/// cost scales with vertex count (50K), not pixel count (786K at 1024×768).
-///
-/// For static geometry (walls, floors), lighting is baked into lightmaps at map
-/// compile time and combined via the surface cache.
+// Per-vertex Gouraud + Blinn-Phong specular. Cost scales with vertex count.
 
-/// A directional light (sun, moon).
 #[derive(Debug, Clone, Copy)]
 pub struct DirLight {
-    pub direction: Vec3, // normalized, pointing TOWARD the light source
-    pub color: [f32; 3], // RGB intensity [0, 1+] (can be >1 for HDR-ish overbrightening)
+    pub direction: Vec3, // normalized, points TOWARD the source
+    pub color: [f32; 3], // may exceed 1.0 for overbright
 }
 
-/// A point light (torch, explosion flash, muzzle flash).
 #[derive(Debug, Clone, Copy)]
 pub struct PointLight {
     pub position: Vec3,
     pub color: [f32; 3],
-    pub radius: f32,     // attenuation distance (light = 0 beyond radius)
-    pub inv_radius: f32, // pre-computed 1/radius for fast attenuation
+    pub radius: f32,
+    pub inv_radius: f32,
 }
 
 impl PointLight {
@@ -38,20 +29,13 @@ impl PointLight {
     }
 }
 
-/// Ambient + directional + point light accumulation.
-///
-/// All-at-once per-vertex: avoids per-light function call overhead.
-/// This processes up to MAX_LIGHTS in a single pass per vertex.
 pub struct LightEnv {
     pub ambient: [f32; 3],
     pub dir_lights: Vec<DirLight>,
     pub point_lights: Vec<PointLight>,
 }
 
-/// Maximum lights evaluated per vertex (hard limit for performance).
-///
-/// Beyond 4 point lights: sort by distance, only evaluate closest 4.
-/// Quake 2 used exactly 4; Quake 3 used 1 directional + 4 point.
+/// Per-vertex point-light cap; remaining lights are dropped after distance sort.
 pub const MAX_POINT_LIGHTS: usize = 4;
 
 impl Default for LightEnv {
@@ -69,28 +53,20 @@ impl LightEnv {
         }
     }
 
-    /// Compute per-vertex lighting color.
-    ///
-    /// Uses N·L diffuse + half-angle specular (Blinn-Phong approximation).
-    /// The Blinn-Phong half-vector trick: instead of computing reflection
-    /// vector R = 2(N·L)N - L (expensive), compute H = normalize(L + V),
-    /// then specular = (N·H)^power. Same visual result, one fewer normalize.
-    ///
-    /// Returns RGB [0, 1+] (unclamped — gets clamped when converting to u8).
+    /// Blinn-Phong; returns unclamped RGB.
     #[inline]
     pub fn evaluate(
         &self,
         world_pos: Vec3,
         normal: Vec3,
-        view_dir: Vec3,      // normalized direction from vertex to camera
-        specular_power: f32, // 0 = no specular, 16-64 for glossy surfaces
+        view_dir: Vec3,
+        specular_power: f32, // 0 disables specular; 16-64 for glossy
         vertex_color: [f32; 3],
     ) -> [f32; 3] {
         let mut r = self.ambient[0];
         let mut g = self.ambient[1];
         let mut b = self.ambient[2];
 
-        // Directional lights
         for dl in &self.dir_lights {
             let n_dot_l = normal.dot(dl.direction);
             if n_dot_l <= 0.0 {
@@ -112,7 +88,7 @@ impl LightEnv {
             }
         }
 
-        // Point lights (closest MAX_POINT_LIGHTS only)
+        // Insertion-sort closest MAX_POINT_LIGHTS by distance squared.
         let mut best_idx = [usize::MAX; MAX_POINT_LIGHTS];
         let mut best_dist_sq = [f32::INFINITY; MAX_POINT_LIGHTS];
 
@@ -165,8 +141,7 @@ impl LightEnv {
                 continue;
             }
 
-            // Smooth quadratic attenuation: 1 - (dist/radius)²
-            // Carmack used this in Doom 3 — looks better than 1/d² (no harsh cutoff).
+            // Smooth quadratic attenuation: 1 - (dist/radius)². No harsh cutoff vs. 1/d².
             let ratio = dist * pl.inv_radius;
             let atten = saturate(1.0 - ratio * ratio);
             let diff = saturate(n_dot_l) * atten;
@@ -185,7 +160,7 @@ impl LightEnv {
             }
         }
 
-        // Modulate by vertex color (baked AO, tinting)
+        // Vertex color modulates final (baked AO, tinting).
         [
             r * vertex_color[0],
             g * vertex_color[1],
@@ -194,13 +169,7 @@ impl LightEnv {
     }
 }
 
-/// Fast integer power approximation for specular highlights.
-///
-/// For N·H raised to a power (Phong exponent), we use the classic
-/// squaring trick: pow(x, n) via repeated squaring in log2(n) steps.
-///
-/// For typical specular powers (8, 16, 32, 64), this is 3-6 multiplies
-/// vs. the Taylor series (10+ multiplies) or a log-exp pair.
+/// 2^(exp * log2(base)) — avoids libm pow.
 fn pow_approx(base: f32, exp: f32) -> f32 {
     if base <= 0.0 {
         return 0.0;
@@ -209,16 +178,10 @@ fn pow_approx(base: f32, exp: f32) -> f32 {
         return 1.0;
     }
 
-    // Use 2^(exp * log2(base)) via fast_log2 and fast_exp2
     crate::math::fast::fast_exp2(exp * crate::math::fast::fast_log2(base))
 }
 
-/// Fog calculation.
-///
-/// Linear fog: factor = (end - z) / (end - start)
-/// Exponential fog: factor = 2^(-density × z)
-///
-/// Returns fog factor in [0, 1] where 0 = fully fogged, 1 = no fog.
+/// Returned factor: 0 = full fog, 1 = no fog.
 #[derive(Debug, Clone, Copy)]
 pub enum FogMode {
     None,

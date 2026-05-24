@@ -30,9 +30,6 @@ use crate::error::{NetworkError, Result};
 pub mod pci;
 pub mod registers;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NETWORK DEVICE TRAIT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Unified network device interface MorpheusX drivers must implement.
 pub trait NetworkDevice {
@@ -55,29 +52,12 @@ pub trait NetworkDevice {
     fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>>;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// UNIFIED NETWORK DEVICE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Unified network device that works with both VirtIO and Intel e1000e.
 ///
 /// This is the main entry point for network operations. It automatically
 /// detects whether it's running in QEMU (VirtIO) or on real hardware (Intel)
 /// and uses the appropriate driver transparently.
-///
-/// # Example
-///
-/// ```ignore
-/// // Probe and create - works anywhere
-/// let mut device = UnifiedNetDevice::probe(&dma, tsc_freq)?;
-///
-/// // All operations are the same regardless of underlying hardware
-/// let mac = device.mac_address();
-/// device.transmit(&frame)?;
-/// if let Some(len) = device.receive(&mut buffer)? {
-///     // process received frame
-/// }
-/// ```
 pub enum UnifiedNetDevice {
     /// VirtIO-net driver (QEMU, cloud VMs)
     VirtIO(VirtioNetDriver),
@@ -114,14 +94,6 @@ impl UnifiedNetDevice {
     /// This is the main entry point. It scans the PCI bus for supported NICs
     /// (Intel e1000e first, then VirtIO) and creates the appropriate driver.
     ///
-    /// # Arguments
-    /// - `dma`: Pre-allocated DMA region (2MB minimum)
-    /// - `tsc_freq`: Calibrated TSC frequency (ticks/second)
-    ///
-    /// # Returns
-    /// - `Ok(UnifiedNetDevice)` - Ready to use network device
-    /// - `Err(UnifiedDeviceError::NoDevice)` - No supported NIC found
-    ///
     /// # Safety
     /// - DMA region must be properly allocated with correct bus addresses
     /// - TSC frequency must be calibrated at boot
@@ -149,7 +121,6 @@ impl UnifiedNetDevice {
         }
     }
 
-    /// Check if link is up.
     pub fn link_up(&self) -> bool {
         match self {
             UnifiedNetDevice::VirtIO(d) => d.link_up(),
@@ -229,9 +200,6 @@ impl NetworkDevice for UnifiedNetDevice {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// UNIFIED BLOCK DEVICE
-// ═══════════════════════════════════════════════════════════════════════════
 
 use crate::driver::ahci::{AhciDriver, AhciInitError};
 use crate::driver::block_traits::{BlockCompletion, BlockDeviceInfo, BlockDriver, BlockError};
@@ -244,23 +212,6 @@ use crate::driver::virtio_blk::{VirtioBlkDriver, VirtioBlkInitError};
 /// This provides automatic hardware detection and driver selection:
 /// - QEMU/VMs: Uses VirtIO-blk
 /// - Real hardware (ThinkPad T450s): Uses AHCI SATA driver
-///
-/// # Example
-///
-/// ```ignore
-/// // Probe and create - works anywhere
-/// let mut device = UnifiedBlockDevice::probe(&blk_dma, tsc_freq)?;
-///
-/// // Check what was detected
-/// println!("Using: {}", device.driver_type());  // "VirtIO-blk" or "AHCI SATA"
-///
-/// // All operations are the same regardless of underlying hardware
-/// let info = device.info();
-/// device.submit_read(sector, buffer_phys, count, request_id)?;
-/// if let Some(completion) = device.poll_completion() {
-///     // handle completion
-/// }
-/// ```
 pub enum UnifiedBlockDevice {
     /// VirtIO-blk driver (QEMU, cloud VMs)
     VirtIO(VirtioBlkDriver),
@@ -426,9 +377,6 @@ impl BlockDriver for UnifiedBlockDevice {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NULL DEVICE (for testing/early bring-up)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Placeholder NIC that does nothing. Useful for early bring-up.
 pub struct NullDevice;

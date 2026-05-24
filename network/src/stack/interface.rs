@@ -93,12 +93,10 @@ pub enum NetConfig {
 }
 
 impl NetConfig {
-    /// Create DHCP configuration.
     pub fn dhcp() -> Self {
         Self::Dhcp
     }
 
-    /// Create static configuration.
     pub fn static_ip(ip: Ipv4Addr, prefix_len: u8, gateway: Option<Ipv4Addr>) -> Self {
         Self::Static {
             ip,
@@ -108,7 +106,6 @@ impl NetConfig {
         }
     }
 
-    /// Create static configuration with DNS.
     pub fn static_with_dns(
         ip: Ipv4Addr,
         prefix_len: u8,
@@ -137,16 +134,12 @@ pub enum NetState {
     Error,
 }
 
-/// Maximum number of concurrent TCP sockets.
 pub const MAX_TCP_SOCKETS: usize = 4;
 
-/// TCP receive buffer size.
 pub const TCP_RX_BUFFER_SIZE: usize = 65535;
 
-/// TCP transmit buffer size.
 pub const TCP_TX_BUFFER_SIZE: usize = 65535;
 
-/// UDP packet metadata entry count.
 pub const UDP_PACKET_META_COUNT: usize = 8;
 
 /// UDP payload storage per direction.
@@ -178,11 +171,6 @@ pub struct NetInterface<D: NetworkDevice> {
 
 impl<D: NetworkDevice> NetInterface<D> {
     /// Create a new network interface.
-    ///
-    /// # Arguments
-    ///
-    /// * `device` - The network device to use
-    /// * `config` - IP configuration (DHCP or static)
     pub fn new(device: D, config: NetConfig) -> Self {
         super::set_debug_stage(10); // Stage 10: entered NetInterface::new
         super::debug_log(10, "NetInterface::new() entered");
@@ -278,7 +266,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         }
     }
 
-    /// Get current state.
     pub fn state(&self) -> NetState {
         self.state
     }
@@ -315,7 +302,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         })
     }
 
-    /// Restart DHCP discovery on an existing DHCP-enabled interface.
     pub fn restart_dhcp(&mut self) -> Result<()> {
         let Some(dhcp_handle) = self.dhcp_handle else {
             return Err(NetworkError::ProtocolNotAvailable);
@@ -393,7 +379,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         }
     }
 
-    /// Get the MAC address.
     pub fn mac_address(&self) -> [u8; 6] {
         self.device.inner.mac_address()
     }
@@ -473,7 +458,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         Ok(handle)
     }
 
-    /// Connect a TCP socket to a remote endpoint.
     pub fn tcp_connect(
         &mut self,
         handle: SocketHandle,
@@ -500,13 +484,11 @@ impl<D: NetworkDevice> NetInterface<D> {
         Ok(())
     }
 
-    /// Check if a TCP socket is connected.
     pub fn tcp_is_connected(&self, handle: SocketHandle) -> bool {
         let socket = self.sockets.get::<TcpSocket>(handle);
         socket.state() == TcpState::Established
     }
 
-    /// Check if a TCP socket can send data.
     pub fn tcp_can_send(&self, handle: SocketHandle) -> bool {
         let socket = self.sockets.get::<TcpSocket>(handle);
         socket.can_send()
@@ -518,7 +500,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         socket.can_recv()
     }
 
-    /// Send data on a TCP socket.
     pub fn tcp_send(&mut self, handle: SocketHandle, data: &[u8]) -> Result<usize> {
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         socket
@@ -534,7 +515,6 @@ impl<D: NetworkDevice> NetInterface<D> {
             .map_err(|_| NetworkError::ReceiveFailed)
     }
 
-    /// Close a TCP socket.
     pub fn tcp_close(&mut self, handle: SocketHandle) {
         let socket = self.sockets.get_mut::<TcpSocket>(handle);
         socket.close();
@@ -554,7 +534,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         socket.is_listening()
     }
 
-    /// Returns local port if bound.
     pub fn tcp_local_port(&self, handle: SocketHandle) -> Option<u16> {
         let socket = self.sockets.get::<TcpSocket>(handle);
         socket.local_endpoint().map(|ep| ep.port)
@@ -597,7 +576,6 @@ impl<D: NetworkDevice> NetInterface<D> {
         Ok(self.sockets.add(socket))
     }
 
-    /// Bind a UDP socket to local port.
     pub fn udp_bind(&mut self, handle: SocketHandle, port: u16) -> Result<()> {
         let socket = self.sockets.get_mut::<UdpSocket>(handle);
         socket
@@ -605,7 +583,6 @@ impl<D: NetworkDevice> NetInterface<D> {
             .map_err(|_| NetworkError::ConnectionFailed)
     }
 
-    /// Send a UDP datagram.
     pub fn udp_send_to(
         &mut self,
         handle: SocketHandle,
@@ -630,7 +607,6 @@ impl<D: NetworkDevice> NetInterface<D> {
             .map_err(|_| NetworkError::SendFailed)
     }
 
-    /// Receive a UDP datagram.
     pub fn udp_recv_from(
         &mut self,
         handle: SocketHandle,
@@ -651,12 +627,10 @@ impl<D: NetworkDevice> NetInterface<D> {
         }
     }
 
-    /// Remove a socket from the set.
     pub fn remove_socket(&mut self, handle: SocketHandle) {
         self.sockets.remove(handle);
     }
 
-    /// Get TCP socket state.
     pub fn tcp_state(&self, handle: SocketHandle) -> TcpState {
         self.sockets.get::<TcpSocket>(handle).state()
     }

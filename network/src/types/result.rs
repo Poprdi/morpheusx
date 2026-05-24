@@ -1,7 +1,4 @@
 //! ASM result and error code types.
-//!
-//! # Reference
-//! ARCHITECTURE_V3.md
 
 /// Result from ASM function calls.
 #[repr(u32)]
@@ -35,7 +32,6 @@ impl AsmResult {
         !self.is_ok()
     }
 
-    /// Convert from raw u32.
     pub fn from_u32(val: u32) -> Self {
         match val {
             0 => AsmResult::Ok,

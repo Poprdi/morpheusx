@@ -1,50 +1,39 @@
-//! Boot catalog entry types
-//!
-//! Initial/Default, Section Header, and Section entries.
+//! El Torito boot catalog entry layout.
 
 use crate::types::BootMediaType;
 
-/// Boot Catalog Entry (32 bytes)
+/// 32-byte catalog entry covering Initial/Default and Section formats.
 #[repr(C, packed)]
 pub struct BootEntry {
-    /// Boot indicator (0x88 = bootable, 0x00 = not bootable)
+    /// 0x88 = bootable, 0x00 = not.
     pub boot_indicator: u8,
-
-    /// Boot media type
+    /// Media type code; see `media_type()`.
     pub boot_media_type: u8,
-
-    /// Load segment (0 = default 0x7C0)
+    /// Real-mode load segment (0 = default 0x07C0).
     pub load_segment: u16,
-
-    /// System type (partition type from MBR)
+    /// MBR partition type byte.
     pub system_type: u8,
-
-    /// Unused
+    /// Unused; spec mandates zero.
     pub unused1: u8,
-
-    /// Sector count (virtual sectors, 512 bytes each)
+    /// Virtual sector count (512-byte units).
     pub sector_count: u16,
-
-    /// Load RBA (ISO sector, 2048 bytes)
+    /// Image start LBA on the disc (2048-byte sectors).
     pub load_rba: u32,
-
-    /// Unused (20 bytes)
+    /// Reserved tail.
     pub unused2: [u8; 20],
 }
 
 impl BootEntry {
-    /// Bootable indicator
     pub const BOOTABLE: u8 = 0x88;
 
-    /// Not bootable indicator
     pub const NOT_BOOTABLE: u8 = 0x00;
 
-    /// Is this entry bootable?
+    /// Whether the entry is flagged bootable.
     pub fn is_bootable(&self) -> bool {
         self.boot_indicator == Self::BOOTABLE
     }
 
-    /// Parse boot media type
+    /// Decoded media type; unknown values fall back to `NoEmulation`.
     pub fn media_type(&self) -> BootMediaType {
         match self.boot_media_type {
             0 => BootMediaType::NoEmulation,
@@ -56,7 +45,7 @@ impl BootEntry {
         }
     }
 
-    /// Get image size in bytes (sector_count * 512)
+    /// Image size in bytes: `sector_count * 512`.
     pub fn image_size(&self) -> u32 {
         self.sector_count as u32 * 512
     }

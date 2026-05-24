@@ -1,17 +1,8 @@
-//! 8x16 VGA font bitmap for text rendering.
-//!
-//! This is a standard VGA font covering ASCII 0x20-0x7E.
-//! Each glyph is 8 pixels wide, 16 pixels tall.
-//! Each row is one byte, MSB = leftmost pixel.
+//! 8x16 VGA font, ASCII 0x20-0x7E. One byte per row, MSB = leftmost pixel.
 
-/// Font width in pixels.
 pub const FONT_WIDTH: usize = 8;
-
-/// Font height in pixels.
 pub const FONT_HEIGHT: usize = 16;
 
-/// Get glyph data for a character.
-/// Returns 16 bytes (one per row), or None if character is unsupported.
 pub fn get_glyph(c: char) -> Option<&'static [u8; FONT_HEIGHT]> {
     let index = c as usize;
     if (0x20..=0x7E).contains(&index) {
@@ -21,13 +12,10 @@ pub fn get_glyph(c: char) -> Option<&'static [u8; FONT_HEIGHT]> {
     }
 }
 
-/// Get glyph data with fallback to space for unsupported characters.
 pub fn get_glyph_or_space(c: char) -> &'static [u8; FONT_HEIGHT] {
-    get_glyph(c).unwrap_or(&FONT_DATA[0]) // Space is at index 0
+    get_glyph(c).unwrap_or(&FONT_DATA[0])
 }
 
-/// Standard 8x16 VGA font data.
-/// Each glyph is 16 bytes (one per row), covering ASCII 0x20-0x7E.
 #[rustfmt::skip]
 pub static FONT_DATA: [[u8; FONT_HEIGHT]; 95] = [
     // 0x20 ' ' (space)

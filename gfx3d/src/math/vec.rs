@@ -1,4 +1,3 @@
-/// 2D vector (screen space, UV coordinates).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct Vec2 {
@@ -6,7 +5,6 @@ pub struct Vec2 {
     pub y: f32,
 }
 
-/// 3D vector (positions, normals, directions).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]
 pub struct Vec3 {
@@ -15,7 +13,7 @@ pub struct Vec3 {
     pub z: f32,
 }
 
-/// 4D homogeneous vector (clip space, transformed vertices).
+/// Homogeneous clip-space vector.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C, align(16))]
 pub struct Vec4 {
@@ -24,8 +22,6 @@ pub struct Vec4 {
     pub z: f32,
     pub w: f32,
 }
-
-// ── Vec2 ──
 
 impl Vec2 {
     pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
@@ -53,8 +49,6 @@ impl Vec2 {
         }
     }
 }
-
-// ── Vec3 ──
 
 impl Vec3 {
     pub const ZERO: Self = Self {
@@ -116,7 +110,6 @@ impl Vec3 {
         sq * super::fast::inv_sqrt(sq)
     }
 
-    /// Normalize using fast inverse square root (Quake III trick, 2 Newton iterations).
     #[inline]
     pub fn normalize(self) -> Self {
         let sq = self.length_sq();
@@ -136,13 +129,11 @@ impl Vec3 {
         }
     }
 
-    /// Reflect incident vector around normal.
     #[inline]
     pub fn reflect(self, normal: Self) -> Self {
         self - normal * (2.0 * self.dot(normal))
     }
 
-    /// Component-wise min.
     #[inline]
     pub fn min(self, rhs: Self) -> Self {
         Self {
@@ -152,7 +143,6 @@ impl Vec3 {
         }
     }
 
-    /// Component-wise max.
     #[inline]
     pub fn max(self, rhs: Self) -> Self {
         Self {
@@ -230,8 +220,6 @@ impl core::ops::AddAssign for Vec3 {
     }
 }
 
-// ── Vec4 ──
-
 impl Vec4 {
     pub const ZERO: Self = Self {
         x: 0.0,
@@ -250,7 +238,7 @@ impl Vec4 {
         self.x * rhs.x + self.y * rhs.y + self.z * rhs.z + self.w * rhs.w
     }
 
-    /// Perspective divide: project from clip space to NDC.
+    /// Clip → NDC.
     #[inline]
     pub fn perspective_div(self) -> Vec3 {
         if self.w == 0.0 {
@@ -342,7 +330,7 @@ mod tests {
         let v = Vec3::new(3.0, 0.0, 4.0);
         let n = v.normalize();
         let len = n.length_sq();
-        assert!((len - 1.0).abs() < 0.002); // fast_inv_sqrt within 0.2%
+        assert!((len - 1.0).abs() < 0.002);
     }
 
     #[test]

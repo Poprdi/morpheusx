@@ -2,38 +2,17 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-// ═══════════════════════════════════════════════════════════════════════
-// FsOp — filesystem operation descriptors
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Filesystem operation requested by a shell command.
-///
-/// The desktop event loop (which has VFS access) interprets these
-/// and pushes the result text back into the shell output.
-///
-/// HelixFS has NO file permissions — no rwx, no uid/gid.
-/// All paths are pre-resolved to absolute form by the command parser
-/// using the shell's current working directory.
+/// Paths are pre-resolved to absolute; HelixFS has no permissions.
 pub enum FsOp {
-    /// List directory contents. `long` shows type, size, version count.
     Ls { path: String, long: bool },
-    /// Change working directory. Executor must verify target is a directory.
     Cd { path: String },
-    /// Create a directory.
     Mkdir { path: String },
-    /// Create an empty file (no-op if already exists).
     Touch { path: String },
-    /// Read and display file contents (UTF-8 text; rejects binary).
     Cat { path: String },
-    /// Remove a file or empty directory.
     Rm { path: String },
-    /// Rename / move.
     Mv { src: String, dst: String },
-    /// Write text content to a file (creates or overwrites).
     Write { path: String, content: String },
-    /// Display HelixFS metadata (key, size, LSN, versions, flags).
     Stat { path: String },
-    /// Flush the log-structured journal to disk.
     Sync,
 }
 
@@ -86,7 +65,6 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
         }
         "list" | "windows" => CommandResult::ListWindows,
 
-        // ── Filesystem commands ─────────────────────────────────────
         "pwd" => CommandResult::Output(String::from(cwd)),
 
         "cd" => {
@@ -195,13 +173,6 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Path resolution
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Resolve a possibly-relative path against the current working directory.
-///
-/// Handles `.` (current), `..` (parent), and normalizes slashes.
 pub fn resolve_path(cwd: &str, input: &str) -> String {
     let raw = if input.starts_with('/') {
         String::from(input)
@@ -216,7 +187,6 @@ pub fn resolve_path(cwd: &str, input: &str) -> String {
     normalize_path(&raw)
 }
 
-/// Normalize an absolute path: collapse `.`, `..`, and extra slashes.
 fn normalize_path(path: &str) -> String {
     let mut components: Vec<&str> = Vec::new();
     for part in path.split('/') {
@@ -239,9 +209,7 @@ fn normalize_path(path: &str) -> String {
     result
 }
 
-/// Parse `ls` arguments. Returns `(long_format, path_argument)`.
-///
-/// Supports: `ls`, `ls -l`, `ls <path>`, `ls -l <path>`.
+/// Returns (long_format, path).
 fn parse_ls_args(arg: &str) -> (bool, &str) {
     if arg.is_empty() {
         return (false, "");

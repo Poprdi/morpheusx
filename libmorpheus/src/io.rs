@@ -1,11 +1,4 @@
-//! Console I/O — read from stdin, write to stdout.
-//!
-//! This module provides:
-//! - Raw functions: [`print`], [`println`], [`write_fd`], [`read_fd`], etc.
-//! - Traits: [`Read`], [`Write`], [`Seek`], [`BufRead`]
-//! - Buffered adapters: [`BufReader`], [`BufWriter`]
-//! - Typed handles: [`Stdin`], [`Stdout`], [`Stderr`]
-//! - Formatting macros: `print!`, `println!`, `eprint!`, `eprintln!`
+//! Console I/O: stdin/stdout, `Read`/`Write`/`Seek`/`BufRead`, `BufReader`/`BufWriter`.
 
 extern crate alloc;
 
@@ -16,7 +9,7 @@ use alloc::vec::Vec;
 use crate::error::{self, Error, ErrorKind};
 use crate::raw::*;
 
-/// Write a string to the kernel console (serial port, fd 1 = stdout).
+/// Write a string to fd 1.
 pub fn print(s: &str) {
     if s.is_empty() {
         return;
@@ -26,13 +19,11 @@ pub fn print(s: &str) {
     }
 }
 
-/// Write a string followed by a newline.
 pub fn println(s: &str) {
     print(s);
     print("\n");
 }
 
-/// Write to a specific fd.
 pub fn write_fd(fd: u32, data: &[u8]) -> Result<usize, u64> {
     if data.is_empty() {
         return Ok(0);
@@ -52,7 +43,6 @@ pub fn write_fd(fd: u32, data: &[u8]) -> Result<usize, u64> {
     }
 }
 
-/// Read from a specific fd.
 pub fn read_fd(fd: u32, buf: &mut [u8]) -> Result<usize, u64> {
     if buf.is_empty() {
         return Ok(0);
@@ -72,10 +62,6 @@ pub fn read_fd(fd: u32, buf: &mut [u8]) -> Result<usize, u64> {
     }
 }
 
-/// Blocking read from stdin (fd 0).
-///
-/// Returns the number of bytes read.  Blocks until at least one byte
-/// is available (keyboard input).
 pub fn read_stdin(buf: &mut [u8]) -> usize {
     if buf.is_empty() {
         return 0;
@@ -88,10 +74,7 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
     }
 }
 
-/// Read a line from stdin into `buf`, echoing characters to stdout.
-///
-/// Returns the number of bytes read (excluding the trailing newline).
-/// The newline is NOT included in the buffer.
+/// Read a line with local echo; newline consumed and not stored.
 pub fn read_line(buf: &mut [u8]) -> usize {
     let mut pos = 0;
     let mut ch = [0u8; 1];
@@ -106,18 +89,16 @@ pub fn read_line(buf: &mut [u8]) -> usize {
                 print("\n");
                 return pos;
             }
-            // Backspace (0x08 or 0x7F)
             0x08 | 0x7F => {
                 if pos > 0 {
                     pos -= 1;
-                    print("\x08 \x08"); // erase character
+                    print("\x08 \x08");
                 }
             }
             c => {
                 if pos < buf.len() {
                     buf[pos] = c;
                     pos += 1;
-                    // Echo the character.
                     let s = unsafe { core::str::from_utf8_unchecked(core::slice::from_ref(&c)) };
                     print(s);
                 }
@@ -126,18 +107,8 @@ pub fn read_line(buf: &mut [u8]) -> usize {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Formatting support — print!(), println!(), eprint!(), eprintln!()
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Stdout handle for `core::fmt::Write`.  Zero-size — formatting goes
-/// directly to serial via `SYS_WRITE(1, ...)`.
 pub struct Stdout;
-
-/// Stderr handle.  Goes to fd 2.
 pub struct Stderr;
-
-/// Stdin handle.
 pub struct Stdin;
 
 impl core::fmt::Write for Stdout {
@@ -158,25 +129,16 @@ impl core::fmt::Write for Stderr {
     }
 }
 
-/// Internal: write formatted args to stdout.
 #[doc(hidden)]
 pub fn _print_fmt(args: core::fmt::Arguments<'_>) {
     let _ = core::fmt::Write::write_fmt(&mut Stdout, args);
 }
 
-/// Internal: write formatted args to stderr.
 #[doc(hidden)]
 pub fn _eprint_fmt(args: core::fmt::Arguments<'_>) {
     let _ = core::fmt::Write::write_fmt(&mut Stderr, args);
 }
 
-/// Print formatted text to stdout (serial console).
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::print;
-/// print!("PID: {}, status: {}\n", pid, status);
-/// ```
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
@@ -184,13 +146,6 @@ macro_rules! print {
     };
 }
 
-/// Print formatted text to stdout with a trailing newline.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::println;
-/// println!("Hello, {}!", name);
-/// ```
 #[macro_export]
 macro_rules! println {
     () => { $crate::io::_print_fmt(format_args!("\n")) };
@@ -199,7 +154,6 @@ macro_rules! println {
     };
 }
 
-/// Print formatted text to stderr.
 #[macro_export]
 macro_rules! eprint {
     ($($arg:tt)*) => {
@@ -207,7 +161,6 @@ macro_rules! eprint {
     };
 }
 
-/// Print formatted text to stderr with a trailing newline.
 #[macro_export]
 macro_rules! eprintln {
     () => { $crate::io::_eprint_fmt(format_args!("\n")) };
@@ -216,27 +169,17 @@ macro_rules! eprintln {
     };
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// I/O traits — Read, Write, Seek, BufRead
-// ═══════════════════════════════════════════════════════════════════════
-
-/// Seek reference point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeekFrom {
-    /// Absolute offset from file start.
     Start(u64),
-    /// Relative offset from current position.
     Current(i64),
-    /// Relative offset from file end.
     End(i64),
 }
 
-/// Read bytes from a source.
 pub trait Read {
-    /// Pull bytes into `buf`.  Returns number of bytes read (0 = EOF).
+    /// Read into `buf`; returns 0 on EOF.
     fn read(&mut self, buf: &mut [u8]) -> error::Result<usize>;
 
-    /// Read exactly `buf.len()` bytes, or error.
     fn read_exact(&mut self, mut buf: &mut [u8]) -> error::Result<()> {
         while !buf.is_empty() {
             match self.read(buf) {
@@ -248,7 +191,6 @@ pub trait Read {
         Ok(())
     }
 
-    /// Read all remaining bytes into a Vec.
     fn read_to_end(&mut self, buf: &mut Vec<u8>) -> error::Result<usize> {
         let start_len = buf.len();
         let mut tmp = [0u8; 4096];
@@ -261,7 +203,6 @@ pub trait Read {
         }
     }
 
-    /// Read all remaining bytes into a String.
     fn read_to_string(&mut self, buf: &mut String) -> error::Result<usize> {
         let mut bytes = Vec::new();
         let n = self.read_to_end(&mut bytes)?;
@@ -275,15 +216,10 @@ pub trait Read {
     }
 }
 
-/// Write bytes to a sink.
 pub trait Write {
-    /// Write bytes from `buf`.  Returns number of bytes written.
     fn write(&mut self, buf: &[u8]) -> error::Result<usize>;
-
-    /// Flush buffered data.  No-op for unbuffered writers.
     fn flush(&mut self) -> error::Result<()>;
 
-    /// Write the entire buffer, looping if needed.
     fn write_all(&mut self, mut buf: &[u8]) -> error::Result<()> {
         while !buf.is_empty() {
             match self.write(buf) {
@@ -295,9 +231,8 @@ pub trait Write {
         Ok(())
     }
 
-    /// Write a formatted string.
     fn write_fmt(&mut self, fmt: core::fmt::Arguments<'_>) -> error::Result<()> {
-        // Use an adapter to bridge core::fmt::Write → io::Write.
+        // Bridge `core::fmt::Write` → `io::Write`, capturing the first error.
         struct Adapter<'a, W: ?Sized + Write> {
             inner: &'a mut W,
             error: Option<Error>,
@@ -324,26 +259,19 @@ pub trait Write {
     }
 }
 
-/// Seek to an offset within a stream.
 pub trait Seek {
-    /// Seek to a position.  Returns the new absolute offset.
     fn seek(&mut self, pos: SeekFrom) -> error::Result<u64>;
 
-    /// Return the current stream position.
     fn stream_position(&mut self) -> error::Result<u64> {
         self.seek(SeekFrom::Current(0))
     }
 }
 
-/// Read with an internal buffer.
 pub trait BufRead: Read {
-    /// Return the internal buffer contents (may be empty).
     fn fill_buf(&mut self) -> error::Result<&[u8]>;
-
-    /// Mark `amt` bytes as consumed.
     fn consume(&mut self, amt: usize);
 
-    /// Read until `byte` is found or EOF.  The delimiter is included.
+    /// Reads through `byte` inclusive (or EOF).
     fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> error::Result<usize> {
         let start = buf.len();
         loop {
@@ -368,7 +296,7 @@ pub trait BufRead: Read {
         }
     }
 
-    /// Read a line (including `\n`) into `buf`.
+    /// Reads through `\n` inclusive.
     fn read_line(&mut self, buf: &mut String) -> error::Result<usize> {
         let mut bytes = Vec::new();
         let n = self.read_until(b'\n', &mut bytes)?;
@@ -381,7 +309,6 @@ pub trait BufRead: Read {
         }
     }
 
-    /// Return an iterator over the lines of this reader.
     fn lines(self) -> Lines<Self>
     where
         Self: Sized,
@@ -390,7 +317,6 @@ pub trait BufRead: Read {
     }
 }
 
-/// Iterator over lines from a [`BufRead`].
 pub struct Lines<B> {
     inner: B,
 }
@@ -403,7 +329,6 @@ impl<B: BufRead> Iterator for Lines<B> {
         match self.inner.read_line(&mut buf) {
             Ok(0) => None,
             Ok(_) => {
-                // Strip trailing newline.
                 if buf.ends_with('\n') {
                     buf.pop();
                     if buf.ends_with('\r') {
@@ -416,10 +341,6 @@ impl<B: BufRead> Iterator for Lines<B> {
         }
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════
-// Trait impls for Stdin / Stdout / Stderr
-// ═══════════════════════════════════════════════════════════════════════
 
 impl Read for Stdin {
     fn read(&mut self, buf: &mut [u8]) -> error::Result<usize> {
@@ -445,13 +366,8 @@ impl Write for Stderr {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// BufReader<R>
-// ═══════════════════════════════════════════════════════════════════════
-
 const DEFAULT_BUF_SIZE: usize = 4096;
 
-/// Wraps a [`Read`] with an internal buffer for efficient small reads.
 pub struct BufReader<R> {
     inner: R,
     buf: Vec<u8>,
@@ -520,9 +436,6 @@ impl<R: Read> BufRead for BufReader<R> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// BufWriter<W>
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Wraps a [`Write`] with an internal buffer to batch small writes.
 pub struct BufWriter<W: Write> {
@@ -607,9 +520,6 @@ impl<W: Write> Drop for BufWriter<W> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// copy() utility
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Copy all bytes from `reader` to `writer`.  Returns total bytes copied.
 pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64> {
@@ -625,14 +535,10 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// ioctl wrappers
-// ═══════════════════════════════════════════════════════════════════════
 
 const IOCTL_FIONREAD: u64 = 0x541B;
 const IOCTL_TIOCGWINSZ: u64 = 0x5413;
 
-/// Raw ioctl syscall.
 pub fn ioctl(fd: u32, cmd: u64, arg: u64) -> Result<u64, u64> {
     let ret = unsafe { syscall3(SYS_IOCTL, fd as u64, cmd, arg) };
     if crate::is_error(ret) {

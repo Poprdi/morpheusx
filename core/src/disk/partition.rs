@@ -34,7 +34,6 @@ impl PartitionInfo {
 }
 
 impl PartitionType {
-    /// Convert from gpt_disk_types GUID to PartitionType
     pub fn from_gpt_guid(guid: &gpt_disk_types::GptPartitionType) -> Self {
         use gpt_disk_types::{guid, GptPartitionType as GptType};
 
@@ -57,7 +56,6 @@ impl PartitionType {
         }
     }
 
-    /// Convert to gpt_disk_types GUID
     pub fn to_gpt_guid(&self) -> gpt_disk_types::GptPartitionType {
         use gpt_disk_types::{guid, GptPartitionType as GptType};
 
