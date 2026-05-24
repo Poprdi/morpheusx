@@ -1,8 +1,5 @@
-//! SDHCI block device driver scaffold.
-//!
-//! This module defines the BlockDriver-facing contract for the upcoming
-//! ASM-backed SDHCI implementation. Hardware-touching logic will be added in
-//! assembly primitives; Rust keeps orchestration/state/error surfaces stable.
+//! SDHCI driver. PIO read path lands first; ASM primitives back hardware access.
+//! SDA-PHY 3.0.
 
 use crate::asm::core::mmio;
 use crate::asm::core::tsc;
@@ -18,21 +15,17 @@ extern "win64" {
     fn asm_sdhci_read_block_pio(mmio_base: u64, lba: u64, dst: u64, tsc_freq: u64) -> u32;
 }
 
-/// PCI base class / subclass / prog-if for SD Host Controller.
+/// PCI class.subclass.progif = 0x08.05.01.
 pub const PCI_CLASS_SDHCI: u32 = 0x080501;
 
-/// SDHCI configuration.
 #[derive(Debug, Clone)]
 pub struct SdhciConfig {
-    /// TSC frequency for timeout calculations.
     pub tsc_freq: u64,
-    /// Optional DMA bounce buffer base (physical).
+    /// Optional bounce buffer (physical addr + size).
     pub dma_phys: u64,
-    /// Optional DMA bounce buffer size.
     pub dma_size: usize,
 }
 
-/// SDHCI initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SdhciInitError {
     InvalidConfig,
@@ -62,7 +55,6 @@ impl core::fmt::Display for SdhciInitError {
     }
 }
 
-/// SDHCI driver state (scaffold).
 pub struct SdhciDriver {
     mmio_base: u64,
     tsc_freq: u64,
@@ -157,17 +149,16 @@ impl SdhciDriver {
         }
     }
 
+    /// SD spec 4.7 init sequence: CMD0 → CMD8 → ACMD41 → CMD2/CMD3/CMD7, CMD16 for SDSC.
     unsafe fn init_card(&mut self) -> Result<(), SdhciInitError> {
-        // CMD0: idle
         let _ = self.send_cmd(0, 0, CMD_RESP_NONE, 100)?;
 
-        // CMD8: interface condition; if it fails, assume legacy SDSC.
+        // CMD8 fails on legacy SDSC; treat as v1.
         let mut supports_v2 = false;
         if let Ok(r7) = self.send_cmd(8, 0x0000_01AA, CMD_RESP_SHORT | CMD_CRC | CMD_INDEX, 100) {
             supports_v2 = (r7 & 0xFFF) == 0x1AA;
         }
 
-        // ACMD41 loop until card powers up.
         let mut ocr: u32;
         let hcs = if supports_v2 { 1u32 << 30 } else { 0 };
         let start = tsc::read_tsc();
@@ -184,17 +175,14 @@ impl SdhciDriver {
         }
         self.high_capacity = (ocr & (1u32 << 30)) != 0;
 
-        // CMD2: CID
         let _ = self.send_cmd(2, 0, CMD_RESP_LONG | CMD_CRC, 200)?;
 
-        // CMD3: RCA assign
         let rca_resp = self.send_cmd(3, 0, CMD_RESP_SHORT | CMD_CRC | CMD_INDEX, 200)?;
         self.rca = (rca_resp >> 16) as u16;
         if self.rca == 0 {
             return Err(SdhciInitError::IoError);
         }
 
-        // CMD7: select card
         let _ = self.send_cmd(
             7,
             (self.rca as u32) << 16,
@@ -202,7 +190,7 @@ impl SdhciDriver {
             200,
         )?;
 
-        // CMD16: set block length for SDSC cards.
+        // SDHC/SDXC already use 512 B blocks.
         if !self.high_capacity {
             let _ = self.send_cmd(16, 512, CMD_RESP_SHORT | CMD_CRC | CMD_INDEX, 100)?;
         }
@@ -210,9 +198,6 @@ impl SdhciDriver {
         Ok(())
     }
 
-    /// Create a new SDHCI driver instance.
-    ///
-    /// Phase-1 scaffold returns NotImplemented until ASM primitives land.
     pub unsafe fn new(mmio_base: u64, config: SdhciConfig) -> Result<Self, SdhciInitError> {
         if mmio_base == 0 || config.tsc_freq == 0 {
             return Err(SdhciInitError::InvalidConfig);

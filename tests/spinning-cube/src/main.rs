@@ -19,7 +19,6 @@ use morpheus_gfx3d::target::{DirectTarget, TargetPixelFormat};
 entry!(main);
 
 fn main() -> i32 {
-    // ── Get framebuffer info ──
     let fb_info = match fb_info() {
         Ok(info) => info,
         Err(_) => return 1,
@@ -34,24 +33,19 @@ fn main() -> i32 {
         _ => TargetPixelFormat::Bgrx,
     };
 
-    // ── Map framebuffer virtual address ──
     let fb_vaddr = match fb_map() {
         Ok(addr) => addr,
         Err(_) => return 1,
     };
 
-    // ── Take exclusive framebuffer ownership ──
     if fb_lock().is_err() {
         return 1;
     }
 
-    // ── Clear framebuffer to black ──
     clear_framebuffer(fb_vaddr, fb_width, fb_height, fb_stride, 0x00000000);
 
-    // ── Create render target backed directly by the mapped back buffer ──
-    // No intermediate copy — the 3D pipeline writes pixels straight into
-    // the kernel-visible back buffer.  fb_present() then diffs against
-    // the shadow and pushes only changed spans to VRAM.
+    // Pipeline writes straight into the mapped back buffer; fb_present()
+    // diffs against the shadow and pushes only changed spans.
     let mut target = unsafe {
         DirectTarget::new(
             fb_vaddr as *mut u32,
@@ -62,14 +56,12 @@ fn main() -> i32 {
         )
     };
 
-    // ── Initialize 3D pipeline ──
     let mut pipeline = Pipeline::new(fb_width, fb_height);
     pipeline.fog = morpheus_gfx3d::light::FogMode::None;
     pipeline.wireframe = false;
     pipeline.backface_cull = true;
     pipeline.sample_mode = morpheus_gfx3d::texture::sample::SampleMode::Nearest;
 
-    // ── Set up lighting ──
     let mut lights = LightEnv::new();
     lights.ambient = [0.42, 0.42, 0.42];
     lights.dir_lights.push(DirLight {
@@ -81,7 +73,6 @@ fn main() -> i32 {
         color: [0.25, 0.25, 0.25],
     });
 
-    // ── Create meshes ──
     let cube = Mesh::cube();
     let sphere = Mesh::sphere(12, 24);
     let torus = Mesh::torus(0.6, 0.3, 16, 16);
@@ -91,32 +82,26 @@ fn main() -> i32 {
     let lattice_wall = Mesh::plane(28.0, 18.0, 28, 18);
     let lattice_floor = Mesh::plane(28.0, 18.0, 28, 18);
 
-    // ── Set up camera (looking at the center where all meshes are) ──
     let aspect = fb_width as f32 / fb_height.max(1) as f32;
     let mut camera = Camera::new(aspect);
     camera.position = Vec3::new(0.0, 0.8, 10.5);
     camera.yaw = 0.0;
     camera.pitch = 0.0;
-    camera.fov_y = 0.87266; // 50° for less perspective exaggeration
+    camera.fov_y = 0.87266; // 50°
 
-    // ── Trig table for rotation ──
     let trig = TrigTable::new();
 
-    // ── Frame statistics ──
     let mut fps_frame_count = 0u32;
     let mut fps_window_start_ns = time::clock_gettime();
     let mut fps_display = 0u32;
 
-    // ── Render loop (spin all shapes forever, until Ctrl+C) ──
     loop {
         let frame_start_ns = time::clock_gettime();
 
-        // Update target state (reset for new frame)
-        target.clear(0x00000000); // Black background
+        target.clear(0x00000000);
         pipeline.begin_frame();
         pipeline.set_camera(&camera);
 
-        // Compute time-based rotation phases
         let nanos = frame_start_ns;
         let phase_y = (nanos % 4_000_000_000) as f32 / 4_000_000_000.0;
         let angle_y = phase_y * 6.2831855;
@@ -131,7 +116,7 @@ fn main() -> i32 {
         let rot_x = Mat4::rotation_x(sin_x, cos_x);
         let rot_z = Mat4::rotation_z(sin_z, cos_z);
 
-        // Draw background lattice (wireframe wall + floor)
+        // Wireframe wall + floor backdrop.
         {
             pipeline.wireframe = true;
             let wall_model = Mat4::translation(0.0, 0.5, -8.5).mul(&Mat4::rotation_x(1.0, 0.0));
@@ -157,7 +142,7 @@ fn main() -> i32 {
             pipeline.wireframe = false;
         }
 
-        // Draw cube (top-left) — rigid single-axis rotation for diagnostics
+        // Cube (top-left): single-axis rotation for diagnostics.
         {
             let cube_phase = (nanos % 6_000_000_000) as f32 / 6_000_000_000.0;
             let cube_angle = cube_phase * 6.2831855;
@@ -170,7 +155,6 @@ fn main() -> i32 {
             pipeline.draw_mesh(&cube, &model, &material, &lights, &mut target);
         }
 
-        // Draw sphere (top-center)
         {
             let model = Mat4::translation(0.0, 2.2, 0.0).mul(
                 &rot_y
@@ -182,7 +166,6 @@ fn main() -> i32 {
             pipeline.draw_mesh(&sphere, &model, &material, &lights, &mut target);
         }
 
-        // Draw torus (top-right)
         {
             let model = Mat4::translation(3.8, 2.2, -0.8).mul(
                 &rot_y
@@ -194,7 +177,6 @@ fn main() -> i32 {
             pipeline.draw_mesh(&torus, &model, &material, &lights, &mut target);
         }
 
-        // Draw pyramid (bottom-left)
         {
             let model = Mat4::translation(-3.8, -2.2, -0.4).mul(
                 &rot_y
@@ -217,7 +199,6 @@ fn main() -> i32 {
             pipeline.draw_mesh(&plane, &model, &material, &lights, &mut target);
         }
 
-        // Draw cylinder (bottom-right)
         {
             let phase_cyl = (nanos % 4_000_000_000) as f32 / 4_000_000_000.0;
             let angle_cyl = phase_cyl * 6.2831855;
@@ -228,7 +209,6 @@ fn main() -> i32 {
             pipeline.draw_mesh(&cylinder, &model, &material, &lights, &mut target);
         }
 
-        // Update and draw HUD stats
         let frame_end_ns = time::clock_gettime();
         let frame_ns = frame_end_ns.saturating_sub(frame_start_ns);
         let latency_ms = (frame_ns / 1_000_000).min(999) as u32;
@@ -253,11 +233,10 @@ fn main() -> i32 {
             pipeline.stats.pixels_written,
         );
 
-        // Push completed frame to VRAM (full memcpy — faster than delta for 3D)
+        // 3D writes the whole frame, so full blit beats delta diff.
         let _ = fb_blit();
 
-        // Frame pacing — cap at ~60 FPS, sleep the remainder so we don't
-        // burn 100 % CPU on a render-bound demo.
+        // 60 FPS cap; sleep the remainder rather than busy-wait.
         let frame_end_ns = time::clock_gettime();
         let frame_ns = frame_end_ns.saturating_sub(frame_start_ns);
         const TARGET_NS: u64 = 16_666_666; // ~60 FPS
@@ -275,7 +254,6 @@ fn main() -> i32 {
     }
 }
 
-/// Clear the hardware framebuffer to a solid color.
 fn clear_framebuffer(fb_vaddr: u64, fb_width: u32, fb_height: u32, fb_stride: u32, color: u32) {
     let fb_ptr = fb_vaddr as *mut u32;
     for y in 0..fb_height {

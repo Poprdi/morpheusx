@@ -1,7 +1,4 @@
-//! GPT preparation state — claims disk space before download.
-//!
-//! Creates GPT partition for ISO storage, verifying no overlap with
-//! existing partitions. Handles automatic relocation if needed.
+//! Claim disk space (GPT partition) before download; relocates on overlap.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -20,13 +17,9 @@ use crate::transfer::disk::{DiskError, GptOps};
 
 use super::{FailedState, LinkWaitState};
 
-/// DMA buffer size for GPT operations.
 const GPT_DMA_BUFFER_SIZE: usize = 64 * 1024;
-
-/// Static DMA buffer for GPT operations.
 static mut GPT_DMA_BUFFER: [u8; GPT_DMA_BUFFER_SIZE] = [0u8; GPT_DMA_BUFFER_SIZE];
 
-/// GPT preparation state.
 pub struct GptPrepState {
     started: bool,
     completed: bool,
@@ -40,7 +33,7 @@ impl GptPrepState {
         }
     }
 
-    /// Verify requested range is free, find alternative if not.
+    /// Returns the actual range to use; relocates if requested overlaps.
     fn verify_or_find_space(
         &self,
         blk: &mut UnifiedBlockDevice,
@@ -63,7 +56,6 @@ impl GptPrepState {
             Err(_) => return Err("failed to create BlockIo adapter"),
         };
 
-        // Check if requested range is free
         match GptOps::verify_range_free(&mut adapter, requested_start, requested_end) {
             Ok(true) => {
                 serial::println("[GPT] ✓ Range verified free");
@@ -88,7 +80,6 @@ impl GptPrepState {
             }
         }
 
-        // Range not free, find alternative
         serial::println("[GPT] Searching for alternative free space...");
         match GptOps::find_free_space(&mut adapter) {
             Ok((free_start, free_end)) => {
@@ -104,7 +95,7 @@ impl GptPrepState {
                     serial::print_u32((free_size * 512 / (1024 * 1024 * 1024)) as u32);
                     serial::println(" GB)");
 
-                    // Align to 1MB boundary (2048 sectors)
+                    // Align to 1 MB (2048 sectors).
                     let aligned_start = free_start.div_ceil(2048) * 2048;
                     let aligned_end = aligned_start + needed_size - 1;
 
@@ -137,7 +128,6 @@ impl GptPrepState {
         }
     }
 
-    /// Create GPT partition for ISO storage.
     fn create_partition(
         &self,
         blk: &mut UnifiedBlockDevice,
@@ -177,7 +167,6 @@ impl GptPrepState {
                 serial::println("[GPT] Type: Microsoft Basic Data");
                 serial::println("[GPT] Status: Active in GPT partition table");
 
-                // Return placeholder GUID
                 Ok([
                     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12,
                     0x34, 0x56, 0x78,
@@ -228,14 +217,12 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
         if !self.started {
             self.started = true;
 
-            // Skip if disk writing disabled
             if !ctx.config.write_to_disk {
                 serial::println("[GPT] Disk writes disabled, skipping partition setup");
                 self.completed = true;
                 return (self, StepResult::Continue);
             }
 
-            // Need block device
             let blk = match &mut ctx.blk_device {
                 Some(b) => b,
                 None => {
@@ -254,11 +241,10 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
             serial::print_hex(ctx.config.target_start_sector);
             serial::println("");
 
-            // Calculate sectors needed (use expected_size or max download)
             let size_bytes = if ctx.config.expected_size > 0 {
                 ctx.config.expected_size
             } else {
-                8 * 1024 * 1024 * 1024 // Default 8GB max
+                8 * 1024 * 1024 * 1024 // default 8 GB cap
             };
             let sectors_needed = size_bytes.div_ceil(512);
             let requested_end = ctx.config.target_start_sector + sectors_needed - 1;
@@ -270,7 +256,6 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
             serial::print_u32((size_bytes / (1024 * 1024 * 1024)) as u32);
             serial::println(" GB");
 
-            // Verify or find space
             let (actual_start, actual_end) =
                 match self.verify_or_find_space(blk, ctx.config.target_start_sector, requested_end)
                 {
@@ -286,15 +271,13 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
                     }
                 };
 
-            // Update context with actual start sector
             ctx.actual_start_sector = actual_start;
 
-            // Create partition - get block device again (borrow was released)
+            // Re-borrow after dropping verify_or_find_space's loan.
             let blk = ctx.blk_device.as_mut().unwrap();
             match self.create_partition(blk, actual_start, actual_end) {
                 Ok(uuid) => {
                     serial::println("[GPT] ISO partition created and claimed");
-                    // Could store UUID in context if needed
                     let _ = uuid;
                 }
                 Err(msg) => {

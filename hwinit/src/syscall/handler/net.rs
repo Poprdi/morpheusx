@@ -206,9 +206,7 @@ fn net_stack_present() -> bool {
 
 const ENOSYS_NET: u64 = u64::MAX - 37;
 
-// SYS_NET (38) — TCP socket operations (multiplexed via subcmd)
-
-/// `SYS_NET(subcmd, a2, a3, a4) → result`
+/// TCP/UDP socket operations multiplexed by subcmd.
 pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     if !net_stack_present() {
         return ENODEV;
@@ -492,9 +490,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     }
 }
 
-// SYS_DNS (39) — DNS resolution
-
-/// `SYS_DNS(subcmd, a2, a3) → result`
+// SYS_DNS
 pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
     if !net_stack_present() {
         return ENODEV;
@@ -564,9 +560,7 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
     }
 }
 
-// SYS_NET_CFG (40) — IP stack configuration
-
-/// `SYS_NET_CFG(subcmd, a2, a3, a4) → result`
+// SYS_NET_CFG
 pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
     match subcmd {
         // CFG_GET(buf_ptr) — works even without stack (returns zeroed)
@@ -672,9 +666,7 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
     }
 }
 
-// SYS_NET_POLL (41) — drive the stack & query statistics
-
-/// `SYS_NET_POLL(subcmd, a2) → result`
+// SYS_NET_POLL
 pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
     if !net_stack_present() {
         return ENODEV;

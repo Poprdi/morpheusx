@@ -115,9 +115,8 @@ fn main() -> i32 {
         Err(_) => return 1,
     };
 
-    // Render into a private software back buffer, then copy once per frame
-    // into the mapped framebuffer surface. This avoids compositor sampling
-    // partially-rendered frames and greatly reduces visible blinking.
+    // Private back buffer; one memcpy per frame to the mapped surface
+    // prevents the compositor from sampling partial frames.
     let mut backbuf = vec![0u32; (fb_stride as usize).saturating_mul(fb_h as usize)];
 
     let cloud_assets = Box::new(cloud::CloudAssets::new());
@@ -170,10 +169,10 @@ fn main() -> i32 {
     let mut fps_display = 0u32;
     let mut prev_frame_ns = time::clock_gettime();
 
-    let orbit_accel = 6.0f32; // base rotation acceleration (scaled by speed_mult)
+    let orbit_accel = 6.0f32;
     let zoom_accel = 12.0f32;
     let mouse_sensitivity = 0.004f32;
-    let mut speed_mult = 1.0f32; // adjustable via [ and ]
+    let mut speed_mult = 1.0f32; // [ / ] keys
 
     sys_state.poll();
 
@@ -405,9 +404,7 @@ fn main() -> i32 {
         }
         let _ = fb_present();
 
-        // No artificial frame cap — sysvis runs at full throughput.
-        // A sleep here blocks the process, handing quanta back to the kernel
-        // which immediately HLTs — producing ~40 % false idle.
+        // No frame cap: sleeping here lets the kernel HLT and skew idle stats.
     }
 
     0

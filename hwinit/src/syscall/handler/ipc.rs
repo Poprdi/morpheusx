@@ -128,37 +128,9 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     target_vaddr
 }
 
-// SYS_MPROTECT (74) — change page protection flags
-//
-// Modifies the x86-64 page table flags on an existing VMA in the calling
-// process.  This is a bare page-table-flag-flip — the minimum kernel
-// mechanism for W^X enforcement, guard pages, and JIT compilation.
-//
-// # Arguments
-//
-//   a1 = virtual address (must be the exact start of a VMA)
-//   a2 = number of 4 KiB pages (must match the VMA exactly)
-//   a3 = protection flags:
-//        bit 0 (PROT_WRITE) = set WRITABLE
-//        bit 1 (PROT_EXEC)  = clear NO_EXECUTE (allow execution)
-//        All other bits must be zero.
-//        PROT_READ is implied (a present page is always readable on x86-64).
-//
-// # Returns
-//
-//   0 on success, or error code.
-//
-// # Constraints
-//
-//   - Must match an existing VMA exactly (vaddr and pages).
-//   - PROT_WRITE | PROT_EXEC simultaneously is allowed but discouraged
-//     (breaks W^X).
-//   - Does NOT split VMAs.  If you need different protections on sub-ranges,
-//     mmap separate regions.
-
-/// `SYS_MPROTECT(vaddr, pages, prot) → 0`
+/// Flip PTE flags on an existing VMA (exact match, no splits).
+/// prot: bit0 PROT_WRITE, bit1 PROT_EXEC. Read is implicit on x86-64.
 pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
-    // argument validation
     if pages == 0 || pages > 1024 {
         return EINVAL;
     }
@@ -168,7 +140,6 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
     if vaddr >= USER_ADDR_LIMIT {
         return EINVAL;
     }
-    // Only bits 0 and 1 are defined.
     if prot & !3 != 0 {
         return EINVAL;
     }
@@ -179,7 +150,6 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
 
     let proc = SCHEDULER.current_memory_leader_mut();
 
-    // find the vma
     let (_, vma) = match proc.vma_table.find_exact(vaddr) {
         Some(pair) => pair,
         None => return EINVAL,
@@ -189,8 +159,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
         return EINVAL;
     }
 
-    // build new pte flags
-    // Base: PRESENT + USER + NX (read-only, non-executable)
+    // Base = PRESENT|USER|NX (RO, non-exec).
     let mut new_flags = crate::paging::entry::PageFlags::PRESENT
         .with(crate::paging::entry::PageFlags::USER)
         .with(crate::paging::entry::PageFlags::NO_EXECUTE);
@@ -202,17 +171,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
         new_flags = new_flags.without(crate::paging::entry::PageFlags::NO_EXECUTE);
     }
 
-    // walk and update each pte
-    //
-    // We walk the process's own page table tree.  Each 4 KiB page maps
-    // to a leaf PTE at the PT level.  We rewrite the PTE preserving the
-    // physical address but replacing the flag bits.
-    //
-    // This is safe because:
-    //   1. We verified the VMA exists (so the pages ARE mapped).
-    //   2. We only touch leaf PTEs in the user's page table.
-    //   3. We flush the TLB after every PTE write.
-
+    // Rewrite each leaf PTE preserving phys, replacing flags. invlpg per write.
     let pml4 = proc.cr3 as *mut crate::paging::entry::PageTable;
 
     for i in 0..pages {
@@ -222,7 +181,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
         // Walk PML4 → PDPT → PD → PT
         let pml4_e = (*pml4).entry(va.pml4_idx);
         if !pml4_e.is_present() {
-            return EFAULT; // page table corruption — shouldn't happen
+            return EFAULT; // PT corruption — VMA said mapped, walk disagrees
         }
 
         let pdpt = pml4_e.phys_addr() as *mut crate::paging::entry::PageTable;
@@ -259,11 +218,7 @@ pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
     0
 }
 
-// SYS_PIPE (75) — create a unidirectional pipe
-
-/// `SYS_PIPE(result_ptr) → 0`
-///
-/// Creates a pipe.  Writes `[read_fd, write_fd]` (two u64s) at `result_ptr`.
+/// Writes `[read_fd, write_fd]` (two u64) at `result_ptr`.
 pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
     if !validate_user_buf(result_ptr, 8) {
         return EFAULT;
@@ -315,12 +270,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
     0
 }
 
-// SYS_DUP2 (76) — duplicate a file descriptor
-
-/// `SYS_DUP2(old_fd, new_fd) → new_fd`
-///
-/// Duplicate `old_fd` into `new_fd`.  If `new_fd` is already open it is
-/// silently closed first.
+/// Silently closes `new_fd` first if it was open.
 pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
     // POSIX: dup2(a, a) is a safe no-op. We handle it anyway.
     if old_fd == new_fd {
@@ -365,20 +315,13 @@ pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
     new_fd
 }
 
-// SYS_SET_FG (77) — set foreground process for stdin
-
-/// `SYS_SET_FG(pid) → 0`
+// SYS_SET_FG
 pub unsafe fn sys_set_fg(pid: u64) -> u64 {
     crate::stdin::set_foreground_pid(pid as u32);
     0
 }
 
-// SYS_GETARGS (78) — retrieve command-line arguments
-
-/// `SYS_GETARGS(buf_ptr, buf_len) → argc`
-///
-/// Copies the null-separated argument blob into the user buffer.
-/// Returns the argument count (argc) in RAX.
+/// Copies NUL-separated argv blob; returns argc.
 pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     let proc = SCHEDULER.current_process_mut();
     let argc = proc.argc;
@@ -397,7 +340,7 @@ pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
 
 // Helper — blocking pipe read
 
-/// Read from a pipe, blocking if empty until data arrives or all writers close.
+/// Blocks until data, or returns 0 once all writers have closed.
 unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
     loop {
         let n = crate::pipe::pipe_read(pipe_idx, buf);

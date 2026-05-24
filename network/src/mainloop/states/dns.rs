@@ -56,7 +56,6 @@ impl<D: NetworkDriver> State<D> for DnsState {
             serial::println("[DNS] Starting resolution...");
         }
 
-        // Check timeout
         let elapsed = tsc.saturating_sub(self.start_tsc);
         let timeout = ctx.timeouts.dns();
         if elapsed > timeout {
@@ -69,7 +68,6 @@ impl<D: NetworkDriver> State<D> for DnsState {
 
         let hostname = ctx.url_host;
 
-        // Try parsing as IP address first
         if let Some(ip) = parse_ipv4(hostname) {
             serial::print("[DNS] Host is IP: ");
             serial::print_ipv4(&ip.0);
@@ -79,11 +77,9 @@ impl<D: NetworkDriver> State<D> for DnsState {
             return (Box::new(ConnectState::new()), StepResult::Transition);
         }
 
-        // Need DNS resolution
         serial::print("[DNS] Resolving: ");
         serial::println(hostname);
 
-        // Get DNS server from DHCP
         let dns_server = match ctx.dns_servers.iter().find_map(|s| *s) {
             Some(IpAddress::Ipv4(ip)) => ip,
             _ => {
@@ -95,7 +91,6 @@ impl<D: NetworkDriver> State<D> for DnsState {
             }
         };
 
-        // Create DNS socket if not done yet
         if !self.dns_handle_added {
             serial::print("[DNS] Using server: ");
             serial::print_ipv4(&dns_server.0);
@@ -119,7 +114,6 @@ impl<D: NetworkDriver> State<D> for DnsState {
             }
         };
 
-        // Start query if not started
         if self.query_handle.is_none() {
             let dns = sockets.get_mut::<DnsSocket>(dns_handle);
             match dns.start_query(iface.context(), hostname, DnsQueryType::A) {
@@ -138,12 +132,10 @@ impl<D: NetworkDriver> State<D> for DnsState {
             return (self, StepResult::Continue);
         }
 
-        // Poll for result
         let query_handle = self.query_handle.unwrap();
         let dns = sockets.get_mut::<DnsSocket>(dns_handle);
         match dns.get_query_result(query_handle) {
             Ok(addrs) => {
-                // Find first IPv4 address
                 for addr in addrs {
                     #[allow(irrefutable_let_patterns)]
                     if let IpAddress::Ipv4(ip) = addr {
@@ -161,10 +153,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
                     StepResult::Failed("no IPv4"),
                 )
             }
-            Err(GetQueryResultError::Pending) => {
-                // Still waiting
-                (self, StepResult::Continue)
-            }
+            Err(GetQueryResultError::Pending) => (self, StepResult::Continue),
             Err(GetQueryResultError::Failed) => {
                 serial::println("[DNS] ERROR: Query failed");
                 (
@@ -180,7 +169,6 @@ impl<D: NetworkDriver> State<D> for DnsState {
     }
 }
 
-/// Parse IPv4 address from dotted decimal string.
 pub fn parse_ipv4(s: &str) -> Option<Ipv4Address> {
     let bytes = s.as_bytes();
     let mut octets = [0u8; 4];

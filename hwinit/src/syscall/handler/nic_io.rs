@@ -60,9 +60,7 @@ pub unsafe fn sys_nic_rx(buf_ptr: u64, buf_len: u64) -> u64 {
     }
 }
 
-// SYS_NIC_LINK (35) — get link status
-
-/// `SYS_NIC_LINK() → 0/1 (down/up)`
+/// 0 = down, 1 = up.
 pub unsafe fn sys_nic_link() -> u64 {
     match NIC_OPS.link_up {
         Some(f) => f() as u64,
@@ -70,9 +68,6 @@ pub unsafe fn sys_nic_link() -> u64 {
     }
 }
 
-// SYS_NIC_MAC (36) — get 6-byte MAC address
-
-/// `SYS_NIC_MAC(buf_ptr) → 0`
 pub unsafe fn sys_nic_mac(buf_ptr: u64) -> u64 {
     if !validate_user_buf(buf_ptr, 6) {
         return EFAULT;
@@ -86,9 +81,6 @@ pub unsafe fn sys_nic_mac(buf_ptr: u64) -> u64 {
     }
 }
 
-// SYS_NIC_REFILL (37) — refill RX descriptor ring
-
-/// `SYS_NIC_REFILL() → 0`
 pub unsafe fn sys_nic_refill() -> u64 {
     match NIC_OPS.refill {
         Some(f) => {
@@ -99,12 +91,7 @@ pub unsafe fn sys_nic_refill() -> u64 {
     }
 }
 
-// NIC_CTRL — hardware-level NIC control (exokernel)
-
-/// `sys_nic_ctrl(cmd, arg) → 0`
-///
-/// Direct hardware control: promiscuous mode, MAC spoofing, VLAN,
-/// checksum offloads, ring sizing, interrupt coalescing, etc.
+/// Raw NIC control: promisc, MAC, VLAN, csum offloads, ring sizing, IRQ coalesce.
 pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     match NIC_OPS.ctrl {
         Some(f) => {
@@ -119,26 +106,13 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     }
 }
 
-// SYS_IOCTL (42) — device control
+const IOCTL_FIONREAD: u64 = 0x541B;
+const IOCTL_TIOCGWINSZ: u64 = 0x5413;
 
-// ioctl commands
-const IOCTL_FIONREAD: u64 = 0x541B; // bytes available on fd (like FIONREAD)
-const IOCTL_TIOCGWINSZ: u64 = 0x5413; // get terminal window size
-
-/// `SYS_IOCTL(fd, cmd, arg) → result`
 pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     match (fd, cmd) {
-        // FIONREAD: bytes available on fd without blocking.
         (0, IOCTL_FIONREAD) => {
-            // Where does stdin data live?
-            //
-            // 1. fd 0 has an explicit pipe → pipe_available()
-            // 2. Composited client (no pipe) → per-process input buffer
-            // 3. Everyone else → global stdin ring buffer
-            //
-            // This is the Wayland model: composited clients don't touch the
-            // global stdin.  The compositor reads it, makes routing decisions,
-            // and pushes bytes into the target's input_buf via SYS_FORWARD_INPUT.
+            // stdin source: explicit pipe → composited input_buf → global stdin ring.
             let fd_table = SCHEDULER.current_fd_table_mut();
             let avail = if let Ok(desc) = fd_table.get(0) {
                 if desc.flags & O_PIPE_READ != 0 {
@@ -160,22 +134,22 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             }
             avail as u64
         }
-        // Terminal window size: derive from framebuffer if available, else 80×25.
+        // TIOCGWINSZ: derive from FB (8x16 glyphs), fall back to 80x25.
         (0..=2, IOCTL_TIOCGWINSZ) => {
             if arg != 0 && validate_user_buf(arg, 8) {
                 let (rows, cols, xpix, ypix) = match fb_registered() {
                     Some(fb) => {
-                        let c = fb.width / 8; // 8px font width
-                        let r = fb.height / 16; // 16px font height
+                        let c = fb.width / 8;
+                        let r = fb.height / 16;
                         (r as u16, c as u16, fb.width as u16, fb.height as u16)
                     }
                     None => (25, 80, 0, 0),
                 };
                 let buf = arg as *mut u16;
-                *buf = rows; // ws_row
-                *buf.add(1) = cols; // ws_col
-                *buf.add(2) = xpix; // ws_xpixel
-                *buf.add(3) = ypix; // ws_ypixel
+                *buf = rows;
+                *buf.add(1) = cols;
+                *buf.add(2) = xpix;
+                *buf.add(3) = ypix;
             }
             0
         }
@@ -183,12 +157,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     }
 }
 
-// SYS_MOUNT (43) — mount a filesystem
-
-/// `SYS_MOUNT(src_ptr, src_len, dst_ptr, dst_len) → 0`
-///
-/// Mount the HelixFS volume at `src` to the mount point `dst`.
-/// Currently a no-op success since HelixFS auto-mounts at `/`.
+/// No-op success; HelixFS auto-mounts at `/`.
 pub unsafe fn sys_mount(src_ptr: u64, src_len: u64, dst_ptr: u64, dst_len: u64) -> u64 {
     let _src = match user_path(src_ptr, src_len) {
         Some(p) => p,
@@ -198,16 +167,10 @@ pub unsafe fn sys_mount(src_ptr: u64, src_len: u64, dst_ptr: u64, dst_len: u64) 
         Some(p) => p,
         None => return EINVAL,
     };
-    // HelixFS is always mounted at "/" — additional mounts not supported yet.
     0
 }
 
-// SYS_UMOUNT (44) — unmount a filesystem
-
-/// `SYS_UMOUNT(path_ptr, path_len) → 0`
-///
-/// Unmount the filesystem at `path`.  Syncs dirty data before unmounting.
-/// Currently: syncs and returns success (root cannot be truly unmounted).
+/// Syncs dirty data; root can't actually unmount.
 pub unsafe fn sys_umount(path_ptr: u64, path_len: u64) -> u64 {
     let _path = match user_path(path_ptr, path_len) {
         Some(p) => p,
@@ -223,9 +186,6 @@ pub unsafe fn sys_umount(path_ptr: u64, path_len: u64) -> u64 {
     0
 }
 
-// SYS_POLL (45) — poll file descriptors for readiness
-
-/// Poll entry (matches POSIX pollfd).
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct PollFd {
@@ -238,15 +198,9 @@ const POLLIN: i16 = 0x0001;
 const POLLOUT: i16 = 0x0004;
 const POLLERR: i16 = 0x0008;
 
-/// `SYS_POLL(fds_ptr, nfds, timeout_ms) → ready_count`
-///
-/// Check if file descriptors are ready for I/O.
-/// - fd 0 (stdin): POLLIN if keyboard data available.
-/// - fd 1/2 (stdout/stderr): always POLLOUT (serial is always writable).
-/// - fd >= 3 (VFS): always POLLIN|POLLOUT (files are always ready).
+/// fd 0: POLLIN iff stdin has data. fd 1/2: POLLOUT always. fd≥3 (VFS): both.
 pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
     if nfds == 0 {
-        // Just sleep for timeout_ms.
         if timeout_ms > 0 {
             let _ = sys_sleep(timeout_ms);
         }

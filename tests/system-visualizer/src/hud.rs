@@ -120,8 +120,7 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let y1 = y0 + font::CELL_H + 2;
     fb.draw_str(px + 4, y1, "MEM:", COL_DIM);
-    // Always show in GB when the machine has >= 1 GB total RAM (avoids
-    // 2-digit truncation of large MB values like 12288 → "88").
+    // Prefer GB once total >= 1 GB; MB display truncates past 9999.
     let (mem_used_display, mem_total_display, unit) = if state.mem_total_mb() >= 1024 {
         let used_gb = state.mem_used_mb() as f32 / 1024.0;
         let total_gb = state.mem_total_mb() as f32 / 1024.0;
@@ -137,12 +136,10 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
             "MB",
         )
     };
-    // used: "UU,uu" (2+2 digits for int+frac)
     fb.draw_u32(px + 30, y1, mem_used_display.0, 2, COL_TEXT);
     fb.draw_char(px + 42, y1, b'.', COL_DIM);
     fb.draw_u32(px + 48, y1, mem_used_display.1, 2, COL_TEXT);
     fb.draw_str(px + 60, y1, "/", COL_DIM);
-    // total: "TT,tt" (2+2 digits)
     fb.draw_u32(px + 72, y1, mem_total_display.0, 2, COL_TEXT);
     fb.draw_char(px + 84, y1, b'.', COL_DIM);
     fb.draw_u32(px + 90, y1, mem_total_display.1, 2, COL_TEXT);
@@ -178,7 +175,7 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let y3 = y2 + font::CELL_H + 1;
     fb.draw_str(px + 4, y3, "HEAP:", COL_DIM);
-    // Show kernel heap used / total in KB (heap is 4MB = 4096KB max → 4 digits)
+    // Heap is 4 MB; KB fits in 4 digits.
     let heap_used_kb = (state.heap_used / 1024).min(9999) as u32;
     let heap_total_kb = (state.heap_total / 1024).min(9999) as u32;
     fb.draw_u32(px + 36, y3, heap_used_kb, 4, COL_TEXT);
@@ -257,9 +254,7 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
         fb.draw_str(px + 112, ry, trunc, name_color);
     }
 
-    // IDLE row — shown below the process list.
-    // idle_pct = fraction of wall-clock time the CPU spent in HLT.
-    // Together with per-process cpu_pct values they account for all 100%.
+    // IDLE row completes 100%: HLT fraction + per-process cpu_pct.
     let idle_row_y = base_y + count as u32 * row_h + 2;
     let idle_int = (state.idle_pct as u32).min(100);
     let idle_col = if idle_int > 80 {
@@ -286,7 +281,6 @@ pub fn draw_fps(fb: &Framebuf, fps: u32, latency_ms: u32, speed_mult: f32) {
     fb.draw_str(px + 52, py + 4, "MS:", COL_DIM);
     fb.draw_u32(px + 70, py + 4, latency_ms.min(999), 3, COL_TEXT);
 
-    // Speed indicator: "SPD:1.0x" — integral and one decimal, e.g. "1.0" "1.5"
     let spd_col = if speed_mult > 1.5 {
         COL_ACCENT
     } else if speed_mult < 1.0 {
@@ -436,7 +430,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
 
     let (gx, gy, gw, gh) = per_core_panel_rect(state);
 
-    // layered panel shell
     fb.fill_rect(gx, gy, gw, gh, COL_PANEL);
     fb.fill_rect(gx + 1, gy + 1, gw.saturating_sub(2), 1, 0x001E2834);
     fb.fill_rect(
@@ -449,7 +442,7 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     hline(fb, gx, gy, gw);
     fb.draw_str(gx + 2, gy + 2, "CORE UTILIZATION", COL_ACCENT);
 
-    // Header rollup metrics + compact legend.
+    // Header: rollup metrics + N/W/H legend.
     let mut sum = 0u32;
     let mut peak = 0u32;
     for core in 0..cores {
@@ -467,7 +460,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     fb.draw_u32(gx + 132, gy + 2, peak.min(100), 3, COL_WARN);
     fb.draw_char(gx + 150, gy + 2, b'%', COL_DIM);
 
-    // Compact threshold legend chips: N/W/H
     fb.fill_rect(gx + 156, gy + 3, 4, 4, COL_ACCENT);
     fb.draw_char(gx + 162, gy + 2, b'N', COL_DIM);
     fb.fill_rect(gx + 170, gy + 3, 4, 4, COL_WARN);
@@ -491,7 +483,7 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     }
 
     for core in 0..cores {
-        // Evenly partition content so rows exactly fill the panel height.
+        // Partition content to fill panel height exactly.
         let y0 = content_y + (core as u32 * content_h) / cores as u32;
         let y1 = content_y + ((core as u32 + 1) * content_h) / cores as u32;
         let row_h = y1.saturating_sub(y0).max(3);

@@ -108,23 +108,24 @@ impl IsoBuilder {
     ) {
         let name_bytes = name.as_bytes();
         let name_len = name_bytes.len();
+        // Entry length must be even (§9.1.13).
         let mut entry_len = 33 + name_len;
         if entry_len % 2 != 0 {
             entry_len += 1;
-        } // Padding to even
+        }
 
         let start = *offset;
         data[start] = entry_len as u8;
-        data[start + 1] = 0; // Ext attr len
+        data[start + 1] = 0;
 
         Self::write_both_endian_u32(&mut data[start + 2..], lba);
         Self::write_both_endian_u32(&mut data[start + 10..], size);
 
-        // Date (7 bytes) - all zero is fine for test
+        // bytes [18..25]: recording date — zero is acceptable for tests.
 
         data[start + 25] = flags;
 
-        data[start + 28] = 0; // Volume seq
+        data[start + 28] = 0;
         data[start + 32] = name_len as u8;
 
         data[start + 33..start + 33 + name_len].copy_from_slice(name_bytes);

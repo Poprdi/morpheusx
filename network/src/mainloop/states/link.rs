@@ -1,8 +1,4 @@
-//! PHY link wait state — waits for Ethernet link to establish.
-//!
-//! Real hardware (unlike QEMU) needs time for PHY auto-negotiation.
-//! This state polls the driver until link_up() returns true, with
-//! timeout handling and a brief stabilization delay.
+//! Wait for PHY auto-neg; QEMU links instantly, real silicon doesn't.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -18,7 +14,6 @@ use crate::mainloop::state::{State, StepResult};
 
 use super::{DhcpState, FailedState};
 
-/// PHY link wait state.
 pub struct LinkWaitState {
     started: bool,
     start_tsc: u64,
@@ -38,13 +33,8 @@ impl LinkWaitState {
         }
     }
 
-    /// 15 second timeout for PHY auto-negotiation.
     const LINK_TIMEOUT_SECS: u64 = 15;
-
-    /// 500ms stabilization delay after link comes up.
     const STABILIZE_MS: u64 = 500;
-
-    /// Print progress dot every second.
     const DOT_INTERVAL_SECS: u64 = 1;
 }
 
@@ -71,7 +61,6 @@ impl<D: NetworkDriver> State<D> for LinkWaitState {
             serial::println("[NET] Waiting for PHY link...");
         }
 
-        // If link already established, wait for stabilization
         if self.link_established {
             let stabilize_ticks = (ctx.tsc_freq * Self::STABILIZE_MS) / 1000;
             if tsc.wrapping_sub(self.stable_start_tsc) >= stabilize_ticks {
@@ -79,11 +68,9 @@ impl<D: NetworkDriver> State<D> for LinkWaitState {
                 serial::println("[LINK] -> DHCP");
                 return (Box::new(DhcpState::new()), StepResult::Transition);
             }
-            // Still stabilizing
             return (self, StepResult::Continue);
         }
 
-        // Check if link is up
         if adapter.driver_link_up() {
             serial::println("");
             serial::println("[OK] PHY link established");
@@ -93,20 +80,17 @@ impl<D: NetworkDriver> State<D> for LinkWaitState {
             return (self, StepResult::Continue);
         }
 
-        // Print progress dot every second
         let dot_ticks = ctx.tsc_freq * Self::DOT_INTERVAL_SECS;
         if tsc.wrapping_sub(self.last_dot_tsc) >= dot_ticks {
             serial::print(".");
             self.last_dot_tsc = tsc;
         }
 
-        // Check timeout
         let timeout_ticks = ctx.tsc_freq * Self::LINK_TIMEOUT_SECS;
         if tsc.wrapping_sub(self.start_tsc) >= timeout_ticks {
             serial::println("");
             serial::println("[WARN] PHY link timeout - continuing anyway...");
-            // Continue to DHCP even without link - it will fail with proper error
-            // if link really isn't available
+            // Let DHCP surface the real error.
             serial::println("[LINK] -> DHCP");
             return (Box::new(DhcpState::new()), StepResult::Transition);
         }

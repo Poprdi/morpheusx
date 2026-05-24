@@ -93,12 +93,37 @@ unsafe fn arm_keyboard_transfer() {
 /// caller can use the return value to keep `had_work = true` so the idle HLT
 /// doesn't fire while keystrokes are arriving.
 pub unsafe fn poll_keyboard() -> bool {
+    // One-shot diagnostic state. We log once on the first poll call and once
+    // on the first successful event so the framebuffer shows whether the
+    // runtime polling path is alive and whether the controller is posting
+    // events for us. Without these, "no keystrokes" was indistinguishable
+    // from "polling never runs."
+    static mut DBG_FIRST_POLL: bool = true;
+    static mut DBG_FIRST_EVENT: bool = true;
+
     let mut ctrl_guard = USB_CONTROLLER.lock();
     let kb_guard = USB_KEYBOARD.lock();
     let (controller, kb) = match (ctrl_guard.as_mut(), kb_guard.as_ref()) {
         (Some(c), Some(k)) => (c, k),
         _ => return false,
     };
+
+    if DBG_FIRST_POLL {
+        DBG_FIRST_POLL = false;
+        // Dump the controller state at the moment runtime polling begins.
+        // Same fields as dump_state, plus the bin (interrupt-IN) ring's
+        // producer state so we can see if our armed TRB is in fact there.
+        controller.dump_state("first poll");
+        crate::serial::puts("[USB-DBG] bin.enq=");
+        crate::serial::puts_dec_u8(controller.bin.enq);
+        crate::serial::puts(" bin.cycle=");
+        crate::serial::puts_dec_u8(controller.bin.cycle);
+        crate::serial::puts(" evt.deq=");
+        crate::serial::puts_dec_u8(controller.evt_ring.deq);
+        crate::serial::puts(" evt.cycle=");
+        crate::serial::puts_dec_u8(controller.evt_ring.cycle);
+        crate::serial::puts("\n");
+    }
 
     let dci = ((kb.ep_in & 0x7F) as u32) * 2 + 1;
 
@@ -107,11 +132,28 @@ pub unsafe fn poll_keyboard() -> bool {
     // [[usb-event-ring-drain-invariant]]), and returns CommandTimeout if
     // nothing matches.
     match controller.wait_xfer(kb.slot_id, dci, 0) {
-        Ok(_residue) => {
+        Ok(residue) => {
             // Got a report. Snapshot the bytes from the DMA buffer before
             // re-arming so we don't race the next packet writing over it.
             let buf = controller.dma_base + dma::OFF_REPORT as u64;
             let report_ptr = buf as *const KeyboardReport;
+
+            if DBG_FIRST_EVENT {
+                DBG_FIRST_EVENT = false;
+                // Dump the raw 8-byte report so we can see what the keyboard
+                // actually sends. If this fires but the gate still doesn't
+                // dismiss, the issue is in parse_keyboard_report or the
+                // unified queue drain, not in the xHC transfer path.
+                crate::serial::puts("[USB-DBG] first event! residue=");
+                crate::serial::puts_hex_u8(residue as u8);
+                crate::serial::puts(" report=");
+                for i in 0..8 {
+                    let b = core::ptr::read_volatile((buf + i as u64) as *const u8);
+                    crate::serial::puts_hex_u8(b);
+                    crate::serial::puts(" ");
+                }
+                crate::serial::puts("\n");
+            }
 
             // parse_keyboard_report currently ignores ctl/iface (predates this
             // polling layer); passed anyway for forward compat.

@@ -1,4 +1,4 @@
-//! Initialization state — parses URL.
+//! Parse URL into host/port/path.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -14,7 +14,6 @@ use crate::mainloop::state::{State, StepResult};
 
 use super::GptPrepState;
 
-/// Initialization state.
 pub struct InitState {
     validated: bool,
 }
@@ -51,8 +50,7 @@ impl<D: NetworkDriver> State<D> for InitState {
         serial::println("=====================================");
         serial::println("");
 
-        // Parse URL by computing indices first, avoiding borrow conflicts.
-        // URL format: scheme://host[:port]/path
+        // Compute indices first; ctx.config.url is the backing storage we borrow from.
         let (scheme_end, default_port) = {
             let url = ctx.config.url;
             if url.starts_with("https://") {
@@ -68,7 +66,6 @@ impl<D: NetworkDriver> State<D> for InitState {
             }
         };
 
-        // Compute indices for host and path
         let url = ctx.config.url;
         let rest = &url[scheme_end..];
 
@@ -87,7 +84,6 @@ impl<D: NetworkDriver> State<D> for InitState {
             None => (host_end, default_port),
         };
 
-        // Assign using direct indexing
         ctx.resolved_port = port;
         ctx.url_host = &ctx.config.url[scheme_end..host_slice_end];
         ctx.url_path = if path_start < ctx.config.url.len() {
