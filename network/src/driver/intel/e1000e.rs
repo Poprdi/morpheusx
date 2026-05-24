@@ -18,11 +18,7 @@ pub enum E1000eError {
     LinkDown,
 }
 
-impl From<E1000eInitError> for E1000eError {
-    fn from(err: E1000eInitError) -> Self {
-        E1000eError::InitFailed(err)
-    }
-}
+crate::impl_from!(E1000eInitError => E1000eError : InitFailed);
 
 pub struct E1000eDriver {
     mmio_base: u64,

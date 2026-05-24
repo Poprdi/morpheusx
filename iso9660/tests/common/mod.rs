@@ -1,7 +1,6 @@
 //! Common test utilities and mock block devices
 
 pub mod builder;
-#[allow(unused_imports)]
 pub use builder::IsoBuilder;
 
 use gpt_disk_io::BlockIo;
@@ -24,14 +23,12 @@ impl MemoryBlockDevice {
         }
     }
 
-    #[allow(dead_code)]
     pub fn from_file(path: &str) -> io::Result<Self> {
         let data = std::fs::read(path)?;
         Ok(Self::new(data))
     }
 
     /// Create a minimal valid ISO9660 volume for testing
-    #[allow(dead_code)]
     pub fn create_minimal_iso() -> Self {
         let mut data = vec![0u8; 64 * 2048]; // 64 sectors
 
@@ -163,19 +160,3 @@ impl BlockIo for MemoryBlockDevice {
     }
 }
 
-/// Helper to create a test file entry (simple injection without proper directory update for now)
-#[allow(dead_code)]
-pub fn create_test_file(
-    device: &mut MemoryBlockDevice,
-    _parent_lba: u32,
-    _name: &str,
-    content: &[u8],
-    file_lba: u32,
-) {
-    // Write file content to specified LBA
-    let file_offset = file_lba as usize * 2048;
-    let content_len = content.len();
-    if file_offset + content_len <= device.data.len() {
-        device.data[file_offset..file_offset + content_len].copy_from_slice(content);
-    }
-}

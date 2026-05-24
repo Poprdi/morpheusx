@@ -6,6 +6,17 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::cpu::idt::{disable_interrupts, enable_interrupts, interrupts_enabled};
 
+/// Spin on CAS until `lock` flips false→true. Shared by every spinlock here.
+#[inline(always)]
+fn cas_acquire(lock: &AtomicBool) {
+    while lock
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
 /// Disables interrupts while held. Use this when in doubt.
 pub struct SpinLock<T> {
     locked: AtomicBool,
@@ -28,13 +39,7 @@ impl<T> SpinLock<T> {
         let interrupts_were_enabled = interrupts_enabled();
         disable_interrupts();
 
-        while self
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            core::hint::spin_loop();
-        }
+        cas_acquire(&self.locked);
 
         SpinLockGuard {
             lock: self,
@@ -116,13 +121,7 @@ impl RawSpinLock {
     }
 
     pub fn lock(&self) {
-        while self
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            core::hint::spin_loop();
-        }
+        cas_acquire(&self.locked);
     }
 
     pub fn unlock(&self) {
@@ -174,13 +173,7 @@ impl IsrSafeRawSpinLock {
         let was_enabled = interrupts_enabled();
         disable_interrupts();
 
-        while self
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            core::hint::spin_loop();
-        }
+        cas_acquire(&self.locked);
 
         // Stamp IF state only after we hold the lock.
         let ci = Self::core_index();

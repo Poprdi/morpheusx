@@ -20,6 +20,7 @@ members = [
     "init",
     "shelld",
     "settings",
+    "ping",
     "tests/syscall-e2e",
     "tests/netcheck",
     "tests/spinning-cube",
@@ -46,6 +47,18 @@ iso9660 = { path = "iso9660", package = "iso9660-rs" }
 morpheus-ui = { path = "ui" }
 morpheus-helix = { path = "helix" }
 
+# Shared external dependencies — hoisted from per-crate Cargo.toml.
+# Canonical feature set picked to be the most restrictive across consumers.
+spin = { version = "0.9", default-features = false, features = ["lock_api", "spin_mutex"] }
+linked_list_allocator = "0.10"
+gpt_disk_io = { version = "0.16", default-features = false }
+gpt_disk_types = { version = "0.16", default-features = false }
+
 
 [profile.dev]
 panic = "abort"      # No unwinding in dev either
+
+[profile.release]
+opt-level = 3
+lto       = true
+panic     = "abort"

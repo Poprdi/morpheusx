@@ -2,9 +2,7 @@
 
 mod common;
 
-#[allow(unused_imports)]
 use common::{IsoBuilder, MemoryBlockDevice};
-#[allow(unused_imports)]
 use iso9660::{find_file, mount, read_file};
 
 #[test]

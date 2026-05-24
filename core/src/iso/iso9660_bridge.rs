@@ -23,14 +23,12 @@
 
 extern crate alloc;
 use super::reader::IsoReadContext;
+use crate::fs::SECTOR_SIZE as DISK_BLOCK_SIZE;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
 /// ISO9660 sector size (what iso9660 crate expects)
 const ISO_SECTOR_SIZE: usize = 2048;
-
-/// Physical disk block size
-const DISK_BLOCK_SIZE: usize = 512;
 
 /// Ratio of ISO sectors to disk blocks
 const BLOCKS_PER_ISO_SECTOR: usize = ISO_SECTOR_SIZE / DISK_BLOCK_SIZE;

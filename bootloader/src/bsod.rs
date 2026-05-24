@@ -2,9 +2,6 @@
 
 #[path = "bsod_bg_data.rs"]
 mod bsod_bg_data;
-#[path = "bsod_bg_data_v1.rs"]
-#[allow(dead_code)]
-mod bsod_bg_data_v1;
 
 use morpheus_display::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
 use morpheus_hwinit::serial::puts;
@@ -392,42 +389,6 @@ fn dec32(val: u32, buf: &mut [u8; 10]) -> &str {
     buf[..len].reverse();
     unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
 }
-
-#[allow(dead_code)]
-const EXCEPTION_NAMES: [&str; 32] = [
-    "DIVIDE_BY_ZERO",
-    "DEBUG",
-    "NMI",
-    "BREAKPOINT",
-    "OVERFLOW",
-    "BOUND_RANGE_EXCEEDED",
-    "INVALID_OPCODE",
-    "DEVICE_NOT_AVAILABLE",
-    "DOUBLE_FAULT",
-    "COPROCESSOR_SEGMENT",
-    "INVALID_TSS",
-    "SEGMENT_NOT_PRESENT",
-    "STACK_SEGMENT_FAULT",
-    "GENERAL_PROTECTION_FAULT",
-    "PAGE_FAULT",
-    "RESERVED",
-    "X87_FLOATING_POINT",
-    "ALIGNMENT_CHECK",
-    "MACHINE_CHECK",
-    "SIMD_FLOATING_POINT",
-    "VIRTUALIZATION",
-    "CONTROL_PROTECTION",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-];
 
 /// Fixed-buffer string builder for crash-screen lines.
 struct Line {

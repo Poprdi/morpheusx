@@ -6,7 +6,7 @@ A bare-metal x86-64 exokernel written in Rust. MorpheusX boots via UEFI, takes d
 
 MorpheusX is not a kernel in the traditional sense. It's closer to exokernel philosophy: the kernel exposes hardware directly and lets applications manage their own resources within loose isolation boundaries. 
 
-The system boots through an 11-phase initialization that transforms raw x86-64 hardware into a runnable environment:
+The system boots through a 12-phase initialization (13 counting the 10.5 reclaim) that transforms raw x86-64 hardware into a runnable environment:
 
 1. Memory ownership (UEFI → bare metal)
 2. CPU state (GDT, IDT, exception handlers)
@@ -16,9 +16,12 @@ The system boots through an 11-phase initialization that transforms raw x86-64 h
 6. DMA region (2 MB pre-allocated)
 7. PCI discovery
 8. Paging (adopt/manage page tables)
-9. Process scheduler (100 Hz preemptive)
-10. Syscall interface (SYSCALL/SYSRET)
-11. Root filesystem (HelixFS)
+9. USB input (xHCI HID enumeration)
+10. Process scheduler (100 Hz preemptive)
+11. Syscall interface (SYSCALL/SYSRET)
+   - 10.5. Reclaim BootServices{Code,Data} into the buddy allocator
+12. Root filesystem (HelixFS)
+13. SMP bring-up (AP boot via ACPI MADT)
 
 After boot, applications can spawn user processes, allocate memory, perform I/O, and communicate through syscalls.
 ## Design Principles

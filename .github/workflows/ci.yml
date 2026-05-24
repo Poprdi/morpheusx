@@ -4,7 +4,7 @@
 # Fast feedback: lint → build-host → test-host (cascade, fail-fast)
 #
 # Separate workflows:
-# - UEFI builds and E2E tests → manual only (uefi-e2e.yml)
+# - UEFI builds and E2E tests → manual only (uefi-build.yml)
 # - Documentation → tags only (cargo-doc.yml)
 # - Security audit → weekly + dependency changes (audit.yml)
 # - Releases → tags only (release.yml)
@@ -24,8 +24,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Pin toolchain for reproducibility
-  RUST_VERSION: "1.85"
+  # Pin toolchain for reproducibility (matches rust-toolchain.toml)
+  RUST_VERSION: "1.92.0"
 
 # Cancel in-progress runs for same PR/branch
 concurrency:
@@ -141,18 +141,23 @@ jobs:
 
       # Test workspace crates that support host tests
       # Note: morpheus-bootloader is UEFI-only (has #[panic_handler])
+      # `updater` is a placeholder crate with no tests — skipped.
       - name: Run tests (host-testable crates)
         run: |
           cargo test --all-features \
             -p iso9660-rs \
             -p morpheus-core \
             -p morpheus-network \
-            -p updater
+            -p morpheus-gfx3d \
+            -p morpheus-ui \
+            -p morpheus-ping \
+            -p morpheus-helix
 
-      # Run iso9660 integration tests that create fixtures
+      # Run iso9660 integration tests that create fixtures.
+      # These are gated behind `--ignored`; failures should fail CI now that
+      # the fixture-generation tools are installed in this job.
       - name: Run ISO9660 extended tests
         run: |
           cd iso9660
-          cargo test --test integration_tests create_test_iso -- --ignored --nocapture || true
-        continue-on-error: true
+          cargo test --test integration_tests create_test_iso -- --ignored --nocapture
 

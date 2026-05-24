@@ -23,11 +23,7 @@ pub enum DnsError {
     InvalidHostname,
 }
 
-impl From<DnsError> for StateError {
-    fn from(_: DnsError) -> Self {
-        StateError::DnsError
-    }
-}
+crate::impl_from!(DnsError => StateError : DnsError(_));
 
 /// DNS resolution state machine.
 ///

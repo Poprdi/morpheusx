@@ -1,10 +1,8 @@
-use super::super::Fat32Error;
+use super::super::{Fat32Error, SECTOR_SIZE};
 use super::context::Fat32Context;
 use super::types::{DirEntry, ATTR_DIRECTORY};
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
-
-const SECTOR_SIZE: usize = 512;
 
 fn names_match_case_insensitive(a: &[u8; 11], b: &[u8; 11]) -> bool {
     for i in 0..11 {

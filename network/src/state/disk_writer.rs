@@ -46,11 +46,7 @@ pub enum DiskWriterError {
     InvalidState,
 }
 
-impl From<BlockError> for DiskWriterError {
-    fn from(e: BlockError) -> Self {
-        DiskWriterError::BlockError(e)
-    }
-}
+crate::impl_from!(BlockError => DiskWriterError : BlockError);
 
 /// Pending write request.
 #[derive(Debug, Clone, Copy, Default)]

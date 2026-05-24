@@ -120,7 +120,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
     }
 
     // Drop registry before spawn_user_process — load_elf64 reacquires it.
-    let pages_needed = file_size.div_ceil(4096) as u64;
+    let pages_needed = file_size.div_ceil(crate::memory::PAGE_SIZE as usize) as u64;
     let buf_phys = {
         let mut registry = crate::memory::global_registry_mut();
         match registry.allocate_pages(

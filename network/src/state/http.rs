@@ -58,17 +58,8 @@ pub enum HttpError {
     HttpsNotSupported,
 }
 
-impl From<DnsError> for HttpError {
-    fn from(e: DnsError) -> Self {
-        HttpError::DnsError(e)
-    }
-}
-
-impl From<TcpError> for HttpError {
-    fn from(e: TcpError) -> Self {
-        HttpError::TcpError(e)
-    }
-}
+crate::impl_from!(DnsError => HttpError : DnsError);
+crate::impl_from!(TcpError => HttpError : TcpError);
 
 impl From<HttpError> for StateError {
     fn from(e: HttpError) -> Self {

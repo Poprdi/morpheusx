@@ -377,7 +377,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
 
     // Read at most 64 KB for header parsing.
     let read_size = file_size.min(65536);
-    let pages_needed = read_size.div_ceil(4096) as u64;
+    let pages_needed = read_size.div_ceil(crate::memory::PAGE_SIZE as usize) as u64;
 
     // drop registry before disk I/O — holding it blocks every other core from allocating.
     let buf_phys = {

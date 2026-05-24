@@ -1,7 +1,6 @@
 use crate::common::MemoryBlockDevice;
 use std::collections::HashMap;
 
-#[allow(dead_code)]
 pub struct IsoBuilder {
     files: HashMap<String, Vec<u8>>,
     pvd_lba: u32,
@@ -9,7 +8,6 @@ pub struct IsoBuilder {
     next_free_lba: u32,
 }
 
-#[allow(dead_code)]
 impl IsoBuilder {
     pub fn new() -> Self {
         Self {

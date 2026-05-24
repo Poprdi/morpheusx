@@ -1,4 +1,4 @@
-use super::super::Fat32Error;
+use super::super::{Fat32Error, SECTOR_SIZE};
 use super::context::Fat32Context;
 use super::directory::add_dir_entry_to_cluster;
 use super::types::{DirEntry, ATTR_ARCHIVE, ATTR_DIRECTORY};
@@ -9,8 +9,6 @@ extern crate alloc;
 use crate::uefi_alloc;
 use alloc::vec;
 use alloc::vec::Vec;
-
-const SECTOR_SIZE: usize = 512;
 
 /// Pre-EBS temp buffer via UEFI allocate_pages.
 unsafe fn with_temp_buffer<F>(

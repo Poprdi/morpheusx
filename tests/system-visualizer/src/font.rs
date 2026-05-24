@@ -292,8 +292,6 @@ pub fn glyph(ch: u8) -> [u8; 7] {
     }
 }
 
-#[allow(dead_code)]
-pub const GLYPH_W: u32 = 5;
 pub const GLYPH_H: u32 = 7;
 pub const CELL_W: u32 = 6;
 pub const CELL_H: u32 = 9;

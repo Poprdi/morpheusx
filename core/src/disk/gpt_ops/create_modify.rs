@@ -27,7 +27,7 @@ fn write_gpt_both<B: BlockIo>(
 
     let num_entries = header.number_of_partition_entries.to_u32() as u64;
     let entry_size = header.size_of_partition_entry.to_u32() as u64;
-    let block_size = 512u64;
+    let block_size = crate::fs::SECTOR_SIZE as u64;
     let entries_sectors = (num_entries * entry_size + block_size - 1) / block_size;
     let secondary_entry_lba = alternate_lba.to_u64() - entries_sectors;
 
@@ -218,7 +218,7 @@ pub fn shrink_partition<B: BlockIo>(
     let current_end_lba = entry.ending_lba.to_u64();
     let current_size_lba = current_end_lba - start_lba + 1;
 
-    let new_size_lba = mb_to_lba(new_size_mb, 512);
+    let new_size_lba = mb_to_lba(new_size_mb, crate::fs::SECTOR_SIZE as u32);
 
     if new_size_lba == 0 || new_size_lba >= current_size_lba {
         return Err(GptError::InvalidSize);

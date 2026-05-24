@@ -48,16 +48,14 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "channel"
-version = "0.1.0"
+version = "1.0.1"
 
 [[package]]
 name = "compd"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "channel",
  "libmorpheus",
- "morpheus-display",
- "morpheus-gfx3d",
 ]
 
 [[package]]
@@ -159,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "init"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "libmorpheus",
 ]
@@ -228,12 +226,11 @@ version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
- "uguid",
 ]
 
 [[package]]
 name = "morpheus-display"
-version = "0.1.0"
+version = "1.0.1"
 
 [[package]]
 name = "morpheus-gfx3d"
@@ -273,15 +270,15 @@ dependencies = [
 
 [[package]]
 name = "morpheus-persistent"
+version = "1.0.1"
+
+[[package]]
+name = "morpheus-ping"
 version = "0.1.0"
-dependencies = [
- "gpt_disk_io",
- "gpt_disk_types",
-]
 
 [[package]]
 name = "morpheus-ui"
-version = "0.1.0"
+version = "1.0.1"
 
 [[package]]
 name = "msh"
@@ -345,19 +342,16 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "settings"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "libmorpheus",
- "morpheus-ui",
 ]
 
 [[package]]
 name = "shelld"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
- "channel",
  "libmorpheus",
- "morpheus-display",
 ]
 
 [[package]]

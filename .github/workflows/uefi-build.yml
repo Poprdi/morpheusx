@@ -23,7 +23,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: "1.85"
+  RUST_VERSION: "1.92.0"
 
 # Remove concurrency here to avoid deadlocks with callers.
 # concurrency:

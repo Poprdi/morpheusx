@@ -495,22 +495,7 @@ unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-#[inline]
-fn read_tsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    unsafe {
-        core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
-    }
-    ((hi as u64) << 32) | (lo as u64)
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[inline]
-fn read_tsc() -> u64 {
-    0
-}
+use crate::asm::core::tsc::read_tsc;
 
 /// Write a manifest for an existing ISO without using the state machine.
 ///

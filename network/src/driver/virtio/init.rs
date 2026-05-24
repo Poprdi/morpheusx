@@ -45,11 +45,7 @@ pub enum VirtioInitError {
     DeviceError,
 }
 
-impl From<RxError> for VirtioInitError {
-    fn from(_err: RxError) -> Self {
-        VirtioInitError::DeviceError
-    }
-}
+crate::impl_from!(RxError => VirtioInitError : DeviceError(_));
 
 /// Initialize VirtIO network device.
 ///

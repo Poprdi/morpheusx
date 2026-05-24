@@ -19,6 +19,26 @@
 
 extern crate alloc;
 
+/// Trivial `impl From<Src> for Dst { fn from(e) -> Self { Dst::Variant(e) } }`.
+/// Use the `(_)` form for variants that drop the payload.
+#[macro_export]
+macro_rules! impl_from {
+    ($src:ty => $dst:ty : $variant:ident) => {
+        impl From<$src> for $dst {
+            fn from(e: $src) -> Self {
+                <$dst>::$variant(e)
+            }
+        }
+    };
+    ($src:ty => $dst:ty : $variant:ident(_)) => {
+        impl From<$src> for $dst {
+            fn from(_: $src) -> Self {
+                <$dst>::$variant
+            }
+        }
+    };
+}
+
 pub mod alloc_heap;
 pub mod display;
 

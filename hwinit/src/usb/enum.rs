@@ -44,10 +44,14 @@ impl XhciController {
             crate::serial::log_warn("USB", 253, "enable_slot: success event but slot id = 0");
             return Err(XhciError::EnableSlotFailed);
         }
+        if (slot as usize) > dma::MAX_OUT_CTX_SLOTS {
+            crate::serial::log_warn("USB", 254, "enable_slot: slot id exceeds out-ctx capacity");
+            return Err(XhciError::EnableSlotFailed);
+        }
         self.slot_id = slot;
 
-        // wire output context into DCBAA
-        let out_ctx = self.dma_base + dma::OFF_OUT_CTX as u64;
+        let out_ctx = self.dma_base + dma::slot_out_ctx_offset(slot) as u64;
+        core::ptr::write_bytes(out_ctx as *mut u8, 0, dma::OUT_CTX_STRIDE);
         vw64(
             self.dma_base + dma::OFF_DCBAA as u64 + (slot as u64) * 8,
             out_ctx,
@@ -154,7 +158,7 @@ impl XhciController {
 
         // Copy the current slot context from the output context, then patch
         // only the Context Entries field (bits 31:27) to cover the new EP DCI.
-        let out_slot = self.dma_base + dma::OFF_OUT_CTX as u64;
+        let out_slot = self.dma_base + dma::slot_out_ctx_offset(self.slot_id) as u64;
         let in_slot = in_ctx + cs;
         let d0 = vr32(out_slot);
         let d0_new = (d0 & !(0x1Fu32 << 27)) | ((dci_in as u32 & 0x1F) << 27);
@@ -218,7 +222,7 @@ impl XhciController {
         let add_flags = (1u32 << 0) | (1u32 << dci_in) | (1u32 << dci_out);
         vw32(in_ctx + 4, add_flags);
 
-        let out_slot = self.dma_base + dma::OFF_OUT_CTX as u64;
+        let out_slot = self.dma_base + dma::slot_out_ctx_offset(self.slot_id) as u64;
         let d0 = vr32(out_slot);
         vw32(in_ctx + cs, (d0 & (0xF << 20)) | ((max_dci as u32) << 26));
         vw32(in_ctx + cs + 4, vr32(out_slot + 4));

@@ -13,7 +13,7 @@ MorpheusX is a bare-metal x86-64 exokernel written in Rust. It boots via UEFI, t
 - **Language**: Rust (1.75+) with `no_std` in core components
 - **Subsystems**: HelixFS (log-structured filesystem), hwinit (memory/paging/scheduler), bootloader (UEFI TUI), display (framebuffer), network (VirtIO/AHCI)
 - **Build target**: `x86_64-unknown-uefi`
-- **Boot flow**: 11-phase initialization (memory → CPU → interrupts → heap → DMA → PCI → paging → scheduler → syscalls → filesystem)
+- **Boot flow**: 12-phase initialization (13 counting the 10.5 reclaim): memory → CPU → interrupts → heap → TSC → DMA → PCI → paging → USB input → scheduler → syscalls → (10.5 reclaim BootServices) → HelixFS → SMP
 - **Security classification**: Experimental - not production hardened
 
 ## Authoritative Standards

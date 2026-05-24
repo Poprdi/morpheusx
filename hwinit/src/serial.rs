@@ -143,19 +143,25 @@ pub fn puts(s: &str) {
     }
 }
 
-/// Write `val` as 8 hex digits (no `0x` prefix) to all three sinks.
-/// Routes through `puts` so the framebuffer mirror sees the digits too —
-/// unlike `put_dec_u16_raw`, which only reaches COM1.
-pub fn puts_hex_u32(val: u32) {
-    let mut buf = [b'0'; 8];
-    for i in 0..8 {
-        let nyb = ((val >> ((7 - i) * 4)) & 0xF) as u8;
+/// Fill `buf[..n]` with the low `n` hex nibbles of `val`, MSB-first. `n <= buf.len()`.
+#[inline]
+fn fmt_hex(val: u64, n: usize, buf: &mut [u8]) {
+    for i in 0..n {
+        let nyb = ((val >> ((n - 1 - i) * 4)) & 0xF) as u8;
         buf[i] = if nyb < 10 {
             b'0' + nyb
         } else {
             b'a' + (nyb - 10)
         };
     }
+}
+
+/// Write `val` as 8 hex digits (no `0x` prefix) to all three sinks.
+/// Routes through `puts` so the framebuffer mirror sees the digits too —
+/// unlike `put_dec_u16_raw`, which only reaches COM1.
+pub fn puts_hex_u32(val: u32) {
+    let mut buf = [0u8; 8];
+    fmt_hex(val as u64, 8, &mut buf);
     if let Ok(s) = core::str::from_utf8(&buf) {
         puts(s);
     }
@@ -169,11 +175,8 @@ pub fn puts_hex_u64(val: u64) {
 
 /// Write `val` as 2 hex digits (no `0x` prefix) to all three sinks.
 pub fn puts_hex_u8(val: u8) {
-    let mut buf = [b'0'; 2];
-    let hi = (val >> 4) & 0xF;
-    let lo = val & 0xF;
-    buf[0] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
-    buf[1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+    let mut buf = [0u8; 2];
+    fmt_hex(val as u64, 2, &mut buf);
     if let Ok(s) = core::str::from_utf8(&buf) {
         puts(s);
     }
@@ -434,43 +437,30 @@ pub fn checkpoint(label: &str) {
     emit(b'\n');
 }
 
-/// Write u32 as hex (0x prefix).
-pub fn put_hex32(val: u32) {
+/// COM1-only hex emit with `0x` prefix. `n` is the digit count.
+#[inline]
+fn put_hex_raw(val: u64, n: usize) {
+    let mut buf = [0u8; 16];
+    fmt_hex(val, n, &mut buf);
     let _guard = SERIAL_LOCK.lock();
     putc_raw(b'0');
     putc_raw(b'x');
-    for i in (0..8).rev() {
-        let nibble = ((val >> (i * 4)) & 0xF) as u8;
-        let c = if nibble < 10 {
-            b'0' + nibble
-        } else {
-            b'a' + nibble - 10
-        };
-        putc_raw(c);
+    for &b in &buf[..n] {
+        putc_raw(b);
     }
+}
+
+/// Write u32 as hex (0x prefix).
+pub fn put_hex32(val: u32) {
+    put_hex_raw(val as u64, 8);
 }
 
 pub fn put_hex64(val: u64) {
-    let _guard = SERIAL_LOCK.lock();
-    putc_raw(b'0');
-    putc_raw(b'x');
-    for i in (0..16).rev() {
-        let nibble = ((val >> (i * 4)) & 0xF) as u8;
-        let c = if nibble < 10 {
-            b'0' + nibble
-        } else {
-            b'a' + nibble - 10
-        };
-        putc_raw(c);
-    }
+    put_hex_raw(val, 16);
 }
 
 pub fn put_hex8(val: u8) {
-    let _guard = SERIAL_LOCK.lock();
-    let hi = (val >> 4) & 0xF;
-    let lo = val & 0xF;
-    putc_raw(if hi < 10 { b'0' + hi } else { b'a' + hi - 10 });
-    putc_raw(if lo < 10 { b'0' + lo } else { b'a' + lo - 10 });
+    put_hex_raw(val as u64, 2);
 }
 
 #[inline]

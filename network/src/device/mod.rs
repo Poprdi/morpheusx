@@ -74,17 +74,8 @@ pub enum UnifiedDeviceError {
     IntelError(E1000eError),
 }
 
-impl From<VirtioInitError> for UnifiedDeviceError {
-    fn from(e: VirtioInitError) -> Self {
-        UnifiedDeviceError::VirtioError(e)
-    }
-}
-
-impl From<E1000eError> for UnifiedDeviceError {
-    fn from(e: E1000eError) -> Self {
-        UnifiedDeviceError::IntelError(e)
-    }
-}
+crate::impl_from!(VirtioInitError => UnifiedDeviceError : VirtioError);
+crate::impl_from!(E1000eError => UnifiedDeviceError : IntelError);
 
 impl UnifiedNetDevice {
     /// Probe for network device and create appropriate driver.
@@ -235,29 +226,10 @@ pub enum UnifiedBlockError {
     UsbMsdError(UsbMsdInitError),
 }
 
-impl From<VirtioBlkInitError> for UnifiedBlockError {
-    fn from(e: VirtioBlkInitError) -> Self {
-        UnifiedBlockError::VirtioError(e)
-    }
-}
-
-impl From<AhciInitError> for UnifiedBlockError {
-    fn from(e: AhciInitError) -> Self {
-        UnifiedBlockError::AhciError(e)
-    }
-}
-
-impl From<SdhciInitError> for UnifiedBlockError {
-    fn from(e: SdhciInitError) -> Self {
-        UnifiedBlockError::SdhciError(e)
-    }
-}
-
-impl From<UsbMsdInitError> for UnifiedBlockError {
-    fn from(e: UsbMsdInitError) -> Self {
-        UnifiedBlockError::UsbMsdError(e)
-    }
-}
+crate::impl_from!(VirtioBlkInitError => UnifiedBlockError : VirtioError);
+crate::impl_from!(AhciInitError => UnifiedBlockError : AhciError);
+crate::impl_from!(SdhciInitError => UnifiedBlockError : SdhciError);
+crate::impl_from!(UsbMsdInitError => UnifiedBlockError : UsbMsdError);
 
 impl UnifiedBlockDevice {
     /// Get which driver type is being used.

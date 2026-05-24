@@ -24,9 +24,7 @@
 
 use super::error::IsoError;
 use super::reader::IsoReadContext;
-
-/// Sector size (standard)
-const SECTOR_SIZE: usize = 512;
+use crate::fs::SECTOR_SIZE;
 
 /// Block I/O adapter for chunked ISO storage
 ///

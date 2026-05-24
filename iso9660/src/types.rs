@@ -1,8 +1,5 @@
 //! ISO 9660 types and constants.
 
-#[allow(unused_imports)]
-use alloc::vec::Vec;
-
 /// Logical sector size. Fixed by spec.
 pub const SECTOR_SIZE: usize = 2048;
 

@@ -157,7 +157,7 @@ impl XhciController {
     ) -> Result<(), XhciError> {
         let cs = self.ctx_size as u64;
         let in_ctx = self.dma_base + dma::OFF_IN_CTX as u64;
-        let out_ctx = self.dma_base + dma::OFF_OUT_CTX as u64;
+        let out_ctx = self.dma_base + dma::slot_out_ctx_offset(self.slot_id) as u64;
 
         // Wipe input control context + slot context + EP0 context area
         core::ptr::write_bytes(in_ctx as *mut u8, 0, (3 * cs) as usize);

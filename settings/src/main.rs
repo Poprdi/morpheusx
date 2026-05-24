@@ -7,7 +7,6 @@ extern crate alloc;
 use alloc::vec;
 
 mod chambers;
-mod font;
 mod layout;
 mod state;
 mod theme;

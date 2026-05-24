@@ -111,8 +111,6 @@ pub unsafe fn poll_keyboard() -> bool {
     if DBG_FIRST_POLL {
         DBG_FIRST_POLL = false;
         // Dump the controller state at the moment runtime polling begins.
-        // Same fields as dump_state, plus the bin (interrupt-IN) ring's
-        // producer state so we can see if our armed TRB is in fact there.
         controller.dump_state("first poll");
         crate::serial::puts("[USB-DBG] bin.enq=");
         crate::serial::puts_dec_u8(controller.bin.enq);
@@ -122,6 +120,40 @@ pub unsafe fn poll_keyboard() -> bool {
         crate::serial::puts_dec_u8(controller.evt_ring.deq);
         crate::serial::puts(" evt.cycle=");
         crate::serial::puts_dec_u8(controller.evt_ring.cycle);
+        crate::serial::puts("\n");
+
+        // Authoritative state-of-the-keyboard dump. The xHC writes per-device
+        // state into the slot's output context as it processes commands. If
+        // ADDRESS_DEVICE + CONFIGURE_ENDPOINT really completed for the
+        // keyboard, this snapshot should show:
+        //   slot.dw0 [23:20] Speed = 2 (LS)
+        //   slot.dw3 [31:27] Slot State = 3 (Configured)
+        //   slot.dw3 [22:0]  USB Address != 0
+        //   ep_in.dw0 [2:0]  EP State = 1 (Running)
+        //   ep_in.dw1 [5:3]  EP Type = 7 (Int IN)
+        //   ep_in.dw2/3      TR Dequeue Pointer matching OFF_XFER_BIN
+        let cs = controller.ctx_size as u64;
+        let out_ctx = controller.dma_base
+            + crate::usb::dma::slot_out_ctx_offset(kb.slot_id) as u64;
+        let slot_d0 = crate::usb::rings::vr32(out_ctx);
+        let slot_d3 = crate::usb::rings::vr32(out_ctx + 12);
+
+        let dci = ((kb.ep_in & 0x7F) as u64) * 2 + 1;
+        let ep_ctx = out_ctx + dci * cs;
+        let ep_d0 = crate::usb::rings::vr32(ep_ctx);
+        let ep_d1 = crate::usb::rings::vr32(ep_ctx + 4);
+        let ep_d2 = crate::usb::rings::vr32(ep_ctx + 8);
+
+        crate::serial::puts("[USB-DBG] kbd slot.d0=");
+        crate::serial::puts_hex_u32(slot_d0);
+        crate::serial::puts(" slot.d3=");
+        crate::serial::puts_hex_u32(slot_d3);
+        crate::serial::puts(" ep.d0=");
+        crate::serial::puts_hex_u32(ep_d0);
+        crate::serial::puts(" ep.d1=");
+        crate::serial::puts_hex_u32(ep_d1);
+        crate::serial::puts(" ep.d2=");
+        crate::serial::puts_hex_u32(ep_d2);
         crate::serial::puts("\n");
     }
 

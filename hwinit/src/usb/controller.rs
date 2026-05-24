@@ -169,9 +169,11 @@ impl XhciController {
         // we don't rely on that — write it ourselves so behaviour matches
         // across firmwares and reboots. Bits [7:0] = MaxSlotsEn; preserve the
         // upper bits (U3E, CIE, etc.) in case firmware set them.
+        // `slot_out_ctx_offset(20)` would silently index past the array.
         {
             let cur = mmio::read32(op_base + OP_CONFIG);
-            mmio::write32(op_base + OP_CONFIG, (cur & !0xFF) | (max_slots as u32));
+            let enabled = (max_slots as u32).min(dma::MAX_OUT_CTX_SLOTS as u32);
+            mmio::write32(op_base + OP_CONFIG, (cur & !0xFF) | enabled);
         }
 
         // DCBAAP

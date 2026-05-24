@@ -96,29 +96,10 @@ pub enum BlockProbeError {
     DeviceNotResponding,
 }
 
-impl From<VirtioBlkInitError> for BlockProbeError {
-    fn from(_: VirtioBlkInitError) -> Self {
-        BlockProbeError::VirtioInitFailed
-    }
-}
-
-impl From<AhciInitError> for BlockProbeError {
-    fn from(_: AhciInitError) -> Self {
-        BlockProbeError::AhciInitFailed
-    }
-}
-
-impl From<SdhciInitError> for BlockProbeError {
-    fn from(_: SdhciInitError) -> Self {
-        BlockProbeError::SdhciInitFailed
-    }
-}
-
-impl From<UsbMsdInitError> for BlockProbeError {
-    fn from(_: UsbMsdInitError) -> Self {
-        BlockProbeError::UsbMsdInitFailed
-    }
-}
+crate::impl_from!(VirtioBlkInitError => BlockProbeError : VirtioInitFailed(_));
+crate::impl_from!(AhciInitError => BlockProbeError : AhciInitFailed(_));
+crate::impl_from!(SdhciInitError => BlockProbeError : SdhciInitFailed(_));
+crate::impl_from!(UsbMsdInitError => BlockProbeError : UsbMsdInitFailed(_));
 
 /// Information about a detected block device.
 #[derive(Debug, Clone, Copy)]

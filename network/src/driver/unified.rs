@@ -38,17 +38,8 @@ pub enum UnifiedDriverError {
     InvalidHandoff,
 }
 
-impl From<VirtioInitError> for UnifiedDriverError {
-    fn from(e: VirtioInitError) -> Self {
-        UnifiedDriverError::VirtioError(e)
-    }
-}
-
-impl From<E1000eError> for UnifiedDriverError {
-    fn from(e: E1000eError) -> Self {
-        UnifiedDriverError::IntelError(e)
-    }
-}
+crate::impl_from!(VirtioInitError => UnifiedDriverError : VirtioError);
+crate::impl_from!(E1000eError => UnifiedDriverError : IntelError);
 
 /// Unified network driver that wraps all supported NIC drivers.
 ///

@@ -1,7 +1,6 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-const SECTOR_SIZE: usize = 512;
 pub const ATTR_DIRECTORY: u8 = 0x10;
 pub const ATTR_ARCHIVE: u8 = 0x20;
 

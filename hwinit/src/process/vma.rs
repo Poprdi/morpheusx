@@ -31,12 +31,12 @@ impl Vma {
 
     #[inline]
     pub const fn size_bytes(&self) -> u64 {
-        self.pages * 4096
+        self.pages * crate::memory::PAGE_SIZE
     }
 
     #[inline]
     pub const fn vaddr_end(&self) -> u64 {
-        self.vaddr + self.pages * 4096
+        self.vaddr + self.pages * crate::memory::PAGE_SIZE
     }
 }
 

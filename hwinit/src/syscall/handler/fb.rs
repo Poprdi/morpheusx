@@ -139,7 +139,7 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
 
     // Drop registry before sys_map_phys — ensure_user_table re-acquires
     // GLOBAL_REGISTRY and would deadlock otherwise.
-    let pages = info.size.div_ceil(4096);
+    let pages = info.size.div_ceil(crate::memory::PAGE_SIZE);
     let phys = {
         let mut registry = crate::memory::global_registry_mut();
         match registry.allocate_pages(
@@ -169,7 +169,7 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
 
 /// Allocate back + shadow, seed both from VRAM.
 unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
-    let pages = info.size.div_ceil(4096);
+    let pages = info.size.div_ceil(crate::memory::PAGE_SIZE);
     let mut registry = crate::memory::global_registry_mut();
 
     let back_phys = registry

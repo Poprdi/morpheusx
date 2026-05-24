@@ -80,11 +80,7 @@ pub enum OrchestratorError {
     InvalidState,
 }
 
-impl From<DiskWriterError> for OrchestratorError {
-    fn from(e: DiskWriterError) -> Self {
-        OrchestratorError::DiskError(e)
-    }
-}
+crate::impl_from!(DiskWriterError => OrchestratorError : DiskError);
 
 impl From<BlockError> for OrchestratorError {
     fn from(e: BlockError) -> Self {

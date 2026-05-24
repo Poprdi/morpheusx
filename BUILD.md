@@ -33,7 +33,7 @@ Output: `testing/esp/EFI/BOOT/BOOTX64.EFI`
 - `updater/` - self-update logic
 - `network/` - Bare metal networking (WIP)
 **Build requirements**:
-- `nasm` - assembles `trampoline32.asm` (bootloader/build.rs)
+- `nasm` - assembles `bootloader/asm/keyboard/ps2.s` (bootloader/build.rs) into `libbootloader_asm.a`
 - `ar` - creates static lib from .obj
 - Rust 1.75+ with `x86_64-unknown-uefi` target
 
@@ -138,18 +138,29 @@ Downloads Tails, builds, runs. ~10min on decent connection.
 
 | Script | Purpose |
 |--------|---------|
-| build.sh | 2-pass build with reloc extraction |
-| install-arch.sh | Arch bootstrap → rootfs → initramfs |
-| install-tails.sh | Download Tails ISO, extract kernel/initrd |
-| install-live-distro.sh | Menu installer for 5 distros |
-| quickstart-tails.sh | Automated Tails setup + build + run |
-| create-minimal-initrd.sh | Busybox test initrd |
-| rebuild-initrd.sh | Pack rootfs/ into initramfs |
-| setup-initrd.sh | Download Ubuntu netboot initrd |
-| create-test-disk.sh | Create 50GB GPT disk with ESP |
-| run-persistence-test.sh | Boot only 10GB disk (persistence check) |
-| extract-reloc-data.sh | Parse PE, extract .reloc, gen Rust code |
-| debug.sh | Connect GDB to QEMU :1234 |
+| `setup-dev.sh` | Repo-root entrypoint: setup / build / run / deploy |
+| `debug.sh` | Connect GDB to QEMU :1234 |
+| `testing/run.sh` | Thin shim → `./setup-dev.sh run` (QEMU + OVMF launch) |
+| `testing/build.sh` | 2-pass build with reloc extraction |
+| `testing/install-arch.sh` | Arch bootstrap → rootfs → initramfs |
+| `testing/install-tails.sh` | Download Tails ISO, extract kernel/initrd |
+| `testing/install-live-distro.sh` | Menu installer for 5 distros |
+| `testing/quickstart-tails.sh` | Automated Tails setup + build + run |
+| `testing/create-minimal-initrd.sh` | Busybox test initrd |
+| `testing/rebuild-initrd.sh` | Pack rootfs/ into initramfs |
+| `testing/setup-initrd.sh` | Download Ubuntu netboot initrd |
+| `testing/create-test-disk.sh` | Create 50GB GPT disk with ESP |
+| `testing/run-persistence-test.sh` | Boot only 10GB disk (persistence check) |
+| `testing/setup-tails-for-boot.sh` | Configure Tails ESP entries |
+| `testing/test-network.sh` | Smoke-test network bring-up |
+| `tools/extract-reloc-data.sh` | Parse PE, extract .reloc, gen Rust code |
+| `tools/extract-image-base.sh` | Read ImageBase from PE optional header |
+| `tools/analyze-relocs.sh` | Debug helper for .reloc section |
+| `scripts/build-docs.sh` | Build rustdoc for the workspace |
+| `scripts/ci-build-uefi.sh` | CI: build UEFI bootloader |
+| `scripts/gen-fixtures.sh` | Generate test fixtures |
+| `scripts/qemu-e2e.sh` | CI: QEMU end-to-end boot test |
+| `scripts/validate-commit-msg.sh` | Enforce conventional-commit format |
 
 ## Architecture Flow
 

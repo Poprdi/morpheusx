@@ -1,6 +1,6 @@
 [package]
 name = "morpheus-cli"
-version.workspace = true  
+version.workspace = true
 edition.workspace = true
 
 [[bin]]
@@ -8,6 +8,6 @@ name = "morpheus-cli"
 path = "src/main.rs"
 
 [dependencies]
-morpheus-helix = { path = "../helix" }
-gpt_disk_io = "0.16"
-gpt_disk_types = "0.16"
+morpheus-helix.workspace = true
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true

@@ -1,8 +1,6 @@
-use super::super::Fat32Error;
+use super::super::{Fat32Error, SECTOR_SIZE};
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
-
-const SECTOR_SIZE: usize = 512;
 
 pub struct Fat32Context {
     pub sectors_per_cluster: u32,

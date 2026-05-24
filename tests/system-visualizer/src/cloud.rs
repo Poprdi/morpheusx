@@ -39,7 +39,6 @@ pub fn render_cloud<T: RenderTarget>(
 ) {
     let n = layout.count.min(state.proc_count);
 
-    // Process spheres
     for i in 0..n {
         let proc = match state.process(i) {
             Some(p) => p,

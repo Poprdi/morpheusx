@@ -191,19 +191,4 @@ unsafe fn flush_remaining(blk: &mut UnifiedBlockDevice) -> bool {
     flush_buffer(blk) > 0
 }
 
-#[cfg(target_arch = "x86_64")]
-#[inline]
-fn read_tsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    unsafe {
-        core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
-    }
-    ((hi as u64) << 32) | (lo as u64)
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[inline]
-fn read_tsc() -> u64 {
-    0
-}
+use crate::asm::core::tsc::read_tsc;

@@ -243,7 +243,7 @@ pub unsafe fn init_heap_with_buffer(buffer: *mut u8, size: usize) -> Result<(), 
         return Err("heap already initialized");
     }
 
-    if buffer.is_null() || size < 4096 {
+    if buffer.is_null() || size < crate::memory::PAGE_SIZE as usize {
         return Err("invalid buffer");
     }
 

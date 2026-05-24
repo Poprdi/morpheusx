@@ -49,17 +49,8 @@ pub enum DownloadError {
     Cancelled,
 }
 
-impl From<DhcpError> for DownloadError {
-    fn from(e: DhcpError) -> Self {
-        DownloadError::NetworkError(e)
-    }
-}
-
-impl From<HttpError> for DownloadError {
-    fn from(e: HttpError) -> Self {
-        DownloadError::HttpError(e)
-    }
-}
+crate::impl_from!(DhcpError => DownloadError : NetworkError);
+crate::impl_from!(HttpError => DownloadError : HttpError);
 
 impl From<DownloadError> for StateError {
     fn from(e: DownloadError) -> Self {

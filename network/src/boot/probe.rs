@@ -55,17 +55,8 @@ pub enum ProbeError {
     DeviceNotResponding,
 }
 
-impl From<VirtioInitError> for ProbeError {
-    fn from(_: VirtioInitError) -> Self {
-        ProbeError::VirtioInitFailed
-    }
-}
-
-impl From<E1000eError> for ProbeError {
-    fn from(_: E1000eError) -> Self {
-        ProbeError::IntelInitFailed
-    }
-}
+crate::impl_from!(VirtioInitError => ProbeError : VirtioInitFailed(_));
+crate::impl_from!(E1000eError => ProbeError : IntelInitFailed(_));
 
 /// Information about a detected network device.
 #[derive(Debug, Clone, Copy)]

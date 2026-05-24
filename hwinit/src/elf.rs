@@ -315,7 +315,7 @@ unsafe fn ensure_user_table(
                 // 2 MiB at PD → 512 × 4 KiB. Base is bits [51:21].
                 let base = raw_phys & !(MIB_2 - 1);
                 for i in 0u64..512 {
-                    let sub_phys = base + i * 4096;
+                    let sub_phys = base + i * crate::memory::PAGE_SIZE;
                     *(*new_table).entry_mut(i as usize) = PageTableEntry::new(sub_phys, sub_flags);
                 }
             }

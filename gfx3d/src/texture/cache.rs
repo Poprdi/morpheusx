@@ -2,7 +2,6 @@ use alloc::vec::Vec;
 
 /// Quake-style surface cache: texture * lightmap pre-combined per tile,
 /// keyed by (texture, lightmap, rect). LRU ring eviction.
-#[allow(dead_code)]
 pub struct SurfaceCache {
     entries: Vec<CacheEntry>,
     capacity: usize,
@@ -10,7 +9,6 @@ pub struct SurfaceCache {
     generation: u32,
 }
 
-#[allow(dead_code)]
 struct CacheEntry {
     key: u64,
     gen: u32,
