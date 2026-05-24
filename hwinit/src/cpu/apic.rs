@@ -248,9 +248,19 @@ pub unsafe fn setup_timer(target_hz: u32) {
 
     lapic_write(base, LAPIC_TIMER_INIT, 0xFFFF_FFFF);
 
-    // Hang here => PIT gate not armed or PIT ch2 absent.
+    // Bounded PIT spin: previously this could hang forever if PIT ch2 was
+    // absent (some modern boards), masked, or wedged. Cap by iteration count
+    // since TSC is not yet calibrated. ~1us per inb on real hw → 1M
+    // iterations ≈ 1s upper bound, far past the 10ms window we expect.
     crate::serial::checkpoint("lapic-pit-spin");
+    let mut pit_timed_out = false;
+    let mut spins: u32 = 0;
     while crate::cpu::pio::inb(0x61) & 0x20 == 0 {
+        spins = spins.wrapping_add(1);
+        if spins >= 1_000_000 {
+            pit_timed_out = true;
+            break;
+        }
         core::hint::spin_loop();
     }
     crate::serial::checkpoint("lapic-pit-done");
@@ -259,8 +269,25 @@ pub unsafe fn setup_timer(target_hz: u32) {
 
     lapic_write(base, LAPIC_LVT_TIMER, TIMER_MASKED);
 
-    if elapsed == 0 {
-        log_warn("LAPIC", 723, "timer calibration returned zero ticks");
+    if pit_timed_out || elapsed == 0 {
+        // PIT unusable. Fall back to an assumed-bus heuristic so the
+        // scheduler still ticks (wrong rate beats a hang). Numbers chosen
+        // for a ~100 MHz LAPIC bus / divisor 16 → 6.25 MHz effective.
+        log_warn(
+            "LAPIC",
+            723,
+            if pit_timed_out {
+                "PIT spin timed out; using fallback timer rate"
+            } else {
+                "timer calibration returned zero ticks; using fallback rate"
+            },
+        );
+        const FALLBACK_TICKS_PER_SEC: u64 = 6_250_000;
+        let init_count = (FALLBACK_TICKS_PER_SEC / target_hz as u64) as u32;
+        LAPIC_TIMER_INIT_COUNT.store(init_count, Ordering::Release);
+        lapic_write(base, LAPIC_LVT_TIMER, TIMER_PERIODIC | TIMER_VECTOR as u32);
+        lapic_write(base, LAPIC_TIMER_DIV, 0x03);
+        lapic_write(base, LAPIC_TIMER_INIT, init_count);
         return;
     }
 
