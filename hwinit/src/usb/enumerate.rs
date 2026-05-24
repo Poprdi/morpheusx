@@ -136,35 +136,68 @@ unsafe fn probe_port(controller: &XhciController, port: u8) -> Result<u8, XhciEr
 }
 
 /// Enumerate a single device on a port.
+///
+/// Each step logs a distinct WARN line on failure so real-hardware bring-up
+/// can identify exactly which xHCI operation died, without numeric codes
+/// (which the framebuffer mirror does not render).
 unsafe fn enumerate_port(
     controller: &mut XhciController,
     port: u8,
     speed: u8,
 ) -> Result<Option<UsbInputDevice>, XhciError> {
-    controller.port_reset(port)?;
+    if let Err(e) = controller.port_reset(port) {
+        crate::serial::log_warn("USB", 211, "step: port_reset failed");
+        return Err(e);
+    }
 
-    let slot_id = controller.enable_slot()?;
+    let slot_id = match controller.enable_slot() {
+        Ok(v) => v,
+        Err(e) => {
+            crate::serial::log_warn("USB", 212, "step: enable_slot failed");
+            return Err(e);
+        }
+    };
     controller.slot_id = slot_id;
 
-    controller.address_device(port, speed)?;
+    if let Err(e) = controller.address_device(port, speed) {
+        crate::serial::log_warn("USB", 213, "step: address_device failed");
+        return Err(e);
+    }
 
     // Pull device descriptor — 18 bytes, lands in OFF_DESC
-    let desc_ptr = controller.get_device_descriptor()?;
+    let desc_ptr = match controller.get_device_descriptor() {
+        Ok(p) => p,
+        Err(e) => {
+            crate::serial::log_warn("USB", 214, "step: get_device_descriptor failed");
+            return Err(e);
+        }
+    };
 
     // Pull config descriptor — first 9 bytes to get wTotalLength
-    let cfg_ptr = controller.get_config_descriptor(9)?;
+    let cfg_ptr = match controller.get_config_descriptor(9) {
+        Ok(p) => p,
+        Err(e) => {
+            crate::serial::log_warn("USB", 215, "step: get_config_descriptor(9) failed");
+            return Err(e);
+        }
+    };
     let total_len = u16::from_le_bytes([
         core::ptr::read_volatile(cfg_ptr.add(2)),
         core::ptr::read_volatile(cfg_ptr.add(3)),
     ]);
 
     // Pull the full config descriptor
-    controller.get_config_descriptor(total_len.min(512))?;
+    if let Err(e) = controller.get_config_descriptor(total_len.min(512)) {
+        crate::serial::log_warn("USB", 216, "step: get_config_descriptor(full) failed");
+        return Err(e);
+    }
 
     // desc_ptr still points into OFF_DESC; re-read cfg from same buffer
     let hid_iface = controller.find_hid_interface(desc_ptr);
 
     if let Some(hid) = hid_iface {
+        crate::serial::log_ok("USB", 219, "step: HID interface located");
+
         // DCI = endpoint_number * 2 + direction (1=IN, 0=OUT)
         let dci_in = (hid.ep_in & 0x7F) * 2 + 1;
         let dci_out = if hid.ep_out != 0 {
@@ -173,7 +206,10 @@ unsafe fn enumerate_port(
             0
         };
 
-        controller.configure_endpoints(dci_in, dci_out, hid.max_packet_in, 0)?;
+        if let Err(e) = controller.configure_endpoints(dci_in, dci_out, hid.max_packet_in, 0) {
+            crate::serial::log_warn("USB", 217, "step: configure_endpoints failed");
+            return Err(e);
+        }
         // Ignore idle errors — some devices don't support it
         let _ = controller.set_hid_idle(hid.interface_num);
 
@@ -185,6 +221,11 @@ unsafe fn enumerate_port(
             max_packet_size: hid.max_packet_in,
         }))
     } else {
+        // Successfully addressed and pulled descriptors, but no HID interface
+        // present in the configuration. Most common cause on real hardware:
+        // the device is a USB hub (class 0x09) acting as the intermediary
+        // between the controller and the real keyboard/mouse downstream.
+        crate::serial::log_info("USB", 218, "step: enumerated, no HID interface (hub?)");
         Ok(None)
     }
 }

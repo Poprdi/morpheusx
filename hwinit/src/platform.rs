@@ -444,6 +444,13 @@ pub unsafe fn platform_init_selfcontained(
     log_info("BOOT", 109, "phase 9/13: USB input init");
     checkpoint("phase9-usb-begin");
 
+    // Phase-0 visibility: dump every USB host controller the PCI bus exposes
+    // before any xHCI-specific code runs. Reveals EHCI/UHCI/OHCI controllers
+    // that the xHCI-only scan below cannot handle.
+    unsafe {
+        crate::pci::dump::dump_usb_controllers();
+    }
+
     {
         use crate::usb;
 
