@@ -333,13 +333,11 @@ impl XhciController {
         puts("\n");
     }
 
-    /// Ring the command doorbell.
     #[inline(always)]
     pub unsafe fn ring_cmd_doorbell(&self) {
         mmio::write32(self.db_base, 0);
     }
 
-    /// Ring a transfer doorbell for slot/ep.
     #[inline(always)]
     pub unsafe fn ring_xfer_doorbell(&self, ep_dci: u32) {
         mmio::write32(self.db_base + (self.slot_id as u64) * 4, ep_dci);
@@ -414,7 +412,6 @@ impl XhciController {
         }
     }
 
-    /// Update ERDP after processing events.
     pub unsafe fn update_erdp(&mut self) {
         let new_erdp = self.evt_ring.base + (self.evt_ring.deq as u64) * 16;
         mmio::write32(self.rt_base + RT_IR0_ERDP, (new_erdp as u32 & !0xF) | 0x08);

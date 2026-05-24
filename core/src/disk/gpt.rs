@@ -1,4 +1,4 @@
-// GPT (GUID Partition Table) parser
+// GPT parser. See UEFI 2.10 §5.3.
 
 #[repr(C, packed)]
 pub struct GptHeader {
@@ -28,7 +28,6 @@ pub struct GptPartitionEntry {
     pub partition_name: [u16; 36], // UTF-16LE
 }
 
-// Common partition type GUIDs
 pub const GUID_EFI_SYSTEM: [u8; 16] = [
     0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
 ];
@@ -86,7 +85,7 @@ impl GptPartitionEntry {
             let partition_name = core::ptr::read_unaligned(name_ptr);
             for (i, &c) in partition_name.iter().enumerate() {
                 if i < name.len() {
-                    name[i] = c as u8; // Simplified UTF-16 -> ASCII (works for ASCII names)
+                    name[i] = c as u8; // UTF-16 truncation; ASCII-only
                 }
             }
         }

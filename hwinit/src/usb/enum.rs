@@ -17,7 +17,6 @@ pub fn ep0_max_packet(speed: u8) -> u16 {
 }
 
 impl XhciController {
-    /// Allocate a device slot.
     pub unsafe fn enable_slot(&mut self) -> Result<u8, XhciError> {
         self.cmd_ring.enqueue(0, 0, TRB_ENABLE_SLOT);
         self.ring_cmd_doorbell();
@@ -126,6 +125,80 @@ impl XhciController {
         Ok(())
     }
 
+    /// Configure a single interrupt-IN endpoint (for an HID device).
+    ///
+    /// Unlike `configure_endpoints` (which is shaped for bulk-mode mass
+    /// storage), this:
+    ///   * uses EP Type 7 (Interrupt IN), not 6 (Bulk IN)
+    ///   * sets only one endpoint (HID keyboards may have an optional OUT
+    ///     for LED reports, but it's not required for keystrokes)
+    ///   * preserves the current slot context's route string, Hub bit,
+    ///     MTT, parent-hub fields and speed (rather than wiping them)
+    ///   * sets Context Entries at bits [31:27] correctly — `configure_endpoints`
+    ///     has a long-standing off-by-one that puts it at bit 26 (Hub) instead
+    pub unsafe fn configure_hid_endpoint(
+        &mut self,
+        dci_in: u8,
+        mpkt_in: u16,
+    ) -> Result<(), XhciError> {
+        let cs = self.ctx_size as u64;
+        let in_ctx = self.dma_base + dma::OFF_IN_CTX as u64;
+
+        // Zero the input control + slot + EP contexts up through dci_in.
+        // Layout: ctrl[0] slot[cs] ep0[2*cs] ep1[3*cs] ... ep_dci[(dci_in+1)*cs]
+        core::ptr::write_bytes(
+            in_ctx as *mut u8,
+            0,
+            ((dci_in as u64 + 2) * cs) as usize,
+        );
+
+        // Add Context flags: A0 (slot context) + the specific EP DCI.
+        let add_flags = (1u32 << 0) | (1u32 << dci_in);
+        vw32(in_ctx + 4, add_flags);
+
+        // Copy the current slot context from the output context, then patch
+        // only the Context Entries field (bits 31:27) to cover the new EP DCI.
+        let out_slot = self.dma_base + dma::OFF_OUT_CTX as u64;
+        let in_slot = in_ctx + cs;
+        let d0 = vr32(out_slot);
+        let d0_new = (d0 & !(0x1Fu32 << 27)) | ((dci_in as u32 & 0x1F) << 27);
+        vw32(in_slot, d0_new);
+        vw32(in_slot + 4, vr32(out_slot + 4));
+        vw32(in_slot + 8, vr32(out_slot + 8));
+        vw32(in_slot + 12, vr32(out_slot + 12));
+
+        // EP context for the interrupt-IN endpoint at DCI = dci_in.
+        let ep_in = in_ctx + ((dci_in as u64) + 1) * cs;
+        // DW0 [23:16] Interval. For HS, units are 2^(N) × 125 μs; for LS/FS,
+        // units are simply N × 1 ms after xHC translates the field. Setting 4
+        // gives 2 ms for HS and ~4 ms for LS/FS — fast enough for keystrokes
+        // and safely under the device's bInterval ceiling. A proper driver
+        // would derive this from the endpoint descriptor's bInterval.
+        vw32(ep_in, 4u32 << 16);
+        // DW1: CErr=3, EP Type=7 (Interrupt IN), Max Packet Size.
+        vw32(
+            ep_in + 4,
+            (3u32 << 1) | (7u32 << 3) | ((mpkt_in as u32) << 16),
+        );
+        // DW2/DW3: TR Dequeue Pointer for this endpoint's ring, DCS=1
+        // (fresh ring). HID interrupt-IN reuses the bulk-IN ring slot.
+        let ring_in = self.dma_base + dma::OFF_XFER_BIN as u64;
+        vw32(ep_in + 8, (ring_in as u32 & !0xF) | 1);
+        vw32(ep_in + 12, (ring_in >> 32) as u32);
+        // DW4: Average TRB Length — short reports for keyboards/mice.
+        vw32(ep_in + 16, 8);
+
+        // Reset the producer state on the bulk-IN ring so the first interrupt
+        // transfer goes at offset 0 with cycle=1, matching the dequeue we just set.
+        self.bin.reset();
+
+        let ctrl = TRB_CONFIGURE_EP | ((self.slot_id as u32) << 24);
+        self.cmd_ring.enqueue(in_ctx, 0, ctrl);
+        self.ring_cmd_doorbell();
+        self.wait_cmd(2000)?;
+        Ok(())
+    }
+
     /// Configure bulk-in and bulk-out endpoints.
     pub unsafe fn configure_endpoints(
         &mut self,
@@ -189,7 +262,6 @@ impl XhciController {
         Ok(desc_buf as *const u8)
     }
 
-    /// Fetch configuration descriptor.
     pub unsafe fn get_config_descriptor(&mut self, len: u16) -> Result<*const u8, XhciError> {
         let desc_buf = self.dma_base + dma::OFF_DESC as u64;
         let slot_id = self.slot_id;
@@ -203,7 +275,6 @@ impl XhciController {
         Ok(desc_buf as *const u8)
     }
 
-    /// Set the active configuration.
     pub unsafe fn set_configuration(&mut self, cfg_val: u8) -> Result<(), XhciError> {
         let slot_id = self.slot_id;
         let param = pack_setup(0x00, 0x09, cfg_val as u16, 0, 0);

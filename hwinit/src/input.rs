@@ -1,62 +1,19 @@
-//! Unified Input Subsystem
-//!
-//! Provides a single interface for keyboard and mouse input regardless of
-//! source (PS/2 or USB HID). Device drivers register themselves with this
-//! layer during early boot, and the desktop compositor reads from the
-//! unified API.
-//!
-//! # Boot Sequence Constraint
-//! All input device initialization MUST complete before the scheduler is
-//! enabled. This ensures deterministic input handling from the very first
-//! userspace process.
-//!
-//! # Design
-//!
-//! ```text
-//! Device Drivers          Input Layer          Userspace
-//!     |                      |                    |
-//! PS/2 Keyboard ──────────►  │                    │
-//! PS/2 Mouse   ───────────► │ ── unified API ──► │
-//! USB HID Kbd ─────────────► │                    │
-//! USB HID Mouse ────────────► │                    │
-//! ```
-//!
-//! # Usage
-//!
-//! ```ignore
-//! // During early boot (before scheduler):
-//! input_init();
-//!
-//! // Drivers register their handlers
-//! register_keyboard_handler(ps2_keyboard_handler);
-//! register_mouse_handler(ps2_mouse_handler);
-//!
-//! // Desktop compositor reads from unified API
-//! if let Some(key) = poll_keyboard() { ... }
-//! let (dx, dy, buttons) = poll_mouse();
-//! ```
+//! Unified keyboard/mouse input layer. PS/2 and USB HID drivers register a
+//! single handler each; the desktop drains the unified queues. All
+//! registration must happen before the scheduler starts.
 
 use crate::sync::SpinLock;
 
-/// Input event types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEvent {
-    /// Keyboard key event (scan_code, pressed)
     Key(u8, bool),
-    /// Mouse movement (dx, dy)
     Move(i16, i16),
-    /// Mouse button (button_index, pressed)
     Button(usize, bool),
-    /// Mouse wheel scroll (delta)
     Wheel(i8),
 }
 
-/// Keyboard handler function type
 type KeyboardHandler = fn(scan_code: u8, pressed: bool);
-/// Mouse handler function type
 type MouseHandler = fn(dx: i16, dy: i16, buttons: u8);
-
-// INTERNAL STATE
 
 static KEYBOARD_HANDLERS: SpinLock<Option<KeyboardHandler>> = SpinLock::new(None);
 static MOUSE_HANDLERS: SpinLock<Option<MouseHandler>> = SpinLock::new(None);
@@ -72,12 +29,8 @@ static MOUSE_TAIL: SpinLock<usize> = SpinLock::new(0);
 static KEYBOARD_REGISTERED: SpinLock<bool> = SpinLock::new(false);
 static MOUSE_REGISTERED: SpinLock<bool> = SpinLock::new(false);
 
-// UNIFIED INPUT API
-
-/// Initialize the unified input subsystem.
-/// Must be called during early boot before any input devices register.
+/// Call once during early boot before any device registers.
 pub fn init() {
-    // Reset all state
     {
         let mut head = KEYBOARD_HEAD.lock();
         *head = 0;
@@ -104,9 +57,7 @@ pub fn init() {
     }
 }
 
-/// Register a keyboard input handler.
-/// Only one handler can be registered (PS/2 or USB, not both).
-/// Panics if a handler is already registered.
+/// Panics on duplicate registration; PS/2 and USB are mutually exclusive.
 pub fn register_keyboard_handler(handler: KeyboardHandler) {
     let mut registered = KEYBOARD_REGISTERED.lock();
     if *registered {
@@ -117,9 +68,7 @@ pub fn register_keyboard_handler(handler: KeyboardHandler) {
     *registered = true;
 }
 
-/// Register a mouse input handler.
-/// Only one handler can be registered (PS/2 or USB, not both).
-/// Panics if a handler is already registered.
+/// Panics on duplicate registration; PS/2 and USB are mutually exclusive.
 pub fn register_mouse_handler(handler: MouseHandler) {
     let mut registered = MOUSE_REGISTERED.lock();
     if *registered {
@@ -130,8 +79,6 @@ pub fn register_mouse_handler(handler: MouseHandler) {
     *registered = true;
 }
 
-/// Push a keyboard event into the unified queue.
-/// Called by registered keyboard handlers.
 fn push_keyboard_event(event: InputEvent) {
     const MASK: usize = 31;
 
@@ -160,8 +107,7 @@ fn push_mouse_event(event: InputEvent) {
     }
 }
 
-/// Internal: Push a keyboard event directly.
-/// Used by drivers to inject events into the unified queue.
+/// Driver-side injection into the keyboard queue.
 pub fn push_keyboard_event_internal(event: InputEvent) {
     const MASK: usize = 31;
 
@@ -176,8 +122,7 @@ pub fn push_keyboard_event_internal(event: InputEvent) {
     }
 }
 
-/// Internal: Push a mouse event directly.
-/// Used by drivers to inject events into the unified queue.
+/// Driver-side injection into the mouse queue.
 pub fn push_mouse_event_internal(event: InputEvent) {
     const MASK: usize = 15;
 

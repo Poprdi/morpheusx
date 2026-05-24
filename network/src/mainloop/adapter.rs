@@ -40,32 +40,26 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
         }
     }
 
-    /// Refill RX descriptor queue.
     pub fn refill_rx(&mut self) {
         self.driver.refill_rx_queue();
     }
 
-    /// Collect TX completions.
     pub fn collect_tx(&mut self) {
         self.driver.collect_tx_completions();
     }
 
-    /// Get MAC address.
     pub fn mac_address(&self) -> [u8; 6] {
         self.driver.mac_address()
     }
 
-    /// Get TX packet count.
     pub fn tx_count(&self) -> u32 {
         self.tx_count
     }
 
-    /// Get RX packet count.
     pub fn rx_count(&self) -> u32 {
         self.rx_count
     }
 
-    /// Check if PHY link is up.
     pub fn driver_link_up(&self) -> bool {
         self.driver.link_up()
     }

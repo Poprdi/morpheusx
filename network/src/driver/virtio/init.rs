@@ -22,9 +22,6 @@
 //! 7. Configure virtqueues from scratch
 //! 8. Set DRIVER_OK
 //! 9. Read MAC address
-//!
-//! # Reference
-//! VirtIO 1.1 spec, Section 3.1
 
 use super::config::{features, negotiate_features, status, VirtioConfig};
 use super::transport::{TransportType, VirtioTransport};
@@ -56,13 +53,6 @@ impl From<RxError> for VirtioInitError {
 
 /// Initialize VirtIO network device.
 ///
-/// # Arguments
-/// - `mmio_base`: MMIO base address from PCI BAR
-/// - `config`: Pre-allocated DMA configuration
-///
-/// # Returns
-/// Tuple of (negotiated_features, rx_queue_state, tx_queue_state, mac_address)
-///
 /// # Safety
 /// - `mmio_base` must be valid VirtIO MMIO address
 /// - DMA region must be properly allocated
@@ -73,52 +63,31 @@ pub unsafe fn virtio_net_init(
 ) -> Result<(u64, VirtqueueState, VirtqueueState, MacAddress), VirtioInitError> {
     use crate::asm::drivers::virtio::{device, queue};
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 1: RESET DEVICE
-    // ═══════════════════════════════════════════════════════════
     let reset_result = device::reset(mmio_base);
     if !reset_result {
         return Err(VirtioInitError::ResetTimeout);
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 2: SET ACKNOWLEDGE
-    // ═══════════════════════════════════════════════════════════
     device::set_status(mmio_base, status::ACKNOWLEDGE);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 3: SET DRIVER
-    // ═══════════════════════════════════════════════════════════
     device::set_status(mmio_base, status::ACKNOWLEDGE | status::DRIVER);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 4: FEATURE NEGOTIATION
-    // ═══════════════════════════════════════════════════════════
     let device_features = device::read_features(mmio_base);
     let our_features = negotiate_features(device_features)
         .map_err(|_| VirtioInitError::FeatureNegotiationFailed)?;
     device::write_features(mmio_base, our_features);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 5: SET FEATURES_OK
-    // ═══════════════════════════════════════════════════════════
     device::set_status(
         mmio_base,
         status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK,
     );
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 6: VERIFY FEATURES_OK
-    // ═══════════════════════════════════════════════════════════
     let current_status = device::get_status(mmio_base);
     if current_status & status::FEATURES_OK == 0 {
         device::set_status(mmio_base, status::FAILED);
         return Err(VirtioInitError::FeaturesRejected);
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 7: CONFIGURE VIRTQUEUES
-    // ═══════════════════════════════════════════════════════════
 
     // Setup RX queue (index 0)
     let rx_queue = setup_queue(mmio_base, 0, config)?;
@@ -126,22 +95,13 @@ pub unsafe fn virtio_net_init(
     // Setup TX queue (index 1)
     let tx_queue = setup_queue(mmio_base, 1, config)?;
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 8: PRE-FILL RX QUEUE (deferred to driver)
-    // ═══════════════════════════════════════════════════════════
     // RX prefill is done by the driver after queue setup
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 9: SET DRIVER_OK
-    // ═══════════════════════════════════════════════════════════
     device::set_status(
         mmio_base,
         status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK | status::DRIVER_OK,
     );
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 10: READ MAC ADDRESS
-    // ═══════════════════════════════════════════════════════════
     let mac = if our_features & features::VIRTIO_NET_F_MAC != 0 {
         device::read_mac(mmio_base).unwrap_or_else(generate_local_mac)
     } else {
@@ -245,70 +205,38 @@ fn generate_local_mac() -> MacAddress {
     [0x02, 0x00, 0x00, 0x00, 0x00, 0x01]
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TRANSPORT-AWARE INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Initialize VirtIO network device using transport abstraction.
 ///
 /// This function auto-selects the correct initialization path based
 /// on the transport type (MMIO or PCI Modern).
-///
-/// # Arguments
-/// - `transport`: Transport handle (already configured with addresses)
-/// - `config`: Pre-allocated DMA configuration
-/// - `tsc_freq`: TSC frequency for timeout calculations
-///
-/// # Returns
-/// Tuple of (negotiated_features, rx_queue_state, tx_queue_state, mac_address)
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn virtio_net_init_transport(
     transport: &VirtioTransport,
     config: &VirtioConfig,
     tsc_freq: u64,
 ) -> Result<(u64, VirtqueueState, VirtqueueState, MacAddress), VirtioInitError> {
-    // ═══════════════════════════════════════════════════════════
-    // STEP 1: RESET DEVICE
-    // ═══════════════════════════════════════════════════════════
     if !transport.reset(tsc_freq) {
         return Err(VirtioInitError::ResetTimeout);
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 2: SET ACKNOWLEDGE
-    // ═══════════════════════════════════════════════════════════
     transport.set_status(status::ACKNOWLEDGE);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 3: SET DRIVER
-    // ═══════════════════════════════════════════════════════════
     transport.set_status(status::ACKNOWLEDGE | status::DRIVER);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 4: FEATURE NEGOTIATION
-    // ═══════════════════════════════════════════════════════════
     let device_features = transport.read_features();
     let our_features = negotiate_features(device_features)
         .map_err(|_| VirtioInitError::FeatureNegotiationFailed)?;
     transport.write_features(our_features);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 5: SET FEATURES_OK
-    // ═══════════════════════════════════════════════════════════
     transport.set_status(status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 6: VERIFY FEATURES_OK
-    // ═══════════════════════════════════════════════════════════
     let current_status = transport.get_status();
     if current_status & status::FEATURES_OK == 0 {
         transport.set_status(status::FAILED);
         return Err(VirtioInitError::FeaturesRejected);
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 7: CONFIGURE VIRTQUEUES
-    // ═══════════════════════════════════════════════════════════
 
     // Setup RX queue (index 0)
     let rx_queue = setup_queue_transport(transport, 0, config)?;
@@ -316,15 +244,9 @@ pub unsafe fn virtio_net_init_transport(
     // Setup TX queue (index 1)
     let tx_queue = setup_queue_transport(transport, 1, config)?;
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 9: SET DRIVER_OK
-    // ═══════════════════════════════════════════════════════════
     transport
         .set_status(status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK | status::DRIVER_OK);
 
-    // ═══════════════════════════════════════════════════════════
-    // STEP 10: READ MAC ADDRESS
-    // ═══════════════════════════════════════════════════════════
     let mac = if our_features & features::VIRTIO_NET_F_MAC != 0 {
         let mut mac_buf = [0u8; 6];
         if transport.read_mac(&mut mac_buf) {

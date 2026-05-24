@@ -59,12 +59,10 @@ impl DiskWriter {
         self.enabled
     }
 
-    /// Get total bytes written to disk.
     pub fn bytes_written(&self) -> u64 {
         unsafe { TOTAL_WRITTEN }
     }
 
-    /// Get current sector position.
     pub fn current_sector(&self) -> u64 {
         unsafe { NEXT_SECTOR }
     }

@@ -44,9 +44,6 @@ use crate::tui::input::Keyboard;
 use crate::tui::mouse::Mouse;
 use crate::{baremetal_ops, bsod, storage, tui, uefi_allocator};
 
-// ─────────────────────────────────────────────────────────────────────────
-// 1. Cross-border types (firmware → kernel handoff)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Raw framebuffer info from GOP.
 ///
@@ -158,9 +155,6 @@ impl BootContext {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 2. Published framebuffer snapshot
-// ─────────────────────────────────────────────────────────────────────────
 //
 // The BSoD/panic screen runs from exception context where touching the
 // heap or a SpinLock is forbidden. We publish a single framebuffer
@@ -206,9 +200,6 @@ pub fn published_framebuffer() -> Option<FramebufferInfo> {
     })
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 3. Live serial→framebuffer mirror
-// ─────────────────────────────────────────────────────────────────────────
 //
 // Owned by the live console stage. The hwinit serial layer holds a raw
 // `unsafe fn(u8)` pointer to this function while the live console is
@@ -223,9 +214,6 @@ unsafe fn live_console_putc(b: u8) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 4. UEFI FFI subset (only what stages B/C need)
-// ─────────────────────────────────────────────────────────────────────────
 
 const LOADED_IMAGE_PROTOCOL_GUID: [u8; 16] = [
     0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11, 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B,
@@ -399,9 +387,6 @@ struct Gop {
     mode: *mut GopMode,
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 5. UEFI binary entry — boot starts here
-// ─────────────────────────────────────────────────────────────────────────
 
 /// EFI entry point. UEFI invokes this; we never return except via reset.
 ///
@@ -458,9 +443,6 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     stage_e2_enter_userspace(&ctx);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 6. Phase A — Pre-EBS preparation
-// ─────────────────────────────────────────────────────────────────────────
 
 /// A1. Hand the global allocator the UEFI BootServices pointer so that
 /// pre-EBS allocations go through `allocate_pool`.
@@ -749,9 +731,6 @@ unsafe fn stage_a7_fetch_memory_map(ctx: &mut BootContext) {
     log_ok("EBS", 915, "memory map captured");
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 7. Phase B — Border crossing
-// ─────────────────────────────────────────────────────────────────────────
 
 static EBS_MAP_KEY: AtomicUsize = AtomicUsize::new(0);
 
@@ -829,9 +808,6 @@ fn stage_b6_publish_framebuffer(ctx: &BootContext) {
     publish_framebuffer(&ctx.framebuffer);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 8. Phase C — Hardware init (hwinit owns the machine baseline)
-// ─────────────────────────────────────────────────────────────────────────
 
 /// C1. Hand the memory map + boot stack + image bounds + ACPI RSDP to
 /// hwinit. After this returns, GDT/IDT/PIC→APIC/heap/TSC/DMA/PCI/paging/
@@ -878,9 +854,6 @@ fn stage_c3_record_platform_outputs(
     ctx.tsc_freq = platform.tsc_freq();
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 9. Phase D — Runtime services on top of hwinit
-// ─────────────────────────────────────────────────────────────────────────
 
 /// D1. Register the userspace-triggered network activation callback. The
 /// network stack stays offline until userspace explicitly opts in via
@@ -933,9 +906,6 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
     log_ok("DISPLAY", 941, "framebuffer registered with syscall layer");
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 10. Phase E — Concurrency release + userspace transition
-// ─────────────────────────────────────────────────────────────────────────
 
 /// E1. Release the parked APs. From this point on, the system is fully SMP.
 ///
@@ -986,17 +956,42 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     input_forwarding_loop(&mut keyboard, &mut mouse);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 11. Support routines used only by stage E2
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Wait for any keypress before tearing down the live console.
 ///
 /// The user sees the full boot log on screen; pressing a key signals
-/// "ready to hand off to userspace."
+/// "ready to hand off to userspace." Polls BOTH the PS/2 keyboard and the
+/// USB HID runtime — on real hardware without a PS/2 controller, USB is
+/// the only path through this gate.
 fn boot_log_gate(keyboard: &mut Keyboard) {
     puts("\nPress any key to start userspace...");
-    keyboard.wait_for_key();
+    loop {
+        // PS/2 fast path
+        if let Some(_key) = keyboard.read_key() {
+            break;
+        }
+
+        // USB HID path — non-blocking peek of the event ring; if a report
+        // arrived since the last poll, parse it and push the resulting
+        // key events into the unified input queue.
+        unsafe {
+            morpheus_hwinit::usb::runtime::poll_keyboard();
+        }
+
+        // Drain unified queue. Any press event (PS/2 didn't put anything
+        // here in this codepath, so this is the USB side) dismisses the gate.
+        let mut got_press = false;
+        while let Some(event) = morpheus_hwinit::poll_keyboard() {
+            if let morpheus_hwinit::InputEvent::Key(_scan, pressed) = event {
+                if pressed {
+                    got_press = true;
+                }
+            }
+        }
+        if got_press {
+            break;
+        }
+    }
     puts("\n");
 }
 
@@ -1070,8 +1065,9 @@ fn input_forwarding_loop(keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
     loop {
         let mut had_work = false;
 
-        // Drain up to 64 buffered bytes per outer iteration to keep mouse
-        // input responsive while the keyboard is also active.
+        // PS/2 polling — unchanged. Drains up to 64 buffered bytes per
+        // outer iteration to keep mouse input responsive while the keyboard
+        // is also active.
         for _ in 0..64 {
             let raw = unsafe { tui::input::asm_ps2_poll_any() };
             if raw == 0 {
@@ -1094,6 +1090,31 @@ fn input_forwarding_loop(keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
 
             if let Some(input) = keyboard.feed_raw(byte) {
                 forward_keyboard_byte(input);
+            }
+        }
+
+        // USB HID polling. `poll_keyboard` is non-blocking: it peeks the
+        // event ring and, if the keyboard sent a report since last poll,
+        // parses it and pushes per-key `InputEvent`s into the unified input
+        // queue via `push_keyboard_event_internal`. Re-arms the interrupt-IN
+        // transfer automatically.
+        unsafe {
+            morpheus_hwinit::usb::runtime::poll_keyboard();
+        }
+
+        // Drain any USB-derived key events from the unified input queue and
+        // feed them through the same PS/2 scan-code translator the PS/2 path
+        // uses — `parse_keyboard_report` translated HID usage codes to Set-1
+        // make codes already, so `keyboard.feed_raw` sees the same bytes it
+        // would from an actual PS/2 keypress.
+        while let Some(event) = morpheus_hwinit::poll_keyboard() {
+            if let morpheus_hwinit::InputEvent::Key(scan_code, pressed) = event {
+                if pressed && scan_code != 0 {
+                    had_work = true;
+                    if let Some(input) = keyboard.feed_raw(scan_code) {
+                        forward_keyboard_byte(input);
+                    }
+                }
             }
         }
 
@@ -1129,9 +1150,6 @@ fn forward_keyboard_byte(input: crate::tui::input::InputKey) {
     unsafe { morpheus_hwinit::process::wake_stdin_waiters() };
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 12. Boot-time fatal paths
-// ─────────────────────────────────────────────────────────────────────────
 
 /// Unrecoverable boot error. Logs and halts the BSP. APs are either still
 /// parked (pre-E1) or will quiesce on their next tick; either way the
@@ -1149,9 +1167,6 @@ fn halt_forever() -> ! {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 13. Compatibility shim
-// ─────────────────────────────────────────────────────────────────────────
 //
 // Old code (`bsod.rs`) used `crate::baremetal::get_framebuffer_info()` to
 // read the published framebuffer. The new authoritative accessor is

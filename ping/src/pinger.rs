@@ -106,25 +106,14 @@ impl Pinger {
         &self.stats
     }
 
-    /// Reset statistics
     pub fn reset_stats(&mut self) {
         self.stats.reset();
     }
 
-    /// Reset sequence number
     pub fn reset_sequence(&mut self) {
         self.sequence = 0;
     }
 
-    /// Build an ICMP echo request packet
-    ///
-    /// # Arguments
-    /// * `src` - Source IP address
-    /// * `dst` - Destination IP address  
-    /// * `buffer` - Output buffer (must be large enough for full packet)
-    ///
-    /// # Returns
-    /// Number of bytes written to buffer, or error
     pub fn build_request(
         &mut self,
         src: Ipv4Addr,
@@ -174,14 +163,6 @@ impl Pinger {
         Ok(total_size)
     }
 
-    /// Parse an ICMP echo reply packet
-    ///
-    /// # Arguments
-    /// * `data` - Received packet data (including IP header)
-    /// * `expected_seq` - Expected sequence number (None to accept any)
-    ///
-    /// # Returns
-    /// Parsed ping result or error
     pub fn parse_reply(
         &mut self,
         data: &[u8],
@@ -233,7 +214,6 @@ impl Pinger {
         self.stats.record_reply(rtt_ms);
     }
 
-    /// Record a timeout
     pub fn record_timeout(&mut self) {
         self.stats.record_lost();
     }

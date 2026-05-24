@@ -1,16 +1,6 @@
 //! HTTP response parsing.
 //!
 //! Parse HTTP/1.1 responses from wire format.
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use morpheus_network::http::Response;
-//!
-//! let data = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello";
-//! let response = Response::parse(data).unwrap();
-//! assert_eq!(response.status_code, 200);
-//! ```
 
 use super::headers::Headers;
 use crate::error::{NetworkError, Result};
@@ -99,7 +89,6 @@ impl Response {
         self.headers.get("Location")
     }
 
-    /// Get Content-Length.
     pub fn content_length(&self) -> Option<usize> {
         self.headers.content_length()
     }
@@ -109,7 +98,6 @@ impl Response {
         self.headers.is_chunked()
     }
 
-    /// Get Content-Type.
     pub fn content_type(&self) -> Option<&str> {
         self.headers.content_type()
     }

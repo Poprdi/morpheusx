@@ -1,30 +1,24 @@
-//! Path Table parsing (optional fast lookup)
-//!
-//! Path tables provide quick directory hierarchy traversal.
+//! Path table records (ISO 9660 §6.9). Optional shortcut to directory extents.
 
-/// Path Table Record
+/// Fixed-header portion of a path table record. Followed by `dir_id_len` name
+/// bytes plus an odd-length pad byte.
 #[repr(C, packed)]
 pub struct PathTableRecord {
-    /// Directory identifier length
+    /// Length of directory identifier in bytes.
     pub dir_id_len: u8,
-
-    /// Extended attribute record length
+    /// Length of any preceding Extended Attribute Record.
     pub extended_attr_len: u8,
-
-    /// Extent location (32-bit)
+    /// Directory extent LBA.
     pub extent_lba: u32,
-
-    /// Parent directory number
+    /// 1-based index of parent directory in the path table.
     pub parent_dir_num: u16,
-    // Followed by directory identifier (dir_id_len bytes)
-    // Followed by padding byte if dir_id_len is odd
 }
 
-/// Path table type
+/// L-type (LE) and M-type (BE) path tables are stored separately on the volume.
 #[derive(Debug, Clone, Copy)]
 pub enum PathTableType {
-    /// Little-endian (Type L)
+    /// L-type, little-endian.
     LittleEndian,
-    /// Big-endian (Type M)
+    /// M-type, big-endian.
     BigEndian,
 }

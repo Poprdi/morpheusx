@@ -31,9 +31,6 @@ pub struct EspBackend {
 
 impl EspBackend {
     /// Create ESP backend for a specific partition
-    ///
-    /// # Note
-    /// Not yet implemented. Use `fat32_ops::write_file()` directly for now.
     pub fn new() -> Self {
         Self { _private: () }
     }

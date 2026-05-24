@@ -1,8 +1,4 @@
-/// 16.16 fixed-point for sub-pixel precision in rasterizer inner loops.
-///
-/// Used where f32→int conversion overhead dominates (edge stepping, UV interpolation).
-/// The rasterizer pre-converts to Fx16 before the scanline loop, then steps with
-/// pure integer adds — no FPU traffic in the hot path.
+/// 16.16 fixed-point. Used by the rasterizer to keep the inner loop integer-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct Fx16(pub i32);
@@ -49,31 +45,28 @@ impl Fx16 {
         self.0 & FRAC_MASK
     }
 
-    /// Round to nearest integer.
     #[inline(always)]
     pub const fn round(self) -> i32 {
         (self.0 + HALF) >> SHIFT
     }
 
-    /// Floor: bias toward negative infinity.
     #[inline(always)]
     pub const fn floor(self) -> i32 {
         self.0 >> SHIFT
     }
 
-    /// Ceil: bias toward positive infinity.
     #[inline(always)]
     pub const fn ceil(self) -> i32 {
         (self.0 + FRAC_MASK) >> SHIFT
     }
 
-    /// Fixed × fixed with 64-bit intermediate (no overflow on 16.16 products).
+    /// 64-bit intermediate to absorb the product before the shift.
     #[inline(always)]
     pub const fn mul(self, rhs: Self) -> Self {
         Self(((self.0 as i64 * rhs.0 as i64) >> SHIFT) as i32)
     }
 
-    /// Fixed / fixed with 64-bit pre-shift (full precision, no truncation).
+    /// 64-bit pre-shift; saturates on divide-by-zero.
     #[inline(always)]
     pub const fn div(self, rhs: Self) -> Self {
         if rhs.0 == 0 {
@@ -91,7 +84,7 @@ impl Fx16 {
         }
     }
 
-    /// Linear interpolation: self + (other - self) * t, where t is Fx16 in [0, 1].
+    /// t in [0,1] as Fx16.
     #[inline(always)]
     pub const fn lerp(self, other: Self, t: Self) -> Self {
         let diff = other.0 - self.0;

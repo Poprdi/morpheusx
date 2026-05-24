@@ -60,7 +60,6 @@ impl SysInfo {
         }
     }
 
-    /// Uptime in milliseconds.
     pub fn uptime_ms(&self) -> u64 {
         if self.tsc_freq == 0 {
             return 0;

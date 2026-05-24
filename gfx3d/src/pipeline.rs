@@ -18,21 +18,7 @@ use crate::target::{RenderTarget, TargetPixelFormat};
 use crate::texture::mipmap::{MipChain, Texture};
 use crate::texture::sample::{self, SampleMode};
 
-/// The rendering pipeline — Quake-class software renderer.
-///
-/// Call order per frame:
-/// 1. `begin_frame()` — clear buffers, reset arena
-/// 2. `set_camera()` — update view/projection
-/// 3. `draw_mesh()` × N — submit geometry with transforms and materials
-/// 4. `end_frame()` — finalize (optional post-processing)
-///
-/// Internally, each `draw_mesh` call:
-/// - Frustum-culls the mesh's bounding sphere
-/// - Transforms vertices to clip space (model → world → clip)
-/// - Clips triangles against the 6 frustum planes
-/// - Performs perspective divide + viewport transform
-/// - Rasterizes to spans with fixed-point edge walking
-/// - Fills spans with perspective-correct texturing + lighting
+/// Software renderer. Order: begin_frame, set_camera, draw_mesh×N, end_frame.
 pub struct Pipeline {
     trig: TrigTable,
     clipper: Clipper,
@@ -72,11 +58,10 @@ pub struct FrameStats {
     pub meshes_frustum_culled: u32,
 }
 
-/// Material description for a draw call.
 pub struct Material<'a> {
     pub texture: Option<&'a MipChain>,
     pub specular_power: f32,
-    pub base_color: [f32; 3], // fallback color if no texture
+    pub base_color: [f32; 3], // used if texture is None
 }
 
 impl<'a> Material<'a> {
@@ -128,7 +113,6 @@ impl Pipeline {
         }
     }
 
-    /// Resize viewport (call when framebuffer resolution changes).
     pub fn resize(&mut self, w: u32, h: u32) {
         self.viewport_w = w;
         self.viewport_h = h;
@@ -156,10 +140,7 @@ impl Pipeline {
         self.camera_pos = camera.position;
     }
 
-    /// Submit a mesh with a model-to-world transform.
-    ///
-    /// This is the main draw call. Handles the full vertex pipeline:
-    /// transform → light → clip → project → rasterize → shade.
+    /// Full vertex pipeline: transform, light, clip, project, rasterize, shade.
     pub fn draw_mesh(
         &mut self,
         mesh: &Mesh,
@@ -168,7 +149,7 @@ impl Pipeline {
         lights: &LightEnv,
         target: &mut dyn RenderTarget,
     ) {
-        // ── 1. Frustum cull (bounding sphere in world space) ──
+        // Bounding-sphere frustum cull (world space).
         let world_center = model.transform_point(mesh.bound_center).xyz();
         let scale_approx = {
             let sx2 = model.cols[0][0] * model.cols[0][0]
@@ -206,12 +187,10 @@ impl Pipeline {
             return;
         }
 
-        // ── 2. Compute combined model-view-projection ──
         let mvp = self.view_proj.mul(model);
         let model_view = self.view.mul(model);
         let camera_pos = self.camera_pos;
 
-        // ── 3. Transform + light all vertices ──
         let vert_count = mesh.vertices.len();
         self.clip_verts.clear();
         self.lit_colors.clear();
@@ -244,7 +223,6 @@ impl Pipeline {
             ));
         }
 
-        // ── 4. Process each triangle ──
         let idx = &mesh.indices;
         let tri_count = idx.len() / 3;
 
@@ -290,7 +268,6 @@ impl Pipeline {
                 build_vert(i2, clip_tri[2], &self.lit_colors),
             ];
 
-            // ── 5. Clip against frustum ──
             let clipped = self.clipper.clip_triangle(&tri_verts);
             if clipped.len() < 3 {
                 self.stats.triangles_culled += 1;
@@ -300,14 +277,14 @@ impl Pipeline {
                 self.stats.triangles_clipped += 1;
             }
 
-            // Copy clipped verts out so we can release the clipper borrow
+            // Copy out to release the clipper borrow before rasterizing.
             let clipped_count = clipped.len();
             let mut clipped_buf = [Vertex::ZEROED; 12];
             for (i, v) in clipped.iter().enumerate() {
                 clipped_buf[i] = *v;
             }
 
-            // ── 6. Fan-triangulate clipped polygon and rasterize ──
+            // Fan-triangulate the clipped polygon.
             for fan_idx in 1..(clipped_count - 1) {
                 let v0 = project_vertex(&clipped_buf[0], self.half_w, self.half_h);
                 let v1 = project_vertex(&clipped_buf[fan_idx], self.half_w, self.half_h);
@@ -354,18 +331,12 @@ impl Pipeline {
         }
     }
 
-    /// Fill a single scanline span with shaded pixels.
-    ///
-    /// This is THE hot inner loop — every optimization matters here.
     pub fn end_frame(&mut self) {
-        // Reserved for post-processing passes (gamma correction, etc.)
+        // Reserved for post-processing.
     }
 }
 
-/// Perspective divide + viewport transform a clip-space vertex to screen space.
-///
-/// After this, vertex.pos = (screen_x, screen_y, depth_01, 1/clip_w).
-/// The 1/clip_w is stored in pos.w for perspective-correct interpolation.
+/// Perspective divide + viewport transform. Stores 1/w in pos.w for perspective-correct interp.
 #[inline]
 fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     let clip_w = v.pos.w;
@@ -384,11 +355,10 @@ fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     let ndc_y = v.pos.y * inv_w;
     let ndc_z = v.pos.z * inv_w;
 
-    // Viewport transform: NDC [-1,1] → screen pixels
     let screen_x = (ndc_x + 1.0) * half_w;
-    let screen_y = (1.0 - ndc_y) * half_h; // Y flipped (screen Y goes down)
+    let screen_y = (1.0 - ndc_y) * half_h; // screen Y is down
 
-    // Pre-divide attributes by clip_w for perspective-correct interpolation
+    // Attributes pre-divided by w; rasterizer interpolates these and recovers w.
     Vertex {
         pos: Vec4::new(screen_x, screen_y, ndc_z, inv_w),
         color: [v.color[0] * inv_w, v.color[1] * inv_w, v.color[2] * inv_w],
@@ -398,15 +368,13 @@ fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     }
 }
 
-/// Signed area × 2 of screen-space triangle (for back-face culling).
+/// 2× signed area of screen triangle (back-face cull sign).
 #[inline]
 fn screen_area_2x(v0: &Vertex, v1: &Vertex, v2: &Vertex) -> f32 {
     (v1.pos.x - v0.pos.x) * (v2.pos.y - v0.pos.y) - (v1.pos.y - v0.pos.y) * (v2.pos.x - v0.pos.x)
 }
 
-/// Trivial reject: true if all 3 vertices are outside the same clip plane.
-///
-/// Cohen-Sutherland-style outcodes for 3D clip space.
+/// Cohen-Sutherland outcodes against the 6 clip planes; reject if all share a plane.
 #[inline]
 fn trivial_reject(tri: &[Vec4; 3]) -> bool {
     let outcode = |v: &Vec4| -> u8 {
@@ -425,7 +393,7 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
         }
         if v.z < 0.0 {
             c |= 16;
-        } // near (reversed-Z)
+        } // near
         if v.z > v.w {
             c |= 32;
         } // far
@@ -437,7 +405,7 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
     (c0 & c1 & c2) != 0
 }
 
-/// Dispatch to the optimal fill_span variant based on material and fog.
+/// Dispatch to the cheapest valid span path.
 fn fill_span(
     span: &Span,
     grads: &SpanGradients,
@@ -498,7 +466,6 @@ fn fill_span(
     }
 }
 
-/// Pack (r8, g8, b8) directly to the target pixel format — no intermediate.
 #[inline(always)]
 fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
     match format {
@@ -510,12 +477,7 @@ fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
     }
 }
 
-/// Fast path: solid-color, no texture, no fog.
-///
-/// Skips the per-pixel perspective divide entirely. Colors are interpolated
-/// linearly in screen space (the error vs perspective-correct is invisible
-/// for Gouraud-shaded solid polygons). Everything stays in 16.16 fixed-point,
-/// no f32 in the inner loop.
+/// Solid + no fog. Two divides per span, linear interp inside; pure 16.16 fixed inner loop.
 fn fill_span_solid(
     span: &Span,
     grads: &SpanGradients,
@@ -536,12 +498,12 @@ fn fill_span_solid(
     let x_start_fx = Fx16::from_i32(x_start as i32);
     let prestep_fx = x_start_fx - span.x_left;
 
-    // Pre-compute base color as 8.8 fixed point (avoid per-pixel f32→int)
+    // Base color as 8.8.
     let base_r = (material.base_color[0] * 256.0) as i32;
     let base_g = (material.base_color[1] * 256.0) as i32;
     let base_b = (material.base_color[2] * 256.0) as i32;
 
-    // Recover true color at x_start by dividing out inv_w once
+    // Perspective-divide at span endpoints, then linear interp.
     let inv_w_start = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
     let w_start = if inv_w_start.0 != 0 {
         Fx16::ONE.div(inv_w_start)
@@ -553,7 +515,6 @@ fn fill_span_solid(
     let cg_start = (span.g_left + grads.g_step.mul(prestep_fx)).mul(w_start);
     let cb_start = (span.b_left + grads.b_step.mul(prestep_fx)).mul(w_start);
 
-    // Recover true color at x_end by dividing out inv_w once
     let span_len_fx = Fx16::from_i32((x_end - x_start) as i32);
     let inv_w_end = inv_w_start + grads.inv_w_step.mul(span_len_fx);
     let w_end = if inv_w_end.0 != 0 {
@@ -566,7 +527,6 @@ fn fill_span_solid(
     let cg_end = (span.g_left + grads.g_step.mul(prestep_fx + span_len_fx)).mul(w_end);
     let cb_end = (span.b_left + grads.b_step.mul(prestep_fx + span_len_fx)).mul(w_end);
 
-    // Linear steps in screen-space color (2 divisions for the whole span)
     let len = (x_end - x_start) as i32;
     let len_fx = Fx16::from_i32(len.max(1));
     let r_step = (cr_end - cr_start).div(len_fx);
@@ -615,13 +575,10 @@ fn fill_span_solid(
     pixels_written
 }
 
-/// Affine subdivision step for perspective-correct texture mapping.
+/// Pixels per perspective divide in textured path (classic Quake affine step).
 const AFFINE_STEP: u32 = 8;
 
-/// Textured path with affine subdivision — no fog.
-///
-/// Perspective divide every AFFINE_STEP pixels, linear UV interpolation
-/// between. Classic Quake/Unreal technique: 87.5% fewer divisions.
+/// Textured, no fog. Divide every AFFINE_STEP px; linear UV inside.
 fn fill_span_textured(
     span: &Span,
     grads: &SpanGradients,
@@ -666,7 +623,6 @@ fn fill_span_textured(
         let chunk_end = (x + AFFINE_STEP).min(x_end);
         let chunk_len = chunk_end - x;
 
-        // Perspective divide at chunk start
         let w0 = if inv_w.0 != 0 {
             Fx16::ONE.div(inv_w)
         } else {
@@ -678,7 +634,6 @@ fn fill_span_textured(
         let g0 = cg_iw.mul(w0);
         let b0 = cb_iw.mul(w0);
 
-        // Perspective divide at chunk end
         let inv_w_next = inv_w + Fx16(grads.inv_w_step.0 * chunk_len as i32);
         let w1 = if inv_w_next.0 != 0 {
             Fx16::ONE.div(inv_w_next)
@@ -696,7 +651,6 @@ fn fill_span_textured(
         let g1 = cg_next.mul(w1);
         let b1 = cb_next.mul(w1);
 
-        // Linear steps within chunk
         let inv_len = Fx16::from_i32((chunk_len as i32).max(1));
         let du = (u1 - u0).div(inv_len);
         let dv = (v1 - v0).div(inv_len);
@@ -736,7 +690,7 @@ fn fill_span_textured(
             };
             let (tr, tg, tb, _ta) = Texture::unpack(texel);
 
-            // Color × texel in integer: Fx16(0..1) × u8 → i32, >> 16 → u8
+            // Fx16 × u8 → 16.16 i32, >> 16 → u8.
             let pr = fast::clamp_u8((r_cur.0 * tr as i32) >> 16);
             let pg = fast::clamp_u8((g_cur.0 * tg as i32) >> 16);
             let pb = fast::clamp_u8((b_cur.0 * tb as i32) >> 16);
@@ -751,7 +705,6 @@ fn fill_span_textured(
             z += grads.z_step;
         }
 
-        // Advance interpolants by chunk
         inv_w += Fx16(grads.inv_w_step.0 * chunk_len as i32);
         cr_iw += Fx16(grads.r_step.0 * chunk_len as i32);
         cg_iw += Fx16(grads.g_step.0 * chunk_len as i32);
@@ -764,7 +717,7 @@ fn fill_span_textured(
     pixels_written
 }
 
-/// Full path: textured + fog (general fallback).
+/// Fallback: per-pixel divide, supports fog.
 fn fill_span_full(
     span: &Span,
     grads: &SpanGradients,

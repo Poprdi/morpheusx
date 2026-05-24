@@ -11,16 +11,6 @@
 //! 0\r\n
 //! \r\n
 //! ```
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use morpheus_network::transfer::ChunkedDecoder;
-//!
-//! let data = b"5\r\nHello\r\n0\r\n\r\n";
-//! let result = ChunkedDecoder::decode(data).unwrap();
-//! assert_eq!(result, b"Hello");
-//! ```
 
 use crate::error::{NetworkError, Result};
 use alloc::vec::Vec;
@@ -84,7 +74,6 @@ impl ChunkedDecoder {
         &self.output
     }
 
-    /// Take ownership of the decoded output.
     pub fn take_output(self) -> Vec<u8> {
         self.output
     }

@@ -24,7 +24,6 @@ impl MemoryBlockDevice {
         }
     }
 
-    /// Create from a file path
     #[allow(dead_code)]
     pub fn from_file(path: &str) -> io::Result<Self> {
         let data = std::fs::read(path)?;

@@ -1,7 +1,4 @@
 //! Ethernet frame types and helpers.
-//!
-//! # Reference
-//! IEEE 802.3
 
 /// Ethernet address length (6 bytes).
 pub const ETH_ALEN: usize = 6;
@@ -36,7 +33,6 @@ impl EthernetHeader {
         u16::from_be_bytes(self.ethertype)
     }
 
-    /// Set EtherType from u16.
     pub fn set_ethertype(&mut self, val: u16) {
         self.ethertype = val.to_be_bytes();
     }
@@ -45,17 +41,13 @@ impl EthernetHeader {
 // Common EtherTypes (in host byte order)
 /// IPv4.
 pub const ETH_P_IP: u16 = 0x0800;
-/// ARP.
 pub const ETH_P_ARP: u16 = 0x0806;
-/// IPv6.
 pub const ETH_P_IPV6: u16 = 0x86DD;
 /// VLAN tag.
 pub const ETH_P_8021Q: u16 = 0x8100;
 
-/// Broadcast MAC address.
 pub const MAC_BROADCAST: MacAddress = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
-/// Check if MAC is broadcast.
 pub fn is_broadcast(mac: &MacAddress) -> bool {
     *mac == MAC_BROADCAST
 }

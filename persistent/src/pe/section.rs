@@ -21,7 +21,6 @@ pub struct SectionHeader {
 }
 
 impl SectionHeader {
-    /// Check if this is the .reloc section
     pub fn is_reloc_section(&self) -> bool {
         &self.name[..6] == b".reloc"
     }
@@ -69,12 +68,10 @@ impl<'a> SectionTable<'a> {
         Ok(SectionTable { sections })
     }
 
-    /// Find the .reloc section
     pub fn find_reloc_section(&self) -> Option<&SectionHeader> {
         self.sections.iter().find(|s| s.is_reloc_section())
     }
 
-    /// Get section by index
     pub fn get(&self, index: usize) -> Option<&SectionHeader> {
         self.sections.get(index)
     }

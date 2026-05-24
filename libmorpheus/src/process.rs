@@ -302,21 +302,9 @@ pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
     count
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// Command — builder for child process spawning
-// ═══════════════════════════════════════════════════════════════════════
 
 /// A process builder, providing fine-grained control over how a new
 /// process is configured.
-///
-/// # Example
-/// ```ignore
-/// use libmorpheus::process::Command;
-/// let status = Command::new("/bin/ls")
-///     .arg("/home")
-///     .status()?;
-/// println!("exited with {}", status);
-/// ```
 pub struct Command {
     path: String,
     args: Vec<String>,
@@ -373,7 +361,6 @@ impl ExitStatus {
         Self { code }
     }
 
-    /// The exit code.
     pub fn code(&self) -> i32 {
         self.code
     }

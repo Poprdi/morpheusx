@@ -1,30 +1,22 @@
-//! Framebuffer-based TextOutput implementation.
-//!
-//! This is the post-ExitBootServices backend that renders directly to the framebuffer.
+//! Post-ExitBootServices TextOutput rendering directly to the framebuffer.
 
 use crate::console::TextConsole;
 use crate::framebuffer::Framebuffer;
 use crate::types::FramebufferInfo;
 use crate::TextOutput;
 
-/// Framebuffer-based text output.
 pub struct FbTextOutput {
     console: TextConsole,
 }
 
 impl FbTextOutput {
-    /// Create a new framebuffer text output.
-    ///
-    /// # Safety
-    /// The framebuffer info must point to valid framebuffer memory
-    /// that remains mapped for the lifetime of this struct.
+    /// SAFETY: `info` must point to mapped fb memory that outlives self.
     pub unsafe fn new(info: FramebufferInfo) -> Self {
         let fb = Framebuffer::new(info);
         let console = TextConsole::new(fb);
         Self { console }
     }
 
-    /// Get mutable access to the underlying console.
     pub fn console_mut(&mut self) -> &mut TextConsole {
         &mut self.console
     }
@@ -32,7 +24,7 @@ impl FbTextOutput {
 
 impl TextOutput for FbTextOutput {
     fn reset(&mut self) {
-        self.console.set_attribute(0x07); // Light gray on black
+        self.console.set_attribute(0x07); // light gray on black
         self.console.clear();
     }
 

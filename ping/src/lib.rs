@@ -69,9 +69,7 @@ pub mod targets {
     /// Google DNS - widely available
     pub const GOOGLE: Ipv4Addr = Ipv4Addr::new(8, 8, 8, 8);
     
-    /// Quad9 DNS
     pub const QUAD9: Ipv4Addr = Ipv4Addr::new(9, 9, 9, 9);
     
-    /// OpenDNS
     pub const OPENDNS: Ipv4Addr = Ipv4Addr::new(208, 67, 222, 222);
 }

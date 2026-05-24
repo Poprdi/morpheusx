@@ -1,7 +1,4 @@
-//! ASM bindings for framebuffer primitives.
-//!
-//! This module provides safe wrappers around standalone assembly functions
-//! for hardware-facing framebuffer operations.
+//! Wrappers around standalone fb assembly primitives.
 
 pub mod fb;
 

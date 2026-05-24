@@ -1,24 +1,14 @@
 use super::triangle::Vertex;
 use crate::math::fixed::Fx16;
 
-/// A horizontal span (scanline segment) produced by the edge walker.
-///
-/// The edge function approach: we walk left and right edges top-to-bottom,
-/// producing one Span per scanline. Each span stores the start/end x and
-/// interpolated attributes at both endpoints. The inner loop then steps
-/// between them using fixed-point increments.
-///
-/// This is the Quake 1/2 approach: edge → span → pixel. Modern GPUs
-/// use tile-based rasterization, but for software rendering, span-based
-/// is still king because it's perfectly cache-friendly (sequential writes
-/// to the framebuffer row).
+/// Scanline segment from the edge walker. Quake-style edge -> span -> pixel.
 #[derive(Debug, Clone, Copy)]
 pub struct Span {
     pub y: u32,
     pub x_left: Fx16,
     pub x_right: Fx16,
 
-    // Interpolated attributes at left edge (all pre-divided by w for perspective correction)
+    // Pre-divided by w for perspective correction.
     pub inv_w_left: Fx16,
     pub r_left: Fx16,
     pub g_left: Fx16,
@@ -44,17 +34,13 @@ impl Span {
         fog_left: Fx16::ZERO,
     };
 
-    /// Width of this span in pixels.
     #[inline]
     pub fn width(&self) -> i32 {
         self.x_right.ceil() - self.x_left.ceil()
     }
 }
 
-/// Compute per-pixel step increments for a span.
-///
-/// This pre-computes 1/(x_right - x_left) once, then multiplies each
-/// attribute delta by it. The inner pixel loop only needs additions.
+/// Per-pixel step increments; inner loop only adds.
 #[derive(Debug, Clone, Copy)]
 pub struct SpanGradients {
     pub inv_w_step: Fx16,

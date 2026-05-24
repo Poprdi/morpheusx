@@ -10,9 +10,6 @@ use crate::asm::drivers::intel::{
 };
 use crate::mainloop::serial::{serial_print, serial_print_hex, serial_println};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Size of a single TX descriptor in bytes.
 pub const TX_DESC_SIZE: usize = 16;
@@ -20,12 +17,8 @@ pub const TX_DESC_SIZE: usize = 16;
 /// Maximum Ethernet frame size (without FCS - hardware adds it).
 pub const MAX_FRAME_SIZE: usize = 1514;
 
-/// Default TX buffer size (2KB).
 pub const DEFAULT_BUFFER_SIZE: usize = 2048;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TX ERRORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TX errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,9 +34,6 @@ pub enum TxError {
     },
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TX RING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TX descriptor ring.
 ///
@@ -135,7 +125,6 @@ impl TxRing {
         (self.queue_size as u32) * (TX_DESC_SIZE as u32)
     }
 
-    /// Check if we can transmit a frame.
     #[inline]
     pub fn can_transmit(&self) -> bool {
         self.available() > 0
@@ -158,14 +147,6 @@ impl TxRing {
     }
 
     /// Transmit a frame (fire-and-forget).
-    ///
-    /// # Arguments
-    /// - `frame`: Ethernet frame to transmit
-    ///
-    /// # Returns
-    /// - `Ok(())`: Frame queued for transmission
-    /// - `Err(TxError::QueueFull)`: No descriptors available
-    /// - `Err(TxError::FrameTooLarge)`: Frame exceeds maximum size
     ///
     /// # Contract
     /// Returns immediately. Does NOT wait for completion.

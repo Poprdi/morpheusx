@@ -1,74 +1,54 @@
-//! Error types for ISO9660 operations
+//! ISO 9660 error types.
 
 use core::fmt;
 
-/// Result type for ISO9660 operations
+/// Result alias for ISO 9660 operations.
 pub type Result<T> = core::result::Result<T, Iso9660Error>;
 
-/// Errors that can occur during ISO9660 operations
+/// Errors surfaced by the ISO 9660 reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Iso9660Error {
-    /// I/O error reading from block device
+    /// Block device I/O failure.
     IoError,
-
-    /// Invalid volume descriptor signature
+    /// Volume descriptor signature mismatch.
     InvalidSignature,
-
-    /// Unsupported ISO9660 version
+    /// Volume descriptor version not supported.
     UnsupportedVersion,
-
-    /// Corrupted directory record
+    /// Directory record failed structural checks.
     InvalidDirectoryRecord,
-
-    /// File or directory not found
+    /// File or directory not found.
     NotFound,
-
-    /// Path is too long
+    /// Path exceeds maximum length.
     PathTooLong,
-
-    /// Invalid path format
+    /// Malformed path.
     InvalidPath,
-
-    /// File extent out of bounds
+    /// Extent reference outside the volume.
     ExtentOutOfBounds,
-
-    /// Invalid file flags
+    /// Reserved bits set in directory record flags.
     InvalidFlags,
-
-    /// Invalid datetime format
+    /// Invalid 7.x.x datetime encoding.
     InvalidDatetime,
-
-    /// Invalid string encoding
+    /// String could not be decoded.
     InvalidString,
-
-    /// Boot record not found
+    /// No Boot Record volume descriptor present.
     NoBootRecord,
-
-    /// Invalid boot catalog
+    /// El Torito boot catalog structurally invalid.
     InvalidBootCatalog,
-
-    /// No boot catalog found
+    /// Boot catalog not found.
     NoBootCatalog,
-
-    /// Invalid boot entry
+    /// El Torito boot entry malformed.
     InvalidBootEntry,
-
-    /// Validation entry checksum failed
+    /// El Torito validation entry checksum mismatch.
     ChecksumFailed,
-
-    /// Unsupported boot platform
+    /// Unrecognized El Torito platform ID.
     UnsupportedPlatform,
-
-    /// Rock Ridge extension error
+    /// Rock Ridge SUSP/RRIP parse error.
     RockRidgeError,
-
-    /// Joliet extension error
+    /// Joliet decoding error.
     JolietError,
-
-    /// Read failed
+    /// Read operation failed.
     ReadFailed,
-
-    /// Internal error (should not occur)
+    /// Reached a path the code believed unreachable.
     InternalError,
 }
 

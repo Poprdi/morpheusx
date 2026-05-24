@@ -70,7 +70,6 @@ impl XhciController {
         })
     }
 
-    /// SET_FEATURE(PORT_POWER) on a downstream port (1-based).
     pub unsafe fn hub_port_power_on(&mut self, port: u8) -> Result<(), XhciError> {
         self.hub_port_set_feature(port, PORT_FEAT_POWER)
     }
@@ -116,7 +115,6 @@ impl XhciController {
         Ok(vr32(buf))
     }
 
-    /// CLEAR_FEATURE(C_PORT_CONNECTION) — drain a stale connect-change event.
     pub unsafe fn hub_port_clear_connection_change(&mut self, port: u8) -> Result<(), XhciError> {
         self.hub_port_clear_feature(port, PORT_FEAT_C_CONNECTION)
     }

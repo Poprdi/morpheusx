@@ -1,14 +1,5 @@
-//! AP (Application Processor) boot orchestration.
-//!
-//! The BSP calls `start_aps()` or `start_aps_from_list()` after its own
-//! init is complete.  For each AP we:
-//!   1.  Copy the real-mode trampoline to page 0x8000 (validated first)
-//!   2.  Fill the trampoline data area (CR3, GDT, stack, entry point)
-//!   3.  Send INIT IPI → wait 10ms → SIPI × 2
-//!   4.  Wait for the AP to signal readiness via `AP_ONLINE_COUNT`
-//!
-//! The trampoline code lives in `asm/cpu/ap_trampoline.s`, assembled as
-//! flat binary by build.rs and included here via `include_bytes!`.
+//! AP bring-up: copy real-mode trampoline to 0x8000, INIT IPI + SIPI x2,
+//! poll AP_ONLINE_COUNT. Trampoline binary baked in via build.rs.
 
 use crate::cpu::apic;
 use crate::cpu::gdt;
@@ -16,19 +7,12 @@ use crate::cpu::per_cpu::{self, MAX_CPUS};
 use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
 use crate::serial::{log_error, log_info, log_ok, log_warn};
 use core::sync::atomic::{AtomicBool, Ordering};
-/// Physical address where the AP trampoline is copied.
-/// Must be page-aligned, below 1 MiB, and not in use by anything else.
-/// 0x8000 is the traditional choice (page 8).
+/// Trampoline physical address. Page-aligned, <1 MiB. 0x8000 is traditional.
 const AP_TRAMPOLINE_PHYS: u64 = 0x8000;
-
-/// SIPI start page = AP_TRAMPOLINE_PHYS / 0x1000
 const AP_TRAMPOLINE_PAGE: u8 = (AP_TRAMPOLINE_PHYS / 0x1000) as u8;
-
-/// AP kernel stack size (64 KiB per core).
 const AP_STACK_SIZE: u64 = 64 * 1024;
 
-// Brute-force LAPIC probing is a fallback path. Keep it bounded so one bad
-// topology guess doesn't make boot look dead on real hardware.
+// Bounded brute-force LAPIC fallback; one bad topology must not deadlock boot.
 const AP_WAIT_STEP_US: u64 = 50;
 const AP_WAIT_TIMEOUT_US: u64 = 20_000;
 const AP_BRUTE_SCAN_BUDGET_US: u64 = 3_000_000;
@@ -48,38 +32,27 @@ struct ApStack {
     top: u64,
 }
 
-// These must match the .data section layout at the end of ap_trampoline.s.lapic_id
-// The trampoline data block starts at AP_TRAMPOLINE_PHYS + TRAMPOLINE_DATA_OFFSET.
-const TRAMPOLINE_DATA_OFFSET: u64 = 0xF00; // within the 4K page
+// Layout MUST match ap_trampoline.s .data block.
+const TRAMPOLINE_DATA_OFFSET: u64 = 0xF00;
 const TD_CR3: u64 = TRAMPOLINE_DATA_OFFSET + 0x00;
 const TD_ENTRY64: u64 = TRAMPOLINE_DATA_OFFSET + 0x08;
 const TD_STACK: u64 = TRAMPOLINE_DATA_OFFSET + 0x10;
 const TD_CORE_IDX: u64 = TRAMPOLINE_DATA_OFFSET + 0x18;
 const TD_LAPIC_ID: u64 = TRAMPOLINE_DATA_OFFSET + 0x1C;
-const TD_GDT_PTR: u64 = TRAMPOLINE_DATA_OFFSET + 0x20; // 10 bytes: limit(2) + base(8)
+const TD_GDT_PTR: u64 = TRAMPOLINE_DATA_OFFSET + 0x20; // limit(2) + base(8)
 const TD_READY: u64 = TRAMPOLINE_DATA_OFFSET + 0x30;
 
-/// The flat-binary AP trampoline assembled by build.rs.
-/// May be empty if the trampoline ASM file doesn't exist yet — in that case
-/// `start_aps` is a no-op.
+/// Flat-binary trampoline from build.rs. Empty => `start_aps` is a no-op.
 #[cfg(feature = "smp")]
 static AP_TRAMPOLINE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ap_trampoline.bin"));
 
 #[cfg(not(feature = "smp"))]
 static AP_TRAMPOLINE_BIN: &[u8] = &[];
 
-// ── Trampoline setup ─────────────────────────────────────────────────────
-
-/// Validate and prepare the trampoline page at 0x8000.
-///
-/// Reserves the physical page from the buddy allocator (validates it's
-/// actually available), copies the trampoline binary, fills shared data
-/// (CR3, GDT, entry point).
-///
-/// Returns false if the trampoline page is unavailable (reserved by firmware).
+/// Reserve 0x8000 from the registry, copy trampoline, fill handoff data
+/// (CR3, GDT, entry). False = page unavailable (firmware reserved).
 unsafe fn setup_trampoline() -> bool {
-    // validate the trampoline page is usable before stomping it.
-    // on exotic firmware 0x8000 might be reserved/MMIO.
+    // Some firmware marks 0x8000 reserved/MMIO; validate before stomping.
     match global_registry_mut().allocate_pages(
         AllocateType::Address(AP_TRAMPOLINE_PHYS),
         MemoryType::LoaderData,
@@ -101,14 +74,12 @@ unsafe fn setup_trampoline() -> bool {
     core::ptr::copy_nonoverlapping(AP_TRAMPOLINE_BIN.as_ptr(), dest, trampoline_len);
     core::ptr::write_bytes(dest.add(trampoline_len), 0, 0x1000 - trampoline_len);
 
-    // read current CR3 for the trampoline to use
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
     let kernel_cr3 = cr3 & 0x000F_FFFF_FFFF_F000;
 
-    // The 32-bit protected mode trampoline loads CR3 via `mov eax, [0x8F00]`
-    // which only reads the low 32 bits.  If the kernel page tables are above
-    // 4 GB, the AP would load a truncated CR3 and triple-fault immediately.
+    // 32-bit trampoline reads CR3 from [0x8F00] (low 32 bits only).
+    // CR3 >4 GiB => truncated load => instant triple-fault.
     if kernel_cr3 > 0xFFFF_FFFF {
         log_error(
             "AP",
@@ -118,7 +89,7 @@ unsafe fn setup_trampoline() -> bool {
         return false;
     }
 
-    // read current GDT for APs to load (temporary, until per-core GDT)
+    // Snapshot BSP GDT (APs swap to per-core GDT later).
     let mut gdt_buf = [0u8; 10];
     core::arch::asm!("sgdt [{}]", in(reg) gdt_buf.as_mut_ptr(), options(nostack));
 
@@ -130,10 +101,7 @@ unsafe fn setup_trampoline() -> bool {
     true
 }
 
-/// Boot a single AP via INIT+SIPI and wait for it to come online.
-///
-/// Returns true if the AP responded within the timeout.
-/// On failure, frees the allocated stack — no leak.
+/// INIT+SIPI a single AP and wait for online ack. Frees stack on timeout.
 unsafe fn boot_single_ap(core_idx: u32, lapic_id: u32) -> bool {
     let stack = match allocate_ap_stack() {
         Ok(stack) => stack,
@@ -210,27 +178,18 @@ fn park_until_scheduler_release() {
     }
 }
 
-/// Release parked APs into LAPIC timer-driven scheduling.
-///
-/// APs are deliberately brought up during platform init, but held with
-/// interrupts disabled until the BSP is done with driver init and is about to
-/// hand off to userland.
+/// Release parked APs into LAPIC-timer scheduling. APs are brought up early
+/// but held IF=0 until BSP finishes driver init.
 pub fn release_parked_aps() {
     if !AP_SCHEDULER_RELEASED.swap(true, Ordering::Release) {
         log_ok("AP", 530, "parked APs released for scheduling");
     }
 }
 
-// ── Public API ───────────────────────────────────────────────────────────
-
-/// Start APs from an explicit list of LAPIC IDs (from ACPI MADT).
-///
-/// This is the preferred path — no brute-force, no ghost timeouts,
-/// no wasted stacks.
+/// Preferred AP bring-up path: use MADT-discovered LAPIC IDs.
 ///
 /// # Safety
-/// BSP must have completed full platform init (GDT, IDT, paging, LAPIC,
-/// memory registry, scheduler).
+/// BSP must have completed platform init (GDT, IDT, paging, LAPIC, registry, sched).
 pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
     if AP_TRAMPOLINE_BIN.is_empty() {
         log_warn("AP", 503, "no trampoline binary; smp disabled");
@@ -255,7 +214,7 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
         }
 
         if !x2_mode && lapic_id > 0xFF {
-            // xAPIC destination field is 8-bit. without x2APIC mode this target is unreachable.
+            // xAPIC destination is 8-bit; this ID is unreachable.
             log_warn("AP", 513, "skipping MADT x2APIC ID in xAPIC mode");
             continue;
         }
@@ -273,20 +232,16 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
             core_idx += 1;
         }
 
-        // same per-attempt upper bound used by brute-force path.
         budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
 
     log_ok("AP", 505, "MADT AP bring-up pass complete");
 }
 
-/// Start APs by brute-force LAPIC ID enumeration (CPUID fallback).
-///
-/// Iterates LAPIC IDs 0..255, skipping the BSP.  Ghost IDs that don't
-/// respond are skipped without wasting a core slot or leaking stack memory.
+/// CPUID fallback: brute-force LAPIC IDs 0..255. Ghosts free their stacks.
 ///
 /// # Safety
-/// BSP must have completed full platform init.
+/// BSP must have completed platform init.
 pub unsafe fn start_aps() {
     if AP_TRAMPOLINE_BIN.is_empty() {
         log_warn("AP", 506, "no trampoline binary; smp disabled");
@@ -313,7 +268,6 @@ pub unsafe fn start_aps() {
         if lapic_id == bsp_lapic_id {
             continue;
         }
-        // found enough cores already
         if online >= total_cpus - 1 {
             break;
         }
@@ -335,34 +289,19 @@ pub unsafe fn start_aps() {
         }
 
         if boot_single_ap(core_idx, lapic_id) {
-            // only consume a core slot on success
             core_idx += 1;
             online += 1;
         }
 
-        // upper bound for one probe: INIT delay + SIPI delays + wait timeout
+        // Upper bound: INIT delay + SIPI delays + wait timeout.
         scan_budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
 
     log_ok("AP", 509, "brute-force AP bring-up pass complete");
 }
 
-// ── AP Rust entry point ──────────────────────────────────────────────────
-
-/// Called by the AP trampoline after transitioning to 64-bit long mode.
-///
-/// At entry:
-/// - RSP = per-AP kernel stack (allocated by BSP)
-/// - interrupts disabled
-/// - CR3 = kernel page tables
-/// - GDT = BSP's GDT (temporary — we'll load per-core GDT)
-///
-/// The AP must:
-/// 1. Load its own GDT + TSS
-/// 2. Load the shared IDT
-/// 3. Initialize per-CPU data (GS-base)
-/// 4. Enable LAPIC + timer
-/// 5. Enter the idle loop (scheduler will assign work)
+/// AP entry from trampoline. Long mode, IF=0, kernel CR3, BSP GDT.
+/// Loads per-core GDT/IDT, brings up LAPIC, then parks until released.
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     log_ok("AP", 520, "AP {} (LAPIC {}) booting");

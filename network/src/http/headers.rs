@@ -1,16 +1,6 @@
 //! HTTP header management.
 //!
 //! Case-insensitive header storage and retrieval for HTTP requests and responses.
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use morpheus_network::http::Headers;
-//!
-//! let mut headers = Headers::new();
-//! headers.set("Content-Type", "application/json");
-//! assert_eq!(headers.get("content-type"), Some("application/json"));
-//! ```
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -25,7 +15,6 @@ pub struct Header {
 }
 
 impl Header {
-    /// Create a new header.
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -59,7 +48,6 @@ impl Headers {
         self.headers.len()
     }
 
-    /// Check if empty.
     pub fn is_empty(&self) -> bool {
         self.headers.is_empty()
     }
@@ -121,29 +109,24 @@ impl Headers {
         self.headers.iter()
     }
 
-    /// Clear all headers.
     pub fn clear(&mut self) {
         self.headers.clear();
     }
 
     // ==================== Common Header Helpers ====================
 
-    /// Get Content-Length header as usize.
     pub fn content_length(&self) -> Option<usize> {
         self.get("Content-Length").and_then(|v| v.parse().ok())
     }
 
-    /// Set Content-Length header.
     pub fn set_content_length(&mut self, length: usize) {
         self.set("Content-Length", alloc::format!("{}", length));
     }
 
-    /// Get Content-Type header.
     pub fn content_type(&self) -> Option<&str> {
         self.get("Content-Type")
     }
 
-    /// Set Content-Type header.
     pub fn set_content_type(&mut self, content_type: impl Into<String>) {
         self.set("Content-Type", content_type);
     }
@@ -155,17 +138,14 @@ impl Headers {
             .unwrap_or(false)
     }
 
-    /// Get Host header.
     pub fn host(&self) -> Option<&str> {
         self.get("Host")
     }
 
-    /// Set Host header.
     pub fn set_host(&mut self, host: impl Into<String>) {
         self.set("Host", host);
     }
 
-    /// Get Connection header.
     pub fn connection(&self) -> Option<&str> {
         self.get("Connection")
     }

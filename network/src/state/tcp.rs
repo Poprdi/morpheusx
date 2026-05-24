@@ -35,16 +35,10 @@
 //!     }
 //! }
 //! ```
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5.4
 
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TCP SOCKET STATE (mirrors smoltcp)
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TCP socket state (simplified from smoltcp).
 ///
@@ -87,7 +81,6 @@ impl TcpSocketState {
         self == Self::Closed
     }
 
-    /// Check if connection is closing.
     pub fn is_closing(self) -> bool {
         matches!(
             self,
@@ -96,9 +89,6 @@ impl TcpSocketState {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TCP ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TCP-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,9 +118,6 @@ impl From<TcpError> for StateError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TCP CONNECTION INFO
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Information about an established connection.
 #[derive(Debug, Clone, Copy)]
@@ -143,9 +130,6 @@ pub struct TcpConnectionInfo {
     pub remote_port: u16,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TCP CONNECTION STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TCP connection state machine.
 ///
@@ -203,13 +187,6 @@ impl TcpConnState {
     ///
     /// Called AFTER smoltcp's `socket.connect()` has been called.
     /// This just tracks the state - actual connect is done by smoltcp.
-    ///
-    /// # Arguments
-    /// - `socket_handle`: Socket handle from smoltcp
-    /// - `remote_ip`: Remote IP address
-    /// - `remote_port`: Remote port
-    /// - `local_port`: Local port (0 for ephemeral)
-    /// - `now_tsc`: Current TSC timestamp
     pub fn initiate(
         &mut self,
         socket_handle: usize,
@@ -228,17 +205,6 @@ impl TcpConnState {
     }
 
     /// Step the state machine.
-    ///
-    /// # Arguments
-    /// - `socket_state`: Current TCP socket state from smoltcp
-    /// - `now_tsc`: Current TSC value
-    /// - `timeout_ticks`: Connect/close timeout in TSC ticks
-    ///
-    /// # Returns
-    /// - `Pending`: Still connecting/closing
-    /// - `Done`: Connected (when Connecting) or Closed (when Closing)
-    /// - `Timeout`: Operation timed out
-    /// - `Failed`: Operation failed
     pub fn step(
         &mut self,
         socket_state: TcpSocketState,
@@ -342,7 +308,6 @@ impl TcpConnState {
         }
     }
 
-    /// Abort connection immediately.
     pub fn abort(&mut self) {
         *self = TcpConnState::Closed;
     }
@@ -352,7 +317,6 @@ impl TcpConnState {
         *self = TcpConnState::Error { error };
     }
 
-    /// Get socket handle (if connecting or established).
     pub fn socket_handle(&self) -> Option<usize> {
         match self {
             TcpConnState::Connecting { socket_handle, .. } => Some(*socket_handle),
@@ -362,7 +326,6 @@ impl TcpConnState {
         }
     }
 
-    /// Get connection info (if established).
     pub fn connection_info(&self) -> Option<&TcpConnectionInfo> {
         match self {
             TcpConnState::Established { info, .. } => Some(info),
@@ -370,7 +333,6 @@ impl TcpConnState {
         }
     }
 
-    /// Get error (if failed).
     pub fn error(&self) -> Option<TcpError> {
         match self {
             TcpConnState::Error { error } => Some(*error),
@@ -378,17 +340,14 @@ impl TcpConnState {
         }
     }
 
-    /// Check if connection is established.
     pub fn is_established(&self) -> bool {
         matches!(self, TcpConnState::Established { .. })
     }
 
-    /// Check if closed (initial or after close).
     pub fn is_closed(&self) -> bool {
         matches!(self, TcpConnState::Closed)
     }
 
-    /// Check if in error state.
     pub fn is_error(&self) -> bool {
         matches!(self, TcpConnState::Error { .. })
     }

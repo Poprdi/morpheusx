@@ -1,6 +1,4 @@
-//! Build script for morpheus-hwinit.
-//!
-//! Assembles platform-level ASM files for x86_64 UEFI targets.
+//! Assembles platform ASM for x86_64 UEFI targets.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -72,7 +70,7 @@ fn main() {
         }
     }
 
-    // AP trampoline: flat binary for SMP startup (not linked, included via include_bytes!)
+    // AP trampoline: flat binary, included via include_bytes!.
     let trampoline_src = "asm/cpu/ap_trampoline.s";
     if Path::new(trampoline_src).exists() {
         println!("cargo:rerun-if-changed={}", trampoline_src);

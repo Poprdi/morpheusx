@@ -10,19 +10,12 @@ use crate::asm::drivers::intel::{
 };
 use crate::mainloop::serial::{serial_print, serial_print_hex, serial_println};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Size of a single RX descriptor in bytes.
 pub const RX_DESC_SIZE: usize = 16;
 
-/// Default RX buffer size (2KB).
 pub const DEFAULT_BUFFER_SIZE: usize = 2048;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RX ERRORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// RX errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +31,6 @@ pub enum RxError {
     PacketError(u8),
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RX RING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// RX descriptor ring.
 ///
@@ -153,15 +143,6 @@ impl RxRing {
         unsafe { asm_intel_rx_poll(desc_ptr, &mut result) != 0 }
     }
 
-    /// Receive a packet.
-    ///
-    /// # Arguments
-    /// - `out_buffer`: Buffer to copy received packet into
-    ///
-    /// # Returns
-    /// - `Ok(Some(len))`: Packet received, length in bytes
-    /// - `Ok(None)`: No packet available
-    /// - `Err(RxError)`: Error occurred
     pub fn receive(&mut self, out_buffer: &mut [u8]) -> Result<Option<usize>, RxError> {
         let desc_idx = self.next_to_clean;
         let desc_ptr = self.desc_ptr(desc_idx);

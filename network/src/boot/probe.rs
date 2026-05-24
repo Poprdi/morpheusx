@@ -30,9 +30,6 @@ use crate::driver::virtio::{VirtioConfig, VirtioInitError, VirtioNetDriver};
 use crate::pci::capability::probe_virtio_caps;
 use crate::pci::config::{offset, pci_cfg_read16, pci_cfg_read32, PciAddr};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// VirtIO vendor ID
 const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
@@ -44,9 +41,6 @@ const VIRTIO_NET_MODERN: u16 = 0x1041;
 /// Intel vendor ID
 const INTEL_VENDOR_ID: u16 = 0x8086;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROBE ERRORS
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Probe and initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,9 +69,6 @@ impl From<E1000eError> for ProbeError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DETECTED DEVICE INFO
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Information about a detected network device.
 #[derive(Debug, Clone, Copy)]
@@ -96,9 +87,6 @@ pub enum ProbeResult {
     Intel(E1000eDriver),
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PCI SCANNING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Scan PCI bus for supported network devices.
 ///
@@ -176,15 +164,8 @@ fn find_virtio_nic() -> Option<(PciAddr, u64)> {
     None
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DRIVER CREATION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Probe for network device and create appropriate driver.
-///
-/// # Arguments
-/// - `dma`: Pre-allocated DMA region
-/// - `tsc_freq`: Calibrated TSC frequency
 ///
 /// # Safety
 /// - DMA region must be properly allocated with correct bus addresses
@@ -304,9 +285,6 @@ pub unsafe fn create_virtio_driver(
     VirtioNetDriver::new(mmio_base, config)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DEVICE TYPE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Detected NIC type for handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

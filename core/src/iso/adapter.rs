@@ -50,10 +50,6 @@ where
     F: FnMut(u64, &mut [u8]) -> Result<(), IsoError>,
 {
     /// Create a new chunked block I/O adapter
-    ///
-    /// # Arguments
-    /// * `ctx` - ISO read context with chunk partition info
-    /// * `read_fn` - Callback to read from disk: `fn(lba, buffer) -> Result`
     pub fn new(ctx: IsoReadContext, read_fn: F) -> Self {
         let total_sectors = ctx.total_size / SECTOR_SIZE as u64;
 
@@ -65,12 +61,10 @@ where
         }
     }
 
-    /// Get total size in bytes
     pub fn total_size(&self) -> u64 {
         self.ctx.total_size
     }
 
-    /// Get total number of sectors
     pub fn total_sectors(&self) -> u64 {
         self.total_sectors
     }
@@ -92,7 +86,6 @@ where
         None
     }
 
-    /// Read a single sector
     pub fn read_sector(&mut self, virtual_lba: u64, buffer: &mut [u8]) -> Result<(), IsoError> {
         if buffer.len() < SECTOR_SIZE {
             return Err(IsoError::IoError);
@@ -118,7 +111,6 @@ where
         (self.read_fn)(physical_lba, &mut buffer[..SECTOR_SIZE])
     }
 
-    /// Read multiple sectors
     pub fn read_sectors(&mut self, start_lba: u64, buffer: &mut [u8]) -> Result<usize, IsoError> {
         let sector_count = buffer.len() / SECTOR_SIZE;
         let mut bytes_read = 0;
@@ -193,17 +185,14 @@ where
         }
     }
 
-    /// Get total size
     pub fn total_size(&self) -> u64 {
         self.block_io.total_size()
     }
 
-    /// Get current position
     pub fn position(&self) -> u64 {
         self.position
     }
 
-    /// Seek to position
     pub fn seek(&mut self, pos: u64) -> Result<(), IsoError> {
         if pos > self.block_io.total_size() {
             return Err(IsoError::ReadOverflow);

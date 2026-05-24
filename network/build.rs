@@ -1,14 +1,9 @@
-//! Build script for morpheus-network.
-//!
-//! Assembles all ASM files for x86_64 targets:
-//! - Legacy pci_io.S (existing)
-//! - New ASM layer in asm/ (core, pci, drivers, phy)
+//! Assembles ASM sources and links them as `libnetwork_asm.a` on x86_64 UEFI.
 
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// All ASM source files organized by category
 const ASM_CORE: &[&str] = &[
     "asm/core/tsc.s",
     "asm/core/barriers.s",
@@ -41,7 +36,7 @@ const ASM_INTEL: &[&str] = &[
     "asm/drivers/intel/tx.s",
     "asm/drivers/intel/rx.s",
     "asm/drivers/intel/phy.s",
-    "asm/drivers/intel/ulp.s", // I218/PCH LPT ULP management (CRITICAL for real hardware)
+    "asm/drivers/intel/ulp.s", // I218/PCH LPT ULP — required on real hw
 ];
 
 const ASM_AHCI: &[&str] = &[
@@ -62,10 +57,8 @@ fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // Always rerun if build.rs changes
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Only build assembly for x86_64 targets
     if !target.contains("x86_64") {
         println!(
             "cargo:warning=Skipping assembly for non-x86_64 target: {}",
@@ -74,8 +67,6 @@ fn main() {
         return;
     }
 
-    // Only build ASM for UEFI target - host builds don't need it
-    // The ASM is for bare-metal post-ExitBootServices execution
     if !target.contains("uefi") {
         println!(
             "cargo:warning=Skipping assembly for non-UEFI target: {} (ASM only needed for bare-metal)",
@@ -84,10 +75,9 @@ fn main() {
         return;
     }
 
-    // Determine output format based on target
-    // UEFI uses PE/COFF format (win64)
+    // UEFI links PE/COFF.
     let obj_format = if target.contains("windows") || target.contains("uefi") {
-        "win64" // PE/COFF format for UEFI
+        "win64"
     } else {
         "elf64"
     };
@@ -99,9 +89,6 @@ fn main() {
 
     let mut all_objects = Vec::new();
 
-    // =========================================================================
-    // Build legacy pci_io.S (existing)
-    // =========================================================================
     let legacy_asm = "src/device/pci_io.S";
     if Path::new(legacy_asm).exists() {
         println!("cargo:rerun-if-changed={}", legacy_asm);
@@ -109,9 +96,6 @@ fn main() {
         all_objects.push(obj);
     }
 
-    // =========================================================================
-    // Build new ASM layer (if feature enabled or files exist)
-    // =========================================================================
     let asm_categories = [
         ("core", ASM_CORE),
         ("pci", ASM_PCI),
@@ -136,16 +120,12 @@ fn main() {
                             "cargo:warning=Failed to assemble {} ({}): {}",
                             asm_path, category, e
                         );
-                        // Continue with other files
                     }
                 }
             }
         }
     }
 
-    // =========================================================================
-    // Create static library from all objects
-    // =========================================================================
     if all_objects.is_empty() {
         println!("cargo:warning=No ASM files assembled!");
         return;
@@ -153,7 +133,6 @@ fn main() {
 
     let lib_path = out_dir.join("libnetwork_asm.a");
 
-    // Use ar to create archive
     let mut ar_args = vec!["crs".to_string(), lib_path.to_str().unwrap().to_string()];
     for obj in &all_objects {
         ar_args.push(obj.to_str().unwrap().to_string());
@@ -175,18 +154,15 @@ fn main() {
         lib_path.display()
     );
 
-    // Tell cargo to link the library
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=network_asm");
 }
 
-/// Assemble a single file, panic on failure
 fn assemble_file(asm_path: &str, out_dir: &Path, obj_format: &str) -> PathBuf {
     assemble_file_checked(asm_path, out_dir, obj_format)
         .unwrap_or_else(|e| panic!("Failed to assemble {}: {}", asm_path, e))
 }
 
-/// Assemble a single file, return Result
 fn assemble_file_checked(
     asm_path: &str,
     out_dir: &Path,
@@ -197,7 +173,6 @@ fn assemble_file_checked(
         .and_then(|s| s.to_str())
         .ok_or_else(|| format!("Invalid path: {}", asm_path))?;
 
-    // Create unique object name to avoid collisions
     let obj_name = asm_path
         .replace(['/', '\\'], "_")
         .replace(".s", ".o")
@@ -205,7 +180,6 @@ fn assemble_file_checked(
 
     let obj_path = out_dir.join(&obj_name);
 
-    // Get include paths for ASM files that use external references
     let mut nasm_args = vec![
         "-f".to_string(),
         obj_format.to_string(),
@@ -213,7 +187,6 @@ fn assemble_file_checked(
         obj_path.to_str().unwrap().to_string(),
     ];
 
-    // Add include path for cross-file references
     if asm_path.contains("asm/") {
         nasm_args.push("-I".to_string());
         nasm_args.push("asm/".to_string());

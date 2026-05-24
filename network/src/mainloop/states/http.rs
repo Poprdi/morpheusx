@@ -122,12 +122,10 @@ impl HttpState {
         }
     }
 
-    /// Get current phase.
     pub fn phase(&self) -> HttpPhase {
         self.phase
     }
 
-    /// Get bytes received so far.
     pub fn bytes_received(&self) -> u64 {
         self.bytes_received
     }

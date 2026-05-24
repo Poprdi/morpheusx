@@ -53,7 +53,6 @@ pub struct VirtioTransport {
 }
 
 impl VirtioTransport {
-    /// Create MMIO transport
     pub fn mmio(mmio_base: u64) -> Self {
         Self {
             transport_type: TransportType::Mmio,
@@ -62,7 +61,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Create PCI Modern transport
     pub fn pci_modern(config: PciModernConfig) -> Self {
         Self {
             transport_type: TransportType::PciModern,
@@ -71,7 +69,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Get device status
     pub fn get_status(&self) -> u8 {
         match self.transport_type {
             TransportType::Mmio => mmio_device::get_status(self.base),
@@ -80,7 +77,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Set device status
     pub fn set_status(&self, status: u8) {
         match self.transport_type {
             TransportType::Mmio => mmio_device::set_status(self.base, status),
@@ -89,7 +85,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Reset device
     pub fn reset(&self, tsc_freq: u64) -> bool {
         // Note: MMIO reset doesn't use tsc_freq, PCI Modern does for timeout
         match self.transport_type {
@@ -99,7 +94,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Read device feature bits (64-bit)
     pub fn read_features(&self) -> u64 {
         match self.transport_type {
             TransportType::Mmio => mmio_device::read_features(self.base),
@@ -108,7 +102,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Write driver-accepted features
     pub fn write_features(&self, features: u64) {
         match self.transport_type {
             TransportType::Mmio => mmio_device::write_features(self.base, features),
@@ -125,7 +118,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Select a queue for configuration
     pub fn select_queue(&self, queue_idx: u16) {
         unsafe {
             match self.transport_type {
@@ -141,7 +133,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Get max queue size for selected queue
     pub fn get_queue_size(&self) -> u16 {
         unsafe {
             match self.transport_type {
@@ -155,7 +146,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Set queue size
     pub fn set_queue_size(&self, size: u16) {
         unsafe {
             match self.transport_type {
@@ -170,7 +160,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Set queue descriptor table address
     pub fn set_queue_desc(&self, addr: u64) {
         unsafe {
             match self.transport_type {
@@ -187,7 +176,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Set queue available ring address
     pub fn set_queue_avail(&self, addr: u64) {
         unsafe {
             match self.transport_type {
@@ -204,7 +192,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Set queue used ring address
     pub fn set_queue_used(&self, addr: u64) {
         unsafe {
             match self.transport_type {
@@ -221,7 +208,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Enable the selected queue
     pub fn enable_queue(&self) {
         unsafe {
             match self.transport_type {
@@ -258,7 +244,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Notify device about queue
     pub fn notify_queue(&self, queue_idx: u16) {
         unsafe {
             match self.transport_type {
@@ -302,13 +287,6 @@ impl VirtioTransport {
     }
 
     /// Setup a virtqueue. Returns the notify address on success.
-    ///
-    /// # Arguments
-    /// - `queue_idx`: Queue index (0 for blk, 0/1 for net RX/TX)
-    /// - `desc_addr`: Physical address of descriptor table
-    /// - `avail_addr`: Physical address of available ring
-    /// - `used_addr`: Physical address of used ring
-    /// - `queue_size`: Number of descriptors
     pub fn setup_queue(
         &self,
         queue_idx: u16,

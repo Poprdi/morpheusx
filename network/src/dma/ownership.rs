@@ -8,9 +8,6 @@
 //! ```
 //!
 //! INVARIANT: Accessing DEVICE_OWNED buffer is instant UB.
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §3.4
 
 /// Ownership state of a DMA buffer.
 ///
@@ -32,12 +29,10 @@ impl BufferOwnership {
         matches!(self, BufferOwnership::DriverOwned)
     }
 
-    /// Check if buffer is free.
     pub fn is_free(&self) -> bool {
         matches!(self, BufferOwnership::Free)
     }
 
-    /// Check if buffer is device-owned.
     pub fn is_device_owned(&self) -> bool {
         matches!(self, BufferOwnership::DeviceOwned)
     }

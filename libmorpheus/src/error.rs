@@ -1,70 +1,30 @@
-//! Structured error type for MorpheusX syscalls and I/O.
-//!
-//! Every raw syscall returns `Result<T, u64>`.  This module provides a
-//! richer [`Error`] type that maps kernel errno values to named variants,
-//! and a [`Result<T>`] alias that uses it.
-//!
-//! # Converting from raw errors
-//!
-//! ```ignore
-//! use libmorpheus::error::Error;
-//! let e: Error = raw_errno.into();
-//! match e.kind() {
-//!     ErrorKind::NotFound => { /* handle */ }
-//!     _ => { /* fallback */ }
-//! }
-//! ```
+//! Structured error type wrapping raw kernel errnos.
 
 use core::fmt;
 
-/// Error kind — maps 1:1 to kernel errno values, plus synthetic kinds
-/// for higher-level operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
-    /// `ENOENT` — file or entity not found.
     NotFound,
-    /// `ESRCH` — no such process.
     ProcessNotFound,
-    /// `EIO` — I/O error.
     Io,
-    /// `EBADF` — bad file descriptor.
     BadFd,
-    /// `ENOMEM` — out of memory.
     OutOfMemory,
-    /// `EFAULT` — bad address.
     Fault,
-    /// `EPIPE` — broken pipe.
     BrokenPipe,
-    /// `ENOSYS` — syscall not implemented.
     NotImplemented,
-    /// `EINVAL` — invalid argument.
     InvalidInput,
-    /// Non-blocking I/O returned 0 bytes.
     WouldBlock,
-    /// Operation timed out.
     TimedOut,
-    /// Entity already exists.
     AlreadyExists,
-    /// Permission denied.
     PermissionDenied,
-    /// Connection refused.
     ConnectionRefused,
-    /// Connection reset by peer.
     ConnectionReset,
-    /// Not connected.
     NotConnected,
-    /// Unexpected end of file.
     UnexpectedEof,
-    /// Write returned 0.
     WriteZero,
-    /// Unrecognized error code.
     Unknown,
 }
 
-/// The error type for MorpheusX I/O and syscall operations.
-///
-/// Carries a [`ErrorKind`] for matching and the raw kernel u64 for
-/// debugging.  16 bytes on the stack — cheap to copy.
 #[derive(Clone, Copy)]
 pub struct Error {
     kind: ErrorKind,
@@ -72,7 +32,6 @@ pub struct Error {
 }
 
 impl Error {
-    /// Create an error from a raw kernel error code.
     #[inline]
     pub fn from_raw(raw: u64) -> Self {
         let kind = match raw {
@@ -90,19 +49,17 @@ impl Error {
         Self { kind, raw }
     }
 
-    /// Create a synthetic error from a kind (raw = 0).
+    /// Synthetic error; raw = 0.
     #[inline]
     pub const fn new(kind: ErrorKind) -> Self {
         Self { kind, raw: 0 }
     }
 
-    /// The error kind for `match`-based dispatch.
     #[inline]
     pub const fn kind(&self) -> ErrorKind {
         self.kind
     }
 
-    /// The raw kernel error code.  0 if this is a synthetic error.
     #[inline]
     pub const fn raw_code(&self) -> u64 {
         self.raw
@@ -141,7 +98,6 @@ impl fmt::Display for Error {
     }
 }
 
-/// Convert a raw kernel u64 error to [`Error`].
 impl From<u64> for Error {
     #[inline]
     fn from(raw: u64) -> Self {
@@ -149,12 +105,8 @@ impl From<u64> for Error {
     }
 }
 
-/// Result type alias for MorpheusX operations.
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Helper: convert a raw syscall return to `Result<u64>`.
-///
-/// Used internally by higher-level wrappers.
 #[inline]
 pub(crate) fn check(ret: u64) -> Result<u64> {
     if crate::is_error(ret) {

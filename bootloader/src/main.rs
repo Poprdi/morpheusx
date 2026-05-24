@@ -27,9 +27,6 @@ mod storage;
 mod tui;
 mod uefi_allocator;
 
-// ─────────────────────────────────────────────────────────────────────────
-// UEFI BootServices layout
-// ─────────────────────────────────────────────────────────────────────────
 //
 // The hybrid allocator (`uefi_allocator`) needs to call `allocate_pool`
 // and `free_pool` while UEFI is still alive. Both this module and
@@ -85,9 +82,6 @@ pub struct BootServices {
     pub locate_protocol: extern "efiapi" fn(*const [u8; 16], *const (), *mut *mut ()) -> usize,
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Panic handler
-// ─────────────────────────────────────────────────────────────────────────
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

@@ -87,15 +87,6 @@ impl<'a> VirtioBlkBlockIo<'a> {
     pub const MAX_TRANSFER_SIZE: usize = 64 * 1024;
 
     /// Create a new BlockIo adapter.
-    ///
-    /// # Arguments
-    /// * `driver` - VirtIO-blk driver
-    /// * `dma_buffer` - DMA-capable buffer (must be at least MAX_TRANSFER_SIZE bytes)
-    /// * `dma_buffer_phys` - Physical address of DMA buffer
-    /// * `timeout_ticks` - Timeout for I/O operations in TSC ticks
-    ///
-    /// # Returns
-    /// New adapter or error if buffer too small
     pub fn new(
         driver: &'a mut VirtioBlkDriver,
         dma_buffer: &'a mut [u8],

@@ -1,18 +1,17 @@
-//! Userspace buddy heap. Intrusive free-lists, XOR buddy math, 8 MiB arenas
-//! from SYS_MMAP. Registered as `#[global_allocator]` — Vec/Box/String just work.
+//! Userspace buddy heap: intrusive free-lists, XOR buddy math, 8 MiB arenas via SYS_MMAP.
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub const MIN_ALLOC: usize = 16; // smallest block & alignment
-const MIN_ALLOC_SHIFT: usize = 4; // log2(16)
-const MAX_ORDER: usize = 19; // 16 << 19 = 8 MiB = one arena
+pub const MIN_ALLOC: usize = 16;
+const MIN_ALLOC_SHIFT: usize = 4;
+const MAX_ORDER: usize = 19; // 16 << 19 = 8 MiB per arena
 pub const ARENA_SIZE: usize = MIN_ALLOC << MAX_ORDER;
 const ARENA_PAGES: u64 = (ARENA_SIZE / 4096) as u64;
-const MAX_ARENAS: usize = 64; // 512 MiB ceiling. generous.
+const MAX_ARENAS: usize = 64; // 512 MiB ceiling
 
-/// Two pointers crammed into the first 16 bytes of every free block.
+/// Embedded in the first 16 bytes of every free block.
 #[repr(C)]
 struct FreeNode {
     next: *mut FreeNode,
@@ -21,7 +20,7 @@ struct FreeNode {
 
 struct HeapState {
     free_lists: [*mut FreeNode; MAX_ORDER + 1],
-    arenas: [u64; MAX_ARENAS], // base VAs from SYS_MMAP
+    arenas: [u64; MAX_ARENAS],
     arena_count: usize,
 }
 
@@ -35,11 +34,10 @@ impl HeapState {
     }
 }
 
-// no SMP, no preemption — these are lies but safe lies.
+// SAFETY: single-threaded userspace; no SMP, no preemption.
 unsafe impl Send for HeapState {}
 unsafe impl Sync for HeapState {}
 
-/// TAS spinlock. cooperative scheduling means this never actually spins.
 struct SpinLock(AtomicBool);
 
 impl SpinLock {
@@ -67,7 +65,7 @@ impl SpinLock {
 static HEAP: SpinLock = SpinLock::new();
 static mut STATE: HeapState = HeapState::zeroed();
 
-// all helpers below: caller holds HEAP lock. no exceptions.
+// All helpers below assume the caller holds HEAP.
 
 unsafe fn list_push(state: &mut HeapState, order: usize, node: *mut FreeNode) {
     debug_assert!(!node.is_null());
@@ -99,7 +97,6 @@ unsafe fn list_remove(state: &mut HeapState, order: usize, node: *mut FreeNode) 
     if !prev.is_null() {
         (*prev).next = next;
     } else {
-        // node was the head
         state.free_lists[order] = next;
     }
     if !next.is_null() {
@@ -109,7 +106,7 @@ unsafe fn list_remove(state: &mut HeapState, order: usize, node: *mut FreeNode) 
     (*node).prev = ptr::null_mut();
 }
 
-/// XOR buddy address. the one line of math that makes this whole thing work.
+/// XOR buddy address within an arena.
 #[inline]
 fn buddy_of(addr: u64, order: usize, arena_base: u64) -> u64 {
     let offset = addr - arena_base;
@@ -117,7 +114,7 @@ fn buddy_of(addr: u64, order: usize, arena_base: u64) -> u64 {
     arena_base + buddy_offset
 }
 
-/// which arena owns this address? linear scan, sue me.
+/// Linear scan; O(arena_count).
 unsafe fn arena_of(state: &HeapState, addr: u64) -> Option<u64> {
     for i in 0..state.arena_count {
         let base = state.arenas[i];
@@ -128,7 +125,7 @@ unsafe fn arena_of(state: &HeapState, addr: u64) -> Option<u64> {
     None
 }
 
-/// O(n) walk to check if buddy is free. yes it's slow. no we don't care yet.
+/// O(n) walk of the order's free list.
 unsafe fn is_free(state: &HeapState, order: usize, addr: u64) -> bool {
     let mut cur = state.free_lists[order];
     while !cur.is_null() {
@@ -140,10 +137,10 @@ unsafe fn is_free(state: &HeapState, order: usize, addr: u64) -> bool {
     false
 }
 
-/// fresh 8 MiB arena from the kernel → one fat MAX_ORDER block.
+/// Register a fresh arena as a single MAX_ORDER block.
 unsafe fn add_arena(state: &mut HeapState, base: u64) {
     if state.arena_count >= MAX_ARENAS {
-        return; // you have 512 MiB of heap. rethink your life choices.
+        return;
     }
     state.arenas[state.arena_count] = base;
     state.arena_count += 1;
@@ -153,7 +150,6 @@ unsafe fn add_arena(state: &mut HeapState, base: u64) {
     list_push(state, MAX_ORDER, node);
 }
 
-/// find a block, split it down, hand it over.
 unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
     let mut found = None;
     for k in order..=MAX_ORDER {
@@ -166,14 +162,13 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
     let found_order = match found {
         Some(k) => k,
         None => {
-            // out of blocks — beg the kernel for more pages
+            // Out of blocks; request another arena from the kernel.
             let va = crate::raw::syscall1(crate::raw::SYS_MMAP, ARENA_PAGES);
             if crate::is_error(va) {
                 return None;
             }
             add_arena(state, va);
 
-            // retry with the shiny new arena
             let mut refound = None;
             for k in order..=MAX_ORDER {
                 if !state.free_lists[k].is_null() {
@@ -185,13 +180,12 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
         }
     };
 
-    // split the block down to size
     let block = list_pop(state, found_order).unwrap();
     let mut cur_order = found_order;
 
     while cur_order > order {
         cur_order -= 1;
-        // upper half goes back on the free list
+        // Upper half goes back on the free list at cur_order.
         let buddy_addr = block as u64 + ((MIN_ALLOC as u64) << cur_order);
         let buddy = buddy_addr as *mut FreeNode;
         (*buddy).next = ptr::null_mut();
@@ -202,11 +196,10 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
     Some(block as *mut u8)
 }
 
-/// return a block, coalesce with its buddy if possible. rinse, repeat.
 unsafe fn buddy_free(state: &mut HeapState, ptr: *mut u8, order: usize) {
     let arena_base = match arena_of(state, ptr as u64) {
         Some(b) => b,
-        None => return, // not our problem
+        None => return,
     };
 
     let mut addr = ptr as u64;
@@ -238,7 +231,7 @@ unsafe fn buddy_free(state: &mut HeapState, ptr: *mut u8, order: usize) {
     list_push(state, cur_order, node);
 }
 
-/// layout → buddy order. must match between alloc and dealloc or you're hosed.
+/// Layout → buddy order. Must round-trip identically between alloc and dealloc.
 #[inline]
 pub fn layout_to_order(layout: Layout) -> usize {
     let needed = layout.size().max(layout.align()).max(MIN_ALLOC);
@@ -255,7 +248,7 @@ pub static GLOBAL_HEAP: BuddyHeap = BuddyHeap;
 unsafe impl GlobalAlloc for BuddyHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if layout.size() == 0 {
-            return NonNull::<u8>::dangling().as_ptr(); // ZST? here's a fake pointer, enjoy.
+            return NonNull::<u8>::dangling().as_ptr();
         }
 
         let order = layout_to_order(layout);
@@ -277,7 +270,6 @@ unsafe impl GlobalAlloc for BuddyHeap {
         HEAP.unlock();
     }
 
-    /// zero the whole block because recycled memory is dirty memory.
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         let ptr = self.alloc(layout);
         if !ptr.is_null() && layout.size() > 0 {
@@ -288,7 +280,6 @@ unsafe impl GlobalAlloc for BuddyHeap {
         ptr
     }
 
-    /// alloc new, memcpy, free old. the classic.
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if new_size == 0 {
             self.dealloc(ptr, layout);
@@ -298,7 +289,7 @@ unsafe impl GlobalAlloc for BuddyHeap {
             Ok(l) => l,
             Err(_) => return ptr::null_mut(),
         };
-        // same order? nothing to do. power-of-two sizing pays off here.
+        // Same buddy order: in-place.
         if layout_to_order(layout) == layout_to_order(new_layout) {
             return ptr;
         }

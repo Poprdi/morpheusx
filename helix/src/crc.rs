@@ -1,12 +1,8 @@
-//! Software CRC32C and CRC64 for HelixFS.
-//!
-//! In the future these can be swapped for hardware `crc32` (SSE4.2) via
-//! inline assembly.  The table-driven implementations here are correct
-//! reference code that works in any `no_std` environment.
+//! Table-driven CRC32C / CRC64 / FNV-1a. Could be replaced with SSE4.2 `crc32`.
 
-/// CRC32C (Castagnoli) polynomial: 0x1EDC6F41.
+/// CRC32C (Castagnoli) polynomial 0x1EDC6F41, bit-reversed.
 const CRC32C_TABLE: [u32; 256] = {
-    let poly: u32 = 0x82F6_3B78; // bit-reversed 0x1EDC6F41
+    let poly: u32 = 0x82F6_3B78;
     let mut table = [0u32; 256];
     let mut i = 0u32;
     while i < 256 {
@@ -26,7 +22,6 @@ const CRC32C_TABLE: [u32; 256] = {
     table
 };
 
-/// Compute CRC32C of `data`.
 pub fn crc32c(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &b in data {
@@ -36,9 +31,7 @@ pub fn crc32c(data: &[u8]) -> u32 {
     crc ^ 0xFFFF_FFFF
 }
 
-/// Compute CRC32C over two contiguous byte arrays without allocating.
-///
-/// Equivalent to `crc32c(&[a, b].concat())` but avoids the heap allocation.
+/// `crc32c(a ++ b)` without allocating.
 pub fn crc32c_two(a: &[u8], b: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &byte in a {
@@ -52,7 +45,7 @@ pub fn crc32c_two(a: &[u8], b: &[u8]) -> u32 {
     crc ^ 0xFFFF_FFFF
 }
 
-/// ECMA-182 CRC64 polynomial (used for content dedup).
+/// ECMA-182 CRC64; used for content dedup.
 const CRC64_TABLE: [u64; 256] = {
     let poly: u64 = 0xC96C_5795_D787_0F42;
     let mut table = [0u64; 256];
@@ -74,7 +67,6 @@ const CRC64_TABLE: [u64; 256] = {
     table
 };
 
-/// Compute CRC64 of `data`.
 pub fn crc64(data: &[u8]) -> u64 {
     let mut crc: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     for &b in data {
@@ -84,7 +76,7 @@ pub fn crc64(data: &[u8]) -> u64 {
     crc ^ 0xFFFF_FFFF_FFFF_FFFF
 }
 
-/// FNV-1a 64-bit hash for path strings.
+/// FNV-1a 64-bit; used for path hashing.
 pub fn fnv1a_64(data: &[u8]) -> u64 {
     let mut hash: u64 = 0xCBF2_9CE4_8422_2325;
     for &b in data {
@@ -101,7 +93,7 @@ mod tests {
     #[test]
     fn crc32c_known_vectors() {
         assert_eq!(crc32c(b""), 0x0000_0000);
-        // "123456789" → 0xE3069283 (CRC32C standard test vector)
+        // Standard test vector: "123456789" → 0xE3069283.
         assert_eq!(crc32c(b"123456789"), 0xE306_9283);
     }
 

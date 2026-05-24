@@ -56,7 +56,6 @@ impl InitStage {
         }
     }
 
-    /// Convert from network crate stage byte
     pub fn from_network_stage(stage: u8) -> Self {
         // Map network crate stages to our stages
         // Network crate uses: 0=CLIENT, 1=DEVICE, 2=DHCP, 3=DNS, 4=HTTP
@@ -173,19 +172,11 @@ static READ_POS: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 
 /// Log an error message to the ring buffer
-///
-/// # Arguments
-/// * `stage` - Which initialization stage this error occurred in
-/// * `msg` - Error message (will be truncated if too long)
 pub fn error_log(stage: InitStage, msg: &str) {
     log_internal(stage, msg, true);
 }
 
 /// Log a debug/info message to the ring buffer
-///
-/// # Arguments
-/// * `stage` - Which initialization stage this message is from
-/// * `msg` - Debug message (will be truncated if too long)
 pub fn debug_log(stage: InitStage, msg: &str) {
     log_internal(stage, msg, false);
 }

@@ -1,9 +1,8 @@
-//! CRT0 for userspace. provides `_start` and a panic handler that
-//! prints something vaguely useful before dying.
+//! Userspace CRT0: `_start` and panic handler.
 
 use crate::process;
 
-/// Generates `_start`. your main() returns i32, we call exit(). simple.
+/// Emit `_start` that calls `$main` and exits with its return code.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
@@ -15,11 +14,9 @@ macro_rules! entry {
     };
 }
 
-/// Minimal panic handler — prints the message to serial and exits.
 #[cfg(not(test))]
 #[panic_handler]
 fn _panic(_info: &core::panic::PanicInfo) -> ! {
-    // Write a terse panic message to stderr (fd 2) via SYS_WRITE.
     let msg = "User Process shit the bed!\n";
     let _ = unsafe {
         crate::raw::syscall3(

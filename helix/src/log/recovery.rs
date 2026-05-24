@@ -90,9 +90,6 @@ pub fn write_superblock<B: BlockIo>(
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// LOG REPLAY — Rebuild in-memory index from log records
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Decode the v2 path prefix from a log payload.
 ///

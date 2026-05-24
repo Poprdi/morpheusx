@@ -13,6 +13,7 @@ pub mod hid;
 pub mod hub;
 pub mod regs;
 pub mod rings;
+pub mod runtime;
 
 // `enum` is a Rust keyword; the file is named `enum.rs` but we import it
 // under an alias so the rest of the crate can refer to it as `crate::usb::enum_`.

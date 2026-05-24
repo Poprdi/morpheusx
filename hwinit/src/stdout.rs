@@ -1,11 +1,5 @@
-//! Kernel stdout capture ring buffer for user-space process output.
-//!
-//! `sys_write(fd=1/2)` pushes bytes here in addition to serial output.
-//! The desktop event loop drains the buffer via [`drain()`] and feeds
-//! captured text into the Shell widget for on-screen display.
-//!
-//! Same SPSC design as stdin.rs — single producer (syscall handler),
-//! single consumer (desktop event loop).
+//! SPSC ring buffer mirroring user stdout (fd=1/2) to the desktop Shell widget.
+//! Producer: sys_write. Consumer: desktop event loop.
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -18,17 +12,14 @@ static HEAD: AtomicUsize = AtomicUsize::new(0);
 static TAIL: AtomicUsize = AtomicUsize::new(0);
 static PUSH_LOCK: crate::sync::IsrSafeRawSpinLock = crate::sync::IsrSafeRawSpinLock::new();
 
-/// Master enable flag — the desktop sets this once the WM is ready
-/// to receive process output. Before that, stdout goes to serial only.
+/// Set once the WM is ready; until then stdout is serial-only.
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Enable stdout capture. Called by the desktop after WM initialisation.
 pub fn enable() {
     ENABLED.store(true, Ordering::Release);
 }
 
-/// Push bytes into the stdout capture buffer.
-/// Silently drops bytes if the buffer is full (never blocks).
+/// Drops bytes if full, never blocks.
 pub fn push(data: &[u8]) {
     if !ENABLED.load(Ordering::Acquire) {
         return;
@@ -39,7 +30,7 @@ pub fn push(data: &[u8]) {
         let next = (head + 1) & BUF_MASK;
         if next == TAIL.load(Ordering::Acquire) {
             PUSH_LOCK.unlock();
-            return; // full — drop remainder
+            return;
         }
         unsafe {
             BUF[head] = b;
@@ -49,8 +40,7 @@ pub fn push(data: &[u8]) {
     PUSH_LOCK.unlock();
 }
 
-/// Drain all available bytes into `out`, appending up to `limit` bytes.
-/// Returns the number of bytes drained.
+/// Drain up to `out.len()` bytes; returns count drained.
 pub fn drain(out: &mut [u8]) -> usize {
     let mut count = 0;
     while count < out.len() {
@@ -66,7 +56,6 @@ pub fn drain(out: &mut [u8]) -> usize {
     count
 }
 
-/// Returns the number of bytes available to drain.
 pub fn available() -> usize {
     let head = HEAD.load(Ordering::Acquire);
     let tail = TAIL.load(Ordering::Relaxed);

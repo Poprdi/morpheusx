@@ -26,9 +26,6 @@
 //!     }
 //! }
 //! ```
-//!
-//! # Reference
-//! NETWORK_IMPL_GUIDE.md §5
 
 pub mod dhcp;
 pub mod disk_writer;
@@ -40,9 +37,6 @@ pub mod tcp;
 use crate::time::TimeoutConfig;
 use core::fmt;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STEP RESULT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Result of a state machine step.
 ///
@@ -92,9 +86,6 @@ impl StepResult {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STATE MACHINE ERROR
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Common error type for state machines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,9 +141,6 @@ impl fmt::Display for StateError {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TIMESTAMP WRAPPER
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// TSC timestamp wrapper for timeout calculations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -191,9 +179,6 @@ impl From<u64> for TscTimestamp {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// STATE MACHINE CONTEXT
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Context passed to state machine step functions.
 ///
@@ -207,7 +192,6 @@ pub struct StepContext {
 }
 
 impl StepContext {
-    /// Create new context.
     pub fn new(now_tsc: u64, tsc_freq: u64) -> Self {
         Self {
             now_tsc,
@@ -228,9 +212,6 @@ impl StepContext {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROGRESS TRACKING
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Progress information for long-running operations.
 #[derive(Debug, Clone, Copy, Default)]
@@ -256,13 +237,11 @@ impl Progress {
         }
     }
 
-    /// Update progress.
     pub fn update(&mut self, bytes_done: u64, now_tsc: u64) {
         self.bytes_done = bytes_done;
         self.last_update_tsc = now_tsc;
     }
 
-    /// Set total bytes (when known).
     pub fn set_total(&mut self, total: u64) {
         self.bytes_total = total;
     }
@@ -276,7 +255,6 @@ impl Progress {
         }
     }
 
-    /// Calculate bytes per second (approximate).
     pub fn bytes_per_second(&self, now_tsc: u64, tsc_freq: u64) -> u64 {
         let elapsed = now_tsc.wrapping_sub(self.start_tsc);
         if elapsed == 0 {
@@ -292,9 +270,6 @@ impl Progress {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RE-EXPORTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 pub use dhcp::DhcpState;
 pub use dns::DnsResolveState;

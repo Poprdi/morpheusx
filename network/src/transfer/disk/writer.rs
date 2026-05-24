@@ -81,22 +81,18 @@ impl IsoWriter {
         }
     }
 
-    /// Set progress callback
     pub fn set_progress(&mut self, f: ProgressFn) {
         self.progress_fn = Some(f);
     }
 
-    /// Get current state
     pub fn state(&self) -> WriterState {
         self.state
     }
 
-    /// Get bytes written
     pub fn bytes_written(&self) -> u64 {
         self.total_bytes
     }
 
-    /// Get chunk info
     pub fn chunks(&self) -> &ChunkSet {
         &self.chunks
     }

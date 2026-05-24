@@ -21,14 +21,12 @@ impl LogSegmentHeader {
         hdr
     }
 
-    /// Recompute CRC.
     pub fn update_crc(&mut self) {
         self.crc32c = 0;
         let bytes = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, 40) };
         self.crc32c = crc32c(bytes);
     }
 
-    /// Verify CRC.
     pub fn verify_crc(&self) -> bool {
         let mut copy = *self;
         copy.crc32c = 0;

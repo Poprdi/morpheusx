@@ -13,7 +13,6 @@ pub fn alloc_pages(pages: u64) -> Result<u64, u64> {
     }
 }
 
-/// Free previously allocated physical pages.
 pub fn free_pages(phys_base: u64, pages: u64) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_FREE, phys_base, pages) };
     if is_error(ret) {

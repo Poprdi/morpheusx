@@ -1,4 +1,4 @@
-//! Directory record parsing and navigation
+//! Directory record parsing and path lookup.
 
 pub mod flags;
 pub mod iterator;
@@ -27,59 +27,32 @@ fn trace(msg: &str) {
 #[allow(dead_code)]
 fn trace(_msg: &str) {}
 
-/// Find a file or directory by path
-///
-/// Navigates the directory tree from root to locate a file/directory.
-/// Paths are case-insensitive and support both `/` and `\` separators.
-///
-/// # Arguments
-/// * `block_io` - Block device
-/// * `volume` - Mounted volume info
-/// * `path` - Path to find (e.g., "/boot/vmlinuz", "/LIVE/INITRD.IMG")
-///
-/// # Returns
-/// File entry if found, with metadata and extent location
-///
-/// # Example
-/// ```ignore
-/// use iso9660::{mount, find_file};
-///
-/// let volume = mount(&mut block_io, 0)?;
-/// let file = find_file(&mut block_io, &volume, "/boot/vmlinuz")?;
-/// println!("File size: {} bytes", file.size);
-/// ```
+/// Resolve a `/`-separated, case-insensitive path to a `FileEntry`.
+/// An empty path or "/" returns a synthesized root entry.
 pub fn find_file<B: BlockIo>(
     block_io: &mut B,
     volume: &VolumeInfo,
     path: &str,
 ) -> Result<FileEntry> {
-    // Split path by '/' and filter empty components
     let components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
 
-    // Check depth
     if components.len() > MAX_DIRECTORY_DEPTH {
         return Err(Iso9660Error::PathTooLong);
     }
 
-    // Start at root directory
     let mut current_lba = volume.root_extent_lba;
     let mut current_len = volume.root_extent_len;
 
-    // Navigate through each component
     for (depth, component) in components.iter().enumerate() {
         let is_last = depth == components.len() - 1;
 
-        // Create iterator for current directory
         let iter = iterator::DirectoryIterator::new(block_io, current_lba, current_len);
 
-        // Search for matching entry (case-insensitive)
         let mut found = None;
         let mut _entry_count = 0u32;
         for result in iter {
             let entry = result?;
             _entry_count += 1;
-
-            // Case-insensitive comparison
             if entry.name.eq_ignore_ascii_case(component) {
                 found = Some(entry);
                 break;
@@ -89,22 +62,18 @@ pub fn find_file<B: BlockIo>(
         match found {
             Some(entry) => {
                 if is_last {
-                    // Found the target file/directory
                     return Ok(entry);
-                } else {
-                    // Need to navigate into this directory
-                    if !entry.flags.directory {
-                        return Err(Iso9660Error::NotFound);
-                    }
-                    current_lba = entry.extent_lba;
-                    current_len = entry.data_length;
                 }
+                if !entry.flags.directory {
+                    return Err(Iso9660Error::NotFound);
+                }
+                current_lba = entry.extent_lba;
+                current_len = entry.data_length;
             }
             None => return Err(Iso9660Error::NotFound),
         }
     }
 
-    // If path is empty or just "/", return root as a directory entry
     if components.is_empty() {
         Ok(FileEntry {
             name: String::from("/"),

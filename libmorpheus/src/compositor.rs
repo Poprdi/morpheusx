@@ -1,15 +1,9 @@
-//! Compositor protocol — userspace API for per-process window surfaces.
-//!
-//! A single process registers as the compositor via [`compositor_set`].
-//! After that, all other processes that call [`crate::hw::fb_map`] receive
-//! private offscreen framebuffers.  The compositor reads those surfaces,
-//! composites them onto the real framebuffer, and presents the result.
+//! Compositor protocol: one process registers via [`compositor_set`]; thereafter
+//! [`crate::hw::fb_map`] hands every other process a private offscreen surface.
 
 use crate::raw::*;
 
-/// Surface descriptor returned by [`surface_list`].
-///
-/// Must match `hwinit::syscall::handler::SurfaceEntry` exactly.
+/// Mirror of `hwinit::syscall::handler::SurfaceEntry` — layout must match exactly.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceEntry {
@@ -25,10 +19,7 @@ pub struct SurfaceEntry {
     pub _pad2: u32,
 }
 
-/// Register the calling process as the window compositor.
-///
-/// Only one process can hold this role at a time.  Returns `Ok(())` on
-/// success, `Err(code)` if another compositor is already registered.
+/// Register the caller as the compositor. Only one at a time.
 pub fn compositor_set() -> Result<(), u64> {
     let r = unsafe { syscall0(SYS_COMPOSITOR_SET) };
     if r == 0 {
@@ -38,11 +29,7 @@ pub fn compositor_set() -> Result<(), u64> {
     }
 }
 
-/// Enumerate all per-process framebuffer surfaces.
-///
-/// Fills `buf` with up to `buf.len()` entries and returns the number
-/// of surfaces actually written.  If `buf` is empty, returns the total
-/// count of active surfaces (for pre-sizing the buffer).
+/// Enumerate surfaces. Empty `buf` returns total count for pre-sizing.
 pub fn surface_list(buf: &mut [SurfaceEntry]) -> usize {
     let r = unsafe {
         syscall2(
@@ -54,15 +41,9 @@ pub fn surface_list(buf: &mut [SurfaceEntry]) -> usize {
     r as usize
 }
 
-/// Map another process's surface into our address space.
-///
-/// Returns a pointer to the surface pixel data.  The mapping is writable
-/// (compositor may clear/init) but normally used read-only for compositing.
-///
-/// The returned pointer remains valid until the target process exits.
+/// Map another process's surface into our address space until that process exits.
 pub fn surface_map(pid: u32) -> Result<*mut u8, u64> {
     let r = unsafe { syscall1(SYS_WIN_SURFACE_MAP, pid as u64) };
-    // Error codes are near u64::MAX (> 0xFFFF_FFFF_FFFF_FF00).
     if r > 0xFFFF_FFFF_FFFF_FF00 {
         Err(r)
     } else {
@@ -70,10 +51,7 @@ pub fn surface_map(pid: u32) -> Result<*mut u8, u64> {
     }
 }
 
-/// Forward mouse input to a target process's per-process accumulator.
-///
-/// The compositor reads raw mouse data and routes it to the focused
-/// window's process.
+/// Route mouse delta to a process's per-process accumulator.
 pub fn mouse_forward(pid: u32, dx: i16, dy: i16, buttons: u8) -> Result<(), u64> {
     let packed = (dx as u16 as u64) | ((dy as u16 as u64) << 16) | ((buttons as u64) << 32);
     let r = unsafe { syscall2(SYS_MOUSE_FORWARD, pid as u64, packed) };
@@ -84,16 +62,8 @@ pub fn mouse_forward(pid: u32, dx: i16, dy: i16, buttons: u8) -> Result<(), u64>
     }
 }
 
-/// Forward keyboard bytes to a target process's per-process input buffer.
-///
-/// The compositor calls this after reading from global stdin and deciding
-/// which child gets the input.  The kernel writes the bytes into the
-/// target's `input_buf` ring buffer, where a subsequent `read(fd=0)` by
-/// the child will find them.  Wakes the child if it was blocked.
-///
-/// Returns the number of bytes actually written (may be less than
-/// `data.len()` if the target's buffer is full — maybe they should
-/// read faster).
+/// Push bytes into a target process's input ring; wakes it if blocked on `read(0)`.
+/// Returns bytes written; may be short if the ring is full.
 pub fn forward_input(pid: u32, data: &[u8]) -> Result<usize, u64> {
     if data.is_empty() {
         return Ok(0);
@@ -113,9 +83,7 @@ pub fn forward_input(pid: u32, data: &[u8]) -> Result<usize, u64> {
     }
 }
 
-/// Clear the dirty flag on a target process's surface.
-///
-/// Called by the compositor after it has read and composited the surface.
+/// Called by the compositor after it composites a surface.
 pub fn surface_dirty_clear(pid: u32) -> Result<(), u64> {
     let r = unsafe { syscall1(SYS_WIN_SURFACE_DIRTY_CLEAR, pid as u64) };
     if r == 0 {

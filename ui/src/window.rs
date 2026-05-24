@@ -109,10 +109,8 @@ impl Window {
         let ow = outer.w;
         let tb_h = TITLE_BAR_HEIGHT;
 
-        // Title bar background
         rect_fill(canvas, ox, oy, ow, tb_h, title_bg);
 
-        // Title text (left-aligned with padding)
         let text_y = oy + (tb_h.saturating_sub(font::FONT_HEIGHT)) / 2;
         draw_string(
             canvas,
@@ -124,7 +122,6 @@ impl Window {
             &font::FONT_DATA,
         );
 
-        // Close button [X] right-aligned
         let close_x = ox + ow.saturating_sub(4 * font::FONT_WIDTH + 2);
         draw_string(
             canvas,
@@ -136,10 +133,8 @@ impl Window {
             &font::FONT_DATA,
         );
 
-        // Bottom border of title bar
         hline(canvas, ox, oy + tb_h.saturating_sub(1), ow, border_color);
 
-        // Left border
         let content_bottom = oy + tb_h + self.height + BORDER_WIDTH;
         canvas.fill_rect(
             ox,
@@ -149,7 +144,6 @@ impl Window {
             border_color,
         );
 
-        // Right border
         let right_x = ox + ow.saturating_sub(BORDER_WIDTH);
         canvas.fill_rect(
             right_x,
@@ -159,7 +153,6 @@ impl Window {
             border_color,
         );
 
-        // Bottom border
         hline(
             canvas,
             ox,

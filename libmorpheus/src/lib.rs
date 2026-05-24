@@ -1,18 +1,12 @@
-//! libmorpheus — userspace syscall library and SDK.
+//! libmorpheus — userspace syscall library.
 //!
-//! # Layers
-//!
-//! 1. **Raw**: `raw::syscall0`..`syscall5` — thin `syscall` instruction wrappers.
-//! 2. **Bare functions**: `fs::open`, `net::tcp_send`, etc. — return `Result<T, u64>`.
-//! 3. **Ergonomic types**: `fs::File`, `net::TcpStream`, `time::Instant`, etc. —
-//!    RAII, implement `io::Read`/`io::Write`, use `error::Error`.
-//!
-//! RAX=nr, RDI..R9=args, RAX=return. errors > 0xFFFF_FFFF_FFFF_FF00.
+//! Layers: `raw` syscall wrappers, bare `Result<T, u64>` helpers, RAII types.
+//! ABI: RAX=nr, RDI..R9=args, RAX=return; errors are values > `0xFFFF_FFFF_FFFF_FF00`.
 
 #![no_std]
 #![allow(dead_code)]
 
-extern crate alloc; // buddy.rs registers #[global_allocator] → Vec/Box/String work
+extern crate alloc; // buddy.rs registers the global allocator
 
 pub mod buddy;
 pub mod compositor;
@@ -34,7 +28,7 @@ pub mod task;
 pub mod thread;
 pub mod time;
 
-/// Error codes from kernel. high bits = bad news.
+/// Kernel error codes (returned as high u64 values).
 pub const ENOSYS: u64 = u64::MAX - 37;
 pub const EINVAL: u64 = u64::MAX;
 pub const ENOMEM: u64 = u64::MAX - 12;
@@ -45,7 +39,6 @@ pub const EFAULT: u64 = u64::MAX - 14;
 pub const ESRCH: u64 = u64::MAX - 3;
 pub const EIO: u64 = u64::MAX - 5;
 
-/// true if the kernel is telling you to go away.
 #[inline]
 pub fn is_error(ret: u64) -> bool {
     ret > 0xFFFF_FFFF_FFFF_FF00

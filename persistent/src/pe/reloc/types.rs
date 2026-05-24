@@ -34,7 +34,6 @@ impl RelocationEntry {
         Self { raw }
     }
 
-    /// Get relocation type
     pub fn reloc_type(&self) -> RelocationType {
         RelocationType::from_u16(self.raw >> 12)
     }

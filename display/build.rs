@@ -1,7 +1,4 @@
-//! Build script for morpheus-display.
-//!
-//! Assembles framebuffer ASM primitives using NASM.
-//! Pattern matches network/build.rs.
+//! NASM assembly build for framebuffer primitives. Mirrors network/build.rs.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -18,13 +15,12 @@ fn main() {
         println!("cargo:rerun-if-changed={}", asm);
     }
 
-    // Only build ASM for x86_64 UEFI target
     if !target.contains("x86_64") || !target.contains("uefi") {
         println!("cargo:warning=Skipping ASM for target: {}", target);
         return;
     }
 
-    let obj_format = "win64"; // PE/COFF for UEFI
+    let obj_format = "win64"; // PE/COFF for UEFI.
     let mut objects = Vec::new();
 
     for asm_path in ASM_FILES {
@@ -48,7 +44,6 @@ fn main() {
         return;
     }
 
-    // Create static library
     let lib_path = out_dir.join("libdisplay_asm.a");
     let mut ar_args = vec!["crs".to_string(), lib_path.to_str().unwrap().to_string()];
     for obj in &objects {

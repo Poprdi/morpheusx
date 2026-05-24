@@ -116,7 +116,6 @@ pub fn find_free_space(partitions: &[(u64, u64)], disk_size_lba: u64) -> Option<
     None
 }
 
-/// Create a blank GPT header for a disk
 pub fn create_gpt_header(disk_size_lba: u64) -> GptHeader {
     GptHeader {
         signature: *b"EFI PART",
@@ -136,7 +135,6 @@ pub fn create_gpt_header(disk_size_lba: u64) -> GptHeader {
     }
 }
 
-/// Write GPT header to a 512-byte buffer
 pub fn write_gpt_header(header: &GptHeader, buffer: &mut [u8; 512]) {
     buffer.fill(0);
 
@@ -183,7 +181,6 @@ pub fn write_gpt_header(header: &GptHeader, buffer: &mut [u8; 512]) {
     buffer[88..92].copy_from_slice(&header.partition_array_crc32.to_le_bytes());
 }
 
-/// Create a blank partition entry
 pub fn create_partition_entry(
     type_guid: [u8; 16],
     start_lba: u64,

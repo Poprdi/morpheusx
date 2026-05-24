@@ -1,33 +1,5 @@
-//! AHCI (Advanced Host Controller Interface) block device driver.
-//!
-//! Provides native SATA block I/O for real hardware (ThinkPad T450s).
-//!
-//! # Target Hardware
-//!
-//! Intel Wildcat Point-LP SATA Controller [AHCI Mode]
-//! - PCI Vendor: 0x8086 (Intel)
-//! - PCI Device: 0x9C83
-//! - Class: 0x010601 (Mass Storage, SATA, AHCI)
-//!
-//! # Architecture
-//!
-//! The driver follows MorpheusX's ASM-first pattern:
-//! - All hardware access (MMIO, DMA structures) via hand-written assembly
-//! - Rust code handles orchestration, state tracking, error handling
-//! - Fire-and-forget command submission with poll-based completion
-//!
-//! # DMA Memory Layout
-//!
-//! Per-port DMA structures (must be properly aligned):
-//! - Command List: 1KB aligned, 32 × 32-byte command headers
-//! - FIS Receive: 256-byte aligned, 256 bytes
-//! - Command Tables: 128-byte aligned, one per command slot
-//!
-//! # Reference
-//!
-//! - AHCI 1.3.1 Specification
-//! - Intel PCH Datasheet
-//! - ATA/ATAPI-8 Command Set
+//! AHCI 1.3.1 block driver. Targets Intel PCH SATA (Wildcat Point-LP, etc.)
+//! and QEMU ich9-ahci. Polling-only; per-port CLB/FIS/CT DMA layout per spec §4.2.
 
 pub mod init;
 pub mod port;
@@ -39,15 +11,9 @@ use crate::driver::block_traits::{
 };
 use core::ptr;
 
-// Re-exports
 pub use init::{AhciConfig, AhciInitError};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ASM BINDINGS
-// ═══════════════════════════════════════════════════════════════════════════
-
 extern "win64" {
-    // HBA initialization
     fn asm_ahci_hba_reset(abar: u64, tsc_freq: u64) -> u32;
     fn asm_ahci_enable(abar: u64) -> u32;
     fn asm_ahci_read_cap(abar: u64) -> u32;
@@ -58,7 +24,6 @@ extern "win64" {
     fn asm_ahci_get_num_cmd_slots(abar: u64) -> u32;
     fn asm_ahci_supports_64bit(abar: u64) -> u32;
 
-    // Port operations
     fn asm_ahci_port_detect(abar: u64, port_num: u32) -> u32;
     fn asm_ahci_port_stop(abar: u64, port_num: u32, tsc_freq: u64) -> u32;
     fn asm_ahci_port_start(abar: u64, port_num: u32) -> u32;
@@ -71,7 +36,6 @@ extern "win64" {
     fn asm_ahci_port_clear_is(abar: u64, port_num: u32, bits: u32);
     fn asm_ahci_port_disable_interrupts(abar: u64, port_num: u32);
 
-    // Command operations
     fn asm_ahci_setup_cmd_header(cmd_header_ptr: u64, flags: u32, ctba_phys: u64);
     fn asm_ahci_build_h2d_fis(fis_ptr: u64, command: u8, lba: u64, sector_count: u16);
     fn asm_ahci_build_prdt(prdt_ptr: u64, data_phys: u64, byte_count_minus_1: u32);
@@ -86,7 +50,6 @@ extern "win64" {
     fn asm_ahci_check_cmd_complete(abar: u64, port_num: u32, slot_mask: u32) -> u32;
     fn asm_ahci_read_prdbc(cmd_header_ptr: u64) -> u32;
 
-    // IDENTIFY
     fn asm_ahci_identify_device(
         abar: u64,
         port_num: u32,
@@ -99,7 +62,6 @@ extern "win64" {
     fn asm_ahci_get_identify_capacity(identify_buf_ptr: u64) -> u64;
     fn asm_ahci_get_identify_sector_size(identify_buf_ptr: u64) -> u32;
 
-    // I/O operations
     fn asm_ahci_submit_read(
         abar: u64,
         port_num: u32,
@@ -132,20 +94,14 @@ extern "win64" {
     ) -> u32;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Intel PCI Vendor ID
 pub const INTEL_VENDOR_ID: u16 = 0x8086;
 
-/// Wildcat Point-LP SATA Controller (ThinkPad T450s)
+/// Wildcat Point-LP — ThinkPad T450s reference target.
 pub const AHCI_DEVICE_WPT_LP: u16 = 0x9C83;
 
-/// Other supported AHCI device IDs
 pub const AHCI_DEVICE_IDS: &[u16] = &[
-    0x2922, // ICH9 AHCI (QEMU ich9-ahci)
-    0x9C83, // Wildcat Point-LP (T450s)
+    0x2922, // ICH9 (QEMU ich9-ahci)
+    0x9C83, // Wildcat Point-LP
     0x9C03, // Lynx Point-LP
     0x8C02, // 8 Series/C220
     0x8C03, // 8 Series/C220 Mobile
@@ -157,82 +113,55 @@ pub const AHCI_DEVICE_IDS: &[u16] = &[
     0xA0D3, // Tiger Lake
 ];
 
-/// PCI Class code for SATA AHCI controller
 pub const PCI_CLASS_SATA_AHCI: u32 = 0x010601;
 
-/// Maximum command slots we support
 pub const MAX_CMD_SLOTS: usize = 32;
 
-/// Detection status values
 pub const DET_NONE: u32 = 0;
 pub const DET_PRESENT: u32 = 1;
 pub const DET_PHY_COMM: u32 = 3;
 
-/// Device signatures
 pub const SIG_ATA: u32 = 0x00000101;
 pub const SIG_ATAPI: u32 = 0xEB140101;
 
-/// ATA status bits
 pub const ATA_STS_BSY: u8 = 1 << 7;
 pub const ATA_STS_DRQ: u8 = 1 << 3;
 pub const ATA_STS_ERR: u8 = 1 << 0;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BIOS/OS HANDOFF
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Intel AHCI BIOS/OS Handoff — AHCI spec §10.6.
-///
-/// If `CAP2.BOH` is set, the BIOS owns the controller. We must request OS
-/// ownership and wait for BIOS to release before touching `GHC`. Skipping
-/// this on Intel PCH causes `GHC.HR` to stall the bus indefinitely because
-/// the PCH's internal state machine never completes the handshake, blocking
-/// every subsequent MMIO read including the TSC-based reset timeout.
-///
-/// Safe to call even when BOH is not supported — reads CAP2 and returns
-/// early if the feature bit is clear (QEMU, non-Intel controllers, etc.).
+/// AHCI §10.6 BIOS/OS handoff. On Intel PCH, skipping this and writing GHC.HR
+/// stalls the bus forever because the firmware state machine never advances.
+/// No-op when CAP2.BOH is clear (QEMU, non-Intel HBAs).
 unsafe fn ahci_bios_handoff(abar: u64, tsc_freq: u64) {
-    // AHCI generic host control register offsets (BAR5-relative).
     const AHCI_CAP2: u64 = 0x24;
     const AHCI_BOHC: u64 = 0x28;
 
-    // CAP2 bit 0: BIOS/OS Handoff supported.
     const CAP2_BOH: u32 = 1 << 0;
-    // BOHC bit 1: OS Ownership Set   — we write this to claim ownership.
     const BOHC_OOS: u32 = 1 << 1;
-    // BOHC bit 0: BIOS Ownership Semaphore — wait for BIOS to clear this.
     const BOHC_BOS: u32 = 1 << 0;
-    // BOHC bit 4: BIOS Busy — AHCI §10.6.4 step 7, wait for this to clear.
     const BOHC_BB:  u32 = 1 << 4;
 
-    // If BOH not supported, nothing to do — return immediately.
     let cap2 = core::ptr::read_volatile((abar + AHCI_CAP2) as *const u32);
     if cap2 & CAP2_BOH == 0 {
         return;
     }
 
-    // Set OOS — signal to BIOS that OS wants ownership.
     let bohc = core::ptr::read_volatile((abar + AHCI_BOHC) as *const u32);
     core::ptr::write_volatile((abar + AHCI_BOHC) as *mut u32, bohc | BOHC_OOS);
 
-    // Phase 1: wait up to 25 ms for BIOS to release BOS (AHCI §10.6.4 step 5).
-    // If BIOS doesn't release in time we proceed anyway; the HBA reset that
-    // follows will force the controller into a clean state regardless.
-    let deadline_bos = read_tsc_raw().wrapping_add(tsc_freq / 40); // 1/40 s = 25 ms
+    // §10.6.4 step 5: 25 ms for BIOS to drop BOS. If it doesn't, HBA reset will sort it.
+    let deadline_bos = read_tsc_raw().wrapping_add(tsc_freq / 40);
     loop {
         let b = core::ptr::read_volatile((abar + AHCI_BOHC) as *const u32);
         if b & BOHC_BOS == 0 {
             break;
         }
         if read_tsc_raw() >= deadline_bos {
-            // BIOS didn't release semaphore; proceed and let reset sort it out.
             break;
         }
         core::hint::spin_loop();
     }
 
-    // Phase 2: wait up to 2 s for BIOS Busy to clear (AHCI §10.6.4 step 7).
-    // Some BIOSes do cleanup work after releasing BOS; BB stays set until done.
+    // §10.6.4 step 7: up to 2 s for BB to clear — some BIOSes do post-handoff cleanup.
     let deadline_bb = read_tsc_raw().wrapping_add(tsc_freq.saturating_mul(2));
     loop {
         let b = core::ptr::read_volatile((abar + AHCI_BOHC) as *const u32);
@@ -246,77 +175,40 @@ unsafe fn ahci_bios_handoff(abar: u64, tsc_freq: u64) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// REQUEST TRACKING
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Track an in-flight request
 #[derive(Debug, Clone, Copy, Default)]
 struct InFlightRequest {
-    /// Caller's request ID
     request_id: u32,
-    /// Command slot used
     slot: u8,
-    /// Is this slot in use?
     active: bool,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DRIVER
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// AHCI block device driver for real hardware.
-///
-/// Supports Intel SATA controllers in AHCI mode.
 pub struct AhciDriver {
-    /// AHCI Base Address Register (BAR5 mapped)
     abar: u64,
-    /// Active port number (first detected SATA device)
     port_num: u32,
-    /// Calibrated TSC frequency
     tsc_freq: u64,
-    /// Device information
     info: BlockDeviceInfo,
-    /// Number of available command slots
     num_slots: u32,
-    /// In-flight request tracking
     in_flight: [InFlightRequest; MAX_CMD_SLOTS],
-    /// Next slot to use (round-robin)
     next_slot: u8,
-    /// DMA: Command List base (CPU pointer)
     cmd_list_cpu: *mut u8,
-    /// DMA: Command List base (physical)
     cmd_list_phys: u64,
-    /// DMA: FIS Receive buffer (CPU pointer)
     fis_cpu: *mut u8,
-    /// DMA: FIS Receive buffer (physical)
     fis_phys: u64,
-    /// DMA: Command Tables base (CPU pointer)
     cmd_tables_cpu: *mut u8,
-    /// DMA: Command Tables base (physical)
     cmd_tables_phys: u64,
-    /// DMA: IDENTIFY buffer (CPU pointer, 512 bytes)
     identify_cpu: *mut u8,
-    /// DMA: IDENTIFY buffer (physical)
     identify_phys: u64,
 }
 
 impl AhciDriver {
-    /// Create and initialize AHCI driver.
-    ///
     /// # Safety
-    /// - `abar` must be valid AHCI MMIO address (from BAR5)
-    /// - `config` must contain valid DMA memory pointers/addresses
+    /// `abar` must be the device's BAR5 MMIO mapping; config DMA pointers must be valid.
     pub unsafe fn new(abar: u64, config: AhciConfig) -> Result<Self, AhciInitError> {
         Self::new_inner(abar, config, None)
     }
 
-    /// Create and initialize AHCI driver on a specific port.
-    ///
     /// # Safety
-    /// - `abar` must be valid AHCI MMIO address (from BAR5)
-    /// - `config` must contain valid DMA memory pointers/addresses
-    /// - `port_num` must be an AHCI port index (0..31)
+    /// Same as `new`; `port_num < 32`.
     pub unsafe fn new_on_port(
         abar: u64,
         config: AhciConfig,
@@ -330,25 +222,17 @@ impl AhciDriver {
         config: AhciConfig,
         forced_port: Option<u32>,
     ) -> Result<Self, AhciInitError> {
-        // Validate config
         if config.cmd_list_cpu.is_null() || config.fis_cpu.is_null() {
             return Err(AhciInitError::InvalidConfig);
         }
 
         let tsc_freq = config.tsc_freq;
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 0: BIOS/OS handoff — must happen before any GHC access.
-        // Intel PCH stalls GHC reads until BIOS releases ownership.
-        // See AHCI 1.3.1 §10.6. Skipping this caused boot hang on real HW.
-        // ═══════════════════════════════════════════════════════════════════
+        // BIOS/OS handoff must precede any GHC access on Intel PCH.
         crate::serial_str("[AHCI] step 0: bios handoff\n");
         ahci_bios_handoff(abar, tsc_freq);
         crate::serial_str("[AHCI] step 0: done\n");
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 1: Reset HBA to known state, then enable AHCI mode
-        // ═══════════════════════════════════════════════════════════════════
         crate::serial_str("[AHCI] step 1: hba reset\n");
         if asm_ahci_hba_reset(abar, tsc_freq) != 0 {
             crate::serial_str("[AHCI] step 1: TIMEOUT\n");
@@ -357,29 +241,20 @@ impl AhciDriver {
         crate::serial_str("[AHCI] step 1: done\n");
         asm_ahci_enable(abar);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 2: Read capabilities
-        // ═══════════════════════════════════════════════════════════════════
         crate::serial_str("[AHCI] step 2: read caps\n");
         let _cap = asm_ahci_read_cap(abar);
         let num_slots = asm_ahci_get_num_cmd_slots(abar);
         let ports_impl = asm_ahci_read_pi(abar);
 
-        // Check 64-bit support
         let supports_64bit = asm_ahci_supports_64bit(abar) != 0;
         if !supports_64bit && (config.cmd_list_phys >> 32) != 0 {
             return Err(AhciInitError::No64BitSupport);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 3: Disable interrupts (we use polling)
-        // ═══════════════════════════════════════════════════════════════════
         crate::serial_str("[AHCI] step 3: disable irq\n");
         asm_ahci_disable_interrupts(abar);
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 4: Build candidate port list (strict ATA first, then fallback)
-        // ═══════════════════════════════════════════════════════════════════
+        // Strict ATA sigs first, then anything that looked alive during the settle window.
         crate::serial_str("[AHCI] step 4: port scan\n");
         let mut strict_ports = [u32::MAX; 32];
         let mut strict_count = 0usize;
@@ -471,9 +346,6 @@ impl AhciDriver {
             candidate_count += 1;
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 5-7: Try candidates until one IDENTIFY succeeds
-        // ═══════════════════════════════════════════════════════════════════
         crate::serial_str("[AHCI] step 5: try candidates\n");
         let mut last_err = AhciInitError::NoDeviceFound;
 
@@ -491,7 +363,7 @@ impl AhciDriver {
             asm_ahci_port_disable_interrupts(abar, port_num);
             asm_ahci_port_start(abar, port_num);
 
-            // Give link/signature a brief settle window after engine start.
+            // 50 ms settle for link/signature after engine start.
             let link_ticks = (tsc_freq / 1000).saturating_mul(50);
             let link_start = read_tsc_raw();
             while read_tsc_raw().wrapping_sub(link_start) < link_ticks {
@@ -550,24 +422,20 @@ impl AhciDriver {
         Err(last_err)
     }
 
-    /// Get command header pointer for a slot
     fn cmd_header_ptr(&self, slot: u32) -> *mut u8 {
-        // Each command header is 32 bytes
+        // 32-byte command header per slot.
         unsafe { self.cmd_list_cpu.add((slot as usize) * 32) }
     }
 
-    /// Get command table pointer for a slot
     fn cmd_table_ptr(&self, slot: u32) -> *mut u8 {
-        // Each command table is 256 bytes (128 header + PRDTs)
+        // 256-byte command table (CFIS + ACMD + PRDT) per slot.
         unsafe { self.cmd_tables_cpu.add((slot as usize) * 256) }
     }
 
-    /// Get command table physical address for a slot
     fn cmd_table_phys(&self, slot: u32) -> u64 {
         self.cmd_tables_phys + (slot as u64) * 256
     }
 
-    /// Allocate a command slot
     fn alloc_slot(&mut self) -> Option<u32> {
         for _ in 0..self.num_slots {
             let slot = self.next_slot as u32;
@@ -580,18 +448,15 @@ impl AhciDriver {
         None
     }
 
-    /// Check link status
     pub fn link_up(&self) -> bool {
         let det = unsafe { asm_ahci_port_detect(self.abar, self.port_num) };
         det == DET_PHY_COMM
     }
 
-    /// Get port number being used
     pub fn port(&self) -> u32 {
         self.port_num
     }
 
-    /// Get AHCI version
     pub fn version(&self) -> (u8, u8) {
         let vs = unsafe { asm_ahci_read_version(self.abar) };
         let major = ((vs >> 16) & 0xFF) as u8;
@@ -616,7 +481,6 @@ impl BlockDriver for AhciDriver {
         num_sectors: u32,
         request_id: u32,
     ) -> Result<(), BlockError> {
-        // Validate
         if sector + num_sectors as u64 > self.info.total_sectors {
             return Err(BlockError::InvalidSector);
         }
@@ -624,10 +488,8 @@ impl BlockDriver for AhciDriver {
             return Err(BlockError::RequestTooLarge);
         }
 
-        // Allocate slot
         let slot = self.alloc_slot().ok_or(BlockError::QueueFull)?;
 
-        // Submit via ASM
         let result = unsafe {
             asm_ahci_submit_read(
                 self.abar,
@@ -646,7 +508,6 @@ impl BlockDriver for AhciDriver {
             return Err(BlockError::DeviceError);
         }
 
-        // Track in-flight
         self.in_flight[slot as usize] = InFlightRequest {
             request_id,
             slot: slot as u8,
@@ -663,12 +524,10 @@ impl BlockDriver for AhciDriver {
         num_sectors: u32,
         request_id: u32,
     ) -> Result<(), BlockError> {
-        // Check read-only (shouldn't happen for AHCI, but be safe)
         if self.info.read_only {
             return Err(BlockError::ReadOnly);
         }
 
-        // Validate
         if sector + num_sectors as u64 > self.info.total_sectors {
             return Err(BlockError::InvalidSector);
         }
@@ -676,10 +535,8 @@ impl BlockDriver for AhciDriver {
             return Err(BlockError::RequestTooLarge);
         }
 
-        // Allocate slot
         let slot = self.alloc_slot().ok_or(BlockError::QueueFull)?;
 
-        // Submit via ASM
         let result = unsafe {
             asm_ahci_submit_write(
                 self.abar,
@@ -698,7 +555,6 @@ impl BlockDriver for AhciDriver {
             return Err(BlockError::DeviceError);
         }
 
-        // Track in-flight
         self.in_flight[slot as usize] = InFlightRequest {
             request_id,
             slot: slot as u8,
@@ -709,7 +565,6 @@ impl BlockDriver for AhciDriver {
     }
 
     fn poll_completion(&mut self) -> Option<BlockCompletion> {
-        // Check each active slot
         for slot in 0..self.num_slots as usize {
             if !self.in_flight[slot].active {
                 continue;
@@ -720,27 +575,24 @@ impl BlockDriver for AhciDriver {
                 unsafe { asm_ahci_check_cmd_complete(self.abar, self.port_num, slot_mask) };
 
             if status == 0 {
-                // Still pending
                 continue;
             }
 
             let request_id = self.in_flight[slot].request_id;
 
-            // Read bytes transferred from command header
             let bytes_transferred =
                 unsafe { asm_ahci_read_prdbc(self.cmd_header_ptr(slot as u32) as u64) };
 
-            // Mark slot as free
             self.in_flight[slot].active = false;
 
-            // Clear interrupt status for this completion
             unsafe {
                 asm_ahci_port_clear_is(self.abar, self.port_num, 0xFFFFFFFF);
             }
 
+            // status: 1 = ok, anything else = error.
             let completion = BlockCompletion {
                 request_id,
-                status: if status == 1 { 0 } else { 1 }, // 1=complete, 2=error
+                status: if status == 1 { 0 } else { 1 },
                 bytes_transferred,
             };
 
@@ -751,12 +603,10 @@ impl BlockDriver for AhciDriver {
     }
 
     fn notify(&mut self) {
-        // AHCI doesn't need explicit notify - commands are issued immediately
-        // This is a no-op for AHCI
+        // AHCI issues immediately on slot bit write; no doorbell needed.
     }
 
     fn flush(&mut self) -> Result<(), BlockError> {
-        // Use slot 0 for flush (should be available after draining queue)
         let slot = self.alloc_slot().ok_or(BlockError::QueueFull)?;
 
         unsafe {
@@ -773,14 +623,14 @@ impl BlockDriver for AhciDriver {
                 return Err(BlockError::DeviceError);
             }
 
-            // Poll for completion (30 second timeout for flush)
             let slot_mask = 1u32 << slot;
+            // 30 s — FLUSH CACHE can stall on large dirty queues.
             let poll_result = asm_ahci_poll_cmd(
                 self.abar,
                 self.port_num,
                 slot_mask,
                 self.tsc_freq,
-                30000, // 30 seconds
+                30000,
             );
 
             if poll_result != 0 {
@@ -809,5 +659,5 @@ impl BlockDriverInit for AhciDriver {
     }
 }
 
-// Safety: AhciDriver only contains raw pointers that are not shared
+// SAFETY: raw pointers are owned, never aliased across threads.
 unsafe impl Send for AhciDriver {}

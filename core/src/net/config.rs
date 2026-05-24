@@ -2,10 +2,8 @@
 //!
 //! Configuration options for the network initialization sequence.
 
-/// ECAM base address for QEMU Q35 machine type.
 pub const ECAM_BASE_QEMU_Q35: usize = 0xB000_0000;
 
-/// ECAM base address for QEMU i440FX machine type.
 pub const ECAM_BASE_QEMU_I440FX: usize = 0xE000_0000;
 
 /// Network initialization configuration.
@@ -81,7 +79,6 @@ impl InitConfig {
         self
     }
 
-    /// Set DHCP timeout.
     pub fn dhcp_timeout(mut self, timeout_ms: u64) -> Self {
         self.dhcp_timeout_ms = timeout_ms;
         self

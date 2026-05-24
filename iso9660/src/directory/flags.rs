@@ -1,9 +1,9 @@
-//! File flags parsing and manipulation
+//! `FileFlags` byte conversions (ISO 9660 §9.1.6).
 
 use crate::types::FileFlags;
 
 impl FileFlags {
-    /// Parse from raw byte
+    /// Decode the directory-record file-flags byte.
     pub fn from_byte(byte: u8) -> Self {
         Self {
             hidden: byte & 0x01 != 0,
@@ -15,7 +15,7 @@ impl FileFlags {
         }
     }
 
-    /// Convert to raw byte
+    /// Encode back to the directory-record byte.
     pub fn to_byte(&self) -> u8 {
         let mut byte = 0u8;
         if self.hidden {

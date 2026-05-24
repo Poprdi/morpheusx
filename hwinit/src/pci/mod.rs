@@ -1,8 +1,4 @@
 //! PCI enumeration and configuration access.
-//!
-//! # Reference
-//! - PCI Local Bus Spec 3.0
-//! - VirtIO Spec 1.2 §4.1.4
 
 pub mod capability;
 pub mod config;

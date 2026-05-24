@@ -26,19 +26,16 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-/// PCI vendor ID for VirtIO devices.
 pub const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
 
 /// VirtIO device ID range for transitional devices.
 pub const VIRTIO_DEVICE_ID_BASE: u16 = 0x1000;
 
-/// VirtIO device ID for modern network device.
 pub const VIRTIO_NET_DEVICE_ID: u16 = 0x1041;
 
 /// PCI configuration space size for a single function.
 pub const PCI_CONFIG_SIZE: usize = 256;
 
-/// PCIe extended configuration space size.
 pub const PCIE_CONFIG_SIZE: usize = 4096;
 
 /// PCI device/function identifier.
@@ -128,7 +125,6 @@ impl PciDeviceInfo {
         self.class == 0x02
     }
 
-    /// Get VirtIO device type (for transitional devices).
     pub fn virtio_device_type(&self) -> Option<u8> {
         if !self.is_virtio() {
             return None;
@@ -219,10 +215,8 @@ impl ConfigAccess for EcamAccess {
 unsafe impl Send for EcamAccess {}
 unsafe impl Sync for EcamAccess {}
 
-// =============================================================================
 // External assembly functions for PCI I/O (compiled from pci_io.S)
 // Using standalone assembly avoids compiler optimization issues with inline asm
-// =============================================================================
 #[cfg(target_arch = "x86_64")]
 extern "C" {
     /// Read 32-bit value from PCI configuration space.
@@ -370,7 +364,6 @@ impl<A: ConfigAccess> PciScanner<A> {
         })
     }
 
-    /// Scan a single bus for devices.
     pub fn scan_bus(&self, bus: u8) -> Vec<PciDeviceInfo> {
         let mut devices = Vec::new();
 
@@ -408,7 +401,6 @@ impl<A: ConfigAccess> PciScanner<A> {
         devices
     }
 
-    /// Find all VirtIO network devices.
     pub fn find_virtio_net(&self) -> Vec<PciDeviceInfo> {
         self.scan_bus(0)
             .into_iter()
@@ -430,10 +422,8 @@ pub mod ecam_bases {
     /// QEMU Q35 machine type (also used by OVMF).
     pub const QEMU_Q35: usize = 0xB000_0000;
 
-    /// QEMU i440FX machine type (legacy).
     pub const QEMU_I440FX: usize = 0xE000_0000;
 
-    /// Intel platform (typical).
     pub const INTEL_TYPICAL: usize = 0xE000_0000;
 }
 
@@ -512,7 +502,6 @@ pub mod diagnostics {
         pub virtio_locations: Vec<(DeviceFunction, u16, u16)>,
     }
 
-    /// Run full PCI diagnostics.
     pub fn run_diagnostics() -> PciDiagnostic {
         let (cf8_readback, _data) = raw_io_test();
 

@@ -1,14 +1,11 @@
-//! File reader implementation
+//! Sector-buffered seek/read interface for ISO 9660 files.
 
 use crate::error::{Iso9660Error, Result};
 use crate::types::{FileEntry, SECTOR_SIZE};
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
-/// Buffered file reader for streaming large files
-///
-/// Provides a seek/read interface for files that may be too large
-/// to load entirely into memory.
+/// Streaming reader for files too large to slurp into memory.
 pub struct FileReader<'a, B: BlockIo> {
     block_io: &'a mut B,
     file: FileEntry,
@@ -16,7 +13,7 @@ pub struct FileReader<'a, B: BlockIo> {
 }
 
 impl<'a, B: BlockIo> FileReader<'a, B> {
-    /// Create new file reader
+    /// New reader positioned at offset 0.
     pub fn new(block_io: &'a mut B, file: FileEntry) -> Self {
         Self {
             block_io,
@@ -25,9 +22,7 @@ impl<'a, B: BlockIo> FileReader<'a, B> {
         }
     }
 
-    /// Read bytes from current position
-    ///
-    /// Returns number of bytes read (may be less than buffer size at EOF)
+    /// Read from the current position. Returns 0 at EOF.
     pub fn read(&mut self, buffer: &mut [u8]) -> Result<usize> {
         if self.position >= self.file.size {
             return Ok(0);
@@ -40,7 +35,6 @@ impl<'a, B: BlockIo> FileReader<'a, B> {
             return Ok(0);
         }
 
-        // Calculate sector and offset within sector
         let start_sector = (self.position / SECTOR_SIZE as u64) as u32;
         let offset_in_sector = (self.position % SECTOR_SIZE as u64) as usize;
 
@@ -63,19 +57,19 @@ impl<'a, B: BlockIo> FileReader<'a, B> {
 
             bytes_read += chunk_size;
             current_sector += 1;
-            current_offset = 0; // After first sector, start from beginning
+            current_offset = 0;
         }
 
         self.position += bytes_read as u64;
         Ok(bytes_read)
     }
 
-    /// Seek to absolute position
+    /// Seek to an absolute byte position, clamped to file size.
     pub fn seek(&mut self, pos: u64) {
         self.position = pos.min(self.file.size);
     }
 
-    /// Seek relative to current position
+    /// Seek relative to current position; saturates at 0 and file size.
     pub fn seek_relative(&mut self, offset: i64) {
         let new_pos = if offset < 0 {
             self.position.saturating_sub((-offset) as u64)
@@ -85,22 +79,19 @@ impl<'a, B: BlockIo> FileReader<'a, B> {
         self.position = new_pos.min(self.file.size);
     }
 
-    /// Get current position
     pub fn position(&self) -> u64 {
         self.position
     }
 
-    /// Get file size
     pub fn size(&self) -> u64 {
         self.file.size
     }
 
-    /// Check if at end of file
     pub fn is_eof(&self) -> bool {
         self.position >= self.file.size
     }
 
-    /// Get remaining bytes
+    /// Bytes left until EOF.
     pub fn remaining(&self) -> u64 {
         self.file.size.saturating_sub(self.position)
     }

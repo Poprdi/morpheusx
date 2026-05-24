@@ -446,7 +446,6 @@ pub fn put_hex32(val: u32) {
     }
 }
 
-/// Write u64 as hex.
 pub fn put_hex64(val: u64) {
     let _guard = SERIAL_LOCK.lock();
     putc_raw(b'0');
@@ -462,7 +461,6 @@ pub fn put_hex64(val: u64) {
     }
 }
 
-/// Write u8 as hex (no prefix).
 pub fn put_hex8(val: u8) {
     let _guard = SERIAL_LOCK.lock();
     let hi = (val >> 4) & 0xF;
@@ -471,7 +469,6 @@ pub fn put_hex8(val: u8) {
     putc_raw(if lo < 10 { b'0' + lo } else { b'a' + lo - 10 });
 }
 
-/// Newline.
 #[inline]
 pub fn newline() {
     let _guard = SERIAL_LOCK.lock();

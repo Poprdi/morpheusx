@@ -343,7 +343,6 @@ impl Process {
         self.name[len] = 0;
     }
 
-    /// Set the process CWD.
     pub fn set_cwd(&mut self, path: &str) {
         let bytes = path.as_bytes();
         let len = bytes.len().min(255);

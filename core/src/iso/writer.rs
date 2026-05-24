@@ -121,22 +121,18 @@ impl ChunkWriter {
         })
     }
 
-    /// Set progress callback
     pub fn set_progress_fn(&mut self, f: WriteProgressFn) {
         self.progress_fn = Some(f);
     }
 
-    /// Get current state
     pub fn state(&self) -> WriterState {
         self.state
     }
 
-    /// Get total bytes written
     pub fn bytes_written(&self) -> u64 {
         self.total_bytes_written
     }
 
-    /// Get current chunk index
     pub fn current_chunk_index(&self) -> usize {
         self.current_chunk
     }

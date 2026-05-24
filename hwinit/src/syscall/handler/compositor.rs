@@ -1,7 +1,4 @@
 
-// ═══════════════════════════════════════════════════════════════════════
-// COMPOSITOR SYSCALLS (91-95)
-// ═══════════════════════════════════════════════════════════════════════
 
 /// Surface entry returned by SYS_WIN_SURFACE_LIST.
 /// Must match `libmorpheus::compositor::SurfaceEntry` exactly.
@@ -228,9 +225,6 @@ pub unsafe fn sys_win_surface_dirty_clear(target_pid: u64) -> u64 {
     result
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// NON-BLOCKING WAIT
-// ═══════════════════════════════════════════════════════════════════════
 
 /// `SYS_TRY_WAIT(pid) → exit_code | EAGAIN | ESRCH`
 ///
@@ -240,9 +234,6 @@ pub unsafe fn sys_try_wait(pid: u64) -> u64 {
     crate::process::scheduler::try_wait_child(pid as u32)
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-// COMPOSITOR INPUT FORWARDING (97)
-// ═══════════════════════════════════════════════════════════════════════
 
 /// `SYS_FORWARD_INPUT(target_pid, ptr, len) → bytes_written`
 ///

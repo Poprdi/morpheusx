@@ -57,11 +57,6 @@ pub enum DownloadResult {
 }
 
 /// Execute HTTP download using state machine.
-///
-/// # Arguments
-/// * `driver` - Already-initialized network driver
-/// * `url` - Download URL
-/// * `tsc_freq` - TSC frequency (Hz)
 pub fn download<D: NetworkDriver>(
     driver: &mut D,
     url: &'static str,
@@ -72,12 +67,6 @@ pub fn download<D: NetworkDriver>(
 }
 
 /// Execute HTTP download with disk writing.
-///
-/// # Arguments
-/// * `driver` - Already-initialized network driver
-/// * `config` - Full download configuration
-/// * `blk_device` - Optional block device for disk writes
-/// * `tsc_freq` - TSC frequency (Hz)
 pub fn download_with_config<D: NetworkDriver>(
     driver: &mut D,
     config: DownloadConfig<'static>,

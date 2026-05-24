@@ -74,7 +74,7 @@ pub unsafe fn reset_machine_now() -> ! {
     crate::serial::set_checkpoints_enabled(true);
     shutdown_stage("shutdown: request ap quiesce");
 
-    // Ask APs to park before we start poking reset controls.
+    // Park APs before poking reset controls.
     crate::cpu::per_cpu::request_shutdown_quiesce();
     let quiesced = crate::cpu::per_cpu::wait_for_shutdown_quiesce(500);
     if quiesced {

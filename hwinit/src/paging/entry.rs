@@ -55,10 +55,8 @@ impl PageFlags {
     pub const USER_RW: Self =
         Self(Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0 | Self::NO_EXECUTE.0);
 
-    /// User executable page.
     pub const USER_CODE: Self = Self(Self::PRESENT.0 | Self::USER.0);
 
-    /// Empty (not present).
     pub const EMPTY: Self = Self(0);
 
     // combinators
@@ -148,7 +146,6 @@ impl PageTableEntry {
         self.0 & Self::PHYS_ADDR_MASK
     }
 
-    /// Raw 64-bit value.
     #[inline]
     pub fn raw(self) -> u64 {
         self.0
@@ -202,7 +199,6 @@ impl PageTable {
         }
     }
 
-    /// Zero all entries.
     pub fn zero(&mut self) {
         for e in self.entries.iter_mut() {
             e.clear();
