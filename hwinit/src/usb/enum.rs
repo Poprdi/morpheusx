@@ -21,8 +21,28 @@ impl XhciController {
     pub unsafe fn enable_slot(&mut self) -> Result<u8, XhciError> {
         self.cmd_ring.enqueue(0, 0, TRB_ENABLE_SLOT);
         self.ring_cmd_doorbell();
-        let (slot, _) = self.wait_cmd(2000)?;
+        let (slot, _) = match self.wait_cmd(2000) {
+            Ok(v) => v,
+            Err(XhciError::CommandTimeout) => {
+                // No completion event in 2 s. Controller never processed the
+                // command — usually means CRCR wasn't accepted, MaxSlotsEn=0,
+                // bus-mastering disabled, or the doorbell isn't being seen.
+                crate::serial::log_warn("USB", 251, "enable_slot: no completion event (timeout)");
+                self.dump_state("enable_slot.timeout");
+                return Err(XhciError::CommandTimeout);
+            }
+            Err(e) => {
+                // Got a completion event but with a non-success code (CC != 1).
+                // Most likely "No Slots Available" (CC=12) — MaxSlotsEnabled issue.
+                crate::serial::log_warn("USB", 252, "enable_slot: command returned error CC");
+                self.dump_state("enable_slot.cc_err");
+                return Err(e);
+            }
+        };
         if slot == 0 {
+            // Completion event was successful but reported slot 0 — controller
+            // bug or context-size mismatch (slot ID in wrong bit position).
+            crate::serial::log_warn("USB", 253, "enable_slot: success event but slot id = 0");
             return Err(XhciError::EnableSlotFailed);
         }
         self.slot_id = slot;
@@ -46,7 +66,15 @@ impl XhciController {
 
         let slot_ctx = in_ctx + cs;
         let max_pkt = ep0_max_packet(speed);
-        vw32(slot_ctx, ((speed as u32) << 20) | (1u32 << 26));
+        // Slot Context DW0:
+        //   [23:20] Speed
+        //   [26]    Hub   — must be 0 for non-hub devices
+        //   [31:27] Context Entries — must be >=1 (0 is reserved/invalid)
+        // Previously this set bit 26 (Hub) instead of bit 27 (Context Entries=1).
+        // QEMU tolerated it; real Intel xHCI rejects AddressDevice with a
+        // non-success CC because Hub=1 lacks hub-specific DW1 fields AND
+        // Context Entries=0 is explicitly invalid.
+        vw32(slot_ctx, ((speed as u32) << 20) | (1u32 << 27));
         vw32(slot_ctx + 4, (port as u32 + 1) << 16);
 
         let ep0 = in_ctx + 2 * cs;

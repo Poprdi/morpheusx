@@ -143,6 +143,63 @@ pub fn puts(s: &str) {
     }
 }
 
+/// Write `val` as 8 hex digits (no `0x` prefix) to all three sinks.
+/// Routes through `puts` so the framebuffer mirror sees the digits too —
+/// unlike `put_dec_u16_raw`, which only reaches COM1.
+pub fn puts_hex_u32(val: u32) {
+    let mut buf = [b'0'; 8];
+    for i in 0..8 {
+        let nyb = ((val >> ((7 - i) * 4)) & 0xF) as u8;
+        buf[i] = if nyb < 10 { b'0' + nyb } else { b'a' + (nyb - 10) };
+    }
+    if let Ok(s) = core::str::from_utf8(&buf) {
+        puts(s);
+    }
+}
+
+/// Write `val` as 16 hex digits (no `0x` prefix) to all three sinks.
+pub fn puts_hex_u64(val: u64) {
+    puts_hex_u32((val >> 32) as u32);
+    puts_hex_u32(val as u32);
+}
+
+/// Write `val` as 2 hex digits (no `0x` prefix) to all three sinks.
+pub fn puts_hex_u8(val: u8) {
+    let mut buf = [b'0'; 2];
+    let hi = (val >> 4) & 0xF;
+    let lo = val & 0xF;
+    buf[0] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+    buf[1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+    if let Ok(s) = core::str::from_utf8(&buf) {
+        puts(s);
+    }
+}
+
+/// Write `val` as up to 3 decimal digits to all three sinks.
+pub fn puts_dec_u8(val: u8) {
+    if val >= 100 {
+        let mut buf = [b'0'; 3];
+        buf[0] = b'0' + (val / 100);
+        buf[1] = b'0' + ((val / 10) % 10);
+        buf[2] = b'0' + (val % 10);
+        if let Ok(s) = core::str::from_utf8(&buf) {
+            puts(s);
+        }
+    } else if val >= 10 {
+        let mut buf = [b'0'; 2];
+        buf[0] = b'0' + (val / 10);
+        buf[1] = b'0' + (val % 10);
+        if let Ok(s) = core::str::from_utf8(&buf) {
+            puts(s);
+        }
+    } else {
+        let buf = [b'0' + val];
+        if let Ok(s) = core::str::from_utf8(&buf) {
+            puts(s);
+        }
+    }
+}
+
 #[inline]
 fn put_str_raw(s: &str) {
     for b in s.bytes() {
