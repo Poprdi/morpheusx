@@ -10,6 +10,7 @@ pub mod controller;
 pub mod dma;
 pub mod enumerate;
 pub mod hid;
+pub mod hub;
 pub mod regs;
 pub mod rings;
 

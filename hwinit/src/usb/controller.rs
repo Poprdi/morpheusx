@@ -294,7 +294,7 @@ impl XhciController {
     }
 
     #[inline(always)]
-    unsafe fn tsc_delay(tsc_freq: u64, ms: u64) {
+    pub(crate) unsafe fn tsc_delay(tsc_freq: u64, ms: u64) {
         if ms == 0 {
             return;
         }
@@ -303,6 +303,34 @@ impl XhciController {
         while tsc::read_tsc().wrapping_sub(start) < ticks {
             core::hint::spin_loop();
         }
+    }
+
+    /// Instance wrapper around `tsc_delay` for callers that already hold a
+    /// controller reference (mostly the hub class code in `hub.rs`).
+    #[inline(always)]
+    pub unsafe fn delay_ms(&self, ms: u64) {
+        Self::tsc_delay(self.tsc_freq, ms);
+    }
+
+    /// Single-line snapshot of the controller's run-state registers.
+    /// Tag is a short identifier so multiple dumps in a boot can be distinguished.
+    pub unsafe fn dump_state(&self, tag: &str) {
+        use crate::serial::{puts, puts_hex_u32};
+        let cmd = mmio::read32(self.op_base + OP_USBCMD);
+        let sts = mmio::read32(self.op_base + OP_USBSTS);
+        let crcr = mmio::read32(self.op_base + OP_CRCR);
+        let dcb = mmio::read32(self.op_base + OP_DCBAAP);
+        puts("[USB-DBG] ");
+        puts(tag);
+        puts(" cmd=");
+        puts_hex_u32(cmd);
+        puts(" sts=");
+        puts_hex_u32(sts);
+        puts(" crcr=");
+        puts_hex_u32(crcr);
+        puts(" dcb=");
+        puts_hex_u32(dcb);
+        puts("\n");
     }
 
     /// Ring the command doorbell.
