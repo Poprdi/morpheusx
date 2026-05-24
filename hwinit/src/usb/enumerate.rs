@@ -173,6 +173,13 @@ unsafe fn enumerate_port(
         }
     };
 
+    // Snapshot bDeviceClass / SubClass / Protocol before the config fetches
+    // overwrite OFF_DESC. We need them later for the "no HID" diagnostic so
+    // we can tell hubs (class 09) apart from composite/other devices.
+    let dev_class = core::ptr::read_volatile(desc_ptr.add(4));
+    let dev_subclass = core::ptr::read_volatile(desc_ptr.add(5));
+    let dev_proto = core::ptr::read_volatile(desc_ptr.add(6));
+
     // Pull config descriptor — first 9 bytes to get wTotalLength
     let cfg_ptr = match controller.get_config_descriptor(9) {
         Ok(p) => p,
@@ -222,10 +229,17 @@ unsafe fn enumerate_port(
         }))
     } else {
         // Successfully addressed and pulled descriptors, but no HID interface
-        // present in the configuration. Most common cause on real hardware:
-        // the device is a USB hub (class 0x09) acting as the intermediary
-        // between the controller and the real keyboard/mouse downstream.
-        crate::serial::log_info("USB", 218, "step: enumerated, no HID interface (hub?)");
+        // present in the configuration. Print bDeviceClass/SubClass/Protocol
+        // so the operator can identify what we're talking to: 09 = USB hub,
+        // 00 = device class on interface (composite), other = vendor/MSC/etc.
+        crate::serial::log_info("USB", 218, "step: enumerated, no HID interface");
+        crate::serial::puts("[USB-DBG] devclass=");
+        crate::serial::puts_hex_u8(dev_class);
+        crate::serial::puts(" devsub=");
+        crate::serial::puts_hex_u8(dev_subclass);
+        crate::serial::puts(" devproto=");
+        crate::serial::puts_hex_u8(dev_proto);
+        crate::serial::puts("\n");
         Ok(None)
     }
 }

@@ -163,6 +163,17 @@ impl XhciController {
             vw64(dma_base + dma::OFF_DCBAA as u64, arr);
         }
 
+        // Configure register — enable the device slots we want to use.
+        // xHCI spec §4.3.3: MaxSlotsEnabled must be programmed before any
+        // ENABLE_SLOT command. UEFI may have left a non-zero value here, but
+        // we don't rely on that — write it ourselves so behaviour matches
+        // across firmwares and reboots. Bits [7:0] = MaxSlotsEn; preserve the
+        // upper bits (U3E, CIE, etc.) in case firmware set them.
+        {
+            let cur = mmio::read32(op_base + OP_CONFIG);
+            mmio::write32(op_base + OP_CONFIG, (cur & !0xFF) | (max_slots as u32));
+        }
+
         // DCBAAP
         let dcbaa = dma_base + dma::OFF_DCBAA as u64;
         mmio::write32(op_base + OP_DCBAAP, dcbaa as u32);
@@ -219,6 +230,35 @@ impl XhciController {
         }
 
         Self::tsc_delay(tsc_freq, 200);
+
+        // Single-line diagnostic dump — gives the operator everything needed
+        // to debug a non-responding controller without reading scrollback.
+        // Fields: HCCPARAMS1 / USBCMD / USBSTS / CRCR.lo / DCBAAP.lo /
+        //         dma_base / max_slots / max_ports.
+        {
+            use crate::serial::{puts, puts_dec_u8, puts_hex_u32, puts_hex_u64};
+            let cmd_now = mmio::read32(op_base + OP_USBCMD);
+            let sts_now = mmio::read32(op_base + OP_USBSTS);
+            let crcr_lo = mmio::read32(op_base + OP_CRCR);
+            let dcb_lo = mmio::read32(op_base + OP_DCBAAP);
+            puts("[USB-DBG] hccp1=");
+            puts_hex_u32(hccparams1);
+            puts(" cmd=");
+            puts_hex_u32(cmd_now);
+            puts(" sts=");
+            puts_hex_u32(sts_now);
+            puts(" crcr=");
+            puts_hex_u32(crcr_lo);
+            puts(" dcb=");
+            puts_hex_u32(dcb_lo);
+            puts(" dma=");
+            puts_hex_u64(dma_base);
+            puts(" slots=");
+            puts_dec_u8(max_slots);
+            puts(" ports=");
+            puts_dec_u8(max_ports);
+            puts("\n");
+        }
 
         Ok(Self {
             mmio_base,
