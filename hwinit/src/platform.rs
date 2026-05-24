@@ -404,6 +404,12 @@ pub unsafe fn platform_init_selfcontained(
 
                         match unsafe { XhciController::new(base_addr as u64, tsc_freq) } {
                             Ok(mut controller) => {
+                                // Phase 2: wire MSI-X to a stub ISR. Polling
+                                // remains the authoritative event path; this
+                                // only proves delivery works.
+                                unsafe {
+                                    crate::usb::msi::wire_msix(addr, controller.rt_base);
+                                }
                                 let kbd_for_runtime =
                                     match unsafe { enumerate_and_bind_inputs(&mut controller) } {
                                         Ok(result) => {

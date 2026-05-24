@@ -11,6 +11,7 @@ pub mod dma;
 pub mod enumerate;
 pub mod hid;
 pub mod hub;
+pub mod msi;
 pub mod regs;
 pub mod rings;
 pub mod runtime;
