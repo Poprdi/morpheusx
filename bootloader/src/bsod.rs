@@ -9,7 +9,7 @@ mod bsod_bg_data_v1;
 use morpheus_display::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
 use morpheus_hwinit::serial::puts;
 
-use crate::baremetal;
+use crate::boot;
 
 // FRAMEBUFFER PRIMITIVES (no alloc, direct pixel writes)
 
@@ -512,7 +512,7 @@ impl Line {
 /// Must only be called when the system is in a fatal state.
 /// Does not allocate — writes directly to the framebuffer.
 pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
-    let fb_info = match baremetal::get_framebuffer_info() {
+    let fb_info = match boot::published_framebuffer() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => {
             puts("[BSOD] No framebuffer available\n");
@@ -921,7 +921,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
 /// # Safety
 /// Same constraints as `show_crash_screen`.
 pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
-    let fb_info = match baremetal::get_framebuffer_info() {
+    let fb_info = match boot::published_framebuffer() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => return,
     };

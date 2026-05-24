@@ -17,6 +17,7 @@ pub const OFF_XFER_BOUT: usize = 0x4100; // 256B
 pub const OFF_XFER_BIN: usize = 0x4200; // 256B
 pub const OFF_DESC: usize = 0x4480; // 256B
 pub const OFF_DATA: usize = 0x5000; // 4KB bounce buffer
+pub const OFF_REPORT: usize = 0x4300; // 64B — HID interrupt report buffer
 pub const OFF_CBW: usize = 0x4400; // 64B
 pub const OFF_CSW: usize = 0x4440; // 64B
 pub const OFF_SCRATCH_ARR: usize = 0x7000; // 64B

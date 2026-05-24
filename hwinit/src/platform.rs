@@ -19,13 +19,12 @@ use crate::memory::{
     PhysicalAllocator,
 };
 use crate::paging::init_kernel_page_table;
-use crate::pci::{offset, pci_cfg_read16, pci_cfg_read8, pci_cfg_write16, PciAddr};
+use crate::pci::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, pci_cfg_write16, PciAddr};
 use crate::process::scheduler::init_scheduler;
 use crate::serial::{checkpoint, log_error, log_info, log_ok, log_warn};
 use crate::syscall::init_syscall;
 use crate::usb::controller::XhciController;
 use crate::usb::enumerate::enumerate_and_bind_inputs;
-
 // CONSTANTS
 
 /// PCI command register bits
@@ -472,7 +471,7 @@ pub unsafe fn platform_init_selfcontained(
                             log_warn("USB", 901, "TSC calibration failed for USB");
                             continue;
                         }
-                        
+
                         // Initialize xHCI controller
                         match unsafe { XhciController::new(base_addr as u64, tsc_freq) } {
                             Ok(mut controller) => {
@@ -488,7 +487,11 @@ pub unsafe fn platform_init_selfcontained(
                                             usb_init_count += 1;
                                         }
                                         if result.keyboard.is_none() && result.mouse.is_none() {
-                                            log_info("USB", 912, "USB device found but no HID interface");
+                                            log_info(
+                                                "USB",
+                                                912,
+                                                "USB device found but no HID interface",
+                                            );
                                         }
                                     }
                                     Err(e) => {
