@@ -8,21 +8,17 @@ use crate::types::*;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Create a directory.
-///
-/// The path must end with '/'.  Parent directories are created automatically.
+/// Creates parents implicitly. Trailing '/' is canonical and added if missing.
 pub fn mkdir(
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    // Validate.
     if path.is_empty() || !path.starts_with('/') {
         return Err(HelixError::PathInvalid);
     }
 
-    // Normalize: ensure trailing slash.
     let normalized = if path.ends_with('/') {
         String::from(path)
     } else {
@@ -35,7 +31,6 @@ pub fn mkdir(
         return Err(HelixError::PathInvalid);
     }
 
-    // Check if it already exists.
     if let Some(existing) = index.lookup(&normalized) {
         if existing.flags & entry_flags::IS_DIR != 0
             && existing.flags & entry_flags::IS_DELETED == 0
@@ -44,10 +39,8 @@ pub fn mkdir(
         }
     }
 
-    // Ensure parent directories exist.
     ensure_parent_dirs(log, index, &normalized, timestamp_ns)?;
 
-    // Create the directory.
     let hash = fnv1a_64(normalized.as_bytes());
     let norm_bytes = normalized.as_bytes();
     let mut payload = Vec::with_capacity(2 + norm_bytes.len());
@@ -60,12 +53,8 @@ pub fn mkdir(
     Ok(lsn)
 }
 
-/// Read directory contents.
-///
-/// Returns a vector of `DirEntry` structs.  Each entry includes
-/// the filename (not full path), size, and directory flag.
+/// Returns direct children only; names, not full paths.
 pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, HelixError> {
-    // Normalize path.
     let normalized = if dir_path == "/" {
         String::from("/")
     } else if dir_path.ends_with('/') {
@@ -76,7 +65,6 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
         s
     };
 
-    // Verify directory exists (root is always valid).
     if normalized != "/" {
         let dir_entry = index.lookup(&normalized).ok_or(HelixError::NotFound)?;
         if dir_entry.flags & entry_flags::IS_DIR == 0 {
@@ -87,25 +75,21 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
         }
     }
 
-    // Prefix scan for children.
     let children = index.readdir(&normalized);
 
     let mut entries = Vec::with_capacity(children.len());
     for child in children {
         let name_str = btree::path_str(&child.path);
 
-        // Extract just the filename from the full path.
         let filename = if child.flags & entry_flags::IS_DIR != 0 {
-            // Directory: strip the normalized prefix and trailing slash.
             let relative = &name_str[normalized.len()..];
             let trimmed = relative.trim_end_matches('/');
-            // Only direct children (no deeper nesting).
+            // Skip deeper descendants.
             if trimmed.contains('/') {
                 continue;
             }
             trimmed
         } else {
-            // File: extract filename.
             btree::filename(name_str)
         };
 
@@ -133,13 +117,8 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
     Ok(entries)
 }
 
-/// Unlink (delete) a file or empty directory.
-///
-/// For directories, the directory must be empty.
-/// For non-inline files, the data blocks are freed in the bitmap immediately.
-/// For fragmented files only the first extent is freed here; full
-/// extent-tree reclamation is deferred to the GC pass (the log still
-/// holds the complete extent list).
+/// Directories must be empty. Inline data and directories own no blocks;
+/// fragmented files only free their first extent here, the rest is GC's job.
 pub fn unlink(
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
@@ -147,8 +126,7 @@ pub fn unlink(
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    // Use flexible lookup: paths may or may not have trailing '/'.
-    // Capture extent info before any mutable borrow of `index`.
+    // Capture before any mut borrow of index. Path may lack trailing '/'.
     let (extent_root, size, is_inline, is_dir) = {
         let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
         if entry.flags & entry_flags::IS_DELETED != 0 {
@@ -162,7 +140,6 @@ pub fn unlink(
         )
     };
 
-    // If this is a directory, verify it's empty.
     if is_dir {
         let normalized = if path.ends_with('/') {
             String::from(path)
@@ -178,7 +155,6 @@ pub fn unlink(
         }
     }
 
-    // Delete using the actual stored path form.
     let actual_path = if index.lookup(path).is_some() {
         String::from(path)
     } else if !path.ends_with('/') {
@@ -196,10 +172,8 @@ pub fn unlink(
     let lsn = log.append(LogOp::Delete, hash, &payload, timestamp_ns)?;
     index.mark_deleted(&actual_path)?;
 
-    // Free data blocks.  Skip inline data (stored in the index entry, no
-    // disk allocation) and directories (never allocate data blocks).
-    // Note: for fragmented files `extent_root` holds only the first extent;
-    // the bitmap for additional extents is reclaimed lazily by the GC pass.
+    // Inline data and dirs never own blocks. For fragmented files only the
+    // first extent is freed here; GC reclaims the rest from the log.
     if !is_inline && !is_dir && extent_root != crate::types::BLOCK_NULL {
         let blocks = size.div_ceil(crate::types::BLOCK_SIZE as u64);
         let _ = bitmap.free_range(extent_root, blocks);
@@ -208,7 +182,7 @@ pub fn unlink(
     Ok(lsn)
 }
 
-/// Ensure all parent directories exist (same logic as in write.rs).
+/// Mirrors write.rs.
 fn ensure_parent_dirs(
     log: &mut LogEngine,
     index: &mut NamespaceIndex,

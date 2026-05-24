@@ -34,6 +34,17 @@ pub struct Mouse {
 }
 
 impl Mouse {
+    /// Decoder-only construction — skips PS/2 aux-port init. For systems
+    /// without a working PS/2 mouse (real hardware), avoids the flood of
+    /// `mouse_cmd` timeouts that the full init path produces.
+    pub fn new_decoder_only() -> Self {
+        Self {
+            buf: [0; 3],
+            fill: 0,
+            desync_count: 0,
+        }
+    }
+
     pub fn new() -> Self {
         let mut m = Self {
             buf: [0; 3],

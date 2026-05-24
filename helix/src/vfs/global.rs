@@ -6,16 +6,10 @@ use crate::types::*;
 use crate::vfs::{HelixInstance, MountTable};
 use gpt_disk_io::BlockIo;
 
-/// Rebuild the in-memory bitmap from the namespace index after log replay.
-///
-/// After `replay_log()` populates the index, the bitmap is still all-free
-/// (`BlockBitmap::new` zeros every bit).  This function scans all live
-/// index entries and marks blocks used by extent-based files.  Without
-/// this step, newly allocated blocks could overlap existing file data —
-/// silent data corruption.
+/// After replay the bitmap is zero. Mark every extent-backed live file's
+/// blocks used, or new allocations will overlap existing data.
 fn rebuild_bitmap_from_index(instance: &mut HelixInstance) {
     for entry in instance.index.all_entries() {
-        // Skip deleted, directories, and inline files.
         if entry.flags & entry_flags::IS_DELETED != 0 {
             continue;
         }
@@ -28,7 +22,6 @@ fn rebuild_bitmap_from_index(instance: &mut HelixInstance) {
         if entry.extent_root == BLOCK_NULL {
             continue;
         }
-        // Contiguous extent starting at extent_root.
         let blocks_needed = entry.size.div_ceil(BLOCK_SIZE as u64);
         if blocks_needed > 0 {
             instance
@@ -43,20 +36,17 @@ pub struct FsGlobal {
     pub device: RawBlockDevice,
 }
 
-/// Backing storage for the RAM-disk MemBlockDevice when no real disk is available.
-/// Must live in a static so the RawBlockDevice function pointers remain valid.
+// MemBlockDevice must outlive the fn pointers in RawBlockDevice.
 static mut MEM_DEVICE: Option<MemBlockDevice> = None;
 
 static mut FS_GLOBAL: Option<FsGlobal> = None;
 static mut FS_INITIALIZED: bool = false;
 
-/// Initialize the root filesystem on a memory-backed block device.
-///
-/// Formats the region as HelixFS, recovers the superblock, and mounts at "/".
+/// Format the region, recover the superblock, mount at "/".
 ///
 /// # Safety
-/// `base` must point to `size` bytes of zeroed, identity-mapped physical RAM.
-/// Must be called exactly once, after heap is ready.
+/// `base..base+size` must be zeroed, identity-mapped RAM. Call once,
+/// post-heap-init.
 pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError> {
     if FS_INITIALIZED {
         return Ok(());
@@ -64,7 +54,6 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
 
     let sector_size = BLOCK_SIZE;
 
-    // Store MemBlockDevice in static so RawBlockDevice pointers stay valid.
     MEM_DEVICE = Some(MemBlockDevice::new(base, size, sector_size));
     #[allow(static_mut_refs)]
     let mem_dev = MEM_DEVICE.as_mut().unwrap();

@@ -243,6 +243,25 @@ pub struct Keyboard {
 }
 
 impl Keyboard {
+    /// Decoder-only construction — skips the i8042 PS/2 controller init
+    /// sequence. Use when an alternative input source (e.g. USB HID) is
+    /// already known to be available and probing PS/2 hardware would just
+    /// produce a flood of warnings on a board without a PS/2 controller.
+    /// The scan-code decoder itself works without controller init.
+    pub fn new_decoder_only() -> Self {
+        Self {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            altgr: false,
+            caps_lock: false,
+            extended: false,
+            initialized: false,
+            layout: KeyLayout::Us,
+            aux_as_kbd: false,
+        }
+    }
+
     pub fn new() -> Self {
         let mut kb = Self {
             shift: false,

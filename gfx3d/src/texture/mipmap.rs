@@ -1,18 +1,14 @@
 use alloc::vec::Vec;
 
-/// A single texture level: RGBA8888 pixel data, power-of-two dimensions.
-///
-/// Textures are stored unpacked (one u32 per pixel) for fastest sampling.
-/// Byte order: `0xRRGGBBAA` (R in MSB). Not tied to any framebuffer format —
-/// the pipeline converts to target format only when writing the final pixel.
+/// RGBA8888 (R in MSB), power-of-two dims. Format-independent of the framebuffer.
 #[derive(Clone)]
 pub struct Texture {
     pub pixels: Vec<u32>,
     pub width: u32,
     pub height: u32,
-    pub width_mask: u32,  // width - 1 (for power-of-two wrap)
-    pub height_mask: u32, // height - 1
-    pub width_shift: u32, // log2(width) for y*width = y << shift
+    pub width_mask: u32,
+    pub height_mask: u32,
+    pub width_shift: u32, // log2(width)
 }
 
 impl Texture {
@@ -28,12 +24,10 @@ impl Texture {
         }
     }
 
-    /// Create a solid color texture (1×1 mip0).
     pub fn solid(rgba: u32) -> Self {
         Self::new(1, 1, alloc::vec![rgba])
     }
 
-    /// Create a checkerboard pattern (useful for debugging UV mapping).
     pub fn checkerboard(size: u32, c0: u32, c1: u32) -> Self {
         let mut pixels = Vec::with_capacity((size * size) as usize);
         for y in 0..size {
@@ -45,13 +39,11 @@ impl Texture {
         Self::new(size, size, pixels)
     }
 
-    /// Fetch a single texel (no filtering). Coordinates are already masked.
     #[inline(always)]
     pub fn fetch(&self, u: u32, v: u32) -> u32 {
         let u = u & self.width_mask;
         let v = v & self.height_mask;
         let idx = (v << self.width_shift) | u;
-        // Safety: mask guarantees in-bounds, but we still bounds-check for correctness
         if let Some(&px) = self.pixels.get(idx as usize) {
             px
         } else {
@@ -59,7 +51,6 @@ impl Texture {
         }
     }
 
-    /// Extract RGBA channels from packed u32.
     #[inline(always)]
     pub fn unpack(packed: u32) -> (u8, u8, u8, u8) {
         let r = (packed >> 24) as u8;
@@ -69,30 +60,18 @@ impl Texture {
         (r, g, b, a)
     }
 
-    /// Pack RGBA channels into u32.
     #[inline(always)]
     pub fn pack(r: u8, g: u8, b: u8, a: u8) -> u32 {
         (r as u32) << 24 | (g as u32) << 16 | (b as u32) << 8 | a as u32
     }
 }
 
-/// A mipmap chain — pre-computed downscaled versions of a texture.
-///
-/// Mip level 0 is the original. Each subsequent level is half the resolution.
-/// Mip selection uses the screen-space derivative of UV (how fast the texture
-/// coordinates change per pixel), computed once per span via fast_log2.
-///
-/// Box filter downscaling (average of 2×2 block) — simple, fast, mathematically
-/// correct for power-of-two reduction.
+/// Box-filter mip chain. Level 0 is base; selected via fast_log2(texel/pixel).
 pub struct MipChain {
     pub levels: Vec<Texture>,
 }
 
 impl MipChain {
-    /// Build full mip chain from a base texture.
-    ///
-    /// Uses box-filter downscaling: each 2×2 block of the parent level
-    /// is averaged to produce one pixel at the child level.
     pub fn build(base: Texture) -> Self {
         let mut levels = Vec::new();
         let mut current = base;
@@ -129,10 +108,7 @@ impl MipChain {
         Self { levels }
     }
 
-    /// Select mip level from screen-space UV derivatives.
-    ///
-    /// `texel_per_pixel` = max(|du/dx * tex_w|, |dv/dy * tex_h|)
-    /// level = log2(texel_per_pixel), clamped to valid range.
+    /// level = log2(texels_per_pixel), clamped.
     #[inline]
     pub fn select_level(&self, texels_per_pixel: f32) -> usize {
         if texels_per_pixel <= 1.0 {
@@ -151,16 +127,10 @@ impl MipChain {
     }
 }
 
-/// Average 4 packed RGBA pixels (box filter kernel).
-///
-/// Uses the shift-and-mask trick to process R+B and G+A in parallel,
-/// cutting the channel operations from 16 to 8. Same trick used in
-/// id Software's Quake 2 texture downscaler.
+/// 4-pixel box average. Interleaved RB/GA channels via shift-mask (Quake 2 trick).
 #[inline]
 fn avg4(a: u32, b: u32, c: u32, d: u32) -> u32 {
-    // Mask for R and B channels (every other byte): 0x__RR__BB
     const RB_MASK: u32 = 0x00FF00FF;
-    // Mask for G and A channels: 0xGG__AA__  (shifted down by 8)
 
     let rb = ((a & RB_MASK) + (b & RB_MASK) + (c & RB_MASK) + (d & RB_MASK) + 0x00020002) >> 2;
     let ga = (((a >> 8) & RB_MASK)

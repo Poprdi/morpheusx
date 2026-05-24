@@ -512,7 +512,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         }
     }
 
-    // Layout parameters
     let scale = if w >= 1920 { 2u32 } else { 1 };
     let margin = 24u32 * scale;
     let text_x = panel_x + margin;
@@ -528,7 +527,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     let mut dbuf = [0u8; 10];
     let mut line = Line::new();
 
-    // 4. Sad face + title
     let face_size = if w >= 1920 { 50u32 } else { 30 };
     let face_cx = text_x + face_size;
     let face_cy = text_y + face_size;
@@ -550,7 +548,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y = text_y.max(face_cy + face_size + 10);
 
-    // 5. Subtitle
     text_y = draw_string(
         fb,
         stride,
@@ -565,7 +562,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y += 6 * scale;
 
-    // 6. Process identification
     line.clear();
     line.push("Process: ");
     let name_end = info.process_name.iter().position(|&b| b == 0).unwrap_or(32);
@@ -592,7 +588,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y += 6 * scale;
 
-    // 7. Exception stop code
     line.clear();
     line.push("*** ");
     line.push(info.exception_name);
@@ -617,7 +612,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         scale,
     );
 
-    // 8. Explanation
     if info.explanation_len > 0 {
         if let Ok(s) = core::str::from_utf8(&info.explanation[..info.explanation_len as usize]) {
             text_y = draw_string(fb, stride, fmt, w, h, text_x, text_y, s, yellow, scale);
@@ -625,7 +619,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     }
     text_y += 6 * scale;
 
-    // 9. Exception frame
     text_y = draw_string(
         fb,
         stride,
@@ -712,7 +705,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         scale,
     );
 
-    // Page fault bit decode
+    // #PF error-code bit decode
     if info.vector == 14 {
         line.clear();
         line.push("Flags: ");
@@ -752,7 +745,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     }
     text_y += 4 * scale;
 
-    // 10. All general-purpose registers (2 per line)
     text_y = draw_string(
         fb,
         stride,
@@ -812,7 +804,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     );
     text_y += 4 * scale;
 
-    // 11. Backtrace (kernel-mode only, if available)
     if info.backtrace_depth > 0 {
         text_y = draw_string(
             fb,
@@ -826,7 +817,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
             gray,
             scale,
         );
-        let show = (info.backtrace_depth as usize).min(10); // cap to avoid overflow
+        let show = (info.backtrace_depth as usize).min(10);
         for i in 0..show {
             line.clear();
             line.push("#");
@@ -849,7 +840,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
         text_y += 4 * scale;
     }
 
-    // 12. Footer
     let _ = draw_string(
         fb,
         stride,
@@ -866,8 +856,6 @@ pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
     puts("[BSOD] Crash screen rendered\n");
 }
 
-/// Display a panic screen with source location.
-///
 /// # Safety
 /// Same constraints as `show_crash_screen`.
 pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
@@ -882,10 +870,8 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     let h = fb_info.height;
     let fmt = fb_info.format;
 
-    // Draw background
     draw_background(fb, stride, w, h, fmt);
 
-    // Dark overlay
     let panel_w = w * 3 / 4;
     let panel_h = h * 3 / 4;
     let panel_x = (w - panel_w) / 2;
@@ -903,7 +889,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         }
     }
 
-    // Border
     let border_color = to_fb_pixel(0x661111, fmt);
     for t in 0..2u32 {
         for c in panel_x..panel_x + panel_w {
@@ -925,7 +910,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     let red = 0xFF4444;
     let gray = 0x999999;
 
-    // Sad face
     let face_size = if w >= 1920 { 50u32 } else { 30 };
     draw_sad_face(
         fb,
@@ -939,7 +923,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         white,
     );
 
-    // Title
     let title_x = text_x + face_size * 2 + 30;
     text_y = draw_string(
         fb,
@@ -983,7 +966,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
     );
     text_y += 8 * scale;
 
-    // File location
     text_y = draw_string(
         fb,
         stride,
@@ -997,7 +979,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         scale,
     );
 
-    // File name (may be long, just print as-is)
     text_y = draw_string(
         fb,
         stride,
@@ -1011,7 +992,6 @@ pub unsafe fn show_panic_screen(file: &str, line: u32, _col: u32) {
         scale,
     );
 
-    // Line number
     let mut buf32 = [0u8; 10];
     let mut line_info = [0u8; 20];
     line_info[..6].copy_from_slice(b"Line: ");

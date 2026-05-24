@@ -10,18 +10,14 @@ pub use table::{MappedPageSize, PageTableManager, VirtAddr};
 use crate::serial::{log_info, log_ok, log_warn};
 use crate::sync::SpinLock;
 
-// kernel page table singleton — SMP-safe via SpinLock
 static KERNEL_PT: SpinLock<Option<PageTableManager>> = SpinLock::new(None);
 static PAGING_INITIALIZED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-/// Initialize the kernel page table manager by reading the current CR3.
-///
-/// Must be called once, after MemoryRegistry is ready (Phase 1 of hwinit).
+/// Adopt the active CR3. Phase 1 of hwinit, after MemoryRegistry.
 ///
 /// # Safety
-/// - Must run in long mode with paging active.
-/// - Must be called exactly once.
+/// Long mode + paging active. Call exactly once.
 pub unsafe fn init_kernel_page_table() {
     if PAGING_INITIALIZED.load(core::sync::atomic::Ordering::Relaxed) {
         log_info("PAGING", 730, "already initialized; skipping");
@@ -30,11 +26,8 @@ pub unsafe fn init_kernel_page_table() {
 
     let mgr = PageTableManager::from_cr3();
 
-    // UEFI / OVMF sets CR0.WP = 1 (Write Protect) and marks its own
-    // page-table pages as read-only.  With WP=1, even Ring 0 code faults
-    // when writing to a page whose PTE has R/W = 0.  Since we've adopted
-    // these page tables as our own and need to freely modify entries (add
-    // mappings, change caching flags, split huge pages), clear CR0.WP.
+    // UEFI sets CR0.WP=1 and marks its PT pages read-only — even ring-0
+    // writes fault. Clear WP so we can mutate the adopted tables.
     let cr0: u64;
     core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
     if cr0 & (1u64 << 16) != 0 {
@@ -45,9 +38,8 @@ pub unsafe fn init_kernel_page_table() {
         );
         log_info("PAGING", 731, "cleared CR0.WP");
 
-        // Flush TLB so stale entries that cached R/W=0 under WP=1 are
-        // discarded.  Without this, writes to UEFI-owned PT pages can
-        // still fault on real hardware that cached the old permission.
+        // Flush stale R/W=0 entries cached under WP=1; without this,
+        // real hardware can still fault on writes to ex-UEFI PT pages.
         let cr3_val: u64;
         core::arch::asm!("mov {}, cr3", out(reg) cr3_val, options(nomem, nostack));
         core::arch::asm!("mov cr3, {}", in(reg) cr3_val, options(nostack));
@@ -57,15 +49,12 @@ pub unsafe fn init_kernel_page_table() {
     PAGING_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
 }
 
-/// Returns true if the kernel page table has been initialized.
 pub fn is_paging_initialized() -> bool {
     PAGING_INITIALIZED.load(core::sync::atomic::Ordering::Acquire)
 }
 
-/// Get the kernel PML4 physical address (for cloning into user page tables).
-///
 /// # Safety
-/// Must be called after init_kernel_page_table().
+/// `init_kernel_page_table` must have run.
 pub unsafe fn kernel_pml4_phys() -> u64 {
     KERNEL_PT
         .lock()
@@ -74,13 +63,9 @@ pub unsafe fn kernel_pml4_phys() -> u64 {
         .pml4_phys
 }
 
-// CONVENIENCE WRAPPERS
-// each acquires the KERNEL_PT lock for the duration of the operation
+// Convenience wrappers — each takes the KERNEL_PT lock for the call.
 
-/// Map a single 4 KiB page in the kernel page table.
-///
-/// # Safety
-/// See [`PageTableManager::map_4k`].
+/// # Safety: see [`PageTableManager::map_4k`].
 pub unsafe fn kmap_4k(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -89,10 +74,7 @@ pub unsafe fn kmap_4k(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'st
         .map_4k(virt, phys, flags)
 }
 
-/// Map a 2 MiB huge page in the kernel page table.
-///
-/// # Safety
-/// See [`PageTableManager::map_2m`].
+/// # Safety: see [`PageTableManager::map_2m`].
 pub unsafe fn kmap_2m(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -101,10 +83,7 @@ pub unsafe fn kmap_2m(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'st
         .map_2m(virt, phys, flags)
 }
 
-/// Unmap a 4 KiB page from the kernel page table.
-///
-/// # Safety
-/// See [`PageTableManager::unmap_4k`].
+/// # Safety: see [`PageTableManager::unmap_4k`].
 pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -113,12 +92,7 @@ pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
         .unmap_4k(virt)
 }
 
-/// Translate a virtual address to physical using the kernel page table.
-///
-/// Returns `None` if the address is not mapped.
-///
-/// # Safety
-/// See [`PageTableManager::translate`].
+/// # Safety: see [`PageTableManager::translate`].
 pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
     KERNEL_PT
         .lock()
@@ -127,11 +101,9 @@ pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
         .translate(virt)
 }
 
-/// Split any huge pages along the path to `virt` in the kernel page table
-/// so that a subsequent `kmap_4k()` call will succeed.
+/// Split any huge pages on the walk to `virt`, so a later `kmap_4k` succeeds.
 ///
-/// # Safety
-/// See [`PageTableManager::ensure_4k_mappable`].
+/// # Safety: see [`PageTableManager::ensure_4k_mappable`].
 pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -140,13 +112,9 @@ pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
         .ensure_4k_mappable(virt)
 }
 
-/// Identity-map a physical MMIO region with UC flags in the kernel page table.
+/// Identity-map MMIO with UC; works on huge or 4 KiB and on unmapped regions.
 ///
-/// Handles all cases: existing huge pages (sets UC bits), existing 4K pages
-/// (sets UC bits), and unmapped regions (creates new identity-mapped entries).
-///
-/// # Safety
-/// See [`PageTableManager::map_mmio`].
+/// # Safety: see [`PageTableManager::map_mmio`].
 pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -155,13 +123,10 @@ pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
         .map_mmio(phys, size)
 }
 
-/// Mark the leaf page table entry covering `virt` as uncacheable (UC).
+/// Force UC on the leaf covering `virt` (1 GiB / 2 MiB / 4 KiB).
+/// Used to fix UEFI's WB caching on PCI BAR identity maps.
 ///
-/// Works with 1 GiB, 2 MiB, or 4 KiB pages.  Ideal for PCI MMIO BAR
-/// regions that UEFI identity-mapped with Write-Back caching.
-///
-/// # Safety
-/// See [`PageTableManager::mark_uncacheable`].
+/// # Safety: see [`PageTableManager::mark_uncacheable`].
 pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -170,35 +135,16 @@ pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
         .mark_uncacheable(virt)
 }
 
-// PAGE TABLE RESERVATION
-
-/// Maximum number of page-table pages we expect to encounter.
-///
-/// UEFI/OVMF identity-maps up to ~12 GB of RAM.  With 2 MiB huge pages the
-/// page table tree is shallow:
-///   - 1 PML4    (always)
-///   - up to ~6  PDPT pages (one per 512 GiB)
-///   - up to ~24 PD pages   (one per 1 GiB)
-///   - PT pages only if 4 KiB region exists (firmware code, MMIO, etc.)
-///
-/// On some firmware builds, low memory and MMIO windows are mapped with many
-/// 4 KiB leaves, which can produce far more than a few hundred PT pages.
-/// Keep this comfortably large so reclaim never misses live paging structures.
+/// Bound on PT pages we might see. UEFI's shallow 2 MiB tree fits in a few
+/// dozen; some firmware variants use heavy 4 KiB leaves over MMIO windows
+/// and balloon into the thousands. Keep this large.
 const MAX_PT_PAGES: usize = 8192;
 
-/// Walk the active CR3 page table hierarchy and collect the physical
-/// addresses of **every** page that is itself a page table page (PML4,
-/// PDPT, PD, PT).
-///
-/// This is used very early — before `init_kernel_page_table()` — so it
-/// does NOT depend on any `PageTableManager` state.  It reads CR3 directly
-/// and interprets identity-mapped pointers.
-///
-/// Returns `(pages_array, count)`.
+/// Walk CR3 and collect every page-table page (PML4/PDPT/PD/PT) by phys addr.
+/// Reads CR3 directly so it can run before `init_kernel_page_table`.
 ///
 /// # Safety
-/// - Must run in 64-bit long mode with paging active.
-/// - Physical == virtual (identity-mapped).
+/// Long mode + paging active, identity-mapped.
 pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
     let cr3: u64;
     core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nostack, nomem));
@@ -208,7 +154,6 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
     let mut count = 0usize;
     let mut truncated = false;
 
-    // Helper closure (inlined) to add a page if not already seen.
     macro_rules! add_page {
         ($phys:expr) => {
             let p = $phys;
@@ -230,7 +175,6 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
         };
     }
 
-    // PML4 itself
     add_page!(pml4_phys);
 
     let pml4 = pml4_phys as *const u64;
@@ -238,7 +182,7 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
         let e1 = *pml4.add(i);
         if e1 & 1 == 0 {
             continue;
-        } // not present
+        }
         let pdpt_phys = e1 & 0x000F_FFFF_FFFF_F000;
         add_page!(pdpt_phys);
 
@@ -247,10 +191,10 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
             let e2 = *pdpt.add(j);
             if e2 & 1 == 0 {
                 continue;
-            } // not present
+            }
             if e2 & (1 << 7) != 0 {
-                continue;
-            } // 1 GiB huge page — no sub-table
+                continue; // 1 GiB huge — no PD
+            }
             let pd_phys = e2 & 0x000F_FFFF_FFFF_F000;
             add_page!(pd_phys);
 
@@ -259,10 +203,10 @@ pub unsafe fn collect_page_table_pages() -> ([u64; MAX_PT_PAGES], usize) {
                 let e3 = *pd.add(k);
                 if e3 & 1 == 0 {
                     continue;
-                } // not present
+                }
                 if e3 & (1 << 7) != 0 {
-                    continue;
-                } // 2 MiB huge page
+                    continue; // 2 MiB huge — no PT
+                }
                 let pt_phys = e3 & 0x000F_FFFF_FFFF_F000;
                 add_page!(pt_phys);
             }

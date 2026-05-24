@@ -921,13 +921,29 @@ unsafe fn stage_e1_release_aps() {
 unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     log_info("BOOT", 960, "preparing to launch /bin/init");
 
-    // Hand the framebuffer over from the live serial mirror to userspace.
-    // After this, /bin/init (or its descendants) own the display.
-    let mut keyboard = Keyboard::new();
+    // Pick input init based on what Phase 9 actually detected. If a USB
+    // keyboard was enumerated we don't need (and don't want) to probe PS/2 —
+    // on boards without a PS/2 controller the full reset path floods the log
+    // with warnings and accomplishes nothing.
+    let usb_kbd_present = morpheus_hwinit::usb::runtime::keyboard_present();
+    let mut keyboard = if usb_kbd_present {
+        log_info("BOOT", 963, "USB keyboard active; skipping PS/2 init");
+        Keyboard::new_decoder_only()
+    } else {
+        log_info("BOOT", 963, "no USB keyboard; trying PS/2 init");
+        Keyboard::new()
+    };
     boot_log_gate(&mut keyboard);
     clear_live_console_hook();
 
-    let mut mouse = Mouse::new();
+    // Mouse currently has no USB driver; if USB keyboard is present we still
+    // skip PS/2 mouse init to keep the log clean. Mouse becomes a no-op
+    // until a USB mouse driver is wired up.
+    let mut mouse = if usb_kbd_present {
+        Mouse::new_decoder_only()
+    } else {
+        Mouse::new()
+    };
 
     let elf_data = match load_init_elf() {
         Some(d) => d,
@@ -959,38 +975,35 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
 
 /// Wait for any keypress before tearing down the live console.
 ///
-/// The user sees the full boot log on screen; pressing a key signals
-/// "ready to hand off to userspace." Polls BOTH the PS/2 keyboard and the
-/// USB HID runtime — on real hardware without a PS/2 controller, USB is
-/// the only path through this gate.
+/// Primary path is USB HID; PS/2 is only polled as a fallback when no USB
+/// keyboard was detected during Phase 9 enumeration.
 fn boot_log_gate(keyboard: &mut Keyboard) {
     puts("\nPress any key to start userspace...");
+    let usb_active = morpheus_hwinit::usb::runtime::keyboard_present();
     loop {
-        // PS/2 fast path
-        if let Some(_key) = keyboard.read_key() {
-            break;
-        }
-
-        // USB HID path — non-blocking peek of the event ring; if a report
-        // arrived since the last poll, parse it and push the resulting
-        // key events into the unified input queue.
-        unsafe {
-            morpheus_hwinit::usb::runtime::poll_keyboard();
-        }
-
-        // Drain unified queue. Any press event (PS/2 didn't put anything
-        // here in this codepath, so this is the USB side) dismisses the gate.
-        let mut got_press = false;
-        while let Some(event) = morpheus_hwinit::poll_keyboard() {
-            if let morpheus_hwinit::InputEvent::Key(_scan, pressed) = event {
-                if pressed {
-                    got_press = true;
+        if usb_active {
+            // USB-primary. Non-blocking peek + drain the unified queue.
+            unsafe {
+                morpheus_hwinit::usb::runtime::poll_keyboard();
+            }
+            let mut got_press = false;
+            while let Some(event) = morpheus_hwinit::poll_keyboard() {
+                if let morpheus_hwinit::InputEvent::Key(_scan, pressed) = event {
+                    if pressed {
+                        got_press = true;
+                    }
                 }
             }
+            if got_press {
+                break;
+            }
+        } else {
+            // PS/2 fallback
+            if let Some(_key) = keyboard.read_key() {
+                break;
+            }
         }
-        if got_press {
-            break;
-        }
+        core::hint::spin_loop();
     }
     puts("\n");
 }
@@ -1062,58 +1075,54 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
 /// Kernel main loop: poll PS/2 keyboard + mouse, feed kernel stdin and the
 /// mouse accumulator. HLTs between batches to keep idle power low.
 fn input_forwarding_loop(keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
+    // Pin the primary-source decision once at entry. USB present in Phase 9
+    // means USB is authoritative for the rest of uptime; PS/2 only polls if
+    // USB enumeration found nothing.
+    let usb_active = morpheus_hwinit::usb::runtime::keyboard_present();
+
     loop {
         let mut had_work = false;
 
-        // PS/2 polling — unchanged. Drains up to 64 buffered bytes per
-        // outer iteration to keep mouse input responsive while the keyboard
-        // is also active.
-        for _ in 0..64 {
-            let raw = unsafe { tui::input::asm_ps2_poll_any() };
-            if raw == 0 {
-                break;
+        if usb_active {
+            // USB-primary path.
+            unsafe {
+                morpheus_hwinit::usb::runtime::poll_keyboard();
             }
-            had_work = true;
-
-            let device = (raw >> 8) & 0xFF;
-            let byte = (raw & 0xFF) as u8;
-
-            if device == 0x03 {
-                if let Some(pkt) = mouse.feed(byte) {
-                    morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
-                }
-                continue;
-            }
-            if device != 0x01 {
-                continue;
-            }
-
-            if let Some(input) = keyboard.feed_raw(byte) {
-                forward_keyboard_byte(input);
-            }
-        }
-
-        // USB HID polling. `poll_keyboard` is non-blocking: it peeks the
-        // event ring and, if the keyboard sent a report since last poll,
-        // parses it and pushes per-key `InputEvent`s into the unified input
-        // queue via `push_keyboard_event_internal`. Re-arms the interrupt-IN
-        // transfer automatically.
-        unsafe {
-            morpheus_hwinit::usb::runtime::poll_keyboard();
-        }
-
-        // Drain any USB-derived key events from the unified input queue and
-        // feed them through the same PS/2 scan-code translator the PS/2 path
-        // uses — `parse_keyboard_report` translated HID usage codes to Set-1
-        // make codes already, so `keyboard.feed_raw` sees the same bytes it
-        // would from an actual PS/2 keypress.
-        while let Some(event) = morpheus_hwinit::poll_keyboard() {
-            if let morpheus_hwinit::InputEvent::Key(scan_code, pressed) = event {
-                if pressed && scan_code != 0 {
-                    had_work = true;
-                    if let Some(input) = keyboard.feed_raw(scan_code) {
-                        forward_keyboard_byte(input);
+            while let Some(event) = morpheus_hwinit::poll_keyboard() {
+                if let morpheus_hwinit::InputEvent::Key(scan_code, pressed) = event {
+                    if pressed && scan_code != 0 {
+                        had_work = true;
+                        if let Some(input) = keyboard.feed_raw(scan_code) {
+                            forward_keyboard_byte(input);
+                        }
                     }
+                }
+            }
+        } else {
+            // PS/2 fallback. Drains up to 64 buffered bytes per outer
+            // iteration to keep mouse input responsive.
+            for _ in 0..64 {
+                let raw = unsafe { tui::input::asm_ps2_poll_any() };
+                if raw == 0 {
+                    break;
+                }
+                had_work = true;
+
+                let device = (raw >> 8) & 0xFF;
+                let byte = (raw & 0xFF) as u8;
+
+                if device == 0x03 {
+                    if let Some(pkt) = mouse.feed(byte) {
+                        morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
+                    }
+                    continue;
+                }
+                if device != 0x01 {
+                    continue;
+                }
+
+                if let Some(input) = keyboard.feed_raw(byte) {
+                    forward_keyboard_byte(input);
                 }
             }
         }
