@@ -130,15 +130,6 @@ unsafe fn enumerate_device(
     parent: Option<HubParent>,
     result: &mut InputEnumerationResult,
 ) -> Result<(), XhciError> {
-    // Diagnostic: which physical root port + how deep in the hub tree.
-    crate::serial::puts("[USB-DBG] enumerate port=");
-    crate::serial::puts_dec_u8(root_port);
-    crate::serial::puts(" depth=");
-    crate::serial::puts_dec_u8(route_depth_bits);
-    crate::serial::puts(" speed=");
-    crate::serial::puts_dec_u8(speed);
-    crate::serial::puts("\n");
-
     // ── enable_slot ──
     let slot_id = match controller.enable_slot() {
         Ok(v) => v,
@@ -168,7 +159,6 @@ unsafe fn enumerate_device(
         }
     };
     let dev_class = core::ptr::read_volatile(desc_ptr.add(4));
-    let dev_subclass = core::ptr::read_volatile(desc_ptr.add(5));
     let dev_proto = core::ptr::read_volatile(desc_ptr.add(6));
 
     if dev_class == USB_CLASS_HUB {
@@ -201,31 +191,39 @@ unsafe fn enumerate_device(
         return Err(e);
     }
 
-    // Diagnostic: walk every interface descriptor in the config and print its
-    // class/subclass/protocol. Tells us exactly what each composite device
-    // exposes — find_hid_interface only matches boot-protocol HID, so a
-    // mass-storage device or a non-boot-protocol keyboard would otherwise be
-    // invisible.
-    dump_interfaces(desc_ptr);
-
     let hid_iface = controller.find_hid_interface(desc_ptr);
 
     if let Some(hid) = hid_iface {
         crate::serial::log_ok("USB", 219, "step: HID interface located");
         let dci_in = (hid.ep_in & 0x7F) * 2 + 1;
 
+        // PROPER USB BRINGUP ORDER. Previously we configured the host-side EP
+        // context first, which transitions the endpoint to Running and starts
+        // the xHC polling the device immediately. If the device was still in
+        // report protocol mode (the typical default at power-on, despite
+        // spec saying boot-subclass should default to boot), it STALL'd the
+        // first few polls, CErr decremented to 0, endpoint halted before
+        // SET_PROTOCOL could even reach it. So:
+        //   1) bConfigurationValue from config descriptor offset 5
+        //   2) SET_CONFIGURATION → activate the device's configuration
+        //      (required before any non-EP0 endpoint is usable per USB 2.0 §9)
+        //   3) SET_HID_IDLE(0) → suppress autorepeat reports
+        //   4) SET_PROTOCOL(boot) → device sends 8-byte boot reports
+        //   5) brief settle delay (some keyboards take ~50 ms to switch protocol)
+        //   6) CONFIGURE_ENDPOINT → only NOW is the device ready for polling
+        let cfg_val = core::ptr::read_volatile(desc_ptr.add(5));
+        if let Err(e) = controller.set_configuration(cfg_val) {
+            crate::serial::log_warn("USB", 224, "step: set_configuration failed");
+            return Err(e);
+        }
+        let _ = controller.set_hid_idle(hid.interface_num);
+        let _ = controller.set_hid_protocol_boot(hid.interface_num);
+        controller.delay_ms(50);
+
         if let Err(e) = controller.configure_hid_endpoint(dci_in, hid.max_packet_in) {
             crate::serial::log_warn("USB", 217, "step: configure_hid_endpoint failed");
             return Err(e);
         }
-        let _ = controller.set_hid_idle(hid.interface_num);
-        // Force the device into boot protocol mode. Spec says boot-subclass
-        // devices default to boot at power-on, but real keyboards regularly
-        // ignore that and come up in report protocol. Linux's usbkbd does
-        // the same — see usb_set_protocol() in drivers/hid/usbhid/usbkbd.c.
-        // Failure is non-fatal: a working boot-default device just returns
-        // success here, an uncooperative one would have ignored us anyway.
-        let _ = controller.set_hid_protocol_boot(hid.interface_num);
 
         let dev = UsbInputDevice {
             slot_id,
@@ -243,53 +241,7 @@ unsafe fn enumerate_device(
         Ok(())
     } else {
         crate::serial::log_info("USB", 218, "step: enumerated, no HID interface");
-        crate::serial::puts("[USB-DBG] devclass=");
-        crate::serial::puts_hex_u8(dev_class);
-        crate::serial::puts(" devsub=");
-        crate::serial::puts_hex_u8(dev_subclass);
-        crate::serial::puts(" devproto=");
-        crate::serial::puts_hex_u8(dev_proto);
-        crate::serial::puts("\n");
         Ok(())
-    }
-}
-
-/// Walk the configuration descriptor at `desc_ptr` and log one line per
-/// interface descriptor: number / class / subclass / protocol. Bounded by the
-/// `wTotalLength` field in the config descriptor header so we never read past
-/// the controller's returned data.
-unsafe fn dump_interfaces(desc_ptr: *const u8) {
-    let total = u16::from_le_bytes([
-        core::ptr::read_volatile(desc_ptr.add(2)),
-        core::ptr::read_volatile(desc_ptr.add(3)),
-    ]) as usize;
-    let limit = total.min(512);
-    let mut off = 0usize;
-    while off + 2 <= limit {
-        let blen = core::ptr::read_volatile(desc_ptr.add(off)) as usize;
-        let btype = core::ptr::read_volatile(desc_ptr.add(off + 1));
-        if blen < 2 || off + blen > limit {
-            break;
-        }
-        // bDescriptorType 4 = Interface; the relevant bytes are at offsets
-        // 2 (bInterfaceNumber), 5 (bInterfaceClass), 6 (bInterfaceSubClass),
-        // 7 (bInterfaceProtocol). USB 2.0 spec §9.6.5.
-        if btype == 4 && blen >= 9 {
-            let inum = core::ptr::read_volatile(desc_ptr.add(off + 2));
-            let icls = core::ptr::read_volatile(desc_ptr.add(off + 5));
-            let isub = core::ptr::read_volatile(desc_ptr.add(off + 6));
-            let iproto = core::ptr::read_volatile(desc_ptr.add(off + 7));
-            crate::serial::puts("[USB-DBG] iface=");
-            crate::serial::puts_hex_u8(inum);
-            crate::serial::puts(" cls=");
-            crate::serial::puts_hex_u8(icls);
-            crate::serial::puts(" sub=");
-            crate::serial::puts_hex_u8(isub);
-            crate::serial::puts(" proto=");
-            crate::serial::puts_hex_u8(iproto);
-            crate::serial::puts("\n");
-        }
-        off += blen;
     }
 }
 

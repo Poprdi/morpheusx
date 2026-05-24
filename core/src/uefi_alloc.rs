@@ -40,4 +40,3 @@ pub unsafe fn free_pages(free_pages: FreePages, addr: u64, pages: usize) -> Resu
 pub fn bytes_to_pages(bytes: usize) -> usize {
     (bytes + 4095) / 4096
 }
-

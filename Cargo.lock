@@ -233,7 +233,15 @@ name = "morpheus-display"
 version = "1.0.1"
 
 [[package]]
+name = "morpheus-foundation"
+version = "1.0.1"
+
+[[package]]
 name = "morpheus-gfx3d"
+version = "1.0.1"
+
+[[package]]
+name = "morpheus-hal-api"
 version = "1.0.1"
 
 [[package]]

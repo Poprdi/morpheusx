@@ -233,35 +233,6 @@ impl XhciController {
 
         Self::tsc_delay(tsc_freq, 200);
 
-        // Single-line diagnostic dump — gives the operator everything needed
-        // to debug a non-responding controller without reading scrollback.
-        // Fields: HCCPARAMS1 / USBCMD / USBSTS / CRCR.lo / DCBAAP.lo /
-        //         dma_base / max_slots / max_ports.
-        {
-            use crate::serial::{puts, puts_dec_u8, puts_hex_u32, puts_hex_u64};
-            let cmd_now = mmio::read32(op_base + OP_USBCMD);
-            let sts_now = mmio::read32(op_base + OP_USBSTS);
-            let crcr_lo = mmio::read32(op_base + OP_CRCR);
-            let dcb_lo = mmio::read32(op_base + OP_DCBAAP);
-            puts("[USB-DBG] hccp1=");
-            puts_hex_u32(hccparams1);
-            puts(" cmd=");
-            puts_hex_u32(cmd_now);
-            puts(" sts=");
-            puts_hex_u32(sts_now);
-            puts(" crcr=");
-            puts_hex_u32(crcr_lo);
-            puts(" dcb=");
-            puts_hex_u32(dcb_lo);
-            puts(" dma=");
-            puts_hex_u64(dma_base);
-            puts(" slots=");
-            puts_dec_u8(max_slots);
-            puts(" ports=");
-            puts_dec_u8(max_ports);
-            puts("\n");
-        }
-
         Ok(Self {
             mmio_base,
             op_base,
@@ -314,28 +285,44 @@ impl XhciController {
         Self::tsc_delay(self.tsc_freq, ms);
     }
 
-    /// Single-line snapshot of the controller's run-state registers.
-    /// Tag is a short identifier so multiple dumps in a boot can be distinguished.
-    pub unsafe fn dump_state(&self, tag: &str) {
-        use crate::serial::{puts, puts_hex_u32};
-        let cmd = mmio::read32(self.op_base + OP_USBCMD);
-        let sts = mmio::read32(self.op_base + OP_USBSTS);
-        let crcr = mmio::read32(self.op_base + OP_CRCR);
-        let dcb = mmio::read32(self.op_base + OP_DCBAAP);
-        puts("[USB-DBG] ");
-        puts(tag);
-        puts(" cmd=");
-        puts_hex_u32(cmd);
-        puts(" sts=");
-        puts_hex_u32(sts);
-        puts(" crcr=");
-        puts_hex_u32(crcr);
-        puts(" dcb=");
-        puts_hex_u32(dcb);
-        puts("\n");
+    #[inline(always)]
+    /// Issue a `RESET_ENDPOINT` command (xHCI TRB type 14).
+    ///
+    /// Required to clear a Halted endpoint — caused on real hardware by the
+    /// controller hitting CErr USB errors during polling (timeouts, STALLs,
+    /// LS-on-HS TT glitches). The endpoint stays Halted until reset; new
+    /// doorbell rings are ignored. After this completes the endpoint is in
+    /// Stopped state, and the TR Dequeue Pointer is left wherever the
+    /// controller halted it. Pair with `set_tr_dequeue_pointer` to restart
+    /// from a known position.
+    pub unsafe fn reset_endpoint(&mut self, slot_id: u8, ep_dci: u32) -> Result<(), XhciError> {
+        const TRB_RESET_ENDPOINT: u32 = 14u32 << 10;
+        let ctrl = TRB_RESET_ENDPOINT | ((ep_dci & 0x1F) << 16) | ((slot_id as u32) << 24);
+        self.cmd_ring.enqueue(0, 0, ctrl);
+        self.ring_cmd_doorbell();
+        self.wait_cmd(2000)?;
+        Ok(())
     }
 
-    #[inline(always)]
+    /// Issue a `SET_TR_DEQUEUE_POINTER` command (xHCI TRB type 16).
+    ///
+    /// Tells the controller where to read the next TRB for the given
+    /// endpoint. The low bit of `deq_ptr` is DCS (Dequeue Cycle State);
+    /// bits 3:1 are reserved; bits [63:4] are the 16-byte-aligned ring address.
+    pub unsafe fn set_tr_dequeue_pointer(
+        &mut self,
+        slot_id: u8,
+        ep_dci: u32,
+        deq_ptr: u64,
+    ) -> Result<(), XhciError> {
+        const TRB_SET_TR_DEQ: u32 = 16u32 << 10;
+        let ctrl = TRB_SET_TR_DEQ | ((ep_dci & 0x1F) << 16) | ((slot_id as u32) << 24);
+        self.cmd_ring.enqueue(deq_ptr, 0, ctrl);
+        self.ring_cmd_doorbell();
+        self.wait_cmd(2000)?;
+        Ok(())
+    }
+
     pub unsafe fn ring_cmd_doorbell(&self) {
         mmio::write32(self.db_base, 0);
     }

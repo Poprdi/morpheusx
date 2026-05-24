@@ -25,6 +25,8 @@ members = [
     "tests/netcheck",
     "tests/spinning-cube",
     "tests/system-visualizer",
+    "morpheus-hal-api",
+    "morpheus-foundation",
 ]
 
 [workspace.package]
@@ -46,6 +48,8 @@ morpheus-hwinit = { path = "hwinit" }
 iso9660 = { path = "iso9660", package = "iso9660-rs" }
 morpheus-ui = { path = "ui" }
 morpheus-helix = { path = "helix" }
+morpheus-hal-api = { path = "morpheus-hal-api" }
+morpheus-foundation = { path = "morpheus-foundation" }
 
 # Shared external dependencies — hoisted from per-crate Cargo.toml.
 # Canonical feature set picked to be the most restrictive across consumers.

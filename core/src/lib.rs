@@ -1,4 +1,4 @@
-//! Morpheus core: disk, FS, ISO, networking. `no_std`.
+//! Morpheus core: disk formats (GPT, FAT32) + ISO chunked storage. `no_std`.
 
 #![no_std]
 #![allow(dead_code)]
@@ -14,6 +14,4 @@
 pub mod disk;
 pub mod fs;
 pub mod iso;
-pub mod logger;
-pub mod net;
-pub mod uefi_alloc;
+pub(crate) mod uefi_alloc;

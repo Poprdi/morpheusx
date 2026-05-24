@@ -1,7 +1,21 @@
-//! Boot-protocol HID keyboard. Translates HID usage codes to PS/2 scancodes
-//! and feeds the unified input layer (PS/2 or USB, never both — see input.rs).
+//! Boot-protocol HID keyboard. Translates HID usage codes to PS/2 Set 1
+//! scancodes and feeds the unified input layer (PS/2 or USB, never both —
+//! see input.rs).
+//!
+//! Wire protocol into the unified queue
+//! ------------------------------------
+//! The HID boot report (8 bytes) has no per-key press/release bit; state
+//! changes are inferred by diffing the current report against the previous
+//! one. From that diff we synthesize raw PS/2 Set 1 bytes and push them as
+//! `InputEvent::Key(byte, true)` — the `pressed` flag is repurposed as
+//! "process this byte", not "this is a make code." A break is encoded by
+//! `(scancode | 0x80)` in the byte, exactly like real PS/2 hardware would
+//! send. Extended keys (arrows, F-keys' nav cluster, right modifiers, GUI,
+//! menu) push two events: first `Key(0xE0, true)`, then the make/break byte.
+//! The bootloader's `Keyboard::feed_raw` reassembles the sequence.
 
 use crate::input::{self, InputEvent};
+use crate::sync::SpinLock;
 use crate::usb::controller::{XhciController, XhciError};
 use crate::usb::dma;
 use crate::usb::hid::HIDInterface;
@@ -15,140 +29,250 @@ pub struct KeyboardReport {
     pub keys: [u8; 6],
 }
 
+impl KeyboardReport {
+    const fn zero() -> Self {
+        Self {
+            modifiers: 0,
+            reserved: 0,
+            keys: [0; 6],
+        }
+    }
+}
+
+/// Last report we successfully parsed. The next report is diffed against
+/// this to derive press/release events; without it we'd re-fire press
+/// events for every held key on every poll.
+static PREV_REPORT: SpinLock<KeyboardReport> = SpinLock::new(KeyboardReport::zero());
+
+const EXT_PREFIX: u8 = 0xE0;
+const BREAK_FLAG: u8 = 0x80;
+
+/// HID usage codes for the eight standard modifier bits in report byte 0.
+/// Bit 0 = LeftCtrl, bit 1 = LeftShift, ..., bit 7 = RightGUI.
+const MODIFIER_USAGE: [u8; 8] = [0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7];
+
 pub unsafe fn parse_keyboard_report(
     _controller: &mut XhciController,
     _iface: &HIDInterface,
     report: *const KeyboardReport,
 ) -> Result<(), XhciError> {
-    let report = &*(report as *const KeyboardReport);
+    let cur = *(report as *const KeyboardReport);
+    let mut prev = PREV_REPORT.lock();
 
-    // Modifier byte: LCtrl/LShift/LAlt/LWin/RCtrl/RShift/RAlt/RWin (bits 0..=7).
-    let modifiers = report.modifiers;
-    push_key(InputEvent::Key(0x1D, (modifiers & 0x01) != 0));
-    push_key(InputEvent::Key(0x2A, (modifiers & 0x02) != 0));
-    push_key(InputEvent::Key(0x38, (modifiers & 0x04) != 0));
-    push_key(InputEvent::Key(0x5B, (modifiers & 0x08) != 0));
-    push_key(InputEvent::Key(0x1D, (modifiers & 0x10) != 0));
-    push_key(InputEvent::Key(0x36, (modifiers & 0x20) != 0));
-    push_key(InputEvent::Key(0x38, (modifiers & 0x40) != 0));
-    push_key(InputEvent::Key(0x5C, (modifiers & 0x80) != 0));
-
-    for key in report.keys.iter() {
-        if *key != 0 {
-            let scan_code = translate_hid_to_ps2(*key);
-            if scan_code != 0 {
-                push_key(InputEvent::Key(scan_code, true));
+    // ---- Modifier byte diff (8 independent bits) ----
+    let changed = cur.modifiers ^ prev.modifiers;
+    if changed != 0 {
+        for bit in 0..8u8 {
+            let mask = 1u8 << bit;
+            if changed & mask == 0 {
+                continue;
+            }
+            let pressed_now = cur.modifiers & mask != 0;
+            if pressed_now {
+                push_make(MODIFIER_USAGE[bit as usize]);
+            } else {
+                push_break(MODIFIER_USAGE[bit as usize]);
             }
         }
     }
 
+    // ---- Key array diff ----
+    // Release events: usage codes present in prev but not in cur.
+    for &k in prev.keys.iter() {
+        if k == 0 {
+            continue;
+        }
+        if !contains(&cur.keys, k) {
+            push_break(k);
+        }
+    }
+    // Press events: usage codes present in cur but not in prev.
+    for &k in cur.keys.iter() {
+        if k == 0 {
+            continue;
+        }
+        if !contains(&prev.keys, k) {
+            push_make(k);
+        }
+    }
+
+    *prev = cur;
     Ok(())
 }
 
-fn push_key(event: InputEvent) {
-    input::push_keyboard_event_internal(event);
+#[inline]
+fn contains(arr: &[u8; 6], needle: u8) -> bool {
+    arr.iter().any(|&b| b == needle)
 }
 
-/// Unifies scancode space across PS/2 and USB. HID usage tables §10.
-fn translate_hid_to_ps2(hid_code: u8) -> u8 {
+#[inline]
+fn push_byte(byte: u8) {
+    // pressed=true is the "process this byte" flag — the consumer drops
+    // events with pressed=false. See module-level comment.
+    input::push_keyboard_event_internal(InputEvent::Key(byte, true));
+}
+
+/// Push the Set 1 make sequence for a HID usage code (1 or 2 bytes).
+/// Unmapped codes are silently dropped.
+fn push_make(hid_code: u8) {
+    let (prefix, base) = translate_hid_to_ps2_set1(hid_code);
+    if base == 0 {
+        return;
+    }
+    if let Some(p) = prefix {
+        push_byte(p);
+    }
+    push_byte(base);
+}
+
+/// Push the Set 1 break sequence for a HID usage code (1 or 2 bytes).
+/// Unmapped codes are silently dropped.
+fn push_break(hid_code: u8) {
+    let (prefix, base) = translate_hid_to_ps2_set1(hid_code);
+    if base == 0 {
+        return;
+    }
+    if let Some(p) = prefix {
+        push_byte(p);
+    }
+    push_byte(base | BREAK_FLAG);
+}
+
+/// Returns `(extended_prefix, base_scancode)` for a HID usage code.
+/// `extended_prefix == Some(0xE0)` means the caller must prefix the base byte
+/// with 0xE0. `base_scancode` is the Set 1 make code; OR 0x80 for the break.
+/// `(None, 0)` = unmapped — caller should skip emitting anything.
+///
+/// USB HID Usage Page 0x07 (keyboard) → IBM PC AT scan code set 1.
+/// References: HID Usage Tables 1.5 §10, "Keyboard Scan Codes" (IBM).
+fn translate_hid_to_ps2_set1(hid_code: u8) -> (Option<u8>, u8) {
     match hid_code {
-        // Letters
-        0x04 => 0x1C, // a/A
-        0x05 => 0x32, // b/B
-        0x06 => 0x21, // c/C
-        0x07 => 0x23, // d/D
-        0x08 => 0x24, // e/E
-        0x09 => 0x2B, // f/F
-        0x0A => 0x34, // g/G
-        0x0B => 0x33, // h/H
-        0x0C => 0x43, // i/I
-        0x0D => 0x3B, // j/J
-        0x0E => 0x42, // k/K
-        0x0F => 0x4B, // l/L
-        0x10 => 0x3A, // m/M
-        0x11 => 0x31, // n/N
-        0x12 => 0x44, // o/O
-        0x13 => 0x4D, // p/P
-        0x14 => 0x15, // q/Q
-        0x15 => 0x2D, // r/R
-        0x16 => 0x1B, // s/S
-        0x17 => 0x2C, // t/T
-        0x18 => 0x3C, // u/U
-        0x19 => 0x2A, // v/V
-        0x1A => 0x1D, // w/W
-        0x1B => 0x22, // x/X
-        0x1C => 0x35, // y/Y
-        0x1D => 0x1A, // z/Z
-        // Numbers
-        0x1E => 0x02, // 1/!
-        0x1F => 0x03, // 2/@
-        0x20 => 0x04, // 3/#
-        0x21 => 0x05, // 4/$
-        0x22 => 0x06, // 5/%
-        0x23 => 0x07, // 6/^
-        0x24 => 0x08, // 7/&
-        0x25 => 0x09, // 8/*
-        0x26 => 0x0A, // 9/(
-        0x27 => 0x0B, // 0/)
-        // Special keys
-        0x28 => 0x1C, // Enter
-        0x29 => 0x01, // Escape
-        0x2A => 0x0E, // Backspace
-        0x2B => 0x0F, // Tab
-        0x2C => 0x39, // Space
-        0x2D => 0x0C, // -/_
-        0x2E => 0x0D, // =/+
-        0x2F => 0x1A, // [/{
-        0x30 => 0x1B, // ]/}
-        0x31 => 0x2B, // \/|
-        0x32 => 0x29, // `/~
-        0x33 => 0x36, // ;/:
-        0x34 => 0x37, // '/"
-        0x35 => 0x4E, // ,/< (or -/_ for keypad)
-        0x36 => 0x6E, // ./> (or + for keypad)
-        0x37 => 0x0D, // //? (or * for keypad)
-        // Function keys
-        0x3A => 0x3B, // F1
-        0x3B => 0x3C, // F2
-        0x3C => 0x3D, // F3
-        0x3D => 0x3E, // F4
-        0x3E => 0x3F, // F5
-        0x3F => 0x40, // F6
-        0x40 => 0x41, // F7
-        0x41 => 0x42, // F8
-        0x42 => 0x43, // F9
-        0x43 => 0x44, // F10
-        0x44 => 0x57, // F11
-        0x45 => 0x58, // F12
-        // Navigation
-        0x49 => 0x52, // Insert
-        0x4A => 0x47, // Home
-        0x4B => 0x49, // Page Up
-        0x4C => 0x53, // Delete (Note: 0x4C is actually '5' on keypad)
-        0x4E => 0x4A, // Page Down
-        0x4F => 0x4D, // Right Arrow
-        0x50 => 0x4B, // Left Arrow
-        0x51 => 0x50, // Down Arrow
-        0x52 => 0x48, // Up Arrow
-        // Keypad
-        0x53 => 0x37, // Num Lock
-        0x54 => 0x4E, // Keypad /
-        0x55 => 0x4C, // Keypad *
-        0x56 => 0x4A, // Keypad -
-        0x57 => 0x4E, // Keypad +
-        0x58 => 0x5A, // Keypad Enter
-        0x59 => 0x4B, // Keypad 1 (End)
-        0x5A => 0x4C, // Keypad 2 (Down)
-        0x5B => 0x4D, // Keypad 3 (Page Down)
-        0x5C => 0x47, // Keypad 4 (Home)
-        0x5D => 0x4C, // Keypad 5
-        0x5E => 0x4F, // Keypad 6 (Right)
-        0x5F => 0x47, // Keypad 7 (Home)
-        0x60 => 0x48, // Keypad 8 (Up)
-        0x61 => 0x49, // Keypad 9 (Page Up)
-        0x62 => 0x35, // Keypad 0 (Insert)
-        0x63 => 0x53, // Keypad . (Delete)
-        _ => 0x00,    // Unknown
+        // ---- Letters (a–z, HID 0x04..=0x1D) ----
+        0x04 => (None, 0x1E), // a
+        0x05 => (None, 0x30), // b
+        0x06 => (None, 0x2E), // c
+        0x07 => (None, 0x20), // d
+        0x08 => (None, 0x12), // e
+        0x09 => (None, 0x21), // f
+        0x0A => (None, 0x22), // g
+        0x0B => (None, 0x23), // h
+        0x0C => (None, 0x17), // i
+        0x0D => (None, 0x24), // j
+        0x0E => (None, 0x25), // k
+        0x0F => (None, 0x26), // l
+        0x10 => (None, 0x32), // m
+        0x11 => (None, 0x31), // n
+        0x12 => (None, 0x18), // o
+        0x13 => (None, 0x19), // p
+        0x14 => (None, 0x10), // q
+        0x15 => (None, 0x13), // r
+        0x16 => (None, 0x1F), // s
+        0x17 => (None, 0x14), // t
+        0x18 => (None, 0x16), // u
+        0x19 => (None, 0x2F), // v
+        0x1A => (None, 0x11), // w
+        0x1B => (None, 0x2D), // x
+        0x1C => (None, 0x15), // y
+        0x1D => (None, 0x2C), // z
+
+        // ---- Top-row digits ----
+        0x1E => (None, 0x02), // 1
+        0x1F => (None, 0x03), // 2
+        0x20 => (None, 0x04), // 3
+        0x21 => (None, 0x05), // 4
+        0x22 => (None, 0x06), // 5
+        0x23 => (None, 0x07), // 6
+        0x24 => (None, 0x08), // 7
+        0x25 => (None, 0x09), // 8
+        0x26 => (None, 0x0A), // 9
+        0x27 => (None, 0x0B), // 0
+
+        // ---- Editing / whitespace ----
+        0x28 => (None, 0x1C), // Enter
+        0x29 => (None, 0x01), // Escape
+        0x2A => (None, 0x0E), // Backspace
+        0x2B => (None, 0x0F), // Tab
+        0x2C => (None, 0x39), // Space
+
+        // ---- Punctuation row ----
+        0x2D => (None, 0x0C), // - _
+        0x2E => (None, 0x0D), // = +
+        0x2F => (None, 0x1A), // [ {
+        0x30 => (None, 0x1B), // ] }
+        0x31 => (None, 0x2B), // \ |
+        // 0x32 — Non-US # ~ (rare); leave unmapped for now.
+        0x33 => (None, 0x27), // ; :
+        0x34 => (None, 0x28), // ' "
+        0x35 => (None, 0x29), // ` ~
+        0x36 => (None, 0x33), // , <
+        0x37 => (None, 0x34), // . >
+        0x38 => (None, 0x35), // / ?
+        0x39 => (None, 0x3A), // CapsLock
+
+        // ---- Function keys ----
+        0x3A => (None, 0x3B), // F1
+        0x3B => (None, 0x3C), // F2
+        0x3C => (None, 0x3D), // F3
+        0x3D => (None, 0x3E), // F4
+        0x3E => (None, 0x3F), // F5
+        0x3F => (None, 0x40), // F6
+        0x40 => (None, 0x41), // F7
+        0x41 => (None, 0x42), // F8
+        0x42 => (None, 0x43), // F9
+        0x43 => (None, 0x44), // F10
+        0x44 => (None, 0x57), // F11
+        0x45 => (None, 0x58), // F12
+
+        // ---- Navigation / editing cluster (all 0xE0-prefixed) ----
+        0x46 => (Some(EXT_PREFIX), 0x37), // PrintScreen (simplified; real PS/2 is E0 2A E0 37)
+        // 0x47 ScrollLock, 0x48 Pause/Break — both messy; skip.
+        0x49 => (Some(EXT_PREFIX), 0x52), // Insert
+        0x4A => (Some(EXT_PREFIX), 0x47), // Home
+        0x4B => (Some(EXT_PREFIX), 0x49), // PageUp
+        0x4C => (Some(EXT_PREFIX), 0x53), // Delete
+        0x4D => (Some(EXT_PREFIX), 0x4F), // End
+        0x4E => (Some(EXT_PREFIX), 0x51), // PageDown
+        0x4F => (Some(EXT_PREFIX), 0x4D), // RightArrow
+        0x50 => (Some(EXT_PREFIX), 0x4B), // LeftArrow
+        0x51 => (Some(EXT_PREFIX), 0x50), // DownArrow
+        0x52 => (Some(EXT_PREFIX), 0x48), // UpArrow
+
+        // ---- Keypad ----
+        0x53 => (None, 0x45),             // NumLock
+        0x54 => (Some(EXT_PREFIX), 0x35), // Keypad /
+        0x55 => (None, 0x37),             // Keypad *
+        0x56 => (None, 0x4A),             // Keypad -
+        0x57 => (None, 0x4E),             // Keypad +
+        0x58 => (Some(EXT_PREFIX), 0x1C), // Keypad Enter
+        0x59 => (None, 0x4F),             // Keypad 1 (End)
+        0x5A => (None, 0x50),             // Keypad 2 (Down)
+        0x5B => (None, 0x51),             // Keypad 3 (PgDn)
+        0x5C => (None, 0x4B),             // Keypad 4 (Left)
+        0x5D => (None, 0x4C),             // Keypad 5
+        0x5E => (None, 0x4D),             // Keypad 6 (Right)
+        0x5F => (None, 0x47),             // Keypad 7 (Home)
+        0x60 => (None, 0x48),             // Keypad 8 (Up)
+        0x61 => (None, 0x49),             // Keypad 9 (PgUp)
+        0x62 => (None, 0x52),             // Keypad 0 (Insert)
+        0x63 => (None, 0x53),             // Keypad . (Delete)
+
+        // ---- Application / context menu ----
+        0x65 => (Some(EXT_PREFIX), 0x5D), // App / Menu
+
+        // ---- Standalone modifier usages (0xE0..=0xE7).
+        // Most keyboards report modifiers via byte 0 of the report, but
+        // some quirky firmware also drops them into the keys array; handle
+        // both paths via the same translator so encoding stays consistent.
+        0xE0 => (None, 0x1D),             // LeftCtrl
+        0xE1 => (None, 0x2A),             // LeftShift
+        0xE2 => (None, 0x38),             // LeftAlt
+        0xE3 => (Some(EXT_PREFIX), 0x5B), // LeftGUI (Win)
+        0xE4 => (Some(EXT_PREFIX), 0x1D), // RightCtrl
+        0xE5 => (None, 0x36),             // RightShift
+        0xE6 => (Some(EXT_PREFIX), 0x38), // RightAlt
+        0xE7 => (Some(EXT_PREFIX), 0x5C), // RightGUI
+
+        _ => (None, 0),
     }
 }
 

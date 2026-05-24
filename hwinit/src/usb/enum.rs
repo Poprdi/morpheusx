@@ -27,14 +27,12 @@ impl XhciController {
                 // command — usually means CRCR wasn't accepted, MaxSlotsEn=0,
                 // bus-mastering disabled, or the doorbell isn't being seen.
                 crate::serial::log_warn("USB", 251, "enable_slot: no completion event (timeout)");
-                self.dump_state("enable_slot.timeout");
                 return Err(XhciError::CommandTimeout);
             }
             Err(e) => {
                 // Got a completion event but with a non-success code (CC != 1).
                 // Most likely "No Slots Available" (CC=12) — MaxSlotsEnabled issue.
                 crate::serial::log_warn("USB", 252, "enable_slot: command returned error CC");
-                self.dump_state("enable_slot.cc_err");
                 return Err(e);
             }
         };

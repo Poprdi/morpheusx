@@ -101,11 +101,11 @@ pub use driver::{NetworkDriver as AsmNetworkDriver, VirtioConfig, VirtioNetDrive
 pub use device::pci::{pci_io_test, read_tsc, tsc_delay_us};
 
 // COM1 (0x3f8) serial for QEMU -serial stdio debugging.
+// Moves to morpheus-serial in Phase 1.4; kept pub(crate) until then.
 
-/// Write one byte to COM1, abandoning after ~100 spins if TX never empties.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-pub fn serial_byte(b: u8) {
+pub(crate) fn serial_byte(b: u8) {
     unsafe {
         let mut retries = 0u32;
         loop {
@@ -135,7 +135,7 @@ pub fn serial_byte(b: u8) {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn serial_str(s: &str) {
+pub(crate) fn serial_str(s: &str) {
     for b in s.bytes() {
         serial_byte(b);
     }
@@ -143,7 +143,7 @@ pub fn serial_str(s: &str) {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn serial_u32(n: u32) {
+pub(crate) fn serial_u32(n: u32) {
     if n == 0 {
         serial_byte(b'0');
         return;
@@ -164,10 +164,11 @@ pub fn serial_u32(n: u32) {
 
 /// Emit `[NET:<stage>] <msg>` on COM1.
 #[cfg(target_arch = "x86_64")]
-pub fn serial_stage(stage: u32, msg: &str) {
+pub(crate) fn serial_stage(stage: u32, msg: &str) {
     serial_str("[NET:");
     serial_u32(stage);
     serial_str("] ");
     serial_str(msg);
     serial_byte(b'\n');
 }
+
