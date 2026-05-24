@@ -56,8 +56,23 @@ impl XhciController {
         Ok(slot)
     }
 
-    /// Address the device on the given root port.
-    pub unsafe fn address_device(&mut self, port: u8, speed: u8) -> Result<(), XhciError> {
+    /// Address the device whose slot is currently in `self.slot_id`.
+    ///
+    /// `root_port` is the 0-based root-hub port the device's link traverses
+    /// (the slot context stores it as 1-based in DW1[23:16]).
+    /// `route` is the 20-bit xHCI route string — 0 for devices directly on a
+    /// root port, populated for devices behind hubs.
+    /// `parent_hub_slot` / `parent_hub_port` identify the immediately upstream
+    /// HS hub when this is a LS/FS device (used by the controller's TT routing).
+    /// They are 0 for devices that don't need TT forwarding.
+    pub unsafe fn address_device(
+        &mut self,
+        root_port: u8,
+        speed: u8,
+        route: u32,
+        parent_hub_slot: u8,
+        parent_hub_port: u8,
+    ) -> Result<(), XhciError> {
         let cs = self.ctx_size as u64;
         let in_ctx = self.dma_base + dma::OFF_IN_CTX as u64;
 
@@ -67,24 +82,41 @@ impl XhciController {
         let slot_ctx = in_ctx + cs;
         let max_pkt = ep0_max_packet(speed);
         // Slot Context DW0:
+        //   [19:0]  Route String
         //   [23:20] Speed
-        //   [26]    Hub   — must be 0 for non-hub devices
+        //   [26]    Hub   — must be 0 for non-hub devices (set later via
+        //                  configure_hub_slot if device turns out to be a hub)
         //   [31:27] Context Entries — must be >=1 (0 is reserved/invalid)
-        // Previously this set bit 26 (Hub) instead of bit 27 (Context Entries=1).
-        // QEMU tolerated it; real Intel xHCI rejects AddressDevice with a
-        // non-success CC because Hub=1 lacks hub-specific DW1 fields AND
-        // Context Entries=0 is explicitly invalid.
-        vw32(slot_ctx, ((speed as u32) << 20) | (1u32 << 27));
-        vw32(slot_ctx + 4, (port as u32 + 1) << 16);
+        let d0 = (route & 0x000F_FFFF) | ((speed as u32) << 20) | (1u32 << 27);
+        vw32(slot_ctx, d0);
+        // DW1 [23:16] Root Hub Port Number (1-based)
+        vw32(slot_ctx + 4, ((root_port as u32 + 1) & 0xFF) << 16);
+        // DW2: TT routing for LS/FS devices behind a HS hub.
+        //   [7:0]  Parent Hub Slot ID
+        //   [15:8] Parent Port Number
+        // (TT Think Time lives in [17:16] but is only meaningful for hubs;
+        // configure_hub_slot patches it in if this device turns out to be one.)
+        let d2 = if parent_hub_slot != 0 && speed < 3 {
+            (parent_hub_slot as u32) | ((parent_hub_port as u32) << 8)
+        } else {
+            0
+        };
+        vw32(slot_ctx + 8, d2);
 
         let ep0 = in_ctx + 2 * cs;
         vw32(
             ep0 + 4,
             (3u32 << 1) | (4u32 << 3) | ((max_pkt as u32) << 16),
         );
-        let ring_phys = self.dma_base + dma::OFF_XFER_EP0 as u64;
-        vw32(ep0 + 8, (ring_phys as u32 & !0xF) | 1);
-        vw32(ep0 + 12, (ring_phys >> 32) as u32);
+        // CRITICAL: each slot's EP0 context dequeue pointer must reflect the
+        // CURRENT position of the shared EP0 transfer ring (with the current
+        // cycle bit), not the ring base with cycle=1. Otherwise the controller
+        // tries to read stale TRBs left over from previous devices.
+        let ring_base = self.dma_base + dma::OFF_XFER_EP0 as u64;
+        let cur_pos = ring_base + (self.ep0.enq as u64) * 16;
+        let dcs = self.ep0.cycle as u32 & 1;
+        vw32(ep0 + 8, (cur_pos as u32 & !0xF) | dcs);
+        vw32(ep0 + 12, (cur_pos >> 32) as u32);
         vw32(ep0 + 16, 8);
 
         let ctrl = TRB_ADDRESS_DEV | ((self.slot_id as u32) << 24);
