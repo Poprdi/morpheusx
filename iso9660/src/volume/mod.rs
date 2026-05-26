@@ -46,7 +46,7 @@ pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeIn
                         vi.boot_catalog_lba = Some(catalog_lba);
                     }
                 }
-            }
+            },
             1 => {
                 let pvd = primary::parse(&buffer)?;
                 // Root record is the 34-byte field embedded at PVD offset 156.
@@ -63,14 +63,14 @@ pub fn mount<B: BlockIo>(block_io: &mut B, start_sector: u64) -> Result<VolumeIn
                     // TODO: detect via root directory SUSP entries.
                     has_rock_ridge: false,
                 });
-            }
+            },
             2 => {
                 if let Some(ref mut vi) = volume_info {
                     vi.has_joliet = true;
                 }
-            }
+            },
             255 => break,
-            _ => {}
+            _ => {},
         }
 
         sector += 1;

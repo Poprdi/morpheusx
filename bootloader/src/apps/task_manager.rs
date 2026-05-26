@@ -4,8 +4,9 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 
-use morpheus_hwinit::serial::puts;
-use morpheus_hwinit::{ProcessInfo, ProcessState, Signal, SCHEDULER};
+use morpheus_hal_x86_64::serial::puts;
+use morpheus_kernel::process::{ProcessInfo, ProcessState, Signal};
+use morpheus_kernel::schedular::SCHEDULER;
 
 /// Matches hwinit MAX_PROCESSES.
 const SNAP_CAP: usize = 64;

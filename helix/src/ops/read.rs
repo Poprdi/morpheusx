@@ -46,7 +46,7 @@ pub fn read_file<B: BlockIo>(
     )
 }
 
-/// Replays log from tail up to target_lsn, returning state as of that point.
+/// Replay tail..=`target_lsn`; returns state as of that LSN.
 pub fn read_file_at_lsn<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,
@@ -87,7 +87,7 @@ pub fn read_file_at_lsn<B: BlockIo>(
                         if let Some(op) = LogOp::from_u8(header.op) {
                             match op {
                                 LogOp::Write => {
-                                    // v2 payload: [path_len:u16][path][data...]
+                                    // v2: [path_len:u16][path][data...].
                                     let data = if payload.len() >= 2 {
                                         let plen =
                                             u16::from_le_bytes([payload[0], payload[1]]) as usize;
@@ -115,20 +115,20 @@ pub fn read_file_at_lsn<B: BlockIo>(
                                         let block_count = u32::from_le_bytes(count_bytes) as u64;
                                         last_file_size = Some(block_count * BLOCK_SIZE as u64);
                                     }
-                                }
+                                },
                                 LogOp::Delete => {
                                     last_write_data = None;
                                     last_extent_root = None;
                                     last_file_size = None;
-                                }
-                                _ => {}
+                                },
+                                _ => {},
                             }
                         }
                     }
 
-                    // total_size() is 8-byte aligned.
+                    // 8-byte aligned.
                     offset += header.total_size() as u32;
-                }
+                },
                 Err(_) => break,
             }
         }
@@ -193,14 +193,14 @@ pub fn list_versions<B: BlockIo>(
                                 | LogOp::Truncate
                                 | LogOp::SetMeta => {
                                     versions.push((header.lsn, header.timestamp_ns, op));
-                                }
-                                _ => {}
+                                },
+                                _ => {},
                             }
                         }
                     }
 
                     offset += header.total_size() as u32;
-                }
+                },
                 Err(_) => break,
             }
         }
@@ -219,7 +219,7 @@ pub fn list_versions<B: BlockIo>(
 }
 
 pub fn stat_file(index: &NamespaceIndex, path: &str) -> Result<FileStat, HelixError> {
-    // lookup_flex: dirs are stored with trailing '/', callers usually omit it.
+    // lookup_flex: dirs stored with trailing '/', callers usually omit it.
     let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
 
     if entry.flags & entry_flags::IS_DELETED != 0 {
@@ -256,7 +256,7 @@ fn read_extent_data<B: BlockIo>(
 
     let scale = BLOCK_SIZE as u64 / device_block_size as u64;
 
-    // Single-extent fast path. Fragmented files want a real extent walk.
+    // Single-extent fast path; fragmented files need a real extent walk.
     for i in 0..blocks_needed {
         let abs_block = data_region_start_block + extent_root + i;
         let lba = Lba(partition_lba_start + abs_block * scale);

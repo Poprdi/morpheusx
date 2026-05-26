@@ -1,7 +1,7 @@
 use crate::islands::{draw_text, raw_fill, ShellState, PANEL_H, START_BTN_W};
 use libmorpheus::time;
 
-/// Bottom taskbar: START, status, uptime clock.
+/// START + status + uptime clock.
 pub fn tick(state: &mut ShellState) {
     if !state.panel_dirty {
         return;
@@ -72,7 +72,7 @@ pub fn tick(state: &mut ShellState) {
         );
     }
 
-    // Repaint every tick so the clock updates.
+    // Repaint each tick so the clock updates.
     state.panel_dirty = true;
 }
 

@@ -22,7 +22,6 @@ pub fn getpid() -> u32 {
     unsafe { syscall0(SYS_GETPID) as u32 }
 }
 
-/// Get the parent process ID.
 pub fn getppid() -> u32 {
     unsafe { syscall0(SYS_GETPPID) as u32 }
 }
@@ -42,14 +41,13 @@ pub fn kill(pid: u32, signal: u8) -> Result<(), u64> {
     }
 }
 
-/// Sleep for `millis` milliseconds.
 pub fn sleep(millis: u64) {
     unsafe {
         syscall1(SYS_SLEEP, millis);
     }
 }
 
-/// Wait for a child process to exit, returning its exit code.
+/// Block until child exits; returns its exit code.
 pub fn wait(pid: u32) -> Result<i32, u64> {
     let ret = unsafe { syscall1(SYS_WAIT, pid as u64) };
     if is_error(ret) {
@@ -59,8 +57,7 @@ pub fn wait(pid: u32) -> Result<i32, u64> {
     }
 }
 
-/// Non-blocking wait.  Returns `Ok(Some(code))` if the child has exited,
-/// `Ok(None)` if the child is still running, or `Err` on error.
+/// `Ok(None)` means still running.
 pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
     let ret = unsafe { syscall1(SYS_TRY_WAIT, pid as u64) };
     const EAGAIN: u64 = u64::MAX - 11;
@@ -73,9 +70,7 @@ pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
     }
 }
 
-/// Spawn a child process from an ELF binary path in the filesystem.
-///
-/// Returns the child PID on success.
+/// Spawn ELF at `path`; returns child PID.
 pub fn spawn(path: &str) -> Result<u32, u64> {
     let ret = unsafe { syscall4(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64, 0, 0) };
     if is_error(ret) {
@@ -85,9 +80,9 @@ pub fn spawn(path: &str) -> Result<u32, u64> {
     }
 }
 
-/// Spawn with args. max 16 args, null-separated blob. child inherits our FDs.
+/// Max 16 args. Child inherits our FDs.
 pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
-    // Build argv descriptor array: [ptr, len] pairs on the stack.
+    // argv descriptor array: [ptr, len] pairs on the stack.
     let mut descs = [[0u64; 2]; 16];
     let count = args.len().min(16);
     for i in 0..count {
@@ -110,24 +105,20 @@ pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
     }
 }
 
-// process listing
-
-/// Process table entry returned by `ps()`.
+/// Process table entry from `ps()`.
 #[repr(C)]
 pub struct PsEntry {
     pub pid: u32,
     pub ppid: u32,
-    /// 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated
+    /// 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated.
     pub state: u32,
     pub priority: u32,
     pub cpu_ticks: u64,
-    /// Accumulated TSC cycles this process was actively running.
-    /// For PID 0 (kernel), HLT idle time is excluded — use this as the
-    /// numerator and `SysInfo::uptime_ticks` delta as denominator for
-    /// absolute CPU utilization %.
+    /// Active TSC cycles. PID 0 excludes HLT idle — divide by `SysInfo::uptime_ticks`
+    /// delta for absolute CPU utilization %.
     pub cpu_tsc: u64,
     pub pages_alloc: u64,
-    /// NUL-terminated process name.
+    /// NUL-terminated.
     pub name: [u8; 32],
 }
 
@@ -145,19 +136,17 @@ impl PsEntry {
         }
     }
 
-    /// Get the process name as a string slice.
     pub fn name_str(&self) -> &str {
         let end = self.name.iter().position(|&b| b == 0).unwrap_or(32);
         core::str::from_utf8(&self.name[..end]).unwrap_or("")
     }
 }
 
-/// Get the number of live processes.
 pub fn ps_count() -> u32 {
     unsafe { syscall2(SYS_PS, 0, 0) as u32 }
 }
 
-/// List all processes.  Returns the number of entries written.
+/// Returns entries written.
 pub fn ps(entries: &mut [PsEntry]) -> usize {
     let ret = unsafe { syscall2(SYS_PS, entries.as_mut_ptr() as u64, entries.len() as u64) };
     if is_error(ret) {
@@ -167,9 +156,6 @@ pub fn ps(entries: &mut [PsEntry]) -> usize {
     }
 }
 
-// signals
-
-/// Well-known signal numbers.
 pub mod signal {
     pub const SIGINT: u8 = 2;
     pub const SIGKILL: u8 = 9;
@@ -190,20 +176,15 @@ pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64> {
     }
 }
 
-/// Restore the pre-signal context after a user signal handler is done.
-///
-/// Must be called at the end of every signal handler registered via
-/// `sigaction()`.  Failure to call this results in undefined behavior
-/// (the handler's return address is 0, triggering a page fault).
+/// Restore pre-signal context. MUST be called at end of every `sigaction()` handler;
+/// otherwise the handler's return address is 0 and faults on return.
 pub fn sigreturn() {
     unsafe {
         syscall0(SYS_SIGRETURN);
     }
 }
 
-// priority
-
-/// pid=0 means us. 0=highest, 255=lowest.
+/// pid=0 means self. 0=highest, 255=lowest.
 pub fn setpriority(pid: u32, priority: u8) -> Result<(), u64> {
     let ret = unsafe { syscall2(SYS_SETPRIORITY, pid as u64, priority as u64) };
     if is_error(ret) {
@@ -213,7 +194,7 @@ pub fn setpriority(pid: u32, priority: u8) -> Result<(), u64> {
     }
 }
 
-/// pid=0 means us.
+/// pid=0 means self.
 pub fn getpriority(pid: u32) -> Result<u8, u64> {
     let ret = unsafe { syscall1(SYS_GETPRIORITY, pid as u64) };
     if is_error(ret) {
@@ -223,11 +204,7 @@ pub fn getpriority(pid: u32) -> Result<u8, u64> {
     }
 }
 
-// pipes and dup2
-
-/// Create a pipe.
-///
-/// Returns `(read_fd, write_fd)` on success.
+/// Returns `(read_fd, write_fd)`.
 pub fn pipe() -> Result<(u32, u32), u64> {
     let mut fds = [0u32; 2];
     let ret = unsafe { syscall1(SYS_PIPE, fds.as_mut_ptr() as u64) };
@@ -238,7 +215,7 @@ pub fn pipe() -> Result<(u32, u32), u64> {
     }
 }
 
-/// dup2. closes new_fd if open first.
+/// Closes `new_fd` first if open.
 pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, u64> {
     let ret = unsafe { syscall2(SYS_DUP2, old_fd as u64, new_fd as u64) };
     if is_error(ret) {
@@ -248,22 +225,19 @@ pub fn dup2(old_fd: u32, new_fd: u32) -> Result<u32, u64> {
     }
 }
 
-// foreground / argv
-
-/// Set the foreground process (receives Ctrl+C as SIGINT).
+/// Foreground process receives Ctrl+C as SIGINT.
 pub fn set_foreground(pid: u32) {
     unsafe {
         syscall1(SYS_SET_FG, pid as u64);
     }
 }
 
-/// Get the number of arguments passed to this process.
 pub fn argc() -> usize {
     let ret = unsafe { syscall2(SYS_GETARGS, 0, 0) };
     ret as usize
 }
 
-/// Args into buf, null-separated. use `parse_args()` to split.
+/// Writes null-separated args. Use `parse_args()` to split.
 pub fn getargs(buf: &mut [u8]) -> usize {
     let ret = unsafe { syscall2(SYS_GETARGS, buf.as_mut_ptr() as u64, buf.len() as u64) };
     if is_error(ret) {
@@ -273,9 +247,7 @@ pub fn getargs(buf: &mut [u8]) -> usize {
     }
 }
 
-/// Parse a null-separated argument buffer into individual slices.
-///
-/// Returns the number of args written into `out`.
+/// Returns number of args written into `out`.
 pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
     let mut count = 0;
     let mut start = 0;
@@ -290,7 +262,7 @@ pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
             start = i + 1;
         }
     }
-    // Handle last arg if no trailing null.
+    // Last arg may not have trailing null.
     if start < buf.len() && count < out.len() {
         if let Ok(s) = core::str::from_utf8(&buf[start..]) {
             if !s.is_empty() {
@@ -302,15 +274,13 @@ pub fn parse_args<'a>(buf: &'a [u8], out: &mut [&'a str]) -> usize {
     count
 }
 
-/// A process builder, providing fine-grained control over how a new
-/// process is configured.
+/// Process builder.
 pub struct Command {
     path: String,
     args: Vec<String>,
 }
 
 impl Command {
-    /// Create a new Command for launching the program at `path`.
     pub fn new(path: &str) -> Self {
         Self {
             path: String::from(path),
@@ -318,13 +288,11 @@ impl Command {
         }
     }
 
-    /// Append an argument.
     pub fn arg(&mut self, arg: &str) -> &mut Self {
         self.args.push(String::from(arg));
         self
     }
 
-    /// Append multiple arguments.
     pub fn args(&mut self, args: &[&str]) -> &mut Self {
         for a in args {
             self.args.push(String::from(*a));
@@ -332,7 +300,6 @@ impl Command {
         self
     }
 
-    /// Spawn the process and return its PID.
     pub fn spawn_pid(&self) -> error::Result<u32> {
         if self.args.is_empty() {
             spawn(&self.path).map_err(Error::from_raw)
@@ -342,14 +309,13 @@ impl Command {
         }
     }
 
-    /// Spawn and wait for exit.  Returns the exit code.
+    /// Spawn and wait. Returns exit code.
     pub fn status(&self) -> error::Result<i32> {
         let pid = self.spawn_pid()?;
         wait(pid).map_err(Error::from_raw)
     }
 }
 
-/// Exit status from a child process.
 #[derive(Debug, Clone, Copy)]
 pub struct ExitStatus {
     code: i32,
@@ -364,7 +330,6 @@ impl ExitStatus {
         self.code
     }
 
-    /// Did the process exit successfully (code 0)?
     pub fn success(&self) -> bool {
         self.code == 0
     }

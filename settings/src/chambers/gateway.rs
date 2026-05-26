@@ -1,4 +1,4 @@
-// Entry chamber: safe/severe mode gate, quick-jump links, recent visits.
+//! Entry chamber: safe/severe gate, quick-jump links, recent visits.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{ArmState, Route, SafetyMode, SettingsApp};

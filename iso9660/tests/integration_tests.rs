@@ -105,9 +105,7 @@ fn create_test_iso() {
     fs::write(format!("{}/test.dat", test_dir), &[0u8; 8192]).expect("Should write test file");
 
     let result = Command::new("genisoimage")
-        .args(&[
-            "-o", iso_file, "-r", "-J", "-V", "TEST", test_dir,
-        ])
+        .args(&["-o", iso_file, "-r", "-J", "-V", "TEST", test_dir])
         .output();
 
     match result {
@@ -128,14 +126,14 @@ fn create_test_iso() {
 
                 assert_eq!(&content, b"Hello, World!");
             }
-        }
+        },
         Ok(output) => {
             eprintln!("genisoimage failed:");
             eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-        }
+        },
         Err(e) => {
             eprintln!("genisoimage not available: {}", e);
             eprintln!("Install with: apt-get install genisoimage");
-        }
+        },
     }
 }

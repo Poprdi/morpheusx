@@ -1,0 +1,14 @@
+[package]
+name = "morpheus-x86-asm"
+version.workspace = true
+edition.workspace = true
+description = "Leaf crate of bare x86_64 asm primitives (port I/O, MMIO, barriers, cache, TSC, PAUSE). Zero deps. Shared by every driver crate that needs raw hardware access without dragging the rest of hal-x86_64 along."
+build = "build.rs"
+
+[features]
+default = []
+
+[dependencies]
+# Intentionally empty. Pull this in from a driver crate when you need bare
+# hardware primitives and nothing else; if you find yourself wanting to add a
+# dep, the primitive doesn't belong here.

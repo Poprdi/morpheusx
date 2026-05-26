@@ -139,22 +139,22 @@ unsafe fn post_ebs_dealloc(ptr: *mut u8, layout: Layout) {
         return;
     }
 
-    morpheus_hwinit::serial::puts("[ALLOC] WARN: dealloc ptr ");
-    morpheus_hwinit::serial::put_hex64(addr);
-    morpheus_hwinit::serial::puts(" not in any heap\n");
+    morpheus_hal_x86_64::serial::puts("[ALLOC] WARN: dealloc ptr ");
+    morpheus_hal_x86_64::serial::put_hex64(addr);
+    morpheus_hal_x86_64::serial::puts(" not in any heap\n");
 }
 
 unsafe fn try_init_overflow() -> Option<OverflowState> {
-    if !morpheus_hwinit::is_registry_initialized() {
+    if !morpheus_hal_x86_64::memory::is_registry_initialized() {
         return None;
     }
 
-    let mut registry = morpheus_hwinit::global_registry_mut();
-    let pages = (OVERFLOW_GROW_CHUNK as u64).div_ceil(morpheus_hwinit::PAGE_SIZE);
+    let mut registry = morpheus_hal_x86_64::memory::global_registry_mut();
+    let pages = (OVERFLOW_GROW_CHUNK as u64).div_ceil(morpheus_hal_x86_64::memory::PAGE_SIZE);
 
     match registry.allocate_pages(
-        morpheus_hwinit::AllocateType::AnyPages,
-        morpheus_hwinit::MemoryType::AllocatedHeap,
+        morpheus_hal_x86_64::memory::AllocateType::AnyPages,
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedHeap,
         pages,
     ) {
         Ok(base) => {
@@ -171,7 +171,7 @@ unsafe fn try_init_overflow() -> Option<OverflowState> {
             })
         }
         Err(_) => {
-            morpheus_hwinit::serial::puts(
+            morpheus_hal_x86_64::serial::puts(
                 "[ALLOC] ERROR: MemoryRegistry refused overflow allocation!\n",
             );
             None
@@ -182,24 +182,24 @@ unsafe fn try_init_overflow() -> Option<OverflowState> {
 /// Grow overflow heap by `OVERFLOW_GROW_CHUNK` via contiguous page alloc.
 unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
     if state.size >= OVERFLOW_MAX_SIZE {
-        morpheus_hwinit::serial::puts("[ALLOC] Overflow heap at hard limit (256 MB)\n");
+        morpheus_hal_x86_64::serial::puts("[ALLOC] Overflow heap at hard limit (256 MB)\n");
         return false;
     }
 
-    if !morpheus_hwinit::is_registry_initialized() {
+    if !morpheus_hal_x86_64::memory::is_registry_initialized() {
         return false;
     }
 
     let grow = OVERFLOW_GROW_CHUNK.min(OVERFLOW_MAX_SIZE - state.size);
-    let pages = (grow as u64).div_ceil(morpheus_hwinit::PAGE_SIZE);
+    let pages = (grow as u64).div_ceil(morpheus_hal_x86_64::memory::PAGE_SIZE);
 
     // Pages must be contiguous with current heap end so Heap::extend() can merge.
     let extend_addr = state.base + state.size as u64;
 
-    let mut registry = morpheus_hwinit::global_registry_mut();
+    let mut registry = morpheus_hal_x86_64::memory::global_registry_mut();
     match registry.allocate_pages(
-        morpheus_hwinit::AllocateType::Address(extend_addr),
-        morpheus_hwinit::MemoryType::AllocatedHeap,
+        morpheus_hal_x86_64::memory::AllocateType::Address(extend_addr),
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedHeap,
         pages,
     ) {
         Ok(_) => {
@@ -211,7 +211,7 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
         }
         Err(_) => {
             // Adjacent pages taken; we don't support disjoint heap regions.
-            morpheus_hwinit::serial::puts(
+            morpheus_hal_x86_64::serial::puts(
                 "[ALLOC] Overflow grow failed: address not free in registry\n",
             );
             false

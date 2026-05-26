@@ -416,47 +416,8 @@ impl FileDescriptor {
     }
 }
 
-/// Directory entry returned by readdir.
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct DirEntry {
-    /// Filename (not full path — just the last component).
-    pub name: [u8; 256],
-    /// Name length in bytes.
-    pub name_len: u16,
-    /// Is this a directory?
-    pub is_dir: bool,
-    /// File size (0 for directories).
-    pub size: u64,
-    /// Last modification timestamp (TSC ns).
-    pub modified_ns: u64,
-    /// Version count.
-    pub version_count: u32,
-}
-
-/// File stat information.
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct FileStat {
-    /// Full path hash.
-    pub key: u64,
-    /// File size in bytes.
-    pub size: u64,
-    /// Is directory?
-    pub is_dir: bool,
-    /// Created timestamp (TSC ns).
-    pub created_ns: u64,
-    /// Modified timestamp (TSC ns).
-    pub modified_ns: u64,
-    /// Number of prior versions.
-    pub version_count: u32,
-    /// Current LSN.
-    pub lsn: Lsn,
-    /// First LSN (creation).
-    pub first_lsn: Lsn,
-    /// Entry flags.
-    pub flags: u32,
-}
+// Canonical kernel↔userland FFI types live in morpheus-foundation.
+pub use morpheus_foundation::types::{DirEntry, FileStat};
 
 /// `open(path_ptr, path_len, flags) → fd`
 pub const SYS_OPEN: u64 = 10;

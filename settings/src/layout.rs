@@ -1,4 +1,5 @@
-// Frame: top strip, left rail, right pane, bottom command bar.
+//! Frame: top strip, left rail, right pane, bottom command bar.
+
 use crate::state::{Route, SafetyMode, SettingsApp};
 
 use crate::widgets;
@@ -15,7 +16,7 @@ pub fn row_step(app: &SettingsApp, extra: u32) -> u32 {
     let pane_h = app
         .fb_h
         .saturating_sub(STRIP_HEIGHT + BAR_HEIGHT + 2 * PANE_PAD);
-    // Stretch row spacing on taller panes; capped at +8 px.
+    // Stretch row spacing on taller panes (cap +8 px).
     let bonus = (pane_h / 120).saturating_sub(4).min(8);
     widgets::FONT_H + extra + bonus
 }
@@ -127,7 +128,7 @@ fn render_rail(app: &SettingsApp) {
             14,
         );
 
-        // Keyboard hint (1-7).
+        // 1-7 keyboard hint.
         let mut hint = [0u8; 1];
         hint[0] = b'1' + i as u8;
         let hint_str = core::str::from_utf8(&hint).unwrap_or("?");

@@ -12,7 +12,7 @@ pub struct ShellState {
     pub surface_ptr: *mut u32,
     pub fb_w: u32,
     pub fb_h: u32,
-    pub fb_stride: u32, // pixels (fb_info.stride / 4)
+    pub fb_stride: u32, // pixels = fb_info.stride / 4
     pub is_bgrx: bool,
 
     pub wallpaper_dirty: bool,
@@ -59,7 +59,7 @@ impl ShellState {
             launcher_bg_rgb: (28, 30, 42),
             icon_bg_rgb: (40, 60, 90),
             icon_inner_rgb: (18, 24, 40),
-            // Centered to match compd's initial cursor so forwarded deltas track.
+            // Center matches compd's initial cursor so forwarded deltas track.
             mouse_x: (fb_w / 2) as i32,
             mouse_y: (fb_h / 2) as i32,
             last_buttons: 0,

@@ -1,11 +1,5 @@
-//! MorpheusX Syscall E2E Test Suite
-//!
 //! Exercises all 73 syscalls (0-72) on a running kernel.
-//! Build: cargo build --release --target ../../x86_64-morpheus.json -p syscall-e2e
-//! Run:   Copy the ELF to HelixFS, then `spawn /bin/syscall-e2e` from the shell.
-//!
-//! Each test prints [PASS] or [FAIL] to serial.  At the end a summary
-//! line reports total/passed/failed.
+//! Each test prints `[PASS]` or `[FAIL]` to serial; summary line at the end.
 
 #![no_std]
 #![no_main]
@@ -56,7 +50,7 @@ fn check(name: &str, cond: bool, detail: &str) {
     }
 }
 
-/// Check that a raw return value is NOT an error.
+/// Asserts `ret` is NOT an error code.
 fn check_ok(name: &str, ret: u64) {
     if libmorpheus::is_error(ret) {
         fail(name, "returned error");
@@ -65,7 +59,7 @@ fn check_ok(name: &str, ret: u64) {
     }
 }
 
-/// Check that a raw return value IS an error (expected for stubs/bad args).
+/// Asserts `ret` IS an error (stubs / bad args).
 fn check_err(name: &str, ret: u64) {
     if libmorpheus::is_error(ret) {
         ok(name);

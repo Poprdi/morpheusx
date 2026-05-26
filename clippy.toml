@@ -1,0 +1,10 @@
+avoid-breaking-exported-api = false
+msrv = "1.75"
+
+# Bare-metal kernel writes a lot of by-hand low-level loops — let the obvious ones through.
+type-complexity-threshold = 250
+too-many-arguments-threshold = 8
+cognitive-complexity-threshold = 30
+
+# Hex literals in MMIO/PCI/USB register definitions are intentional and frequent.
+literal-representation-threshold = 16384

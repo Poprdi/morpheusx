@@ -190,13 +190,13 @@ pub fn rasterize_triangle_to_spans(
 
     let mut long_edge = Edge::new(v0, v2);
 
-    // Place mid vertex relative to the long edge to pick the left/right slot.
+    // Place mid vertex relative to the long edge → pick left/right slot.
     let mid_x_on_long = v0.pos.x + (v1.pos.y - v0.pos.y) / total_height * (v2.pos.x - v0.pos.x);
     let long_on_right = v1.pos.x < mid_x_on_long;
 
     let mut count = 0;
 
-    // Top half v0→v1.
+    // Top half: v0 → v1.
     let mut short = Edge::new(v0, v1);
     let y_start = (short.y_start.max(0) as u32).min(viewport_h);
     let y_mid = (short.y_end.max(0) as u32).min(viewport_h);
@@ -226,12 +226,12 @@ pub fn rasterize_triangle_to_spans(
         long_edge.y_start += 1;
     }
 
-    // Bottom half: v1 → v2
+    // Bottom half: v1 → v2.
     let mut short = Edge::new(v1, v2);
     let y_mid2 = (short.y_start.max(0) as u32).min(viewport_h);
     let y_end = (short.y_end.max(0) as u32).min(viewport_h);
 
-    // Sync long edge if we skipped scanlines
+    // Sync long edge across any skipped scanlines.
     while (long_edge.y_start as u32) < y_mid2 && long_edge.y_start < long_edge.y_end {
         long_edge.step();
         long_edge.y_start += 1;

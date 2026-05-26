@@ -1,0 +1,37 @@
+[package]
+name = "morpheus-net-stack"
+version.workspace = true
+edition.workspace = true
+description = "Kernel-side TCP/IP stack (smoltcp) + DHCP/DNS/TCP state machines + HTTP client + URL parser."
+
+[features]
+default = []
+# Mirror serial output to framebuffer via `morpheus-display` when enabled.
+display = ["morpheus-display"]
+
+[dependencies]
+morpheus-foundation.workspace = true
+morpheus-hal-x86_64.workspace = true
+morpheus-nic.workspace = true
+morpheus-block.workspace = true
+morpheus-virtio.workspace = true
+morpheus-storage-format.workspace = true
+morpheus-display = { path = "../display", features = ["framebuffer-backend"], optional = true }
+
+# GPT disk I/O traits for FAT32 / GPT manifest writes.
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true
+
+spin.workspace = true
+
+smoltcp = { version = "0.11", default-features = false, features = [
+    "alloc",
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-tcp",
+    "socket-udp",
+    "socket-icmp",
+    "socket-dhcpv4",
+    "socket-dns",
+] }

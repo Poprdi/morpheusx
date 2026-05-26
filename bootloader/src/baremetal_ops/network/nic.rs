@@ -1,4 +1,4 @@
-use morpheus_network::device::NetworkDevice;
+use morpheus_nic::device::NetworkDevice;
 
 use super::state;
 
@@ -7,8 +7,8 @@ pub(super) unsafe fn log_pci_network_candidates() {
     for bus in 0..=255u8 {
         for dev in 0..32u8 {
             for func in 0..8u8 {
-                let addr = morpheus_hwinit::PciAddr::new(bus, dev, func);
-                let vendor = morpheus_hwinit::pci_cfg_read16(addr, 0x00);
+                let addr = morpheus_hal_x86_64::pci::PciAddr::new(bus, dev, func);
+                let vendor = morpheus_hal_x86_64::pci::pci_cfg_read16(addr, 0x00);
                 if vendor == 0xFFFF {
                     if func == 0 {
                         break;
@@ -16,11 +16,11 @@ pub(super) unsafe fn log_pci_network_candidates() {
                     continue;
                 }
 
-                let class = morpheus_hwinit::pci_cfg_read8(addr, 0x0B);
-                let subclass = morpheus_hwinit::pci_cfg_read8(addr, 0x0A);
+                let class = morpheus_hal_x86_64::pci::pci_cfg_read8(addr, 0x0B);
+                let subclass = morpheus_hal_x86_64::pci::pci_cfg_read8(addr, 0x0A);
                 if class != 0x02 {
                     if func == 0 {
-                        let header = morpheus_hwinit::pci_cfg_read8(addr, 0x0E);
+                        let header = morpheus_hal_x86_64::pci::pci_cfg_read8(addr, 0x0E);
                         if (header & 0x80) == 0 {
                             break;
                         }
@@ -28,22 +28,22 @@ pub(super) unsafe fn log_pci_network_candidates() {
                     continue;
                 }
 
-                let device = morpheus_hwinit::pci_cfg_read16(addr, 0x02);
+                let device = morpheus_hal_x86_64::pci::pci_cfg_read16(addr, 0x02);
                 found = found.wrapping_add(1);
-                morpheus_hwinit::serial::puts("[INFO] [NET] pci net candidate bdf=");
-                morpheus_hwinit::serial::put_hex64(
+                morpheus_hal_x86_64::serial::puts("[INFO] [NET] pci net candidate bdf=");
+                morpheus_hal_x86_64::serial::put_hex64(
                     ((bus as u64) << 16) | ((dev as u64) << 8) | func as u64,
                 );
-                morpheus_hwinit::serial::puts(" ven=");
-                morpheus_hwinit::serial::put_hex64(vendor as u64);
-                morpheus_hwinit::serial::puts(" dev=");
-                morpheus_hwinit::serial::put_hex64(device as u64);
-                morpheus_hwinit::serial::puts(" sub=");
-                morpheus_hwinit::serial::put_hex64(subclass as u64);
-                morpheus_hwinit::serial::puts("\n");
+                morpheus_hal_x86_64::serial::puts(" ven=");
+                morpheus_hal_x86_64::serial::put_hex64(vendor as u64);
+                morpheus_hal_x86_64::serial::puts(" dev=");
+                morpheus_hal_x86_64::serial::put_hex64(device as u64);
+                morpheus_hal_x86_64::serial::puts(" sub=");
+                morpheus_hal_x86_64::serial::put_hex64(subclass as u64);
+                morpheus_hal_x86_64::serial::puts("\n");
 
                 if func == 0 {
-                    let header = morpheus_hwinit::pci_cfg_read8(addr, 0x0E);
+                    let header = morpheus_hal_x86_64::pci::pci_cfg_read8(addr, 0x0E);
                     if (header & 0x80) == 0 {
                         break;
                     }
@@ -53,9 +53,9 @@ pub(super) unsafe fn log_pci_network_candidates() {
     }
 
     if found == 0 {
-        morpheus_hwinit::serial::log_warn("NET", 953, "pci scan found zero class-0x02 devices");
+        morpheus_hal_x86_64::serial::log_warn("NET", 953, "pci scan found zero class-0x02 devices");
     } else {
-        morpheus_hwinit::serial::log_info("NET", 954, "pci net candidates logged");
+        morpheus_hal_x86_64::serial::log_info("NET", 954, "pci net candidates logged");
     }
 }
 

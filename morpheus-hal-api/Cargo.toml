@@ -1,0 +1,10 @@
+[package]
+name = "morpheus-hal-api"
+version.workspace = true
+edition.workspace = true
+description = "HAL trait surface — object-safe traits implemented per-arch (e.g. morpheus-hal-x86_64). Kernel depends on this, never on the concrete impl."
+
+[features]
+default = []
+
+[dependencies]

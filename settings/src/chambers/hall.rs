@@ -1,4 +1,4 @@
-// Named theme presets: snapshot, preview, apply.
+//! Named theme presets: snapshot, preview, apply.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{Route, SettingsApp};

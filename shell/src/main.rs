@@ -91,7 +91,7 @@ fn main() -> i32 {
             let cmd = &pipeline.commands[0];
             let has_redirects = cmd.stdin_file.is_some() || cmd.stdout_file.is_some();
 
-            // Redirects route through exec for fd-level I/O.
+            // Redirects route through exec for fd-level I/O; bypass builtins.
             if !has_redirects {
                 if let Some(code) = builtin::dispatch_fb(&cmd.argv, &cwd, &framebuffer, &mut con) {
                     if code == builtin::EXIT_SENTINEL {

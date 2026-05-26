@@ -1,31 +1,23 @@
-//! Time — monotonic clock, Duration, and Instant.
+//! Monotonic clock, Duration, Instant.
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 use crate::raw::*;
 
-/// Get monotonic nanoseconds since boot.
-///
-/// Derived from the TSC (Time Stamp Counter).  Returns 0 if the TSC
-/// has not been calibrated.
+/// Monotonic nanoseconds since boot. Derived from TSC; returns 0 if TSC uncalibrated.
 pub fn clock_gettime() -> u64 {
     unsafe { syscall0(SYS_CLOCK) }
 }
 
-/// Get monotonic milliseconds since boot (convenience wrapper).
 pub fn uptime_ms() -> u64 {
     clock_gettime() / 1_000_000
 }
 
-/// Get monotonic microseconds since boot (convenience wrapper).
 pub fn uptime_us() -> u64 {
     clock_gettime() / 1_000
 }
 
-/// A span of time, measured in nanoseconds.
-///
-/// 64-bit nanoseconds → max ~584 years.  Plenty.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Duration {
     nanos: u64,
@@ -72,7 +64,6 @@ impl Duration {
         self.nanos / 1_000_000_000
     }
 
-    /// Fractional nanoseconds (the sub-second part).
     pub const fn subsec_nanos(&self) -> u32 {
         (self.nanos % 1_000_000_000) as u32
     }
@@ -160,29 +151,23 @@ impl fmt::Display for Duration {
     }
 }
 
-/// A measurement of a monotonically increasing clock.
-///
-/// Useful for measuring elapsed time.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant {
     nanos: u64,
 }
 
 impl Instant {
-    /// Capture the current instant.
     pub fn now() -> Self {
         Self {
             nanos: clock_gettime(),
         }
     }
 
-    /// Duration elapsed since this instant.
     pub fn elapsed(&self) -> Duration {
         let now = clock_gettime();
         Duration::from_nanos(now.saturating_sub(self.nanos))
     }
 
-    /// Duration between `self` and a later instant.
     pub fn duration_since(&self, earlier: Instant) -> Duration {
         Duration::from_nanos(self.nanos.saturating_sub(earlier.nanos))
     }
@@ -231,7 +216,6 @@ impl fmt::Debug for Instant {
     }
 }
 
-/// Sleep for a [`Duration`].
 pub fn sleep(duration: Duration) {
     let ms = duration.as_millis();
     if ms > 0 {

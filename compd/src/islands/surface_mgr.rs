@@ -117,8 +117,7 @@ pub fn update(state: &mut CompState) {
                 state.desktop_idx = Some(idx);
             } else {
                 let step = CASCADE_STEP * (state.cascade_n % 5);
-                // Open at source size, clamped to visible work area so the title
-                // bar and resize grip stay reachable.
+                // Source size clamped to work area so title bar / resize grip stay reachable.
                 let max_w = state.fb_w.saturating_sub(40).max(160);
                 let max_h = state.fb_h.saturating_sub(TITLE_H + PANEL_H + 40).max(120);
                 let w = entry.width.max(1).min(max_w);
@@ -152,7 +151,7 @@ pub fn update(state: &mut CompState) {
                     z_layer: 1,
                 });
 
-                // Seed app-local cursor so the first click lands at the right local position.
+                // Seed app-local cursor so the first click lands at the right local pos.
                 if let Some(ref mut win) = state.windows[idx] {
                     let (local_x, local_y) =
                         map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);

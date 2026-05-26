@@ -251,7 +251,7 @@ impl SettingsApp {
 
         self.poll_input();
 
-        // ~1 Hz refresh for observatory chambers.
+        // Observatory chambers refresh ~1 Hz.
         if self.tick_count % 60 == 0 {
             match self.route {
                 Route::SysObservatory => self.sys_obs.refresh(),
@@ -305,7 +305,7 @@ impl SettingsApp {
     fn handle_key(&mut self, key: u8) {
         self.frame_dirty = true;
 
-        // Chamber text input swallows global hotkeys (an IP isn't navigation).
+        // Text input swallows global hotkeys (an IP isn't navigation).
         if self.is_text_input_active() {
             self.chamber_key(key);
             return;
@@ -319,7 +319,7 @@ impl SettingsApp {
         }
 
         match key {
-            // Tab: toggle rail/pane.
+            // Tab toggles rail/pane focus.
             0x0F | b'\t' => {
                 self.focus_in_rail = !self.focus_in_rail;
             }
@@ -348,7 +348,7 @@ impl SettingsApp {
                     self.pane_activate();
                 }
             }
-            // Esc: disarm, else back to Gateway.
+            // Esc disarms if armed, else navigates back to Gateway.
             0x01 | 0x1B => {
                 if self.severe_arm == ArmState::Armed {
                     self.severe_arm = ArmState::Disarmed;
@@ -367,7 +367,7 @@ impl SettingsApp {
             b'l' | b'L' => {
                 self.focus_in_rail = false;
             }
-            // a/r/d match bar buttons; raw scancodes alongside ASCII.
+            // a/r/d mirror the bar buttons; raw scancodes alongside ASCII.
             0x1E | b'a' | b'A' => {
                 if !self.focus_in_rail {
                     self.apply_pending();
@@ -489,7 +489,7 @@ impl SettingsApp {
             return;
         }
 
-        // Only clear pending once apply succeeded.
+        // Clear pending only on successful apply.
         self.clear_pending_for(route);
 
         if route != Route::NetObservatory {

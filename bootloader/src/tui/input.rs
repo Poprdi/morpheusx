@@ -303,7 +303,7 @@ impl Keyboard {
 
     unsafe fn init_controller(&mut self) {
         // Full i8042+keyboard reinit. No partial-trust path.
-        morpheus_hwinit::serial::log_info("INPUT", 935, "keyboard controller init begin");
+        morpheus_hal_x86_64::serial::log_info("INPUT", 935, "keyboard controller init begin");
         self.aux_as_kbd = false;
         self.initialized = false;
 
@@ -326,7 +326,7 @@ impl Keyboard {
         asm_ps2_write_cmd(0xAA);
         let ctl_ok = self.wait_kbd_byte(200_000) == Some(0x55);
         if !ctl_ok {
-            morpheus_hwinit::serial::log_warn("INPUT", 936, "8042 self-test failed");
+            morpheus_hal_x86_64::serial::log_warn("INPUT", 936, "8042 self-test failed");
         }
 
         // Self-test rewrites config on some 8042s. Re-assert.
@@ -337,7 +337,7 @@ impl Keyboard {
         asm_ps2_write_cmd(0xAB);
         let port1_ok = self.wait_kbd_byte(100_000) == Some(0x00);
         if !port1_ok {
-            morpheus_hwinit::serial::log_warn("INPUT", 937, "8042 port1 test failed");
+            morpheus_hal_x86_64::serial::log_warn("INPUT", 937, "8042 port1 test failed");
         }
 
         asm_ps2_write_cmd(0xAE);
@@ -362,7 +362,7 @@ impl Keyboard {
             Self::io_delay();
         }
         if !reset_ok {
-            morpheus_hwinit::serial::log_warn(
+            morpheus_hal_x86_64::serial::log_warn(
                 "INPUT",
                 938,
                 "keyboard reset/BAT failed after retries",
@@ -395,16 +395,16 @@ impl Keyboard {
         scan_ok &= f4_ack == Some(0xFA);
 
         if !scan_ok {
-            morpheus_hwinit::serial::log_warn("INPUT", 931, "keyboard scan-set programming failed");
+            morpheus_hal_x86_64::serial::log_warn("INPUT", 931, "keyboard scan-set programming failed");
         }
 
         Self::drain_all(128);
 
         self.initialized = ctl_ok && port1_ok && reset_ok && scan_ok;
         if self.initialized {
-            morpheus_hwinit::serial::log_ok("INPUT", 930, "PS/2 keyboard ready (full reset path)");
+            morpheus_hal_x86_64::serial::log_ok("INPUT", 930, "PS/2 keyboard ready (full reset path)");
         } else {
-            morpheus_hwinit::serial::log_warn(
+            morpheus_hal_x86_64::serial::log_warn(
                 "INPUT",
                 941,
                 "PS/2 keyboard init failed (full reset path)",

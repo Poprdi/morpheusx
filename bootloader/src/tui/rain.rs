@@ -103,7 +103,7 @@ impl MatrixRain {
 
         let mut columns = Vec::new();
 
-        // Stagger initial Y so the columns form continuous flow at t=0.
+        // Stagger initial Y so columns form continuous flow at t=0.
         for x in 0..num_cols {
             let max_offset = screen_height * 2;
             let y_offset = (x * max_offset / num_cols) as isize;
@@ -127,8 +127,8 @@ impl MatrixRain {
         }
     }
 
-    /// TSC-paced ~30 ms/frame; HLT between checks so the core sleeps in C1.
-    /// Target cycles assume ~1 GHz; precise rate not critical here.
+    /// TSC-paced ~30 ms/frame, HLT between checks (core sleeps in C1).
+    /// Target cycles assume ~1 GHz; precise rate not critical.
     fn delay(&self) {
         let start: u64;
         unsafe {
@@ -162,7 +162,7 @@ impl MatrixRain {
             col.update(self.screen_height, &mut self.rng);
         }
 
-        // Renders over the UI; intentional.
+        // Intentionally renders over the UI.
         for col in &self.columns {
             for i in 0..col.length {
                 let y = col.y - i as isize;

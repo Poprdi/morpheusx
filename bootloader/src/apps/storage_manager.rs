@@ -115,8 +115,8 @@ impl StorageManager {
     }
 
     fn refresh_data(&mut self) {
-        if morpheus_hwinit::is_registry_initialized() {
-            let reg = unsafe { morpheus_hwinit::global_registry() };
+        if morpheus_hal_x86_64::memory::is_registry_initialized() {
+            let reg = unsafe { morpheus_hal_x86_64::memory::global_registry() };
             self.mem_stats.total_bytes = reg.total_memory();
             self.mem_stats.free_bytes = reg.free_memory();
             self.mem_stats.allocated_bytes = reg.allocated_memory();
@@ -137,18 +137,18 @@ impl StorageManager {
                         is_free: desc.mem_type.is_free(),
                         is_allocated: matches!(
                             desc.mem_type,
-                            morpheus_hwinit::MemoryType::Allocated
-                                | morpheus_hwinit::MemoryType::AllocatedDma
-                                | morpheus_hwinit::MemoryType::AllocatedStack
-                                | morpheus_hwinit::MemoryType::AllocatedPageTable
-                                | morpheus_hwinit::MemoryType::AllocatedHeap
+                            morpheus_hal_x86_64::memory::MemoryType::Allocated
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedDma
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedStack
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedPageTable
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedHeap
                         ),
                     });
                 }
             }
         }
 
-        if let Some((total, used, free)) = morpheus_hwinit::heap_stats() {
+        if let Some((total, used, free)) = morpheus_hal_x86_64::heap::heap_stats() {
             self.heap_stats = HeapStats { total, used, free };
         }
 
@@ -1134,27 +1134,27 @@ fn format_region_line(r: &MemRegion) -> String {
     )
 }
 
-fn mem_type_name(t: morpheus_hwinit::MemoryType) -> &'static str {
+fn mem_type_name(t: morpheus_hal_x86_64::memory::MemoryType) -> &'static str {
     match t {
-        morpheus_hwinit::MemoryType::Reserved => "Reserved",
-        morpheus_hwinit::MemoryType::LoaderCode => "Loader Code",
-        morpheus_hwinit::MemoryType::LoaderData => "Loader Data",
-        morpheus_hwinit::MemoryType::BootServicesCode => "BS Code",
-        morpheus_hwinit::MemoryType::BootServicesData => "BS Data",
-        morpheus_hwinit::MemoryType::RuntimeServicesCode => "RT Code",
-        morpheus_hwinit::MemoryType::RuntimeServicesData => "RT Data",
-        morpheus_hwinit::MemoryType::Conventional => "Conventional",
-        morpheus_hwinit::MemoryType::Unusable => "Unusable",
-        morpheus_hwinit::MemoryType::AcpiReclaim => "ACPI Reclaim",
-        morpheus_hwinit::MemoryType::AcpiNvs => "ACPI NVS",
-        morpheus_hwinit::MemoryType::Mmio => "MMIO",
-        morpheus_hwinit::MemoryType::MmioPortSpace => "MMIO Port",
-        morpheus_hwinit::MemoryType::PalCode => "PAL Code",
-        morpheus_hwinit::MemoryType::Persistent => "Persistent",
-        morpheus_hwinit::MemoryType::Allocated => "Allocated",
-        morpheus_hwinit::MemoryType::AllocatedDma => "Alloc DMA",
-        morpheus_hwinit::MemoryType::AllocatedStack => "Alloc Stack",
-        morpheus_hwinit::MemoryType::AllocatedPageTable => "Alloc PageTbl",
-        morpheus_hwinit::MemoryType::AllocatedHeap => "Alloc Heap",
+        morpheus_hal_x86_64::memory::MemoryType::Reserved => "Reserved",
+        morpheus_hal_x86_64::memory::MemoryType::LoaderCode => "Loader Code",
+        morpheus_hal_x86_64::memory::MemoryType::LoaderData => "Loader Data",
+        morpheus_hal_x86_64::memory::MemoryType::BootServicesCode => "BS Code",
+        morpheus_hal_x86_64::memory::MemoryType::BootServicesData => "BS Data",
+        morpheus_hal_x86_64::memory::MemoryType::RuntimeServicesCode => "RT Code",
+        morpheus_hal_x86_64::memory::MemoryType::RuntimeServicesData => "RT Data",
+        morpheus_hal_x86_64::memory::MemoryType::Conventional => "Conventional",
+        morpheus_hal_x86_64::memory::MemoryType::Unusable => "Unusable",
+        morpheus_hal_x86_64::memory::MemoryType::AcpiReclaim => "ACPI Reclaim",
+        morpheus_hal_x86_64::memory::MemoryType::AcpiNvs => "ACPI NVS",
+        morpheus_hal_x86_64::memory::MemoryType::Mmio => "MMIO",
+        morpheus_hal_x86_64::memory::MemoryType::MmioPortSpace => "MMIO Port",
+        morpheus_hal_x86_64::memory::MemoryType::PalCode => "PAL Code",
+        morpheus_hal_x86_64::memory::MemoryType::Persistent => "Persistent",
+        morpheus_hal_x86_64::memory::MemoryType::Allocated => "Allocated",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedDma => "Alloc DMA",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedStack => "Alloc Stack",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedPageTable => "Alloc PageTbl",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedHeap => "Alloc Heap",
     }
 }

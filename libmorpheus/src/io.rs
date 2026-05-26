@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use crate::error::{self, Error, ErrorKind};
 use crate::raw::*;
 
-/// Write a string to fd 1.
+/// Write `s` to fd 1.
 pub fn print(s: &str) {
     if s.is_empty() {
         return;
@@ -232,7 +232,7 @@ pub trait Write {
     }
 
     fn write_fmt(&mut self, fmt: core::fmt::Arguments<'_>) -> error::Result<()> {
-        // Bridge `core::fmt::Write` → `io::Write`, capturing the first error.
+        // Bridge core::fmt::Write → io::Write; capture first error.
         struct Adapter<'a, W: ?Sized + Write> {
             inner: &'a mut W,
             error: Option<Error>,
@@ -376,12 +376,10 @@ pub struct BufReader<R> {
 }
 
 impl<R: Read> BufReader<R> {
-    /// Create with default 4 KiB buffer.
     pub fn new(inner: R) -> Self {
         Self::with_capacity(DEFAULT_BUF_SIZE, inner)
     }
 
-    /// Create with custom buffer size.
     pub fn with_capacity(cap: usize, inner: R) -> Self {
         Self {
             inner,
@@ -391,17 +389,14 @@ impl<R: Read> BufReader<R> {
         }
     }
 
-    /// Get a reference to the underlying reader.
     pub fn get_ref(&self) -> &R {
         &self.inner
     }
 
-    /// Get a mutable reference to the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.inner
     }
 
-    /// Consume self and return the underlying reader.
     pub fn into_inner(self) -> R {
         self.inner
     }
@@ -409,8 +404,7 @@ impl<R: Read> BufReader<R> {
 
 impl<R: Read> Read for BufReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> error::Result<usize> {
-        // If buf is larger than internal buffer and nothing is buffered,
-        // bypass the internal buffer entirely.
+        // Bypass internal buffer for large reads when buffer is empty.
         if self.pos == self.filled && buf.len() >= self.buf.len() {
             return self.inner.read(buf);
         }
@@ -436,19 +430,17 @@ impl<R: Read> BufRead for BufReader<R> {
     }
 }
 
-/// Wraps a [`Write`] with an internal buffer to batch small writes.
+/// Batches small writes through an internal buffer.
 pub struct BufWriter<W: Write> {
     inner: W,
     buf: Vec<u8>,
 }
 
 impl<W: Write> BufWriter<W> {
-    /// Create with default 4 KiB buffer.
     pub fn new(inner: W) -> Self {
         Self::with_capacity(DEFAULT_BUF_SIZE, inner)
     }
 
-    /// Create with custom buffer size.
     pub fn with_capacity(cap: usize, inner: W) -> Self {
         Self {
             inner,
@@ -456,20 +448,17 @@ impl<W: Write> BufWriter<W> {
         }
     }
 
-    /// Get a reference to the underlying writer.
     pub fn get_ref(&self) -> &W {
         &self.inner
     }
 
-    /// Get a mutable reference to the underlying writer.
     pub fn get_mut(&mut self) -> &mut W {
         &mut self.inner
     }
 
-    /// Flush the buffer and return the underlying writer.
     pub fn into_inner(mut self) -> error::Result<W> {
         self.flush_buf()?;
-        // SAFETY: we flush first, then take inner out before Drop runs.
+        // SAFETY: flush succeeded; take inner out before Drop runs.
         let inner = unsafe { core::ptr::read(&self.inner) };
         core::mem::forget(self);
         Ok(inner)
@@ -482,7 +471,6 @@ impl<W: Write> BufWriter<W> {
                 Ok(0) => return Err(Error::new(ErrorKind::WriteZero)),
                 Ok(n) => written += n,
                 Err(e) => {
-                    // Shift remaining data to front.
                     self.buf.drain(..written);
                     return Err(e);
                 }
@@ -499,7 +487,6 @@ impl<W: Write> crate::io::Write for BufWriter<W> {
             self.flush_buf()?;
         }
         if buf.len() >= self.buf.capacity() {
-            // Skip buffer for large writes.
             self.inner.write(buf)
         } else {
             self.buf.extend_from_slice(buf);
@@ -519,7 +506,7 @@ impl<W: Write> Drop for BufWriter<W> {
     }
 }
 
-/// Copy all bytes from `reader` to `writer`.  Returns total bytes copied.
+/// Returns total bytes copied.
 pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64> {
     let mut buf = [0u8; 4096];
     let mut total = 0u64;
@@ -545,17 +532,15 @@ pub fn ioctl(fd: u32, cmd: u64, arg: u64) -> Result<u64, u64> {
     }
 }
 
-/// Terminal dimensions: (rows, cols, xpixel, ypixel).
-///
-/// Derived from the framebuffer resolution and 8×16 font size.
-/// Falls back to (25, 80, 0, 0) if no framebuffer is registered.
+/// `(rows, cols, xpixel, ypixel)` from framebuffer res / 8×16 font.
+/// Falls back to `(25, 80, 0, 0)` if no framebuffer is registered.
 pub fn terminal_size() -> (u16, u16, u16, u16) {
     let mut buf = [0u16; 4];
     let _ = ioctl(0, IOCTL_TIOCGWINSZ, buf.as_mut_ptr() as u64);
     (buf[0], buf[1], buf[2], buf[3])
 }
 
-/// Number of bytes available on stdin without blocking.
+/// Bytes available on stdin without blocking.
 pub fn stdin_available() -> usize {
     let mut avail = 0u32;
     let _ = ioctl(0, IOCTL_FIONREAD, &mut avail as *mut u32 as u64);

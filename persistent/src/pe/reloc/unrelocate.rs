@@ -12,13 +12,9 @@ pub unsafe fn unrelocate_image(
         return Err(PeError::InvalidOffset);
     }
 
-    // UEFI sometimes truncates .reloc; floor at 512 and clamp implicitly via bounds checks.
+    // UEFI sometimes truncates .reloc; floor at 512. Out-of-bounds is
+    // tolerated; per-entry bounds checks below skip what doesn't fit.
     let max_reloc_size = reloc_size.max(512);
-
-    if (reloc_rva as usize + max_reloc_size as usize) > image_data.len() {
-        // Clamp to image bounds
-        // Don't error - just process what we can
-    }
 
     let mut block_offset = 0usize;
 

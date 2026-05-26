@@ -61,7 +61,6 @@ impl Frustum {
         }
     }
 
-    /// Positive-vertex AABB test.
     #[inline]
     pub fn test_aabb(&self, min: Vec3, max: Vec3) -> CullResult {
         let mut all_inside = true;

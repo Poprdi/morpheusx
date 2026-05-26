@@ -20,6 +20,7 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+mod alloc_heap;
 mod baremetal_ops;
 mod boot;
 mod bsod;
@@ -85,10 +86,10 @@ pub struct BootServices {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     // Emit as much as possible to serial. Never use alloc here (may be OOM).
-    morpheus_hwinit::serial::puts("\n[PANIC] ");
+    morpheus_hal_x86_64::serial::puts("\n[PANIC] ");
     if let Some(loc) = info.location() {
-        morpheus_hwinit::serial::puts(loc.file());
-        morpheus_hwinit::serial::puts(":");
+        morpheus_hal_x86_64::serial::puts(loc.file());
+        morpheus_hal_x86_64::serial::puts(":");
         // Print line number as decimal digits (no alloc needed).
         let line = loc.line();
         let mut digits = [0u8; 10];
@@ -106,10 +107,10 @@ fn panic(info: &PanicInfo) -> ! {
             digits[..len].reverse();
         }
         if let Ok(s) = core::str::from_utf8(&digits[..len]) {
-            morpheus_hwinit::serial::puts(s);
+            morpheus_hal_x86_64::serial::puts(s);
         }
     }
-    morpheus_hwinit::serial::puts(" — PANIC (spinning)\n");
+    morpheus_hal_x86_64::serial::puts(" — PANIC (spinning)\n");
 
     // Show BSoD panic screen on the framebuffer (uses boot::published_framebuffer()).
     if let Some(loc) = info.location() {

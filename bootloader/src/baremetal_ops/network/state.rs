@@ -1,11 +1,11 @@
 use core::net::Ipv4Addr;
 
-use morpheus_network::device::UnifiedNetDevice;
-use morpheus_network::stack::{DnsQueryHandle, NetInterface, SocketHandle};
+use morpheus_net_stack::stack::{DnsQueryHandle, NetInterface, SocketHandle};
+use morpheus_nic::device::UnifiedNetDevice;
 
 pub(super) static mut USER_NET_DRIVER: Option<UnifiedNetDevice> = None;
 pub(super) static mut USER_NET_STACK: Option<NetInterface<UnifiedNetDevice>> = None;
-static mut USER_NET_DMA: Option<morpheus_network::dma::DmaRegion> = None;
+static mut USER_NET_DMA: Option<morpheus_virtio::dma::DmaRegion> = None;
 static mut USER_NET_TSC_FREQ: u64 = 0;
 static mut USER_NET_HOSTNAME: [u8; 64] = [0; 64];
 static mut USER_NET_HOSTNAME_LEN: usize = 0;
@@ -47,12 +47,12 @@ fn user_handle_to_slot(handle: i64, max: usize) -> Option<usize> {
     }
 }
 
-pub(super) unsafe fn set_activation_context(dma: morpheus_network::dma::DmaRegion, tsc_freq: u64) {
+pub(super) unsafe fn set_activation_context(dma: morpheus_virtio::dma::DmaRegion, tsc_freq: u64) {
     USER_NET_DMA = Some(dma);
     USER_NET_TSC_FREQ = tsc_freq;
 }
 
-pub(super) unsafe fn activation_context() -> Option<(&'static morpheus_network::dma::DmaRegion, u64)>
+pub(super) unsafe fn activation_context() -> Option<(&'static morpheus_virtio::dma::DmaRegion, u64)>
 {
     let dma = USER_NET_DMA.as_ref()?;
     Some((dma, USER_NET_TSC_FREQ))
@@ -167,7 +167,7 @@ pub(super) unsafe fn set_hostname(name: *const u8, len: usize) -> i64 {
     0
 }
 
-pub(super) unsafe fn write_hostname_to(out: &mut morpheus_hwinit::NetConfigInfo) {
+pub(super) unsafe fn write_hostname_to(out: &mut morpheus_kernel::syscall::handler::NetConfigInfo) {
     if USER_NET_HOSTNAME_LEN > 0 {
         let n = USER_NET_HOSTNAME_LEN.min(63);
         out.hostname[..n].copy_from_slice(&USER_NET_HOSTNAME[..n]);

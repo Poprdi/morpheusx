@@ -1,0 +1,9 @@
+[package]
+name = "morpheus-storage-format"
+version.workspace = true
+edition.workspace = true
+description = "On-disk format parsers + writers for MorpheusX: GPT, FAT32, and the chunked-ISO-on-FAT32 storage manager. Replaces the old morpheus-core crate."
+
+[dependencies]
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true

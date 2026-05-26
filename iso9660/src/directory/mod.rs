@@ -69,7 +69,7 @@ pub fn find_file<B: BlockIo>(
                 }
                 current_lba = entry.extent_lba;
                 current_len = entry.data_length;
-            }
+            },
             None => return Err(Iso9660Error::NotFound),
         }
     }

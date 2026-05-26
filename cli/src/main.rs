@@ -1,18 +1,5 @@
-//! morpheus-cli — host-side HelixFS utility for MorpheusX development.
-//!
-//! Injects files into a `helix-data.img` raw disk image from the host,
-//! so they are available at runtime when MorpheusX boots in QEMU.
-//!
-//! # Usage
-//!
-//! ```text
-//! morpheus-cli inject <disk-image> <elf-binary> [--dest /bin/name]
-//! ```
-//!
-//! # Inject with a custom path inside HelixFS
-//! cargo run -p morpheus-cli -- inject testing/helix-data.img \
-//!     target/x86_64-morpheus/release/syscall-e2e --dest /bin/e2e
-//! ```
+//! Host-side HelixFS utility: inject ELF binaries into `helix-data.img` so they
+//! exist when MorpheusX boots in QEMU.
 
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -43,7 +30,7 @@ impl FileBlockDevice {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut len = file.metadata()?.len();
         if len == 0 {
-            // Block devices may report 0 via metadata; use seek-to-end as fallback.
+            // Block devices report 0 via metadata; fall back to seek-to-end.
             len = file.seek(SeekFrom::End(0))?;
         }
         let total_sectors = len / SECTOR_SIZE as u64;
@@ -199,8 +186,6 @@ fn cmd_pack(disk: &str, output: &str, max_mb: u64) -> Result<(), String> {
     Ok(())
 }
 
-// Mount an existing or fresh HelixFS from a FileBlockDevice.
-// Returns (device, mount_table).
 fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
     let mut dev =
         FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
@@ -210,7 +195,6 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
         dev.total_sectors, SECTOR_SIZE
     );
 
-    // Try to recover an existing superblock.
     let (sb, do_replay) = match recover_superblock(&mut dev, 0, SECTOR_SIZE) {
         Ok(sb) => {
             if sb.version != HELIX_VERSION {
@@ -219,7 +203,7 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
                     sb.version, HELIX_VERSION
                 );
                 let sb = do_format(&mut dev)?;
-                (sb, false) // fresh format, nothing to replay
+                (sb, false)
             } else {
                 println!("[helix] found valid superblock (version {})", sb.version);
                 (sb, true)
@@ -232,7 +216,6 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
         }
     };
 
-    // Build in-memory HelixInstance.
     let mut instance = HelixInstance {
         sb,
         log: morpheus_helix::log::LogEngine::new(&sb, 0, SECTOR_SIZE),
@@ -242,18 +225,17 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
         device_block_size: SECTOR_SIZE,
     };
 
-    // Reload the head log segment (so future writes append correctly).
+    // Reload head log segment so future writes append correctly.
     instance
         .log
         .reload_head_segment(&mut dev)
         .map_err(|e| format!("reload_head_segment: {:?}", e))?;
 
     if do_replay {
-        // Replay the log to rebuild the in-memory index.
         replay_log(&mut dev, &instance.log, &mut instance.index)
             .map_err(|e| format!("replay_log: {:?}", e))?;
 
-        // Rebuild bitmap so we don't overwrite existing file data.
+        // Rebuild bitmap so existing file data isn't overwritten.
         rebuild_bitmap(&mut instance);
 
         println!(
@@ -281,7 +263,7 @@ fn do_format(dev: &mut FileBlockDevice) -> Result<HelixSuperblock, String> {
     recover_superblock(dev, 0, SECTOR_SIZE).map_err(|e| format!("recover after format: {:?}", e))
 }
 
-/// Rebuild the block bitmap from index entries (mirrors vfs/global.rs private fn).
+/// Rebuild block bitmap from index entries; mirrors vfs/global.rs private fn.
 fn rebuild_bitmap(instance: &mut HelixInstance) {
     for entry in instance.index.all_entries() {
         if entry.flags & entry_flags::IS_DELETED != 0 {
@@ -308,7 +290,6 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     println!("[inject] binary : {}", binary);
     println!("[inject] dest   : {}", dest);
 
-    // Read ELF bytes from host filesystem.
     let elf_bytes =
         std::fs::read(binary).map_err(|e| format!("cannot read '{}': {}", binary, e))?;
     println!(
@@ -317,7 +298,6 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
         elf_bytes.len() as f64 / 1024.0
     );
 
-    // Validate it looks like an ELF64.
     if elf_bytes.len() < 4 || &elf_bytes[0..4] != b"\x7fELF" {
         return Err(format!("'{}' does not appear to be an ELF binary", binary));
     }
@@ -325,19 +305,17 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     let (mut dev, mut mt) = mount(disk)?;
     let mut fdt = FdTable::new();
 
-    // Ensure /bin directory exists (note: mkdir is index-only, no block_io needed).
+    // mkdir is index-only; no block_io needed.
     match vfs::vfs_mkdir(&mut mt, "/bin", 0) {
         Ok(()) => println!("[inject] created /bin"),
         Err(HelixError::AlreadyExists) => println!("[inject] /bin already exists"),
         Err(e) => return Err(format!("vfs_mkdir /bin: {:?}", e)),
     }
 
-    // Open (create / overwrite) destination path.
     let flags = open_flags::O_WRITE | open_flags::O_CREATE | open_flags::O_TRUNC;
     let fd = vfs::vfs_open(&mut dev, &mut mt, &mut fdt, dest, flags, 0)
         .map_err(|e| format!("vfs_open {}: {:?}", dest, e))?;
 
-    // Write ELF data.
     let written = vfs::vfs_write(&mut dev, &mut mt, &mut fdt, fd, &elf_bytes, 0)
         .map_err(|e| format!("vfs_write: {:?}", e))?;
 

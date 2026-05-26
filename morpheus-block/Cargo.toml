@@ -1,0 +1,21 @@
+[package]
+name = "morpheus-block"
+version.workspace = true
+edition.workspace = true
+description = "Block-device drivers (AHCI, SDHCI, virtio_blk, USB-MSD) + unified block I/O traits + disk transfer."
+
+[features]
+default = ["fat32_manifest"]
+# Enable FAT32 file write for manifests (requires heap allocator). Mirror of
+# the same-named feature in `morpheus-network` so the moved `manifest.rs`
+# compiles unchanged.
+fat32_manifest = []
+
+[dependencies]
+morpheus-foundation.workspace = true
+morpheus-hal-x86_64.workspace = true
+morpheus-xhci.workspace = true
+morpheus-virtio.workspace = true
+morpheus-storage-format.workspace = true
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true

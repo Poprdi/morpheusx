@@ -86,7 +86,7 @@ impl<'a, B: BlockIo> Iterator for DirectoryIterator<'a, B> {
                     Err(_) => {
                         let s = String::from_utf8_lossy(file_id);
                         String::from(string::strip_version(&s))
-                    }
+                    },
                 }
             };
 

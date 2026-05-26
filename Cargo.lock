@@ -173,6 +173,9 @@ dependencies = [
 [[package]]
 name = "libmorpheus"
 version = "1.0.1"
+dependencies = [
+ "morpheus-foundation",
+]
 
 [[package]]
 name = "linked_list_allocator"
@@ -199,15 +202,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
 
 [[package]]
+name = "morpheus-block"
+version = "1.0.1"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+ "morpheus-foundation",
+ "morpheus-hal-x86_64",
+ "morpheus-storage-format",
+ "morpheus-virtio",
+ "morpheus-xhci",
+]
+
+[[package]]
 name = "morpheus-bootloader"
 version = "1.0.1"
 dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
  "linked_list_allocator",
+ "morpheus-block",
  "morpheus-display",
+ "morpheus-hal-api",
+ "morpheus-hal-x86_64",
  "morpheus-helix",
- "morpheus-hwinit",
- "morpheus-network",
+ "morpheus-kernel",
+ "morpheus-net-stack",
+ "morpheus-nic",
  "morpheus-ui",
+ "morpheus-virtio",
+ "morpheus-xhci",
  "spin",
 ]
 
@@ -218,14 +242,6 @@ dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
  "morpheus-helix",
-]
-
-[[package]]
-name = "morpheus-core"
-version = "1.0.1"
-dependencies = [
- "gpt_disk_io",
- "gpt_disk_types",
 ]
 
 [[package]]
@@ -245,35 +261,60 @@ name = "morpheus-hal-api"
 version = "1.0.1"
 
 [[package]]
+name = "morpheus-hal-x86_64"
+version = "1.0.1"
+dependencies = [
+ "linked_list_allocator",
+ "morpheus-hal-api",
+ "morpheus-x86-asm",
+ "morpheus-xhci",
+ "spin",
+]
+
+[[package]]
 name = "morpheus-helix"
 version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
+ "morpheus-foundation",
 ]
 
 [[package]]
-name = "morpheus-hwinit"
+name = "morpheus-kernel"
 version = "1.0.1"
 dependencies = [
- "linked_list_allocator",
+ "morpheus-foundation",
+ "morpheus-hal-api",
  "morpheus-helix",
  "morpheus-persistent",
  "spin",
 ]
 
 [[package]]
-name = "morpheus-network"
+name = "morpheus-net-stack"
 version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
- "linked_list_allocator",
- "morpheus-core",
+ "morpheus-block",
  "morpheus-display",
- "morpheus-hwinit",
+ "morpheus-foundation",
+ "morpheus-hal-x86_64",
+ "morpheus-nic",
+ "morpheus-storage-format",
+ "morpheus-virtio",
  "smoltcp",
  "spin",
+]
+
+[[package]]
+name = "morpheus-nic"
+version = "1.0.1"
+dependencies = [
+ "morpheus-foundation",
+ "morpheus-hal-x86_64",
+ "morpheus-virtio",
 ]
 
 [[package]]
@@ -285,8 +326,38 @@ name = "morpheus-ping"
 version = "0.1.0"
 
 [[package]]
+name = "morpheus-storage-format"
+version = "1.0.1"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+]
+
+[[package]]
 name = "morpheus-ui"
 version = "1.0.1"
+
+[[package]]
+name = "morpheus-virtio"
+version = "1.0.1"
+dependencies = [
+ "morpheus-foundation",
+ "morpheus-hal-x86_64",
+]
+
+[[package]]
+name = "morpheus-x86-asm"
+version = "1.0.1"
+
+[[package]]
+name = "morpheus-xhci"
+version = "1.0.1"
+dependencies = [
+ "morpheus-foundation",
+ "morpheus-hal-api",
+ "morpheus-kernel",
+ "morpheus-x86-asm",
+]
 
 [[package]]
 name = "msh"

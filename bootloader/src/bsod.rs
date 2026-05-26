@@ -4,7 +4,7 @@
 mod bsod_bg_data;
 
 use morpheus_display::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
-use morpheus_hwinit::serial::puts;
+use morpheus_hal_x86_64::serial::puts;
 
 use crate::boot;
 
@@ -424,7 +424,7 @@ impl Line {
 
 /// # Safety
 /// Only valid in a fatal state. Writes directly to the framebuffer, no alloc.
-pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
+pub unsafe fn show_crash_screen(info: &morpheus_hal_x86_64::cpu::idt::CrashInfo) {
     let fb_info = match boot::published_framebuffer() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => {

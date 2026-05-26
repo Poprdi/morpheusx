@@ -44,8 +44,8 @@ fn main() -> i32 {
 
     clear_framebuffer(fb_vaddr, fb_width, fb_height, fb_stride, 0x00000000);
 
-    // Pipeline writes straight into the mapped back buffer; fb_present()
-    // diffs against the shadow and pushes only changed spans.
+    // Pipeline writes into the mapped back buffer; fb_present() diffs against
+    // the shadow and pushes only changed spans.
     let mut target = unsafe {
         DirectTarget::new(
             fb_vaddr as *mut u32,

@@ -1,14 +1,4 @@
-//! In-memory B-tree for the namespace index.
-//!
-//! This is a sorted-array B-tree stored entirely in `Vec<IndexEntry>`.
-//! On-disk serialization (checkpoint) is handled externally.
-//!
-//! Operations:
-//! - `lookup(path_hash, path)` → `Option<&IndexEntry>`
-//! - `insert(entry)` — upsert by path_hash + path
-//! - `delete(path_hash, path)` — marks entry as deleted
-//! - `prefix_scan(parent_path)` → iterator of direct children (readdir)
-//! - `all_entries()` → iterator for checkpoint serialization
+//! In-memory namespace index. Sorted `Vec<IndexEntry>`; on-disk serialization via checkpoint.
 
 use crate::crc::fnv1a_64;
 use crate::error::HelixError;
@@ -16,15 +6,8 @@ use crate::types::*;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Maximum entries before we should warn (not a hard limit).
 const EXPECTED_MAX_ENTRIES: usize = 1_000_000;
 
-/// In-memory namespace index.
-///
-/// Simple sorted-vec implementation for correctness.  A proper B-tree
-/// node structure can replace this later for O(log n) operations on
-/// very large namespaces.  For typical use (< 100K files), binary
-/// search on a sorted vec is fast enough and much simpler to verify.
 pub struct NamespaceIndex {
     /// Sorted by (key, path bytes).
     entries: Vec<IndexEntry>,
@@ -37,14 +20,12 @@ impl Default for NamespaceIndex {
 }
 
 impl NamespaceIndex {
-    /// Create an empty index.
     pub fn new() -> Self {
         Self {
             entries: Vec::with_capacity(1024),
         }
     }
 
-    /// Number of live (non-deleted) entries.
     pub fn live_count(&self) -> usize {
         self.entries
             .iter()
@@ -52,12 +33,11 @@ impl NamespaceIndex {
             .count()
     }
 
-    /// Total entries including deleted tombstones.
+    /// Total including tombstones.
     pub fn total_count(&self) -> usize {
         self.entries.len()
     }
 
-    /// Find the position of an entry by key + path.
     fn find_pos(&self, key: u64, path: &[u8]) -> Result<usize, usize> {
         self.entries.binary_search_by(|e| {
             e.key.cmp(&key).then_with(|| {
@@ -67,7 +47,6 @@ impl NamespaceIndex {
         })
     }
 
-    /// Look up an entry by exact path string.
     pub fn lookup(&self, path: &str) -> Option<&IndexEntry> {
         let key = fnv1a_64(path.as_bytes());
         let path_b = path.as_bytes();
@@ -79,21 +58,16 @@ impl NamespaceIndex {
                 } else {
                     Some(entry)
                 }
-            }
+            },
             Err(_) => None,
         }
     }
 
-    /// Look up an entry by path, trying both with and without trailing `/`.
-    ///
-    /// Directories are stored with a trailing `/` (e.g. `/home/`), but user
-    /// paths often omit it (e.g. `/home`).  This method bridges the gap.
+    /// Try path as-is, then toggle trailing `/`. Dirs are stored with trailing `/`.
     pub fn lookup_flex(&self, path: &str) -> Option<&IndexEntry> {
-        // Try exact match first.
         if let Some(entry) = self.lookup(path) {
             return Some(entry);
         }
-        // Try the alternate form.
         if !path.ends_with('/') {
             let mut with_slash = String::from(path);
             with_slash.push('/');
@@ -105,7 +79,6 @@ impl NamespaceIndex {
         }
     }
 
-    /// Look up a mutable reference by exact path string.
     pub fn lookup_mut(&mut self, path: &str) -> Option<&mut IndexEntry> {
         let key = fnv1a_64(path.as_bytes());
         let path_b = path.as_bytes();
@@ -117,18 +90,15 @@ impl NamespaceIndex {
                 } else {
                     Some(entry)
                 }
-            }
+            },
             Err(_) => None,
         }
     }
 
-    /// Mutable flexible lookup — tries both with and without trailing `/`.
     pub fn lookup_flex_mut(&mut self, path: &str) -> Option<&mut IndexEntry> {
-        // Try exact match first.
         if self.lookup(path).is_some() {
             return self.lookup_mut(path);
         }
-        // Try alternate form.
         if !path.ends_with('/') {
             let mut with_slash = String::from(path);
             with_slash.push('/');
@@ -144,13 +114,8 @@ impl NamespaceIndex {
         None
     }
 
-    /// Look up an entry by key (hash) alone.
-    ///
-    /// This is used by the VFS layer when we have an fd with only the
-    /// key stored.  If multiple entries share the same key (hash collision),
-    /// the first live match is returned.
+    /// Look up by key (hash) alone. On collision returns the first live match.
     pub fn lookup_by_key(&self, key: u64) -> Option<&IndexEntry> {
-        // Binary search for the first entry with this key.
         let start = self.entries.partition_point(|e| e.key < key);
         for entry in &self.entries[start..] {
             if entry.key != key {
@@ -163,26 +128,18 @@ impl NamespaceIndex {
         None
     }
 
-    /// Insert or update an entry.
-    ///
-    /// After the update, tombstones are compacted if they account for more
-    /// than half the index.  This bounds memory growth from deleted entries
-    /// without triggering an O(n) compact on every single write.
+    /// Upsert; auto-compact tombstones once they exceed live entries (and index >= 512).
     pub fn upsert(&mut self, entry: IndexEntry) {
         let path_b = path_bytes(&entry.path);
         match self.find_pos(entry.key, path_b) {
             Ok(idx) => {
-                // Update in place.
                 self.entries[idx] = entry;
-            }
+            },
             Err(idx) => {
-                // Insert at sorted position.
                 self.entries.insert(idx, entry);
-            }
+            },
         }
 
-        // Compact tombstones when they outnumber live entries and the index
-        // is large enough to make the memcpy worthwhile.
         let total = self.entries.len();
         let live = self.live_count();
         if total >= 512 && total > live.saturating_mul(2) {
@@ -191,13 +148,11 @@ impl NamespaceIndex {
     }
 
     pub fn mark_deleted(&mut self, path: &str) -> Result<(), HelixError> {
-        // Try exact path first, then alternate form (with/without trailing '/').
         let idx = {
             let key = fnv1a_64(path.as_bytes());
             match self.find_pos(key, path.as_bytes()) {
                 Ok(i) => i,
                 Err(_) => {
-                    // Try alternate form.
                     let alt = if !path.ends_with('/') {
                         let mut s = String::from(path);
                         s.push('/');
@@ -210,18 +165,14 @@ impl NamespaceIndex {
                     let alt_key = fnv1a_64(alt.as_bytes());
                     self.find_pos(alt_key, alt.as_bytes())
                         .map_err(|_| HelixError::NotFound)?
-                }
+                },
             }
         };
         self.entries[idx].flags |= entry_flags::IS_DELETED;
         Ok(())
     }
 
-    /// List direct children of a directory path.
-    ///
-    /// `parent_path` should end with `/` for directories, or be `"/"`
-    /// for root.  Returns entries whose paths match `parent_path + name`
-    /// with no further `/` separators.
+    /// Direct children of `parent_path`. Use `"/"` for root; otherwise must end with `/`.
     pub fn readdir(&self, parent_path: &str) -> Vec<&IndexEntry> {
         let prefix = if parent_path == "/" {
             "/".as_bytes()
@@ -236,29 +187,15 @@ impl NamespaceIndex {
                 continue;
             }
             let e_path = path_bytes(&entry.path);
-            // Must start with parent path.
             if !e_path.starts_with(prefix) {
                 continue;
             }
-            // Skip the parent itself.
             if e_path == prefix {
                 continue;
             }
-            // For root "/", children are like "/foo" or "/bar/".
-            // For "/data/", children are like "/data/foo" or "/data/bar/".
             let remainder = &e_path[prefix.len()..];
-            // Strip leading '/' if parent is root.
-            let remainder = if parent_path == "/" && remainder.starts_with(b"/") {
-                // Actually, for root, prefix is "/" so e_path "/foo" has
-                // remainder "foo".  But "/data/docs" has remainder "data/docs".
-                // We want only entries with no '/' in the remainder.
-                remainder
-            } else {
-                remainder
-            };
 
-            // Direct child: no '/' in remainder, or remainder ends with '/'
-            // and has no other '/'.
+            // Direct child: no '/' in remainder, or trailing '/' only.
             let slash_count = remainder.iter().filter(|&&b| b == b'/').count();
             let is_direct_child =
                 slash_count == 0 || (slash_count == 1 && remainder.last() == Some(&b'/'));
@@ -271,28 +208,25 @@ impl NamespaceIndex {
         results
     }
 
-    /// Get all live entries (for checkpoint serialization).
     pub fn all_entries(&self) -> &[IndexEntry] {
         &self.entries
     }
 
-    /// Get all live entries as a mutable reference.
     pub fn all_entries_mut(&mut self) -> &mut [IndexEntry] {
         &mut self.entries
     }
 
-    /// Remove all tombstoned entries from the in-memory index.
+    /// Drop tombstones from the in-memory index.
     pub fn compact(&mut self) {
         self.entries
             .retain(|e| e.flags & entry_flags::IS_DELETED == 0);
     }
 
-    /// Clear the entire index (used during recovery before replay).
+    /// Used during recovery before replay.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// Build a new IndexEntry for a file.
     pub fn make_file_entry(
         path: &str,
         lsn: Lsn,
@@ -328,7 +262,6 @@ impl NamespaceIndex {
         entry
     }
 
-    /// Build a new IndexEntry for a directory.
     pub fn make_dir_entry(path: &str, lsn: Lsn, timestamp_ns: u64) -> IndexEntry {
         let mut entry: IndexEntry = unsafe { core::mem::zeroed() };
         entry.key = fnv1a_64(path.as_bytes());
@@ -343,21 +276,16 @@ impl NamespaceIndex {
     }
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────
-
-/// Extract the null-terminated path from a fixed-size buffer.
 pub fn path_bytes(buf: &[u8; 256]) -> &[u8] {
     let len = buf.iter().position(|&b| b == 0).unwrap_or(256);
     &buf[..len]
 }
 
-/// Extract the path as a `&str`.
 pub fn path_str(buf: &[u8; 256]) -> &str {
     let bytes = path_bytes(buf);
     core::str::from_utf8(bytes).unwrap_or("")
 }
 
-/// Write path bytes into a fixed buffer.
 fn set_path(buf: &mut [u8; 256], path: &[u8]) {
     let len = path.len().min(MAX_PATH_LEN);
     buf[..len].copy_from_slice(&path[..len]);
@@ -366,7 +294,6 @@ fn set_path(buf: &mut [u8; 256], path: &[u8]) {
     }
 }
 
-/// Extract the filename (last path component) from a full path.
 pub fn filename(path: &str) -> &str {
     if path == "/" {
         return "/";
@@ -378,7 +305,6 @@ pub fn filename(path: &str) -> &str {
     }
 }
 
-/// Extract the parent directory from a full path.
 pub fn parent_path(path: &str) -> &str {
     if path == "/" {
         return "/";

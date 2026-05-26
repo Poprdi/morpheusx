@@ -13,7 +13,7 @@ entry!(main);
 fn main() -> i32 {
     io::println("shelld: starting");
 
-    // Wait for compd. surface_list returns usize::MAX while no compositor is registered.
+    // surface_list returns usize::MAX until compd registers.
     loop {
         let mut buf = [compsys::SurfaceEntry {
             pid: 0,
@@ -38,11 +38,11 @@ fn main() -> i32 {
 
     let fb_info = hw::fb_info().expect("shelld: fb_info failed");
 
-    // compd is the compositor, so fb_map returns a private offscreen buffer.
+    // compd owns the compositor slot; fb_map returns a private offscreen buffer.
     let surface_vaddr = hw::fb_map().expect("shelld: fb_map failed");
     let surface_ptr = surface_vaddr as *mut u32;
 
-    // stride is bytes.
+    // fb_info.stride is bytes.
     let fb_stride_px = fb_info.stride / 4;
     let is_bgrx = fb_info.format == 1;
 

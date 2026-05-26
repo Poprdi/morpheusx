@@ -1,7 +1,6 @@
 use super::{Mesh, MeshVertex};
 use crate::math::vec::{Vec2, Vec3};
 
-/// XZ plane at Y=0, centered at origin.
 pub fn plane(width: f32, height: f32, segments_x: usize, segments_z: usize) -> Mesh {
     let segments_x = segments_x.max(1);
     let segments_z = segments_z.max(1);

@@ -13,7 +13,7 @@ pub fn ls(args: &[String], cwd: &str) -> i32 {
         if m.is_file() {
             let name = path::basename(&target);
             if long {
-                libmorpheus::println!("FILE {:>10}  v{:<3} {}", m.len(), m.version_count, name);
+                libmorpheus::println!("FILE {:>10}  v{:<3} {}", m.len(), m.version_count(), name);
             } else {
                 libmorpheus::println!("{}", name);
             }
@@ -60,7 +60,7 @@ pub fn ls_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
             if long {
                 con.write_str(
                     fb,
-                    &format!("FILE {:>10}  v{:<3} {}\n", m.len(), m.version_count, name),
+                    &format!("FILE {:>10}  v{:<3} {}\n", m.len(), m.version_count(), name),
                 );
             } else {
                 con.write_str(fb, name);
@@ -589,10 +589,10 @@ pub fn stat(args: &[String], cwd: &str) -> i32 {
             libmorpheus::println!("  Path: {}", p);
             libmorpheus::println!("  Type: {}", if m.is_dir() { "directory" } else { "file" });
             libmorpheus::println!("  Size: {} bytes", m.len());
-            libmorpheus::println!("   Key: 0x{:016x}", m.key);
-            libmorpheus::println!("   LSN: {} (first: {})", m.lsn, m.first_lsn);
-            libmorpheus::println!("  Vers: {}", m.version_count);
-            libmorpheus::println!(" Flags: 0x{:08x}", m.flags);
+            libmorpheus::println!("   Key: 0x{:016x}", m.key());
+            libmorpheus::println!("   LSN: {} (first: {})", m.lsn(), m.first_lsn());
+            libmorpheus::println!("  Vers: {}", m.version_count());
+            libmorpheus::println!(" Flags: 0x{:08x}", m.flags());
             0
         }
         Err(e) => {
@@ -626,10 +626,10 @@ pub fn stat_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) 
                 ),
             );
             con.write_str(fb, &format!("  Size: {} bytes\n", m.len()));
-            con.write_str(fb, &format!("   Key: 0x{:016x}\n", m.key));
-            con.write_str(fb, &format!("   LSN: {} (first: {})\n", m.lsn, m.first_lsn));
-            con.write_str(fb, &format!("  Vers: {}\n", m.version_count));
-            con.write_str(fb, &format!(" Flags: 0x{:08x}\n", m.flags));
+            con.write_str(fb, &format!("   Key: 0x{:016x}\n", m.key()));
+            con.write_str(fb, &format!("   LSN: {} (first: {})\n", m.lsn(), m.first_lsn()));
+            con.write_str(fb, &format!("  Vers: {}\n", m.version_count()));
+            con.write_str(fb, &format!(" Flags: 0x{:08x}\n", m.flags()));
             0
         }
         Err(e) => {

@@ -6,20 +6,19 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-/// Single-producer, single-consumer ring buffer.
-/// N MUST be a power of 2. enforced at compile time via const assertion.
+/// SPSC ring buffer. `N` must be a power of two (const-asserted).
 pub struct Channel<T, const N: usize> {
     buf: [UnsafeCell<MaybeUninit<T>>; N],
-    head: AtomicUsize, // producer advances
-    tail: AtomicUsize, // consumer advances
+    head: AtomicUsize,
+    tail: AtomicUsize,
 }
 
-// single-core scheduler. no preemption between send/recv within same process.
+// Single-core scheduler: no preemption between send/recv within same process.
 unsafe impl<T, const N: usize> Sync for Channel<T, N> {}
 unsafe impl<T, const N: usize> Send for Channel<T, N> {}
 
 impl<T, const N: usize> Channel<T, N> {
-    // N-1 mask only works if N is a power of 2. the const assert handles it. you're welcome.
+    // `N-1` mask requires power-of-two N.
     const ASSERT_POWER_OF_2: () = assert!(
         N.is_power_of_two(),
         "Channel capacity N must be a power of two"
@@ -35,7 +34,7 @@ impl<T, const N: usize> Channel<T, N> {
         }
     }
 
-    /// Returns `Err(msg)` if the channel is full. never blocks. never allocs.
+    /// Non-blocking. Returns `Err(msg)` if full.
     #[inline]
     pub fn send(&self, msg: T) -> Result<(), T> {
         let head = self.head.load(Ordering::Relaxed);
@@ -50,7 +49,7 @@ impl<T, const N: usize> Channel<T, N> {
         Ok(())
     }
 
-    /// Returns `None` if the channel is empty. never blocks. never allocs.
+    /// Non-blocking. Returns `None` if empty.
     #[inline]
     pub fn recv(&self) -> Option<T> {
         let tail = self.tail.load(Ordering::Relaxed);

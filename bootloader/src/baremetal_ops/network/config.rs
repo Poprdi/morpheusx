@@ -1,4 +1,4 @@
-use morpheus_network::stack::NetState;
+use morpheus_net_stack::stack::NetState;
 
 use super::state;
 
@@ -7,11 +7,11 @@ pub(super) unsafe fn net_cfg_get(buf: *mut u8) -> i64 {
         return -1;
     };
 
-    let out = &mut *(buf as *mut morpheus_hwinit::NetConfigInfo);
+    let out = &mut *(buf as *mut morpheus_kernel::syscall::handler::NetConfigInfo);
     core::ptr::write_bytes(
         out as *mut _ as *mut u8,
         0,
-        core::mem::size_of::<morpheus_hwinit::NetConfigInfo>(),
+        core::mem::size_of::<morpheus_kernel::syscall::handler::NetConfigInfo>(),
     );
 
     out.state = match stack.state() {
@@ -82,14 +82,14 @@ pub(super) unsafe fn net_poll_stats(buf: *mut u8) -> i64 {
     if state::user_net_stack_mut().is_none() {
         return -1;
     }
-    let out = &mut *(buf as *mut morpheus_hwinit::NetStats);
+    let out = &mut *(buf as *mut morpheus_kernel::syscall::handler::NetStats);
     core::ptr::write_bytes(
         out as *mut _ as *mut u8,
         0,
-        core::mem::size_of::<morpheus_hwinit::NetStats>(),
+        core::mem::size_of::<morpheus_kernel::syscall::handler::NetStats>(),
     );
-    out.tx_packets = morpheus_network::stack::tx_packet_count() as u64;
-    out.rx_packets = morpheus_network::stack::rx_packet_count() as u64;
+    out.tx_packets = morpheus_net_stack::stack::tx_packet_count() as u64;
+    out.rx_packets = morpheus_net_stack::stack::rx_packet_count() as u64;
     out.tcp_active = state::tcp_active_count();
     0
 }

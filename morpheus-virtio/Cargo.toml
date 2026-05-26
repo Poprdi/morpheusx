@@ -1,0 +1,9 @@
+[package]
+name = "morpheus-virtio"
+version.workspace = true
+edition.workspace = true
+description = "Shared VirtIO transport + queue infrastructure. Consumed by morpheus-block (virtio_blk) and morpheus-nic (virtio-net)."
+
+[dependencies]
+morpheus-foundation.workspace = true
+morpheus-hal-x86_64.workspace = true

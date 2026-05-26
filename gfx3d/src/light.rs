@@ -2,12 +2,14 @@ use crate::math::fast::saturate;
 use crate::math::vec::Vec3;
 use alloc::vec::Vec;
 
-// Per-vertex Gouraud + Blinn-Phong specular. Cost scales with vertex count.
+// Per-vertex Gouraud + Blinn-Phong specular.
 
 #[derive(Debug, Clone, Copy)]
 pub struct DirLight {
-    pub direction: Vec3, // normalized, points TOWARD the source
-    pub color: [f32; 3], // may exceed 1.0 for overbright
+    /// Normalized, points TOWARD the source.
+    pub direction: Vec3,
+    /// May exceed 1.0 for overbright.
+    pub color: [f32; 3],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,14 +55,14 @@ impl LightEnv {
         }
     }
 
-    /// Blinn-Phong; returns unclamped RGB.
+    /// Blinn-Phong; returns unclamped RGB. `specular_power`: 0 disables, 16-64 glossy.
     #[inline]
     pub fn evaluate(
         &self,
         world_pos: Vec3,
         normal: Vec3,
         view_dir: Vec3,
-        specular_power: f32, // 0 disables specular; 16-64 for glossy
+        specular_power: f32,
         vertex_color: [f32; 3],
     ) -> [f32; 3] {
         let mut r = self.ambient[0];
@@ -141,7 +143,7 @@ impl LightEnv {
                 continue;
             }
 
-            // Smooth quadratic attenuation: 1 - (dist/radius)². No harsh cutoff vs. 1/d².
+            // Smooth quadratic attenuation: 1 - (dist/radius)².
             let ratio = dist * pl.inv_radius;
             let atten = saturate(1.0 - ratio * ratio);
             let diff = saturate(n_dot_l) * atten;
@@ -160,7 +162,7 @@ impl LightEnv {
             }
         }
 
-        // Vertex color modulates final (baked AO, tinting).
+        // Vertex color modulates (baked AO, tinting).
         [
             r * vertex_color[0],
             g * vertex_color[1],

@@ -111,7 +111,7 @@ pub fn compose(state: &mut CompState) {
 fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     let fb_ptr = state.fb_ptr;
 
-    // Snapshot fields before any rendering call mutates state.
+    // Snapshot before rendering mutates state.
     let (
         win_x,
         win_y,
@@ -462,7 +462,7 @@ fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
     let cy = state.mouse_y;
     let px = state.pack(CURSOR_RGB.0, CURSOR_RGB.1, CURSOR_RGB.2);
 
-    // 9px crosshair with single-pixel black outline at the tips.
+    // 9px crosshair, black tip outline.
     for d in -4i32..=4 {
         raw_put(
             fb_ptr,

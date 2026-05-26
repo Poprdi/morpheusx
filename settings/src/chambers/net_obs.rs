@@ -1,4 +1,4 @@
-// DHCP/static, hostname, DNS, link, MAC, stats. SYS_NET_CFG + SYS_NIC_INFO.
+//! DHCP/static, hostname, DNS, link, MAC, stats. SYS_NET_CFG + SYS_NIC_INFO.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{Route, SettingsApp};

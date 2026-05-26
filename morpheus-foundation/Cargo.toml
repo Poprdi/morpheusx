@@ -1,0 +1,10 @@
+[package]
+name = "morpheus-foundation"
+version.workspace = true
+edition.workspace = true
+description = "Arch-agnostic shared types and syscall ABI constants. NO asm, NO serial — those live in per-arch HAL crates."
+
+[features]
+default = []
+
+[dependencies]

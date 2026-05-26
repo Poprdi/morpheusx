@@ -8,30 +8,21 @@ pub mod pyramid;
 pub mod sphere;
 pub mod torus;
 
-/// A vertex in a mesh (model-space).
+/// Model-space vertex.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct MeshVertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: Vec2,
-    pub color: [u8; 4], // RGBA vertex color (for baked lighting or tinting)
+    pub color: [u8; 4],
 }
 
-/// An indexed triangle mesh.
-///
-/// This is the fundamental geometric primitive. Meshes are loaded from disk
-/// (OBJ, custom binary format) or generated procedurally (cubes, spheres).
-///
-/// Storage is interleaved vertex + separate index buffer — this is cache-optimal
-/// for vertex transformation (all attributes of one vertex are adjacent in memory).
-///
-/// Triangle indices are u16 for meshes under 65K verts (saves 50% index memory
-/// and bandwidth). For larger meshes, use multiple Mesh instances.
+/// Indexed triangle mesh. Interleaved verts + u16 indices (65K-vert cap per mesh).
 pub struct Mesh {
     pub vertices: Vec<MeshVertex>,
     pub indices: Vec<u16>,
-    /// Bounding sphere for quick frustum rejection.
+    /// Bounding sphere for frustum rejection.
     pub bound_center: Vec3,
     pub bound_radius: f32,
 }
@@ -51,17 +42,15 @@ impl Mesh {
         self.indices.len() / 3
     }
 
-    /// Generate a unit cube centered at origin.
     pub fn cube() -> Self {
         cube::cube()
     }
 
-    /// Generate a UV sphere (latitude-longitude).
+    /// UV sphere (lat-long parameterization).
     pub fn sphere(stacks: usize, slices: usize) -> Self {
         sphere::sphere(stacks, slices)
     }
 
-    /// Generate a torus (donut shape).
     pub fn torus(
         major_radius: f32,
         minor_radius: f32,
@@ -83,7 +72,7 @@ impl Mesh {
         cylinder::cylinder(radius, height, segments)
     }
 
-    /// Recompute bounding sphere (call after modifying vertices).
+    /// Call after mutating vertices.
     pub fn recompute_bounds(&mut self) {
         let (c, r) = compute_bounding_sphere(&self.vertices);
         self.bound_center = c;
@@ -91,16 +80,12 @@ impl Mesh {
     }
 }
 
-/// Compute bounding sphere using Ritter's algorithm.
-///
-/// Not optimal but O(n) and within 5% of optimal radius in practice.
-/// Good enough for coarse frustum culling.
+/// Ritter's bounding sphere: O(n), within ~5% of optimal.
 pub fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
     if verts.is_empty() {
         return (Vec3::ZERO, 0.0);
     }
 
-    // Start with AABB center
     let mut min = verts[0].position;
     let mut max = verts[0].position;
     for v in verts.iter().skip(1) {
@@ -109,7 +94,6 @@ pub fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
     }
     let center = (min + max) * 0.5;
 
-    // Find max distance from center
     let mut max_dist_sq = 0.0f32;
     for v in verts {
         let diff = v.position - center;

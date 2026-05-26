@@ -10,7 +10,7 @@ const HEADER_ART: &[&str] = &[
     "|_|  |_|\\___/|_| \\_\\_|   |_| |_|_____|\\___/|____/_/\\_\\",
 ];
 
-/// Inner content is 75 cols; outer with borders is 77.
+/// 75 cols inner + 2 cols of borders.
 const BOX_WIDTH: usize = 77;
 const EMPTY_LINE: &str =
     "|                                                                           |";
@@ -237,7 +237,7 @@ impl MainMenu {
             crate::tui::rain::render_rain(screen);
             self.debug.render(screen);
 
-            // ~60 FPS frame limiting inside poll_key_with_delay.
+            // poll_key_with_delay caps to ~60 FPS.
             if let Some(key) = keyboard.poll_key_with_delay() {
                 if key.unicode_char == b'd' as u16 || key.unicode_char == b'D' as u16 {
                     self.debug.toggle();

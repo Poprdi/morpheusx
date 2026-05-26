@@ -1,4 +1,4 @@
-//! Pinger - High-level ping interface
+//! Stateful pinger: builds echo requests, parses replies, tracks stats.
 
 use crate::types::{Ipv4Addr, PingConfig, PingResult, PingStats};
 use crate::packet::{
@@ -7,28 +7,17 @@ use crate::packet::{
 };
 use core::fmt;
 
-/// Ping error types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PingError {
-    /// Buffer too small for packet
     BufferTooSmall,
-    /// Invalid packet received
     InvalidPacket,
-    /// Not an ICMP packet
     NotIcmp,
-    /// Not an echo reply
     NotEchoReply,
-    /// ID mismatch
     IdMismatch,
-    /// Sequence mismatch
     SequenceMismatch,
-    /// Destination unreachable
     DestUnreachable,
-    /// Network unreachable
     NetworkUnreachable,
-    /// Host unreachable
     HostUnreachable,
-    /// Timeout
     Timeout,
 }
 
@@ -49,24 +38,18 @@ impl fmt::Display for PingError {
     }
 }
 
-/// Result type for ping operations
 pub type PingResultType<T> = Result<T, PingError>;
 
-/// Stateful pinger for sending/receiving ICMP echo requests
 #[derive(Debug)]
 pub struct Pinger {
-    /// Configuration
     config: PingConfig,
-    /// Echo identifier (unique per pinger instance)
+    /// Echo identifier; unique per instance.
     id: u16,
-    /// Current sequence number
     sequence: u16,
-    /// Statistics
     stats: PingStats,
 }
 
 impl Pinger {
-    /// Create a new pinger with the given configuration
     pub fn new(config: PingConfig) -> Self {
         Self {
             config,
@@ -76,7 +59,6 @@ impl Pinger {
         }
     }
 
-    /// Create a pinger with specific ID (useful for testing)
     pub const fn with_id(config: PingConfig, id: u16) -> Self {
         Self {
             config,
@@ -86,22 +68,18 @@ impl Pinger {
         }
     }
 
-    /// Get current configuration
     pub const fn config(&self) -> &PingConfig {
         &self.config
     }
 
-    /// Get echo identifier
     pub const fn id(&self) -> u16 {
         self.id
     }
 
-    /// Get current sequence number
     pub const fn sequence(&self) -> u16 {
         self.sequence
     }
 
-    /// Get statistics
     pub const fn stats(&self) -> &PingStats {
         &self.stats
     }
@@ -127,7 +105,6 @@ impl Pinger {
             return Err(PingError::BufferTooSmall);
         }
 
-        // Build IP header
         let ip_len = build_ip_header(
             buffer,
             src,
@@ -142,7 +119,6 @@ impl Pinger {
             return Err(PingError::BufferTooSmall);
         }
 
-        // Build ICMP echo request
         let icmp_len = build_icmp_echo_request(
             &mut buffer[IP_HEADER_SIZE..],
             self.id,
@@ -154,15 +130,13 @@ impl Pinger {
             return Err(PingError::BufferTooSmall);
         }
 
-        // Increment sequence for next request
         self.sequence = self.sequence.wrapping_add(1);
-        
-        // Record sent
         self.stats.record_sent();
 
         Ok(total_size)
     }
 
+    /// Returns `rtt_ms = 0`; caller fills it in from external timestamps.
     pub fn parse_reply(
         &mut self,
         data: &[u8],
@@ -174,7 +148,6 @@ impl Pinger {
 
         let parsed = parse_icmp_reply(data).ok_or(PingError::InvalidPacket)?;
 
-        // Check for ICMP errors
         if parsed.icmp_type == IcmpType::DestUnreachable as u8 {
             return match parsed.icmp_code {
                 0 => Err(PingError::NetworkUnreachable),
@@ -183,17 +156,14 @@ impl Pinger {
             };
         }
 
-        // Must be echo reply
         if parsed.icmp_type != IcmpType::EchoReply as u8 {
             return Err(PingError::NotEchoReply);
         }
 
-        // Verify ID matches
         if parsed.id != self.id {
             return Err(PingError::IdMismatch);
         }
 
-        // Verify sequence if expected
         if let Some(seq) = expected_seq {
             if parsed.sequence != seq {
                 return Err(PingError::SequenceMismatch);
@@ -203,13 +173,12 @@ impl Pinger {
         Ok(PingResult {
             target: parsed.src_ip,
             sequence: parsed.sequence,
-            rtt_ms: 0, // Caller must calculate from timestamps
+            rtt_ms: 0,
             reply_ttl: parsed.ttl,
             success: true,
         })
     }
 
-    /// Record a successful reply with RTT
     pub fn record_success(&mut self, rtt_ms: u32) {
         self.stats.record_reply(rtt_ms);
     }
@@ -218,7 +187,6 @@ impl Pinger {
         self.stats.record_lost();
     }
 
-    /// Check if we have any connectivity based on stats
     pub fn has_connectivity(&self) -> bool {
         self.stats.has_connectivity()
     }
@@ -230,20 +198,17 @@ impl Default for Pinger {
     }
 }
 
-/// Generate a pseudo-random ID based on some simple mixing
+/// Counter-mixed pseudo-ID; sufficient for distinguishing concurrent pingers.
 fn generate_id() -> u16 {
-    // In real implementation, would use timestamp or RNG
-    // For no_std, we use a simple counter-based approach
     static mut COUNTER: u16 = 0;
-    
-    // SAFETY: Single-threaded bootloader context
+
+    // SAFETY: single-threaded bootloader context.
     unsafe {
         COUNTER = COUNTER.wrapping_add(1);
         COUNTER.wrapping_mul(31421).wrapping_add(6927)
     }
 }
 
-/// Quick ping check - build request, returns buffer ready to send
 pub fn quick_ping_request(
     src: Ipv4Addr,
     dst: Ipv4Addr,
@@ -273,10 +238,9 @@ mod tests {
         let mut buffer = [0u8; 128];
 
         let len = pinger.build_request(src, dst, &mut buffer).unwrap();
-        
-        // IP(20) + ICMP(8) + payload(32 for quick config)
+
         assert_eq!(len, 20 + 8 + 32);
-        assert_eq!(pinger.sequence(), 1); // Should increment
+        assert_eq!(pinger.sequence(), 1);
         assert_eq!(pinger.stats().sent, 1);
     }
 
@@ -285,7 +249,7 @@ mod tests {
         let mut pinger = Pinger::new(PingConfig::default());
         let src = Ipv4Addr::new(192, 168, 1, 100);
         let dst = Ipv4Addr::CLOUDFLARE_DNS;
-        let mut buffer = [0u8; 10]; // Too small
+        let mut buffer = [0u8; 10];
 
         let result = pinger.build_request(src, dst, &mut buffer);
         assert_eq!(result, Err(PingError::BufferTooSmall));
@@ -299,10 +263,10 @@ mod tests {
         let mut buffer = [0u8; 128];
 
         assert_eq!(pinger.sequence(), 0);
-        
+
         pinger.build_request(src, dst, &mut buffer).unwrap();
         assert_eq!(pinger.sequence(), 1);
-        
+
         pinger.build_request(src, dst, &mut buffer).unwrap();
         assert_eq!(pinger.sequence(), 2);
     }
@@ -310,11 +274,11 @@ mod tests {
     #[test]
     fn test_stats_tracking() {
         let mut pinger = Pinger::new(PingConfig::default());
-        
+
         pinger.record_success(10);
         pinger.record_success(20);
         pinger.record_timeout();
-        
+
         assert_eq!(pinger.stats().received, 2);
         assert_eq!(pinger.stats().lost, 1);
         assert!(pinger.has_connectivity());
@@ -327,7 +291,7 @@ mod tests {
         let mut buffer = [0u8; 128];
 
         let (len, id) = quick_ping_request(src, dst, &mut buffer).unwrap();
-        
+
         assert!(len > 0);
         assert!(id != 0);
     }

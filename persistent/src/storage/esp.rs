@@ -5,7 +5,7 @@
 //! # Current Status
 //!
 //! This API is **not yet implemented**. The current working implementation
-//! uses `morpheus_core::fs::fat32_ops::write_file()` directly in the
+//! uses `morpheus_storage_format::fs::fat32_ops::write_file()` directly in the
 //! bootloader installer at `bootloader/src/installer/operations.rs`.
 //!
 //! # Future Usage
@@ -38,17 +38,17 @@ impl EspBackend {
 
 impl PersistenceBackend for EspBackend {
     fn store_bootloader(&mut self, _data: &[u8]) -> Result<(), PeError> {
-        // Future: Use morpheus_core::fs::fat32_ops::write_file
+        // Future: Use morpheus_storage_format::fs::fat32_ops::write_file
         unimplemented!("Use fat32_ops::write_file() directly for now")
     }
 
     fn retrieve_bootloader(&mut self) -> Result<alloc::vec::Vec<u8>, PeError> {
-        // Future: Use morpheus_core::fs::fat32_ops::read_file
+        // Future: Use morpheus_storage_format::fs::fat32_ops::read_file
         unimplemented!("Use fat32_ops::read_file() directly for now")
     }
 
     fn is_persisted(&mut self) -> Result<bool, PeError> {
-        // Future: Use morpheus_core::fs::fat32_ops::file_exists
+        // Future: Use morpheus_storage_format::fs::fat32_ops::file_exists
         unimplemented!("Use fat32_ops::file_exists() directly for now")
     }
 

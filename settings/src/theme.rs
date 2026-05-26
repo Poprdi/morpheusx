@@ -1,4 +1,4 @@
-// Semantic tokens, not raw colors. Field names ARE the spec.
+/// Semantic tokens; field names ARE the spec.
 #[derive(Clone, Copy)]
 pub struct OneiricTheme {
     pub substrate: u32,
@@ -75,7 +75,7 @@ impl OneiricTheme {
     }
 }
 
-// BGRX: UEFI's preferred byte order.
+/// BGRX (UEFI's preferred byte order).
 #[inline(always)]
 pub const fn pack(r: u8, g: u8, b: u8) -> u32 {
     (b as u32) | ((g as u32) << 8) | ((r as u32) << 16) | (0xFF << 24)

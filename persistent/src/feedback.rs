@@ -1,13 +1,9 @@
-//! Visual feedback and logging for persistence operations
-//!
-//! Provides structured feedback that can be displayed in TUI or logged.
-//! Reusable across the entire persistence system.
+//! Structured feedback messages for persistence operations.
 
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Feedback message with severity level
 #[derive(Debug, Clone)]
 pub struct FeedbackMessage {
     pub level: FeedbackLevel,
@@ -15,26 +11,24 @@ pub struct FeedbackMessage {
     pub message: String,
 }
 
-/// Message severity
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedbackLevel {
-    Info,    // Normal operation info
-    Success, // Operation succeeded
-    Warning, // Non-critical issue
-    Error,   // Operation failed
-    Debug,   // Detailed debug info
+    Info,
+    Success,
+    Warning,
+    Error,
+    Debug,
 }
 
-/// Message category for filtering/display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedbackCategory {
-    PeHeader,     // PE header parsing
-    Section,      // Section table parsing
-    Relocation,   // Relocation processing
-    Memory,       // Memory operations
-    Storage,      // Storage backend operations
-    Verification, // Verification/validation
-    General,      // General messages
+    PeHeader,
+    Section,
+    Relocation,
+    Memory,
+    Storage,
+    Verification,
+    General,
 }
 
 impl FeedbackMessage {
@@ -91,7 +85,7 @@ impl FeedbackMessage {
     }
 }
 
-/// Feedback collector - accumulates messages for batch display
+/// Bounded FIFO ring of messages for batch display.
 pub struct FeedbackCollector {
     messages: Vec<FeedbackMessage>,
     max_messages: usize,
@@ -107,7 +101,7 @@ impl FeedbackCollector {
 
     pub fn add(&mut self, msg: FeedbackMessage) {
         if self.messages.len() >= self.max_messages {
-            self.messages.remove(0); // FIFO - remove oldest
+            self.messages.remove(0);
         }
         self.messages.push(msg);
     }
@@ -158,7 +152,7 @@ impl FeedbackCollector {
     }
 }
 
-/// PE dump summary for TUI display
+/// PE header summary for TUI display.
 pub struct PeDumpSummary {
     pub arch: String,
     pub image_base_header: u64,

@@ -21,7 +21,7 @@ pub fn run(pipeline: &Pipeline, cwd: &str) -> i32 {
 fn run_single(cmd: &SimpleCommand, cwd: &str) -> i32 {
     let has_redirect = cmd.stdout_file.is_some() || cmd.stdin_file.is_some();
 
-    // Builtins write to fd 1, so fd-level redirects work directly.
+    // Builtins write to fd 1; fd-level redirects apply directly.
     if has_redirect {
         if let Some(first) = cmd.argv.first() {
             if is_builtin(first) {
@@ -118,7 +118,7 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
         let _ = setup_redirects(cmd, cwd);
 
         if let Some(_code) = builtin::dispatch(&cmd.argv, cwd) {
-            // Builtin output went through fd 1.
+            // Output went through fd 1.
         } else {
             let binary = match path::which(&cmd.argv[0], cwd) {
                 Some(p) => p,
@@ -201,8 +201,7 @@ fn spawn_child(binary: &str, argv: &[String]) -> Option<u32> {
     }
 }
 
-/// Spawn under compositor input routing. Child's fd 0 reads from its
-/// per-process input buffer populated by SYS_FORWARD_INPUT.
+/// Child's fd 0 reads from its per-process input buffer (SYS_FORWARD_INPUT).
 pub fn spawn_composited(binary: &str, args: &[&str]) -> Option<u32> {
     let pid = match process::spawn_with_args(binary, args) {
         Ok(pid) => pid,

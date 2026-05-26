@@ -58,25 +58,25 @@ impl Mouse {
 
         let ack_reset = mouse_cmd(0xFF);
         if ack_reset != 0xFA {
-            morpheus_hwinit::serial::log_warn("INPUT", 931, "mouse reset ACK missing");
+            morpheus_hal_x86_64::serial::log_warn("INPUT", 931, "mouse reset ACK missing");
         }
         // eat BAT + device ID
         drain(100_000);
 
         let ack_defaults = mouse_cmd(0xF6);
         if ack_defaults != 0xFA {
-            morpheus_hwinit::serial::log_warn("INPUT", 932, "mouse defaults ACK missing");
+            morpheus_hal_x86_64::serial::log_warn("INPUT", 932, "mouse defaults ACK missing");
         }
 
         let ack_stream = mouse_cmd(0xF4);
         if ack_stream != 0xFA {
-            morpheus_hwinit::serial::log_warn("INPUT", 933, "mouse stream ACK missing");
+            morpheus_hal_x86_64::serial::log_warn("INPUT", 933, "mouse stream ACK missing");
         }
 
         asm_ps2_flush();
         self.fill = 0;
         self.desync_count = 0;
-        morpheus_hwinit::serial::log_ok("INPUT", 934, "PS/2 mouse ready");
+        morpheus_hal_x86_64::serial::log_ok("INPUT", 934, "PS/2 mouse ready");
     }
 
     /// Returns a packet once 3 aux-port bytes are accumulated.

@@ -8,17 +8,22 @@
 use morpheus_helix::device::{MemBlockDevice, RawBlockDevice};
 /// In-RAM staged Helix partition (Some after successful RAM staging).
 static mut RAM_HELIX_DEVICE: Option<MemBlockDevice> = None;
-use morpheus_hwinit::dma::DmaRegion;
-use morpheus_hwinit::memory::{global_registry_mut, AllocateType, MemoryType};
-use morpheus_hwinit::paging::is_paging_initialized;
-use morpheus_hwinit::serial::{log_error, log_info, log_ok, log_warn, puts};
-use morpheus_hwinit::{kmap_mmio, pci_cfg_read16, pci_cfg_read32, PciAddr};
-use morpheus_network::device::UnifiedBlockError;
-use morpheus_network::{
-    create_unified_from_detected, scan_all_block_devices, AhciInitError, BlockDmaConfig,
-    BlockDriver, DetectedBlockDevice, SdhciInitError, UnifiedBlockDevice, UnifiedBlockIo,
-    UsbMsdInitError, VirtioBlkInitError,
+use morpheus_hal_x86_64::dma::DmaRegion;
+use morpheus_hal_x86_64::memory::{global_registry_mut, AllocateType, MemoryType};
+use morpheus_hal_x86_64::paging::is_paging_initialized;
+use morpheus_hal_x86_64::serial::{log_error, log_info, log_ok, log_warn, puts};
+use morpheus_hal_x86_64::paging::kmap_mmio;
+use morpheus_hal_x86_64::pci::{pci_cfg_read16, pci_cfg_read32, PciAddr};
+use morpheus_block::ahci::AhciInitError;
+use morpheus_block::boot_probe::{
+    create_unified_from_detected, scan_all_block_devices, BlockDmaConfig, DetectedBlockDevice,
 };
+use morpheus_block::device::{UnifiedBlockDevice, UnifiedBlockError};
+use morpheus_block::sdhci::SdhciInitError;
+use morpheus_block::unified_block_io::UnifiedBlockIo;
+use morpheus_block::usb_msd::UsbMsdInitError;
+use morpheus_block::virtio_blk::VirtioBlkInitError;
+use morpheus_block::BlockDriver;
 
 const VIRTIO_QUEUE_SIZE: u16 = 32;
 
@@ -54,17 +59,17 @@ unsafe fn dump_pci_devices() {
             let cmd = pci_cfg_read16(addr, 0x04);
 
             puts("[PCI-DUMP]   00:");
-            morpheus_hwinit::serial::put_hex8(dev);
+            morpheus_hal_x86_64::serial::put_hex8(dev);
             puts(".");
-            morpheus_hwinit::serial::put_hex8(func);
+            morpheus_hal_x86_64::serial::put_hex8(func);
             puts("  ven=");
-            morpheus_hwinit::serial::put_hex32(vendor_id as u32);
+            morpheus_hal_x86_64::serial::put_hex32(vendor_id as u32);
             puts(" dev=");
-            morpheus_hwinit::serial::put_hex32(device_id as u32);
+            morpheus_hal_x86_64::serial::put_hex32(device_id as u32);
             puts(" class=");
-            morpheus_hwinit::serial::put_hex32(class_code >> 8);
+            morpheus_hal_x86_64::serial::put_hex32(class_code >> 8);
             puts(" cmd=");
-            morpheus_hwinit::serial::put_hex32(cmd as u32);
+            morpheus_hal_x86_64::serial::put_hex32(cmd as u32);
             puts("\n");
 
             if vendor_id == 0x1AF4 {
@@ -75,18 +80,18 @@ unsafe fn dump_pci_devices() {
                         let is_io = raw & 0x01 != 0;
                         let is_64 = !is_io && (raw >> 1) & 0x03 == 0x02;
                         puts("[PCI-DUMP]     BAR");
-                        morpheus_hwinit::serial::put_hex8(bar_i);
+                        morpheus_hal_x86_64::serial::put_hex8(bar_i);
                         puts(" raw=");
-                        morpheus_hwinit::serial::put_hex32(raw);
+                        morpheus_hal_x86_64::serial::put_hex32(raw);
                         if is_64 && bar_i < 5 {
                             let high = pci_cfg_read32(addr, 0x10 + (bar_i + 1) * 4);
                             puts(" BAR");
-                            morpheus_hwinit::serial::put_hex8(bar_i + 1);
+                            morpheus_hal_x86_64::serial::put_hex8(bar_i + 1);
                             puts("=");
-                            morpheus_hwinit::serial::put_hex32(high);
+                            morpheus_hal_x86_64::serial::put_hex32(high);
                             let full = ((high as u64) << 32) | ((raw & 0xFFFFFFF0) as u64);
                             puts(" -> ");
-                            morpheus_hwinit::serial::put_hex64(full);
+                            morpheus_hal_x86_64::serial::put_hex64(full);
                         }
                         if is_io {
                             puts(" (IO)");
@@ -286,8 +291,8 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
 
     let mut bio = UnifiedBlockIo::new(dev, io_buf, io_phys, timeout).ok()?;
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
 
     let mut first_two = alloc::vec![0u8; (sector_size as usize) * 2];
     if bio.read_blocks(GptLba(0), &mut first_two).is_err() {
@@ -523,11 +528,11 @@ fn spinner_start() {
     unsafe {
         SPIN_ACTIVE = true;
         SPIN_FRAME = 0;
-        SPIN_LAST_TSC = morpheus_hwinit::tsc::read_tsc();
-        morpheus_hwinit::serial::serial_puts("   ");
-        morpheus_hwinit::serial::serial_putc(SPIN_FRAMES[0]);
-        morpheus_hwinit::serial::fb_puts("   ");
-        morpheus_hwinit::serial::fb_putc(SPIN_FRAMES[0]);
+        SPIN_LAST_TSC = morpheus_hal_x86_64::cpu::tsc::read_tsc();
+        morpheus_hal_x86_64::serial::serial_puts("   ");
+        morpheus_hal_x86_64::serial::serial_putc(SPIN_FRAMES[0]);
+        morpheus_hal_x86_64::serial::fb_puts("   ");
+        morpheus_hal_x86_64::serial::fb_putc(SPIN_FRAMES[0]);
     }
 }
 
@@ -537,7 +542,7 @@ fn spinner_tick() {
         if !SPIN_ACTIVE || STORAGE_TSC_FREQ == 0 {
             return;
         }
-        let now = morpheus_hwinit::tsc::read_tsc();
+        let now = morpheus_hal_x86_64::cpu::tsc::read_tsc();
         let interval = STORAGE_TSC_FREQ / 10;
         if now.wrapping_sub(SPIN_LAST_TSC) < interval {
             return;
@@ -545,10 +550,10 @@ fn spinner_tick() {
         SPIN_LAST_TSC = now;
         SPIN_FRAME = (SPIN_FRAME + 1) % SPIN_FRAMES.len();
         let frame = SPIN_FRAMES[SPIN_FRAME];
-        morpheus_hwinit::serial::serial_putc(b'\x08');
-        morpheus_hwinit::serial::serial_putc(frame);
-        morpheus_hwinit::serial::fb_putc(b'\x08');
-        morpheus_hwinit::serial::fb_putc(frame);
+        morpheus_hal_x86_64::serial::serial_putc(b'\x08');
+        morpheus_hal_x86_64::serial::serial_putc(frame);
+        morpheus_hal_x86_64::serial::fb_putc(b'\x08');
+        morpheus_hal_x86_64::serial::fb_putc(frame);
     }
 }
 
@@ -556,8 +561,8 @@ fn spinner_done() {
     unsafe {
         SPIN_ACTIVE = false;
     }
-    morpheus_hwinit::serial::serial_putc(b'\r');
-    morpheus_hwinit::serial::fb_puts("\r");
+    morpheus_hal_x86_64::serial::serial_putc(b'\r');
+    morpheus_hal_x86_64::serial::fb_puts("\r");
 }
 
 /// # Safety
@@ -700,9 +705,9 @@ pub unsafe fn init_persistent_storage(
         // Mask BSP interrupts across driver init: 100 Hz LAPIC timer ISRs
         // mid-PCH-MMIO extend bus cycles on real Intel silicon (same root
         // cause as the AHCI BIOS/OS handoff stall). Init polls on TSC.
-        morpheus_hwinit::disable_interrupts();
+        morpheus_hal_x86_64::cpu::idt::disable_interrupts();
         let device_result = create_unified_from_detected(detected, &config);
-        morpheus_hwinit::enable_interrupts();
+        morpheus_hal_x86_64::cpu::idt::enable_interrupts();
 
         let device = match device_result {
             Ok(dev) => dev,
@@ -1220,8 +1225,8 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
     let read_size = (sector_size as usize) * 2;
     let mut buf = alloc::vec![0u8; read_size];
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
     if bio.read_blocks(GptLba(0), &mut buf).is_err() {
         return false;
     }
@@ -1379,7 +1384,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
 
 /// Idempotent; call after root FS is mounted.
 pub fn create_init_directories() {
-    use morpheus_hwinit::cpu::tsc::read_tsc;
+    use morpheus_hal_x86_64::cpu::tsc::read_tsc;
 
     let dirs = ["/bin", "/etc", "/tmp", "/home", "/var", "/dev"];
 
@@ -1453,8 +1458,8 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
 
     let dst_slice = core::slice::from_raw_parts_mut(dst, len);
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
     bio.read_blocks(GptLba(lba + STORAGE_LBA_BASE), dst_slice)
         .is_ok()
 }
@@ -1482,8 +1487,8 @@ unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool
 
     let src_slice = core::slice::from_raw_parts(src, len);
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
     bio.write_blocks(GptLba(lba + STORAGE_LBA_BASE), src_slice)
         .is_ok()
 }

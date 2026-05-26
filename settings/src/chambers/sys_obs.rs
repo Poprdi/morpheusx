@@ -1,4 +1,4 @@
-// System telemetry + power controls. Power buttons require two-stage arm.
+//! System telemetry + power controls. Power buttons require two-stage arm.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{ArmState, Route, SettingsApp};

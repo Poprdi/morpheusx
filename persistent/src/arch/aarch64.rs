@@ -18,7 +18,7 @@ impl RelocationEngine for Aarch64RelocationEngine {
             RelocationType::Absolute => Ok(()),
             RelocationType::Dir64 => {
                 todo!("ARM64 DIR64 relocation: detect ADRP/ADD vs data pointer")
-            }
+            },
             _ => Err(PeError::UnsupportedFormat),
         }
     }

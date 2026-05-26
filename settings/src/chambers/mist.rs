@@ -1,4 +1,4 @@
-// Read-only framebuffer telemetry: stride, format, geometry.
+//! Read-only framebuffer telemetry: stride, format, geometry.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::SettingsApp;

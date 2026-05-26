@@ -1,7 +1,7 @@
 use crate::islands::{draw_text, raw_fill, ShellState, ICON_SIZE, LAUNCHER_H, LAUNCHER_W, PANEL_H};
 use libmorpheus::{io, process};
 
-/// Launcher overlay; opened by START.
+/// Overlay opened by START.
 pub fn tick(state: &mut ShellState) {
     if !state.launcher_open || !state.launcher_dirty {
         return;
@@ -95,8 +95,8 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
     {
         state.launcher_open = !state.launcher_open;
         state.launcher_dirty = true;
-        // Repaint wallpaper underneath when closing.
         if !state.launcher_open {
+            // Repaint wallpaper underneath.
             state.wallpaper_dirty = true;
         }
         state.panel_dirty = true;
@@ -129,12 +129,12 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
             return true;
         }
 
-        // Consume clicks within launcher bounds.
+        // Consume clicks inside launcher bounds.
         if mx >= lx && mx < lx + LAUNCHER_W as i32 && my >= ly && my < ly + LAUNCHER_H as i32 {
             return true;
         }
 
-        // Outside: close.
+        // Click outside closes.
         state.launcher_open = false;
         state.launcher_dirty = false;
         state.wallpaper_dirty = true;

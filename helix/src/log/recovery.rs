@@ -1,14 +1,9 @@
-//! Log recovery — replay from last checkpoint to restore in-memory index.
+//! Log recovery: replay from last checkpoint to rebuild the in-memory index.
 //!
-//! ## Algorithm
-//!
-//! 1. Read both superblocks.  Pick the one with the highest valid
-//!    `committed_lsn` (or the only valid one).
-//! 2. Load the B-tree root from `index_root_block` in that superblock.
-//! 3. Scan the log forward from `checkpoint_lsn`, applying each valid
-//!    record to the in-memory index.
-//! 4. Stop at the first record with an invalid CRC (crash boundary).
-//! 5. Update `committed_lsn` to the highest valid LSN seen.
+//! 1. Pick the superblock with the highest valid `committed_lsn`.
+//! 2. Scan log forward from `checkpoint_lsn`, applying each valid record.
+//! 3. Stop at first bad CRC (crash boundary).
+//! 4. Set `committed_lsn` to the highest valid LSN seen.
 
 use crate::crc::fnv1a_64;
 use crate::error::HelixError;
@@ -19,7 +14,7 @@ use alloc::vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
-/// Read and validate both superblocks, returning the best one.
+/// Read both superblocks; return the one with the higher valid `committed_lsn`.
 pub fn recover_superblock<B: BlockIo>(
     block_io: &mut B,
     partition_lba_start: u64,
@@ -29,7 +24,6 @@ pub fn recover_superblock<B: BlockIo>(
 
     let mut buf = vec![0u8; BLOCK_SIZE as usize];
 
-    // Read superblock A (block 0).
     let lba_a = Lba(partition_lba_start + SUPERBLOCK_A_BLOCK * blocks_per_sector);
     block_io
         .read_blocks(lba_a, &mut buf)
@@ -38,7 +32,6 @@ pub fn recover_superblock<B: BlockIo>(
         unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const HelixSuperblock) };
     let a_valid = sb_a.is_valid();
 
-    // Read superblock B (block 1).
     let lba_b = Lba(partition_lba_start + SUPERBLOCK_B_BLOCK * blocks_per_sector);
     block_io
         .read_blocks(lba_b, &mut buf)
@@ -49,26 +42,25 @@ pub fn recover_superblock<B: BlockIo>(
 
     match (a_valid, b_valid) {
         (true, true) => {
-            // Pick whichever has higher committed_lsn.
             if sb_b.committed_lsn > sb_a.committed_lsn {
                 Ok(sb_b)
             } else {
                 Ok(sb_a)
             }
-        }
+        },
         (true, false) => Ok(sb_a),
         (false, true) => Ok(sb_b),
         (false, false) => Err(HelixError::NoValidSuperblock),
     }
 }
 
-/// Write a superblock to one of the two slots.
+/// `slot`: 0 = A, 1 = B.
 pub fn write_superblock<B: BlockIo>(
     block_io: &mut B,
     partition_lba_start: u64,
     device_block_size: u32,
     sb: &mut HelixSuperblock,
-    slot: u64, // 0 = A, 1 = B
+    slot: u64,
 ) -> Result<(), HelixError> {
     sb.update_crc();
 
@@ -90,11 +82,7 @@ pub fn write_superblock<B: BlockIo>(
     Ok(())
 }
 
-/// Decode the v2 path prefix from a log payload.
-///
-/// v2 format: `[path_len: u16 LE][path: path_len bytes][rest...]`
-///
-/// Returns `(path_str, rest_of_payload)` or `None` if malformed.
+/// v2 payload prefix: `[path_len: u16 LE][path][rest...]`.
 fn decode_path_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
     if payload.len() < 2 {
         return None;
@@ -112,28 +100,14 @@ fn decode_path_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
     Some((path_str, &payload[data_start..]))
 }
 
-/// Replay the log from `tail_segment` through `head_segment` and rebuild
-/// the in-memory [`NamespaceIndex`].
-///
-/// This is the core recovery path.  On mount:
-///
-/// 1. `recover_superblock()` picks the best superblock.
-/// 2. `HelixInstance::new(sb)` creates the log engine + empty index.
-/// 3. `log.reload_head_segment(bio)` loads the write buffer.
-/// 4. **`replay_log(bio, log, index)`** scans all committed records and
-///    rebuilds the index from the path-carrying payloads (v2 format).
-///
-/// Records that cannot be decoded (e.g. v1 payloads without paths) are
-/// silently skipped.
-///
-/// # Safety
-/// Caller must ensure `log` and `index` belong to the same `HelixInstance`.
+/// Replay tail..=head, rebuilding the in-memory [`NamespaceIndex`]. v1 records
+/// without v2 path prefix are silently skipped. `log` + `index` must be from
+/// the same `HelixInstance`.
 pub fn replay_log<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,
     index: &mut NamespaceIndex,
 ) -> Result<Lsn, HelixError> {
-    // Clear any stale entries.
     index.clear();
 
     let start_offset = core::mem::size_of::<LogSegmentHeader>() as u32;
@@ -145,7 +119,7 @@ pub fn replay_log<B: BlockIo>(
         |hdr, payload| {
             let op = match LogOp::from_u8(hdr.op) {
                 Some(o) => o,
-                None => return Ok(()), // skip unknown ops
+                None => return Ok(()),
             };
 
             match op {
@@ -154,15 +128,13 @@ pub fn replay_log<B: BlockIo>(
                         let entry = NamespaceIndex::make_dir_entry(path, hdr.lsn, hdr.timestamp_ns);
                         index.upsert(entry);
                     }
-                }
+                },
 
                 LogOp::Write => {
                     if let Some((path, data)) = decode_path_payload(payload) {
-                        // v3 format: extent records start with 0xFF marker.
-                        // Inline records have raw data (≤ INLINE_DATA_SIZE bytes, no 0xFF prefix).
+                        // v3 extent: [0xFF][file_size: u64][logical: u64][physical: u64][count: u32][pad: u32].
+                        // Inline: raw data, no 0xFF prefix, len <= INLINE_DATA_SIZE.
                         if !data.is_empty() && data[0] == 0xFF && data.len() >= 1 + 8 + 24 {
-                            // Extent-based file — v3 format:
-                            // [0xFF][file_size: u64 LE][logical: u64][physical: u64][count: u32][pad: u32]
                             let file_size =
                                 u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
                             let phys = u64::from_le_bytes(
@@ -180,7 +152,6 @@ pub fn replay_log<B: BlockIo>(
                             );
                             index.upsert(entry);
                         } else if data.len() <= INLINE_DATA_SIZE {
-                            // Inline file — raw data bytes
                             let crc = if data.is_empty() {
                                 0
                             } else {
@@ -198,22 +169,21 @@ pub fn replay_log<B: BlockIo>(
                             index.upsert(entry);
                         }
                     }
-                }
+                },
 
                 LogOp::Delete => {
                     if let Some((path, _rest)) = decode_path_payload(payload) {
                         let _ = index.mark_deleted(path);
                     }
-                }
+                },
 
                 LogOp::Rename => {
-                    // v2 rename: [old_path_len: u16][old_path][new_path_len: u16][new_path]
+                    // v2: [old_path_len: u16][old_path][new_path_len: u16][new_path].
                     if let Some((old_path, rest)) = decode_path_payload(payload) {
                         if rest.len() >= 2 {
                             let new_len = u16::from_le_bytes([rest[0], rest[1]]) as usize;
                             if rest.len() >= 2 + new_len {
                                 if let Ok(new_path) = core::str::from_utf8(&rest[2..2 + new_len]) {
-                                    // Copy old entry, update path/key, delete old
                                     if let Some(old_entry) = index.lookup(old_path) {
                                         let mut new_entry = *old_entry;
                                         new_entry.key = fnv1a_64(new_path.as_bytes());
@@ -230,9 +200,9 @@ pub fn replay_log<B: BlockIo>(
                             }
                         }
                     }
-                }
+                },
 
-                // Transaction markers, snapshots, checkpoints — skip during replay
+                // Skipped during replay.
                 LogOp::SetMeta
                 | LogOp::DedupRef
                 | LogOp::TxBegin
@@ -240,49 +210,43 @@ pub fn replay_log<B: BlockIo>(
                 | LogOp::TxAbort
                 | LogOp::Snapshot
                 | LogOp::Checkpoint
-                | LogOp::Truncate => {}
+                | LogOp::Truncate => {},
 
                 LogOp::Append => {
-                    // Append: extend an existing file's data.
-                    // v2 payload: [path_len: u16][path][appended_data]
+                    // v2 payload: [path_len: u16][path][appended_data].
                     if let Some((path, appended)) = decode_path_payload(payload) {
                         if let Some(existing) = index.lookup_mut(path) {
                             let old_size = existing.size as usize;
                             let new_size = old_size + appended.len();
 
                             if existing.flags & entry_flags::IS_INLINE != 0 {
-                                // Inline file — extend inline_data if it still fits.
                                 if new_size <= INLINE_DATA_SIZE {
                                     existing.inline_data[old_size..new_size]
                                         .copy_from_slice(appended);
                                     existing.size = new_size as u64;
                                 } else {
-                                    // Overflow: data was promoted to an extent by the
-                                    // write path. The extent metadata should appear
-                                    // as a separate Write record; just update size.
+                                    // Promoted to extent by write path; that
+                                    // appears as a separate Write record.
                                     existing.flags &= !entry_flags::IS_INLINE;
                                     existing.size = new_size as u64;
                                 }
                             } else {
-                                // Extent-based file — data blocks were already
-                                // written by the original append operation.
-                                // Just update the size.
+                                // Data blocks already written by original append.
                                 existing.size = new_size as u64;
                             }
                             existing.lsn = hdr.lsn;
                             existing.modified_ns = hdr.timestamp_ns;
                             existing.version_count += 1;
                         }
-                        // If the entry doesn't exist yet, skip (orphaned append).
+                        // Orphaned append (entry missing): skip.
                     }
-                }
+                },
             }
 
             Ok(())
         },
     )?;
 
-    // Remove tombstoned entries after full replay.
     index.compact();
 
     Ok(highest_lsn)

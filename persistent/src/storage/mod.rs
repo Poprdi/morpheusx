@@ -1,5 +1,5 @@
 //! Future multi-layer persistence trait (ESP/TPM/CMOS/HVRAM). Current
-//! installer still calls `morpheus_core::fs::fat32_ops::write_file` directly.
+//! installer still calls `morpheus_storage_format::fs::fat32_ops::write_file` directly.
 
 pub mod esp;
 

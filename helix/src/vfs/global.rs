@@ -59,10 +59,11 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
     let mem_dev = MEM_DEVICE.as_mut().unwrap();
 
     let total_sectors = size as u64 / sector_size as u64;
+    // "MXROOT\0..\x01"
     let uuid = [
         0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x01,
-    ]; // "MXROOT\0\0\0\0\0\0\0\0\0\x01"
+    ];
 
     format::format_helix(mem_dev, 0, total_sectors, sector_size, "root", uuid)?;
 

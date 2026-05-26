@@ -1,9 +1,9 @@
-// Direct framebuffer primitives. No canvas, no trait dispatch.
+//! Direct framebuffer primitives. No canvas, no trait dispatch.
 
 pub const FONT_W: u32 = 8;
 pub const FONT_H: u32 = 16;
 
-// Embedded VGA font, printable ASCII (0x20..=0x7E).
+/// Embedded VGA font; printable ASCII `0x20..=0x7E`.
 pub static FONT_DATA: [[u8; 16]; 95] = include!("font_data.inc");
 
 #[inline(always)]
@@ -57,7 +57,7 @@ pub fn draw_char(
     let idx = if ch >= 0x20 && ch <= 0x7E {
         (ch - 0x20) as usize
     } else {
-        0 // fall back to space
+        0 // space fallback
     };
     let glyph = &FONT_DATA[idx];
 
@@ -136,7 +136,7 @@ pub fn draw_str_trunc(
             }
             end = bi;
         }
-        // Push `end` past the last kept char.
+        // Push `end` past the last kept char so the slice is byte-aligned.
         if keep > 0 {
             if let Some((bi, ch)) = s.char_indices().nth(keep - 1) {
                 end = bi + ch.len_utf8();
