@@ -1,0 +1,71 @@
+name: CI
+
+# Focused host CI: format, clippy, build, test. Runs on master.
+#
+# This is a mixed workspace: most crates are host-buildable libraries + host
+# tools, but the userland apps and the bootloader are `no_std`/`#![no_main]`
+# binaries for a custom bare-metal target — they cannot link for the host
+# (their `_start` collides with the host crt0). So we lint everything (clippy
+# type-checks bins without linking), but only *build* libraries + host tools
+# and only *test* the host-runnable crates. The bare-metal images are built
+# for their real target via `setup-dev.sh` / `testing/build.sh`.
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel superseded runs for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: fmt · clippy · build · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned toolchain matches rust-toolchain.toml (1.92.0).
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+
+      # build.rs in several crates assembles x86_64 `.s` files with NASM.
+      - name: Install NASM
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nasm
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude morpheus-bootloader --all-features --lib --bins -- -W warnings
+
+      - name: Build (libraries + host tools)
+        run: |
+          cargo build --workspace --lib --all-features
+          cargo build -p morpheus-cli -p keymap-gen
+
+      - name: Test (host-runnable crates)
+        run: |
+          cargo test --all-features \
+            -p iso9660-rs \
+            -p morpheus-storage-format \
+            -p morpheus-helix \
+            -p morpheus-gfx3d \
+            -p morpheus-ui \
+            -p morpheus-ping \
+            -p morpheus-block \
+            -p morpheus-nic \
+            -p morpheus-net-stack
