@@ -20,8 +20,11 @@ impl CoffHeader {
     /// "PE\0\0".
     pub const PE_SIGNATURE: u32 = 0x00004550;
 
-    /// SAFETY: `data + pe_offset` must point at the PE signature followed by
-    /// a valid COFF header, all within `size`.
+    /// # Safety
+    ///
+    /// `data` must be readable for at least `size` bytes, and
+    /// `data + pe_offset` must point at the PE signature followed by a COFF
+    /// header that lies entirely within `size`.
     pub unsafe fn parse(data: *const u8, pe_offset: u32, size: usize) -> PeResult<Self> {
         let offset = pe_offset as usize;
 

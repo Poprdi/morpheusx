@@ -74,6 +74,22 @@ pub fn read_stdin(buf: &mut [u8]) -> usize {
     }
 }
 
+/// Non-blocking drain of the kernel keyboard event ring — raw PS/2 Set 1
+/// bytes (break encoded as `|0x80`, `0xE0` prefix as its own byte). Returns
+/// the number of bytes read (0 if empty). The compositor reads input through
+/// this rather than the stdin byte stream.
+pub fn read_keyboard(buf: &mut [u8]) -> usize {
+    if buf.is_empty() {
+        return 0;
+    }
+    let ret = unsafe { syscall2(SYS_KEYBOARD_READ, buf.as_mut_ptr() as u64, buf.len() as u64) };
+    if crate::is_error(ret) {
+        0
+    } else {
+        ret as usize
+    }
+}
+
 /// Read a line with local echo; newline consumed and not stored.
 pub fn read_line(buf: &mut [u8]) -> usize {
     let mut pos = 0;
@@ -540,7 +556,6 @@ pub fn terminal_size() -> (u16, u16, u16, u16) {
     (buf[0], buf[1], buf[2], buf[3])
 }
 
-/// Bytes available on stdin without blocking.
 pub fn stdin_available() -> usize {
     let mut avail = 0u32;
     let _ = ioctl(0, IOCTL_FIONREAD, &mut avail as *mut u32 as u64);

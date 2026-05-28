@@ -15,12 +15,14 @@ pub struct MouseReport {
     pub wheel: i8,
 }
 
+/// # Safety
+/// `report` must point to a readable `MouseReport` in the DMA buffer.
 pub unsafe fn parse_mouse_report(
     _controller: &mut XhciController,
     _iface: &HIDInterface,
     report: *const MouseReport,
 ) -> Result<(), XhciError> {
-    let report = &*(report as *const MouseReport);
+    let report = &*report;
 
     // Push a single composite event to the kernel sink. Kernel translates
     // it into the InputEvent stream (move / button / wheel) as needed.
@@ -37,6 +39,10 @@ pub fn register_handler() {
 }
 
 /// TODO: real interrupt-in handling. Parses whatever's in OFF_REPORT today.
+///
+/// # Safety
+/// `controller` must have valid DMA mappings and the caller must hold exclusive
+/// access; the report region must contain a valid `MouseReport`.
 pub unsafe fn handle_interrupt_transfer(
     controller: &mut XhciController,
     iface: &HIDInterface,

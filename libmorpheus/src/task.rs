@@ -136,6 +136,12 @@ pub struct Runtime {
     queue: Arc<TaskQueue>,
 }
 
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runtime {
     pub fn new() -> Self {
         Self {

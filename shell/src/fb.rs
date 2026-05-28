@@ -57,6 +57,7 @@ impl Framebuffer {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn put_pixel(&self, x: u32, y: u32, r: u8, g: u8, b: u8) {
         if self.is_locked() {
             return;

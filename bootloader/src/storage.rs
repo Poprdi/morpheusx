@@ -175,7 +175,7 @@ static mut STORAGE_REGION_SECTORS: u64 = 0;
 static mut PERSISTENT_READY: bool = false;
 
 const RAM_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
-static mut RAM_STAGE_LAST_REASON: &'static str = "none";
+static mut RAM_STAGE_LAST_REASON: &str = "none";
 
 const GPT_SIG: &[u8; 8] = b"EFI PART";
 /// ESP type GUID, little-endian on-disk.
@@ -219,7 +219,7 @@ fn le_u64(buf: &[u8], off: usize) -> u64 {
 fn select_largest_gpt_free_region(
     first_usable: u64,
     last_usable: u64,
-    used_ranges: &mut alloc::vec::Vec<(u64, u64)>,
+    used_ranges: &mut [(u64, u64)],
     sector_size: u32,
 ) -> Option<DataRegion> {
     if first_usable == 0 || last_usable < first_usable {
@@ -266,7 +266,7 @@ fn select_largest_gpt_free_region(
         }
     }
 
-    let min_free_sectors = ((64u64 * 1024 * 1024) + (sector_size as u64 - 1)) / sector_size as u64;
+    let min_free_sectors = (64u64 * 1024 * 1024).div_ceil(sector_size as u64);
     if best_sectors >= min_free_sectors {
         Some(DataRegion {
             lba_start: best_start,
@@ -438,6 +438,8 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
         let mut best_start = 0u64;
         let mut best_sectors = 0u64;
 
+        // Index `i` also computes the byte offset into the MBR table, not just a slice index.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..MBR_PARTS {
             let off = MBR_PART_OFF + (i * MBR_PART_SIZE);
             let ptype = first_two[off + 4];
@@ -661,6 +663,7 @@ pub unsafe fn init_persistent_storage(
     // Skip boot disks (GPT/MBR), accept first blank or HelixFS device.
     let mut found_data_disk = false;
     let mut saw_unimplemented_backend = false;
+    #[allow(clippy::needless_range_loop)]
     'device_scan: for i in 0..dev_count {
         let detected = match &devices[i] {
             Some(d) => d,
@@ -1024,7 +1027,7 @@ pub unsafe fn init_persistent_storage(
         // Commit only after proving the candidate holds HelixFS.
         log_ok("STORAGE", 827, "selected data-disk candidate");
 
-        let mut raw_dev = make_raw_block_device();
+        let _raw_dev = make_raw_block_device();
 
         let needs_format = {
             let mut probe_dev = make_raw_block_device();

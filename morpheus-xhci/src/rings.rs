@@ -25,6 +25,9 @@ impl Trb {
 }
 
 /// Write a TRB at `base + idx*16`. Ctrl written last to set cycle state atomically.
+///
+/// # Safety
+/// `base + idx*16 .. +16` must lie within a valid, exclusively-owned DMA ring.
 #[inline(always)]
 pub unsafe fn write_trb(base: u64, idx: usize, param: u64, status: u32, ctrl: u32) {
     let a = base + (idx as u64) * 16;
@@ -35,18 +38,27 @@ pub unsafe fn write_trb(base: u64, idx: usize, param: u64, status: u32, ctrl: u3
 }
 
 /// Volatile read of a 32-bit value from DMA RAM.
+///
+/// # Safety
+/// `a` must be a valid, 4-byte-aligned address inside a mapped DMA region.
 #[inline(always)]
 pub unsafe fn vr32(a: u64) -> u32 {
     core::ptr::read_volatile(a as *const u32)
 }
 
 /// Volatile write of a 32-bit value to DMA RAM.
+///
+/// # Safety
+/// `a` must be a valid, 4-byte-aligned address inside a mapped DMA region.
 #[inline(always)]
 pub unsafe fn vw32(a: u64, v: u32) {
     core::ptr::write_volatile(a as *mut u32, v);
 }
 
 /// Volatile write of a 64-bit value to DMA RAM (two dwords).
+///
+/// # Safety
+/// `a .. a+8` must be a valid, 4-byte-aligned range inside a mapped DMA region.
 #[inline(always)]
 pub unsafe fn vw64(a: u64, v: u64) {
     vw32(a, v as u32);
@@ -72,6 +84,9 @@ impl CmdRing {
     }
 
     /// Enqueue a TRB and advance producer. Wraps if ring is full.
+    ///
+    /// # Safety
+    /// `self.base` must point to a valid, exclusively-owned command ring in DMA.
     #[inline(always)]
     pub unsafe fn enqueue(&mut self, param: u64, status: u32, ctrl: u32) {
         let c = (ctrl & !1) | (self.cycle as u32);
@@ -104,6 +119,10 @@ impl XferRing {
         }
     }
 
+    /// Enqueue a TRB and advance producer. Wraps if ring is full.
+    ///
+    /// # Safety
+    /// `self.base` must point to a valid, exclusively-owned transfer ring in DMA.
     #[inline(always)]
     pub unsafe fn enqueue(&mut self, param: u64, status: u32, ctrl: u32) {
         let c = (ctrl & !1) | (self.cycle as u32);
@@ -142,6 +161,9 @@ impl EvtRing {
     }
 
     /// Read the current event TRB without advancing (for inspection).
+    ///
+    /// # Safety
+    /// `self.base` must point to a valid, exclusively-owned event ring in DMA.
     #[inline(always)]
     pub unsafe fn peek(&self) -> Option<(u64, u32, u32)> {
         let a = self.base + (self.deq as u64) * 16;

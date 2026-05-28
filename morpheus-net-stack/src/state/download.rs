@@ -1,23 +1,8 @@
-//! ISO download orchestration state machine.
+//! ISO download orchestrator composing DHCP -> HTTP -> disk write, streaming
+//! multi-GB ISOs straight to VirtIO-blk rather than buffering in memory.
 //!
-//! Composes DHCP → HTTP state machines for complete ISO download workflow.
-//!
-//! # Architecture
-//!
-//! ```text
-//! Init → WaitingForNetwork → Downloading → WritingToDisk → Done
-//!   ↓           ↓                 ↓              ↓            
-//! Failed     Failed           Failed         Failed
-//! ```
-//!
-//! # Streaming Support
-//!
-//! For large ISO downloads (often 1-4GB), data is streamed directly to disk
-//! rather than buffered in memory. The state machine coordinates:
-//!
-//! 1. DHCP: Obtain network configuration
-//! 2. HTTP: Download ISO with streaming callbacks
-//! 3. Disk: Write chunks to VirtIO-blk as they arrive
+//! Init -> WaitingForNetwork -> Downloading -> Done, with Failed reachable
+//! from each active state.
 
 use alloc::string::{String, ToString};
 use core::net::Ipv4Addr;
@@ -28,24 +13,15 @@ use super::tcp::TcpSocketState;
 use super::{Progress, StateError, StepResult, TscTimestamp};
 use crate::url::Url;
 
-/// Errors during ISO download.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadError {
-    /// DHCP failed to obtain address
     NetworkError(DhcpError),
-    /// HTTP download failed
     HttpError(HttpError),
-    /// Invalid URL
     InvalidUrl,
-    /// Checksum verification failed
     ChecksumMismatch,
-    /// Disk write failed
     DiskWriteError,
-    /// Not enough disk space
     InsufficientSpace,
-    /// ISO too large for available memory
     IsoTooLarge,
-    /// Download cancelled
     Cancelled,
 }
 
@@ -67,23 +43,17 @@ impl From<DownloadError> for StateError {
     }
 }
 
-/// Configuration for ISO download.
 #[derive(Debug, Clone)]
 pub struct DownloadConfig {
-    /// URL of ISO to download
     pub url: Url,
-    /// Expected SHA-256 hash (optional, for verification)
+    /// Optional SHA-256 for post-download verification.
     pub expected_hash: Option<[u8; 32]>,
-    /// Maximum file size (bytes)
     pub max_size: Option<usize>,
-    /// Target disk sector offset for writing
     pub disk_start_sector: u64,
-    /// Sector size (usually 512)
     pub sector_size: usize,
 }
 
 impl DownloadConfig {
-    /// Create new download config.
     pub fn new(url: Url) -> Self {
         Self {
             url,
@@ -94,13 +64,11 @@ impl DownloadConfig {
         }
     }
 
-    /// Set expected SHA-256 hash for verification.
     pub fn with_hash(mut self, hash: [u8; 32]) -> Self {
         self.expected_hash = Some(hash);
         self
     }
 
-    /// Set maximum allowed file size.
     pub fn with_max_size(mut self, max_size: usize) -> Self {
         self.max_size = Some(max_size);
         self
@@ -113,38 +81,26 @@ impl DownloadConfig {
     }
 }
 
-/// Overall download progress.
 #[derive(Debug, Clone, Copy)]
 pub struct DownloadProgress {
-    /// Current phase
     pub phase: DownloadPhase,
-    /// Bytes downloaded
     pub bytes_downloaded: usize,
-    /// Total expected bytes (if known)
     pub total_bytes: Option<usize>,
-    /// Bytes written to disk
     pub bytes_written: usize,
 }
 
-/// Download phase for progress tracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadPhase {
-    /// Waiting for network
     WaitingForNetwork,
-    /// Connecting to server
     Connecting,
-    /// Downloading data
     Downloading,
-    /// Writing to disk
     WritingToDisk,
-    /// Verifying checksum
     Verifying,
-    /// Complete
     Complete,
 }
 
 impl DownloadProgress {
-    /// Calculate overall percentage (0-100).
+    /// 0-100, weighting connect at 5% and download/write at 5-95%.
     pub fn percent(&self) -> Option<u8> {
         match self.phase {
             DownloadPhase::WaitingForNetwork => Some(0),
@@ -176,80 +132,51 @@ impl From<DownloadProgress> for Progress {
     }
 }
 
-/// Result of successful download.
 #[derive(Debug, Clone)]
 pub struct DownloadResult {
-    /// Total bytes downloaded
     pub total_bytes: usize,
-    /// HTTP response info
     pub response_info: HttpResponseInfo,
-    /// Starting sector on disk
     pub disk_start_sector: u64,
-    /// Number of sectors written
     pub sectors_written: u64,
 }
 
-/// ISO download orchestration state machine.
-///
-/// Coordinates DHCP → HTTP → Disk Write workflow.
 #[derive(Debug)]
 pub(crate) enum IsoDownloadState {
-    /// Initial state with configuration.
-    Init { config: DownloadConfig },
-
-    /// Waiting for DHCP to obtain network configuration.
-    WaitingForNetwork {
-        /// DHCP state machine
-        dhcp: DhcpState,
-        /// Download configuration
+    Init {
         config: DownloadConfig,
     },
-
-    /// Network ready, downloading ISO.
-    Downloading {
-        /// HTTP download state machine
-        http: HttpDownloadState,
-        /// Network configuration from DHCP
-        network_config: DhcpConfig,
-        /// Download configuration
+    WaitingForNetwork {
+        dhcp: DhcpState,
         config: DownloadConfig,
-        /// Current disk write position (sectors)
+    },
+    Downloading {
+        http: HttpDownloadState,
+        network_config: DhcpConfig,
+        config: DownloadConfig,
         disk_position: u64,
-        /// Bytes pending disk write
         pending_write: usize,
-        /// Total bytes written to disk
         bytes_written: usize,
     },
-
-    /// Download complete, verifying checksum (if hash provided).
     Verifying {
-        /// Download result so far
         result: DownloadResult,
-        /// Expected hash
         expected_hash: [u8; 32],
-        /// Verification progress (bytes checked)
         verified_bytes: usize,
-        /// When verification started
         start_tsc: TscTimestamp,
     },
-
-    /// Download and verification complete.
-    Done { result: DownloadResult },
-
-    /// Download failed.
-    Failed { error: DownloadError },
+    Done {
+        result: DownloadResult,
+    },
+    Failed {
+        error: DownloadError,
+    },
 }
 
 impl IsoDownloadState {
-    /// Create new download state machine.
     pub fn new(config: DownloadConfig) -> Self {
         IsoDownloadState::Init { config }
     }
 
-    /// Start the download.
-    ///
-    /// If already have network config, skip DHCP.
-    /// Otherwise, start DHCP first.
+    /// Skip DHCP if `existing_network` is provided, else run DHCP first.
     pub fn start(&mut self, existing_network: Option<DhcpConfig>, now_tsc: u64) {
         if let IsoDownloadState::Init { config } = self {
             let config = core::mem::replace(
@@ -264,7 +191,6 @@ impl IsoDownloadState {
             );
 
             if let Some(network_config) = existing_network {
-                // Already have network, start HTTP download
                 match HttpDownloadState::new(config.url.clone()) {
                     Ok(mut http) => {
                         http.start(now_tsc);
@@ -284,7 +210,6 @@ impl IsoDownloadState {
                     },
                 }
             } else {
-                // Need DHCP first
                 let mut dhcp = DhcpState::new();
                 dhcp.start(now_tsc);
                 *self = IsoDownloadState::WaitingForNetwork { dhcp, config };
@@ -292,7 +217,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Step the state machine.
     pub fn step(
         &mut self,
         dhcp_event: Option<Result<DhcpConfig, ()>>,
@@ -308,7 +232,6 @@ impl IsoDownloadState {
         http_send_timeout: u64,
         http_recv_timeout: u64,
     ) -> StepResult {
-        // Take ownership for state transitions
         let current = core::mem::replace(
             self,
             IsoDownloadState::Init {
@@ -342,7 +265,6 @@ impl IsoDownloadState {
         result
     }
 
-    /// Internal step implementation.
     #[allow(clippy::too_many_arguments)]
     fn step_inner(
         &self,
@@ -362,19 +284,15 @@ impl IsoDownloadState {
     ) -> (IsoDownloadState, StepResult) {
         match current {
             IsoDownloadState::Init { config } => {
-                // Not started yet
                 (IsoDownloadState::Init { config }, StepResult::Pending)
             },
 
             IsoDownloadState::WaitingForNetwork { mut dhcp, config } => {
-                // Step DHCP state machine
-                // Convert Option<Result<DhcpConfig, ()>> to Option<DhcpConfig>
                 let dhcp_config = dhcp_event.and_then(|r| r.ok());
                 let result = dhcp.step(dhcp_config, now_tsc, dhcp_timeout);
 
                 match result {
                     StepResult::Done => {
-                        // Network ready, start HTTP download
                         let network_config = *dhcp.config().unwrap();
 
                         match HttpDownloadState::new(config.url.clone()) {
@@ -430,7 +348,6 @@ impl IsoDownloadState {
                 mut pending_write,
                 mut bytes_written,
             } => {
-                // Process disk write result first
                 if let Some(write_result) = disk_write_result {
                     match write_result {
                         Ok(written) => {
@@ -449,7 +366,6 @@ impl IsoDownloadState {
                     }
                 }
 
-                // Check max size before proceeding
                 if let (Some(max_size), Some(content_length)) = (
                     config.max_size,
                     http.response_info().and_then(|r| r.content_length),
@@ -464,7 +380,6 @@ impl IsoDownloadState {
                     }
                 }
 
-                // Step HTTP state machine
                 let result = http.step(
                     dns_result,
                     tcp_state,
@@ -477,17 +392,15 @@ impl IsoDownloadState {
                     http_recv_timeout,
                 );
 
-                // Track pending writes from received data
+                // Body bytes (response_info present) become pending disk writes.
                 if let Some(data) = recv_data {
                     if http.response_info().is_some() {
-                        // We're in body reception phase
                         pending_write += data.len();
                     }
                 }
 
                 match result {
                     StepResult::Done => {
-                        // HTTP complete
                         let (response_info, total_bytes) = http.result().unwrap();
                         let sectors_written = (bytes_written / config.sector_size) as u64;
 
@@ -498,7 +411,6 @@ impl IsoDownloadState {
                             sectors_written,
                         };
 
-                        // Check if we need verification
                         if let Some(expected_hash) = config.expected_hash {
                             (
                                 IsoDownloadState::Verifying {
@@ -556,11 +468,7 @@ impl IsoDownloadState {
                 verified_bytes: _,
                 start_tsc: _,
             } => {
-                // TODO: Implement actual hash verification
-                // For now, skip verification (always pass)
-                // In real implementation, would read sectors back and compute SHA-256
-
-                // Just mark as done for now
+                // TODO: read sectors back and compare SHA-256; currently a no-op pass.
                 (IsoDownloadState::Done { result }, StepResult::Done)
             },
 
@@ -624,7 +532,7 @@ impl IsoDownloadState {
                 bytes_written: result.total_bytes,
             },
             IsoDownloadState::Failed { .. } => DownloadProgress {
-                phase: DownloadPhase::Downloading, // Keep last known phase
+                phase: DownloadPhase::Downloading,
                 bytes_downloaded: 0,
                 total_bytes: None,
                 bytes_written: 0,
@@ -632,7 +540,6 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get download result (if complete).
     pub fn result(&self) -> Option<&DownloadResult> {
         if let IsoDownloadState::Done { result } = self {
             Some(result)
@@ -678,9 +585,7 @@ impl IsoDownloadState {
         }
     }
 
-    /// Get data pending disk write.
-    ///
-    /// Returns (current_sector, bytes_pending)
+    /// `(current_sector, bytes_pending)` if any data awaits writing.
     pub fn pending_disk_write(&self) -> Option<(u64, usize)> {
         if let IsoDownloadState::Downloading {
             config,
@@ -699,7 +604,7 @@ impl IsoDownloadState {
         }
     }
 
-    /// Check if download is complete (success or failure).
+    /// Done or failed.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -707,7 +612,6 @@ impl IsoDownloadState {
         )
     }
 
-    /// Check if download is in progress.
     pub fn is_active(&self) -> bool {
         !matches!(
             self,

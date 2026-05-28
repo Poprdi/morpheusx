@@ -1,6 +1,7 @@
 use libmorpheus::env;
 use libmorpheus::io;
 
+#[allow(dead_code)]
 pub fn render(last_status: i32) {
     let cwd = env::current_dir().unwrap_or_else(|_| alloc::string::String::from("/"));
 

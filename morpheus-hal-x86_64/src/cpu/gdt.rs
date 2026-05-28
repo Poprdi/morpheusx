@@ -118,6 +118,12 @@ pub struct Tss {
     pub iopb_offset: u16,
 }
 
+impl Default for Tss {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tss {
     pub const fn new() -> Self {
         Self {
@@ -191,6 +197,8 @@ static mut GDT_INITIALIZED: bool = false;
 ///
 /// # Safety
 /// Once per CPU. `kernel_stack` must be a mapped stack top.
+// SAFETY: single-threaded boot/init context; static accessed before APs start, no aliasing.
+#[allow(static_mut_refs)]
 pub unsafe fn init_gdt(kernel_stack: u64) {
     if GDT_INITIALIZED {
         crate::serial::log_warn("GDT", 710, "already initialized");

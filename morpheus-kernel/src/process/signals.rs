@@ -3,6 +3,8 @@
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
+// Variant names mirror POSIX/Linux signal mnemonics verbatim.
+#[allow(clippy::upper_case_acronyms)]
 pub enum Signal {
     SIGINT = 2,
     SIGKILL = 9,

@@ -51,11 +51,9 @@ impl ArchiveChamber {
     }
 
     pub fn handle_key(&mut self, scancode: u8) {
-        if !self.searching {
-            if scancode == 0x35 || scancode == b'/' {
-                self.searching = true;
-                return;
-            }
+        if !self.searching && (scancode == 0x35 || scancode == b'/') {
+            self.searching = true;
+            return;
         }
 
         if self.searching {
@@ -396,7 +394,7 @@ fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[inline(always)]
 fn to_lower(b: u8) -> u8 {
-    if b >= b'A' && b <= b'Z' {
+    if b.is_ascii_uppercase() {
         b + 32
     } else {
         b

@@ -1,11 +1,12 @@
 //! Stack-buffered GPT manipulation. UEFI 2.10 §5.3.
 
 use gpt_disk_io::BlockIo;
-use gpt_disk_types::{Lba, LbaLe};
+use gpt_disk_types::Lba;
 
-use super::types::{guid, DiskError, DiskResult, PartitionInfo, SECTOR_SIZE};
+use super::types::{DiskError, DiskResult, PartitionInfo, SECTOR_SIZE};
 
 const GPT_SIGNATURE: &[u8; 8] = b"EFI PART";
+#[allow(dead_code)]
 const GPT_REVISION: u32 = 0x00010000;
 const PARTITION_ENTRY_SIZE: usize = 128;
 const MAX_PARTITION_ENTRIES: usize = 128;

@@ -52,7 +52,6 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         return EPERM;
     }
 
-    // verify source vma in the caller
     let phys = {
         let caller_proc = SCHEDULER.current_memory_leader_mut();
         let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {

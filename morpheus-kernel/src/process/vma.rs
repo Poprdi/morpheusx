@@ -45,6 +45,12 @@ pub struct VmaTable {
     entries: [Vma; MAX_VMAS],
 }
 
+impl Default for VmaTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VmaTable {
     pub const fn new() -> Self {
         Self {

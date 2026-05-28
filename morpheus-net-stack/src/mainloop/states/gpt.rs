@@ -252,7 +252,7 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
             let size_bytes = if ctx.config.expected_size > 0 {
                 ctx.config.expected_size
             } else {
-                8 * 1024 * 1024 * 1024 // default 8 GB cap
+                8 * 1024 * 1024 * 1024 // default 8 GB
             };
             let sectors_needed = size_bytes.div_ceil(512);
             let requested_end = ctx.config.target_start_sector + sectors_needed - 1;

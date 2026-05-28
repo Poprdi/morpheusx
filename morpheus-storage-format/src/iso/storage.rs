@@ -1,26 +1,4 @@
-//! ISO Storage Manager
-//!
-//! High-level orchestration for ISO storage operations. This module
-//! coordinates GPT partitioning, manifest management, and chunk I/O.
-//!
-//! # Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                    IsoStorageManager                        │
-//! ├─────────────────────────────────────────────────────────────┤
-//! │  - Enumerate stored ISOs (from manifests on ESP)            │
-//! │  - Allocate chunk partitions for new ISOs                   │
-//! │  - Track download progress                                  │
-//! │  - Provide read access for booting                          │
-//! └─────────────────────────────────────────────────────────────┘
-//!          │                    │                    │
-//!          ▼                    ▼                    ▼
-//!   ┌────────────┐      ┌────────────┐      ┌────────────┐
-//!   │  manifest  │      │   writer   │      │   reader   │
-//!   │  (ESP)     │      │  (chunks)  │      │  (chunks)  │
-//!   └────────────┘      └────────────┘      └────────────┘
-//! ```
+//! Orchestrates ISO storage: GPT partitioning, manifests on ESP, chunk I/O.
 
 use super::chunk::{ChunkSet, MAX_CHUNKS};
 use super::error::IsoError;
@@ -29,23 +7,19 @@ use super::reader::{ChunkReader, IsoReadContext};
 use super::writer::ChunkWriter;
 use super::{DEFAULT_CHUNK_SIZE, FAT32_MAX_FILE_SIZE};
 
-/// Maximum number of ISOs that can be tracked
 pub const MAX_ISOS: usize = 8;
 
-/// Manifest directory path on ESP
+/// Manifest directory on ESP.
 pub const MANIFEST_DIR: &str = "/.iso";
 
-/// ISO storage entry (metadata only, no chunk data)
+/// ISO metadata, no chunk data.
 #[derive(Clone)]
 pub struct IsoEntry {
-    /// Manifest data
     pub manifest: IsoManifest,
-    /// Whether this entry is valid/populated
     pub valid: bool,
 }
 
 impl IsoEntry {
-    /// Create an empty entry
     pub const fn empty() -> Self {
         Self {
             manifest: IsoManifest {
@@ -67,35 +41,25 @@ impl Default for IsoEntry {
     }
 }
 
-/// Storage allocation result
 #[derive(Debug, Clone)]
 pub struct AllocationResult {
-    /// Partition LBAs (start, end) for each chunk
+    /// Per-chunk partition LBAs (start, end).
     pub partitions: [(u64, u64); MAX_CHUNKS],
-    /// Number of partitions allocated
     pub count: usize,
-    /// Total space allocated in bytes
     pub total_bytes: u64,
 }
 
-/// ISO storage manager
-///
-/// Manages ISO manifests and coordinates chunk allocation.
+/// Tracks ISO manifests and coordinates chunk allocation.
 pub struct IsoStorageManager {
-    /// Cached ISO entries (loaded from ESP)
     entries: [IsoEntry; MAX_ISOS],
-    /// Number of valid entries
     entry_count: usize,
-    /// ESP partition start LBA (for manifest storage)
+    /// ESP partition start LBA for manifest storage.
     esp_start_lba: u64,
-    /// Target disk for chunk partitions
     target_disk_size_lba: u64,
-    /// Chunk size to use
     chunk_size: u64,
 }
 
 impl IsoStorageManager {
-    /// Create a new storage manager
     pub fn new(esp_start_lba: u64, target_disk_size_lba: u64) -> Self {
         Self {
             entries: [
@@ -119,12 +83,10 @@ impl IsoStorageManager {
         self.chunk_size = size.min(FAT32_MAX_FILE_SIZE);
     }
 
-    /// Get number of stored ISOs
     pub fn count(&self) -> usize {
         self.entry_count
     }
 
-    /// Get ISO entry by index
     pub fn get(&self, index: usize) -> Option<&IsoEntry> {
         if index < self.entry_count && self.entries[index].valid {
             Some(&self.entries[index])
@@ -142,24 +104,18 @@ impl IsoStorageManager {
         ((iso_size + self.chunk_size - 1) / self.chunk_size) as usize
     }
 
-    /// Calculate total disk space needed (with FAT32 overhead)
+    /// Disk space needed including ~1 MB/chunk FAT32 overhead.
     pub fn space_needed(&self, iso_size: u64) -> u64 {
         let chunks = self.chunks_needed(iso_size);
-        // Add ~1MB per chunk for FAT32 overhead
         iso_size + (chunks as u64 * 1024 * 1024)
     }
 
-    /// Check if there's enough space for an ISO
-    ///
-    /// This is a quick estimate - actual allocation may vary based on
-    /// partition alignment and existing partitions.
+    /// Rough estimate; assumes half the disk is usable.
     pub fn has_space_for(&self, iso_size: u64) -> bool {
         let needed_lba = self.space_needed(iso_size) / 512;
-        // Very rough estimate - assumes half the disk is usable
         needed_lba < self.target_disk_size_lba / 2
     }
 
-    /// Add a manifest entry (called after loading from ESP)
     pub fn add_entry(&mut self, manifest: IsoManifest) -> Result<usize, IsoError> {
         if self.entry_count >= MAX_ISOS {
             return Err(IsoError::IsoTooLarge);
@@ -180,7 +136,6 @@ impl IsoStorageManager {
             return Err(IsoError::ManifestNotFound);
         }
 
-        // Shift entries down
         for i in index..self.entry_count - 1 {
             self.entries[i] = self.entries[i + 1].clone();
         }
@@ -190,30 +145,23 @@ impl IsoStorageManager {
         Ok(())
     }
 
-    /// Prepare storage for a new ISO download
-    ///
-    /// This creates the manifest and reserves partition slots.
-    /// The actual partitions should be created via GPT operations.
-    ///
-    /// Returns (entry_index, manifest) that can be used with a ChunkWriter.
+    /// Creates the manifest and reserves slots; partitions created via GPT ops.
+    /// Returns (entry_index, manifest) for a ChunkWriter.
     pub fn prepare_download(
         &mut self,
         name: &str,
         total_size: u64,
         sha256: Option<&[u8; 32]>,
     ) -> Result<(usize, IsoManifest), IsoError> {
-        // Check if already exists
         if self.find_by_name(name).is_some() {
             return Err(IsoError::ManifestExists);
         }
 
-        // Check space
         let chunks_needed = self.chunks_needed(total_size);
         if chunks_needed > MAX_CHUNKS {
             return Err(IsoError::IsoTooLarge);
         }
 
-        // Create manifest
         let mut manifest = IsoManifest::new(name, total_size);
         if let Some(hash) = sha256 {
             manifest.set_sha256(hash);
@@ -222,26 +170,20 @@ impl IsoStorageManager {
         Ok((self.entry_count, manifest))
     }
 
-    /// Finalize a download (update manifest, add entry)
     pub fn finalize_download(
         &mut self,
         mut manifest: IsoManifest,
         chunks: ChunkSet,
     ) -> Result<usize, IsoError> {
-        // Update manifest with actual chunk data
         manifest.chunks = chunks;
         manifest.mark_complete();
-
-        // Add to entries
         self.add_entry(manifest)
     }
 
-    /// Create a ChunkWriter for an ISO download
     pub fn create_writer(&self, manifest: &IsoManifest) -> Result<ChunkWriter, IsoError> {
         ChunkWriter::from_manifest(manifest)
     }
 
-    /// Create a ChunkReader for booting an ISO
     pub fn create_reader(&self, index: usize) -> Result<ChunkReader, IsoError> {
         let entry = self.get(index).ok_or(IsoError::ManifestNotFound)?;
 
@@ -252,7 +194,6 @@ impl IsoStorageManager {
         ChunkReader::from_manifest(&entry.manifest)
     }
 
-    /// Get read context for boot loader (lightweight, copyable)
     pub fn get_read_context(&self, index: usize) -> Result<IsoReadContext, IsoError> {
         let entry = self.get(index).ok_or(IsoError::ManifestNotFound)?;
 
@@ -263,7 +204,6 @@ impl IsoStorageManager {
         Ok(IsoReadContext::from_manifest(&entry.manifest))
     }
 
-    /// Iterator over valid ISO entries
     pub fn iter(&self) -> IsoEntryIterator<'_> {
         IsoEntryIterator {
             entries: &self.entries,
@@ -272,9 +212,7 @@ impl IsoStorageManager {
         }
     }
 
-    /// Get list of partition LBAs used by all ISOs
-    ///
-    /// Useful for avoiding allocation conflicts when creating new partitions.
+    /// Partition LBAs used by all ISOs, for avoiding allocation conflicts.
     pub fn used_partitions(&self) -> [(u64, u64); 64] {
         let mut result = [(0u64, 0u64); 64];
         let mut idx = 0;
@@ -310,7 +248,6 @@ impl Default for IsoStorageManager {
     }
 }
 
-/// Iterator over ISO entries
 pub struct IsoEntryIterator<'a> {
     entries: &'a [IsoEntry; MAX_ISOS],
     count: usize,
@@ -333,16 +270,12 @@ impl<'a> Iterator for IsoEntryIterator<'a> {
     }
 }
 
-/// Partition allocation request
 #[derive(Debug, Clone, Copy)]
 pub struct PartitionRequest {
-    /// Minimum size in bytes
     pub min_size: u64,
-    /// Preferred size in bytes
     pub preferred_size: u64,
-    /// Partition name (for GPT)
+    /// GPT partition name.
     pub name: [u8; 32],
-    /// Name length
     pub name_len: usize,
 }
 
@@ -351,19 +284,17 @@ impl PartitionRequest {
         let mut name = [0u8; 32];
         let prefix = b"ISO_CHUNK_";
         name[..prefix.len()].copy_from_slice(prefix);
-        // Add chunk number
         let digit = b'0' + (chunk_index as u8 % 10);
         name[prefix.len()] = digit;
 
         Self {
             min_size: data_size,
-            preferred_size: data_size + (1024 * 1024), // +1MB for FAT32 overhead
+            preferred_size: data_size + (1024 * 1024), // +1 MB FAT32 overhead
             name,
             name_len: prefix.len() + 1,
         }
     }
 
-    /// Get partition name as string
     pub fn name_str(&self) -> &str {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("ISO_CHUNK")
     }
@@ -377,16 +308,9 @@ mod tests {
     fn test_chunks_needed() {
         let manager = IsoStorageManager::new(0, 100_000_000);
 
-        // Under 4GB - 1 chunk
         assert_eq!(manager.chunks_needed(1_000_000_000), 1);
-
-        // Exactly 4GB - 1 chunk
         assert_eq!(manager.chunks_needed(DEFAULT_CHUNK_SIZE), 1);
-
-        // Just over 4GB - 2 chunks
         assert_eq!(manager.chunks_needed(DEFAULT_CHUNK_SIZE + 1), 2);
-
-        // ~8GB - 2 chunks
         assert_eq!(manager.chunks_needed(8_000_000_000), 2);
     }
 
@@ -407,11 +331,9 @@ mod tests {
     fn test_duplicate_detection() {
         let mut manager = IsoStorageManager::new(2048, 100_000_000);
 
-        // Add first ISO
         let manifest = IsoManifest::new("ubuntu.iso", 1_000_000_000);
         manager.add_entry(manifest).unwrap();
 
-        // Try to prepare duplicate
         let result = manager.prepare_download("ubuntu.iso", 1_000_000_000, None);
         assert!(matches!(result, Err(IsoError::ManifestExists)));
     }

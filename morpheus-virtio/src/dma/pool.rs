@@ -1,7 +1,6 @@
 //! Pre-allocated DMA buffer pool with free-list tracking.
 
 use super::buffer::DmaBuffer;
-use super::ownership::BufferOwnership;
 
 pub const MAX_POOL_SIZE: usize = 32;
 

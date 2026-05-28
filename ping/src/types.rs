@@ -16,7 +16,7 @@ impl Ipv4Addr {
     }
 
     /// Network byte order.
-    pub const fn to_u32(&self) -> u32 {
+    pub const fn to_u32(self) -> u32 {
         u32::from_be_bytes(self.0)
     }
 

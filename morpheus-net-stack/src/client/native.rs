@@ -1,48 +1,4 @@
-//! Native HTTP client using bare metal TCP/IP stack.
-//!
-//! This client uses smoltcp over a `NetworkDevice` driver directly,
-//! bypassing UEFI protocols entirely. Works with any network hardware
-//! that implements the `NetworkDevice` trait.
-//!
-//! # Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                   NativeHttpClient<D>                       │
-//! │  (HTTP/1.1 request/response, redirects, streaming)          │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                   NetInterface<D>                           │
-//! │  (TCP sockets, DHCP, IP routing via smoltcp)               │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │              NetworkDevice (VirtIO, Intel, etc.)            │
-//! └─────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use morpheus_network::client::native::NativeHttpClient;
-//! use morpheus_network::device::virtio::VirtioNetDevice;
-//! use morpheus_network::stack::NetConfig;
-//!
-//! // Create device
-//! let device = VirtioNetDevice::new(transport)?;
-//!
-//! // Create HTTP client (handles DHCP internally)
-//! let mut client = NativeHttpClient::new(device, NetConfig::dhcp())?;
-//!
-//! // Wait for network ready
-//! client.wait_for_network(30_000)?; // 30 second timeout
-//!
-//! // Make HTTP request
-//! let response = client.get("http://example.com/file.iso")?;
-//! ```
+//! HTTP/1.1 client over smoltcp, generic over any `NetworkDevice` driver.
 
 extern crate alloc;
 
@@ -69,20 +25,13 @@ pub const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024 * 1024;
 
 pub const MAX_REDIRECTS: u32 = 10;
 
-/// Native HTTP client configuration.
 #[derive(Debug, Clone)]
 pub struct NativeClientConfig {
-    /// Timeout for connect operations (ms).
     pub connect_timeout_ms: u64,
-    /// Timeout for read operations (ms).
     pub read_timeout_ms: u64,
-    /// Maximum response body size.
     pub max_response_size: usize,
-    /// Follow redirects automatically.
     pub follow_redirects: bool,
-    /// Maximum redirects to follow.
     pub max_redirects: u32,
-    /// Buffer size for streaming.
     pub buffer_size: usize,
 }
 
@@ -112,27 +61,15 @@ impl NativeClientConfig {
     }
 }
 
-/// Native bare-metal HTTP client.
-///
-/// Generic over `NetworkDevice` so it works with any driver:
-/// - VirtIO (QEMU, KVM)
-/// - Intel NICs (future)
-/// - Realtek NICs (future)
-/// - etc.
 pub struct NativeHttpClient<D: NetworkDevice> {
-    /// Network interface with TCP/IP stack.
     iface: NetInterface<D>,
-    /// Client configuration.
     config: NativeClientConfig,
-    /// Current TCP socket handle (if connected).
     socket: Option<SocketHandle>,
-    /// Function to get current time in milliseconds.
-    /// Must be provided by the caller (platform-specific).
+    /// Platform clock; supplied by caller.
     get_time_ms: fn() -> u64,
 }
 
 impl<D: NetworkDevice> NativeHttpClient<D> {
-    /// Create a new native HTTP client.
     pub fn new(device: D, net_config: NetConfig, get_time_ms: fn() -> u64) -> Self {
         let iface = NetInterface::new(device, net_config);
         Self {
@@ -143,7 +80,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Create with custom configuration.
     pub fn with_config(
         device: D,
         net_config: NetConfig,
@@ -159,12 +95,10 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Get current timestamp.
     fn now(&self) -> u64 {
         (self.get_time_ms)()
     }
 
-    /// Poll the network interface.
     pub fn poll(&mut self) {
         self.iface.poll(self.now());
     }
@@ -177,7 +111,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.iface.ipv4_addr()
     }
 
-    /// Wait for network to be ready (DHCP complete or static configured).
+    /// Block until DHCP completes or static config is applied.
     pub fn wait_for_network(&mut self, timeout_ms: u64) -> Result<()> {
         let start = self.now();
 
@@ -194,26 +128,22 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    /// Resolve hostname to IP address using DNS or hardcoded fallbacks.
+    /// Resolve via literal parse, then DNS, then hardcoded fallback table.
     pub fn resolve_host(&mut self, host: &str) -> Result<Ipv4Addr> {
         crate::stack::debug_log(40, "resolve_host start");
 
-        // Try parsing as IP address first
         if let Ok(ip) = host.parse::<Ipv4Addr>() {
             crate::stack::debug_log(41, "host is IP addr");
             return Ok(ip);
         }
 
-        // Try actual DNS resolution
         if let Ok(ip) = self.try_dns_query(host) {
             return Ok(ip);
         }
 
-        // Fallback to hardcoded DNS
         self.lookup_hardcoded_dns(host)
     }
 
-    /// Attempt DNS resolution via UDP query.
     fn try_dns_query(&mut self, host: &str) -> Result<Ipv4Addr> {
         crate::stack::debug_log(42, "starting DNS query");
 
@@ -227,7 +157,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
 
         crate::stack::debug_log(43, "DNS query started");
 
-        // Poll until result or timeout
         loop {
             let now = self.now();
             self.iface.poll(now);
@@ -252,7 +181,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Lookup host in hardcoded DNS table.
     fn lookup_hardcoded_dns(&self, host: &str) -> Result<Ipv4Addr> {
         const KNOWN_HOSTS: &[(&str, &str)] = &[
             ("speedtest.tele2.net", "90.130.70.73"),
@@ -275,7 +203,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Err(NetworkError::DnsResolutionFailed)
     }
 
-    /// Connect to a remote host.
     fn connect(&mut self, ip: Ipv4Addr, port: u16) -> Result<()> {
         crate::stack::debug_log(50, "TCP connect start");
 
@@ -288,7 +215,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    /// Close any existing socket.
     fn close_existing_socket(&mut self) {
         if let Some(handle) = self.socket.take() {
             self.iface.tcp_close(handle);
@@ -296,7 +222,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Create a new TCP socket.
     fn create_tcp_socket(&mut self) -> Result<SocketHandle> {
         let handle = self.iface.tcp_socket()?;
         self.socket = Some(handle);
@@ -304,14 +229,12 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(handle)
     }
 
-    /// Initiate TCP connection.
     fn initiate_connection(&mut self, handle: SocketHandle, ip: Ipv4Addr, port: u16) -> Result<()> {
         self.iface.tcp_connect(handle, ip, port)?;
         crate::stack::debug_log(52, "TCP connecting...");
         Ok(())
     }
 
-    /// Wait for TCP connection to complete.
     fn wait_for_connection(&mut self, handle: SocketHandle) -> Result<()> {
         let start = self.now();
 
@@ -335,7 +258,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    /// Send all data and wait for transmission to complete.
     fn send_all(&mut self, data: &[u8]) -> Result<()> {
         let handle = self.socket.ok_or(NetworkError::NotConnected)?;
         let start = self.now();
@@ -359,7 +281,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    /// Receive data with timeout.
     fn recv(&mut self, buffer: &mut [u8]) -> Result<usize> {
         let handle = self.socket.ok_or(NetworkError::NotConnected)?;
         let start = self.now();
@@ -384,7 +305,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Read HTTP headers until \r\n\r\n found.
+    /// Read until the \r\n\r\n header terminator.
     fn read_headers(&mut self) -> Result<Vec<u8>> {
         let mut header_buf = Vec::new();
         let mut buffer = [0u8; 4096];
@@ -404,7 +325,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Read full HTTP response (headers + body).
     fn read_full_response(&mut self) -> Result<Vec<u8>> {
         let mut response_data = self.read_headers()?;
         let body_start = find_header_end(&response_data).ok_or(NetworkError::InvalidResponse)? + 4;
@@ -413,13 +333,11 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
             .map_err(|_| NetworkError::InvalidResponse)?;
         let content_length = parse_content_length(headers_str);
 
-        // Read remaining body
         self.read_remaining_body(&mut response_data, body_start, content_length)?;
 
         Ok(response_data)
     }
 
-    /// Read remaining body data based on Content-Length.
     fn read_remaining_body(
         &mut self,
         response_data: &mut Vec<u8>,
@@ -453,7 +371,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(())
     }
 
-    /// Stream response body to callback.
     fn stream_response_body<F>(
         &mut self,
         initial_body: &[u8],
@@ -463,13 +380,12 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
-        // Send initial body data that was already received
+        // Flush body bytes already pulled in with the headers.
         let mut total = initial_body.len();
         if !initial_body.is_empty() {
             callback(initial_body)?;
         }
 
-        // Stream remaining body
         let mut buffer = [0u8; 4096];
         loop {
             if let Some(expected) = content_length {
@@ -495,7 +411,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(total)
     }
 
-    /// Execute a basic HTTP request and return full response.
     fn do_request(&mut self, request: &Request) -> Result<Response> {
         let ip = self.resolve_host(&request.url.host)?;
         let port = request.url.port.unwrap_or(80);
@@ -509,7 +424,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(response)
     }
 
-    /// Execute request with automatic redirect following.
     fn do_request_with_redirects(&mut self, mut request: Request) -> Result<Response> {
         let mut redirects = 0;
 
@@ -531,7 +445,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Build a new request for a redirect location.
     fn build_redirect_request(&self, original: &Request, location: &str) -> Result<Request> {
         let new_url = if location.starts_with("http://") || location.starts_with("https://") {
             Url::parse(location)?
@@ -544,14 +457,13 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         Ok(Request::get(new_url))
     }
 
-    /// Simple GET request returning full response.
     pub fn get(&mut self, url: &str) -> Result<Response> {
         let parsed_url = Url::parse(url)?;
         let request = Request::get(parsed_url);
         self.do_request_with_redirects(request)
     }
 
-    /// GET request with streaming callback for large downloads.
+    /// GET that streams the body to `callback`; for large downloads.
     pub fn get_streaming<F>(&mut self, url: &str, mut callback: F) -> Result<usize>
     where
         F: FnMut(&[u8]) -> Result<()>,
@@ -568,7 +480,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.execute_streaming_request(&parsed_url, &mut callback)
     }
 
-    /// Execute a streaming HTTP request.
     fn execute_streaming_request<F>(&mut self, url: &Url, callback: &mut F) -> Result<usize>
     where
         F: FnMut(&[u8]) -> Result<()>,
@@ -589,7 +500,6 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.stream_response(callback)
     }
 
-    /// Stream the HTTP response to the callback.
     fn stream_response<F>(&mut self, callback: &mut F) -> Result<usize>
     where
         F: FnMut(&[u8]) -> Result<()>,
@@ -611,12 +521,11 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         self.stream_response_body(initial_body, content_length, callback)
     }
 
-    /// Close any active connection.
     pub fn close(&mut self) {
         if let Some(handle) = self.socket.take() {
             self.iface.tcp_close(handle);
 
-            // Poll to send FIN
+            // Poll to flush the FIN.
             for _ in 0..10 {
                 self.poll();
             }
@@ -625,12 +534,10 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
         }
     }
 
-    /// Get reference to the network interface.
     pub fn interface(&self) -> &NetInterface<D> {
         &self.iface
     }
 
-    /// Get mutable reference to the network interface.
     pub fn interface_mut(&mut self) -> &mut NetInterface<D> {
         &mut self.iface
     }
@@ -661,12 +568,10 @@ impl<D: NetworkDevice> HttpClient for NativeHttpClient<D> {
     }
 }
 
-/// Find the end of HTTP headers (\r\n\r\n).
 fn find_header_end(data: &[u8]) -> Option<usize> {
     (0..data.len().saturating_sub(3)).find(|&i| &data[i..i + 4] == b"\r\n\r\n")
 }
 
-/// Parse Content-Length from headers string.
 fn parse_content_length(headers: &str) -> Option<usize> {
     for line in headers.lines() {
         let lower = line.to_lowercase();

@@ -191,6 +191,7 @@ impl Compositor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn clip_fill(&self, fb_ptr: *mut u32, x: i32, y: i32, w: u32, h: u32, r: u8, g: u8, b: u8) {
         let x0 = x.max(0) as u32;
         let y0 = y.max(0) as u32;

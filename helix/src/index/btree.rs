@@ -33,7 +33,6 @@ impl NamespaceIndex {
             .count()
     }
 
-    /// Total including tombstones.
     pub fn total_count(&self) -> usize {
         self.entries.len()
     }

@@ -16,7 +16,7 @@ impl FileFlags {
     }
 
     /// Encode back to the directory-record byte.
-    pub fn to_byte(&self) -> u8 {
+    pub fn to_byte(self) -> u8 {
         let mut byte = 0u8;
         if self.hidden {
             byte |= 0x01;
@@ -37,18 +37,5 @@ impl FileFlags {
             byte |= 0x80;
         }
         byte
-    }
-}
-
-impl Default for FileFlags {
-    fn default() -> Self {
-        Self {
-            hidden: false,
-            directory: false,
-            associated: false,
-            extended_format: false,
-            extended_permissions: false,
-            not_final: false,
-        }
     }
 }

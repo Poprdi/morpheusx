@@ -1,31 +1,11 @@
-//! Network Download Orchestrator
+//! Network download orchestrator. Sole entry: `download_with_config()` (or the
+//! `download()` wrapper). State flow: Init -> GptPrep -> LinkWait -> DHCP ->
+//! DNS -> Connect -> HTTP -> Manifest -> Done.
 //!
-//! # Entry Point Contract
-//!
-//! **SOLE ENTRY**: `download_with_config()` or convenience wrapper `download()`
-//!
-//! **PRECONDITIONS** (caller must ensure):
-//! 1. ExitBootServices has been called (no UEFI runtime)
-//! 2. hwinit has normalized platform (bus mastering, DMA policy, cache coherency)
-//! 3. Driver has been instantiated and brutally reset to pristine state
-//!
-//! **WHAT THIS MODULE RECEIVES**:
-//! - `&mut D` - Already-reset driver implementing `NetworkDriver`
-//! - `DownloadConfig` - URL + optional disk write parameters
-//! - `Option<UnifiedBlockDevice>` - Block device if writing
-//! - `tsc_freq` - TSC frequency in Hz
-//!
-//! **WHAT THIS MODULE DOES NOT DO**:
-//! - PCI enumeration (hwinit's job)
-//! - Bus mastering setup (hwinit's job)
-//! - DMA policy (hwinit's job)
-//! - Driver instantiation (caller's job)
-//! - Device reset (driver's job, done before entry)
-//!
-//! # State Machine Flow
-//! ```text
-//! Init → GptPrep → LinkWait → DHCP → DNS → Connect → HTTP → Manifest → Done
-//! ```
+//! Preconditions the caller must satisfy: ExitBootServices done; hwinit has
+//! set up bus mastering, DMA policy, and cache coherency; the driver is
+//! instantiated and reset. This module does no PCI enumeration or driver
+//! setup of its own.
 
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet, SocketStorage};
 use smoltcp::socket::dhcpv4::Socket as Dhcpv4Socket;
@@ -44,19 +24,18 @@ use morpheus_nic::traits::NetworkDriver;
 extern crate alloc;
 use alloc::boxed::Box;
 
-/// Result of a download operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadResult {
-    /// Download completed successfully.
     Success {
         bytes_downloaded: u64,
         bytes_written: u64,
     },
-    /// Download failed.
-    Failed { reason: &'static str },
+    Failed {
+        reason: &'static str,
+    },
 }
 
-/// Execute HTTP download using state machine.
+/// Download-only convenience wrapper.
 pub fn download<D: NetworkDriver>(
     driver: &mut D,
     url: &'static str,
@@ -66,7 +45,6 @@ pub fn download<D: NetworkDriver>(
     download_with_config(driver, config, None, tsc_freq)
 }
 
-/// Execute HTTP download with disk writing.
 pub fn download_with_config<D: NetworkDriver>(
     driver: &mut D,
     config: DownloadConfig<'static>,
@@ -99,15 +77,12 @@ pub fn download_with_config<D: NetworkDriver>(
     let iface_config = IfaceConfig::new(HardwareAddress::Ethernet(eth_addr));
     let mut iface = Interface::new(iface_config, &mut adapter, Instant::ZERO);
 
-    // Static socket storage
     let mut socket_storage: [SocketStorage; 4] = Default::default();
     let mut sockets = SocketSet::new(&mut socket_storage[..]);
 
-    // DHCP socket
     let dhcp_socket = Dhcpv4Socket::new();
     let dhcp_handle = sockets.add(dhcp_socket);
 
-    // TCP socket
     static mut TCP_RX_BUF: [u8; 65536] = [0u8; 65536];
     static mut TCP_TX_BUF: [u8; 65536] = [0u8; 65536];
     let tcp_socket = unsafe {
@@ -118,7 +93,6 @@ pub fn download_with_config<D: NetworkDriver>(
     };
     let tcp_handle = sockets.add(tcp_socket);
 
-    // Context
     let mut ctx = Context::new(config, tsc_freq);
     ctx.dhcp_handle = Some(dhcp_handle);
     ctx.tcp_handle = Some(tcp_handle);
@@ -147,8 +121,6 @@ pub fn download_with_config<D: NetworkDriver>(
 
         match result {
             StepResult::Continue => {
-                // No forward progress — hint the CPU to reduce power and yield
-                // execution resources to a sibling hyperthread.
                 core::hint::spin_loop();
             },
             StepResult::Transition => {

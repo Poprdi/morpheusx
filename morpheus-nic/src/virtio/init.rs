@@ -204,6 +204,13 @@ fn generate_local_mac() -> MacAddress {
 ///
 /// This function auto-selects the correct initialization path based
 /// on the transport type (MMIO or PCI Modern).
+///
+/// # Safety
+///
+/// Caller must ensure `transport` refers to a valid, mapped VirtIO device
+/// (MMIO or PCI Modern) with exclusive access for the duration of the call,
+/// and that `tsc_freq` is the calibrated TSC frequency. The function performs
+/// raw MMIO/PCI register access and allocates DMA-visible queue memory.
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn virtio_net_init_transport(
     transport: &VirtioTransport,

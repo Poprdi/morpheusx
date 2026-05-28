@@ -1,45 +1,17 @@
-//! Block I/O Adapter for Chunked ISO Storage
-//!
-//! This module provides a `BlockIo` implementation that presents chunked
-//! ISO storage as a single contiguous block device. This allows the iso9660
-//! crate to read from multi-partition ISOs transparently.
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use morpheus_storage_format::iso::{ChunkReader, IsoReadContext};
-//! use morpheus_storage_format::iso::adapter::ChunkedBlockIo;
-//!
-//! // Create adapter from read context
-//! let ctx = storage_manager.get_read_context(iso_index)?;
-//! let mut adapter = ChunkedBlockIo::new(ctx, |lba, buf| {
-//!     // Read from actual disk
-//!     disk_block_io.read_blocks(Lba(lba), buf)
-//! });
-//!
-//! // Now use with iso9660
-//! let volume = iso9660::mount(&mut adapter, 0)?;
-//! let file = iso9660::find_file(&mut adapter, &volume, "/boot/vmlinuz")?;
-//! ```
+//! Presents chunked multi-partition ISO storage as one contiguous block device
+//! so the iso9660 crate can read across partitions transparently.
 
 use super::error::IsoError;
 use super::reader::IsoReadContext;
 use crate::fs::SECTOR_SIZE;
 
-/// Block I/O adapter for chunked ISO storage
-///
-/// Implements a virtual block device over chunked partitions.
 pub struct ChunkedBlockIo<F>
 where
     F: FnMut(u64, &mut [u8]) -> Result<(), IsoError>,
 {
-    /// ISO read context (chunk locations)
     ctx: IsoReadContext,
-    /// Callback to read from underlying disk
     read_fn: F,
-    /// Cached block size
     block_size: u32,
-    /// Total sectors in virtual device
     total_sectors: u64,
 }
 
@@ -47,7 +19,6 @@ impl<F> ChunkedBlockIo<F>
 where
     F: FnMut(u64, &mut [u8]) -> Result<(), IsoError>,
 {
-    /// Create a new chunked block I/O adapter
     pub fn new(ctx: IsoReadContext, read_fn: F) -> Self {
         let total_sectors = ctx.total_size / SECTOR_SIZE as u64;
 
@@ -67,7 +38,7 @@ where
         self.total_sectors
     }
 
-    /// Find which chunk contains a given virtual LBA
+    /// Returns (chunk index, byte offset within chunk) for a virtual LBA.
     fn find_chunk_for_lba(&self, virtual_lba: u64) -> Option<(usize, u64)> {
         let byte_offset = virtual_lba * SECTOR_SIZE as u64;
         let mut cumulative = 0u64;
@@ -75,7 +46,6 @@ where
         for i in 0..self.ctx.num_chunks {
             let chunk_size = self.ctx.chunk_sizes[i];
             if byte_offset < cumulative + chunk_size {
-                // Found the chunk
                 let offset_in_chunk = byte_offset - cumulative;
                 return Some((i, offset_in_chunk));
             }
@@ -93,19 +63,16 @@ where
             return Err(IsoError::ReadOverflow);
         }
 
-        // Find which chunk this LBA belongs to
         let (chunk_idx, offset_in_chunk) = self
             .find_chunk_for_lba(virtual_lba)
             .ok_or(IsoError::ChunkNotFound)?;
 
-        // Calculate physical LBA
-        // Data starts at sector 8192 in each chunk partition (matching writer.rs)
+        // Data starts at sector 8192 in each chunk partition (matches writer.rs).
         const DATA_START_SECTOR: u64 = 8192;
         let (part_start, _part_end) = self.ctx.chunk_lbas[chunk_idx];
         let sector_in_chunk = offset_in_chunk / SECTOR_SIZE as u64;
         let physical_lba = part_start + DATA_START_SECTOR + sector_in_chunk;
 
-        // Read from disk
         (self.read_fn)(physical_lba, &mut buffer[..SECTOR_SIZE])
     }
 
@@ -128,15 +95,10 @@ where
     }
 }
 
-/// Trait for block I/O operations (matches gpt_disk_io::BlockIo pattern)
+/// Block I/O surface mirroring `gpt_disk_io::BlockIo`.
 pub trait VirtualBlockIo {
-    /// Read blocks starting at the given LBA
     fn read_blocks(&mut self, lba: u64, buffer: &mut [u8]) -> Result<(), IsoError>;
-
-    /// Get block size
     fn block_size(&self) -> u32;
-
-    /// Get total number of blocks
     fn num_blocks(&self) -> u64;
 }
 
@@ -158,15 +120,14 @@ where
     }
 }
 
-/// Simpler read interface for when you just need byte-level access
+/// Byte-level read interface over `ChunkedBlockIo`.
 pub struct ChunkedReader<F>
 where
     F: FnMut(u64, &mut [u8]) -> Result<(), IsoError>,
 {
     block_io: ChunkedBlockIo<F>,
-    /// Current position
     position: u64,
-    /// Sector buffer for unaligned reads
+    /// Scratch for unaligned reads.
     sector_buf: [u8; SECTOR_SIZE],
 }
 
@@ -174,7 +135,6 @@ impl<F> ChunkedReader<F>
 where
     F: FnMut(u64, &mut [u8]) -> Result<(), IsoError>,
 {
-    /// Create a new chunked reader
     pub fn new(ctx: IsoReadContext, read_fn: F) -> Self {
         Self {
             block_io: ChunkedBlockIo::new(ctx, read_fn),
@@ -199,7 +159,6 @@ where
         Ok(())
     }
 
-    /// Read bytes at current position
     pub fn read(&mut self, buffer: &mut [u8]) -> Result<usize, IsoError> {
         let total_size = self.block_io.total_size();
         if self.position >= total_size {
@@ -215,11 +174,9 @@ where
             let sector_lba = current_pos / SECTOR_SIZE as u64;
             let offset_in_sector = (current_pos % SECTOR_SIZE as u64) as usize;
 
-            // Read the sector
             self.block_io
                 .read_sector(sector_lba, &mut self.sector_buf)?;
 
-            // Copy relevant portion
             let remaining = to_read - bytes_read;
             let available_in_sector = SECTOR_SIZE - offset_in_sector;
             let copy_len = remaining.min(available_in_sector);
@@ -234,7 +191,6 @@ where
         Ok(bytes_read)
     }
 
-    /// Read exact number of bytes (error if not available)
     pub fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), IsoError> {
         let n = self.read(buffer)?;
         if n != buffer.len() {
@@ -255,14 +211,12 @@ mod tests {
             chunk_lbas: [(0, 0); MAX_CHUNKS],
             chunk_sizes: [0; MAX_CHUNKS],
             num_chunks: 2,
-            total_size: 2_000_000_000, // 2GB
+            total_size: 2_000_000_000,
         };
 
-        // Chunk 0: 1GB at LBA 10000
         ctx.chunk_lbas[0] = (10000, 2000000);
         ctx.chunk_sizes[0] = 1_000_000_000;
 
-        // Chunk 1: 1GB at LBA 3000000
         ctx.chunk_lbas[1] = (3000000, 5000000);
         ctx.chunk_sizes[1] = 1_000_000_000;
 
@@ -274,17 +228,14 @@ mod tests {
         let ctx = make_test_context();
         let adapter = ChunkedBlockIo::new(ctx, |_, _| Ok(()));
 
-        // LBA 0 should be in chunk 0
         assert_eq!(adapter.find_chunk_for_lba(0), Some((0, 0)));
 
-        // LBA near end of chunk 0
         let sectors_in_1gb = 1_000_000_000 / 512;
         assert_eq!(
             adapter.find_chunk_for_lba(sectors_in_1gb - 1),
             Some((0, (sectors_in_1gb - 1) * 512))
         );
 
-        // First LBA of chunk 1
         assert_eq!(adapter.find_chunk_for_lba(sectors_in_1gb), Some((1, 0)));
     }
 

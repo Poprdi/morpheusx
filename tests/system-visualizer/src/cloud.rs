@@ -26,6 +26,7 @@ impl CloudAssets {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_cloud<T: RenderTarget>(
     pipeline: &mut Pipeline,
     target: &mut T,
@@ -59,6 +60,8 @@ pub fn render_cloud<T: RenderTarget>(
         let dist_sq = dx * dx + dy * dy + dz * dz;
         let screen_size = radius / (dist_sq.max(1.0) * fast_inv_sqrt(dist_sq.max(1.0)));
 
+        // Selected and large-on-screen both intentionally pick the hi mesh.
+        #[allow(clippy::if_same_then_else)]
         let mesh = if is_sel {
             &assets.sphere_hi
         } else if screen_size > 0.08 {

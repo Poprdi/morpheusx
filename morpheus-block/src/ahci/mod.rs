@@ -8,7 +8,6 @@ pub mod regs;
 use crate::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
-use core::ptr;
 use morpheus_hal_x86_64::asm::tsc::read_tsc as read_tsc_raw;
 
 pub use init::{AhciConfig, AhciInitError};
@@ -30,15 +29,21 @@ extern "win64" {
     fn asm_ahci_port_setup(abar: u64, port_num: u32, clb_phys: u64, fb_phys: u64) -> u32;
     fn asm_ahci_port_clear_errors(abar: u64, port_num: u32);
     fn asm_ahci_port_read_sig(abar: u64, port_num: u32) -> u32;
+    #[allow(dead_code)]
     fn asm_ahci_port_read_tfd(abar: u64, port_num: u32) -> u32;
     fn asm_ahci_port_read_ssts(abar: u64, port_num: u32) -> u32;
+    #[allow(dead_code)]
     fn asm_ahci_port_read_is(abar: u64, port_num: u32) -> u32;
     fn asm_ahci_port_clear_is(abar: u64, port_num: u32, bits: u32);
     fn asm_ahci_port_disable_interrupts(abar: u64, port_num: u32);
 
+    #[allow(dead_code)]
     fn asm_ahci_setup_cmd_header(cmd_header_ptr: u64, flags: u32, ctba_phys: u64);
+    #[allow(dead_code)]
     fn asm_ahci_build_h2d_fis(fis_ptr: u64, command: u8, lba: u64, sector_count: u16);
+    #[allow(dead_code)]
     fn asm_ahci_build_prdt(prdt_ptr: u64, data_phys: u64, byte_count_minus_1: u32);
+    #[allow(dead_code)]
     fn asm_ahci_issue_cmd(abar: u64, port_num: u32, slot_mask: u32);
     fn asm_ahci_poll_cmd(
         abar: u64,
@@ -176,12 +181,14 @@ unsafe fn ahci_bios_handoff(abar: u64, tsc_freq: u64) {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)]
 struct InFlightRequest {
     request_id: u32,
     slot: u8,
     active: bool,
 }
 
+#[allow(dead_code)]
 pub struct AhciDriver {
     abar: u64,
     port_num: u32,
@@ -334,10 +341,12 @@ impl AhciDriver {
 
         let mut candidate_ports = [u32::MAX; 32];
         let mut candidate_count = 0usize;
+        #[allow(clippy::needless_range_loop)]
         for i in 0..strict_count {
             candidate_ports[candidate_count] = strict_ports[i];
             candidate_count += 1;
         }
+        #[allow(clippy::needless_range_loop)]
         for i in 0..fallback_count {
             if candidate_count >= candidate_ports.len() {
                 break;
@@ -349,6 +358,7 @@ impl AhciDriver {
         morpheus_hal_x86_64::serial::puts("[AHCI] step 5: try candidates\n");
         let mut last_err = AhciInitError::NoDeviceFound;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..candidate_count {
             let port_num = candidate_ports[i];
 

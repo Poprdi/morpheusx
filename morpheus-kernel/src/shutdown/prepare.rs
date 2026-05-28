@@ -25,11 +25,9 @@ static mut POWEROFF_HANDLERS: [Option<FinalHandler>; MAX_FINAL_HANDLERS] =
     [None; MAX_FINAL_HANDLERS];
 
 fn register_in_table<T: Copy + PartialEq>(table: &mut [Option<T>], handler: T) {
-    for slot in table.iter_mut() {
-        if let Some(existing) = slot {
-            if *existing == handler {
-                return;
-            }
+    for existing in table.iter_mut().flatten() {
+        if *existing == handler {
+            return;
         }
     }
     for slot in table.iter_mut() {
@@ -85,19 +83,17 @@ pub fn run_prepare_handlers(kind: TransitionKind, timeout_ms: u64) -> bool {
 
     SHUTDOWN_HANDLER_LOCK.lock();
     unsafe {
-        for slot in PREPARE_HANDLERS.iter() {
-            if let Some(handler) = slot {
-                if let Some(d) = deadline {
-                    if hal().timer().read_tsc() >= d {
-                        all_ok = false;
-                        hal().serial().puts("shutdown-prepare-timeout\n");
-                        break;
-                    }
-                }
-                let ok = handler(kind);
-                if !ok {
+        for handler in PREPARE_HANDLERS.iter().flatten() {
+            if let Some(d) = deadline {
+                if hal().timer().read_tsc() >= d {
                     all_ok = false;
+                    hal().serial().puts("shutdown-prepare-timeout\n");
+                    break;
                 }
+            }
+            let ok = handler(kind);
+            if !ok {
+                all_ok = false;
             }
         }
     }
@@ -109,10 +105,8 @@ pub fn run_prepare_handlers(kind: TransitionKind, timeout_ms: u64) -> bool {
 pub fn run_restart_handlers(kind: TransitionKind) {
     SHUTDOWN_HANDLER_LOCK.lock();
     unsafe {
-        for slot in RESTART_HANDLERS.iter() {
-            if let Some(handler) = slot {
-                handler(kind);
-            }
+        for handler in RESTART_HANDLERS.iter().flatten() {
+            handler(kind);
         }
     }
     SHUTDOWN_HANDLER_LOCK.unlock();
@@ -121,10 +115,8 @@ pub fn run_restart_handlers(kind: TransitionKind) {
 pub fn run_poweroff_handlers(kind: TransitionKind) {
     SHUTDOWN_HANDLER_LOCK.lock();
     unsafe {
-        for slot in POWEROFF_HANDLERS.iter() {
-            if let Some(handler) = slot {
-                handler(kind);
-            }
+        for handler in POWEROFF_HANDLERS.iter().flatten() {
+            handler(kind);
         }
     }
     SHUTDOWN_HANDLER_LOCK.unlock();

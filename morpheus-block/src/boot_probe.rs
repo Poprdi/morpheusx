@@ -1,29 +1,5 @@
-//! Dynamic block device probe and driver factory.
-//!
-//! Probes PCI bus and creates appropriate block driver based on detected hardware.
-//! This is the main entry point for automatic block driver selection.
-//!
-//! # Supported Devices
-//! - VirtIO-blk (QEMU, cloud VMs)
-//! - AHCI SATA (Intel - ThinkPad T450s, etc.)
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use morpheus_network::boot::block_probe::{probe_block_device, BlockProbeResult};
-//!
-//! let result = unsafe { probe_block_device(&blk_dma, tsc_freq)? };
-//! match result {
-//!     BlockProbeResult::VirtIO(driver) => { /* use driver */ }
-//!     BlockProbeResult::Ahci(driver) => { /* use driver */ }
-//! }
-//! ```
+//! PCI scan and block-driver factory for VirtIO-blk, AHCI, SDHCI, USB-MSD.
 
-// Phase 3.1 Wave 4 wiring:
-// - `ahci`, `sdhci`, `usb_msd`, `virtio_blk` live in this crate.
-// - `device::UnifiedBlockDevice` lives in this crate (moved out of `morpheus-nic`).
-// - `virtio::transport` lives in `morpheus-virtio`.
-// - PCI config-space and VirtIO capability probing come from `morpheus-hal-x86_64`.
 use crate::ahci::{AhciConfig, AhciDriver, AhciInitError, INTEL_VENDOR_ID};
 use crate::device::{UnifiedBlockDevice, UnifiedBlockError};
 use crate::sdhci::{SdhciConfig, SdhciDriver, SdhciInitError};
@@ -33,7 +9,6 @@ use morpheus_hal_x86_64::pci::capability::probe_virtio_caps;
 use morpheus_hal_x86_64::pci::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_write16, PciAddr};
 use morpheus_virtio::transport::{PciModernConfig, VirtioTransport};
 
-// ─── Inline serial helpers (network crate's serial_str + hex) ────────────
 const VERBOSE_BLOCK_PROBE: bool = false;
 
 fn dbg_str(s: &str) {
@@ -63,11 +38,8 @@ fn dbg_hex8(v: u8) {
     morpheus_hal_x86_64::serial::putc(HEX[(v & 0xF) as usize]);
 }
 
-/// VirtIO vendor ID
 const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
-/// VirtIO-blk device ID (transitional)
 const VIRTIO_BLK_DEVICE_LEGACY: u16 = 0x1001;
-/// VirtIO-blk device ID (modern)
 const VIRTIO_BLK_DEVICE_MODERN: u16 = 0x1042;
 
 /// PCI subclass/prog-if for SATA AHCI controller (0x06/0x01).
@@ -82,22 +54,14 @@ const PCI_CLASS_SUBCLASS_SDHCI: u32 = 0x0805;
 /// PCI subclass/prog-if for USB xHCI: 0x03/0x30.
 const PCI_CLASS_USB_XHCI: u32 = 0x0330;
 
-/// Probe and initialization errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockProbeError {
-    /// No block device found
     NoDevice,
-    /// VirtIO-blk initialization failed
     VirtioInitFailed,
-    /// AHCI initialization failed
     AhciInitFailed,
-    /// SDHCI initialization failed
     SdhciInitFailed,
-    /// USB mass-storage initialization failed
     UsbMsdInitFailed,
-    /// BAR mapping failed
     BarMappingFailed,
-    /// Device not responding
     DeviceNotResponding,
 }
 
@@ -106,88 +70,59 @@ crate::impl_from!(AhciInitError => BlockProbeError : AhciInitFailed(_));
 crate::impl_from!(SdhciInitError => BlockProbeError : SdhciInitFailed(_));
 crate::impl_from!(UsbMsdInitError => BlockProbeError : UsbMsdInitFailed(_));
 
-/// Information about a detected block device.
 #[derive(Debug, Clone, Copy)]
 pub enum DetectedBlockDevice {
-    /// VirtIO-blk device
     VirtIO { pci_addr: PciAddr, mmio_base: u64 },
-    /// AHCI SATA controller
     Ahci(AhciInfo),
-    /// SDHCI controller
     Sdhci(SdhciInfo),
-    /// USB xHCI controller candidate for USB MSD path
     UsbMsd(UsbMsdInfo),
 }
 
-/// Information about detected AHCI controller.
 #[derive(Debug, Clone, Copy)]
 pub struct AhciInfo {
-    /// PCI address
     pub pci_addr: PciAddr,
-    /// ABAR (AHCI Base Address Register) from BAR5
+    /// ABAR from BAR5.
     pub abar: u64,
-    /// Device ID
     pub device_id: u16,
 }
 
-/// Information about detected SDHCI controller.
 #[derive(Debug, Clone, Copy)]
 pub struct SdhciInfo {
-    /// PCI address
     pub pci_addr: PciAddr,
-    /// MMIO base from BAR0
     pub mmio_base: u64,
-    /// Device ID
     pub device_id: u16,
 }
 
-/// Information about detected USB xHCI controller.
 #[derive(Debug, Clone, Copy)]
 pub struct UsbMsdInfo {
-    /// PCI address
     pub pci_addr: PciAddr,
-    /// MMIO base from BAR0
     pub mmio_base: u64,
-    /// Device ID
     pub device_id: u16,
 }
 
-/// Result of successful probe and initialization.
 pub enum BlockProbeResult {
-    /// VirtIO-blk driver
     VirtIO(VirtioBlkDriver),
-    /// AHCI SATA driver
     Ahci(AhciDriver),
-    /// SDHCI block driver
     Sdhci(SdhciDriver),
-    /// USB mass-storage block driver
     UsbMsd(UsbMsdDriver),
 }
 
-/// Maximum block devices we can discover in a single scan.
 const MAX_BLOCK_DEVICES: usize = 32;
 
-/// Scan PCI bus for supported block devices.
-///
-/// Returns the first supported block device found, preferring AHCI over VirtIO
-/// (for real hardware priority - matches network probe behavior).
+/// First supported device found; AHCI preferred over VirtIO for real-hardware priority.
 pub fn scan_for_block_device() -> Option<DetectedBlockDevice> {
-    // First try to find AHCI controller (real hardware)
     if let Some(info) = find_ahci_controller() {
         return Some(DetectedBlockDevice::Ahci(info));
     }
 
-    // Then try SDHCI (SD card host)
     if let Some(info) = find_sdhci_controller() {
         return Some(DetectedBlockDevice::Sdhci(info));
     }
 
-    // Then try USB xHCI for USB mass-storage path
     if let Some(info) = find_usb_xhci_controller() {
         return Some(DetectedBlockDevice::UsbMsd(info));
     }
 
-    // Fall back to VirtIO-blk (QEMU, VMs)
     if let Some((pci_addr, mmio_base)) = find_virtio_blk() {
         return Some(DetectedBlockDevice::VirtIO {
             pci_addr,
@@ -198,15 +133,12 @@ pub fn scan_for_block_device() -> Option<DetectedBlockDevice> {
     None
 }
 
-/// Scan PCI bus for ALL supported block devices.
-///
-/// Returns all detected AHCI/SDHCI/USB/VirtIO devices (up to MAX_BLOCK_DEVICES).
-/// AHCI devices are listed first, then VirtIO-blk.
+/// All detected devices (up to MAX_BLOCK_DEVICES), ordered AHCI, SDHCI, USB, VirtIO.
 pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVICES], usize) {
     let mut result: [Option<DetectedBlockDevice>; MAX_BLOCK_DEVICES] = [None; MAX_BLOCK_DEVICES];
     let mut count = 0;
 
-    // Collect all AHCI controllers.
+    // AHCI controllers.
     for bus in 0..=255u8 {
         if count >= MAX_BLOCK_DEVICES {
             break;
@@ -254,8 +186,7 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
         }
     }
 
-    // Collect all VirtIO-blk devices.
-    // Collect all SDHCI controllers.
+    // SDHCI controllers.
     for bus in 0..=255u8 {
         if count >= MAX_BLOCK_DEVICES {
             break;
@@ -303,7 +234,7 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
         }
     }
 
-    // Collect all USB xHCI controllers.
+    // USB xHCI controllers.
     for bus in 0..=255u8 {
         if count >= MAX_BLOCK_DEVICES {
             break;
@@ -351,7 +282,7 @@ pub fn scan_all_block_devices() -> ([Option<DetectedBlockDevice>; MAX_BLOCK_DEVI
         }
     }
 
-    // Collect all VirtIO-blk devices.
+    // VirtIO-blk devices.
     for bus in 0..=255u8 {
         if count >= MAX_BLOCK_DEVICES {
             break;
@@ -422,7 +353,6 @@ pub fn find_ahci_controller() -> Option<AhciInfo> {
                     continue;
                 }
 
-                // Check class code for SATA AHCI
                 let class_code = pci_cfg_read32(addr, offset::CLASS_CODE);
                 let class = (class_code >> 8) & 0xFFFF;
                 if class != PCI_CLASS_SATA_AHCI {
@@ -431,11 +361,9 @@ pub fn find_ahci_controller() -> Option<AhciInfo> {
 
                 let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
 
-                // Read BAR5 (ABAR - AHCI Base Address Register)
-                // AHCI uses BAR5 for MMIO
+                // ABAR is BAR5 for AHCI.
                 let bar5 = pci_cfg_read32(addr, offset::BAR5);
                 if bar5 == 0 || (bar5 & 0x01) != 0 {
-                    // BAR5 not present or is I/O (shouldn't happen for AHCI)
                     continue;
                 }
 
@@ -505,7 +433,6 @@ pub fn find_sdhci_controller() -> Option<SdhciInfo> {
     None
 }
 
-/// Scan for USB xHCI controller (candidate for USB mass-storage backend).
 pub fn find_usb_xhci_controller() -> Option<UsbMsdInfo> {
     for bus in 0..=255u8 {
         for device in 0..32u8 {
@@ -552,7 +479,6 @@ pub fn find_usb_xhci_controller() -> Option<UsbMsdInfo> {
     None
 }
 
-/// Scan for VirtIO-blk device.
 fn find_virtio_blk() -> Option<(PciAddr, u64)> {
     for bus in 0..=255u8 {
         for device in 0..32u8 {
@@ -579,15 +505,12 @@ fn find_virtio_blk() -> Option<(PciAddr, u64)> {
 
                 let device_id = pci_cfg_read16(addr, offset::DEVICE_ID);
 
-                // Check for VirtIO-blk (transitional or modern)
                 if device_id != VIRTIO_BLK_DEVICE_LEGACY && device_id != VIRTIO_BLK_DEVICE_MODERN {
                     continue;
                 }
 
-                // Read BAR0
                 let bar0 = pci_cfg_read32(addr, offset::BAR0);
                 if bar0 & 0x01 != 0 {
-                    // I/O BAR - skip
                     continue;
                 }
 
@@ -607,62 +530,36 @@ fn find_virtio_blk() -> Option<(PciAddr, u64)> {
     None
 }
 
-/// Block DMA region configuration.
-///
-/// Must be properly allocated before calling probe functions.
+/// Pre-allocated DMA regions for probe functions. AHCI alignment per AHCI §4.2.
 pub struct BlockDmaConfig {
-    /// TSC frequency for timeouts
     pub tsc_freq: u64,
 
-    // For VirtIO-blk
-    /// Descriptor table (CPU pointer)
     pub virtio_desc_cpu: *mut u8,
-    /// Descriptor table (physical)
     pub virtio_desc_phys: u64,
-    /// Available ring (CPU pointer)
     pub virtio_avail_cpu: *mut u8,
-    /// Available ring (physical)
     pub virtio_avail_phys: u64,
-    /// Used ring (CPU pointer)
     pub virtio_used_cpu: *mut u8,
-    /// Used ring (physical)
     pub virtio_used_phys: u64,
-    /// Headers area (CPU pointer)
     pub virtio_headers_cpu: *mut u8,
-    /// Headers area (physical)
     pub virtio_headers_phys: u64,
-    /// Status area (CPU pointer)
     pub virtio_status_cpu: *mut u8,
-    /// Status area (physical)
     pub virtio_status_phys: u64,
-    /// Notify address (for MMIO mode)
     pub virtio_notify_addr: u64,
-    /// Queue size
     pub queue_size: u16,
 
-    // For AHCI
-    /// Command List (CPU pointer, 1K aligned)
     pub ahci_cmd_list_cpu: *mut u8,
-    /// Command List (physical)
     pub ahci_cmd_list_phys: u64,
-    /// FIS Receive buffer (CPU pointer, 256-byte aligned)
     pub ahci_fis_cpu: *mut u8,
-    /// FIS Receive buffer (physical)
     pub ahci_fis_phys: u64,
-    /// Command Tables (CPU pointer, 128-byte aligned, 8KB total)
     pub ahci_cmd_tables_cpu: *mut u8,
-    /// Command Tables (physical)
     pub ahci_cmd_tables_phys: u64,
-    /// IDENTIFY buffer (CPU pointer, 512 bytes)
     pub ahci_identify_cpu: *mut u8,
-    /// IDENTIFY buffer (physical)
     pub ahci_identify_phys: u64,
 }
 
-/// Enable PCI device (bus mastering, memory space).
 fn enable_pci_device(addr: PciAddr) {
     let cmd = pci_cfg_read16(addr, offset::COMMAND);
-    // Set bus master (bit 2) and memory space (bit 1)
+    // Bus master (bit 2) | memory space (bit 1).
     pci_cfg_write16(addr, offset::COMMAND, cmd | 0x06);
 }
 
@@ -710,11 +607,8 @@ fn intel_ahci_pcs_quirk(addr: PciAddr, abar: u64) {
     }
 }
 
-/// Probe for block device and create appropriate driver.
-///
 /// # Safety
-/// - DMA regions must be properly allocated with correct bus addresses
-/// - TSC frequency must be calibrated
+/// DMA regions must be allocated with correct bus addresses; TSC must be calibrated.
 pub unsafe fn probe_and_create_block_driver(
     config: &BlockDmaConfig,
 ) -> Result<BlockProbeResult, BlockProbeError> {
@@ -722,11 +616,9 @@ pub unsafe fn probe_and_create_block_driver(
 
     match detected {
         DetectedBlockDevice::Ahci(info) => {
-            // Enable device
             enable_pci_device(info.pci_addr);
             intel_ahci_pcs_quirk(info.pci_addr, info.abar);
 
-            // Create AHCI config
             let ahci_config = AhciConfig {
                 tsc_freq: config.tsc_freq,
                 cmd_list_cpu: config.ahci_cmd_list_cpu,
@@ -739,7 +631,6 @@ pub unsafe fn probe_and_create_block_driver(
                 identify_phys: config.ahci_identify_phys,
             };
 
-            // Create driver
             let driver = AhciDriver::new(info.abar, ahci_config)?;
             Ok(BlockProbeResult::Ahci(driver))
         },
@@ -769,7 +660,7 @@ pub unsafe fn probe_and_create_block_driver(
             morpheus_hal_x86_64::serial::puts("\n");
 
             enable_pci_device(info.pci_addr);
-            // also disable INTx so BIOS SMI handlers can't interfere
+            // Disable INTx so BIOS SMI handlers can't interfere.
             let cmd = pci_cfg_read16(info.pci_addr, offset::COMMAND);
             pci_cfg_write16(info.pci_addr, offset::COMMAND, cmd | (1 << 10));
 
@@ -787,7 +678,6 @@ pub unsafe fn probe_and_create_block_driver(
             pci_addr,
             mmio_base,
         } => {
-            // Enable device
             enable_pci_device(pci_addr);
 
             let blk_config = VirtioBlkConfig {
@@ -803,7 +693,7 @@ pub unsafe fn probe_and_create_block_driver(
                 transport_type: 0,
             };
 
-            // Try PCI Modern transport first (required for disable-legacy=on)
+            // PCI Modern transport first; required for disable-legacy=on.
             let caps = probe_virtio_caps(pci_addr);
             if caps.has_required() {
                 let pci_cfg = PciModernConfig {
@@ -819,7 +709,7 @@ pub unsafe fn probe_and_create_block_driver(
                     VirtioBlkDriver::new_with_transport(transport, blk_config, config.tsc_freq)?;
                 Ok(BlockProbeResult::VirtIO(driver))
             } else {
-                // Fallback to legacy MMIO transport
+                // Legacy MMIO fallback.
                 let mut legacy_config = blk_config;
                 legacy_config.notify_addr = config.virtio_notify_addr;
                 let driver = VirtioBlkDriver::new(mmio_base, legacy_config)?;
@@ -829,13 +719,8 @@ pub unsafe fn probe_and_create_block_driver(
     }
 }
 
-/// Probe and create unified block device.
-///
-/// This is the main entry point for block device access.
-///
 /// # Safety
-/// - DMA regions must be properly allocated
-/// - TSC frequency must be calibrated
+/// DMA regions must be allocated; TSC must be calibrated.
 pub unsafe fn probe_unified_block_device(
     config: &BlockDmaConfig,
 ) -> Result<UnifiedBlockDevice, UnifiedBlockError> {
@@ -853,10 +738,7 @@ pub unsafe fn probe_unified_block_device(
     }
 }
 
-/// Create a unified block device from a specific detected device.
-///
-/// Use with `scan_all_block_devices()` to iterate through devices
-/// and initialize the one you want.
+/// Initialize one device from `scan_all_block_devices()` output.
 ///
 /// # Safety
 /// Same as `probe_unified_block_device`.
@@ -933,7 +815,7 @@ pub unsafe fn create_unified_from_detected(
             dbg_hex64(mmio_base);
             dbg_str("\n");
 
-            // ── Raw PCI config diagnostics (bypass cap walker ASM) ──
+            // Raw PCI config diagnostics (bypass cap-walker ASM).
             let status = pci_cfg_read16(pci_addr, 0x06);
             dbg_str("[BLK-PROBE] status=");
             dbg_hex32(status as u32);
@@ -945,7 +827,6 @@ pub unsafe fn create_unified_from_detected(
                 dbg_str("[BLK-PROBE] cap_ptr=0x");
                 dbg_hex8(cap_ptr);
                 dbg_str("\n");
-                // Walk chain manually in Rust
                 let mut ptr = cap_ptr;
                 let mut walk = 0u32;
                 while ptr != 0 && walk < 48 {
@@ -958,7 +839,7 @@ pub unsafe fn create_unified_from_detected(
                     dbg_str(" id=0x");
                     dbg_hex8(cap_id);
                     if cap_id == 0x09 {
-                        // VirtIO vendor-specific: read cfg_type at ptr+3
+                        // VirtIO vendor-specific: cfg_type at ptr+3.
                         let cfg_type = pci_cfg_read16(pci_addr, ptr + 2);
                         let cfg_type_byte = ((cfg_type >> 8) & 0xFF) as u8;
                         let bar_idx_raw = pci_cfg_read16(pci_addr, ptr + 4);
@@ -994,7 +875,7 @@ pub unsafe fn create_unified_from_detected(
                 transport_type: 0,
             };
 
-            // Try PCI Modern transport first (required for disable-legacy=on)
+            // PCI Modern transport first; required for disable-legacy=on.
             let caps = probe_virtio_caps(pci_addr);
             dbg_str("[BLK-PROBE] caps found_mask=0x");
             dbg_hex8(caps.found_mask);
@@ -1002,7 +883,7 @@ pub unsafe fn create_unified_from_detected(
             dbg_str(if caps.has_required() { "yes" } else { "no" });
             dbg_str("\n");
 
-            // Raw PCI config space dump (BARs + Command register)
+            // Raw PCI config dump (BARs + Command register).
             {
                 let cmd = pci_cfg_read16(pci_addr, 0x04);
                 dbg_str("[BLK-PROBE] PCI CMD=");
@@ -1065,19 +946,20 @@ pub unsafe fn create_unified_from_detected(
                 };
                 let transport = VirtioTransport::pci_modern(pci_cfg);
 
-                // ── Feature-read diagnostic (volatile MMIO) ──
+                // Feature-read diagnostic (volatile MMIO).
                 {
                     let base = pci_cfg.common_cfg as *mut u32;
+                    // SAFETY: common_cfg is a probed, mapped VirtIO MMIO BAR.
                     unsafe {
-                        // Write ACKNOWLEDGE (0x01) to device_status to test MMIO write path
+                        // device_status at +0x14: reset / ACKNOWLEDGE / reset to test write path.
                         let status_ptr = (pci_cfg.common_cfg + 0x14) as *mut u8;
-                        core::ptr::write_volatile(status_ptr, 0x00u8); // reset
+                        core::ptr::write_volatile(status_ptr, 0x00u8);
                         core::arch::x86_64::_mm_mfence();
                         let st0 = core::ptr::read_volatile(status_ptr);
-                        core::ptr::write_volatile(status_ptr, 0x01u8); // ACKNOWLEDGE
+                        core::ptr::write_volatile(status_ptr, 0x01u8);
                         core::arch::x86_64::_mm_mfence();
                         let st1 = core::ptr::read_volatile(status_ptr);
-                        core::ptr::write_volatile(status_ptr, 0x00u8); // reset again
+                        core::ptr::write_volatile(status_ptr, 0x00u8);
                         core::arch::x86_64::_mm_mfence();
                         dbg_str("[BLK-PROBE] MMIO status write test: reset=");
                         dbg_hex8(st0);
@@ -1085,11 +967,10 @@ pub unsafe fn create_unified_from_detected(
                         dbg_hex8(st1);
                         dbg_str("\n");
 
-                        // device_feature_select = 0, read device_feature (low 32)
-                        core::ptr::write_volatile(base.add(0), 0u32); // offset 0x00
+                        // device_feature_select=0 -> low 32 at +0x04; select=1 -> high 32.
+                        core::ptr::write_volatile(base.add(0), 0u32);
                         core::arch::x86_64::_mm_mfence();
-                        let low = core::ptr::read_volatile(base.add(1)); // offset 0x04
-                                                                         // device_feature_select = 1, read device_feature (high 32)
+                        let low = core::ptr::read_volatile(base.add(1));
                         core::ptr::write_volatile(base.add(0), 1u32);
                         core::arch::x86_64::_mm_mfence();
                         let high = core::ptr::read_volatile(base.add(1));
@@ -1128,7 +1009,7 @@ pub unsafe fn create_unified_from_detected(
                 }
             } else {
                 dbg_str("[BLK-PROBE] no PCI Modern caps, trying MMIO fallback...\n");
-                // Fallback to legacy MMIO transport
+                // Legacy MMIO fallback.
                 let mut legacy_config = blk_config;
                 legacy_config.notify_addr = config.virtio_notify_addr;
                 legacy_config.transport_type = 0;
@@ -1140,9 +1021,7 @@ pub unsafe fn create_unified_from_detected(
     }
 }
 
-/// Create a unified block device from a specific AHCI port on a detected controller.
-///
-/// Returns `NoDevice` for non-AHCI devices.
+/// Init a specific AHCI port; `NoDevice` for non-AHCI devices.
 ///
 /// # Safety
 /// Same as `probe_unified_block_device`.
@@ -1174,7 +1053,6 @@ pub unsafe fn create_unified_from_detected_ahci_port(
     }
 }
 
-/// Detected block device type for handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BlockDeviceType {
@@ -1183,16 +1061,12 @@ pub enum BlockDeviceType {
     Ahci = 2,
 }
 
-/// Detect what type of block device is present without initializing.
-///
-/// Useful for populating BootHandoff before ExitBootServices.
+/// Detect device type without init, for populating BootHandoff before ExitBootServices.
 pub fn detect_block_device_type() -> (BlockDeviceType, Option<u64>, Option<PciAddr>) {
-    // Check for AHCI first (real hardware priority)
     if let Some(info) = find_ahci_controller() {
         return (BlockDeviceType::Ahci, Some(info.abar), Some(info.pci_addr));
     }
 
-    // Check for VirtIO-blk
     if let Some((pci_addr, mmio_base)) = find_virtio_blk() {
         return (BlockDeviceType::VirtIO, Some(mmio_base), Some(pci_addr));
     }

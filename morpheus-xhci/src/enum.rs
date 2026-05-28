@@ -31,6 +31,9 @@ pub fn ep0_max_packet(speed: u8) -> u16 {
 }
 
 impl XhciController {
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access.
     pub unsafe fn enable_slot(&mut self) -> Result<u8, XhciError> {
         self.cmd_ring.enqueue(0, 0, TRB_ENABLE_SLOT);
         self.ring_cmd_doorbell();
@@ -80,6 +83,10 @@ impl XhciController {
     /// `parent_hub_slot` / `parent_hub_port` identify the immediately upstream
     /// HS hub when this is a LS/FS device (used by the controller's TT routing).
     /// They are 0 for devices that don't need TT forwarding.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be a live slot.
     pub unsafe fn address_device(
         &mut self,
         root_port: u8,
@@ -152,6 +159,10 @@ impl XhciController {
     ///     MTT, parent-hub fields and speed (rather than wiping them)
     ///   * sets Context Entries at bits [31:27] correctly — `configure_endpoints`
     ///     has a long-standing off-by-one that puts it at bit 26 (Hub) instead
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be a live slot.
     pub unsafe fn configure_hid_endpoint(
         &mut self,
         dci_in: u8,
@@ -218,6 +229,10 @@ impl XhciController {
     }
 
     /// Configure bulk-in and bulk-out endpoints.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be a live slot.
     pub unsafe fn configure_endpoints(
         &mut self,
         dci_in: u8,
@@ -267,6 +282,10 @@ impl XhciController {
     }
 
     /// Fetch device descriptor (18 bytes). Returns pointer into DMA buffer.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn get_device_descriptor(&mut self) -> Result<*const u8, XhciError> {
         let desc_buf = self.dma_base + dma::OFF_DESC as u64;
         let slot_id = self.slot_id;
@@ -280,6 +299,11 @@ impl XhciController {
         Ok(desc_buf as *const u8)
     }
 
+    /// Fetch configuration descriptor of `len` bytes into the DMA buffer.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn get_config_descriptor(&mut self, len: u16) -> Result<*const u8, XhciError> {
         let desc_buf = self.dma_base + dma::OFF_DESC as u64;
         let slot_id = self.slot_id;
@@ -293,6 +317,11 @@ impl XhciController {
         Ok(desc_buf as *const u8)
     }
 
+    /// Issue SET_CONFIGURATION for the addressed device.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn set_configuration(&mut self, cfg_val: u8) -> Result<(), XhciError> {
         let slot_id = self.slot_id;
         let param = pack_setup(0x00, 0x09, cfg_val as u16, 0, 0);
@@ -304,6 +333,10 @@ impl XhciController {
     }
 
     /// Parse configuration descriptor. Returns (cfg_val, ep_in, ep_out, mpkt_in, mpkt_out).
+    ///
+    /// # Safety
+    /// `desc_ptr` must point to a readable configuration descriptor buffer whose
+    /// declared total length stays within the mapped DMA region.
     pub unsafe fn parse_config(&self, desc_ptr: *const u8) -> Option<(u8, u8, u8, u16, u16)> {
         let d = desc_ptr;
         let total = u16::from_le_bytes([
@@ -361,6 +394,10 @@ impl XhciController {
     }
 
     /// Reset all transfer rings and contexts for a fresh enumeration attempt.
+    ///
+    /// # Safety
+    /// The controller's DMA mappings must be valid and the caller must hold
+    /// exclusive access (no in-flight transfers on the affected rings).
     pub unsafe fn reset_transfer_state(&mut self) {
         core::ptr::write_bytes(
             (self.dma_base + dma::OFF_XFER_EP0 as u64) as *mut u8,

@@ -68,6 +68,9 @@ pub struct XhciController {
 }
 
 impl XhciController {
+    /// # Safety
+    /// `mmio_base` must be the valid, mapped MMIO base of an xHCI controller
+    /// and the caller must have exclusive control of that controller.
     pub unsafe fn new(mmio_base: u64, tsc_freq: u64) -> Result<Self, XhciError> {
         if mmio_base == 0 || tsc_freq == 0 {
             return Err(XhciError::ProbeFailed);
@@ -284,6 +287,10 @@ impl XhciController {
     ///
     /// HCRST is intentionally NOT asserted — port state from UEFI / Phase 9
     /// must persist into Stage D2 (see [[usb-xhci-controller]]).
+    ///
+    /// # Safety
+    /// The controller's MMIO base addresses must be valid and mapped, and the
+    /// caller must hold exclusive access to the controller.
     pub unsafe fn quiesce(&mut self) {
         let timeout = self.tsc_freq; // 1 second cap on every wait
         let cs_bit: u64 = 1 << 1; // CRCR.CS (Command Stop)
@@ -346,6 +353,9 @@ impl XhciController {
 
     /// Instance wrapper around `tsc_delay` for callers that already hold a
     /// controller reference (mostly the hub class code in `hub.rs`).
+    ///
+    /// # Safety
+    /// `self.tsc_freq` must reflect the calibrated TSC frequency; reads the TSC.
     #[inline(always)]
     pub unsafe fn delay_ms(&self, ms: u64) {
         Self::tsc_delay(self.tsc_freq, ms);
@@ -361,6 +371,10 @@ impl XhciController {
     /// Stopped state, and the TR Dequeue Pointer is left wherever the
     /// controller halted it. Pair with `set_tr_dequeue_pointer` to restart
     /// from a known position.
+    ///
+    /// # Safety
+    /// The controller's MMIO/command-ring state must be valid and the caller
+    /// must hold exclusive access; `slot_id`/`ep_dci` must name a real endpoint.
     pub unsafe fn reset_endpoint(&mut self, slot_id: u8, ep_dci: u32) -> Result<(), XhciError> {
         const TRB_RESET_ENDPOINT: u32 = 14u32 << 10;
         let ctrl = TRB_RESET_ENDPOINT | ((ep_dci & 0x1F) << 16) | ((slot_id as u32) << 24);
@@ -375,6 +389,10 @@ impl XhciController {
     /// Tells the controller where to read the next TRB for the given
     /// endpoint. The low bit of `deq_ptr` is DCS (Dequeue Cycle State);
     /// bits 3:1 are reserved; bits [63:4] are the 16-byte-aligned ring address.
+    ///
+    /// # Safety
+    /// The controller's MMIO/command-ring state must be valid and the caller
+    /// must hold exclusive access; `deq_ptr` must point into the endpoint's ring.
     pub unsafe fn set_tr_dequeue_pointer(
         &mut self,
         slot_id: u8,
@@ -389,10 +407,14 @@ impl XhciController {
         Ok(())
     }
 
+    /// # Safety
+    /// `self.db_base` must be the valid, mapped doorbell array base.
     pub unsafe fn ring_cmd_doorbell(&self) {
         mmio::write32(self.db_base, 0);
     }
 
+    /// # Safety
+    /// `self.db_base`/`self.slot_id` must address a valid doorbell register.
     #[inline(always)]
     pub unsafe fn ring_xfer_doorbell(&self, ep_dci: u32) {
         mmio::write32(self.db_base + (self.slot_id as u64) * 4, ep_dci);
@@ -405,6 +427,10 @@ impl XhciController {
     /// posts multiple `Port Status Change Event` TRBs that arrive in the
     /// ring ahead of the command completion — without draining them, we
     /// would spin on the first PSCEC forever.
+    ///
+    /// # Safety
+    /// The controller's event ring and MMIO base must be valid; the caller must
+    /// hold exclusive access while the ring is drained.
     pub unsafe fn wait_cmd(&mut self, timeout_ms: u64) -> Result<(u8, u8), XhciError> {
         let start = tsc::read_tsc();
         let timeout = self.tsc_freq.saturating_mul(timeout_ms) / 1000;
@@ -435,6 +461,10 @@ impl XhciController {
     ///
     /// Same draining discipline as [`wait_cmd`] — advances past every event,
     /// returns only on a `TRB_TRANSFER_EVENT` for the requested slot.
+    ///
+    /// # Safety
+    /// The controller's event ring and MMIO base must be valid; the caller must
+    /// hold exclusive access while the ring is drained.
     pub unsafe fn wait_xfer(
         &mut self,
         slot_id: u8,
@@ -467,6 +497,9 @@ impl XhciController {
         }
     }
 
+    /// # Safety
+    /// `self.rt_base` must be the valid, mapped runtime register base and
+    /// `self.evt_ring` must describe the live event ring.
     pub unsafe fn update_erdp(&mut self) {
         let new_erdp = self.evt_ring.base + (self.evt_ring.deq as u64) * 16;
         mmio::write32(self.rt_base + RT_IR0_ERDP, (new_erdp as u32 & !0xF) | 0x08);
@@ -476,6 +509,10 @@ impl XhciController {
     const TYPE_MASK: u32 = 0x3F << 10;
 
     /// Reset a port. Returns detected link speed (1=FS, 2=LS, 3=HS, 4=SS).
+    ///
+    /// # Safety
+    /// The controller's MMIO base must be valid and mapped; `port` must be a
+    /// real root-hub port index.
     pub unsafe fn port_reset(&self, port: u8) -> Result<u8, XhciError> {
         let addr = self.portsc(port);
 

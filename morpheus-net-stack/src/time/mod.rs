@@ -54,7 +54,6 @@ impl TimeoutConfig {
         30_000 * self.ticks_per_ms
     }
 
-    /// 5 ms main-loop iteration warning threshold.
     #[inline]
     pub fn loop_warning(&self) -> u64 {
         5 * self.ticks_per_ms

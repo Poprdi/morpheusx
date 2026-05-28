@@ -403,7 +403,6 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
         _pad0: 0,
     };
 
-    // detect elf
     if bytes_read >= 64 && data[0] == 0x7f && data[1] == b'E' && data[2] == b'L' && data[3] == b'F'
     {
         info.format = 1; // ELF64
@@ -421,9 +420,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
             ]);
             info.num_sections = u16::from_le_bytes([data[60], data[61]]) as u32;
         }
-    }
-    // detect pe/mz
-    else if bytes_read >= 256 && data[0] == b'M' && data[1] == b'Z' {
+    } else if bytes_read >= 256 && data[0] == b'M' && data[1] == b'Z' {
         info.format = 2; // PE32+
         if let Ok(pe) =
             morpheus_persistent::pe::header::PeHeaders::parse(buf_phys as *const u8, bytes_read)

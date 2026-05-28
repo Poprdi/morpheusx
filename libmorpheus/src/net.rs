@@ -756,7 +756,6 @@ impl TcpStream {
         Self { handle }
     }
 
-    /// Returns raw handle without closing.
     pub fn into_raw_handle(self) -> TcpHandle {
         let h = self.handle;
         core::mem::forget(self);

@@ -14,7 +14,7 @@ use crate::block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
 use core::ptr;
-use morpheus_virtio::transport::{TransportType, VirtioTransport};
+use morpheus_virtio::transport::VirtioTransport;
 use morpheus_virtio::types::VirtqueueState;
 
 extern "win64" {
@@ -39,11 +39,13 @@ extern "win64" {
         desc_idx: u16,
     ) -> u32;
     fn asm_virtio_blk_poll_complete(vq: *mut VirtqueueState, result: *mut BlkPollResult) -> u32;
+    #[allow(dead_code)]
     fn asm_virtio_blk_notify(vq: *mut VirtqueueState);
 }
 
 // Use existing VirtIO init functions
 extern "win64" {
+    #[allow(dead_code)]
     fn asm_virtio_reset(mmio_base: u64) -> u32;
     fn asm_virtio_set_status(mmio_base: u64, status: u8);
     fn asm_virtio_get_status(mmio_base: u64) -> u8;
@@ -101,7 +103,9 @@ const VIRTIO_STATUS_FAILED: u8 = 0x80;
 
 /// VirtIO-blk feature bits
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+#[allow(dead_code)]
 const VIRTIO_BLK_F_SIZE_MAX: u64 = 1 << 1;
+#[allow(dead_code)]
 const VIRTIO_BLK_F_SEG_MAX: u64 = 1 << 2;
 const VIRTIO_BLK_F_BLK_SIZE: u64 = 1 << 6;
 const VIRTIO_BLK_F_FLUSH: u64 = 1 << 9;
@@ -174,6 +178,7 @@ impl From<morpheus_virtio::transport::VirtioTransportError> for VirtioBlkInitErr
 
 /// Track in-flight request.
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)]
 struct InFlightRequest {
     /// Caller's request ID
     request_id: u32,
@@ -187,6 +192,7 @@ struct InFlightRequest {
 const MAX_IN_FLIGHT: usize = 32;
 
 /// VirtIO block device driver.
+#[allow(dead_code)]
 pub struct VirtioBlkDriver {
     /// MMIO base address (legacy) or common_cfg (PCI Modern)
     mmio_base: u64,

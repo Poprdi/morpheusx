@@ -3,7 +3,6 @@
 
 /// Well-known PCIe ECAM base addresses.
 pub mod ecam_bases {
-    /// QEMU Q35 (also OVMF).
     pub const QEMU_Q35: usize = 0xB000_0000;
     pub const QEMU_I440FX: usize = 0xE000_0000;
     pub const INTEL_TYPICAL: usize = 0xE000_0000;

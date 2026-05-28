@@ -1,35 +1,17 @@
-//! Kernel stdin buffer — lock-free SPSC ring buffer for keyboard input.
-//!
-//! The desktop event loop (producer) pushes ASCII bytes via [`push()`].
-//! `SYS_READ(fd=0)` (consumer) drains bytes via [`read()`].
-//!
-//! # Thread safety
-//!
-//! Single-producer / single-consumer on a single core. Atomic loads/stores
-//! on head and tail provide acquire/release ordering without locks.
+//! Lock-free SPSC ring buffer for keyboard input. Producer: desktop event loop.
+//! Consumer: `SYS_READ(fd=0)`. Head/tail acquire/release ordering replaces locks.
 
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-/// Capacity of the stdin ring buffer (must be a power of two for mask trick).
+/// Must be a power of two for the mask.
 const BUF_SIZE: usize = 256;
 const BUF_MASK: usize = BUF_SIZE - 1;
 
-/// Ring buffer storage.
 static mut BUF: [u8; BUF_SIZE] = [0; BUF_SIZE];
-
-/// Write cursor (producer advances).
 static HEAD: AtomicUsize = AtomicUsize::new(0);
-
-/// Read cursor (consumer advances).
 static TAIL: AtomicUsize = AtomicUsize::new(0);
 
-/// Push a single byte into the stdin buffer.
-///
-/// Returns `true` on success, `false` if the buffer is full (byte is dropped).
-///
-/// # Safety
-///
-/// Must be called from a single producer context (the desktop event loop).
+/// Returns false if full (byte dropped). Single-producer only.
 pub fn push(byte: u8) -> bool {
     let head = HEAD.load(Ordering::Relaxed);
     let next = (head + 1) & BUF_MASK;
@@ -45,13 +27,7 @@ pub fn push(byte: u8) -> bool {
     true
 }
 
-/// Read up to `buf.len()` bytes from the stdin buffer.
-///
-/// Returns the number of bytes actually read (0 if the buffer is empty).
-///
-/// # Safety
-///
-/// Must be called from a single consumer context (the syscall handler).
+/// Returns bytes read (0 if empty). Single-consumer only.
 pub fn read(buf: &mut [u8]) -> usize {
     let mut count = 0;
 
@@ -71,17 +47,13 @@ pub fn read(buf: &mut [u8]) -> usize {
     count
 }
 
-/// Returns the number of bytes available to read without blocking.
 pub fn available() -> usize {
     let head = HEAD.load(Ordering::Acquire);
     let tail = TAIL.load(Ordering::Relaxed);
     (head.wrapping_sub(tail)) & BUF_MASK
 }
 
-// FOREGROUND PROCESS (for Ctrl+C → SIGINT delivery)
-
-/// PID of the foreground process (receives Ctrl+C as SIGINT).
-/// 0 = no foreground process, Ctrl+C pushed to stdin instead.
+/// PID that receives Ctrl+C as SIGINT; 0 = none, Ctrl+C pushed to stdin instead.
 static FOREGROUND_PID: AtomicU32 = AtomicU32::new(0);
 
 pub fn set_foreground_pid(pid: u32) {

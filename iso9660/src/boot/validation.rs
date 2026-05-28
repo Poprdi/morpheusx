@@ -20,8 +20,10 @@ pub struct ValidationEntry {
 }
 
 impl ValidationEntry {
+    /// Expected header ID for a validation entry.
     pub const HEADER_ID: u8 = 0x01;
 
+    /// Expected key bytes terminating a valid validation entry.
     pub const KEY_BYTES: [u8; 2] = [0x55, 0xAA];
 
     /// Header, key, and checksum all valid.

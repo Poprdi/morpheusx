@@ -29,7 +29,15 @@ fn main() -> i32 {
         state.apply_desktop_appearance(&a);
     }
 
+    // Override the built-in German layout with the active .kmap on the FS, if
+    // present. Re-checked in the loop so layouts hot-swap (e.g. a settings GUI
+    // writing /system/keymap.kmap) without a reboot.
+    if let Some(km) = load_active_keymap() {
+        state.keymap = km;
+    }
+
     let mut last_appearance_poll_ms = 0u64;
+    let mut last_keymap_poll_ms = 0u64;
 
     loop {
         let now_ms = libmorpheus::time::uptime_ms();
@@ -40,6 +48,13 @@ fn main() -> i32 {
             last_appearance_poll_ms = now_ms;
         }
 
+        if now_ms.saturating_sub(last_keymap_poll_ms) >= 1000 {
+            if let Some(km) = load_active_keymap() {
+                state.keymap = km;
+            }
+            last_keymap_poll_ms = now_ms;
+        }
+
         islands::vsync::tick(&mut state);
         islands::input::poll(&mut state);
         islands::surface_mgr::update(&mut state);
@@ -48,4 +63,12 @@ fn main() -> i32 {
 
         process::yield_cpu();
     }
+}
+
+/// Load the active keyboard layout from `/system/keymap.kmap`. Returns `None`
+/// if the file is absent or invalid, in which case compd keeps its current
+/// layout (built-in German QWERTZ on first boot).
+fn load_active_keymap() -> Option<keymap::Keymap> {
+    let data = libmorpheus::fs::read_to_vec("/system/keymap.kmap").ok()?;
+    keymap::Keymap::parse(&data)
 }

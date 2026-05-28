@@ -16,6 +16,9 @@ extern "win64" {
 }
 
 /// `in al, dx` — 8-bit port read.
+///
+/// # Safety
+/// `port` must be a valid I/O port that tolerates an 8-bit read.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn inb(port: u16) -> u8 {
@@ -23,6 +26,9 @@ pub unsafe fn inb(port: u16) -> u8 {
 }
 
 /// `out dx, al` — 8-bit port write.
+///
+/// # Safety
+/// `port` must be a valid I/O port that tolerates an 8-bit write.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn outb(port: u16, value: u8) {
@@ -30,6 +36,9 @@ pub unsafe fn outb(port: u16, value: u8) {
 }
 
 /// `in ax, dx` — 16-bit port read.
+///
+/// # Safety
+/// `port` must be a valid I/O port that tolerates a 16-bit read.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn inw(port: u16) -> u16 {
@@ -37,6 +46,9 @@ pub unsafe fn inw(port: u16) -> u16 {
 }
 
 /// `out dx, ax` — 16-bit port write.
+///
+/// # Safety
+/// `port` must be a valid I/O port that tolerates a 16-bit write.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn outw(port: u16, value: u16) {
@@ -44,6 +56,9 @@ pub unsafe fn outw(port: u16, value: u16) {
 }
 
 /// `in eax, dx` — 32-bit port read.
+///
+/// # Safety
+/// `port` must be a valid I/O port that tolerates a 32-bit read.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn inl(port: u16) -> u32 {
@@ -51,33 +66,48 @@ pub unsafe fn inl(port: u16) -> u32 {
 }
 
 /// `out dx, eax` — 32-bit port write.
+///
+/// # Safety
+/// `port` must be a valid I/O port that tolerates a 32-bit write.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn outl(port: u16, value: u32) {
     asm_pio_write32(port, value)
 }
 
+/// # Safety
+/// `port` must be a valid I/O port for the operation.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn inb(_port: u16) -> u8 {
     0
 }
+/// # Safety
+/// `port` must be a valid I/O port for the operation.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn outb(_port: u16, _value: u8) {}
+/// # Safety
+/// `port` must be a valid I/O port for the operation.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn inw(_port: u16) -> u16 {
     0
 }
+/// # Safety
+/// `port` must be a valid I/O port for the operation.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn outw(_port: u16, _value: u16) {}
+/// # Safety
+/// `port` must be a valid I/O port for the operation.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn inl(_port: u16) -> u32 {
     0
 }
+/// # Safety
+/// `port` must be a valid I/O port for the operation.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn outl(_port: u16, _value: u32) {}

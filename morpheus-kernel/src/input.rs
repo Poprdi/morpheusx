@@ -207,11 +207,11 @@ pub fn drain_mouse() -> (i32, i32, u8) {
 }
 
 pub fn has_keyboard() -> bool {
-    KEYBOARD_REGISTERED.lock().clone()
+    *KEYBOARD_REGISTERED.lock()
 }
 
 pub fn has_mouse() -> bool {
-    MOUSE_REGISTERED.lock().clone()
+    *MOUSE_REGISTERED.lock()
 }
 
 // Legacy PS/2 thunks — kept so existing call sites compile unchanged.

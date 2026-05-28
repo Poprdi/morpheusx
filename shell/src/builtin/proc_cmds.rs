@@ -394,7 +394,7 @@ pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 
 }
 
 pub fn netup(args: &[String]) -> i32 {
-    for arg in args {
+    if let Some(arg) = args.first() {
         match arg.as_str() {
             "-h" | "--help" => {
                 libmorpheus::io::print(
@@ -464,7 +464,7 @@ pub fn netup(args: &[String]) -> i32 {
 }
 
 pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
-    for arg in args {
+    if let Some(arg) = args.first() {
         match arg.as_str() {
             "-h" | "--help" => {
                 con.write_str(

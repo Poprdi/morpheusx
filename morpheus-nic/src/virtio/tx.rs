@@ -1,20 +1,14 @@
-//! VirtIO TX logic.
-//!
-//! Fire-and-forget transmit - never wait for completion!
+//! VirtIO-net fire-and-forget TX. Never waits for completion.
 
 use super::VirtioNetHdr;
 use crate::traits::TxError;
 use morpheus_virtio::dma::BufferPool;
 use morpheus_virtio::types::VirtqueueState;
 
-/// Maximum frame size including VirtIO header.
+/// Max frame size including the VirtIO header.
 pub const MAX_TX_FRAME_SIZE: usize = VirtioNetHdr::SIZE + 1514;
 
-/// Transmit a packet via VirtIO.
-///
-/// # Contract
-/// - MUST return immediately (no completion wait)
-/// - Caller should call `collect_tx_completions` periodically
+/// Returns immediately; caller drains via `collect_completions` (Phase 5).
 #[cfg(target_arch = "x86_64")]
 pub fn transmit(
     tx_state: &mut VirtqueueState,
@@ -23,74 +17,56 @@ pub fn transmit(
 ) -> Result<(), TxError> {
     use morpheus_virtio::asm::tx as asm_tx;
 
-    // Check frame size
     let total_len = VirtioNetHdr::SIZE + frame.len();
     if total_len > MAX_TX_FRAME_SIZE {
         return Err(TxError::FrameTooLarge);
     }
 
-    // Collect any pending completions first (reclaim buffers)
+    // Reclaim buffers first.
     collect_completions(tx_state, tx_pool);
 
-    // Allocate TX buffer
     let buf = tx_pool.alloc().ok_or(TxError::QueueFull)?;
     let buf_idx = buf.index();
 
-    // Write VirtIO header (12 bytes, all zeros)
+    // Zeroed 12-byte VirtIO header, then the frame.
     let hdr = VirtioNetHdr::zeroed();
     buf.as_mut_slice()[..VirtioNetHdr::SIZE].copy_from_slice(hdr.as_bytes());
-
-    // Copy frame after header
     buf.as_mut_slice()[VirtioNetHdr::SIZE..total_len].copy_from_slice(frame);
 
-    // Mark device-owned BEFORE submit
     unsafe {
         buf.mark_device_owned();
     }
 
-    // Submit via ASM (includes barriers)
+    // Submit includes barriers.
     let success = asm_tx::submit(tx_state, buf_idx, total_len as u16);
 
     if !success {
-        // Queue was full (shouldn't happen after collect, but handle it)
-        // Buffer was marked device-owned, need to reclaim it properly
+        // Submit failed => device never took ownership; bypass the state machine
+        // and force back (error recovery path).
         if let Some(buf) = tx_pool.get_mut(buf_idx) {
-            // Since submit failed, device never took ownership, so we can
-            // directly transition back. We bypass the normal state machine
-            // because this is an error recovery path.
             buf.force_driver_owned();
         }
         tx_pool.free(buf_idx);
         return Err(TxError::QueueFull);
     }
 
-    // NOTE: Notification deferred to collect_completions() for batching throughput
-    // The notify happens in Phase 5 after all TX submissions for this iteration
-
-    // *** DO NOT WAIT FOR COMPLETION ***
-    // Completion collected in main loop Phase 5
+    // Notify is deferred to collect_completions() (Phase 5) to batch throughput.
 
     Ok(())
 }
 
-/// Collect TX completions and notify device of any pending submissions.
-///
-/// Call periodically (main loop Phase 5) to reclaim TX buffers.
-/// Also sends batched notification for any TX submissions since last call.
+/// Mainloop Phase 5: batched notify, then reap completed TX buffers.
 #[cfg(target_arch = "x86_64")]
 pub fn collect_completions(tx_state: &mut VirtqueueState, tx_pool: &mut BufferPool) {
     use morpheus_virtio::asm::{notify, tx as asm_tx};
 
-    // First, notify device of any pending TX submissions (batched)
-    // This is safe to call even if no new submissions - device ignores redundant notifies
+    // Batched notify; device ignores redundant ones.
     notify::notify(tx_state);
 
-    // Then collect completions
     loop {
         let idx = asm_tx::poll_complete(tx_state);
         match idx {
             Some(buf_idx) => {
-                // Return buffer to pool
                 if let Some(buf) = tx_pool.get_mut(buf_idx) {
                     unsafe {
                         buf.mark_driver_owned();
@@ -98,12 +74,11 @@ pub fn collect_completions(tx_state: &mut VirtqueueState, tx_pool: &mut BufferPo
                     tx_pool.free(buf_idx);
                 }
             },
-            None => break, // No more completions
+            None => break,
         }
     }
 }
 
-// Stubs for non-x86_64 platforms
 #[cfg(not(target_arch = "x86_64"))]
 pub fn transmit(
     _tx_state: &mut VirtqueueState,

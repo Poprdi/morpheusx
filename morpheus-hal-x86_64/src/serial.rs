@@ -125,6 +125,8 @@ pub fn puts(s: &str) {
 /// Low `n` hex nibbles, MSB-first, into `buf[..n]`.
 #[inline]
 fn fmt_hex(val: u64, n: usize, buf: &mut [u8]) {
+    // `i` drives both the buffer slot and the nibble shift amount
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         let nyb = ((val >> ((n - 1 - i) * 4)) & 0xF) as u8;
         buf[i] = if nyb < 10 {

@@ -38,8 +38,11 @@ pub struct SectionTable<'a> {
 }
 
 impl<'a> SectionTable<'a> {
-    /// SAFETY: `data + offset` must point to `count` valid `SectionHeader`s
-    /// and lie within `image_size`.
+    /// # Safety
+    ///
+    /// `data` must be readable for at least `image_size` bytes and
+    /// `data + offset` must point to `count` consecutive `SectionHeader`s that
+    /// lie entirely within `image_size`.
     pub unsafe fn parse(
         data: *const u8,
         offset: usize,

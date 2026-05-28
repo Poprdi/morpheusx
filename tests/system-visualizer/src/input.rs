@@ -81,8 +81,8 @@ impl InputState {
         let to_read = avail.min(16);
         let n = io::read_stdin(&mut buf[..to_read]);
 
-        for i in 0..n {
-            match buf[i] {
+        for &byte in buf.iter().take(n) {
+            match byte {
                 b'w' | b'W' => self.held |= HELD_W,
                 b'a' | b'A' => self.held |= HELD_A,
                 b's' | b'S' => self.held |= HELD_S,
@@ -92,7 +92,7 @@ impl InputState {
                 _ => {},
             }
 
-            let action = match buf[i] {
+            let action = match byte {
                 b'\t' | b'n' | b'N' => Action::SelectNext,
                 b'p' | b'P' => Action::SelectPrev,
                 b'k' | b'K' => Action::KillSelected,

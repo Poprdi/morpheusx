@@ -157,6 +157,8 @@ pub fn render(app: &SettingsApp) {
     );
     cy += r8;
 
+    #[allow(clippy::needless_range_loop)]
+    // index used as selection/focus id and hitbox key, not just to index PRESETS.
     for i in 0..PRESET_COUNT {
         let p = &PRESETS[i];
         let is_selected = i == hall.selected;

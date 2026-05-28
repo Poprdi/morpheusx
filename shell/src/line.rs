@@ -10,14 +10,17 @@ use crate::console::Console;
 use crate::fb::Framebuffer;
 
 const MAX_LINE: usize = 1024;
+#[allow(dead_code)]
 const MAX_HISTORY: usize = 128;
 
+#[allow(dead_code)]
 pub struct LineEditor {
     history: Vec<String>,
     buf: [u8; MAX_LINE],
     len: usize,
 }
 
+#[allow(dead_code)]
 impl LineEditor {
     pub fn new() -> Self {
         Self {

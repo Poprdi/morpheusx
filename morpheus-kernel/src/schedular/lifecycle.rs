@@ -130,10 +130,7 @@ pub unsafe fn spawn_kernel_thread(
     }
 
     {
-        // CpuContext is opaque (morpheus-hal-api); construct via the HAL
-        // ctx_init_kernel method instead of the legacy struct literal. The
-        // selector constants (KERNEL_CS / KERNEL_DS) live arch-side and are
-        // applied inside the HAL.
+        // CpuContext is opaque; HAL applies arch-side selectors (KERNEL_CS/DS).
         proc.context = CpuContext::zeroed();
         hal()
             .cpu()

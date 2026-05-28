@@ -1,10 +1,6 @@
-//! Manifest writing state — writes ISO manifest after download.
-//!
-//! Supports two modes:
-//! - FAT32: Write to `/.iso/<name>.manifest` on ESP
-//! - Raw sector: Write to a specific disk sector (legacy)
-//!
-//! Can be used standalone to regenerate a manifest for an existing ISO.
+//! Writes the ISO manifest after download, either to `/.iso/<name>.manifest`
+//! on the ESP (FAT32) or to a raw disk sector (legacy). Also usable standalone
+//! to regenerate a manifest for an existing ISO.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -25,43 +21,30 @@ use morpheus_nic::traits::NetworkDriver;
 
 use super::{DoneState, FailedState};
 
-/// Max ISO name length we store.
 const MAX_ISO_NAME_LEN: usize = 128;
 
-/// DMA buffer size for FAT32 operations.
 const FAT32_DMA_BUFFER_SIZE: usize = 64 * 1024;
 
-/// Static DMA buffer for FAT32 manifest operations.
 /// Separate from disk_writer's buffer to avoid conflicts.
 static mut FAT32_DMA_BUFFER: [u8; FAT32_DMA_BUFFER_SIZE] = [0u8; FAT32_DMA_BUFFER_SIZE];
 
-/// Manifest write mode.
 #[derive(Debug, Clone, Copy)]
 pub enum ManifestMode {
-    /// Write to FAT32 ESP filesystem
     Fat32 { esp_start_lba: u64 },
-    /// Write to raw disk sector
     RawSector { sector: u64 },
-    /// Skip manifest writing
     Skip,
 }
 
-/// Configuration for manifest writing.
 #[derive(Debug, Clone)]
 pub struct ManifestConfig {
-    /// ISO name stored inline (avoids lifetime issues)
+    /// Inline to dodge lifetimes.
     pub iso_name_buf: [u8; MAX_ISO_NAME_LEN],
-    /// ISO name length
     pub iso_name_len: usize,
-    /// Total ISO size in bytes
     pub iso_size: u64,
-    /// Start sector where ISO data begins
     pub start_sector: u64,
-    /// End sector (exclusive)
+    /// Exclusive.
     pub end_sector: u64,
-    /// Partition UUID (16 bytes)
     pub partition_uuid: [u8; 16],
-    /// Write mode
     pub mode: ManifestMode,
 }
 
@@ -70,7 +53,6 @@ impl ManifestConfig {
         core::str::from_utf8(&self.iso_name_buf[..self.iso_name_len]).unwrap_or("unknown")
     }
 
-    /// Create config with name copied into buffer.
     pub fn new(
         iso_name: &str,
         iso_size: u64,
@@ -94,7 +76,6 @@ impl ManifestConfig {
         }
     }
 
-    /// Create config for FAT32 manifest.
     pub fn fat32(
         iso_name: &str,
         iso_size: u64,
@@ -113,7 +94,6 @@ impl ManifestConfig {
         )
     }
 
-    /// Create config for raw sector manifest.
     pub fn raw_sector(
         iso_name: &str,
         iso_size: u64,
@@ -134,7 +114,6 @@ impl ManifestConfig {
         )
     }
 
-    /// Create config to skip manifest writing.
     pub fn skip() -> Self {
         Self {
             iso_name_buf: [0u8; MAX_ISO_NAME_LEN],
@@ -148,7 +127,6 @@ impl ManifestConfig {
     }
 }
 
-/// Manifest writing state.
 pub(crate) struct ManifestState {
     config: ManifestConfig,
     started: bool,
@@ -156,7 +134,6 @@ pub(crate) struct ManifestState {
 }
 
 impl ManifestState {
-    /// Create manifest state with configuration.
     pub fn new(config: ManifestConfig) -> Self {
         Self {
             config,
@@ -167,7 +144,7 @@ impl ManifestState {
 
     pub fn from_context(ctx: &Context<'_>) -> Self {
         let iso_size = ctx.bytes_downloaded;
-        // Use actual_start_sector (set by GPT prep) rather than config
+        // actual_start_sector reflects GPT relocation; config may be stale.
         let start_sector = ctx.actual_start_sector;
         let num_sectors = iso_size.div_ceil(512);
         let end_sector = start_sector + num_sectors;
@@ -194,7 +171,6 @@ impl ManifestState {
         ))
     }
 
-    /// Build manifest structure.
     fn build_manifest(&self) -> Option<IsoManifest> {
         let mut manifest = IsoManifest::new(self.config.iso_name(), self.config.iso_size);
 
@@ -219,7 +195,6 @@ impl ManifestState {
         Some(manifest)
     }
 
-    /// Write manifest to FAT32 ESP filesystem.
     fn write_fat32(&self, blk: &mut UnifiedBlockDevice, esp_start_lba: u64) -> bool {
         serial::println("[MANIFEST] Writing to FAT32 ESP...");
         serial::print("[MANIFEST] ESP start LBA: ");
@@ -234,7 +209,6 @@ impl ManifestState {
             None => return false,
         };
 
-        // Serialize manifest
         let mut manifest_buffer = [0u8; MAX_MANIFEST_SIZE];
         let manifest_len = match manifest.serialize(&mut manifest_buffer) {
             Ok(len) => {
@@ -249,7 +223,6 @@ impl ManifestState {
             },
         };
 
-        // Create BlockIo adapter for FAT32 operations
         serial::println("[MANIFEST] Creating BlockIo adapter for FAT32...");
         let (dma_buffer, dma_buffer_phys) = unsafe {
             let buf = core::slice::from_raw_parts_mut(
@@ -259,7 +232,7 @@ impl ManifestState {
             let phys = (&raw const FAT32_DMA_BUFFER).cast::<u8>() as u64;
             (buf, phys)
         };
-        let timeout_ticks = 500_000_000u64; // ~500ms
+        let timeout_ticks = 500_000_000u64; // ~500 ms
 
         let mut adapter = match UnifiedBlockIo::new(blk, dma_buffer, dma_buffer_phys, timeout_ticks)
         {
@@ -273,7 +246,6 @@ impl ManifestState {
             },
         };
 
-        // Generate 8.3 compatible manifest filename
         let manifest_filename =
             morpheus_storage_format::fs::generate_8_3_manifest_name(self.config.iso_name());
         let manifest_path = format!("/.iso/{}", manifest_filename);
@@ -281,10 +253,8 @@ impl ManifestState {
         serial::print("[MANIFEST] Writing to: ");
         serial::println(&manifest_path);
 
-        // Ensure .iso directory exists
         let _ = morpheus_storage_format::fs::create_directory(&mut adapter, esp_start_lba, "/.iso");
 
-        // Write manifest file
         match morpheus_storage_format::fs::write_file(
             &mut adapter,
             esp_start_lba,
@@ -315,7 +285,6 @@ impl ManifestState {
         }
     }
 
-    /// Write manifest using raw sector method.
     fn write_raw_sector(&self, blk: &mut UnifiedBlockDevice, sector: u64) -> bool {
         serial::println("[MANIFEST] Writing to raw sector...");
         serial::print("[MANIFEST] Sector: ");
@@ -327,7 +296,6 @@ impl ManifestState {
             None => return false,
         };
 
-        // Serialize
         let mut buffer = [0u8; MAX_MANIFEST_SIZE];
         let len = match manifest.serialize(&mut buffer) {
             Ok(l) => l,
@@ -341,7 +309,6 @@ impl ManifestState {
         serial::print_u32(len as u32);
         serial::println(" bytes");
 
-        // Write to disk
         unsafe { write_sector(blk, sector, &buffer) }
     }
 }
@@ -450,11 +417,10 @@ impl<D: NetworkDriver> State<D> for ManifestState {
     }
 }
 
-/// Write a buffer to a disk sector.
 unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -> bool {
     use morpheus_block::block_traits::BlockDriver;
 
-    // Pad to sector size
+    // Zero-pad to one full sector.
     static mut SECTOR_BUF: [u8; 512] = [0u8; 512];
     let copy_len = data.len().min(512);
     SECTOR_BUF[..copy_len].copy_from_slice(&data[..copy_len]);
@@ -464,7 +430,6 @@ unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -
 
     let buffer_phys = (&raw const SECTOR_BUF).cast::<u8>() as u64;
 
-    // Drain pending
     while blk.poll_completion().is_some() {}
 
     if !blk.can_submit() {
@@ -483,9 +448,8 @@ unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -
 
     blk.notify();
 
-    // Poll for completion
     let start = read_tsc();
-    let timeout: u64 = 2_000_000_000; // ~500ms
+    let timeout: u64 = 2_000_000_000; // ~500 ms
 
     loop {
         if let Some(completion) = blk.poll_completion() {
@@ -503,10 +467,7 @@ unsafe fn write_sector(blk: &mut UnifiedBlockDevice, sector: u64, data: &[u8]) -
 
 use morpheus_hal_x86_64::asm::tsc::read_tsc;
 
-/// Write a manifest for an existing ISO without using the state machine.
-///
-/// Use case: Recreate a manifest for an ISO that was previously downloaded
-/// but whose manifest was lost or corrupted.
+/// Write a manifest outside the state machine, e.g. to recreate a lost one.
 pub fn write_manifest_standalone(blk: &mut UnifiedBlockDevice, config: &ManifestConfig) -> bool {
     let state = ManifestState::new(config.clone());
 
@@ -520,9 +481,7 @@ pub fn write_manifest_standalone(blk: &mut UnifiedBlockDevice, config: &Manifest
     }
 }
 
-/// Regenerate manifest for an existing ISO on disk.
-///
-/// Convenience wrapper that creates the config and writes the manifest.
+/// Build the config and write a manifest for an existing on-disk ISO.
 pub fn regenerate_manifest(
     blk: &mut UnifiedBlockDevice,
     iso_name: &str,

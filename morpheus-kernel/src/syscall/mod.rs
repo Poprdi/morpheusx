@@ -17,8 +17,8 @@ use handler::compositor::{
     sys_win_surface_dirty_clear, sys_win_surface_list, sys_win_surface_map,
 };
 use handler::core::{
-    sys_exit, sys_getpid, sys_kill, sys_read, sys_sleep, sys_system_control, sys_wait, sys_write,
-    sys_yield,
+    sys_exit, sys_getpid, sys_keyboard_read, sys_kill, sys_read, sys_sleep, sys_system_control,
+    sys_wait, sys_write, sys_yield,
 };
 use handler::fb::{
     fb_lock_holder, is_composited_client, sys_fb_blit, sys_fb_info, sys_fb_lock, sys_fb_map,
@@ -76,6 +76,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_EXIT => sys_exit(a1),
         SYS_WRITE => sys_write(a1, a2, a3),
         SYS_READ => sys_read(a1, a2, a3),
+        SYS_KEYBOARD_READ => sys_keyboard_read(a1, a2),
         SYS_YIELD => sys_yield(),
         SYS_ALLOC => sys_alloc(a1),
         SYS_FREE => sys_free(a1, a2),

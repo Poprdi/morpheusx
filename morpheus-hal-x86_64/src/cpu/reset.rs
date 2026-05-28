@@ -56,6 +56,10 @@ unsafe fn triple_fault_reset() -> ! {
     core::arch::asm!("ud2", options(noreturn));
 }
 
+/// # Safety
+/// Resets the machine and never returns. Per-CPU state (`GS_BASE`) must be
+/// initialized. Caller must ensure no further code on any core depends on this
+/// one continuing.
 pub unsafe fn reset_machine_now() -> ! {
     let core_idx = crate::cpu::per_cpu::current_core_index();
     if crate::cpu::per_cpu::reboot_owner().is_none() {
@@ -107,6 +111,9 @@ pub unsafe fn reset_machine_now() -> ! {
     triple_fault_reset()
 }
 
+/// # Safety
+/// Reads the TSC and polls input hardware. Call from single-threaded
+/// init/shutdown context only.
 pub unsafe fn wait_for_keypress_or_timeout_ms(timeout_ms: u64) {
     let tsc_hz = crate::cpu::tsc::tsc_frequency();
     let deadline = if tsc_hz > 0 {

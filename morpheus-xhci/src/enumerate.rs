@@ -35,6 +35,7 @@ struct HubParent {
     port_num: u8,
     /// Number of 4-bit groups already consumed in the route string by hubs
     /// above this one. The new port enters the route string at this offset.
+    #[allow(dead_code)]
     route_depth_bits: u8,
 }
 
@@ -60,6 +61,10 @@ pub struct InputEnumerationResult {
 ///
 /// # Boot Order Constraint
 /// Must run AFTER `XhciController::new` and BEFORE the scheduler starts.
+///
+/// # Safety
+/// `controller` must be a fully initialized xHCI controller with valid MMIO
+/// mappings, and the caller must hold exclusive access to it.
 pub unsafe fn enumerate_and_bind_inputs(
     controller: &mut XhciController,
 ) -> Result<InputEnumerationResult, XhciError> {
@@ -317,6 +322,7 @@ unsafe fn enumerate_hub_downstream(
     // ── Phase 2: enumerate each connected downstream device.
     // Each iteration takes over the EP0 ring; we never return to the hub
     // for more class requests after this point.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n_connected {
         let (down_port, dspeed) = connected[i];
         let new_route = route | (((down_port as u32) & 0xF) << route_depth_bits);

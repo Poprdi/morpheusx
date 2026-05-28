@@ -63,7 +63,8 @@ pub unsafe fn kernel_pml4_phys() -> u64 {
 
 // Convenience wrappers — each takes the KERNEL_PT lock per call.
 
-/// # Safety: see [`PageTableManager::map_4k`].
+/// # Safety
+/// See [`PageTableManager::map_4k`].
 pub unsafe fn kmap_4k(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -72,7 +73,8 @@ pub unsafe fn kmap_4k(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'st
         .map_4k(virt, phys, flags)
 }
 
-/// # Safety: see [`PageTableManager::map_2m`].
+/// # Safety
+/// See [`PageTableManager::map_2m`].
 pub unsafe fn kmap_2m(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -81,7 +83,8 @@ pub unsafe fn kmap_2m(virt: u64, phys: u64, flags: PageFlags) -> Result<(), &'st
         .map_2m(virt, phys, flags)
 }
 
-/// # Safety: see [`PageTableManager::unmap_4k`].
+/// # Safety
+/// See [`PageTableManager::unmap_4k`].
 pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -90,7 +93,8 @@ pub unsafe fn kunmap_4k(virt: u64) -> Result<(), &'static str> {
         .unmap_4k(virt)
 }
 
-/// # Safety: see [`PageTableManager::translate`].
+/// # Safety
+/// See [`PageTableManager::translate`].
 pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
     KERNEL_PT
         .lock()
@@ -101,7 +105,8 @@ pub unsafe fn kvirt_to_phys(virt: u64) -> Option<u64> {
 
 /// Splits huge entries on the walk so a later `kmap_4k` succeeds.
 ///
-/// # Safety: see [`PageTableManager::ensure_4k_mappable`].
+/// # Safety
+/// See [`PageTableManager::ensure_4k_mappable`].
 pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -112,7 +117,8 @@ pub unsafe fn kensure_4k(virt: u64) -> Result<(), &'static str> {
 
 /// Identity-map MMIO as UC. Works on huge/4 KiB/unmapped regions.
 ///
-/// # Safety: see [`PageTableManager::map_mmio`].
+/// # Safety
+/// See [`PageTableManager::map_mmio`].
 pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()
@@ -123,7 +129,8 @@ pub unsafe fn kmap_mmio(phys: u64, size: u64) -> Result<(), &'static str> {
 
 /// UC on the covering leaf. Fixes UEFI's WB caching on PCI BAR identity maps.
 ///
-/// # Safety: see [`PageTableManager::mark_uncacheable`].
+/// # Safety
+/// See [`PageTableManager::mark_uncacheable`].
 pub unsafe fn kmark_uncacheable(virt: u64) -> Result<(), &'static str> {
     KERNEL_PT
         .lock()

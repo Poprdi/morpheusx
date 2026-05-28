@@ -218,6 +218,8 @@ pub fn render(app: &SettingsApp) {
     let (ar, ag, ab, name) = ACCENTS[mirror.accent_idx];
     let accent = crate::theme::pack(ar, ag, ab);
 
+    #[allow(clippy::needless_range_loop)]
+    // index also drives swatch x-position and selection compare, not just ACCENTS indexing.
     for i in 0..ACCENT_COUNT {
         let (r, g, b, _) = ACCENTS[i];
         let c = crate::theme::pack(r, g, b);

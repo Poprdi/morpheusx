@@ -80,7 +80,6 @@ impl Mesh {
     }
 }
 
-/// Ritter's bounding sphere: O(n), within ~5% of optimal.
 pub fn compute_bounding_sphere(verts: &[MeshVertex]) -> (Vec3, f32) {
     if verts.is_empty() {
         return (Vec3::ZERO, 0.0);

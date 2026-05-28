@@ -253,6 +253,7 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
 }
 
 /// Bilinear scale source surface into dest rect; clipped to fb bounds.
+#[allow(clippy::too_many_arguments)]
 fn blit_surface(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -370,6 +371,7 @@ fn blit_surface(
 }
 
 /// 1:1 copy of a horizontal strip from source to framebuffer. Used for z3 panel overlay.
+#[allow(clippy::too_many_arguments)]
 fn blit_strip(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -403,6 +405,7 @@ fn blit_strip(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn clip_fill(
     state: &CompState,
     fb_ptr: *mut u32,

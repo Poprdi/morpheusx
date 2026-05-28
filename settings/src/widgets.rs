@@ -14,6 +14,7 @@ pub fn put_pixel(surface: *mut u32, stride: u32, x: u32, y: u32, color: u32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn fill_rect(
     surface: *mut u32,
     stride: u32,
@@ -43,6 +44,7 @@ pub fn fill_rect(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_char(
     surface: *mut u32,
     stride: u32,
@@ -54,7 +56,7 @@ pub fn draw_char(
     fb_w: u32,
     fb_h: u32,
 ) {
-    let idx = if ch >= 0x20 && ch <= 0x7E {
+    let idx = if (0x20..=0x7E).contains(&ch) {
         (ch - 0x20) as usize
     } else {
         0 // space fallback
@@ -82,6 +84,7 @@ pub fn draw_char(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_str(
     surface: *mut u32,
     stride: u32,
@@ -104,6 +107,7 @@ pub fn draw_str(
 }
 
 /// Draws `s`, truncating with `..` when it exceeds `max_chars`.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_str_trunc(
     surface: *mut u32,
     stride: u32,
@@ -176,6 +180,7 @@ pub fn vline(
     fill_rect(surface, stride, x, y, 1, h, color, fb_w, fb_h);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn rect_outline(
     surface: *mut u32,
     stride: u32,
@@ -332,6 +337,7 @@ pub fn format_uptime(ms: u64, buf: &mut [u8]) -> usize {
     pos
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_bar(
     surface: *mut u32,
     stride: u32,

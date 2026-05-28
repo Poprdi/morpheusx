@@ -44,18 +44,30 @@ pub struct XhciDma([u8; DMA_SIZE]);
 pub static mut XHCI_DMA: XhciDma = XhciDma([0u8; DMA_SIZE]);
 
 /// Returns the physical base of the static DMA region.
+///
+/// # Safety
+/// Caller must observe the single-threaded, identity-mapped contract of the
+/// static `XHCI_DMA` region (no aliasing mutable access).
 #[inline(always)]
 pub unsafe fn dma_base() -> u64 {
     core::ptr::addr_of!(XHCI_DMA) as u64
 }
 
 /// Zeros the entire DMA region.
+///
+/// # Safety
+/// `base` must be the valid base of the `DMA_SIZE`-byte DMA region and the
+/// caller must hold exclusive access to it.
 #[inline(always)]
 pub unsafe fn dma_zero(base: u64) {
     core::ptr::write_bytes(base as *mut u8, 0, DMA_SIZE);
 }
 
 /// Zeros a subrange starting at `base + off`.
+///
+/// # Safety
+/// `base + off .. base + off + len` must lie within a valid, exclusively-owned
+/// DMA mapping.
 #[inline(always)]
 pub unsafe fn dma_zero_range(base: u64, off: usize, len: usize) {
     core::ptr::write_bytes((base + off as u64) as *mut u8, 0, len);

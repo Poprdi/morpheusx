@@ -125,6 +125,12 @@ pub struct RawSpinLock {
     locked: AtomicBool,
 }
 
+impl Default for RawSpinLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RawSpinLock {
     pub const fn new() -> Self {
         Self {
@@ -160,8 +166,16 @@ pub struct IsrSafeRawSpinLock {
 unsafe impl Sync for IsrSafeRawSpinLock {}
 unsafe impl Send for IsrSafeRawSpinLock {}
 
+impl Default for IsrSafeRawSpinLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IsrSafeRawSpinLock {
     pub const fn new() -> Self {
+        // Interior-mutable const used solely as an array initializer below.
+        #[allow(clippy::declare_interior_mutable_const)]
         const CELL_FALSE: UnsafeCell<bool> = UnsafeCell::new(false);
         Self {
             locked: AtomicBool::new(false),
@@ -222,6 +236,12 @@ pub struct Once {
 const ONCE_INCOMPLETE: u64 = 0;
 const ONCE_RUNNING: u64 = 1;
 const ONCE_COMPLETE: u64 = 2;
+
+impl Default for Once {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Once {
     pub const fn new() -> Self {
@@ -297,6 +317,12 @@ impl<T, F: FnOnce() -> T> Deref for Lazy<T, F> {
 /// Disables IRQs on construct, restores prior IF on drop.
 pub struct InterruptGuard {
     was_enabled: bool,
+}
+
+impl Default for InterruptGuard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InterruptGuard {

@@ -48,6 +48,10 @@ pub struct HubInfo {
 impl XhciController {
     /// Class-specific GET_DESCRIPTOR(HUB). Issued on EP0 of the slot currently
     /// pointed to by `self.slot_id`.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
     pub unsafe fn get_hub_descriptor(&mut self) -> Result<HubInfo, XhciError> {
         let buf = self.dma_base + dma::OFF_DESC as u64;
         let slot_id = self.slot_id;
@@ -70,12 +74,21 @@ impl XhciController {
         })
     }
 
+    /// SET_FEATURE(PORT_POWER) on a downstream hub port.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
     pub unsafe fn hub_port_power_on(&mut self, port: u8) -> Result<(), XhciError> {
         self.hub_port_set_feature(port, PORT_FEAT_POWER)
     }
 
     /// SET_FEATURE(PORT_RESET) + poll for C_PORT_RESET. Clears the change bit
     /// on completion. Returns the detected speed (1=FS, 2=LS, 3=HS).
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
     pub unsafe fn hub_port_reset(&mut self, port: u8) -> Result<u8, XhciError> {
         self.hub_port_set_feature(port, PORT_FEAT_RESET)?;
 
@@ -102,6 +115,10 @@ impl XhciController {
     }
 
     /// GET_PORT_STATUS — returns `wPortStatus | (wPortChange << 16)`.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
     pub unsafe fn hub_port_get_status(&mut self, port: u8) -> Result<u32, XhciError> {
         let buf = self.dma_base + dma::OFF_DESC as u64;
         let slot_id = self.slot_id;
@@ -115,6 +132,11 @@ impl XhciController {
         Ok(vr32(buf))
     }
 
+    /// CLEAR_FEATURE(C_PORT_CONNECTION) on a downstream hub port.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
     pub unsafe fn hub_port_clear_connection_change(&mut self, port: u8) -> Result<(), XhciError> {
         self.hub_port_clear_feature(port, PORT_FEAT_C_CONNECTION)
     }
@@ -149,6 +171,10 @@ impl XhciController {
     ///
     /// xHCI §6.2.2.1: DW0 bit 26 = Hub, DW1 [31:24] = Number of Ports,
     /// DW2 [17:16] = TT Think Time.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn configure_hub_slot(
         &mut self,
         num_ports: u8,

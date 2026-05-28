@@ -134,6 +134,10 @@ pub const SYS_TRY_WAIT: u64 = 96;
 pub const SYS_FORWARD_INPUT: u64 = 97;
 pub const SYS_SYSTEM_CONTROL: u64 = 98;
 
+/// Non-blocking drain of the kernel keyboard event ring (raw PS/2 Set 1 bytes).
+/// The compositor reads input through this instead of the stdin byte stream.
+pub const SYS_KEYBOARD_READ: u64 = 99;
+
 // Seek whence constants.
 pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;

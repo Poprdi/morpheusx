@@ -29,6 +29,8 @@ impl ProcessLayout {
         }
     }
 
+    // `i` is used as a process index value across parallel arrays, not just to index one slice.
+    #[allow(clippy::needless_range_loop)]
     pub fn update(&mut self, state: &SystemState, dt: f32) {
         let n = state.proc_count;
         self.count = n;

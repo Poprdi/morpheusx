@@ -85,6 +85,8 @@ pub(super) unsafe fn clear_net_handle_tables() {
 }
 
 pub(super) unsafe fn alloc_tcp_slot(handle: SocketHandle) -> Option<i64> {
+    // Index-based access avoids taking a `&mut` to the mutable static (static_mut_refs).
+    #[allow(clippy::needless_range_loop)]
     for idx in 0..MAX_TCP_HANDLES {
         if USER_TCP_HANDLES[idx].is_none() {
             USER_TCP_HANDLES[idx] = Some(handle);
@@ -117,6 +119,8 @@ pub(super) unsafe fn tcp_active_count() -> u32 {
 }
 
 pub(super) unsafe fn alloc_udp_slot(handle: SocketHandle) -> Option<i64> {
+    // Index-based access avoids taking a `&mut` to the mutable static (static_mut_refs).
+    #[allow(clippy::needless_range_loop)]
     for idx in 0..MAX_UDP_HANDLES {
         if USER_UDP_HANDLES[idx].is_none() {
             USER_UDP_HANDLES[idx] = Some(handle);
@@ -137,6 +141,8 @@ pub(super) unsafe fn take_udp_slot(handle: i64) -> Option<SocketHandle> {
 }
 
 pub(super) unsafe fn alloc_dns_query_slot(handle: DnsQueryHandle) -> Option<i64> {
+    // Index-based access avoids taking a `&mut` to the mutable static (static_mut_refs).
+    #[allow(clippy::needless_range_loop)]
     for idx in 0..MAX_DNS_QUERIES {
         if USER_DNS_QUERIES[idx].is_none() {
             USER_DNS_QUERIES[idx] = Some(handle);

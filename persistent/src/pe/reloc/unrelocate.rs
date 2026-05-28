@@ -1,7 +1,11 @@
 use super::super::{PeError, PeResult};
 use super::types::*;
 
-/// SAFETY: `reloc_rva`/`reloc_size` must describe `.reloc` inside `image_data`.
+/// # Safety
+///
+/// `reloc_rva` and `reloc_size` must describe a `.reloc` block residing
+/// within `image_data`; per-entry bounds are re-checked, but the block base
+/// is trusted. `image_data` is rewritten in place.
 pub unsafe fn unrelocate_image(
     image_data: &mut [u8],
     reloc_rva: u32,

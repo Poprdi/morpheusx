@@ -182,7 +182,7 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
     let mut stale_input = 0u64;
 
     while stdin_mask != 0 {
-        let bit = stdin_mask.trailing_zeros() as u32;
+        let bit = stdin_mask.trailing_zeros();
         stdin_mask &= stdin_mask - 1;
         if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
             if !matches!(p.state, ProcessState::Blocked(BlockReason::StdinRead)) {
@@ -194,7 +194,7 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
     }
 
     while input_mask != 0 {
-        let bit = input_mask.trailing_zeros() as u32;
+        let bit = input_mask.trailing_zeros();
         input_mask &= input_mask - 1;
         if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
             if !matches!(p.state, ProcessState::Blocked(BlockReason::InputRead)) {
@@ -216,7 +216,7 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
         let mut mask = waiter_set.load(Ordering::Relaxed);
         let mut stale = 0u64;
         while mask != 0 {
-            let bit = mask.trailing_zeros() as u32;
+            let bit = mask.trailing_zeros();
             mask &= mask - 1;
             if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
                 if let ProcessState::Blocked(BlockReason::PipeRead(idx)) = p.state {
@@ -239,7 +239,7 @@ pub(crate) unsafe fn cleanup_stale_waiters() {
         let mut mask = waiter_set.load(Ordering::Relaxed);
         let mut stale = 0u64;
         while mask != 0 {
-            let bit = mask.trailing_zeros() as u32;
+            let bit = mask.trailing_zeros();
             mask &= mask - 1;
             if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
                 if !matches!(p.state, ProcessState::Blocked(BlockReason::FutexWait(_))) {

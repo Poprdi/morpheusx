@@ -1,12 +1,5 @@
-//! PCI MSI and MSI-X capability discovery and programming.
-//!
-//! Walks the capability list (already provided by `capability::walk_capabilities_rust`)
-//! looking for cap IDs `0x05` (MSI) and `0x11` (MSI-X). Programs message
-//! address/data so a device's interrupts land on a chosen IDT vector via the
-//! LAPIC. See `.claude/skills/pci-msi-programming/SKILL.md`.
-//!
-//! Conservative scope: single vector, fixed delivery, edge-triggered, physical
-//! destination mode targeting the BSP. No multi-MSI, no logical destination.
+//! PCI MSI/MSI-X discovery and programming. Single vector, fixed delivery,
+//! edge-triggered, physical destination. No multi-MSI, no logical destination.
 
 use super::capability::walk_capabilities_rust;
 use super::config::{
@@ -20,34 +13,27 @@ pub const CAP_ID_MSIX: u8 = 0x11;
 /// INTx. We always set this when enabling MSI/MSI-X.
 const CMD_INTX_DISABLE: u16 = 1 << 10;
 
-/// Compose the LAPIC-targeting MSI message address for a given APIC ID.
-///
-/// Bits: `0xFEE0_0000 | (apic_id << 12) | (RH=0 << 3) | (DM=0 << 2)`.
-/// Physical destination mode, no redirection hint.
+/// LAPIC MSI message address: `0xFEE0_0000 | (apic_id << 12)`, RH=0, DM=0
+/// (physical dest, no redirection hint).
 #[inline]
 pub fn lapic_msi_addr(apic_id: u32) -> u32 {
     0xFEE0_0000 | ((apic_id & 0xFF) << 12)
 }
 
-/// Compose the MSI data word for `vector`: fixed delivery mode, edge triggered.
+/// MSI data word: fixed delivery, edge-triggered.
 #[inline]
 pub fn msi_data(vector: u8) -> u32 {
     vector as u32
 }
 
-/// Disable legacy INTx on the device. Required when enabling MSI/MSI-X so the
-/// device does not raise both signaling paths.
+/// Disable legacy INTx; required so the device does not double-signal under MSI.
 #[inline]
 pub fn disable_intx(addr: PciAddr) {
     let cmd = pci_cfg_read16(addr, offset::COMMAND);
     pci_cfg_write16(addr, offset::COMMAND, cmd | CMD_INTX_DISABLE);
 }
 
-// ── MSI ──────────────────────────────────────────────────────────────────
-
-/// MSI capability layout, located in PCI config space.
-///
-/// Single-vector use only.
+/// MSI capability in PCI config space. Single-vector use only.
 #[derive(Debug, Clone, Copy)]
 pub struct MsiCapability {
     pub addr: PciAddr,
@@ -107,7 +93,6 @@ impl MsiCapability {
     }
 }
 
-/// Find an MSI capability on the device, if present.
 pub fn find_msi(addr: PciAddr) -> Option<MsiCapability> {
     for (off, id) in walk_capabilities_rust(addr) {
         if id == CAP_ID_MSI {
@@ -123,8 +108,6 @@ pub fn find_msi(addr: PciAddr) -> Option<MsiCapability> {
     None
 }
 
-// ── MSI-X ────────────────────────────────────────────────────────────────
-
 /// MSI-X table entry, 16 bytes, in BAR memory.
 #[repr(C)]
 struct MsixEntry {
@@ -136,7 +119,6 @@ struct MsixEntry {
 
 const MSIX_VEC_CTRL_MASK: u32 = 1;
 
-/// MSI-X capability layout.
 #[derive(Debug, Clone, Copy)]
 pub struct MsixCapability {
     pub addr: PciAddr,
@@ -157,20 +139,15 @@ impl MsixCapability {
         pci_cfg_write16(self.addr, self.cap_off + 2, v)
     }
 
-    /// Resolve the absolute virtual (= physical, identity-mapped MMIO)
-    /// address of MSI-X table entry `idx`.
-    ///
     /// # Safety
-    /// BAR must be a valid memory BAR pointing at MMIO that is mapped UC
-    /// (uncached). `idx` must be `< self.table_size`.
+    /// BAR must be a memory BAR mapped UC. `idx` must be `< self.table_size`.
     unsafe fn entry_ptr(self, idx: u16) -> *mut MsixEntry {
         let bar = read_bar64(self.addr, self.table_bir);
         let base = bar.wrapping_add(self.table_offset as u64);
         (base + (idx as u64) * 16) as *mut MsixEntry
     }
 
-    /// Mask or unmask the function (mask-all bit). Use this around table
-    /// reconfiguration.
+    /// Function mask-all bit; hold set around table reconfiguration.
     pub fn set_function_mask(self, masked: bool) {
         let mut mc = self.msg_ctrl();
         if masked {
@@ -181,7 +158,6 @@ impl MsixCapability {
         self.set_msg_ctrl(mc);
     }
 
-    /// Set or clear the MSI-X enable bit.
     pub fn set_enable(self, enable: bool) {
         let mut mc = self.msg_ctrl();
         if enable {
@@ -192,11 +168,9 @@ impl MsixCapability {
         self.set_msg_ctrl(mc);
     }
 
-    /// Program one MSI-X table entry.
-    ///
     /// # Safety
-    /// See `entry_ptr`. Caller should hold `set_function_mask(true)` while
-    /// programming, then `set_function_mask(false)` and `set_enable(true)`.
+    /// See `entry_ptr`. Hold `set_function_mask(true)` while programming, then
+    /// `set_function_mask(false)` and `set_enable(true)`.
     pub unsafe fn program_entry(self, idx: u16, msg_addr_low: u32, vector: u8, masked: bool) {
         let e = self.entry_ptr(idx);
         core::ptr::write_volatile(&mut (*e).addr_lo, msg_addr_low);
@@ -209,7 +183,6 @@ impl MsixCapability {
     }
 }
 
-/// Find an MSI-X capability on the device, if present.
 pub fn find_msix(addr: PciAddr) -> Option<MsixCapability> {
     for (off, id) in walk_capabilities_rust(addr) {
         if id == CAP_ID_MSIX {
@@ -227,23 +200,17 @@ pub fn find_msix(addr: PciAddr) -> Option<MsixCapability> {
     None
 }
 
-// ── High-level helpers ───────────────────────────────────────────────────
-
-/// Errors that can come out of MSI/MSI-X enablement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MsiError {
     NoCapability,
     BarNotMemory,
 }
 
-/// Enable MSI-X with a single entry directed at `vector`, prefer this over
-/// MSI when both are present. Caller chooses the target APIC ID; for the
-/// common single-CPU-target case use `unsafe { read_lapic_id() }` on the BSP.
+/// Enable MSI-X with a single entry directed at `vector`; prefer over MSI.
 ///
 /// # Safety
-/// MSI-X table BAR must be a memory BAR mapped UC. PCI config writes must be
-/// observed by the device before this returns; the underlying asm thunks
-/// already serialize via port I/O.
+/// MSI-X table BAR must be a memory BAR mapped UC. Config writes serialize via
+/// the port-I/O asm thunks.
 pub unsafe fn enable_msix_single(
     addr: PciAddr,
     target_apic_id: u32,
@@ -273,8 +240,7 @@ pub unsafe fn enable_msix_single(
     Ok(cap)
 }
 
-/// Fallback path: enable plain MSI with a single vector. Used when MSI-X is
-/// not present.
+/// Fallback when MSI-X is absent: plain MSI, single vector.
 ///
 /// # Safety
 /// See `enable_msix_single`.
@@ -289,9 +255,7 @@ pub unsafe fn enable_msi_single(
     Ok(cap)
 }
 
-// ── BAR resolution ───────────────────────────────────────────────────────
-
-/// Read a 32- or 64-bit memory BAR. Returns 0 if the BAR is I/O space.
+/// Read a 32- or 64-bit memory BAR. Returns 0 for I/O-space BARs.
 fn read_bar64(addr: PciAddr, bar_idx: u8) -> u64 {
     if bar_idx >= 6 {
         return 0;

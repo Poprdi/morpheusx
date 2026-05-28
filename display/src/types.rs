@@ -68,11 +68,11 @@ impl Color {
         Self { r, g, b, a: 255 }
     }
 
-    pub const fn to_bgrx(&self) -> u32 {
+    pub const fn to_bgrx(self) -> u32 {
         (self.b as u32) | ((self.g as u32) << 8) | ((self.r as u32) << 16)
     }
 
-    pub const fn to_rgbx(&self) -> u32 {
+    pub const fn to_rgbx(self) -> u32 {
         (self.r as u32) | ((self.g as u32) << 8) | ((self.b as u32) << 16)
     }
 }

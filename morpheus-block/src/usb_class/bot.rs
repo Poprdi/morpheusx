@@ -13,10 +13,18 @@ const CSW_SIG: u32 = 0x5342_5355;
 const SCSI_TEST_UNIT_READY: u8 = 0x00;
 const SCSI_READ_CAPACITY_10: u8 = 0x25;
 const SCSI_READ_10: u8 = 0x28;
+#[allow(dead_code)]
 const SCSI_REQUEST_SENSE: u8 = 0x03;
 
 pub trait BotExt {
     /// Run a BOT command. Data lands at OFF_DATA. Returns bytes transferred.
+    ///
+    /// # Safety
+    ///
+    /// The controller must have an enumerated, configured mass-storage device
+    /// on its active slot, and the BOT data buffer (OFF_DATA) must be valid for
+    /// `data_len` bytes. Caller must hold exclusive access to the controller and
+    /// its DMA regions for the duration of the transfer.
     unsafe fn bot_command(
         &mut self,
         scsi_cb: &[u8],
@@ -25,8 +33,22 @@ pub trait BotExt {
     ) -> Result<u32, XhciError>;
 
     /// Returns (last_lba, block_size).
+    ///
+    /// # Safety
+    ///
+    /// Same invariants as [`BotExt::bot_command`]: requires an enumerated
+    /// mass-storage device and exclusive access to the controller's DMA regions.
     unsafe fn scsi_read_capacity(&mut self) -> Result<(u64, u32), XhciError>;
+    /// # Safety
+    ///
+    /// Same invariants as [`BotExt::bot_command`]: requires an enumerated
+    /// mass-storage device and exclusive access to the controller's DMA regions.
+    /// `lba`/`count` must reference sectors within device capacity.
     unsafe fn scsi_read_sectors(&mut self, lba: u64, count: u32) -> Result<(), XhciError>;
+    /// # Safety
+    ///
+    /// Same invariants as [`BotExt::bot_command`]: requires an enumerated
+    /// mass-storage device and exclusive access to the controller's DMA regions.
     unsafe fn test_unit_ready(&mut self) -> Result<bool, XhciError>;
 }
 

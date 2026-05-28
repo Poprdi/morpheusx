@@ -51,12 +51,9 @@ impl MistChamber {
 }
 
 pub fn activate(app: &mut SettingsApp, idx: usize) {
-    match idx {
-        FIELD_REFRESH => {
-            app.mist.refresh();
-            app.set_status("Display info refreshed", false);
-        },
-        _ => {},
+    if idx == FIELD_REFRESH {
+        app.mist.refresh();
+        app.set_status("Display info refreshed", false);
     }
 }
 

@@ -339,7 +339,7 @@ pub fn apply(app: &mut SettingsApp) -> bool {
         let mut hn_buf = [0u8; 64];
         hn_buf[..hl].copy_from_slice(&app.net_obs.edit_hostname[..hl]);
         let hn = core::str::from_utf8(&hn_buf[..hl]).unwrap_or("");
-        if let Err(_) = net::net_set_hostname(hn) {
+        if net::net_set_hostname(hn).is_err() {
             app.set_status("Hostname set failed", true);
             return false;
         }
@@ -380,7 +380,7 @@ pub fn apply(app: &mut SettingsApp) -> bool {
                 return false;
             },
         };
-        if let Err(_) = net::net_static_ip(ip, prefix, gw) {
+        if net::net_static_ip(ip, prefix, gw).is_err() {
             app.set_status("Static IP set failed", true);
             return false;
         }
@@ -403,7 +403,7 @@ pub fn apply(app: &mut SettingsApp) -> bool {
             },
         };
         let servers = [d1, d2];
-        if let Err(_) = net::dns_set_servers(&servers) {
+        if net::dns_set_servers(&servers).is_err() {
             app.set_status("DNS set failed", true);
             return false;
         }

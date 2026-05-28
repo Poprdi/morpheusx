@@ -200,15 +200,14 @@ impl Default for Pinger {
 
 /// Counter-mixed pseudo-ID; sufficient for distinguishing concurrent pingers.
 fn generate_id() -> u16 {
-    static mut COUNTER: u16 = 0;
+    use core::sync::atomic::{AtomicU16, Ordering};
+    static COUNTER: AtomicU16 = AtomicU16::new(0);
 
-    // SAFETY: single-threaded bootloader context.
-    unsafe {
-        COUNTER = COUNTER.wrapping_add(1);
-        COUNTER.wrapping_mul(31421).wrapping_add(6927)
-    }
+    let next = COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    next.wrapping_mul(31421).wrapping_add(6927)
 }
 
+#[allow(dead_code)]
 pub fn quick_ping_request(
     src: Ipv4Addr,
     dst: Ipv4Addr,

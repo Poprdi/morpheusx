@@ -47,7 +47,7 @@ unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
     *ctx = CpuContext::zeroed();
     hal()
         .cpu()
-        .ctx_init_kernel(ctx, ap_idle_hlt_loop as u64, boot_rsp);
+        .ctx_init_kernel(ctx, ap_idle_hlt_loop as usize as u64, boot_rsp);
     ctx
 }
 
@@ -639,6 +639,8 @@ unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
     }
 
     if let Some(Some(p)) = PROCESS_TABLE.get(current) {
+        // Boot-critical scheduler guard: keep the explicit "idle on AP" form verbatim.
+        #[allow(clippy::nonminimal_bool)]
         if p.state.is_runnable() && !(current == 0 && !is_bsp) {
             if let Some(Some(pm)) = PROCESS_TABLE.get_mut(current) {
                 if pm.sched_budget_left == 0 {

@@ -1,61 +1,37 @@
-//! DNS resolution state machine.
-//!
-//! Non-blocking DNS resolver that integrates with smoltcp's DNS socket.
-//!
-//! # States
-//! Init → Resolving → Resolved | Failed
+//! Non-blocking DNS resolver over smoltcp's DNS socket (Init -> Resolving ->
+//! Resolved | Failed).
 
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-/// DNS-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DnsError {
-    /// Query timed out
     Timeout,
-    /// Query failed (server error, NXDOMAIN, etc.)
+    /// Server error, NXDOMAIN, etc.
     QueryFailed,
-    /// No IPv4 address in response
     NoIpv4Address,
-    /// Failed to start query
     StartFailed,
-    /// Invalid hostname
     InvalidHostname,
 }
 
 crate::impl_from!(DnsError => StateError : DnsError(_));
 
-/// DNS resolution state machine.
-///
-/// Resolves a hostname to an IPv4 address using smoltcp's DNS socket.
 #[derive(Debug)]
 pub(crate) enum DnsResolveState {
-    /// Initial state - not started
     Init,
-
-    /// Waiting for DNS response
     Resolving {
-        /// Query handle from smoltcp
         query_handle: usize,
-        /// When query started (for timeout)
         start_tsc: TscTimestamp,
     },
-
-    /// Resolution complete
     Resolved {
-        /// Resolved IP address
         ip: Ipv4Addr,
     },
-
-    /// Resolution failed
     Failed {
-        /// Error details
         error: DnsError,
     },
 }
 
 impl DnsResolveState {
-    /// Create new DNS resolver in init state.
     pub fn new() -> Self {
         DnsResolveState::Init
     }
@@ -67,17 +43,14 @@ impl DnsResolveState {
         };
     }
 
-    /// Mark as resolved with IP.
     pub fn resolve(&mut self, ip: Ipv4Addr) {
         *self = DnsResolveState::Resolved { ip };
     }
 
-    /// Mark as failed.
     pub fn fail(&mut self, error: DnsError) {
         *self = DnsResolveState::Failed { error };
     }
 
-    /// Step the state machine.
     pub fn step(
         &mut self,
         dns_result: Result<Option<Ipv4Addr>, ()>,
@@ -85,13 +58,9 @@ impl DnsResolveState {
         timeout_ticks: u64,
     ) -> StepResult {
         match self {
-            DnsResolveState::Init => {
-                // Not started yet
-                StepResult::Pending
-            },
+            DnsResolveState::Init => StepResult::Pending,
 
             DnsResolveState::Resolving { start_tsc, .. } => {
-                // Check timeout first
                 if start_tsc.is_expired(now_tsc, timeout_ticks) {
                     *self = DnsResolveState::Failed {
                         error: DnsError::Timeout,
@@ -99,16 +68,12 @@ impl DnsResolveState {
                     return StepResult::Timeout;
                 }
 
-                // Check DNS result
                 match dns_result {
                     Ok(Some(ip)) => {
                         *self = DnsResolveState::Resolved { ip };
                         StepResult::Done
                     },
-                    Ok(None) => {
-                        // Still pending
-                        StepResult::Pending
-                    },
+                    Ok(None) => StepResult::Pending,
                     Err(_) => {
                         *self = DnsResolveState::Failed {
                             error: DnsError::QueryFailed,
@@ -136,7 +101,6 @@ impl DnsResolveState {
         }
     }
 
-    /// Get resolved IP address (if complete).
     pub fn ip(&self) -> Option<Ipv4Addr> {
         match self {
             DnsResolveState::Resolved { ip } => Some(*ip),
@@ -151,7 +115,7 @@ impl DnsResolveState {
         }
     }
 
-    /// Check if resolution is complete (success or failure).
+    /// Resolved or failed.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -159,7 +123,6 @@ impl DnsResolveState {
         )
     }
 
-    /// Check if resolution succeeded.
     pub fn is_resolved(&self) -> bool {
         matches!(self, DnsResolveState::Resolved { .. })
     }
@@ -171,31 +134,21 @@ impl Default for DnsResolveState {
     }
 }
 
-/// Lookup hostname in hardcoded table.
-///
-/// Fallback for when DNS is unavailable or fails.
+/// Fallback hostname table for when DNS is unavailable or fails.
 pub fn lookup_hardcoded(hostname: &str) -> Option<Ipv4Addr> {
     const KNOWN_HOSTS: &[(&str, [u8; 4])] = &[
-        // Speed test servers
         ("speedtest.tele2.net", [90, 130, 70, 73]),
-        // Mirror sites
         ("mirror.fcix.net", [204, 152, 191, 37]),
         ("ftp.acc.umu.se", [130, 239, 18, 159]),
-        // Ubuntu mirrors
         ("releases.ubuntu.com", [91, 189, 91, 38]),
         ("cdimage.ubuntu.com", [91, 189, 88, 142]),
-        // Tails
         ("tails.net", [204, 13, 164, 63]),
         ("dl.amnesia.boum.org", [141, 138, 141, 92]),
-        // Arch Linux
         ("geo.mirror.pkgbuild.com", [143, 244, 34, 62]),
         ("mirror.rackspace.com", [162, 242, 93, 58]),
-        // Debian
         ("deb.debian.org", [151, 101, 130, 132]),
         ("cdimage.debian.org", [194, 71, 11, 165]),
-        // Fedora
         ("download.fedoraproject.org", [38, 145, 60, 22]),
-        // Common CDNs
         ("cloudflare.com", [104, 16, 132, 229]),
     ];
 
@@ -212,9 +165,7 @@ pub fn parse_ip(hostname: &str) -> Option<Ipv4Addr> {
     hostname.parse().ok()
 }
 
-/// Resolve hostname: try parse as IP, then hardcoded lookup.
-///
-/// Returns `None` if neither works (need actual DNS query).
+/// IP literal or hardcoded lookup; None means a real DNS query is needed.
 pub fn resolve_without_dns(hostname: &str) -> Option<Ipv4Addr> {
     parse_ip(hostname).or_else(|| lookup_hardcoded(hostname))
 }

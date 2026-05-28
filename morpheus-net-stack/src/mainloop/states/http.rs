@@ -16,7 +16,6 @@ use morpheus_nic::traits::NetworkDriver;
 
 use super::{DoneState, FailedState, ManifestState};
 
-/// HTTP download phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpPhase {
     SendRequest,
@@ -25,39 +24,26 @@ pub enum HttpPhase {
     Complete,
 }
 
-/// HTTP state — handles HTTP/1.1 GET request and response.
-///
-/// # Standalone Usage
-/// ```ignore
-/// let http_state = HttpState::with_request(tcp_handle, "GET", "/path", "host");
-/// ```
+/// HTTP/1.1 GET request/response, optionally streaming the body to disk.
 pub(crate) struct HttpState {
     tcp_handle: SocketHandle,
     phase: HttpPhase,
     start_tsc: u64,
     last_activity_tsc: u64,
-
-    /// Request components (for standalone use)
     method: &'static str,
     path: Option<&'static str>,
     host: Option<&'static str>,
-
-    /// Response parsing state
     headers_complete: bool,
     content_length: Option<u64>,
     chunked: bool,
     bytes_received: u64,
-
-    /// Header parsing buffer
     header_buf: [u8; 2048],
     header_len: usize,
-
-    /// Disk writer for streaming to disk
     disk_writer: Option<DiskWriter>,
 }
 
 impl HttpState {
-    /// Create HTTP state for download (uses path/host from context).
+    /// Path/host come from the context.
     pub fn new(tcp_handle: SocketHandle) -> Self {
         Self {
             tcp_handle,
@@ -77,7 +63,6 @@ impl HttpState {
         }
     }
 
-    /// Create HTTP state for download with disk writing enabled.
     pub fn with_disk_write(tcp_handle: SocketHandle, start_sector: u64) -> Self {
         Self {
             tcp_handle,
@@ -97,7 +82,7 @@ impl HttpState {
         }
     }
 
-    /// Create HTTP state with explicit request (for standalone use).
+    /// Explicit method/path/host for standalone use.
     pub fn with_request(
         tcp_handle: SocketHandle,
         method: &'static str,
@@ -130,7 +115,6 @@ impl HttpState {
         self.bytes_received
     }
 
-    /// Get content length (if known from headers).
     pub fn content_length(&self) -> Option<u64> {
         self.content_length
     }
@@ -146,14 +130,12 @@ impl<D: NetworkDriver> State<D> for HttpState {
         _now: Instant,
         tsc: u64,
     ) -> (Box<dyn State<D>>, StepResult) {
-        // Initialize on first call
         if self.start_tsc == 0 {
             self.start_tsc = tsc;
             self.last_activity_tsc = tsc;
             serial::println("[HTTP] Starting HTTP request...");
         }
 
-        // Check idle timeout
         let idle_ticks = tsc.saturating_sub(self.last_activity_tsc);
         let idle_timeout = ctx.timeouts.http_idle();
         if idle_ticks > idle_timeout {
@@ -172,7 +154,6 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     return (self, StepResult::Continue);
                 }
 
-                // Build request
                 let path = self.path.unwrap_or(ctx.url_path);
                 let host = self.host.unwrap_or(ctx.url_host);
 
@@ -216,7 +197,6 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     return (self, StepResult::Continue);
                 }
 
-                // Read into header buffer
                 let space = self.header_buf.len() - self.header_len;
                 if space == 0 {
                     serial::println("[HTTP] ERROR: Headers too large");
@@ -232,13 +212,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         self.header_len += n;
                         self.last_activity_tsc = tsc;
 
-                        // Look for end of headers
                         if let Some(end) = find_header_end(&self.header_buf[..self.header_len]) {
-                            // Parse headers
                             let header_str =
                                 core::str::from_utf8(&self.header_buf[..end]).unwrap_or("");
 
-                            // Check status
                             if !header_str.starts_with("HTTP/1.1 200")
                                 && !header_str.starts_with("HTTP/1.0 200")
                             {
@@ -254,7 +231,6 @@ impl<D: NetworkDriver> State<D> for HttpState {
 
                             serial::println("[HTTP] Got 200 OK");
 
-                            // Parse Content-Length
                             self.content_length = parse_content_length(header_str);
                             if let Some(len) = self.content_length {
                                 serial::print("[HTTP] Content-Length: ");
@@ -263,19 +239,16 @@ impl<D: NetworkDriver> State<D> for HttpState {
                                 ctx.content_length = Some(len);
                             }
 
-                            // Check for chunked encoding
                             self.chunked =
                                 contains_ignore_case(header_str, "transfer-encoding: chunked");
 
-                            // Move body data to start of buffer
-                            let body_start = end + 4; // Skip \r\n\r\n
+                            let body_start = end + 4; // past \r\n\r\n
                             let body_len = self.header_len - body_start;
                             if body_len > 0 {
-                                // Process initial body data
+                                // Body bytes that arrived with the headers.
                                 self.bytes_received += body_len as u64;
                                 ctx.bytes_downloaded = self.bytes_received;
 
-                                // Write initial body data to disk if enabled
                                 if let (Some(ref mut writer), Some(ref mut blk)) =
                                     (&mut self.disk_writer, &mut ctx.blk_device)
                                 {
@@ -295,10 +268,8 @@ impl<D: NetworkDriver> State<D> for HttpState {
 
             HttpPhase::ReceiveBody => {
                 if !socket.may_recv() {
-                    // Check if we're done
                     if let Some(expected) = self.content_length {
                         if self.bytes_received >= expected {
-                            // Flush disk buffer
                             if let (Some(ref mut writer), Some(ref mut blk)) =
                                 (&mut self.disk_writer, &mut ctx.blk_device)
                             {
@@ -321,11 +292,9 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         }
                     }
 
-                    // Connection closed?
                     if socket.state() != smoltcp::socket::tcp::State::Established {
+                        // No Content-Length: close signals EOF.
                         if self.content_length.is_none() {
-                            // No Content-Length, connection close = end
-                            // Flush disk buffer
                             if let (Some(ref mut writer), Some(ref mut blk)) =
                                 (&mut self.disk_writer, &mut ctx.blk_device)
                             {
@@ -348,7 +317,6 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     return (self, StepResult::Continue);
                 }
 
-                // Read body data
                 let mut buf = [0u8; 4096];
                 match socket.recv_slice(&mut buf) {
                     Ok(0) => {},
@@ -357,7 +325,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         self.last_activity_tsc = tsc;
                         ctx.bytes_downloaded = self.bytes_received;
 
-                        // Progress every 1MB
+                        // Log progress on each 1 MB boundary crossed.
                         let mb = self.bytes_received / (1024 * 1024);
                         let prev_mb = (self.bytes_received - n as u64) / (1024 * 1024);
                         if mb > prev_mb {
@@ -370,7 +338,6 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             serial::println(" MB");
                         }
 
-                        // Write to disk if enabled
                         if let (Some(ref mut writer), Some(ref mut blk)) =
                             (&mut self.disk_writer, &mut ctx.blk_device)
                         {
@@ -381,10 +348,8 @@ impl<D: NetworkDriver> State<D> for HttpState {
                     Err(_) => {},
                 }
 
-                // Check if download complete
                 if let Some(expected) = self.content_length {
                     if self.bytes_received >= expected {
-                        // Flush remaining disk buffer
                         if let (Some(ref mut writer), Some(ref mut blk)) =
                             (&mut self.disk_writer, &mut ctx.blk_device)
                         {
@@ -408,8 +373,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
             },
 
             HttpPhase::Complete => {
-                // Already transitioned to ManifestState via completion paths above.
-                // If we somehow land here, just go to Done directly.
+                // Completion normally transitions to ManifestState above; this is a fallback.
                 return (Box::new(DoneState::new()), StepResult::Transition);
             },
         }
@@ -422,11 +386,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
     }
 }
 
-/// Format HTTP GET request into buffer. Returns length or 0 if buffer too small.
+/// Returns request length, or 0 if the buffer is too small.
 fn format_http_request(buf: &mut [u8], method: &str, path: &str, host: &str) -> usize {
     let mut pos = 0;
 
-    // "{METHOD} {path} HTTP/1.1\r\nHost: {host}\r\n..."
     let parts: &[&[u8]] = &[
         method.as_bytes(),
         b" ",
@@ -447,15 +410,12 @@ fn format_http_request(buf: &mut [u8], method: &str, path: &str, host: &str) -> 
     pos
 }
 
-/// Find end of HTTP headers (double CRLF).
 fn find_header_end(data: &[u8]) -> Option<usize> {
     (0..data.len().saturating_sub(3)).find(|&i| &data[i..i + 4] == b"\r\n\r\n")
 }
 
-/// Parse Content-Length from headers (case-insensitive).
 fn parse_content_length(headers: &str) -> Option<u64> {
     for line in headers.lines() {
-        // Case-insensitive check without allocation
         if line.len() >= 15 && line[..15].eq_ignore_ascii_case("content-length:") {
             let value = line[15..].trim();
             return value.parse().ok();
@@ -464,7 +424,6 @@ fn parse_content_length(headers: &str) -> Option<u64> {
     None
 }
 
-/// Case-insensitive substring search without allocation.
 fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
     if needle.len() > haystack.len() {
         return false;

@@ -1,14 +1,6 @@
-//! Morpheus bootloader binary crate.
-//!
-//! The authoritative boot sequence lives in `boot.rs` — this file is a
-//! thin shell that:
-//!
-//! 1. Declares the helper modules.
-//! 2. Re-exports the UEFI FFI types the global allocator depends on.
-//! 3. Provides the language-required `#[panic_handler]`.
-//!
-//! `efi_main` itself is defined in `boot.rs` with `#[no_mangle]` so the
-//! UEFI linker picks it up directly — no indirection through main.
+//! Bootloader binary crate. Boot sequence lives in `boot.rs`; this file holds
+//! module decls, the allocator's UEFI FFI types, and the `#[panic_handler]`.
+//! `efi_main` is `#[no_mangle]` in `boot.rs` so the UEFI linker picks it up.
 
 #![no_std]
 #![no_main]
@@ -28,18 +20,9 @@ mod storage;
 mod tui;
 mod uefi_allocator;
 
-//
-// The hybrid allocator (`uefi_allocator`) needs to call `allocate_pool`
-// and `free_pool` while UEFI is still alive. Both this module and
-// `boot::EfiBootServices` type-pun the same UEFI spec layout, but the
-// allocator was written against the type defined here, so we keep the
-// shape (with just the two fields the allocator touches publicly).
-
-/// UEFI BootServices subset, exposed for `uefi_allocator`.
-///
-/// The layout up to `locate_protocol` must match the UEFI specification
-/// byte-for-byte. Fields not used by the allocator are left as `usize`
-/// padding.
+/// UEFI BootServices subset for the pre-EBS allocator's `allocate_pool` /
+/// `free_pool`. Layout up to `locate_protocol` must match the UEFI spec
+/// byte-for-byte; unused fields are `usize` padding.
 #[repr(C)]
 pub struct BootServices {
     _header: [u8; 24],

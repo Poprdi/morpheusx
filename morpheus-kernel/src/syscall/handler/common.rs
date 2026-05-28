@@ -94,16 +94,11 @@ pub(crate) unsafe fn vfs_lock() -> Option<VfsGuard> {
     }
 }
 
-/// LD27: single safe wrap over `fs_global_mut()` paired with the current
-/// process's fd table. Returns `None` if FS isn't initialized.
-///
-/// Most handlers want `vfs_lock()` (which locks the VFS *and* keeps a
-/// guarded `&mut FsGlobal`); this helper is the unlocked variant for
-/// the rare callers that already hold `VFS_LOCK` explicitly.
+/// Unlocked variant of `vfs_lock` paired with the current fd table, for
+/// callers already holding `VFS_LOCK`. Returns `None` if FS isn't initialized.
 ///
 /// # Safety
-/// Single-core-effective access — caller must ensure no other core is
-/// touching the FS or fd table concurrently.
+/// Caller must ensure no other core touches the FS or fd table concurrently.
 #[allow(dead_code)]
 pub(crate) unsafe fn current_fd_table_and_fs(
 ) -> Option<(&'static mut FdTable, &'static mut FsGlobal)> {

@@ -35,6 +35,10 @@ static USB_KEYBOARD: SpinLock<Option<UsbInputDevice>> = SpinLock::new(None);
 /// Call once at the end of platform Phase 9 with the controller that just
 /// finished enumeration. Passing `keyboard = None` is fine — no polling will
 /// happen but the controller is still preserved for future use.
+///
+/// # Safety
+/// `controller` must be a fully enumerated xHCI controller with valid MMIO/DMA
+/// mappings; must be called once from Phase 9 with no concurrent USB access.
 pub unsafe fn install_runtime(controller: XhciController, keyboard: Option<UsbInputDevice>) {
     {
         let mut c = USB_CONTROLLER.lock();
@@ -113,6 +117,10 @@ unsafe fn arm_keyboard_transfer() {
 /// Returns true if a report was consumed this call, false otherwise. The
 /// caller can use the return value to keep `had_work = true` so the idle HLT
 /// doesn't fire while keystrokes are arriving.
+///
+/// # Safety
+/// Must run only after `install_runtime`; the stored controller's MMIO/DMA
+/// mappings must remain valid and no other code may touch the controller.
 pub unsafe fn poll_keyboard() -> bool {
     let mut ctrl_guard = USB_CONTROLLER.lock();
     let kb_guard = USB_KEYBOARD.lock();

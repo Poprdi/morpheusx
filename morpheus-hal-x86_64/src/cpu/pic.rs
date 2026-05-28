@@ -16,7 +16,6 @@ pub const PIC2_VECTOR_OFFSET: u8 = 0x28;
 pub mod irq {
     pub const TIMER: u8 = 0;
     pub const KEYBOARD: u8 = 1;
-    /// Slave PIC cascade.
     pub const CASCADE: u8 = 2;
     pub const COM2: u8 = 3;
     pub const COM1: u8 = 4;
@@ -81,12 +80,19 @@ pub unsafe fn init_pic() {
 }
 
 /// Mask all IRQs on both PICs (when using APIC).
+///
+/// # Safety
+/// Performs raw port I/O to the 8259 PICs. Call from single-threaded init/IRQ
+/// context only.
 pub unsafe fn disable_pic() {
     outb(PIC1_DATA, 0xFF);
     outb(PIC2_DATA, 0xFF);
     log_info("PIC", 752, "disabled");
 }
 
+/// # Safety
+/// Performs raw port I/O to the 8259 PICs and mutates the cached mask globals.
+/// Call from single-threaded init/IRQ context only.
 pub unsafe fn enable_irq(irq: u8) {
     if irq < 8 {
         PIC_MASK1 &= !(1 << irq);
@@ -102,6 +108,9 @@ pub unsafe fn enable_irq(irq: u8) {
     }
 }
 
+/// # Safety
+/// Performs raw port I/O to the 8259 PICs and mutates the cached mask globals.
+/// Call from single-threaded init/IRQ context only.
 pub unsafe fn disable_irq(irq: u8) {
     if irq < 8 {
         PIC_MASK1 |= 1 << irq;
@@ -112,6 +121,9 @@ pub unsafe fn disable_irq(irq: u8) {
     }
 }
 
+/// # Safety
+/// Performs raw port I/O to the 8259 PICs. Call only at the end of a PIC-sourced
+/// IRQ for the given `irq`.
 pub unsafe fn send_eoi(irq: u8) {
     if irq >= 8 {
         outb(PIC2_COMMAND, PIC_EOI);
@@ -140,6 +152,9 @@ pub fn irq_to_vector(irq: u8) -> Option<u8> {
 }
 
 /// ISR bit 7 clear ⇒ spurious.
+///
+/// # Safety
+/// Performs raw port I/O to the master PIC. Call from IRQ7 handler context only.
 pub unsafe fn is_spurious_irq7() -> bool {
     outb(PIC1_COMMAND, 0x0B);
     let isr = inb(PIC1_COMMAND);
@@ -147,6 +162,9 @@ pub unsafe fn is_spurious_irq7() -> bool {
 }
 
 /// Slave spurious still requires master ACK.
+///
+/// # Safety
+/// Performs raw port I/O to both PICs. Call from IRQ15 handler context only.
 pub unsafe fn is_spurious_irq15() -> bool {
     outb(PIC2_COMMAND, 0x0B);
     let isr = inb(PIC2_COMMAND);

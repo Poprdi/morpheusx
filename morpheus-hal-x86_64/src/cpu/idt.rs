@@ -217,6 +217,12 @@ pub struct Idt {
     entries: [IdtEntry; IDT_ENTRIES],
 }
 
+impl Default for Idt {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Idt {
     pub const fn new() -> Self {
         Self {
@@ -361,6 +367,8 @@ fn build_explanation(vec: u64, ec: u64, cr2: u64, user: bool, buf: &mut [u8; 256
 }
 
 /// Kernel-mode RBP frame walk. Strict alignment + range check to avoid faulting.
+// real toolchain is 1.92
+#[allow(clippy::incompatible_msrv)]
 unsafe fn walk_stack(rbp: u64, out: &mut [u64; 16]) -> u8 {
     let mut fp = rbp;
     let mut depth: u8 = 0;
@@ -805,6 +813,8 @@ exception_stub_with_error!(exc_control_protection, 21);
 ///
 /// # Safety
 /// Must be called after GDT is initialized.
+// SAFETY: single-threaded boot/init context; static accessed before APs start, no aliasing.
+#[allow(static_mut_refs)]
 pub unsafe fn init_idt() {
     if IDT_INITIALIZED {
         crate::serial::log_warn("IDT", 740, "already initialized");
@@ -814,43 +824,76 @@ pub unsafe fn init_idt() {
     // Set up exception handlers
     // Use IST1 for critical exceptions (double fault, NMI, machine check)
 
-    IDT.set_handler(0, IdtEntry::interrupt_gate(exc_divide_error as u64, 0, 0));
-    IDT.set_handler(1, IdtEntry::interrupt_gate(exc_debug as u64, 0, 0));
-    IDT.set_handler(2, IdtEntry::interrupt_gate(exc_nmi as u64, 1, 0)); // IST1
-    IDT.set_handler(3, IdtEntry::trap_gate(exc_breakpoint as u64, 0, 3)); // Allow from userspace
-    IDT.set_handler(4, IdtEntry::interrupt_gate(exc_overflow as u64, 0, 0));
-    IDT.set_handler(5, IdtEntry::interrupt_gate(exc_bound_range as u64, 0, 0));
-    IDT.set_handler(6, IdtEntry::interrupt_gate(exc_invalid_opcode as u64, 0, 0));
+    IDT.set_handler(
+        0,
+        IdtEntry::interrupt_gate(exc_divide_error as usize as u64, 0, 0),
+    );
+    IDT.set_handler(1, IdtEntry::interrupt_gate(exc_debug as usize as u64, 0, 0));
+    IDT.set_handler(2, IdtEntry::interrupt_gate(exc_nmi as usize as u64, 1, 0)); // IST1
+    IDT.set_handler(3, IdtEntry::trap_gate(exc_breakpoint as usize as u64, 0, 3)); // Allow from userspace
+    IDT.set_handler(
+        4,
+        IdtEntry::interrupt_gate(exc_overflow as usize as u64, 0, 0),
+    );
+    IDT.set_handler(
+        5,
+        IdtEntry::interrupt_gate(exc_bound_range as usize as u64, 0, 0),
+    );
+    IDT.set_handler(
+        6,
+        IdtEntry::interrupt_gate(exc_invalid_opcode as usize as u64, 0, 0),
+    );
     IDT.set_handler(
         7,
-        IdtEntry::interrupt_gate(exc_device_not_available as u64, 0, 0),
+        IdtEntry::interrupt_gate(exc_device_not_available as usize as u64, 0, 0),
     );
-    IDT.set_handler(8, IdtEntry::interrupt_gate(exc_double_fault as u64, 1, 0)); // IST1
-    IDT.set_handler(10, IdtEntry::interrupt_gate(exc_invalid_tss as u64, 0, 0));
+    IDT.set_handler(
+        8,
+        IdtEntry::interrupt_gate(exc_double_fault as usize as u64, 1, 0),
+    ); // IST1
+    IDT.set_handler(
+        10,
+        IdtEntry::interrupt_gate(exc_invalid_tss as usize as u64, 0, 0),
+    );
     IDT.set_handler(
         11,
-        IdtEntry::interrupt_gate(exc_segment_not_present as u64, 0, 0),
+        IdtEntry::interrupt_gate(exc_segment_not_present as usize as u64, 0, 0),
     );
-    IDT.set_handler(12, IdtEntry::interrupt_gate(exc_stack_segment as u64, 0, 0));
+    IDT.set_handler(
+        12,
+        IdtEntry::interrupt_gate(exc_stack_segment as usize as u64, 0, 0),
+    );
     IDT.set_handler(
         13,
-        IdtEntry::interrupt_gate(exc_general_protection as u64, 0, 0),
+        IdtEntry::interrupt_gate(exc_general_protection as usize as u64, 0, 0),
     );
-    IDT.set_handler(14, IdtEntry::interrupt_gate(exc_page_fault as u64, 0, 0));
-    IDT.set_handler(16, IdtEntry::interrupt_gate(exc_x87_fp as u64, 0, 0));
+    IDT.set_handler(
+        14,
+        IdtEntry::interrupt_gate(exc_page_fault as usize as u64, 0, 0),
+    );
+    IDT.set_handler(
+        16,
+        IdtEntry::interrupt_gate(exc_x87_fp as usize as u64, 0, 0),
+    );
     IDT.set_handler(
         17,
-        IdtEntry::interrupt_gate(exc_alignment_check as u64, 0, 0),
+        IdtEntry::interrupt_gate(exc_alignment_check as usize as u64, 0, 0),
     );
-    IDT.set_handler(18, IdtEntry::interrupt_gate(exc_machine_check as u64, 1, 0)); // IST1
-    IDT.set_handler(19, IdtEntry::interrupt_gate(exc_simd_fp as u64, 0, 0));
+    IDT.set_handler(
+        18,
+        IdtEntry::interrupt_gate(exc_machine_check as usize as u64, 1, 0),
+    ); // IST1
+    IDT.set_handler(
+        19,
+        IdtEntry::interrupt_gate(exc_simd_fp as usize as u64, 0, 0),
+    );
     IDT.set_handler(
         20,
-        IdtEntry::interrupt_gate(exc_virtualization as u64, 0, 0),
+        IdtEntry::interrupt_gate(exc_virtualization as usize as u64, 0, 0),
     );
     IDT.set_handler(
         21,
-        IdtEntry::interrupt_gate(exc_control_protection as u64, 0, 0),
+        IdtEntry::interrupt_gate(exc_control_protection as usize as u64, 0, 0),
     );
 
     // Load IDT
@@ -873,6 +916,8 @@ pub unsafe fn init_idt() {
 ///
 /// # Safety
 /// Handler must be a valid interrupt handler.
+// SAFETY: single-threaded boot/init context; static accessed before APs start, no aliasing.
+#[allow(static_mut_refs)]
 pub unsafe fn set_interrupt_handler(vector: u8, handler: u64, ist: u8, dpl: u8) {
     IDT.set_handler(vector, IdtEntry::interrupt_gate(handler, ist, dpl));
 }
@@ -884,6 +929,8 @@ pub unsafe fn set_interrupt_handler(vector: u8, handler: u64, ist: u8, dpl: u8) 
 ///
 /// # Safety
 /// Must be called after BSP's `init_idt()`.  CLI'd.
+// SAFETY: single-threaded boot/init context; static accessed before APs start, no aliasing.
+#[allow(static_mut_refs)]
 pub unsafe fn load_idt_for_ap() {
     let idt_ptr = IdtPtr {
         limit: (core::mem::size_of::<Idt>() - 1) as u16,

@@ -50,12 +50,14 @@ const BREAK_FLAG: u8 = 0x80;
 /// Bit 0 = LeftCtrl, bit 1 = LeftShift, ..., bit 7 = RightGUI.
 const MODIFIER_USAGE: [u8; 8] = [0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7];
 
+/// # Safety
+/// `report` must point to a readable `KeyboardReport` in the DMA buffer.
 pub unsafe fn parse_keyboard_report(
     _controller: &mut XhciController,
     _iface: &HIDInterface,
     report: *const KeyboardReport,
 ) -> Result<(), XhciError> {
-    let cur = *(report as *const KeyboardReport);
+    let cur = *report;
     let mut prev = PREV_REPORT.lock();
 
     // ---- Modifier byte diff (8 independent bits) ----
@@ -101,7 +103,7 @@ pub unsafe fn parse_keyboard_report(
 
 #[inline]
 fn contains(arr: &[u8; 6], needle: u8) -> bool {
-    arr.iter().any(|&b| b == needle)
+    arr.contains(&needle)
 }
 
 #[inline]
@@ -285,6 +287,10 @@ pub fn register_handler() {
 }
 
 /// TODO: real interrupt-in handling. Currently parses whatever's already in OFF_REPORT.
+///
+/// # Safety
+/// `controller` must have valid DMA mappings and the caller must hold exclusive
+/// access; the report region must contain a valid `KeyboardReport`.
 pub unsafe fn handle_interrupt_transfer(
     controller: &mut XhciController,
     iface: &HIDInterface,

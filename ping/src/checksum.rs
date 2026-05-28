@@ -29,6 +29,7 @@ pub fn verify_checksum(data: &[u8]) -> bool {
 }
 
 /// Partial sum for incremental checksumming. Finalize with `finalize_checksum`.
+#[allow(dead_code)]
 pub fn partial_checksum(data: &[u8], initial: u32) -> u32 {
     let mut sum = initial;
     let mut i = 0;
@@ -46,6 +47,7 @@ pub fn partial_checksum(data: &[u8], initial: u32) -> u32 {
     sum
 }
 
+#[allow(dead_code)]
 pub fn finalize_checksum(sum: u32) -> u16 {
     let mut s = sum;
     while s >> 16 != 0 {

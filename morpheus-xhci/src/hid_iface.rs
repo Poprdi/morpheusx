@@ -27,6 +27,11 @@ pub struct HIDInterface {
 }
 
 impl XhciController {
+    /// Fetch the HID report descriptor into the DMA buffer.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn get_hid_report_descriptor(
         &mut self,
         interface_num: u8,
@@ -51,6 +56,10 @@ impl XhciController {
     }
 
     /// Set the HID idle duration (all endpoints, duration=0 = infinite).
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn set_hid_idle(&mut self, interface_num: u8) -> Result<(), XhciError> {
         let slot_id = self.slot_id;
         let param = pack_setup(0x21, 0x0A, 0, interface_num as u16, 0);
@@ -68,6 +77,10 @@ impl XhciController {
     /// anyway (firmware bugs, "modern" defaults, etc.). Linux's usbkbd driver
     /// always sends this; we do too. Failures are non-fatal — for a properly
     /// behaved boot-subclass device this is just a no-op.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn set_hid_protocol_boot(&mut self, interface_num: u8) -> Result<(), XhciError> {
         let slot_id = self.slot_id;
         // bmRequestType=0x21 (H2D, Class, Interface), bRequest=0x0B (SET_PROTOCOL),
@@ -90,6 +103,10 @@ impl XhciController {
     /// kept `in_hid_boot` as a per-iface flag and tested it in the final
     /// return, which dropped the captured iface-0 match the moment a
     /// non-boot iface-1 followed.
+    ///
+    /// # Safety
+    /// `desc_ptr` must point to a readable configuration descriptor buffer whose
+    /// declared total length stays within the mapped DMA region.
     pub unsafe fn find_hid_interface(&self, desc_ptr: *const u8) -> Option<HIDInterface> {
         let d = desc_ptr;
         let total = u16::from_le_bytes([

@@ -19,7 +19,10 @@ impl OptionalHeader64 {
     pub const MAGIC_PE32PLUS: u16 = 0x20B;
     pub const IMAGE_BASE_OFFSET: usize = 24;
 
-    /// SAFETY: `data..+size` must be a readable PE image.
+    /// # Safety
+    ///
+    /// `data` must be readable for at least `size` bytes and `data + pe_offset`
+    /// must reference a PE image whose optional header lies within `size`.
     pub unsafe fn parse(data: *const u8, pe_offset: u32, size: usize) -> PeResult<Self> {
         // Optional header = pe_offset + 4 (sig) + 20 (COFF).
         let opt_offset = pe_offset as usize + 24;
@@ -57,7 +60,11 @@ impl OptionalHeader64 {
         })
     }
 
-    /// SAFETY: `data` must be a valid PE with DOS/COFF headers.
+    /// # Safety
+    ///
+    /// `data` must contain a valid PE image with consistent DOS and COFF
+    /// headers; the caller is responsible for ensuring the buffer is the real
+    /// image and that overwriting its `ImageBase` field is intended.
     pub unsafe fn patch_image_base(data: &mut [u8], new_image_base: u64) -> PeResult<()> {
         if data.len() < 0x40 {
             return Err(PeError::InvalidOffset);

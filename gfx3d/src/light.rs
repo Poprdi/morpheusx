@@ -57,6 +57,8 @@ impl LightEnv {
 
     /// Blinn-Phong; returns unclamped RGB. `specular_power`: 0 disables, 16-64 glossy.
     #[inline]
+    // Insertion-sort loops index parallel best_idx/best_dist_sq arrays.
+    #[allow(clippy::needless_range_loop)]
     pub fn evaluate(
         &self,
         world_pos: Vec3,

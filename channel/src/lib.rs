@@ -17,6 +17,12 @@ pub struct Channel<T, const N: usize> {
 unsafe impl<T, const N: usize> Sync for Channel<T, N> {}
 unsafe impl<T, const N: usize> Send for Channel<T, N> {}
 
+impl<T, const N: usize> Default for Channel<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T, const N: usize> Channel<T, N> {
     // `N-1` mask requires power-of-two N.
     const ASSERT_POWER_OF_2: () = assert!(
@@ -25,7 +31,9 @@ impl<T, const N: usize> Channel<T, N> {
     );
 
     pub const fn new() -> Self {
-        let _ = Self::ASSERT_POWER_OF_2;
+        // Force const-eval of the power-of-two assertion (compile-time guard).
+        #[allow(path_statements)]
+        Self::ASSERT_POWER_OF_2;
         // SAFETY: MaybeUninit arrays can be zero-initialized.
         Self {
             buf: unsafe { MaybeUninit::<[UnsafeCell<MaybeUninit<T>>; N]>::zeroed().assume_init() },

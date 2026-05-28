@@ -1,7 +1,9 @@
 //! Inter-island messages. All cross-island state travels in these enums.
 
+#[allow(dead_code)] // referenced only by dead message types; retained as protocol definition.
 pub const MAX_WINDOWS: usize = 16;
 
+#[allow(dead_code)] // protocol message type, not yet wired into the live pipeline.
 #[derive(Clone, Copy)]
 pub enum VsyncMsg {
     Tick { now_ns: u64 },
@@ -9,6 +11,7 @@ pub enum VsyncMsg {
 
 /// `surface` is valid only for the compose() call (single-core, no preemption
 /// between surface_mgr and renderer).
+#[allow(dead_code)] // protocol message type, not yet wired into the live pipeline.
 #[derive(Clone, Copy)]
 pub struct CompositeEntry {
     pub pid: u32,
@@ -28,6 +31,7 @@ pub struct CompositeEntry {
 unsafe impl Send for CompositeEntry {}
 unsafe impl Sync for CompositeEntry {}
 
+#[allow(dead_code)] // protocol message type, not yet wired into the live pipeline.
 pub enum SurfaceMsg {
     CompositeList {
         entries: [Option<CompositeEntry>; MAX_WINDOWS],
@@ -38,9 +42,14 @@ pub enum SurfaceMsg {
 #[derive(Clone, Copy)]
 pub enum InputMsg {
     FocusCycleRequest,
-    WindowClosed { idx: u8, pid: u32 },
+    #[allow(dead_code)] // protocol variant, not yet emitted by the live pipeline.
+    WindowClosed {
+        idx: u8,
+        pid: u32,
+    },
 }
 
+#[allow(dead_code)] // protocol message type, not yet wired into the live pipeline.
 #[derive(Clone, Copy)]
 pub enum FocusMsg {
     FocusChanged { old: Option<u8>, new: Option<u8> },

@@ -11,6 +11,12 @@ use morpheus_hal_api::{
 
 pub struct HalImpl {}
 
+impl Default for HalImpl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HalImpl {
     pub fn new() -> Self {
         Self {}
@@ -517,7 +523,7 @@ impl PageTable for HalImpl {
 impl InterruptController for HalImpl {
     fn set_handler(&self, vector: u8, handler: IsrFn, ist: u8, dpl: u8) {
         unsafe {
-            crate::cpu::idt::set_interrupt_handler(vector, handler.0 as u64, ist, dpl);
+            crate::cpu::idt::set_interrupt_handler(vector, handler.0 as usize as u64, ist, dpl);
         }
     }
     fn enable_irq(&self, irq: u8) {
@@ -752,7 +758,7 @@ impl Smp for HalImpl {
         crate::cpu::per_cpu::shutdown_quiesce_ack(core_idx);
     }
     fn wait_for_shutdown_quiesce(&self, ms: u64) -> bool {
-        unsafe { crate::cpu::per_cpu::wait_for_shutdown_quiesce(ms) }
+        crate::cpu::per_cpu::wait_for_shutdown_quiesce(ms)
     }
 
     fn set_kernel_stack_for_core(&self, core_idx: u32, kernel_sp: u64) {

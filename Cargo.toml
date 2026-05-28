@@ -33,6 +33,8 @@ members = [
     "morpheus-nic",
     "morpheus-net-stack",
     "morpheus-kernel",
+    "keymap",
+    "keymap-gen",
 ]
 
 [workspace.package]

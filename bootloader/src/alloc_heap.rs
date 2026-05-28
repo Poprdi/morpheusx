@@ -1,12 +1,8 @@
-//! Post-EBS `linked_list_allocator` heap backed by a 1 MB static buffer.
+//! Standalone `linked_list_allocator` heap over a 1 MB static buffer.
 //!
-//! Folded into the bootloader binary by Wave 4 of Phase 3.1 (decision 17:
-//! `#[global_allocator]` lives in the bootloader binary, not a sub-crate).
-//! The bootloader already installs `HybridAllocator` in `uefi_allocator.rs`
-//! as its global allocator; this module is kept as a self-contained
-//! linked-list heap utility for callers that want their own backing
-//! storage. It is NOT installed as the global allocator here — doing so
-//! would conflict with `uefi_allocator::ALLOCATOR`.
+//! NOT the global allocator — that is `uefi_allocator::ALLOCATOR`
+//! (HybridAllocator). This is a self-contained pool for callers wanting
+//! their own backing storage.
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::NonNull;
@@ -53,9 +49,6 @@ unsafe impl GlobalAlloc for LockedHeap {
     }
 }
 
-// NOTE: NOT a `#[global_allocator]` — the bootloader binary already installs
-// `uefi_allocator::ALLOCATOR` (HybridAllocator). This is a standalone heap
-// usable for self-contained allocation pools.
 static GLOBAL: LockedHeap = LockedHeap::empty();
 
 static mut HEAP_INITIALIZED: bool = false;

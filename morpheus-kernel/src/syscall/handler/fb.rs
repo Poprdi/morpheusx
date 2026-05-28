@@ -8,12 +8,9 @@ use crate::schedular::SCHEDULER;
 use morpheus_foundation::PAGE_SIZE;
 use morpheus_hal_api::{AllocKind, MemoryType};
 
-/// Per LD26: a transient CR3 switch to the kernel's PML4 so we can touch
-/// identity-mapped physical pages even when the current address space is
-/// a user PML4. On `drop`, restores the previously-loaded CR3.
-///
-/// If the kernel PML4 isn't available yet (pre-scheduler init) or we're
-/// already running under it, drop is a no-op.
+/// Transient CR3 switch to the kernel PML4 to touch identity-mapped phys pages
+/// from a user address space; restores the prior CR3 on drop. No-op if the
+/// kernel PML4 isn't ready yet or it's already loaded.
 pub(crate) struct KernelCr3Guard {
     prev_cr3: u64,
     switched: bool,
@@ -368,9 +365,7 @@ pub unsafe fn sys_fb_blit() -> u64 {
     0
 }
 
-/// Re-export so the dispatcher can use the public name. `fb_mark_dirty`
-/// lives in `nic_fb` because static state for the back buffer was
-/// physically split across the two files in the legacy tree.
+/// Re-export; `fb_mark_dirty` lives in `nic_fb` alongside the back-buffer statics.
 #[inline]
 pub fn fb_mark_dirty() {
     super::nic_fb::fb_mark_dirty();

@@ -109,10 +109,8 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
 
         if i < n - 1 {
             let _ = process::dup2(pipes[i].1, 1);
-        } else {
-            if let Some(ref saved) = saved_out {
-                let _ = process::dup2(*saved, 1);
-            }
+        } else if let Some(ref saved) = saved_out {
+            let _ = process::dup2(*saved, 1);
         }
 
         let _ = setup_redirects(cmd, cwd);

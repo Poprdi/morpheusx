@@ -1,4 +1,4 @@
-//! VirtIO driver implementation.
+//! VirtIO-net `NetworkDriver` impl.
 
 use super::config::{VirtioConfig, VIRTIO_NET_DEVICE_IDS, VIRTIO_VENDOR_ID};
 use super::init::{virtio_net_init, virtio_net_init_transport, VirtioInitError};
@@ -8,37 +8,26 @@ use morpheus_virtio::dma::{BufferPool, DmaRegion};
 use morpheus_virtio::transport::VirtioTransport;
 use morpheus_virtio::types::VirtqueueState;
 
-/// VirtIO network driver.
 pub struct VirtioNetDriver {
-    /// Base address (MMIO base or common_cfg for PCI Modern).
+    /// MMIO base, or common_cfg for PCI Modern.
     base_addr: u64,
-    /// Transport handle for ongoing operations.
     transport: VirtioTransport,
-    /// MAC address.
     mac: MacAddress,
-    /// Negotiated features.
     features: u64,
-    /// RX virtqueue state.
     rx_state: VirtqueueState,
-    /// TX virtqueue state.
     tx_state: VirtqueueState,
-    /// RX buffer pool.
     rx_pool: BufferPool,
-    /// TX buffer pool.
     tx_pool: BufferPool,
 }
 
 impl VirtioNetDriver {
-    /// Create a new VirtIO driver (legacy MMIO path).
+    /// Legacy MMIO path.
     ///
     /// # Safety
-    /// - `mmio_base` must be valid VirtIO MMIO address
-    /// - DMA region must be properly allocated
+    /// `mmio_base` must be a valid VirtIO MMIO address; DMA region allocated.
     pub unsafe fn new(mmio_base: u64, config: VirtioConfig) -> Result<Self, VirtioInitError> {
-        // Initialize device using legacy MMIO path
         let (features, rx_state, tx_state, mac) = virtio_net_init(mmio_base, &config)?;
 
-        // Create buffer pools
         let rx_pool = BufferPool::new(
             config.dma_cpu_base.add(DmaRegion::RX_BUFFERS_OFFSET),
             config.dma_bus_base + DmaRegion::RX_BUFFERS_OFFSET as u64,
@@ -64,29 +53,23 @@ impl VirtioNetDriver {
             tx_pool,
         };
 
-        // Pre-fill RX queue
         rx::prefill_queue(&mut driver.rx_state, &mut driver.rx_pool)?;
 
         Ok(driver)
     }
 
-    /// Create a new VirtIO driver using transport abstraction.
-    ///
-    /// This constructor auto-selects MMIO or PCI Modern based on the transport.
+    /// Auto-selects MMIO or PCI Modern based on the transport.
     ///
     /// # Safety
-    /// - Transport addresses must be valid
-    /// - DMA region must be properly allocated
+    /// Transport addresses must be valid; DMA region allocated.
     pub unsafe fn new_with_transport(
         transport: VirtioTransport,
         config: VirtioConfig,
         tsc_freq: u64,
     ) -> Result<Self, VirtioInitError> {
-        // Initialize device using transport abstraction
         let (features, rx_state, tx_state, mac) =
             virtio_net_init_transport(&transport, &config, tsc_freq)?;
 
-        // Create buffer pools
         let rx_pool = BufferPool::new(
             config.dma_cpu_base.add(DmaRegion::RX_BUFFERS_OFFSET),
             config.dma_bus_base + DmaRegion::RX_BUFFERS_OFFSET as u64,
@@ -112,7 +95,6 @@ impl VirtioNetDriver {
             tx_pool,
         };
 
-        // Pre-fill RX queue
         rx::prefill_queue(&mut driver.rx_state, &mut driver.rx_pool)?;
 
         Ok(driver)
@@ -130,12 +112,10 @@ impl VirtioNetDriver {
         &self.transport
     }
 
-    /// Get RX queue state (for debugging).
     pub fn rx_state(&self) -> &VirtqueueState {
         &self.rx_state
     }
 
-    /// Get TX queue state (for debugging).
     pub fn tx_state(&self) -> &VirtqueueState {
         &self.tx_state
     }
@@ -159,8 +139,7 @@ impl NetworkDriver for VirtioNetDriver {
     }
 
     fn can_receive(&self) -> bool {
-        // We can always try to receive - ASM will return quickly if nothing
-        true
+        true // always try; poll returns fast when empty
     }
 
     fn transmit(&mut self, frame: &[u8]) -> Result<(), TxError> {

@@ -260,7 +260,6 @@ fn print_u32(v: u32) {
     print(s);
 }
 
-// ── SYS_WRITE (1) ────────────────────────────────────────────────────────
 fn test_write() {
     let msg = b"test_write output\n";
     let ret = unsafe { syscall3(SYS_WRITE, 1, msg.as_ptr() as u64, msg.len() as u64) };
@@ -270,7 +269,6 @@ fn test_write() {
         "wrong byte count",
     );
 
-    // stderr
     let ret = unsafe { syscall3(SYS_WRITE, 2, msg.as_ptr() as u64, msg.len() as u64) };
     check(
         "SYS_WRITE(2) stderr",
@@ -279,12 +277,10 @@ fn test_write() {
     );
 }
 
-// ── SYS_READ (2) ─────────────────────────────────────────────────────────
 fn test_read() {
     // Non-blocking read from stdin — should return 0 (no keys pressed)
     let mut buf = [0u8; 16];
     let ret = unsafe { syscall3(SYS_READ, 0, buf.as_mut_ptr() as u64, buf.len() as u64) };
-    // Returns 0 or some small number (non-blocking)
     check(
         "SYS_READ(0) stdin non-blocking",
         !libmorpheus::is_error(ret),
@@ -292,13 +288,11 @@ fn test_read() {
     );
 }
 
-// ── SYS_YIELD (3) ────────────────────────────────────────────────────────
 fn test_yield() {
     let ret = unsafe { syscall0(SYS_YIELD) };
     check_ok("SYS_YIELD", ret);
 }
 
-// ── SYS_ALLOC (4) + SYS_FREE (5) ────────────────────────────────────────
 fn test_alloc_free() {
     let ret = unsafe { syscall1(SYS_ALLOC, 1) };
     if libmorpheus::is_error(ret) {
@@ -311,20 +305,17 @@ fn test_alloc_free() {
     check_ok("SYS_FREE(1 page)", ret2);
 }
 
-// ── SYS_GETPID (6) ──────────────────────────────────────────────────────
 fn test_getpid() {
     let pid = libmorpheus::process::getpid();
     check("SYS_GETPID", pid < 256, "pid out of range");
 }
 
-// ── SYS_KILL (7) ─────────────────────────────────────────────────────────
 fn test_kill() {
     // Kill a non-existent process → should return -ESRCH
     let ret = unsafe { syscall2(SYS_KILL, 255, 15) };
     check_err("SYS_KILL(bad pid)", ret);
 }
 
-// ── SYS_SLEEP (9) ────────────────────────────────────────────────────────
 fn test_sleep() {
     let t1 = libmorpheus::time::clock_gettime();
     libmorpheus::process::sleep(10); // 10ms
@@ -333,11 +324,9 @@ fn test_sleep() {
     check("SYS_SLEEP(10ms)", t2 > t1, "clock did not advance");
 }
 
-// ── HelixFS (10-17, 19) ─────────────────────────────────────────────────
 fn test_fs() {
     use libmorpheus::fs;
 
-    // Create test directory
     let _ = fs::mkdir("/tmp");
     let r = fs::mkdir("/tmp/e2etest");
     check(
@@ -345,9 +334,7 @@ fn test_fs() {
         r.is_ok() || r == Err(libmorpheus::EINVAL - 17),
         "mkdir failed",
     );
-    // Ignore EEXIST
 
-    // OPEN + WRITE + CLOSE
     let fd = fs::open("/tmp/e2etest/hello.txt", fs::O_WRITE | fs::O_CREATE);
     match fd {
         Ok(fd) => {
@@ -365,7 +352,6 @@ fn test_fs() {
         },
     }
 
-    // OPEN + READ
     let fd = fs::open("/tmp/e2etest/hello.txt", fs::O_READ);
     match fd {
         Ok(fd) => {
@@ -379,7 +365,6 @@ fn test_fs() {
         },
     }
 
-    // SEEK
     let fd = fs::open("/tmp/e2etest/hello.txt", fs::O_READ);
     match fd {
         Ok(fd) => {
@@ -394,36 +379,28 @@ fn test_fs() {
         Err(_) => fail("SYS_SEEK setup", "open failed"),
     }
 
-    // STAT
     let mut stat_buf = [0u8; 64];
     let r = fs::stat("/tmp/e2etest/hello.txt", &mut stat_buf);
     check("SYS_STAT", r.is_ok(), "stat failed");
 
-    // READDIR
     let mut dir_buf = [0u8; 4096];
     let r = fs::readdir("/tmp/e2etest", &mut dir_buf);
     check("SYS_READDIR", r.is_ok(), "readdir failed");
 
-    // RENAME
     let r = fs::rename("/tmp/e2etest/hello.txt", "/tmp/e2etest/renamed.txt");
     check("SYS_RENAME", r.is_ok(), "rename failed");
 
-    // UNLINK
     let r = libmorpheus::fs::unlink("/tmp/e2etest/renamed.txt");
     check("SYS_UNLINK", r.is_ok(), "unlink failed");
 
-    // SYNC
     let r = fs::sync();
     check("SYS_SYNC", r.is_ok(), "sync failed");
 
-    // Cleanup
     let _ = fs::unlink("/tmp/e2etest");
 }
 
-// ── SYS_TRUNCATE (18) ───────────────────────────────────────────────────
 fn test_truncate() {
     let path = "/tmp/e2etrunc.txt";
-    // Create a file with some data
     if let Ok(fd) =
         libmorpheus::fs::open(path, libmorpheus::fs::O_WRITE | libmorpheus::fs::O_CREATE)
     {
@@ -435,7 +412,6 @@ fn test_truncate() {
     let _ = libmorpheus::fs::unlink(path);
 }
 
-// ── SYS_SNAPSHOT (20) ───────────────────────────────────────────────────
 fn test_snapshot() {
     let name = "e2e_snap";
     let ret = unsafe { syscall2(SYS_SNAPSHOT, name.as_ptr() as u64, name.len() as u64) };
@@ -447,7 +423,6 @@ fn test_snapshot() {
     );
 }
 
-// ── SYS_VERSIONS (21) ──────────────────────────────────────────────────
 fn test_versions() {
     let path = "/tmp";
     let mut buf = [0u8; 256];
@@ -464,13 +439,11 @@ fn test_versions() {
     check("SYS_VERSIONS", ret == 0, "expected 0 entries");
 }
 
-// ── SYS_CLOCK (22) ─────────────────────────────────────────────────────
 fn test_clock() {
     let t = libmorpheus::time::clock_gettime();
     check("SYS_CLOCK", t > 0, "clock returned 0");
 }
 
-// ── SYS_SYSINFO (23) ───────────────────────────────────────────────────
 fn test_sysinfo() {
     let mut info = libmorpheus::sys::SysInfo::zeroed();
     let r = libmorpheus::sys::sysinfo(&mut info);
@@ -479,27 +452,22 @@ fn test_sysinfo() {
     check("SYS_SYSINFO tsc_freq", info.tsc_freq > 0, "no tsc_freq");
 }
 
-// ── SYS_GETPPID (24) ───────────────────────────────────────────────────
 fn test_getppid() {
     let ppid = libmorpheus::process::getppid();
     // Kernel (PID 0) → ppid=0.  User process → ppid=parent.
     check("SYS_GETPPID", ppid < 256, "ppid out of range");
 }
 
-// ── SYS_MMAP / SYS_MUNMAP (26-27) ──────────────────────────────────────
 fn test_mmap_munmap() {
-    // Allocate 1 page via mmap.
     let r = libmorpheus::mem::mmap(1);
     match r {
         Ok(vaddr) => {
-            // The returned address must be in user mmap range.
             check(
                 "SYS_MMAP(1 page)",
                 vaddr >= 0x40_0000_0000,
                 "vaddr out of range",
             );
 
-            // Unmap the same page.
             let ur = libmorpheus::mem::munmap(vaddr, 1);
             check("SYS_MUNMAP(1 page)", ur.is_ok(), "munmap failed");
         },
@@ -510,9 +478,7 @@ fn test_mmap_munmap() {
     }
 }
 
-// ── SYS_DUP (28) ────────────────────────────────────────────────────────
 fn test_dup() {
-    // Open a file then dup its fd
     if let Ok(fd) = libmorpheus::fs::open("/tmp", libmorpheus::fs::O_READ) {
         let r = libmorpheus::fs::dup(fd);
         check("SYS_DUP", r.is_ok(), "dup failed");
@@ -526,33 +492,27 @@ fn test_dup() {
     }
 }
 
-// ── SYS_SYSLOG (29) ────────────────────────────────────────────────────
 fn test_syslog() {
     libmorpheus::sys::syslog("[E2E] syslog test message");
     ok("SYS_SYSLOG");
 }
 
-// ── SYS_GETCWD (30) ────────────────────────────────────────────────────
 fn test_getcwd() {
     let mut buf = [0u8; 256];
     let r = libmorpheus::fs::getcwd(&mut buf);
     check("SYS_GETCWD", r.is_ok(), "getcwd failed");
 }
 
-// ── SYS_CHDIR (31) ─────────────────────────────────────────────────────
 fn test_chdir() {
-    // Save CWD
     let mut orig = [0u8; 256];
     let _ = libmorpheus::fs::getcwd(&mut orig);
 
     let r = libmorpheus::fs::chdir("/tmp");
     check("SYS_CHDIR", r.is_ok(), "chdir /tmp failed");
 
-    // Restore
     let _ = libmorpheus::fs::chdir("/");
 }
 
-// ── NIC (32-37) ─────────────────────────────────────────────────────────
 fn test_nic() {
     // NIC_INFO — should work even if no NIC (present=0)
     let r = libmorpheus::net::nic_info();
@@ -573,18 +533,15 @@ fn test_nic() {
     let ret = unsafe { syscall2(SYS_NIC_TX, frame.as_ptr() as u64, frame.len() as u64) };
     check_err("SYS_NIC_TX(bad frame)", ret);
 
-    // NIC_RX
     let mut buf = [0u8; 1514];
     let _ret = unsafe { syscall2(SYS_NIC_RX, buf.as_mut_ptr() as u64, buf.len() as u64) };
     // ENODEV or 0 bytes — both fine
     check("SYS_NIC_RX", true, "");
 
-    // NIC_REFILL
     let _ret = unsafe { syscall0(SYS_NIC_REFILL) };
     check("SYS_NIC_REFILL", true, ""); // ENODEV expected
 }
 
-// ── Network Stack (38-41) ───────────────────────────────────────────────
 fn test_net_stack() {
     // No stack registered in E2E test → all should return ENODEV.
 
@@ -609,13 +566,11 @@ fn test_net_stack() {
     check_err("NIC_CTRL (no ctrl)", ret);
 }
 
-// ── SYS_IOCTL (42) ─────────────────────────────────────────────────────
 fn test_ioctl() {
     // FIONREAD on stdin (fd 0)
     let ret = unsafe { syscall3(SYS_IOCTL, 0, 0x541B, 0) };
     check_ok("SYS_IOCTL(FIONREAD)", ret);
 
-    // TIOCGWINSZ
     let mut winsize = [0u32; 2];
     let ret = unsafe { syscall3(SYS_IOCTL, 0, 0x5413, winsize.as_mut_ptr() as u64) };
     check_ok("SYS_IOCTL(TIOCGWINSZ)", ret);
@@ -625,7 +580,6 @@ fn test_ioctl() {
     check_err("SYS_IOCTL(bad cmd)", ret);
 }
 
-// ── SYS_MOUNT (43) ─────────────────────────────────────────────────────
 fn test_mount() {
     let src = "/dev/sda";
     let dst = "/mnt";
@@ -641,16 +595,13 @@ fn test_mount() {
     check_ok("SYS_MOUNT (no-op)", ret);
 }
 
-// ── SYS_UMOUNT (44) ────────────────────────────────────────────────────
 fn test_umount() {
     let path = "/mnt";
     let ret = unsafe { syscall2(SYS_UMOUNT, path.as_ptr() as u64, path.len() as u64) };
     check_ok("SYS_UMOUNT", ret);
 }
 
-// ── SYS_POLL (45) ───────────────────────────────────────────────────────
 fn test_poll() {
-    // Poll stdin for read
     #[repr(C)]
     struct PollFd {
         fd: i32,
@@ -678,12 +629,10 @@ fn test_poll() {
     );
 }
 
-// ── Persistence (46-50) ─────────────────────────────────────────────────
 fn test_persist() {
     let key = "e2e_test_key";
     let val = b"e2e test value 42";
 
-    // PUT
     let ret = unsafe {
         syscall4(
             SYS_PERSIST_PUT,
@@ -695,7 +644,6 @@ fn test_persist() {
     };
     check_ok("SYS_PERSIST_PUT", ret);
 
-    // GET (size query)
     let ret = unsafe { syscall4(SYS_PERSIST_GET, key.as_ptr() as u64, key.len() as u64, 0, 0) };
     check(
         "SYS_PERSIST_GET(size)",
@@ -703,7 +651,6 @@ fn test_persist() {
         "wrong size",
     );
 
-    // GET (read)
     let mut buf = [0u8; 64];
     let ret = unsafe {
         syscall4(
@@ -720,7 +667,6 @@ fn test_persist() {
         "wrong read count",
     );
 
-    // LIST
     let mut list_buf = [0u8; 512];
     let ret = unsafe {
         syscall3(
@@ -736,7 +682,6 @@ fn test_persist() {
         "no keys found",
     );
 
-    // INFO
     #[repr(C)]
     struct PersistInfo {
         backend_flags: u32,
@@ -753,12 +698,10 @@ fn test_persist() {
     let ret = unsafe { syscall1(SYS_PERSIST_INFO, &mut info as *mut PersistInfo as u64) };
     check_ok("SYS_PERSIST_INFO", ret);
 
-    // DEL
     let ret = unsafe { syscall2(SYS_PERSIST_DEL, key.as_ptr() as u64, key.len() as u64) };
     check_ok("SYS_PERSIST_DEL", ret);
 }
 
-// ── SYS_PE_INFO (51) ────────────────────────────────────────────────────
 fn test_pe_info() {
     // Introspect our own binary to verify PE_INFO works.
     let r = libmorpheus::persist::pe_info("/bin/syscall-e2e");
@@ -780,7 +723,6 @@ fn test_pe_info() {
     }
 }
 
-// ── PORT_IN / PORT_OUT (52-53) ──────────────────────────────────────────
 fn test_port_io() {
     // Read PIT channel 2 (port 0x42) — should return a byte
     let _val = libmorpheus::hw::port_inb(0x42);
@@ -791,7 +733,6 @@ fn test_port_io() {
     ok("SYS_PORT_IN(0xCF8, dword)");
 
     // Write/read a scratch value to unused port (careful — use PIT count latch)
-    // Just test that the syscall doesn't error
     let ret = unsafe { syscall3(SYS_PORT_OUT, 0x80, 1, 0) }; // port 0x80 = debug port
     check_ok("SYS_PORT_OUT(0x80, byte)", ret);
 
@@ -800,7 +741,6 @@ fn test_port_io() {
     check_err("SYS_PORT_IN(bad width)", ret);
 }
 
-// ── PCI_CFG_READ / PCI_CFG_WRITE (54-55) ────────────────────────────────
 fn test_pci() {
     // Read vendor ID from bus=0, device=0, function=0, offset=0
     let vendor = libmorpheus::hw::pci_cfg_read16(0, 0, 0, 0x00);
@@ -811,16 +751,13 @@ fn test_pci() {
         "no device at 00:00.0",
     );
 
-    // Read device ID
     let _device = libmorpheus::hw::pci_cfg_read16(0, 0, 0, 0x02);
     ok("SYS_PCI_CFG_READ(device)");
 
-    // Read class code (32-bit at offset 0x08)
     let _class = libmorpheus::hw::pci_cfg_read32(0, 0, 0, 0x08);
     ok("SYS_PCI_CFG_READ(class)");
 
     // Write test — write/read-back the latency timer (offset 0x0D)
-    // This is generally harmless to modify
     let orig = libmorpheus::hw::pci_cfg_read8(0, 0, 0, 0x0D);
     libmorpheus::hw::pci_cfg_write8(0, 0, 0, 0x0D, orig);
     ok("SYS_PCI_CFG_WRITE(byte)");
@@ -831,7 +768,6 @@ fn test_pci() {
     check_err("SYS_PCI_CFG_READ(bad width)", ret);
 }
 
-// ── DMA_ALLOC / DMA_FREE (56-57) ────────────────────────────────────────
 fn test_dma() {
     let r = libmorpheus::hw::dma_alloc(1);
     match r {
@@ -847,7 +783,6 @@ fn test_dma() {
     }
 }
 
-// ── SYS_MAP_PHYS (58) ───────────────────────────────────────────────────
 fn test_map_phys() {
     // Allocate a known physical page via DMA, then map it into user space.
     let r = libmorpheus::hw::dma_alloc(1);
@@ -879,10 +814,8 @@ fn test_map_phys() {
     }
 }
 
-// ── VIRT_TO_PHYS (59) ───────────────────────────────────────────────────
 fn test_virt_to_phys() {
     // Identity-mapped kernel → virt == phys for low addresses
-    // Use address of a known variable on the stack
     let stack_var: u64 = 0xDEAD;
     let virt = &stack_var as *const u64 as u64;
     let ret = unsafe { syscall1(SYS_VIRT_TO_PHYS, virt) };
@@ -894,7 +827,6 @@ fn test_virt_to_phys() {
     );
 }
 
-// ── IRQ_ATTACH / IRQ_ACK (60-61) ────────────────────────────────────────
 fn test_irq() {
     // Attach IRQ 7 (spurious — safe to unmask)
     let r = libmorpheus::hw::irq_attach(7);
@@ -909,18 +841,14 @@ fn test_irq() {
     check_err("SYS_IRQ_ATTACH(16 OOB)", ret);
 }
 
-// ── CACHE_FLUSH (62) ────────────────────────────────────────────────────
 fn test_cache_flush() {
-    // Flush a small range (our own stack)
     let data = [0u8; 4096];
     let addr = data.as_ptr() as u64;
-    // Align down to page
     let aligned = addr & !0xFFF;
     let r = libmorpheus::hw::cache_flush(aligned, 4096);
     check("SYS_CACHE_FLUSH", r.is_ok(), "flush failed");
 }
 
-// ── FB_INFO (63) ─────────────────────────────────────────────────────────
 fn test_fb_info() {
     let r = libmorpheus::hw::fb_info();
     match r {
@@ -937,15 +865,11 @@ fn test_fb_info() {
     }
 }
 
-// ── SYS_FB_MAP (64) ─────────────────────────────────────────────────────
 fn test_fb_map() {
     let r = libmorpheus::hw::fb_map();
     match r {
         Ok(vaddr) => {
             check("SYS_FB_MAP", vaddr >= 0x40_0000_0000, "vaddr out of range");
-            // Unmap the framebuffer mapping.
-            // We don't know the exact page count, but 1 is sufficient to
-            // exercise the munmap path (VMA tracks the real size).
             // Skip unmapping — the FB stays mapped for the rest of the test.
             ok("SYS_FB_MAP(mapped)");
         },
@@ -956,7 +880,6 @@ fn test_fb_map() {
     }
 }
 
-// ── PS (65) ──────────────────────────────────────────────────────────────
 fn test_ps() {
     let mut entries = [const { libmorpheus::process::PsEntry::zeroed() }; 32];
     let count = libmorpheus::process::ps(&mut entries);
@@ -970,26 +893,21 @@ fn test_ps() {
     }
 }
 
-// ── SIGACTION (66) ───────────────────────────────────────────────────────
 fn test_sigaction() {
     // Register a handler (address doesn't matter for now — just exercises syscall)
     let r = libmorpheus::process::sigaction(15, 0); // SIGTERM, default handler
     check("SYS_SIGACTION", r.is_ok(), "sigaction failed");
 }
 
-// ── SETPRIORITY / GETPRIORITY (67-68) ───────────────────────────────────
 fn test_priority() {
     let pid = libmorpheus::process::getpid();
 
-    // Get current priority
     let r = libmorpheus::process::getpriority(pid);
     match r {
         Ok(prio) => {
             ok("SYS_GETPRIORITY");
-            // Set priority to 100
             let r2 = libmorpheus::process::setpriority(pid, 100);
             check("SYS_SETPRIORITY", r2.is_ok(), "set failed");
-            // Restore
             let _ = libmorpheus::process::setpriority(pid, prio);
         },
         Err(_) => {
@@ -999,7 +917,6 @@ fn test_priority() {
     }
 }
 
-// ── CPUID (69) ──────────────────────────────────────────────────────────
 fn test_cpuid() {
     let r = libmorpheus::hw::cpuid(0, 0);
     // EAX = max basic leaf (should be > 0)
@@ -1015,7 +932,6 @@ fn test_cpuid() {
     println(vendor_str);
 }
 
-// ── RDTSC (70) ──────────────────────────────────────────────────────────
 fn test_rdtsc() {
     let r = libmorpheus::hw::rdtsc();
     check("SYS_RDTSC tsc", r.tsc > 0, "tsc=0");
@@ -1027,7 +943,6 @@ fn test_rdtsc() {
     println(" Hz");
 }
 
-// ── BOOT_LOG (71) ───────────────────────────────────────────────────────
 fn test_boot_log() {
     let size = libmorpheus::hw::boot_log_size();
     check("SYS_BOOT_LOG(size)", size > 0, "log empty");
@@ -1040,7 +955,6 @@ fn test_boot_log() {
     }
 }
 
-// ── MEMMAP (72) ─────────────────────────────────────────────────────────
 fn test_memmap() {
     let count = libmorpheus::hw::memmap_count();
     check("SYS_MEMMAP(count)", count > 0, "no entries");
@@ -1064,7 +978,6 @@ fn test_memmap() {
     }
 }
 
-// ── SHM_GRANT (73) ───────────────────────────────────────────────────
 fn test_shm_grant() {
     // Allocate 1 page, then try to grant to self → EINVAL.
     match libmorpheus::mem::mmap(1) {
@@ -1096,15 +1009,12 @@ fn test_shm_grant() {
     }
 }
 
-// ── MPROTECT (74) ────────────────────────────────────────────────────
 fn test_mprotect() {
     match libmorpheus::mem::mmap(1) {
         Ok(vaddr) => {
-            // Make read-only (PROT_READ = 0).
             let r = libmorpheus::mem::mprotect(vaddr, 1, libmorpheus::mem::PROT_READ);
             check("SYS_MPROTECT(RO)", r.is_ok(), "mprotect failed");
 
-            // Make writable again.
             let r = libmorpheus::mem::mprotect(vaddr, 1, libmorpheus::mem::PROT_WRITE);
             check("SYS_MPROTECT(RW)", r.is_ok(), "mprotect failed");
 
@@ -1132,12 +1042,10 @@ fn test_pipe() {
         Ok((read_fd, write_fd)) => {
             check("SYS_PIPE(create)", true, "");
 
-            // Write to the pipe.
             let msg = b"hello pipe";
             let wr = libmorpheus::io::write_fd(write_fd, msg);
             check("SYS_PIPE(write)", wr.is_ok(), "pipe write failed");
 
-            // Read back.
             let mut buf = [0u8; 32];
             let rd = libmorpheus::io::read_fd(read_fd, &mut buf);
             match rd {
@@ -1149,7 +1057,6 @@ fn test_pipe() {
                 Err(_) => fail("SYS_PIPE(read)", "pipe read failed"),
             }
 
-            // Close both ends.
             unsafe {
                 syscall1(SYS_CLOSE, read_fd as u64);
                 syscall1(SYS_CLOSE, write_fd as u64);
@@ -1166,13 +1073,11 @@ fn test_pipe() {
 fn test_dup2() {
     match libmorpheus::process::pipe() {
         Ok((read_fd, write_fd)) => {
-            // Dup the read fd to fd 10.
             match libmorpheus::process::dup2(read_fd, 10) {
                 Ok(fd) => check("SYS_DUP2(ok)", fd == 10, "wrong fd"),
                 Err(_) => fail("SYS_DUP2(ok)", "dup2 failed"),
             }
 
-            // Write through the original write end, read from fd 10.
             let msg = b"dup2";
             let _ = libmorpheus::io::write_fd(write_fd, msg);
             let mut buf = [0u8; 16];
@@ -1201,12 +1106,10 @@ fn test_dup2() {
 }
 
 fn test_set_fg() {
-    // Set foreground to ourselves — should not fail.
     let pid = libmorpheus::process::getpid();
     libmorpheus::process::set_foreground(pid);
     check("SYS_SET_FG(self)", true, "");
 
-    // Reset to 0 (no foreground).
     libmorpheus::process::set_foreground(0);
     check("SYS_SET_FG(reset)", true, "");
 }
@@ -1216,7 +1119,6 @@ fn test_getargs() {
     let c = libmorpheus::process::argc();
     check("SYS_GETARGS(argc=0)", c == 0, "expected 0 args");
 
-    // getargs into buffer should also return 0.
     let mut buf = [0u8; 64];
     let c2 = libmorpheus::process::getargs(&mut buf);
     check("SYS_GETARGS(buf)", c2 == 0, "expected 0 args");
@@ -1246,7 +1148,6 @@ fn test_futex() {
     let ret2 = unsafe { syscall3(SYS_FUTEX, &word as *const AtomicU32 as u64, FUTEX_WAKE, 1) };
     check("SYS_FUTEX(wake-none)", ret2 == 0, "expected 0 woken");
 
-    // Test Mutex via the sync module.
     {
         let m = libmorpheus::sync::Mutex::new(0u32);
         {
@@ -1263,7 +1164,6 @@ fn test_futex() {
 fn test_thread_create_join() {
     use core::sync::atomic::{AtomicU32, Ordering};
 
-    // Spawn a thread that writes a sentinel value to shared memory.
     static SENTINEL: AtomicU32 = AtomicU32::new(0);
 
     let handle = libmorpheus::thread::spawn(|| {
@@ -1311,7 +1211,6 @@ fn test_thread_shared_memory() {
 }
 
 fn test_async_block_on() {
-    // block_on a simple async block that returns a value.
     let result = libmorpheus::task::block_on(async { 42u32 });
     check("async(block_on)", result == 42, "wrong return value");
 }
@@ -1319,7 +1218,6 @@ fn test_async_block_on() {
 fn test_async_spawn_multi() {
     use core::sync::atomic::{AtomicU32, Ordering};
 
-    // Spawn multiple async tasks and verify they all complete.
     static ASYNC_COUNTER: AtomicU32 = AtomicU32::new(0);
     ASYNC_COUNTER.store(0, Ordering::SeqCst);
 
@@ -1364,7 +1262,6 @@ fn test_async_join_handle() {
     // spawn_with_handle returns a JoinHandle we can .await for the result.
     let rt = libmorpheus::task::Runtime::new();
     let handle = rt.spawn_with_handle(async { 42u64 + 58 });
-    // Spawn a consumer that awaits the handle.
     use core::sync::atomic::{AtomicU64, Ordering};
     static RESULT: AtomicU64 = AtomicU64::new(0);
     RESULT.store(0, Ordering::SeqCst);

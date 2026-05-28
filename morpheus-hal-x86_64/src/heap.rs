@@ -23,6 +23,12 @@ static mut HEAP_INITIALIZED: bool = false;
 
 pub struct HeapAllocator;
 
+impl Default for HeapAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HeapAllocator {
     pub const fn new() -> Self {
         Self

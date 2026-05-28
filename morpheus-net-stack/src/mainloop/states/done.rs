@@ -29,7 +29,6 @@ impl DoneState {
         }
     }
 
-    /// Initiate system reboot.
     #[cfg(target_arch = "x86_64")]
     fn reboot() {
         serial::println("");
@@ -40,7 +39,7 @@ impl DoneState {
         serial::println("Initiating safe system reboot...");
 
         unsafe {
-            // 1) Keyboard controller reset (most compatible)
+            // Keyboard controller reset: most broadly compatible.
             serial::println("[REBOOT] Using keyboard controller reset (0x64 -> 0xFE)");
             core::arch::asm!(
                 "out dx, al",
@@ -49,12 +48,11 @@ impl DoneState {
                 options(nomem, nostack)
             );
 
-            // Wait for reboot
             for _ in 0..50_000_000 {
                 core::hint::spin_loop();
             }
 
-            // 2) Fallback: Port 0xCF9 reset (modern systems)
+            // Fallback: PCI reset control port 0xCF9 (modern systems).
             serial::println("[REBOOT] Fallback: Port 0xCF9 reset");
             core::arch::asm!(
                 "out dx, al",
@@ -63,12 +61,10 @@ impl DoneState {
                 options(nomem, nostack)
             );
 
-            // Wait again
             for _ in 0..50_000_000 {
                 core::hint::spin_loop();
             }
 
-            // 3) If reboot failed, halt gracefully
             serial::println("[REBOOT] Reboot methods failed - halting system");
             serial::println("[REBOOT] Please manually power cycle the system");
             loop {
@@ -102,7 +98,6 @@ impl<D: NetworkDriver> State<D> for DoneState {
         _now: Instant,
         _tsc: u64,
     ) -> (Box<dyn State<D>>, StepResult) {
-        // Flush disk before reporting done
         if !self.flushed {
             self.flushed = true;
             if let Some(ref mut blk) = ctx.blk_device {
@@ -139,13 +134,13 @@ impl<D: NetworkDriver> State<D> for DoneState {
             self.logged = true;
         }
 
-        // Trigger reboot (never returns)
+        // Never returns.
         if !self.rebooting {
             self.rebooting = true;
             Self::reboot();
         }
 
-        // Unreachable, but required for type system
+        // Unreachable; satisfies the return type.
         (self, StepResult::Done)
     }
 

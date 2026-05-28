@@ -53,7 +53,7 @@ impl PartitionType {
         }
     }
 
-    pub fn to_gpt_guid(&self) -> gpt_disk_types::GptPartitionType {
+    pub fn to_gpt_guid(self) -> gpt_disk_types::GptPartitionType {
         use gpt_disk_types::{guid, GptPartitionType as GptType};
 
         match self {

@@ -10,7 +10,7 @@ categories = ["no-std", "filesystem", "parsing", "embedded"]
 repository = "https://github.com/Poprdi/morpheusx/tree/master/iso9660"
 documentation = "https://docs.rs/iso9660-rs"
 readme = "README.md"
-rust-version = "1.70"
+rust-version = "1.75"
 
 [dependencies]
 # Core dependencies (no_std compatible)

@@ -203,7 +203,6 @@ impl ManifestWriter {
         chunks: &ChunkSet,
     ) -> DiskResult<()> {
         use alloc::format;
-        use alloc::string::String;
 
         // Serialize manifest to buffer
         let mut buffer = [0u8; MAX_MANIFEST_SIZE];

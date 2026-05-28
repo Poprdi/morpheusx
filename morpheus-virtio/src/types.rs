@@ -87,6 +87,12 @@ pub struct VirtqDesc {
     pub next: u16,
 }
 
+impl Default for VirtqDesc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VirtqDesc {
     pub const FLAG_NEXT: u16 = 1;
     pub const FLAG_WRITE: u16 = 2;

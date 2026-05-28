@@ -10,3 +10,4 @@ path = "src/main.rs"
 [dependencies]
 libmorpheus = { path = "../libmorpheus" }
 channel = { path = "../channel" }
+keymap = { path = "../keymap" }

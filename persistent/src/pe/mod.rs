@@ -30,6 +30,8 @@ impl fmt::Display for PeError {
     }
 }
 
+// PE machine-type names (X64/ARM64/ARM) are intentional domain acronyms.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeArch {
     X64,

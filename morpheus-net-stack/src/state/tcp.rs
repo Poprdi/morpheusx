@@ -1,82 +1,35 @@
-//! TCP connection state machine.
+//! Non-blocking TCP connection state machine, tracking smoltcp socket state.
 //!
-//! Non-blocking TCP connection establishment and lifecycle management.
-//!
-//! # States
-//! ```text
-//! Closed → Connecting → Established → Closing → Closed
-//!                 ↓           ↓           ↓
-//!               Error       Error       Error
-//! ```
-//!
-//! # Usage
-//!
-//! ```ignore
-//! let mut tcp = TcpConnState::new();
-//!
-//! // Start connection (non-blocking)
-//! tcp.initiate(socket_handle, remote_ip, remote_port, now_tsc);
-//!
-//! loop {
-//!     iface.poll(...);
-//!     
-//!     // Get socket state from smoltcp
-//!     let socket_state = get_tcp_state(socket_handle);
-//!     
-//!     match tcp.step(socket_state, now_tsc, timeout_ticks) {
-//!         StepResult::Pending => continue,
-//!         StepResult::Done => {
-//!             let socket = tcp.socket().unwrap();
-//!             // Use socket for send/recv
-//!             break;
-//!         }
-//!         StepResult::Timeout => panic!("connect timeout"),
-//!         StepResult::Failed => panic!("connect failed"),
-//!     }
-//! }
-//! ```
+//! Closed -> Connecting -> Established -> Closing -> Closed, with an Error
+//! branch reachable from any active state.
 
 use super::{StateError, StepResult, TscTimestamp};
 use core::net::Ipv4Addr;
 
-/// TCP socket state (simplified from smoltcp).
-///
-/// Used to communicate socket state from smoltcp to our state machine.
+/// RFC 793 TCP states, mirrored from smoltcp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TcpSocketState {
-    /// Socket is closed
     Closed,
-    /// Listening (server mode - not used here)
     Listen,
-    /// SYN sent, waiting for SYN-ACK
     SynSent,
-    /// SYN-ACK received, sending ACK
     SynReceived,
-    /// Connection established
     Established,
-    /// FIN sent, waiting for ACK
     FinWait1,
-    /// FIN-ACK received
     FinWait2,
-    /// Waiting for FIN from peer
     CloseWait,
-    /// FIN sent after CloseWait
     Closing,
-    /// FIN received in FinWait1
     LastAck,
-    /// Waiting for timeout
     TimeWait,
 }
 
 impl TcpSocketState {
-    /// Check if socket is connected and can send/receive.
+    /// Connected and able to send/receive.
     pub fn is_active(self) -> bool {
         matches!(self, Self::Established | Self::CloseWait)
     }
 
-    /// Check if connection attempt failed.
     pub fn is_failed(self) -> bool {
-        // Closed after SynSent means connection refused
+        // Closed after SynSent means connection refused.
         self == Self::Closed
     }
 
@@ -88,20 +41,13 @@ impl TcpSocketState {
     }
 }
 
-/// TCP-specific errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TcpError {
-    /// Connection timed out
     ConnectTimeout,
-    /// Connection refused by remote
     ConnectionRefused,
-    /// Connection reset by remote
     ConnectionReset,
-    /// Close timed out
     CloseTimeout,
-    /// Socket error
     SocketError,
-    /// Invalid state
     InvalidState,
 }
 
@@ -116,73 +62,44 @@ impl From<TcpError> for StateError {
     }
 }
 
-/// Information about an established connection.
 #[derive(Debug, Clone, Copy)]
 pub struct TcpConnectionInfo {
-    /// Local port
     pub local_port: u16,
-    /// Remote IP address
     pub remote_ip: Ipv4Addr,
-    /// Remote port
     pub remote_port: u16,
 }
 
-/// TCP connection state machine.
-///
-/// Manages non-blocking TCP connection establishment and closing.
-/// Does NOT handle data transfer - that's done directly on the socket.
+/// Tracks connection setup and teardown; data transfer goes through the socket
+/// directly, not this machine.
 #[derive(Debug)]
 pub(crate) enum TcpConnState {
-    /// Socket not connected
     Closed,
-
-    /// Connection initiated, waiting for establishment
     Connecting {
-        /// Socket handle (opaque, passed to smoltcp)
         socket_handle: usize,
-        /// Remote address
         remote_ip: Ipv4Addr,
-        /// Remote port
         remote_port: u16,
-        /// Local port (for reference)
         local_port: u16,
-        /// When connect started
         start_tsc: TscTimestamp,
     },
-
-    /// Connection established
     Established {
-        /// Socket handle
         socket_handle: usize,
-        /// Connection info
         info: TcpConnectionInfo,
     },
-
-    /// Connection closing
     Closing {
-        /// Socket handle
         socket_handle: usize,
-        /// When close started
         start_tsc: TscTimestamp,
     },
-
-    /// Error state
     Error {
-        /// Error details
         error: TcpError,
     },
 }
 
 impl TcpConnState {
-    /// Create new TCP state machine in closed state.
     pub fn new() -> Self {
         TcpConnState::Closed
     }
 
-    /// Initiate connection.
-    ///
-    /// Called AFTER smoltcp's `socket.connect()` has been called.
-    /// This just tracks the state - actual connect is done by smoltcp.
+    /// Call after smoltcp's `socket.connect()`; this only tracks state.
     pub fn initiate(
         &mut self,
         socket_handle: usize,
@@ -200,7 +117,6 @@ impl TcpConnState {
         };
     }
 
-    /// Step the state machine.
     pub fn step(
         &mut self,
         socket_state: TcpSocketState,
@@ -208,10 +124,7 @@ impl TcpConnState {
         timeout_ticks: u64,
     ) -> StepResult {
         match self {
-            TcpConnState::Closed => {
-                // Not started
-                StepResult::Pending
-            },
+            TcpConnState::Closed => StepResult::Pending,
 
             TcpConnState::Connecting {
                 socket_handle,
@@ -220,7 +133,6 @@ impl TcpConnState {
                 local_port,
                 start_tsc,
             } => {
-                // Check timeout first
                 if start_tsc.is_expired(now_tsc, timeout_ticks) {
                     *self = TcpConnState::Error {
                         error: TcpError::ConnectTimeout,
@@ -228,9 +140,7 @@ impl TcpConnState {
                     return StepResult::Timeout;
                 }
 
-                // Check socket state
                 if socket_state.is_active() {
-                    // Connected!
                     let handle = *socket_handle;
                     let info = TcpConnectionInfo {
                         local_port: *local_port,
@@ -245,27 +155,22 @@ impl TcpConnState {
                 }
 
                 if socket_state == TcpSocketState::Closed {
-                    // Connection refused or reset
+                    // Closed while connecting => refused or reset.
                     *self = TcpConnState::Error {
                         error: TcpError::ConnectionRefused,
                     };
                     return StepResult::Failed;
                 }
 
-                // Still connecting
                 StepResult::Pending
             },
 
-            TcpConnState::Established { .. } => {
-                // Already connected
-                StepResult::Done
-            },
+            TcpConnState::Established { .. } => StepResult::Done,
 
             TcpConnState::Closing {
                 socket_handle,
                 start_tsc,
             } => {
-                // Check timeout
                 if start_tsc.is_expired(now_tsc, timeout_ticks) {
                     *self = TcpConnState::Error {
                         error: TcpError::CloseTimeout,
@@ -273,13 +178,11 @@ impl TcpConnState {
                     return StepResult::Timeout;
                 }
 
-                // Check if fully closed
                 if socket_state == TcpSocketState::Closed {
                     *self = TcpConnState::Closed;
                     return StepResult::Done;
                 }
 
-                // Still closing
                 let _ = socket_handle;
                 StepResult::Pending
             },
@@ -291,9 +194,7 @@ impl TcpConnState {
         }
     }
 
-    /// Start graceful close.
-    ///
-    /// Called AFTER smoltcp's `socket.close()` has been called.
+    /// Call after smoltcp's `socket.close()`.
     pub fn close(&mut self, now_tsc: u64) {
         if let TcpConnState::Established { socket_handle, .. } = self {
             let handle = *socket_handle;
@@ -308,7 +209,6 @@ impl TcpConnState {
         *self = TcpConnState::Closed;
     }
 
-    /// Mark as failed with error.
     pub fn fail(&mut self, error: TcpError) {
         *self = TcpConnState::Error { error };
     }
@@ -348,7 +248,7 @@ impl TcpConnState {
         matches!(self, TcpConnState::Error { .. })
     }
 
-    /// Check if terminal (established, closed, or error).
+    /// Established, closed, or error.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,

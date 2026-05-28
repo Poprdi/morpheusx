@@ -30,8 +30,11 @@ const SCSI_REQUEST_SENSE: u8 = 0x03;
 const SCSI_READ_CAPACITY_10: u8 = 0x25;
 const SCSI_READ_10: u8 = 0x28;
 
+#[allow(dead_code)]
 const USB_CLASS_MASS_STORAGE: u8 = 0x08;
+#[allow(dead_code)]
 const USB_SUBCLASS_SCSI: u8 = 0x06;
+#[allow(dead_code)]
 const USB_PROTOCOL_BOT: u8 = 0x50;
 
 /// USB mass-storage configuration.
@@ -156,6 +159,13 @@ fn dbg(s: &str) {
 impl UsbMsdDriver {
     /// Initialise xHCI controller, enumerate first USB mass-storage device,
     /// run SCSI READ CAPACITY. Returns a ready-to-read driver or an error.
+    ///
+    /// # Safety
+    ///
+    /// `mmio_base` must be the valid, mapped MMIO base address of an xHCI
+    /// controller with exclusive access for the lifetime of the returned
+    /// driver, and `config.tsc_freq` must be the calibrated TSC frequency.
+    /// The function performs raw MMIO access and drives DMA-visible rings.
     pub unsafe fn new(mmio_base: u64, config: UsbMsdConfig) -> Result<Self, UsbMsdInitError> {
         if mmio_base == 0 || config.tsc_freq == 0 {
             return Err(UsbMsdInitError::InvalidConfig);

@@ -382,6 +382,7 @@ fn draw_hud(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fill_rect(
     fb_vaddr: u64,
     fb_width: u32,

@@ -28,10 +28,12 @@ impl Console {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cols(&self) -> u32 {
         self.cols
     }
 
+    #[allow(dead_code)]
     pub fn rows(&self) -> u32 {
         self.rows
     }

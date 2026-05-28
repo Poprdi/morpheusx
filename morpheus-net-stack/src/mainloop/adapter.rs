@@ -1,7 +1,5 @@
-//! smoltcp Device adapter for NetworkDriver trait.
-//!
-//! Bridges our NetworkDriver abstraction to smoltcp's Device trait.
-//! Uses fixed-size stack buffers — no heap allocation in packet path.
+//! smoltcp Device adapter over `NetworkDriver`. Fixed-size stack buffers; no
+//! heap allocation in the packet path.
 
 use smoltcp::phy::{Device, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
@@ -9,7 +7,6 @@ use smoltcp::time::Instant;
 use super::serial;
 use morpheus_nic::traits::NetworkDriver;
 
-/// Adapter bridging NetworkDriver to smoltcp Device trait.
 pub struct SmoltcpAdapter<'a, D: NetworkDriver> {
     driver: &'a mut D,
     rx_buffer: [u8; 2048],
@@ -19,7 +16,6 @@ pub struct SmoltcpAdapter<'a, D: NetworkDriver> {
 }
 
 impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
-    /// Create a new adapter wrapping a network driver.
     pub fn new(driver: &'a mut D) -> Self {
         Self {
             driver,
@@ -30,7 +26,6 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
         }
     }
 
-    /// Poll hardware for received packets.
     pub fn poll_receive(&mut self) {
         if self.rx_len == 0 {
             if let Ok(Some(len)) = self.driver.receive(&mut self.rx_buffer) {
@@ -64,13 +59,11 @@ impl<'a, D: NetworkDriver> SmoltcpAdapter<'a, D> {
         self.driver.link_up()
     }
 
-    /// Increment TX counter (called from TxToken).
     fn inc_tx(&mut self) {
         self.tx_count += 1;
     }
 }
 
-/// RX token — fixed-size buffer, no allocation.
 pub struct RxToken {
     buffer: [u8; 2048],
     len: usize,
@@ -85,7 +78,6 @@ impl smoltcp::phy::RxToken for RxToken {
     }
 }
 
-/// TX token — writes directly via driver.
 pub struct TxToken<'a, D: NetworkDriver> {
     driver: &'a mut D,
 }
@@ -101,7 +93,7 @@ impl<'a, D: NetworkDriver> smoltcp::phy::TxToken for TxToken<'a, D> {
 
         let result = f(&mut buffer[..actual_len]);
 
-        // Fire-and-forget transmit
+        // Fire-and-forget.
         let _ = self.driver.transmit(&buffer[..actual_len]);
 
         result

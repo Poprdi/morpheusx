@@ -22,6 +22,7 @@ pub enum WriterState {
 pub type ProgressFn = fn(bytes_written: u64, total_bytes: u64, chunk: usize, total_chunks: usize);
 
 /// Creates partitions, formats FAT32, streams data.
+#[allow(dead_code)]
 pub struct IsoWriter {
     state: WriterState,
     chunks: ChunkSet,

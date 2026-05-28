@@ -74,6 +74,8 @@ impl PageTableManager {
         );
     }
 
+    /// # Safety
+    /// Issues `invlpg` for `virt`; affects the current core's TLB only.
     #[inline]
     pub unsafe fn flush_tlb_page(virt: u64) {
         core::arch::asm!("invlpg [{addr}]", addr = in(reg) virt, options(nostack));
@@ -113,6 +115,11 @@ impl PageTableManager {
     }
 
     /// `virt` and `phys` must be 2 MiB-aligned.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy. Access must
+    /// be serialized (single-threaded init or under the paging lock). `phys`
+    /// must be real RAM safe to map at `virt`.
     pub unsafe fn map_2m(
         &mut self,
         virt: u64,
@@ -144,6 +151,10 @@ impl PageTableManager {
     /// address. Returns `Err("not mapped")` if any level of the walk is
     /// absent and `Err("huge page")` if the leaf is a 2 MiB / 1 GiB entry.
     /// Issues an `invlpg` on success.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized (single-threaded init or under the paging lock).
     pub unsafe fn remap_4k_flags(
         &mut self,
         virt: u64,
@@ -184,6 +195,10 @@ impl PageTableManager {
     }
 
     /// No-op on unmapped pages. Intermediate tables are not freed.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized (single-threaded init or under the paging lock).
     pub unsafe fn unmap_4k(&mut self, virt: u64) -> Result<(), &'static str> {
         let va = VirtAddr::from_u64(virt);
 
@@ -215,6 +230,9 @@ impl PageTableManager {
         Ok(())
     }
 
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized (single-threaded init or under the paging lock).
     pub unsafe fn unmap_2m(&mut self, virt: u64) -> Result<(), &'static str> {
         let va = VirtAddr::from_u64(virt);
 
@@ -239,6 +257,10 @@ impl PageTableManager {
     }
 
     /// Walk to physical; `None` if any level is not present.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy that is not
+    /// being concurrently mutated.
     pub unsafe fn translate(&self, virt: u64) -> Option<u64> {
         let va = VirtAddr::from_u64(virt);
 
@@ -281,6 +303,10 @@ impl PageTableManager {
 
     /// Identity-map `[phys_base, +size)` with 2 MiB pages where aligned,
     /// 4 KiB on the edges.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized. The range must be real RAM safe to identity-map.
     pub unsafe fn identity_map_range(
         &mut self,
         phys_base: u64,
@@ -308,6 +334,10 @@ impl PageTableManager {
     /// existing huge → set UC and skip to next huge boundary; existing 4 KiB
     /// → set UC; absent → create UC+P+W+NX entry. Followed by WBINVD + full
     /// TLB flush.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized. `phys`/`size` must describe a real MMIO region.
     pub unsafe fn map_mmio(&mut self, phys: u64, size: u64) -> Result<(), &'static str> {
         // PIT ISR walks these same tables — block interrupts for the edit.
         let rflags: u64;
@@ -391,10 +421,16 @@ impl PageTableManager {
         Ok(())
     }
 
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized (single-threaded init or under the paging lock).
     pub unsafe fn mark_uncacheable(&mut self, virt: u64) -> Result<(), &'static str> {
         self.map_mmio(virt, PAGE_SIZE)
     }
 
+    /// # Safety
+    /// Reloads CR3, flushing the current core's entire TLB. The active CR3 must
+    /// remain valid across the reload.
     #[inline]
     pub unsafe fn flush_tlb_all(&self) {
         core::arch::asm!(
@@ -407,6 +443,10 @@ impl PageTableManager {
 
     /// Split 1 GiB → 2 MiB and 2 MiB → 4 KiB along the path to `virt` so a
     /// later `map_4k` won't hit a huge entry. Both levels in one call.
+    ///
+    /// # Safety
+    /// `self` must reference a valid, mapped page-table hierarchy and access
+    /// must be serialized (single-threaded init or under the paging lock).
     pub unsafe fn ensure_4k_mappable(&mut self, virt: u64) -> Result<(), &'static str> {
         let va = VirtAddr::from_u64(virt);
 
@@ -626,6 +666,8 @@ unsafe fn ensure_user_table(e: &mut PageTableEntry, flags: PageFlags) -> Result<
     Ok(phys)
 }
 
+// real toolchain is 1.92
+#[allow(clippy::incompatible_msrv)]
 unsafe fn alloc_table() -> Result<u64, &'static str> {
     if !is_registry_initialized() {
         return Err("cannot allocate page table: registry not initialized");

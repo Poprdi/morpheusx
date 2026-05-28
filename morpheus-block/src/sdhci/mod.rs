@@ -197,6 +197,12 @@ impl SdhciDriver {
         Ok(())
     }
 
+    /// # Safety
+    ///
+    /// `mmio_base` must be the valid, mapped MMIO base address of an SDHCI
+    /// controller with exclusive access for the lifetime of the returned
+    /// driver, and `config.tsc_freq` must be the calibrated TSC frequency.
+    /// The function performs raw MMIO access and drives DMA-visible buffers.
     pub unsafe fn new(mmio_base: u64, config: SdhciConfig) -> Result<Self, SdhciInitError> {
         if mmio_base == 0 || config.tsc_freq == 0 {
             return Err(SdhciInitError::InvalidConfig);
@@ -301,7 +307,7 @@ impl BlockDriver for SdhciDriver {
                 unsafe { asm_sdhci_read_block_pio(self.mmio_base, arg, curr_dst, self.tsc_freq) };
             if rc != 0 {
                 return Err(match rc {
-                    1 | 2 | 3 | 4 => BlockError::Timeout,
+                    1..=4 => BlockError::Timeout,
                     _ => BlockError::IoError,
                 });
             }

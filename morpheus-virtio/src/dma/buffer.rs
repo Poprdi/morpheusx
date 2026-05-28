@@ -89,6 +89,12 @@ impl DmaBuffer {
     }
 
     /// DriverOwned -> DeviceOwned. Call immediately before submit.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the buffer's contents and descriptors are fully
+    /// initialized and that no driver-side access occurs while the device
+    /// owns the buffer. Must only be called when the buffer is DriverOwned.
     pub unsafe fn mark_device_owned(&mut self) {
         assert!(
             self.ownership == BufferOwnership::DriverOwned,
@@ -98,6 +104,12 @@ impl DmaBuffer {
     }
 
     /// DeviceOwned -> DriverOwned. Call after observed completion.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure the device has finished using the buffer (a
+    /// completion has been observed via the used ring) before reclaiming it.
+    /// Must only be called when the buffer is DeviceOwned.
     pub unsafe fn mark_driver_owned(&mut self) {
         assert!(
             self.ownership == BufferOwnership::DeviceOwned,

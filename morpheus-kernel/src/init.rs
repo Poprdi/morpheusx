@@ -87,9 +87,8 @@ pub unsafe fn mount_root_fs(hal: &'static dyn Hal, size_bytes: usize) {
     }
 }
 
-/// Built bundle for a future `HalImpl::init(KernelHooks)` entry (LD15).
-/// Stub today: bootloader constructs it to lock in call-site shape.
-/// Unset fields stay `None`; future HAL must tolerate missing hooks.
+/// Hook bundle for a future `HalImpl::init(KernelHooks)` entry. Unset fields
+/// stay `None`; the HAL must tolerate missing hooks.
 pub fn build_kernel_hooks() -> KernelHooks {
     KernelHooks {
         // LAPIC ISR currently calls `scheduler_tick` by its `#[no_mangle]` symbol;
@@ -104,9 +103,8 @@ pub fn build_kernel_hooks() -> KernelHooks {
     }
 }
 
-/// Kernel CR3 accessor for `KernelCr3Guard`. The bootloader installs this into
-/// the HAL (`morpheus_hal_x86_64::memory::set_kernel_cr3_hook`) after `init` —
-/// the kernel can't call the arch HAL directly (portability gate).
+/// Kernel CR3 accessor for `KernelCr3Guard`; bootloader installs it into the
+/// HAL after `init` (kernel can't call the arch HAL directly — portability gate).
 ///
 /// # Safety
 /// Returns 0 until `init_scheduler` sets the kernel CR3; callers tolerate 0.

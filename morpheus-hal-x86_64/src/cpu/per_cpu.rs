@@ -111,6 +111,8 @@ unsafe fn lapic_id_to_index(lapic_id: u32) -> Option<u32> {
     }
 
     // Fallback scan for sparse/high IDs; MAX_CPUS tiny.
+    // index `i` is also the returned CPU index, not just a slice cursor
+    #[allow(clippy::needless_range_loop)]
     for i in 0..MAX_CPUS {
         let pcpu = &PER_CPU_ARRAY[i];
         if pcpu.online && pcpu.cpu_id == lapic_id {
@@ -131,6 +133,10 @@ static REBOOT_OWNER_CORE: AtomicU32 = AtomicU32::new(u32::MAX);
 static mut CPU_COUNT: u32 = 1;
 
 /// Once from BSP before starting APs.
+///
+/// # Safety
+/// Call once from the BSP before any AP is started; mutates a global read by
+/// all cores. No concurrent access is permitted.
 pub unsafe fn set_cpu_count(n: u32) {
     CPU_COUNT = n;
 }
@@ -153,6 +159,7 @@ unsafe fn wrmsr(msr: u32, val: u64) {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 unsafe fn rdmsr(msr: u32) -> u64 {
     let lo: u32;
     let hi: u32;
@@ -225,6 +232,11 @@ pub unsafe fn init_ap(core_idx: u32, lapic_id: u32, lapic_base: u64, stack_top: 
 }
 
 /// Hot path — avoid in the timer ISR. ASM reads `gs:` directly.
+///
+/// # Safety
+/// `GS_BASE` must already point at this core's `PerCpu` (set during per-CPU
+/// init). Returns a `&'static mut` to per-core state; caller must not alias it
+/// across cores.
 #[inline(always)]
 pub unsafe fn current() -> &'static mut PerCpu {
     let addr: u64;
@@ -236,21 +248,31 @@ pub unsafe fn current() -> &'static mut PerCpu {
     &mut *(addr as *mut PerCpu)
 }
 
+/// # Safety
+/// `idx` must be `< MAX_CPUS`. Returns a `&'static mut` into the per-CPU array;
+/// caller must ensure no other reference to the same slot is live.
 #[inline(always)]
 pub unsafe fn by_index(idx: u32) -> &'static mut PerCpu {
     &mut PER_CPU_ARRAY[idx as usize]
 }
 
+/// # Safety
+/// Returns a `&'static mut` into the per-CPU array; caller must ensure no other
+/// reference to the same slot is live.
 #[inline(always)]
 pub unsafe fn by_lapic_id(lapic_id: u32) -> Option<&'static mut PerCpu> {
     lapic_id_to_index(lapic_id).map(|idx| &mut PER_CPU_ARRAY[idx as usize])
 }
 
+/// # Safety
+/// `GS_BASE` must point at this core's `PerCpu` (set during per-CPU init).
 #[inline(always)]
 pub unsafe fn current_core_index() -> u32 {
     current().core_index
 }
 
+/// # Safety
+/// `GS_BASE` must point at this core's `PerCpu` (set during per-CPU init).
 #[inline(always)]
 pub unsafe fn current_lapic_id() -> u32 {
     let id: u32;
@@ -262,6 +284,8 @@ pub unsafe fn current_lapic_id() -> u32 {
     id
 }
 
+/// # Safety
+/// `GS_BASE` must point at this core's `PerCpu` (set during per-CPU init).
 #[inline(always)]
 pub unsafe fn current_pid() -> u32 {
     let pid: u32;
@@ -273,6 +297,8 @@ pub unsafe fn current_pid() -> u32 {
     pid
 }
 
+/// # Safety
+/// `GS_BASE` must point at this core's `PerCpu` (set during per-CPU init).
 #[inline(always)]
 pub unsafe fn set_current_pid(pid: u32) {
     core::arch::asm!(

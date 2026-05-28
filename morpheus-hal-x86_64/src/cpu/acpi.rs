@@ -5,6 +5,7 @@ use crate::cpu::per_cpu::MAX_CPUS;
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::{AtomicU64, Ordering};
 
+#[allow(dead_code)]
 const RSDP_SIG: [u8; 8] = *b"RSD PTR ";
 
 /// ACPI 1.0 RSDP (20 bytes).
@@ -113,6 +114,7 @@ pub fn set_rsdp_phys(rsdp_phys: u64) {
 
 /// Legacy BIOS RSDP scan (diagnostics only). RSDP is 16-byte aligned;
 /// first 20 bytes must sum to zero.
+#[allow(dead_code)]
 unsafe fn find_rsdp_in_range(start: u64, end: u64) -> u64 {
     let mut addr = start & !0xF;
     while addr + 20 <= end {
@@ -132,6 +134,7 @@ unsafe fn find_rsdp_in_range(start: u64, end: u64) -> u64 {
 }
 
 /// Scan EBDA (via BDA seg at 0x40E) then main BIOS area 0xE0000..0x100000.
+#[allow(dead_code)]
 unsafe fn find_rsdp() -> u64 {
     let ebda_seg = *(0x40E as *const u16) as u64;
     if ebda_seg != 0 {
@@ -149,7 +152,7 @@ unsafe fn find_rsdp() -> u64 {
 unsafe fn validate_sdt_checksum(table_phys: u64) -> bool {
     let header = table_phys as *const SdtHeader;
     let length = core::ptr::read_unaligned(core::ptr::addr_of!((*header).length)) as usize;
-    if length < SDT_HEADER_SIZE || length > 0x10_0000 {
+    if !(SDT_HEADER_SIZE..=0x10_0000).contains(&length) {
         return false;
     }
     let mut sum: u8 = 0;
@@ -300,6 +303,8 @@ pub unsafe fn discover_ap_lapic_ids_static(rsdp_phys: u64) -> &'static [u32] {
     let result = discover_ap_lapic_ids(bsp_lapic_id);
 
     DISCOVERED_LAPIC_COUNT = result.count;
+    // indexes two parallel slices; index form keeps the copy obviously correct
+    #[allow(clippy::needless_range_loop)]
     for i in 0..result.count {
         DISCOVERED_LAPIC_IDS[i] = result.ids[i];
     }

@@ -14,6 +14,7 @@ pub struct ProcessInfo {
     pub ppid: u32,
     pub state: u32,
     pub priority: u32,
+    #[allow(dead_code)] // mirrors kernel layout; not yet surfaced in the UI
     pub cpu_ticks: u64,
     /// Active TSC cycles (HLT idle excluded for PID 0).
     pub cpu_tsc: u64,
@@ -145,7 +146,7 @@ impl SystemState {
         let _elapsed_ns = now.saturating_sub(self.prev_poll_ns).max(1);
 
         let mut info = Box::new(SysInfo::zeroed());
-        if sys::sysinfo(&mut *info).is_err() {
+        if sys::sysinfo(&mut info).is_err() {
             return;
         }
         self.total_mem = info.total_mem;

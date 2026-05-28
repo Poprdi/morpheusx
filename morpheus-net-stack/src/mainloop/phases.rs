@@ -1,39 +1,20 @@
-//! Main loop phase implementations.
-//!
-//! # 5-Phase Structure
-//! 1. RX Refill (~20µs)
-//! 2. smoltcp Poll - EXACTLY ONCE (~200µs)
-//! 3. TX Drain (~40µs)
-//! 4. App State Step (~400µs)
-//! 5. TX Completions (~20µs)
-//!
-//! Target: <1ms per iteration
-//! Maximum: 5ms per iteration
+//! Main-loop phases: RX refill, smoltcp poll (exactly once), TX drain, app
+//! step, TX completions. Target <1 ms, max 5 ms per iteration.
 
 use morpheus_nic::traits::NetworkDriver;
 
-/// TX budget per iteration (max packets to send in Phase 3).
+/// Max packets to send per iteration in the TX-drain phase.
 pub const TX_BUDGET: usize = 16;
 
-/// Phase 1: Refill RX queue.
-///
-/// Ensures device has buffers to receive into.
-/// Budget: ~20µs
 pub fn phase1_rx_refill<D: NetworkDriver>(device: &mut D) {
     device.refill_rx_queue();
 }
 
-/// Phase 5: Collect TX completions.
-///
-/// Reclaims TX buffers for reuse.
-/// Budget: ~20µs
 pub fn phase5_tx_completions<D: NetworkDriver>(device: &mut D) {
     device.collect_tx_completions();
 }
 
-/// Check if timing warning should be emitted.
-///
-/// Returns true if iteration exceeded warning threshold.
+/// True if the iteration exceeded the warning threshold.
 #[cfg(target_arch = "x86_64")]
 pub fn check_timing_warning(start_tsc: u64, warning_threshold_ticks: u64) -> bool {
     let now = morpheus_hal_x86_64::asm::tsc::read_tsc();

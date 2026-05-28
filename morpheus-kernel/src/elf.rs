@@ -1,12 +1,5 @@
 //! ELF64 parser and user-process loader. Arch-agnostic: all paging and
 //! physical-allocation work routes through the HAL trait.
-//!
-//! Phase 3.7 K7/B3 migration: this file used to live in `hwinit` and used
-//! x86-specific `PageTableManager` / `PageFlags` bit ops. After the HAL grew
-//! `pml4_new_empty` + `pml4_clone_kernel_half` + `pml4_map_user_4k`, the
-//! whole loader is portable. The fn-pointer indirection through
-//! `sched_hooks::install_elf_loader` is gone — callers invoke `load_elf64`
-//! directly.
 
 use crate::hal;
 use crate::sched_hooks::LoadedElfImage;
@@ -25,8 +18,7 @@ pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
 
-/// 4 KiB page size — matches every HAL impl's `PhysAlloc::page_size`. Kept as a
-/// const so segment-size math doesn't need an extra HAL round-trip per call.
+/// Matches every HAL impl's `PhysAlloc::page_size`; const to avoid a HAL round-trip per segment.
 const PAGE_SIZE: u64 = 4096;
 
 pub const USER_STACK_PAGES: u64 = 32;
@@ -119,11 +111,7 @@ pub fn program_headers<'a>(data: &'a [u8], ehdr: &Elf64Ehdr) -> Result<&'a [Elf6
     Ok(unsafe { core::slice::from_raw_parts(data.as_ptr().add(off) as *const Elf64Phdr, num) })
 }
 
-/// Pick a HAL `PageFlags` preset for an ELF segment.
-///
-/// A segment carrying both PF_W and PF_X maps writable+executable (USER_RWX),
-/// preserving pre-refactor behavior for binaries that ship a single merged RWX
-/// PT_LOAD (e.g. a linker script without separate RW/RX segments).
+/// PF_W|PF_X maps USER_RWX to support binaries with a single merged RWX PT_LOAD.
 fn elf_flags_to_preset(p_flags: u32) -> PageFlags {
     let writable = p_flags & PF_W != 0;
     let executable = p_flags & PF_X != 0;
@@ -135,11 +123,8 @@ fn elf_flags_to_preset(p_flags: u32) -> PageFlags {
     }
 }
 
-/// Load an ELF64 image into a fresh PML4, cloning kernel mappings so
+/// Load an ELF64 image into a fresh PML4, cloning the kernel half so
 /// interrupts/syscalls keep working in the new address space.
-///
-/// Returns a heap-allocated [`LoadedElfImage`] suitable for handing straight
-/// to the scheduler's spawn path.
 ///
 /// # Safety
 /// HAL must be installed (paging + phys allocator initialized). `data` must
@@ -153,8 +138,7 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<Box<LoadedElfImage>, ElfError> {
     let paging = hal().paging();
     let phys = hal().phys();
 
-    // Fresh PML4 + clone kernel half (entries 256-511) so the new address
-    // space can take interrupts / run kernel-mode handlers.
+    // Clone kernel half (entries 256-511) so the new space can take interrupts.
     let pml4 = paging.pml4_new_empty().map_err(|_| ElfError::AllocFailed)?;
     paging
         .pml4_clone_kernel_half(pml4)
@@ -216,7 +200,7 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<Box<LoadedElfImage>, ElfError> {
         return Err(ElfError::NoLoadSegments);
     }
 
-    // User stack — fixed VA at top of the user half.
+    // User stack at fixed VA below the top of the user half.
     let stack_phys = phys
         .allocate_pages(
             AllocKind::AnyPages,
@@ -247,9 +231,7 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<Box<LoadedElfImage>, ElfError> {
     }))
 }
 
-/// Extract the raw phys address from a `Pml4Handle`. The kernel scheduler
-/// stores PML4 phys as a `u64` (loaded into CR3 / TTBR0 at context-switch
-/// time), so we unwrap the newtype here in one place.
+/// Unwrap the `Pml4Handle` newtype; scheduler stores PML4 phys as a `u64` for CR3/TTBR0.
 #[inline]
 fn pml4_phys_from_handle(h: Pml4Handle) -> u64 {
     h.0

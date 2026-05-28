@@ -201,9 +201,7 @@ pub(crate) fn ctx_set_user_mode(ctx: &mut CpuContext, user: bool) {
 
 /// AMD64 Vol 1 §11.5.6 offsets.
 mod fxsave_offsets {
-    /// x87 FCW (u16).
     pub const FCW: usize = 0x00;
-    /// MXCSR (u32).
     pub const MXCSR: usize = 0x18;
 }
 

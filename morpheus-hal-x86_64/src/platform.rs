@@ -65,6 +65,8 @@ static HAL_INIT_DONE: AtomicBool = AtomicBool::new(false);
 ///
 /// # Safety
 /// Single-threaded; before any other CPU is up.
+// SAFETY: single-threaded boot/init context; static accessed before APs start, no aliasing.
+#[allow(static_mut_refs)]
 pub unsafe fn init() -> &'static dyn Hal {
     if !HAL_INIT_DONE.load(Ordering::Acquire) {
         HAL = Some(HalImpl::new());
@@ -144,6 +146,11 @@ pub fn set_xhci_runtime_hook(f: XhciRuntimeHook) {
     XHCI_RUNTIME_HOOK.store(f as *mut (), Ordering::Release);
 }
 
+/// # Safety
+/// Call exactly once on the BSP, pre-scheduler, single-threaded, immediately
+/// after `ExitBootServices`. `config` must describe the real UEFI memory map
+/// and framebuffer. Takes over interrupts, paging, and CR0; nothing else may be
+/// touching that hardware.
 pub unsafe fn platform_init_selfcontained(
     config: SelfContainedConfig,
 ) -> Result<PlatformInit, InitError> {

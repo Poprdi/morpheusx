@@ -1,8 +1,7 @@
-//! NIC driver traits. See NETWORK_IMPL_GUIDE.md §8.2.
+//! NIC driver traits.
 
-/// 6-byte MAC address. Mirrors `morpheus_network::types::MacAddress` (S-all
-/// wave still owns `network/src/types/`). Kept here as a local alias so this
-/// crate does not depend on `morpheus-network`.
+/// Local alias mirroring `morpheus_network::types::MacAddress`, kept here to
+/// avoid depending on `morpheus-network`.
 pub type MacAddress = [u8; 6];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

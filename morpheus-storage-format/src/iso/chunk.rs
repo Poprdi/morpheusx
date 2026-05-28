@@ -1,33 +1,24 @@
-//! Chunk information structures
-//!
-//! Fixed-size structures for tracking ISO chunks across partitions.
-//! All structures use fixed arrays to avoid heap allocation where possible.
+//! Fixed-array chunk tracking for ISOs split across partitions; heap-free.
 
-/// Maximum number of chunks per ISO (16 * 4GB = 64GB max ISO size)
+/// 16 * 4 GB = 64 GB max ISO.
 pub const MAX_CHUNKS: usize = 16;
 
-/// Maximum filename length (8.3 format compatible)
+/// 8.3-compatible filename length.
 pub const MAX_FILENAME_LEN: usize = 12;
 
-/// Information about a single chunk partition
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkInfo {
-    /// Partition UUID (16 bytes, from GPT)
+    /// GPT partition UUID.
     pub partition_uuid: [u8; 16],
-    /// Start LBA of the partition
     pub start_lba: u64,
-    /// End LBA of the partition
     pub end_lba: u64,
-    /// Size of data stored in this chunk (bytes)
+    /// Bytes of ISO data stored in this chunk.
     pub data_size: u64,
-    /// Chunk index (0-based)
     pub index: u8,
-    /// Whether this chunk has been written
     pub written: bool,
 }
 
 impl ChunkInfo {
-    /// Create an empty/uninitialized chunk info
     pub const fn empty() -> Self {
         Self {
             partition_uuid: [0u8; 16],
@@ -39,17 +30,15 @@ impl ChunkInfo {
         }
     }
 
-    /// Check if this chunk info is valid (has a partition assigned)
     pub const fn is_valid(&self) -> bool {
         self.start_lba != 0 && self.end_lba > self.start_lba
     }
 
-    /// Get partition size in bytes (assuming 512-byte sectors)
+    /// Partition size in bytes (512-byte sectors).
     pub const fn partition_size(&self) -> u64 {
         (self.end_lba - self.start_lba + 1) * 512
     }
 
-    /// Create a new chunk info for a partition
     pub const fn new(partition_uuid: [u8; 16], start_lba: u64, end_lba: u64, index: u8) -> Self {
         Self {
             partition_uuid,
@@ -62,21 +51,16 @@ impl ChunkInfo {
     }
 }
 
-/// Collection of chunks for a single ISO
+/// Chunks for a single ISO; `count` valid entries in a fixed array.
 #[derive(Debug, Clone)]
 pub struct ChunkSet {
-    /// Array of chunk info (fixed size, use count for valid entries)
     pub chunks: [ChunkInfo; MAX_CHUNKS],
-    /// Number of valid chunks in the array
     pub count: usize,
-    /// Total ISO size in bytes
     pub total_size: u64,
-    /// Bytes written so far (for progress tracking)
     pub bytes_written: u64,
 }
 
 impl ChunkSet {
-    /// Create a new empty chunk set
     pub const fn new() -> Self {
         Self {
             chunks: [ChunkInfo::empty(); MAX_CHUNKS],
@@ -86,9 +70,7 @@ impl ChunkSet {
         }
     }
 
-    /// Add a chunk to the set
-    ///
-    /// Returns the chunk index on success, or None if set is full
+    /// Returns the chunk index, or None if the set is full.
     pub fn add_chunk(&mut self, info: ChunkInfo) -> Option<usize> {
         if self.count >= MAX_CHUNKS {
             return None;
@@ -107,7 +89,6 @@ impl ChunkSet {
         }
     }
 
-    /// Get a mutable chunk by index
     pub fn get_mut(&mut self, index: usize) -> Option<&mut ChunkInfo> {
         if index < self.count {
             Some(&mut self.chunks[index])
@@ -116,7 +97,7 @@ impl ChunkSet {
         }
     }
 
-    /// Find chunk containing a given byte offset
+    /// Returns (chunk index, offset within chunk) for a byte offset.
     pub fn chunk_for_offset(&self, offset: u64) -> Option<(usize, u64)> {
         let mut cumulative = 0u64;
         for i in 0..self.count {
@@ -137,7 +118,6 @@ impl ChunkSet {
         total
     }
 
-    /// Check if all chunks have been written
     pub fn is_complete(&self) -> bool {
         if self.count == 0 {
             return false;
@@ -150,7 +130,7 @@ impl ChunkSet {
         true
     }
 
-    /// Get write progress as percentage (0-100)
+    /// Write progress, 0-100.
     pub fn progress_percent(&self) -> u8 {
         if self.total_size == 0 {
             return 0;
@@ -158,7 +138,6 @@ impl ChunkSet {
         ((self.bytes_written * 100) / self.total_size) as u8
     }
 
-    /// Iterator over valid chunks
     pub fn iter(&self) -> ChunkIterator<'_> {
         ChunkIterator {
             chunks: &self.chunks,
@@ -174,7 +153,6 @@ impl Default for ChunkSet {
     }
 }
 
-/// Iterator over chunks in a ChunkSet
 pub struct ChunkIterator<'a> {
     chunks: &'a [ChunkInfo; MAX_CHUNKS],
     count: usize,

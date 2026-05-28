@@ -107,8 +107,9 @@ pub struct DirectTarget {
 }
 
 impl DirectTarget {
-    /// SAFETY: `ptr` must address ≥ `stride_px * height` valid u32s for the target's lifetime.
-    /// `stride_px` is in pixels, not bytes.
+    /// # Safety
+    /// `ptr` must address ≥ `stride_px * height` valid, writable u32s for the
+    /// target's entire lifetime. `stride_px` is in pixels, not bytes.
     pub unsafe fn new(
         ptr: *mut u32,
         width: u32,

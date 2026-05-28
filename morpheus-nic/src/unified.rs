@@ -46,6 +46,7 @@ crate::impl_from!(E1000eError => UnifiedDriverError : IntelError);
 ///
 /// This enum provides a single type that can represent any supported NIC,
 /// allowing the network stack to be driver-agnostic.
+#[allow(clippy::large_enum_variant)]
 pub enum UnifiedNetworkDriver {
     /// VirtIO-net driver (QEMU, KVM).
     VirtIO(VirtioNetDriver),

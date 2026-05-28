@@ -142,8 +142,8 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
             },
             _ => {
                 if let Some(rest) = tok.strip_prefix('>') {
-                    let (append, path_part) = if rest.starts_with('>') {
-                        (true, &rest[1..])
+                    let (append, path_part) = if let Some(stripped) = rest.strip_prefix('>') {
+                        (true, stripped)
                     } else {
                         (false, rest)
                     };

@@ -35,7 +35,11 @@ unsafe impl Send for RawBlockDevice {}
 unsafe impl Sync for RawBlockDevice {}
 
 impl RawBlockDevice {
-    /// SAFETY: `ctx` must outlive the device; fn pointers must be safe with it.
+    /// # Safety
+    ///
+    /// `ctx` must remain valid for the entire lifetime of the returned device,
+    /// and `read_fn`/`write_fn`/`flush_fn` must be sound to call with that
+    /// `ctx` pointer and the buffers passed to them.
     pub const unsafe fn new(
         ctx: *mut u8,
         sectors: u64,
@@ -109,7 +113,10 @@ unsafe impl Send for MemBlockDevice {}
 unsafe impl Sync for MemBlockDevice {}
 
 impl MemBlockDevice {
-    /// SAFETY: `base..base+size` must be live, identity-mapped for the device's lifetime.
+    /// # Safety
+    ///
+    /// `base` must point to `size` bytes of live, identity-mapped memory that
+    /// stays valid for the entire lifetime of the returned device.
     pub unsafe fn new(base: *mut u8, size: usize, sector_size: u32) -> Self {
         Self {
             base,

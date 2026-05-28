@@ -1,65 +1,43 @@
-//! VirtIO Transport Abstraction
-//!
-//! Provides a unified interface for different VirtIO transports:
-//! - MMIO (used by ARM, some embedded systems)
-//! - PCI Modern (VirtIO 1.0+, uses capabilities)
-//! - PCI Legacy (older QEMU, uses BAR0 I/O ports)
-//!
-//! The transport is probed at runtime based on device discovery.
+//! VirtIO transport abstraction over MMIO, PCI Modern (1.0+), and PCI Legacy.
+//! Probed at runtime from device discovery.
 
 use crate::asm::device as mmio_device;
 
-/// Errors surfaced by [`VirtioTransport`] helpers.
-///
-/// Phase 3.1 Wave 1 — the transport crate is consumed by both virtio-blk
-/// and virtio-net, each of which has its own init-error type. They map
-/// this enum into their domain enum at the call site.
+/// Consumers (virtio-blk, virtio-net) map this into their own error enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtioTransportError {
-    /// Virtqueue setup failed (e.g. device reports `queue_num_max == 0`).
+    /// e.g. device reports `queue_num_max == 0`.
     QueueSetupFailed,
 }
 
-/// VirtIO transport type, determined at probe time
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TransportType {
-    /// VirtIO MMIO transport (direct register access)
     Mmio = 0,
-    /// VirtIO PCI Modern transport (capability-based)
     PciModern = 1,
-    /// VirtIO PCI Legacy transport (BAR0 I/O ports) - not fully supported
+    /// Not fully supported.
     PciLegacy = 2,
 }
 
-/// Configuration for VirtIO PCI Modern transport
+/// PCI Modern config: each base = BAR + cap_offset.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 #[derive(Default)]
 pub struct PciModernConfig {
-    /// Base address of common_cfg (BAR + cap_offset)
     pub common_cfg: u64,
-    /// Base address of notify_cfg (BAR + cap_offset)
     pub notify_cfg: u64,
-    /// Notify offset multiplier (from capability)
     pub notify_off_multiplier: u32,
-    /// Base address of isr_cfg (BAR + cap_offset)
     pub isr_cfg: u64,
-    /// Base address of device_cfg (BAR + cap_offset)
     pub device_cfg: u64,
-    /// Base address of pci_cfg (optional, for config space access)
     pub pci_cfg: u64,
 }
 
-/// Unified VirtIO transport handle
 #[derive(Debug, Clone, Copy)]
 pub struct VirtioTransport {
-    /// Transport type
     pub transport_type: TransportType,
-    /// For MMIO: the MMIO base address
-    /// For PCI Modern: common_cfg base address
+    /// MMIO base, or common_cfg base for PCI Modern.
     pub base: u64,
-    /// PCI Modern specific config (only valid if transport_type == PciModern)
+    /// Valid only when transport_type == PciModern.
     pub pci_modern: PciModernConfig,
 }
 
@@ -121,11 +99,10 @@ impl VirtioTransport {
         }
     }
 
-    /// Get number of queues (PCI Modern only, MMIO needs different approach)
     pub fn get_num_queues(&self) -> u16 {
         match self.transport_type {
             TransportType::PciModern => unsafe { pci_modern::get_num_queues(self.base) as u16 },
-            _ => 2, // Default for MMIO net devices: RX + TX
+            _ => 2, // MMIO net default: RX + TX
         }
     }
 
@@ -133,8 +110,7 @@ impl VirtioTransport {
         unsafe {
             match self.transport_type {
                 TransportType::Mmio => {
-                    // MMIO: write to QueueSel register
-                    let queue_sel_addr = self.base + 0x030;
+                    let queue_sel_addr = self.base + 0x030; // QueueSel
                     core::ptr::write_volatile(queue_sel_addr as *mut u32, queue_idx as u32);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
                 },
@@ -233,16 +209,11 @@ impl VirtioTransport {
         }
     }
 
-    /// Get notify address for a queue
-    /// Returns (notify_addr, queue_notify_offset)
     pub fn get_notify_addr(&self, queue_idx: u16) -> u64 {
         match self.transport_type {
-            TransportType::Mmio => {
-                // MMIO: fixed notify register
-                self.base + 0x050
-            },
+            TransportType::Mmio => self.base + 0x050, // fixed notify register
             TransportType::PciModern => {
-                // PCI Modern: need to select queue and read notify_off
+                // notify_cfg + notify_off * multiplier, per queue
                 unsafe {
                     pci_modern::select_queue(self.base, queue_idx);
                     let queue_notify_off = pci_modern::get_queue_notify_off(self.base);
@@ -272,7 +243,6 @@ impl VirtioTransport {
         }
     }
 
-    /// Read MAC address (net device specific)
     pub fn read_mac(&self, mac_out: &mut [u8; 6]) -> bool {
         match self.transport_type {
             TransportType::Mmio => {
@@ -297,12 +267,7 @@ impl VirtioTransport {
         }
     }
 
-    /// Setup a virtqueue. Returns the notify address on success.
-    ///
-    /// Phase 3.1 Wave 1 — error type is now the local
-    /// [`VirtioTransportError`] instead of the network-crate's
-    /// `VirtioInitError`. Consumers (virtio_blk, virtio-net init) map this
-    /// into their own error enum via `From` / `?`.
+    /// Returns the notify address on success.
     pub fn setup_queue(
         &self,
         queue_idx: u16,
@@ -311,46 +276,38 @@ impl VirtioTransport {
         used_addr: u64,
         queue_size: u16,
     ) -> Result<u64, VirtioTransportError> {
-        // Select queue
         self.select_queue(queue_idx);
 
-        // Check max size
         let max_size = self.get_queue_size();
         if max_size == 0 {
             return Err(VirtioTransportError::QueueSetupFailed);
         }
 
-        // Use min of requested and max
         let actual_size = queue_size.min(max_size);
         self.set_queue_size(actual_size);
 
-        // Set addresses
         self.set_queue_desc(desc_addr);
         self.set_queue_avail(avail_addr);
         self.set_queue_used(used_addr);
 
-        // Enable queue
         self.enable_queue();
 
-        // Get notify address
         let notify_addr = self.get_notify_addr(queue_idx);
 
         Ok(notify_addr)
     }
 
-    /// Read block device capacity (blk device specific)
+    /// virtio-blk capacity: device config offset 0 (8 bytes).
     pub fn read_blk_capacity(&self) -> u64 {
-        // VirtIO-blk device config: capacity is at offset 0 (8 bytes)
         match self.transport_type {
             TransportType::Mmio => {
-                // MMIO: device config at offset 0x100
+                // MMIO device config at offset 0x100
                 unsafe {
                     let config_base = self.base + 0x100;
                     core::ptr::read_volatile(config_base as *const u64)
                 }
             },
             TransportType::PciModern => {
-                // PCI Modern: device_cfg points to device-specific config
                 if self.pci_modern.device_cfg != 0 {
                     unsafe { core::ptr::read_volatile(self.pci_modern.device_cfg as *const u64) }
                 } else {
@@ -361,10 +318,9 @@ impl VirtioTransport {
         }
     }
 
-    /// Read block device sector size (blk device specific)
+    /// virtio-blk sector size: device config offset 20 (4 bytes). Valid only
+    /// if VIRTIO_BLK_F_BLK_SIZE was negotiated.
     pub fn read_blk_size(&self) -> u32 {
-        // VirtIO-blk device config: blk_size is at offset 20 (4 bytes)
-        // Only valid if VIRTIO_BLK_F_BLK_SIZE feature negotiated
         match self.transport_type {
             TransportType::Mmio => unsafe {
                 let config_base = self.base + 0x100 + 20;
@@ -384,7 +340,6 @@ impl VirtioTransport {
     }
 }
 
-/// PCI Modern transport ASM bindings
 pub mod pci_modern {
     extern "win64" {
         #[link_name = "asm_virtio_pci_get_status"]

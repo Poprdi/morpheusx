@@ -405,6 +405,7 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
 }
 
 /// Dispatch to the cheapest valid span path.
+#[allow(clippy::too_many_arguments)]
 fn fill_span(
     span: &Span,
     grads: &SpanGradients,
@@ -477,6 +478,7 @@ fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
 }
 
 /// Solid + no fog. Two divides per span, linear interp inside; pure 16.16 fixed inner loop.
+#[allow(clippy::too_many_arguments)]
 fn fill_span_solid(
     span: &Span,
     grads: &SpanGradients,
@@ -578,6 +580,7 @@ fn fill_span_solid(
 const AFFINE_STEP: u32 = 8;
 
 /// Textured, no fog. Divide every AFFINE_STEP px; linear UV inside.
+#[allow(clippy::too_many_arguments)]
 fn fill_span_textured(
     span: &Span,
     grads: &SpanGradients,
@@ -717,6 +720,7 @@ fn fill_span_textured(
 }
 
 /// Fallback: per-pixel divide, supports fog.
+#[allow(clippy::too_many_arguments)]
 fn fill_span_full(
     span: &Span,
     grads: &SpanGradients,

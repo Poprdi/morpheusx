@@ -1,7 +1,7 @@
 //! Stack-buffered FAT32 formatter; minimal FS for ISO chunk storage.
 
 use gpt_disk_io::BlockIo;
-use gpt_disk_types::{Lba, LbaLe};
+use gpt_disk_types::Lba;
 
 use super::types::{DiskError, DiskResult, SECTOR_SIZE};
 

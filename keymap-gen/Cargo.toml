@@ -1,0 +1,12 @@
+[package]
+name = "keymap-gen"
+version.workspace = true
+edition.workspace = true
+description = "Host tool: serialize built-in keyboard layouts to .kmap files for HelixFS provisioning."
+
+[[bin]]
+name = "keymap-gen"
+path = "src/main.rs"
+
+[dependencies]
+keymap = { path = "../keymap" }

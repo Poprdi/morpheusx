@@ -62,26 +62,21 @@ pub(crate) static mut NIC_OPS: NicOps = NicOps {
     ctrl: None,
 };
 
-/// Register NIC function pointers.  Called by the bootloader after driver init.
+/// Called by the bootloader after driver init.
 pub unsafe fn register_nic(ops: NicOps) {
     NIC_OPS = ops;
 }
 
-/// NIC info returned by SYS_NIC_INFO.
+/// Returned by SYS_NIC_INFO.
 #[repr(C)]
 pub struct NicInfo {
-    /// 6-byte MAC address, padded to 8.
+    /// 6-byte MAC, padded to 8.
     pub mac: [u8; 8],
-    /// 1 if link up, 0 if down.
     pub link_up: u32,
-    /// 1 if NIC is registered, 0 if not.
     pub present: u32,
 }
 
-// FRAMEBUFFER REGISTRATION — pass FB info from bootloader to hwinit
-
-/// Framebuffer information registered by the bootloader.
-/// Matches display/src/types.rs FramebufferInfo layout.
+/// Must match `display::types::FramebufferInfo` layout.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FbInfo {
@@ -94,7 +89,7 @@ pub struct FbInfo {
     pub format: u32,
 }
 
-// write-once, read-many from any core. atomic flag + raw pointer avoids static mut UB.
+// Write-once, read-many across cores; atomic ready-flag gates the static mut.
 use core::sync::atomic::{AtomicBool, Ordering as FbOrd};
 static mut FB_REGISTERED_STORAGE: Option<FbInfo> = None;
 static FB_REGISTERED_READY: AtomicBool = AtomicBool::new(false);
@@ -109,21 +104,20 @@ pub unsafe fn fb_registered() -> Option<FbInfo> {
     }
 }
 
-/// Register framebuffer info. Called by bootloader before entering desktop.
+/// Called by bootloader before entering the desktop.
 pub unsafe fn register_framebuffer(info: FbInfo) {
     FB_REGISTERED_STORAGE = Some(info);
     FB_REGISTERED_READY.store(true, FbOrd::Release);
 }
 
-// DOUBLE BUFFER — kernel-owned back buffer + shadow for delta presentation
+// Kernel-owned back buffer + shadow for delta presentation.
 
-/// Physical address of the kernel-allocated back buffer (zero = unallocated).
+/// Zero = unallocated.
 pub(crate) static FB_BACK_PHYS: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
-/// Physical address of the kernel-allocated shadow buffer.
 pub(crate) static FB_SHADOW_PHYS: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
-/// Number of physical pages allocated for each of the two buffers.
+/// Page count for each of the two buffers.
 pub(crate) static FB_BACK_PAGES: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 
@@ -132,7 +126,6 @@ pub(crate) static FB_BACK_PAGES: core::sync::atomic::AtomicU64 =
 pub(crate) static FB_DIRTY: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-/// Mark the framebuffer back buffer as dirty (needs present).
 #[inline]
 pub fn fb_mark_dirty() {
     FB_DIRTY.store(true, core::sync::atomic::Ordering::Relaxed);

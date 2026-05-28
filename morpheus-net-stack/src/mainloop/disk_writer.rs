@@ -1,38 +1,25 @@
-//! Buffered disk writer for streaming ISO downloads.
-//!
-//! Accumulates data in a static buffer and flushes to disk in
-//! sector-aligned chunks. Works with both VirtIO-blk and AHCI.
+//! Buffered disk writer for streaming ISO downloads. Accumulates into a static
+//! buffer and flushes in sector-aligned chunks (VirtIO-blk and AHCI).
 
 use crate::mainloop::serial;
 use morpheus_block::block_traits::BlockDriver;
 use morpheus_block::device::UnifiedBlockDevice;
 
-/// Write buffer size: 64KB = 128 sectors.
+/// 64 KB = 128 sectors.
 const BUFFER_SIZE: usize = 64 * 1024;
 
-/// Static buffer for accumulating data before disk write.
 static mut WRITE_BUFFER: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
-
-/// Current fill level of write buffer.
 static mut BUFFER_FILL: usize = 0;
-
-/// Next sector to write to.
 static mut NEXT_SECTOR: u64 = 0;
-
-/// Total bytes written to disk.
 static mut TOTAL_WRITTEN: u64 = 0;
-
-/// Next request ID for block driver.
 static mut NEXT_REQUEST_ID: u32 = 1;
 
-/// Disk writer state.
 pub struct DiskWriter {
     start_sector: u64,
     enabled: bool,
 }
 
 impl DiskWriter {
-    /// Create a new disk writer starting at the given sector.
     pub fn new(start_sector: u64) -> Self {
         unsafe {
             BUFFER_FILL = 0;
@@ -46,7 +33,7 @@ impl DiskWriter {
         }
     }
 
-    /// Create a disabled disk writer (for download-only mode).
+    /// Download-only mode: writes become no-ops.
     pub fn disabled() -> Self {
         Self {
             start_sector: 0,
@@ -54,7 +41,6 @@ impl DiskWriter {
         }
     }
 
-    /// Check if disk writing is enabled.
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -67,20 +53,15 @@ impl DiskWriter {
         unsafe { NEXT_SECTOR }
     }
 
-    /// Write data to disk (buffered).
-    ///
-    /// Data is accumulated in an internal buffer and flushed to disk
-    /// when the buffer is full. Returns number of bytes consumed.
+    /// Buffer data, flushing when full. Returns bytes consumed.
     pub fn write(&mut self, blk: &mut UnifiedBlockDevice, data: &[u8]) -> usize {
         if !self.enabled {
-            return data.len(); // Pretend we wrote it
+            return data.len();
         }
         unsafe { buffer_write(blk, data) }
     }
 
-    /// Flush any remaining buffered data to disk.
-    ///
-    /// Must be called at end of download to write partial buffer.
+    /// Flush the partial buffer; call once at end of download.
     pub fn flush(&mut self, blk: &mut UnifiedBlockDevice) -> bool {
         if !self.enabled {
             return true;
@@ -89,7 +70,6 @@ impl DiskWriter {
     }
 }
 
-/// Flush the write buffer to disk.
 unsafe fn flush_buffer(blk: &mut UnifiedBlockDevice) -> usize {
     if BUFFER_FILL == 0 {
         return 0;
@@ -98,13 +78,12 @@ unsafe fn flush_buffer(blk: &mut UnifiedBlockDevice) -> usize {
     let bytes_to_write = BUFFER_FILL;
     let num_sectors = bytes_to_write.div_ceil(512) as u32;
 
-    // Identity mapped post-EBS, so virtual == physical
+    // Identity-mapped post-EBS: virtual == physical.
     let buffer_phys = (&raw const WRITE_BUFFER).cast::<u8>() as u64;
 
     let request_id = NEXT_REQUEST_ID;
     NEXT_REQUEST_ID = NEXT_REQUEST_ID.wrapping_add(1);
 
-    // Drain pending completions
     while blk.poll_completion().is_some() {}
 
     if !blk.can_submit() {
@@ -124,9 +103,8 @@ unsafe fn flush_buffer(blk: &mut UnifiedBlockDevice) -> usize {
 
     blk.notify();
 
-    // Poll for completion with timeout
     let start_tsc = read_tsc();
-    let timeout: u64 = 4_000_000_000; // ~1s at 4GHz
+    let timeout: u64 = 4_000_000_000; // ~1s at 4 GHz
 
     loop {
         if let Some(completion) = blk.poll_completion() {
@@ -154,7 +132,6 @@ unsafe fn flush_buffer(blk: &mut UnifiedBlockDevice) -> usize {
     }
 }
 
-/// Buffer data and flush when full.
 unsafe fn buffer_write(blk: &mut UnifiedBlockDevice, data: &[u8]) -> usize {
     let mut consumed = 0;
     let mut remaining = data;
@@ -177,13 +154,12 @@ unsafe fn buffer_write(blk: &mut UnifiedBlockDevice, data: &[u8]) -> usize {
     consumed
 }
 
-/// Flush remaining data (pad with zeros for sector alignment).
+/// Zero-pad to a sector boundary, then flush.
 unsafe fn flush_remaining(blk: &mut UnifiedBlockDevice) -> bool {
     if BUFFER_FILL == 0 {
         return true;
     }
 
-    // Zero-pad to sector boundary
     for item in WRITE_BUFFER.iter_mut().skip(BUFFER_FILL) {
         *item = 0;
     }

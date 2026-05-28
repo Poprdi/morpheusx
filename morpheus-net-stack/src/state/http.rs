@@ -1,26 +1,9 @@
-//! HTTP download state machine.
+//! Non-blocking streaming HTTP GET, composing `DnsResolveState` and
+//! `TcpConnState`. Body bytes flow to a callback as they arrive rather than
+//! buffering the whole response.
 //!
-//! Non-blocking HTTP GET with streaming support for ISO downloads.
-//!
-//! # States
-//! ```text
-//! Init → Resolving → Connecting → SendingRequest → ReceivingHeaders → ReceivingBody → Done
-//!   ↓         ↓           ↓              ↓                ↓                 ↓
-//! Failed   Failed      Failed         Failed           Failed           Failed
-//! ```
-//!
-//! # Architecture
-//!
-//! This state machine composes DNS and TCP state machines:
-//! - `DnsResolveState` for hostname resolution
-//! - `TcpConnState` for connection establishment
-//!
-//! The HTTP layer handles request/response framing on top of TCP.
-//!
-//! # Streaming Mode
-//!
-//! For large downloads (ISOs), data is passed to a callback function
-//! as it arrives, rather than buffering the entire response.
+//! Init -> Resolving -> Connecting -> SendingRequest -> ReceivingHeaders ->
+//! ReceivingBody -> Done, with Failed reachable from each active state.
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -33,28 +16,17 @@ use super::{StateError, StepResult, TscTimestamp};
 use crate::http::Headers;
 use crate::url::Url;
 
-/// HTTP-specific errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HttpError {
-    /// Invalid URL
     InvalidUrl,
-    /// DNS resolution failed
     DnsError(DnsError),
-    /// TCP connection failed
     TcpError(TcpError),
-    /// Send timeout
     SendTimeout,
-    /// Receive timeout
     ReceiveTimeout,
-    /// HTTP status error (non-2xx)
     HttpStatus { code: u16, reason: String },
-    /// Invalid HTTP response
     InvalidResponse,
-    /// Response too large
     ResponseTooLarge,
-    /// Connection closed unexpectedly
     ConnectionClosed,
-    /// HTTPS not supported
     HttpsNotSupported,
 }
 
@@ -76,46 +48,35 @@ impl From<HttpError> for StateError {
     }
 }
 
-/// Information extracted from HTTP response headers.
 #[derive(Debug, Clone)]
 pub struct HttpResponseInfo {
-    /// HTTP status code (e.g., 200, 404)
     pub status_code: u16,
-    /// Reason phrase (e.g., "OK", "Not Found")
     pub reason: String,
-    /// Content-Length if provided
     pub content_length: Option<usize>,
-    /// Content-Type if provided
     pub content_type: Option<String>,
-    /// Whether response uses chunked transfer encoding
     pub chunked: bool,
-    /// Full headers
     pub headers: Headers,
 }
 
 impl HttpResponseInfo {
-    /// Check if response indicates success (2xx).
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status_code)
     }
 
-    /// Check if response indicates redirect (3xx).
     pub fn is_redirect(&self) -> bool {
         (300..400).contains(&self.status_code)
     }
 }
 
-/// Download progress information.
 #[derive(Debug, Clone, Copy)]
 pub struct HttpProgress {
-    /// Bytes received so far
     pub received: usize,
-    /// Total expected bytes (if Content-Length known)
+    /// Set only if Content-Length is known.
     pub total: Option<usize>,
 }
 
 impl HttpProgress {
-    /// Calculate percentage complete (0-100).
+    /// 0-100.
     pub fn percent(&self) -> Option<u8> {
         self.total.map(|t| {
             if t == 0 {
@@ -127,17 +88,15 @@ impl HttpProgress {
     }
 }
 
-/// Internal state for accumulating headers.
 #[derive(Debug)]
 pub struct HeaderAccumulator {
-    /// Raw header data
     buffer: Vec<u8>,
-    /// Maximum header size (prevent DoS)
+    /// Caps header size to bound memory.
     max_size: usize,
 }
 
 impl HeaderAccumulator {
-    const DEFAULT_MAX_SIZE: usize = 16 * 1024; // 16KB max headers
+    const DEFAULT_MAX_SIZE: usize = 16 * 1024;
 
     fn new() -> Self {
         Self {
@@ -146,8 +105,7 @@ impl HeaderAccumulator {
         }
     }
 
-    /// Append data to buffer.
-    /// Returns true if headers complete (\r\n\r\n found).
+    /// Returns true once the \r\n\r\n terminator is present.
     fn append(&mut self, data: &[u8]) -> Result<bool, HttpError> {
         if self.buffer.len() + data.len() > self.max_size {
             return Err(HttpError::ResponseTooLarge);
@@ -155,16 +113,13 @@ impl HeaderAccumulator {
 
         self.buffer.extend_from_slice(data);
 
-        // Check for end of headers: \r\n\r\n
         Ok(self.find_header_end().is_some())
     }
 
-    /// Find position of header/body separator.
     fn find_header_end(&self) -> Option<usize> {
         self.buffer.windows(4).position(|w| w == b"\r\n\r\n")
     }
 
-    /// Parse headers and return body data.
     fn parse(&self) -> Result<(HttpResponseInfo, &[u8]), HttpError> {
         let sep_pos = self.find_header_end().ok_or(HttpError::InvalidResponse)?;
 
@@ -176,18 +131,15 @@ impl HeaderAccumulator {
         Ok((info, body_bytes))
     }
 
-    /// Parse HTTP response headers.
     fn parse_headers(data: &[u8]) -> Result<HttpResponseInfo, HttpError> {
         let header_str = core::str::from_utf8(data).map_err(|_| HttpError::InvalidResponse)?;
 
         let mut lines = header_str.lines();
 
-        // Parse status line: "HTTP/1.1 200 OK"
         let status_line = lines.next().ok_or(HttpError::InvalidResponse)?;
 
         let (status_code, reason) = Self::parse_status_line(status_line)?;
 
-        // Parse headers
         let mut headers = Headers::new();
         for line in lines {
             if line.is_empty() {
@@ -199,7 +151,6 @@ impl HeaderAccumulator {
             }
         }
 
-        // Extract key header values
         let content_length = headers.get("Content-Length").and_then(|v| v.parse().ok());
 
         let content_type = headers.get("Content-Type").map(|v| v.to_string());
@@ -219,19 +170,15 @@ impl HeaderAccumulator {
         })
     }
 
-    /// Parse HTTP status line.
+    /// Parse a status line like "HTTP/1.1 200 OK".
     fn parse_status_line(line: &str) -> Result<(u16, String), HttpError> {
-        // "HTTP/1.1 200 OK"
         let mut parts = line.split_whitespace();
 
-        // HTTP version
         let _version = parts.next().ok_or(HttpError::InvalidResponse)?;
 
-        // Status code
         let code_str = parts.next().ok_or(HttpError::InvalidResponse)?;
         let code = code_str.parse().map_err(|_| HttpError::InvalidResponse)?;
 
-        // Reason phrase (rest of line)
         let reason: String = parts.collect::<Vec<_>>().join(" ");
         let reason = if reason.is_empty() {
             Self::default_reason(code).to_string()
@@ -242,7 +189,6 @@ impl HeaderAccumulator {
         Ok((code, reason))
     }
 
-    /// Default reason phrase for status code.
     fn default_reason(code: u16) -> &'static str {
         match code {
             200 => "OK",
@@ -264,98 +210,58 @@ impl HeaderAccumulator {
     }
 }
 
-/// HTTP download state machine.
-///
-/// Orchestrates DNS resolution → TCP connection → HTTP request/response.
-/// Supports streaming for large downloads.
+/// Orchestrates DNS -> TCP -> HTTP request/response, streaming the body.
 #[derive(Debug)]
 pub(crate) enum HttpDownloadState {
-    /// Initial state with target URL.
-    Init { url: Url },
-
-    /// Resolving hostname to IP address.
+    Init {
+        url: Url,
+    },
     Resolving {
-        /// DNS state machine
         dns: DnsResolveState,
-        /// Target host
         host: String,
-        /// Target port
         port: u16,
-        /// Request path
         path: String,
-        /// Query string (if any)
         query: Option<String>,
     },
-
-    /// Connecting to server.
     Connecting {
-        /// TCP state machine
         tcp: TcpConnState,
-        /// Resolved IP
         ip: Ipv4Addr,
-        /// Target port
         port: u16,
-        /// Host header value
         host_header: String,
-        /// Request path + query
         request_uri: String,
     },
-
-    /// Sending HTTP request.
     SendingRequest {
-        /// Socket handle
         socket_handle: usize,
-        /// Serialized HTTP request
         request: Vec<u8>,
-        /// Bytes sent so far
         sent: usize,
-        /// When send started
         start_tsc: TscTimestamp,
     },
-
-    /// Receiving HTTP response headers.
     ReceivingHeaders {
-        /// Socket handle
         socket_handle: usize,
-        /// Header accumulator
         accumulator: HeaderAccumulator,
-        /// When receive started
         start_tsc: TscTimestamp,
     },
-
-    /// Receiving HTTP response body.
     ReceivingBody {
-        /// Socket handle
         socket_handle: usize,
-        /// Response info from headers
         response_info: HttpResponseInfo,
-        /// Bytes received so far
         received: usize,
-        /// When body receive started
         start_tsc: TscTimestamp,
-        /// Last activity time (for idle timeout)
+        /// Reset on each chunk; drives the idle timeout.
         last_activity_tsc: TscTimestamp,
     },
-
-    /// Download complete.
     Done {
-        /// Response info
         response_info: HttpResponseInfo,
-        /// Total bytes received (body only)
+        /// Body bytes only.
         total_bytes: usize,
     },
-
-    /// Download failed.
     Failed {
-        /// Error details
         error: HttpError,
     },
 }
 
 impl HttpDownloadState {
-    /// Create new HTTP download state machine.
     pub fn new(url: Url) -> Result<Self, HttpError> {
-        // HTTPS not supported in this bare-metal implementation
+        // No TLS in this bare-metal stack.
         if url.is_https() {
             return Err(HttpError::HttpsNotSupported);
         }
@@ -363,9 +269,7 @@ impl HttpDownloadState {
         Ok(HttpDownloadState::Init { url })
     }
 
-    /// Start the download.
-    ///
-    /// Transitions from Init to Resolving (or Connecting if IP known).
+    /// Transition Init -> Resolving, or -> Connecting if the IP is already known.
     pub fn start(&mut self, _now_tsc: u64) {
         if let HttpDownloadState::Init { url } = self {
             let host = url.host.clone();
@@ -375,11 +279,9 @@ impl HttpDownloadState {
             let host_header = url.host_header();
             let request_uri = url.request_uri();
 
-            // Try to resolve without DNS first (IP or hardcoded)
+            // Connection/query initiation itself happens in step().
             if let Some(ip) = resolve_without_dns(&host) {
-                // Skip DNS, go directly to connecting
                 let tcp = TcpConnState::new();
-                // Note: actual connection initiation happens in step()
                 *self = HttpDownloadState::Connecting {
                     tcp,
                     ip,
@@ -388,9 +290,7 @@ impl HttpDownloadState {
                     request_uri,
                 };
             } else {
-                // Need DNS resolution
                 let dns = DnsResolveState::new();
-                // Note: actual DNS query initiation happens in step()
                 *self = HttpDownloadState::Resolving {
                     dns,
                     host,
@@ -402,12 +302,8 @@ impl HttpDownloadState {
         }
     }
 
-    /// Step the state machine.
-    ///
-    /// # Callback
-    ///
-    /// When `recv_data` contains body data during ReceivingBody state,
-    /// the caller should pass that data to the storage layer.
+    /// In ReceivingBody, the caller must forward `recv_data` to the storage
+    /// layer; this machine only tracks counts.
     pub fn step(
         &mut self,
         dns_result: Result<Option<Ipv4Addr>, ()>,
@@ -420,7 +316,7 @@ impl HttpDownloadState {
         http_send_timeout: u64,
         http_recv_timeout: u64,
     ) -> StepResult {
-        // Take ownership for state transitions
+        // Move out so transitions can consume the current state.
         let current = core::mem::replace(
             self,
             HttpDownloadState::Init {
@@ -451,7 +347,6 @@ impl HttpDownloadState {
         result
     }
 
-    /// Internal step implementation.
     fn step_inner(
         &self,
         current: HttpDownloadState,
@@ -467,7 +362,6 @@ impl HttpDownloadState {
     ) -> (HttpDownloadState, StepResult) {
         match current {
             HttpDownloadState::Init { url } => {
-                // Not started yet
                 (HttpDownloadState::Init { url }, StepResult::Pending)
             },
 
@@ -478,12 +372,10 @@ impl HttpDownloadState {
                 path,
                 query,
             } => {
-                // Step DNS state machine
                 let result = dns.step(dns_result, now_tsc, dns_timeout);
 
                 match result {
                     StepResult::Done => {
-                        // DNS resolved, start TCP connection
                         let ip = dns.ip().unwrap();
                         let host_header = if port != 80 {
                             alloc::format!("{}:{}", host, port)
@@ -541,12 +433,10 @@ impl HttpDownloadState {
                 host_header,
                 request_uri,
             } => {
-                // Step TCP state machine
                 let result = tcp.step(tcp_state, now_tsc, tcp_timeout);
 
                 match result {
                     StepResult::Done => {
-                        // Connected! Build HTTP request
                         let socket_handle = tcp.socket_handle().unwrap();
                         let request = Self::build_request(&host_header, &request_uri);
 
@@ -594,7 +484,6 @@ impl HttpDownloadState {
                 sent,
                 start_tsc,
             } => {
-                // Check timeout
                 if start_tsc.is_expired(now_tsc, http_send_timeout) {
                     return (
                         HttpDownloadState::Failed {
@@ -604,7 +493,6 @@ impl HttpDownloadState {
                     );
                 }
 
-                // Check connection status
                 if tcp_state == TcpSocketState::Closed {
                     return (
                         HttpDownloadState::Failed {
@@ -614,9 +502,8 @@ impl HttpDownloadState {
                     );
                 }
 
-                // Sending is tracked externally, we just track progress
+                // The actual send is driven externally; we only track progress.
                 if sent >= request.len() {
-                    // Request fully sent, start receiving
                     (
                         HttpDownloadState::ReceivingHeaders {
                             socket_handle,
@@ -626,7 +513,6 @@ impl HttpDownloadState {
                         StepResult::Pending,
                     )
                 } else {
-                    // Still sending
                     (
                         HttpDownloadState::SendingRequest {
                             socket_handle,
@@ -644,7 +530,6 @@ impl HttpDownloadState {
                 mut accumulator,
                 start_tsc,
             } => {
-                // Check timeout
                 if start_tsc.is_expired(now_tsc, http_recv_timeout) {
                     return (
                         HttpDownloadState::Failed {
@@ -654,7 +539,6 @@ impl HttpDownloadState {
                     );
                 }
 
-                // Check connection status
                 if tcp_state == TcpSocketState::Closed {
                     return (
                         HttpDownloadState::Failed {
@@ -664,14 +548,11 @@ impl HttpDownloadState {
                     );
                 }
 
-                // Process received data
                 if let Some(data) = recv_data {
                     match accumulator.append(data) {
                         Ok(true) => {
-                            // Headers complete, parse them
                             match accumulator.parse() {
                                 Ok((response_info, body_data)) => {
-                                    // Check for HTTP error status
                                     if !response_info.is_success() && !response_info.is_redirect() {
                                         return (
                                             HttpDownloadState::Failed {
@@ -684,8 +565,7 @@ impl HttpDownloadState {
                                         );
                                     }
 
-                                    // Start body reception
-                                    // Note: body_data may contain initial body bytes
+                                    // body_data may already hold leading body bytes.
                                     let initial_received = body_data.len();
 
                                     (
@@ -704,21 +584,17 @@ impl HttpDownloadState {
                                 },
                             }
                         },
-                        Ok(false) => {
-                            // Headers not complete yet
-                            (
-                                HttpDownloadState::ReceivingHeaders {
-                                    socket_handle,
-                                    accumulator,
-                                    start_tsc,
-                                },
-                                StepResult::Pending,
-                            )
-                        },
+                        Ok(false) => (
+                            HttpDownloadState::ReceivingHeaders {
+                                socket_handle,
+                                accumulator,
+                                start_tsc,
+                            },
+                            StepResult::Pending,
+                        ),
                         Err(e) => (HttpDownloadState::Failed { error: e }, StepResult::Failed),
                     }
                 } else {
-                    // No data received yet
                     (
                         HttpDownloadState::ReceivingHeaders {
                             socket_handle,
@@ -737,7 +613,6 @@ impl HttpDownloadState {
                 start_tsc,
                 last_activity_tsc,
             } => {
-                // Check for idle timeout (no data for too long)
                 if last_activity_tsc.is_expired(now_tsc, http_recv_timeout) {
                     return (
                         HttpDownloadState::Failed {
@@ -747,7 +622,6 @@ impl HttpDownloadState {
                     );
                 }
 
-                // Check if complete based on Content-Length
                 if let Some(content_length) = response_info.content_length {
                     if received >= content_length {
                         return (
@@ -760,11 +634,9 @@ impl HttpDownloadState {
                     }
                 }
 
-                // Check connection status
                 if tcp_state == TcpSocketState::Closed {
-                    // Connection closed - check if we're done
+                    // No Content-Length: close signals EOF; otherwise it is truncated.
                     if response_info.content_length.is_none() {
-                        // No Content-Length, connection close means done
                         return (
                             HttpDownloadState::Done {
                                 response_info,
@@ -773,7 +645,6 @@ impl HttpDownloadState {
                             StepResult::Done,
                         );
                     } else {
-                        // Had Content-Length but didn't receive it all
                         return (
                             HttpDownloadState::Failed {
                                 error: HttpError::ConnectionClosed,
@@ -783,7 +654,6 @@ impl HttpDownloadState {
                     }
                 }
 
-                // Process received data
                 let new_received = if let Some(data) = recv_data {
                     received + data.len()
                 } else {
@@ -833,9 +703,7 @@ impl HttpDownloadState {
         }
     }
 
-    /// Build HTTP GET request.
     fn build_request(host: &str, request_uri: &str) -> Vec<u8> {
-        // Build HTTP/1.1 GET request
         let request = alloc::format!(
             "GET {} HTTP/1.1\r\n\
              Host: {}\r\n\
@@ -850,7 +718,7 @@ impl HttpDownloadState {
         request.into_bytes()
     }
 
-    /// Get the request bytes to send (for SendingRequest state).
+    /// Unsent request bytes and the offset already sent (SendingRequest only).
     pub fn request_bytes(&self) -> Option<(&[u8], usize)> {
         if let HttpDownloadState::SendingRequest { request, sent, .. } = self {
             Some((&request[*sent..], *sent))
@@ -859,7 +727,6 @@ impl HttpDownloadState {
         }
     }
 
-    /// Update bytes sent (for SendingRequest state).
     pub fn mark_sent(&mut self, additional: usize) {
         if let HttpDownloadState::SendingRequest { sent, .. } = self {
             *sent += additional;
@@ -920,7 +787,7 @@ impl HttpDownloadState {
         }
     }
 
-    /// Check if download is complete (success or failure).
+    /// Done or failed.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -928,7 +795,6 @@ impl HttpDownloadState {
         )
     }
 
-    /// Check if download is in progress.
     pub fn is_active(&self) -> bool {
         !matches!(
             self,

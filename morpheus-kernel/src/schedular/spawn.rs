@@ -86,8 +86,6 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     }
 
     {
-        // CpuContext is opaque (morpheus-hal-api); use HAL ctx_init_user
-        // which handles selector (USER_CS/USER_DS / EL0) + arg-slot setup.
         // `arg` lands in arg slot 0 (rdi on x86_64).
         thread.context = CpuContext::zeroed();
         hal().cpu().ctx_init_user(
@@ -120,10 +118,6 @@ pub unsafe fn spawn_user_process(
         return Err("scheduler not initialized");
     }
 
-    // ELF loader lives in-kernel as of Phase 3.7 B3 — the HAL grew the paging
-    // methods (`pml4_new_empty`, `pml4_clone_kernel_half`, `pml4_map_user_4k`)
-    // that used to block this call, so the sched_hooks fn-pointer indirection
-    // is gone.
     let image = crate::elf::load_elf64(elf_data).map_err(|_| "ELF load failed")?;
 
     PROCESS_TABLE_LOCK.lock();
@@ -190,9 +184,7 @@ pub unsafe fn spawn_user_process(
     }
 
     {
-        // CpuContext is opaque (morpheus-hal-api); use HAL ctx_init_user.
-        // spawn_user_process passes no args (libmorpheus's _start reads them
-        // from the SYS_GETARGS path), so all 6 slots are zero.
+        // No args here: libmorpheus's _start reads them via SYS_GETARGS.
         proc.context = CpuContext::zeroed();
         hal().cpu().ctx_init_user(
             &mut proc.context,

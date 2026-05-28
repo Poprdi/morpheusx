@@ -145,6 +145,10 @@ unsafe fn lapic_write(base: u64, reg: u32, val: u32) {
 }
 
 /// Read this CPU's LAPIC ID from hardware.
+///
+/// # Safety
+/// LAPIC must be initialized and its MMIO base identity-mapped (or x2APIC MSRs
+/// available). Touches APIC hardware on the current core only.
 pub unsafe fn read_lapic_id() -> u32 {
     if x2apic_enabled() {
         rdmsr(IA32_X2APIC_ID_MSR) as u32
@@ -206,6 +210,10 @@ pub unsafe fn init_ap() {
 }
 
 /// Write 0 to EOI. Call at end of every LAPIC-sourced ISR.
+///
+/// # Safety
+/// LAPIC must be initialized with its MMIO base identity-mapped. Call exactly
+/// once at the end of a LAPIC-sourced interrupt service routine.
 #[inline(always)]
 pub unsafe fn send_eoi() {
     lapic_write(lapic_base(), LAPIC_EOI, 0);
@@ -310,6 +318,10 @@ pub unsafe fn setup_timer(target_hz: u32) {
 }
 
 /// Mask all 8259 IRQs. Required once LAPIC is the interrupt source.
+///
+/// # Safety
+/// Performs raw `out` to the 8259 PIC ports. Call once during init after the
+/// LAPIC is up and no code still depends on legacy PIC delivery.
 pub unsafe fn disable_pic8259() {
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
@@ -317,6 +329,11 @@ pub unsafe fn disable_pic8259() {
 }
 
 /// INIT IPI assert. Caller waits >=200us then `send_init_deassert`.
+///
+/// # Safety
+/// LAPIC must be initialized with its MMIO base identity-mapped. `target_apic_id`
+/// must be a valid physical APIC ID. Part of the SMP startup sequence; caller is
+/// responsible for the mandated inter-IPI delays.
 pub unsafe fn send_init_assert(target_apic_id: u32) {
     let base = lapic_base();
 
@@ -338,6 +355,10 @@ pub unsafe fn send_init_assert(target_apic_id: u32) {
 }
 
 /// INIT IPI deassert. Trigger MUST stay level or KVM treats it as assert.
+///
+/// # Safety
+/// LAPIC must be initialized with its MMIO base identity-mapped. `target_apic_id`
+/// must be a valid physical APIC ID. Must follow a prior `send_init_assert`.
 pub unsafe fn send_init_deassert(target_apic_id: u32) {
     let base = lapic_base();
 
@@ -359,6 +380,11 @@ pub unsafe fn send_init_deassert(target_apic_id: u32) {
 }
 
 /// SIPI. `start_page` = trampoline phys / 0x1000 (must be <1 MiB, page-aligned).
+///
+/// # Safety
+/// LAPIC must be initialized with its MMIO base identity-mapped. `target_apic_id`
+/// must be valid and `start_page` must point at a real, page-aligned trampoline
+/// below 1 MiB. Must follow the INIT assert/deassert sequence.
 pub unsafe fn send_sipi(target_apic_id: u32, start_page: u8) {
     let base = lapic_base();
     if x2apic_enabled() {
@@ -394,6 +420,10 @@ unsafe fn wait_icr_idle(base: u64) {
 
 /// TSC-based busy wait. Spin fallback if TSC freq is bogus. Watchdog
 /// caps spin count: bad calibration must not turn a 10 ms wait into hours.
+///
+/// # Safety
+/// Reads the TSC via `rdtsc`; requires TSC support (always present on supported
+/// CPUs). Pure busy-spin with no side effects beyond burning cycles.
 pub unsafe fn delay_us(us: u64) {
     let freq = crate::cpu::tsc::tsc_frequency();
     if (1_000_000..=10_000_000_000).contains(&freq) {

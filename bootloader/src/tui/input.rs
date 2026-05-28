@@ -243,11 +243,9 @@ pub struct Keyboard {
 }
 
 impl Keyboard {
-    /// Decoder-only construction — skips the i8042 PS/2 controller init
-    /// sequence. Use when an alternative input source (e.g. USB HID) is
-    /// already known to be available and probing PS/2 hardware would just
-    /// produce a flood of warnings on a board without a PS/2 controller.
-    /// The scan-code decoder itself works without controller init.
+    /// Skips i8042 controller init; the decoder works without it. Use when
+    /// another input source (USB HID) exists and probing PS/2 on a board
+    /// without a controller would just flood warnings.
     pub fn new_decoder_only() -> Self {
         Self {
             shift: false,

@@ -250,21 +250,29 @@ pub trait Hal: Send + Sync {
 /// `addr` must point at a valid MMIO region, satisfy width alignment, and respect
 /// the device's serialization requirements (caller issues fences as needed).
 pub trait Mmio: Send + Sync {
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn read8(&self, addr: u64) -> u8;
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn read16(&self, addr: u64) -> u16;
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn read32(&self, addr: u64) -> u32;
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn read64(&self, addr: u64) -> u64;
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn write8(&self, addr: u64, val: u8);
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn write16(&self, addr: u64, val: u16);
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn write32(&self, addr: u64, val: u32);
-    /// # Safety: see trait docs.
+    /// # Safety
+    /// See trait docs.
     unsafe fn write64(&self, addr: u64, val: u64);
     fn mfence(&self);
     fn sfence(&self);

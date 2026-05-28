@@ -181,15 +181,9 @@ pub unsafe fn sys_irq_ack(irq_num: u64) -> u64 {
     0
 }
 
-/// CPU→device DMA coherence. Caps at 64 MiB to bound stall time.
-///
-/// On x86_64 the architecture is cache-coherent for WB normal memory, so
-/// this is a no-op — userspace DMA setup should use `SYS_DMA_ALLOC`, which
-/// returns pages out of the identity-mapped DMA arena. The HAL exposes
-/// per-DMA-region `sync_for_device`/`sync_for_cpu` for fine-grained CMO on
-/// ARM. Userspace `cache_flush(addr, len)` semantics don't map onto the
-/// HAL's region-keyed sync, so we accept the call but only validate the
-/// arguments.
+/// No-op on x86_64 (cache-coherent WB memory); only validates args. Caps at
+/// 64 MiB. ARM CMO routes through the HAL's region-keyed sync_for_device/cpu,
+/// which this addr/len-keyed call can't express.
 pub unsafe fn sys_cache_flush(addr: u64, len: u64) -> u64 {
     if addr == 0 || len == 0 {
         return EINVAL;

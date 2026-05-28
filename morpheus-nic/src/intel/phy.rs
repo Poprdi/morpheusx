@@ -1,7 +1,4 @@
-//! Intel e1000e PHY management.
-//!
-//! Rust orchestration layer for PHY operations.
-//! All hardware access is via ASM bindings.
+//! Intel e1000e PHY management. Hardware access goes through ASM bindings.
 
 use crate::asm::{
     asm_intel_link_status, asm_intel_phy_read, asm_intel_phy_write, asm_intel_wait_link,
@@ -10,16 +7,11 @@ use crate::asm::{
 
 use super::regs;
 
-/// Link speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkSpeed {
-    /// 10 Mbps.
     Speed10,
-    /// 100 Mbps.
     Speed100,
-    /// 1000 Mbps (1 Gbps).
     Speed1000,
-    /// Unknown speed.
     Unknown,
 }
 
@@ -34,14 +26,10 @@ impl LinkSpeed {
     }
 }
 
-/// Link status information.
 #[derive(Debug, Clone, Copy)]
 pub struct LinkStatus {
-    /// Link is up.
     pub link_up: bool,
-    /// Full duplex mode.
     pub full_duplex: bool,
-    /// Link speed.
     pub speed: LinkSpeed,
 }
 
@@ -72,18 +60,13 @@ impl From<LinkStatusResult> for LinkStatus {
     }
 }
 
-/// PHY manager for an e1000e device.
 pub struct PhyManager {
-    /// MMIO base address.
     mmio_base: u64,
-    /// TSC frequency for timeouts.
     tsc_freq: u64,
-    /// Cached link status.
     cached_status: LinkStatus,
 }
 
 impl PhyManager {
-    /// Create a new PHY manager.
     pub fn new(mmio_base: u64, tsc_freq: u64) -> Self {
         Self {
             mmio_base,
@@ -92,9 +75,7 @@ impl PhyManager {
         }
     }
 
-    /// Get current link status (fast path via STATUS register).
-    ///
-    /// This is a quick check that doesn't access the PHY directly.
+    /// Fast path via STATUS register; does not touch the PHY directly.
     pub fn link_status(&mut self) -> LinkStatus {
         let mut result = LinkStatusResult::default();
         unsafe {
@@ -118,7 +99,6 @@ impl PhyManager {
         let result = unsafe { asm_intel_wait_link(self.mmio_base, timeout_us, self.tsc_freq) };
 
         if result == 0 {
-            // Link came up - get status
             Ok(self.link_status())
         } else {
             Err(())
@@ -150,9 +130,6 @@ impl PhyManager {
         Some((id1, id2))
     }
 
-    /// Read BMSR (Basic Mode Status Register).
-    ///
-    /// This includes link status and auto-negotiation complete bits.
     pub fn read_bmsr(&self) -> Option<u16> {
         self.read_reg(regs::PHY_BMSR)
     }
@@ -164,25 +141,17 @@ impl PhyManager {
     }
 
     pub fn restart_autoneg(&self) -> Result<(), ()> {
-        // Read current BMCR
         let bmcr = self.read_reg(regs::PHY_BMCR).ok_or(())?;
-
-        // Set auto-negotiation enable and restart bits
         let new_bmcr = bmcr | regs::BMCR_ANENABLE | regs::BMCR_ANRESTART;
-
         self.write_reg(regs::PHY_BMCR, new_bmcr)
     }
 
-    /// Software reset the PHY.
+    /// Set BMCR.RESET. Does not wait; caller polls or uses wait_for_link.
     pub fn reset(&self) -> Result<(), ()> {
-        // Set reset bit in BMCR
         self.write_reg(regs::PHY_BMCR, regs::BMCR_RESET)?;
-
-        // The PHY should clear the reset bit when done
-        // We don't wait here - caller should poll or use wait_for_link
         Ok(())
     }
 }
 
-// Safety: PhyManager only contains raw values, no references
+// SAFETY: holds only raw values, no references.
 unsafe impl Send for PhyManager {}

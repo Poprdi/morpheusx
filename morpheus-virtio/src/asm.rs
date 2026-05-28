@@ -65,9 +65,11 @@ extern "win64" {
     fn asm_vq_enable(mmio_base: u64);
 
     /// Disable selected queue.
+    #[allow(dead_code)]
     fn asm_vq_disable(mmio_base: u64);
 
     /// Check if queue is ready.
+    #[allow(dead_code)]
     fn asm_vq_is_ready(mmio_base: u64) -> u32;
 
     /// Full queue setup helper.
@@ -81,9 +83,11 @@ extern "win64" {
     );
 
     /// Initialize a single descriptor.
+    #[allow(dead_code)]
     fn asm_vq_init_desc(desc_table: u64, idx: u16, addr: u64, len: u32, flags: u16, next: u16);
 
     /// Initialize descriptor chain (for multi-descriptor buffers).
+    #[allow(dead_code)]
     fn asm_vq_init_desc_chain(
         desc_table: u64,
         start_idx: u16,
@@ -131,6 +135,7 @@ extern "win64" {
     fn asm_vq_should_notify(vq: *mut VirtqueueState) -> u32;
 
     /// Set notify address in VirtqueueState.
+    #[allow(dead_code)]
     fn asm_vq_set_notify_addr(vq: *mut VirtqueueState, addr: u64);
 }
 

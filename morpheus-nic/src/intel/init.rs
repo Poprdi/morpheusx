@@ -316,17 +316,9 @@ pub fn generate_fallback_mac(seed: u64) -> MacAddress {
     mac
 }
 
-/// Ensure PHY is accessible, with recovery via LANPHYPC toggle.
-///
-/// This is CRITICAL for I218-LM/V (ThinkPad T450s, etc.) - after ULP disable,
-/// the PHY may still not respond to MDIC. In that case, we need to power
-/// cycle the PHY using the LANPHYPC toggle.
-///
-/// This function will:
-/// 1. Check if PHY responds to MDIC
-/// 2. If not, toggle LANPHYPC to power cycle the PHY
-/// 3. Re-check PHY accessibility
-/// 4. If still not accessible, try forcing SMBus mode
+/// Probe PHY, escalating recovery on failure. CRITICAL for I218-LM/V (T450s):
+/// after ULP disable the PHY may still ignore MDIC. Escalates wait -> LANPHYPC
+/// power-cycle -> forced SMBus mode.
 ///
 /// # Safety
 /// Called during init, MMIO must be valid.
@@ -338,7 +330,6 @@ unsafe fn ensure_phy_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
         serial_print_decimal(attempt);
         serial_println("...");
 
-        // Check if PHY responds
         if phy_is_accessible(mmio_base, tsc_freq) {
             serial_println("    PHY accessible!");
             return true;
@@ -346,11 +337,9 @@ unsafe fn ensure_phy_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
 
         serial_println("    PHY not responding, trying recovery...");
 
-        // PHY not accessible - try recovery based on attempt number
         match attempt {
             0 => {
-                // First attempt: just wait a bit longer after ULP disable
-                // Some I218 variants need extra time
+                // Some I218 variants just need more time after ULP disable.
                 serial_println("    Recovery: waiting 50ms...");
                 let start = morpheus_hal_x86_64::asm::tsc::read_tsc();
                 let delay = tsc_freq / 20; // 50ms
@@ -359,12 +348,12 @@ unsafe fn ensure_phy_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
                 }
             },
             1 => {
-                // Second attempt: toggle LANPHYPC to power cycle PHY
+                // Power-cycle the PHY.
                 serial_println("    Recovery: toggling LANPHYPC...");
                 let _ = toggle_lanphypc(mmio_base, tsc_freq);
             },
             2 => {
-                // Third attempt: force SMBus mode and toggle again
+                // Last resort: some I218 only answer over SMBus.
                 serial_println("    Recovery: SMBus mode + LANPHYPC...");
                 crate::asm::force_smbus_mode(mmio_base);
                 let _ = toggle_lanphypc(mmio_base, tsc_freq);
@@ -375,35 +364,24 @@ unsafe fn ensure_phy_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
     }
 
     serial_println("    Final PHY check...");
-    // Final check after all recovery attempts
     phy_is_accessible(mmio_base, tsc_freq)
 }
 
-/// Wake PHY from power-down mode, reset it, and restart auto-negotiation.
-///
-/// CRITICAL for post-ExitBootServices operation on real hardware!
-///
-/// BIOS may have enabled PHY power management (BMCR.PDOWN). In a normal
-/// OS environment, ACPI or SMM handlers would wake the PHY. Post-EBS,
-/// we are on our own - must explicitly:
-/// 1. Clear PDOWN to wake PHY
-/// 2. Wait for PHY to stabilize (100ms - PLL and analog circuitry)
-/// 3. Issue PHY reset (BMCR.RESET)
-/// 4. Wait for reset to complete
-/// 5. Restart auto-negotiation
+/// Clear PDOWN, reset the PHY, restart auto-negotiation. BIOS may leave the PHY
+/// in BMCR.PDOWN; post-EBS there is no ACPI/SMM to wake it, so do it by hand.
+/// Real-hardware timing is mandatory (QEMU tolerates skipping it).
 ///
 /// # Safety
 /// Called during init, MMIO must be valid.
 unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
         if bmcr & regs::BMCR_PDOWN != 0 {
-            // Clear PDOWN bit to wake PHY
             let new_bmcr = bmcr & !regs::BMCR_PDOWN;
             let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
         }
     }
 
-    // Also clear ISOLATE bit which can prevent operation
+    // ISOLATE can also block operation.
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
         if bmcr & regs::BMCR_ISOLATE != 0 {
             let new_bmcr = bmcr & !regs::BMCR_ISOLATE;
@@ -411,44 +389,31 @@ unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
         }
     }
 
-    // STEP 2: Wait for PHY to wake (100ms)
-    //
-    // Intel datasheet specifies PHY needs 50-100ms after PDOWN clear
-    // for PLL lock and analog circuitry stabilization. QEMU doesn't
-    // need this, but real hardware absolutely does.
+    // Datasheet: 50-100ms after PDOWN clear for PLL lock + analog settle.
     let start = morpheus_hal_x86_64::asm::tsc::read_tsc();
     let delay_ticks = tsc_freq / 10; // 100ms (not 1ms!)
     while morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(start) < delay_ticks {
         core::hint::spin_loop();
     }
 
-    // STEP 3: Issue PHY reset (BMCR.RESET)
-    //
-    // Real hardware may be in an inconsistent state after BIOS handoff.
-    // PHY reset establishes a clean baseline for operation.
+    // Reset to a clean baseline after the BIOS handoff.
     let _ = phy_write(mmio_base, regs::PHY_BMCR, regs::BMCR_RESET, tsc_freq);
 
-    // STEP 4: Wait for PHY reset to complete (poll BMCR.RESET bit)
-    //
-    // The PHY clears the RESET bit when reset is complete.
-    // Timeout after 500ms (generous for real hardware).
+    // PHY clears RESET when done; some never do, so bound the wait.
     let reset_start = morpheus_hal_x86_64::asm::tsc::read_tsc();
-    let reset_timeout = tsc_freq / 2; // 500ms timeout
+    let reset_timeout = tsc_freq / 2; // 500ms
     loop {
         if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
             if bmcr & regs::BMCR_RESET == 0 {
-                // Reset complete
                 break;
             }
         }
         if morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(reset_start) >= reset_timeout {
-            // Timeout - continue anyway, some PHYs may not clear the bit
             break;
         }
         core::hint::spin_loop();
     }
 
-    // Small delay after reset before continuing (10ms)
     let post_reset_start = morpheus_hal_x86_64::asm::tsc::read_tsc();
     let post_reset_delay = tsc_freq / 100; // 10ms
     while morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(post_reset_start)
@@ -457,16 +422,12 @@ unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
         core::hint::spin_loop();
     }
 
-    // STEP 5: Restart auto-negotiation
-    //
-    // After reset, the PHY needs to re-negotiate link parameters with
-    // the link partner. Without this, link may never come up.
+    // Restart auto-neg; without it link may never come up.
     if let Some(bmcr) = phy_read(mmio_base, regs::PHY_BMCR, tsc_freq) {
         let new_bmcr = bmcr | regs::BMCR_ANENABLE | regs::BMCR_ANRESTART;
         let _ = phy_write(mmio_base, regs::PHY_BMCR, new_bmcr, tsc_freq);
     }
 
-    // Small delay after starting autoneg (10ms)
     let autoneg_start = morpheus_hal_x86_64::asm::tsc::read_tsc();
     let autoneg_delay = tsc_freq / 100; // 10ms
     while morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(autoneg_start) < autoneg_delay {

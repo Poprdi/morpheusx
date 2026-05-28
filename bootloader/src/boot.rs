@@ -1212,16 +1212,14 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
         let mut had_work = false;
 
         if usb_active {
+            // Pump the USB HID controller; parsed key events land in the kernel
+            // keyboard event ring via the HID sink. The compositor drains that
+            // ring through SYS_KEYBOARD_READ — we no longer bridge scancodes
+            // into stdin here. We idle-HLT below; the 100 Hz timer wakes us to
+            // pump again (HID poll latency ≈ one tick) and schedules compd to
+            // drain on the same ticks.
             unsafe {
                 morpheus_xhci::usb::runtime::poll_keyboard();
-            }
-            while let Some(event) = morpheus_kernel::input::poll_keyboard() {
-                if let morpheus_kernel::input::InputEvent::Key(scan_code, _pressed) = event {
-                    if scan_code != 0 {
-                        had_work = true;
-                        push_scancode(scan_code);
-                    }
-                }
             }
         } else {
             // PS/2 fallback. Drains up to 64 buffered bytes per outer
@@ -1246,7 +1244,13 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
                     continue;
                 }
 
-                push_scancode(byte);
+                // PS/2 keyboard feeds the same kernel event ring as USB HID,
+                // so the compositor drains both through SYS_KEYBOARD_READ.
+                // `pressed=true` is the ring's "process this byte" flag; make/
+                // break is encoded in the byte itself (|0x80).
+                morpheus_kernel::input::push_keyboard_event_internal(
+                    morpheus_kernel::input::InputEvent::Key(byte, true),
+                );
             }
         }
 
@@ -1257,14 +1261,6 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
             }
         }
     }
-}
-
-/// Push a raw PS/2 Set 1 scancode byte into the kernel stdin queue and wake
-/// any blocked readers. No decoding, no Ctrl+C → SIGINT routing here — both
-/// of those are now userland concerns (handled in init).
-fn push_scancode(byte: u8) {
-    morpheus_kernel::stdin::push(byte);
-    unsafe { morpheus_kernel::schedular::wake_stdin_waiters() };
 }
 
 /// Unrecoverable boot error. Logs and halts the BSP. APs are either still

@@ -36,6 +36,7 @@ impl IcmpType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum UnreachableCode {
     Network = 0,
     Host = 1,
@@ -46,6 +47,7 @@ pub enum UnreachableCode {
 }
 
 impl UnreachableCode {
+    #[allow(dead_code)]
     pub const fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Network),

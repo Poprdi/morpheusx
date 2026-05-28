@@ -80,6 +80,7 @@ pub trait NetworkDevice {
 /// This is the main entry point for network operations. It automatically
 /// detects whether it's running in QEMU (VirtIO) or on real hardware (Intel)
 /// and uses the appropriate driver transparently.
+#[allow(clippy::large_enum_variant)]
 pub enum UnifiedNetDevice {
     /// VirtIO-net driver (QEMU, cloud VMs)
     VirtIO(VirtioNetDriver),

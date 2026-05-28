@@ -176,6 +176,37 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
 }
 
+/// Non-blocking drain of the kernel keyboard event ring into `buf`, as raw
+/// PS/2 Set 1 bytes (break encoded as `|0x80`, `0xE0` as its own byte —
+/// exactly what `morpheus-xhci`'s HID driver pushes). Returns the number of
+/// bytes written (0 if the ring is empty).
+///
+/// Symmetric with [`super::sync::sys_mouse_read`]: input events are delivered
+/// through a dedicated ring-draining syscall, not the stdin byte stream. The
+/// compositor owns this; it then forwards decoded input to focused windows via
+/// `SYS_FORWARD_INPUT`.
+pub unsafe fn sys_keyboard_read(ptr: u64, len: u64) -> u64 {
+    if ptr == 0 || len == 0 || len > (1 << 20) {
+        return EINVAL;
+    }
+    if !validate_user_buf(ptr, len) {
+        return EFAULT;
+    }
+    let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
+    let mut n = 0usize;
+    while n < buf.len() {
+        match crate::input::poll_keyboard() {
+            Some(crate::input::InputEvent::Key(byte, _process)) => {
+                buf[n] = byte;
+                n += 1;
+            },
+            Some(_) => continue,
+            None => break,
+        }
+    }
+    n as u64
+}
+
 /// Atomic-IRQ-wait on x86 (`sti; hlt; cli`) routed through HAL.
 pub unsafe fn sys_yield() -> u64 {
     hal().cpu().halt_wait_irq();

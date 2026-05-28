@@ -12,12 +12,21 @@ pub struct ControlXfer<'a> {
 }
 
 impl<'a> ControlXfer<'a> {
+    /// # Safety
+    ///
+    /// Enqueues a raw TRB onto the EP0 transfer ring; the ring must be valid
+    /// and have free space, and the caller must hold exclusive access to it.
     #[inline(always)]
     pub unsafe fn setup(&mut self, param: u64, len: u32) {
         let ctrl = TRB_SETUP | TRB_IDT | TRB_TRT_IN;
         self.ep0.enqueue(param, len, ctrl);
     }
 
+    /// # Safety
+    ///
+    /// Enqueues a raw DATA TRB onto the EP0 transfer ring; `param` must point at
+    /// a DMA buffer valid for `len` bytes, the ring must be valid with free
+    /// space, and the caller must hold exclusive access to it.
     #[inline(always)]
     pub unsafe fn data(&mut self, param: u64, len: u32, dir_in: bool) {
         let ctrl = TRB_DATA | TRB_ISP | if dir_in { TRB_DIR_IN } else { 0 };
@@ -25,6 +34,11 @@ impl<'a> ControlXfer<'a> {
     }
 
     /// `dir_in=true` = host->device status (no data).
+    ///
+    /// # Safety
+    ///
+    /// Enqueues a raw STATUS TRB onto the EP0 transfer ring; the ring must be
+    /// valid with free space, and the caller must hold exclusive access to it.
     #[inline(always)]
     pub unsafe fn status(&mut self, dir_in: bool) {
         let ctrl = TRB_STATUS | TRB_IOC | if dir_in { TRB_DIR_IN } else { 0 };
@@ -33,6 +47,12 @@ impl<'a> ControlXfer<'a> {
 
     /// IN control transfer (GET_DESCRIPTOR etc). `wait_xfer_fn` must poll
     /// the event ring until TRB_TRANSFER_EVENT.
+    ///
+    /// # Safety
+    ///
+    /// `desc_buf` must point at a DMA buffer valid for `len` bytes, the EP0 ring
+    /// must be valid with free space for three TRBs, and the caller must hold
+    /// exclusive access to the controller for the duration of the transfer.
     #[inline(always)]
     pub unsafe fn control_in<F: FnMut(u8, u32) -> Result<u32, morpheus_xhci::XhciError>>(
         &mut self,
@@ -55,6 +75,12 @@ impl<'a> ControlXfer<'a> {
     }
 
     /// SET_ADDRESS, SET_CONFIGURATION etc.
+    ///
+    /// # Safety
+    ///
+    /// The EP0 ring must be valid with free space for two TRBs, and the caller
+    /// must hold exclusive access to the controller for the duration of the
+    /// transfer.
     #[inline(always)]
     pub unsafe fn control_nodata<F: FnMut(u8, u32) -> Result<u32, morpheus_xhci::XhciError>>(
         &mut self,

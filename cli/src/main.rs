@@ -299,17 +299,30 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     );
 
     if elf_bytes.len() < 4 || &elf_bytes[0..4] != b"\x7fELF" {
-        return Err(format!("'{}' does not appear to be an ELF binary", binary));
+        // Not an executable — a data file (e.g. a .kmap layout). Allowed.
+        println!(
+            "[inject] note: '{}' is not an ELF — injecting as a data file",
+            binary
+        );
     }
 
     let (mut dev, mut mt) = mount(disk)?;
     let mut fdt = FdTable::new();
 
-    // mkdir is index-only; no block_io needed.
-    match vfs::vfs_mkdir(&mut mt, "/bin", 0) {
-        Ok(()) => println!("[inject] created /bin"),
-        Err(HelixError::AlreadyExists) => println!("[inject] /bin already exists"),
-        Err(e) => return Err(format!("vfs_mkdir /bin: {:?}", e)),
+    // Create every parent directory of `dest` (mkdir -p). Index-only; no
+    // block_io needed. Lets inject target any path, e.g. /system/keymaps/de.kmap.
+    {
+        let comps: Vec<&str> = dest.split('/').filter(|c| !c.is_empty()).collect();
+        let mut path = String::new();
+        for comp in comps.iter().take(comps.len().saturating_sub(1)) {
+            path.push('/');
+            path.push_str(comp);
+            match vfs::vfs_mkdir(&mut mt, &path, 0) {
+                Ok(()) => println!("[inject] created {}", path),
+                Err(HelixError::AlreadyExists) => {},
+                Err(e) => return Err(format!("vfs_mkdir {}: {:?}", path, e)),
+            }
+        }
     }
 
     let flags = open_flags::O_WRITE | open_flags::O_CREATE | open_flags::O_TRUNC;

@@ -1,41 +1,17 @@
-//! Chunk Reader
-//!
-//! Reads ISO data from chunked partitions, presenting a unified view
-//! of the ISO as if it were a single contiguous file.
-//!
-//! # Usage
-//!
-//! ```ignore
-//! let reader = ChunkReader::from_manifest(&manifest);
-//!
-//! // Read arbitrary ranges (handles chunk boundaries transparently)
-//! let mut buffer = [0u8; 4096];
-//! let bytes_read = reader.read(block_io, offset, &mut buffer)?;
-//!
-//! // Sequential reading with internal position tracking
-//! reader.seek(0)?;
-//! while reader.position() < reader.total_size() {
-//!     let n = reader.read_next(block_io, &mut buffer)?;
-//!     process(&buffer[..n]);
-//! }
-//! ```
+//! Streams a chunked ISO as a single contiguous file, hiding chunk boundaries.
 
 use super::chunk::{ChunkInfo, ChunkSet, MAX_CHUNKS};
 use super::error::IsoError;
 use super::manifest::IsoManifest;
 use super::DEFAULT_CHUNK_SIZE;
 
-/// Chunk reader for streaming ISO data
 pub struct ChunkReader {
-    /// Chunk information
     chunks: ChunkSet,
-    /// Current read position (for sequential reads)
+    /// Sequential read position.
     position: u64,
-    /// Total ISO size
     total_size: u64,
-    /// Chunk size used during write
+    /// Chunk size used at write time.
     chunk_size: u64,
-    /// Cached current chunk index (optimization)
     current_chunk_cache: usize,
 }
 
@@ -69,7 +45,6 @@ impl ChunkReader {
         self.total_size
     }
 
-    /// Get current read position
     pub fn position(&self) -> u64 {
         self.position
     }
@@ -83,24 +58,20 @@ impl ChunkReader {
             return Err(IsoError::ReadOverflow);
         }
         self.position = position;
-        // Invalidate chunk cache
         self.current_chunk_cache = self.chunk_index_for_offset(position).unwrap_or(0);
         Ok(())
     }
 
-    /// Get remaining bytes from current position
     pub fn remaining(&self) -> u64 {
         self.total_size.saturating_sub(self.position)
     }
 
-    /// Check if at end of ISO
     pub fn is_eof(&self) -> bool {
         self.position >= self.total_size
     }
 
-    /// Find chunk containing a given byte offset
     fn chunk_index_for_offset(&self, offset: u64) -> Option<usize> {
-        // Fast path: check cached chunk first
+        // Fast path: cached chunk.
         if self.current_chunk_cache < self.chunks.count {
             let chunk = &self.chunks.chunks[self.current_chunk_cache];
             let chunk_start = self.chunk_start_offset(self.current_chunk_cache);
@@ -110,7 +81,6 @@ impl ChunkReader {
             }
         }
 
-        // Linear search (could optimize with binary search for many chunks)
         let mut cumulative = 0u64;
         for i in 0..self.chunks.count {
             let chunk_size = self.chunks.chunks[i].data_size;
@@ -122,7 +92,6 @@ impl ChunkReader {
         None
     }
 
-    /// Get the starting byte offset of a chunk
     fn chunk_start_offset(&self, chunk_index: usize) -> u64 {
         let mut offset = 0u64;
         for i in 0..chunk_index {
@@ -131,12 +100,8 @@ impl ChunkReader {
         offset
     }
 
-    /// Read data at a specific offset
-    ///
-    /// The `read_sector_fn` callback performs the actual block I/O:
-    /// `fn(partition_start_lba: u64, sector_offset: u64, buffer: &mut [u8]) -> Result<usize, IsoError>`
-    ///
-    /// Returns number of bytes read (may be less than buffer size at EOF or chunk boundary)
+    /// Reads up to `buffer.len()`; may stop short at EOF or chunk boundary.
+    /// `read_sector_fn(partition_start_lba, sector_offset, buf)`.
     pub fn read_at<F>(
         &self,
         offset: u64,
@@ -147,7 +112,7 @@ impl ChunkReader {
         F: FnMut(u64, u64, &mut [u8]) -> Result<usize, IsoError>,
     {
         if offset >= self.total_size {
-            return Ok(0); // EOF
+            return Ok(0);
         }
 
         let chunk_index = self
@@ -155,11 +120,9 @@ impl ChunkReader {
             .ok_or(IsoError::ReadOverflow)?;
         let chunk = &self.chunks.chunks[chunk_index];
 
-        // Calculate offset within chunk
         let chunk_start = self.chunk_start_offset(chunk_index);
         let offset_in_chunk = offset - chunk_start;
 
-        // Calculate how much we can read from this chunk
         let available_in_chunk = chunk.data_size - offset_in_chunk;
         let available_total = self.total_size - offset;
         let read_size = (buffer.len() as u64)
@@ -170,20 +133,15 @@ impl ChunkReader {
             return Ok(0);
         }
 
-        // Calculate sector offset within partition
-        // Match the layout used by writer
+        // Matches writer layout: data starts at sector 8192.
         const DATA_START_SECTOR: u64 = 8192;
         let sector_offset = DATA_START_SECTOR + (offset_in_chunk / 512);
 
-        // Read data
         let bytes_read = read_sector_fn(chunk.start_lba, sector_offset, &mut buffer[..read_size])?;
 
         Ok(bytes_read)
     }
 
-    /// Read at current position and advance
-    ///
-    /// This is the main method for sequential reading.
     pub fn read_next<F>(&mut self, buffer: &mut [u8], read_sector_fn: F) -> Result<usize, IsoError>
     where
         F: FnMut(u64, u64, &mut [u8]) -> Result<usize, IsoError>,
@@ -191,7 +149,6 @@ impl ChunkReader {
         let bytes_read = self.read_at(self.position, buffer, read_sector_fn)?;
         self.position += bytes_read as u64;
 
-        // Update chunk cache
         if bytes_read > 0 {
             self.current_chunk_cache = self.chunk_index_for_offset(self.position).unwrap_or(0);
         }
@@ -199,9 +156,7 @@ impl ChunkReader {
         Ok(bytes_read)
     }
 
-    /// Read a range spanning multiple chunks
-    ///
-    /// This handles reading across chunk boundaries transparently.
+    /// Reads across chunk boundaries transparently.
     pub fn read_range<F>(
         &mut self,
         offset: u64,
@@ -219,7 +174,7 @@ impl ChunkReader {
             let bytes_read = self.read_at(current_offset, remaining_buffer, &mut read_sector_fn)?;
 
             if bytes_read == 0 {
-                break; // EOF or error
+                break;
             }
 
             total_read += bytes_read;
@@ -234,25 +189,19 @@ impl ChunkReader {
         self.chunks.get(index)
     }
 
-    /// Iterate over all chunks
     pub fn chunks(&self) -> impl Iterator<Item = &ChunkInfo> {
         self.chunks.iter()
     }
 }
 
-/// Read context for passing to boot/kernel loader
-///
-/// This is a simpler structure that can be passed across module boundaries
-/// without requiring the full ChunkReader.
+/// Lightweight chunk layout passed to the boot/kernel loader.
 #[derive(Clone)]
 pub struct IsoReadContext {
-    /// Partition LBAs for each chunk (start, end)
+    /// Per-chunk partition LBAs (start, end).
     pub chunk_lbas: [(u64, u64); MAX_CHUNKS],
-    /// Data size in each chunk
+    /// Per-chunk data size.
     pub chunk_sizes: [u64; MAX_CHUNKS],
-    /// Number of valid chunks
     pub num_chunks: usize,
-    /// Total ISO size
     pub total_size: u64,
 }
 
@@ -329,11 +278,9 @@ mod tests {
         reader.seek(500_000_000).unwrap();
         assert_eq!(reader.position(), 500_000_000);
 
-        // Seek to chunk boundary
         reader.seek(1_000_000_000).unwrap();
         assert_eq!(reader.position(), 1_000_000_000);
 
-        // Seek beyond EOF should fail
         assert!(reader.seek(4_000_000_000).is_err());
     }
 
@@ -347,6 +294,6 @@ mod tests {
         assert_eq!(reader.chunk_index_for_offset(999_999_999), Some(0));
         assert_eq!(reader.chunk_index_for_offset(1_000_000_000), Some(1));
         assert_eq!(reader.chunk_index_for_offset(2_500_000_000), Some(2));
-        assert_eq!(reader.chunk_index_for_offset(3_000_000_000), None); // At EOF
+        assert_eq!(reader.chunk_index_for_offset(3_000_000_000), None);
     }
 }

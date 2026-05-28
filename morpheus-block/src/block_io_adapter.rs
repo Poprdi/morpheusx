@@ -222,6 +222,8 @@ impl<'a> BlockIo for VirtioBlkBlockIo<'a> {
         let info = self.driver.info();
         let sector_size = info.sector_size as usize;
 
+        // real toolchain is 1.92
+        #[allow(clippy::incompatible_msrv)]
         if !dst.len().is_multiple_of(sector_size) {
             return Err(BlockIoError::BufferAlignment);
         }
@@ -255,6 +257,8 @@ impl<'a> BlockIo for VirtioBlkBlockIo<'a> {
         let info = self.driver.info();
         let sector_size = info.sector_size as usize;
 
+        // real toolchain is 1.92
+        #[allow(clippy::incompatible_msrv)]
         if !src.len().is_multiple_of(sector_size) {
             return Err(BlockIoError::BufferAlignment);
         }

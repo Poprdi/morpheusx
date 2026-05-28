@@ -14,10 +14,8 @@ pub fn accumulate(dx: i16, dy: i16, buttons: u8) {
 
     // Latch first edge so fast press+release between polls is not lost.
     let prev = BUTTONS.swap(buttons, Ordering::Relaxed);
-    if buttons != prev {
-        if !BUTTON_EDGE_PENDING.swap(true, Ordering::AcqRel) {
-            BUTTON_EDGE_SAMPLE.store(buttons, Ordering::Relaxed);
-        }
+    if buttons != prev && !BUTTON_EDGE_PENDING.swap(true, Ordering::AcqRel) {
+        BUTTON_EDGE_SAMPLE.store(buttons, Ordering::Relaxed);
     }
 }
 

@@ -113,7 +113,7 @@ impl MemoryType {
         )
     }
 
-    pub fn to_e820(&self) -> E820Type {
+    pub fn to_e820(self) -> E820Type {
         match self {
             Self::Conventional
             | Self::LoaderCode
@@ -269,6 +269,12 @@ pub struct MemoryRegistry {
 unsafe impl Send for MemoryRegistry {}
 unsafe impl Sync for MemoryRegistry {}
 
+impl Default for MemoryRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryRegistry {
     /// `const` so the static lives in BSS.
     pub const fn new() -> Self {
@@ -373,6 +379,11 @@ impl MemoryRegistry {
     }
 
     /// Punch a hole in the buddy. Protect PT pages, stacks, etc.
+    ///
+    /// # Safety
+    /// `base`/`pages` must describe a real physical range that is genuinely
+    /// reserved; removing live pages from the allocator or reserving the same
+    /// range twice corrupts the buddy state. Init/single-threaded use only.
     pub unsafe fn reserve_range(&mut self, base: u64, pages: u64) {
         let mut addr = base & !(PAGE_SIZE - 1);
         let end = addr + pages * PAGE_SIZE;
@@ -527,8 +538,7 @@ impl MemoryRegistry {
                 nsub = 1;
             }
 
-            for s in 0..nsub {
-                let (s_start, s_end) = subs[s];
+            for &(s_start, s_end) in subs.iter().take(nsub) {
                 reclaimed_pages += self.add_range_punching_holes(s_start, s_end, cpu_excl);
             }
         }
@@ -649,6 +659,7 @@ impl MemoryRegistry {
     ///     OVMF/firmware poison, real-HW UEFI residue that's canonical but
     ///     always unmapped from the kernel PT — observed crashing the
     ///     post-reclaim validate walk on Intel silicon)
+    ///
     /// Null returns true; callers null-check separately.
     #[inline]
     fn is_canonical(ptr: *mut FreeNode) -> bool {
@@ -1091,6 +1102,10 @@ pub struct KernelCr3Guard {
 }
 
 impl KernelCr3Guard {
+    /// # Safety
+    /// Switches the active CR3 to the kernel page tables and toggles interrupts.
+    /// The kernel CR3 must be established and the guard must be dropped on the
+    /// same core before any user-CR3-dependent code runs.
     #[inline]
     #[cfg(target_arch = "x86_64")]
     pub unsafe fn enter() -> Self {

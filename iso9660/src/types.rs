@@ -6,8 +6,10 @@ pub const SECTOR_SIZE: usize = 2048;
 /// Volume descriptor set begins at sector 16 (ISO 9660 §6.2.1).
 pub const VOLUME_DESCRIPTOR_START: u64 = 16;
 
+/// Maximum supported path length, in bytes.
 pub const MAX_PATH_LENGTH: usize = 255;
 
+/// Maximum supported directory nesting depth (ISO 9660 §6.8.2.1).
 pub const MAX_DIRECTORY_DEPTH: usize = 8;
 
 /// Volume descriptor type code (ISO 9660 §8.1.1).
@@ -67,7 +69,7 @@ pub struct FileEntry {
 }
 
 /// Directory record flag bits (ISO 9660 §9.1.6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FileFlags {
     /// Hidden from normal listings.
     pub hidden: bool,

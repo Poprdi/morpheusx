@@ -12,16 +12,13 @@ pub const MAX_PIPES: usize = 16;
 const PIPE_BUF_SIZE: usize = 4096;
 const PIPE_BUF_MASK: usize = PIPE_BUF_SIZE - 1;
 
-/// A kernel pipe — SPSC ring buffer with refcounts.
+/// SPSC ring buffer with reader/writer refcounts.
 pub struct Pipe {
     buf: [u8; PIPE_BUF_SIZE],
     head: usize,
     tail: usize,
-    /// Number of open read-end file descriptors.
     pub readers: u8,
-    /// Number of open write-end file descriptors.
     pub writers: u8,
-    /// True if this pipe slot is allocated.
     pub active: bool,
 }
 
@@ -42,13 +39,12 @@ impl Pipe {
         (self.head.wrapping_sub(self.tail)) & PIPE_BUF_MASK
     }
 
-    /// Free space available for writing.
     #[inline]
     pub fn available_write(&self) -> usize {
         PIPE_BUF_SIZE - 1 - self.available_read()
     }
 
-    /// Write data into the pipe.  Returns the number of bytes written.
+    /// Returns bytes written.
     pub fn write(&mut self, data: &[u8]) -> usize {
         let mut written = 0;
         for &byte in data {
@@ -63,7 +59,7 @@ impl Pipe {
         written
     }
 
-    /// Read data from the pipe.  Returns the number of bytes read.
+    /// Returns bytes read.
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
         while count < buf.len() {
@@ -78,13 +74,12 @@ impl Pipe {
     }
 }
 
-/// Global pipe table.
 static mut PIPE_TABLE: [Pipe; MAX_PIPES] = [const { Pipe::empty() }; MAX_PIPES];
 
 // smp: without this, two cores writing to the same pipe corrupt head/tail.
 static PIPE_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
 
-/// Allocate a new pipe.  Returns the pipe index, or None if full.
+/// Returns the pipe index, or None if the table is full.
 ///
 /// # Safety
 /// Must be called with interrupts disabled (syscall context).
@@ -104,8 +99,6 @@ pub unsafe fn pipe_alloc() -> Option<u8> {
     None
 }
 
-/// Write to a pipe.
-///
 /// # Safety
 /// `idx` must be a valid pipe index.
 pub unsafe fn pipe_write(idx: u8, data: &[u8]) -> usize {
@@ -123,8 +116,6 @@ pub unsafe fn pipe_write(idx: u8, data: &[u8]) -> usize {
     n
 }
 
-/// Read from a pipe.
-///
 /// # Safety
 /// `idx` must be a valid pipe index.
 pub unsafe fn pipe_read(idx: u8, buf: &mut [u8]) -> usize {
@@ -142,7 +133,6 @@ pub unsafe fn pipe_read(idx: u8, buf: &mut [u8]) -> usize {
     n
 }
 
-/// Get the number of open writers for a pipe.
 pub unsafe fn pipe_writers(idx: u8) -> u8 {
     PIPE_LOCK.lock();
     let n = PIPE_TABLE.get(idx as usize).map(|p| p.writers).unwrap_or(0);
@@ -150,7 +140,6 @@ pub unsafe fn pipe_writers(idx: u8) -> u8 {
     n
 }
 
-/// Get the number of open readers for a pipe.
 pub unsafe fn pipe_readers(idx: u8) -> u8 {
     PIPE_LOCK.lock();
     let n = PIPE_TABLE.get(idx as usize).map(|p| p.readers).unwrap_or(0);
@@ -170,7 +159,7 @@ pub unsafe fn pipe_available(idx: u8) -> usize {
     n
 }
 
-/// Close the read end of a pipe.  Frees the pipe if both ends are closed.
+/// Frees the pipe when both ends are closed.
 pub unsafe fn pipe_close_reader(idx: u8) {
     PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
@@ -184,7 +173,7 @@ pub unsafe fn pipe_close_reader(idx: u8) {
     PIPE_LOCK.unlock();
 }
 
-/// Close the write end of a pipe.  Frees the pipe if both ends are closed.
+/// Frees the pipe when both ends are closed.
 pub unsafe fn pipe_close_writer(idx: u8) {
     PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
@@ -198,7 +187,7 @@ pub unsafe fn pipe_close_writer(idx: u8) {
     PIPE_LOCK.unlock();
 }
 
-/// Increment the reader refcount (used by fd inheritance / dup).
+/// Bump reader refcount (fd inheritance / dup).
 pub unsafe fn pipe_add_reader(idx: u8) {
     PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
@@ -209,7 +198,7 @@ pub unsafe fn pipe_add_reader(idx: u8) {
     PIPE_LOCK.unlock();
 }
 
-/// Increment the writer refcount (used by fd inheritance / dup).
+/// Bump writer refcount (fd inheritance / dup).
 pub unsafe fn pipe_add_writer(idx: u8) {
     PIPE_LOCK.lock();
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {

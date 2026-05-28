@@ -18,6 +18,9 @@ extern "win64" {
 }
 
 /// Read 8-bit MMIO.
+///
+/// # Safety
+/// `addr` must be a valid MMIO mapping for an 8-bit read.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn read8(addr: u64) -> u8 {
@@ -25,6 +28,9 @@ pub unsafe fn read8(addr: u64) -> u8 {
 }
 
 /// Write 8-bit MMIO.
+///
+/// # Safety
+/// `addr` must be a valid MMIO mapping for an 8-bit write.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn write8(addr: u64, value: u8) {
@@ -32,6 +38,9 @@ pub unsafe fn write8(addr: u64, value: u8) {
 }
 
 /// Read 16-bit MMIO. Addr must be 2-byte aligned.
+///
+/// # Safety
+/// `addr` must be a valid, 2-byte-aligned MMIO mapping for a 16-bit read.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn read16(addr: u64) -> u16 {
@@ -39,6 +48,9 @@ pub unsafe fn read16(addr: u64) -> u16 {
 }
 
 /// Write 16-bit MMIO. Addr must be 2-byte aligned.
+///
+/// # Safety
+/// `addr` must be a valid, 2-byte-aligned MMIO mapping for a 16-bit write.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn write16(addr: u64, value: u16) {
@@ -46,6 +58,9 @@ pub unsafe fn write16(addr: u64, value: u16) {
 }
 
 /// Read 32-bit MMIO. Addr must be 4-byte aligned.
+///
+/// # Safety
+/// `addr` must be a valid, 4-byte-aligned MMIO mapping for a 32-bit read.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn read32(addr: u64) -> u32 {
@@ -53,33 +68,48 @@ pub unsafe fn read32(addr: u64) -> u32 {
 }
 
 /// Write 32-bit MMIO. Addr must be 4-byte aligned.
+///
+/// # Safety
+/// `addr` must be a valid, 4-byte-aligned MMIO mapping for a 32-bit write.
 #[cfg(target_arch = "x86_64")]
 #[inline]
 pub unsafe fn write32(addr: u64, value: u32) {
     asm_mmio_write32(addr, value)
 }
 
+/// # Safety
+/// `addr` must be a valid MMIO mapping for the access width.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn read8(_addr: u64) -> u8 {
     0
 }
+/// # Safety
+/// `addr` must be a valid MMIO mapping for the access width.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn write8(_addr: u64, _value: u8) {}
+/// # Safety
+/// `addr` must be a valid MMIO mapping for the access width.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn read16(_addr: u64) -> u16 {
     0
 }
+/// # Safety
+/// `addr` must be a valid MMIO mapping for the access width.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn write16(_addr: u64, _value: u16) {}
+/// # Safety
+/// `addr` must be a valid MMIO mapping for the access width.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn read32(_addr: u64) -> u32 {
     0
 }
+/// # Safety
+/// `addr` must be a valid MMIO mapping for the access width.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub unsafe fn write32(_addr: u64, _value: u32) {}

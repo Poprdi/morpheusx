@@ -42,6 +42,7 @@ const VIRTIO_NET_DEVICE_START: u16 = 0x1000;
 const VIRTIO_NET_MODERN: u16 = 0x1041;
 
 /// Intel vendor ID
+#[allow(dead_code)]
 const INTEL_VENDOR_ID: u16 = 0x8086;
 
 /// Probe and initialization errors.
@@ -72,6 +73,7 @@ pub enum DetectedNic {
 }
 
 /// Result of successful probe and initialization.
+#[allow(clippy::large_enum_variant)]
 pub enum ProbeResult {
     /// VirtIO driver
     VirtIO(VirtioNetDriver),

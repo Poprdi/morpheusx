@@ -171,11 +171,8 @@ pub unsafe fn sys_rdtsc(result_ptr: u64) -> u64 {
     tsc
 }
 
-/// `buf_len == 0` returns total log size without copying.
-///
-/// The HAL doesn't expose a boot log accessor today (the `crate::serial::boot_log()`
-/// shim returns ""), so we honor the "size query" semantics by returning 0
-/// and copy nothing.
+/// `buf_len == 0` returns total log size. The HAL has no boot-log accessor yet,
+/// so `serial::boot_log()` returns "" and this copies nothing.
 pub unsafe fn sys_boot_log(buf_ptr: u64, buf_len: u64) -> u64 {
     if buf_len == 0 {
         return crate::serial::boot_log().len() as u64;

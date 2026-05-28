@@ -1,41 +1,27 @@
-//! xHCI MSI-X interrupt wiring (Phase 2 — stub ISR only).
-//!
-//! This module installs a minimal interrupt handler for the xHCI controller
-//! on a dedicated IDT vector. The handler does not yet drain the event ring —
-//! it bumps a counter, acks IMAN.IP, and EOIs the LAPIC. The existing
-//! polling-based `wait_cmd` / `wait_xfer` paths remain authoritative.
-//!
-//! Proves MSI-X delivery works before Phase 3 swaps the polling waiters for
-//! interrupt-driven HLT-based waits.
-//!
-//! Phase 3.7 wave C1c: relocated from `hwinit/src/usb/msi.rs`. IDT / LAPIC /
-//! MSI capability programming routes through `morpheus_kernel::hal()`'s
-//! `InterruptController` trait rather than hwinit-private modules. The MMIO
-//! IMAN ack is still inline (`morpheus_x86_asm::mmio`) because the trait
-//! surface doesn't expose raw register reads/writes.
-//!
-//! See `.claude/skills/interrupt-driven-refactor/SKILL.md` (Steps 1, 2, 4).
+//! xHCI MSI-X interrupt wiring. The ISR does NOT drain the event ring — it
+//! bumps a counter, W1Cs IMAN.IP, and EOIs the LAPIC; the polling `wait_cmd` /
+//! `wait_xfer` paths remain authoritative. IDT/LAPIC/MSI programming routes
+//! through `morpheus_kernel::hal()`'s `InterruptController` trait; the IMAN ack
+//! stays inline since the trait exposes no raw register access.
 
 use crate::regs::RT_IR0_IMAN;
 use core::sync::atomic::{AtomicU64, Ordering};
 use morpheus_hal_api::{BusAddr, IsrFn, MsiError};
 use morpheus_x86_asm::mmio;
 
-/// IDT vector reserved for xHCI MSI-X. Picked above the standard PIC remap
-/// range (0x20–0x2F) and clear of the existing timer (0x20).
+/// IDT vector reserved for xHCI MSI-X. Above the PIC remap range (0x20-0x2F),
+/// clear of the timer (0x20).
 pub const XHCI_VECTOR: u8 = 0x40;
 
-/// Counts every xHCI MSI-X interrupt the ISR observes. Diagnostic-only for
-/// Phase 2; reachable from a debug syscall or serial dump.
+/// Diagnostic counter of observed xHCI MSI-X interrupts.
 pub static XHCI_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Runtime register base of the xHCI controller. Published by `wire_msix` so
-/// the ISR can W1C the interrupter's IP bit without a wider borrow of the
-/// controller struct (which is owned by Phase 9 init and dropped afterwards).
+/// xHCI runtime register base, published by `wire_msix` so the ISR can W1C the
+/// interrupter IP bit without borrowing the (Phase-9-owned) controller struct.
 static XHCI_RT_BASE: AtomicU64 = AtomicU64::new(0);
 
-/// Rust-side handler. Runs in interrupt context: no allocation, no sleeping
-/// locks. Acknowledges at the device, then EOIs the LAPIC.
+/// Interrupt-context handler: no alloc, no sleeping locks. Acks at the device,
+/// then EOIs the LAPIC.
 extern "C" fn xhci_isr_rust() {
     XHCI_EVENT_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -54,9 +40,8 @@ extern "C" fn xhci_isr_rust() {
     morpheus_kernel::hal().intr().send_lapic_eoi();
 }
 
-/// Assembly thunk that saves caller-saved GPRs, calls the Rust handler under
-/// the MS x64 ABI (with shadow space), restores, and `iretq`s. No vector or
-/// frame is passed — this ISR doesn't need them.
+/// Thunk: save caller-saved GPRs, call the Rust handler (MS x64 ABI + shadow
+/// space), restore, `iretq`. No vector/frame passed.
 #[unsafe(naked)]
 unsafe extern "C" fn xhci_isr_entry() {
     core::arch::naked_asm!(
@@ -86,9 +71,8 @@ unsafe extern "C" fn xhci_isr_entry() {
     );
 }
 
-/// Attempt to wire the xHCI controller's MSI-X (or MSI as fallback) to
-/// `XHCI_VECTOR`. On any failure — no capability, BAR unmapped, etc. — logs
-/// a warning and returns. Polling continues to work.
+/// Wire the controller's MSI-X (or MSI fallback) to `XHCI_VECTOR`. On any
+/// failure logs a warning and returns; polling continues to work.
 ///
 /// # Safety
 /// Must run after the IDT is initialized and after the LAPIC is enabled on

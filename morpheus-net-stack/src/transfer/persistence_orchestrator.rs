@@ -446,11 +446,11 @@ impl PersistenceOrchestrator {
         self.disk_writer.can_write()
     }
 
-    pub fn disk_writer(&self) -> &DiskWriterState {
+    pub(crate) fn disk_writer(&self) -> &DiskWriterState {
         &self.disk_writer
     }
 
-    pub fn disk_writer_mut(&mut self) -> &mut DiskWriterState {
+    pub(crate) fn disk_writer_mut(&mut self) -> &mut DiskWriterState {
         &mut self.disk_writer
     }
 }

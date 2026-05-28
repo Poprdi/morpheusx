@@ -55,6 +55,7 @@ name = "compd"
 version = "1.0.1"
 dependencies = [
  "channel",
+ "keymap",
  "libmorpheus",
 ]
 
@@ -168,6 +169,17 @@ version = "1.0.2"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
+]
+
+[[package]]
+name = "keymap"
+version = "1.0.1"
+
+[[package]]
+name = "keymap-gen"
+version = "1.0.1"
+dependencies = [
+ "keymap",
 ]
 
 [[package]]

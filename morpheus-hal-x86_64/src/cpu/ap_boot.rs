@@ -1,6 +1,10 @@
 //! AP bring-up: copy real-mode trampoline to 0x8000, INIT IPI + SIPI x2,
 //! poll AP_ONLINE_COUNT. Trampoline binary baked in via build.rs.
 
+// The optional `smp` feature gates the baked-in trampoline; it is supplied by
+// the build wiring, not declared in this crate's Cargo.toml.
+#![allow(unexpected_cfgs)]
+
 use crate::cpu::apic;
 use crate::cpu::gdt;
 use crate::cpu::per_cpu::{self, MAX_CPUS};
@@ -34,7 +38,7 @@ struct ApStack {
 
 // Layout MUST match ap_trampoline.s .data block.
 const TRAMPOLINE_DATA_OFFSET: u64 = 0xF00;
-const TD_CR3: u64 = TRAMPOLINE_DATA_OFFSET + 0x00;
+const TD_CR3: u64 = TRAMPOLINE_DATA_OFFSET;
 const TD_ENTRY64: u64 = TRAMPOLINE_DATA_OFFSET + 0x08;
 const TD_STACK: u64 = TRAMPOLINE_DATA_OFFSET + 0x10;
 const TD_CORE_IDX: u64 = TRAMPOLINE_DATA_OFFSET + 0x18;
@@ -98,7 +102,7 @@ unsafe fn setup_trampoline() -> bool {
     core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_CR3) as *mut u64, kernel_cr3);
     core::ptr::write_volatile(
         (AP_TRAMPOLINE_PHYS + TD_ENTRY64) as *mut u64,
-        ap_rust_entry as u64,
+        ap_rust_entry as usize as u64,
     );
 
     true
@@ -305,6 +309,11 @@ pub unsafe fn start_aps() {
 
 /// AP entry from trampoline. Long mode, IF=0, kernel CR3, BSP GDT.
 /// Loads per-core GDT/IDT, brings up LAPIC, then parks until released.
+///
+/// # Safety
+/// Called only by the AP trampoline in long mode with a valid kernel CR3, the
+/// BSP GDT loaded, and IF=0. `core_idx`/`lapic_id` must be the values written
+/// into the trampoline handoff block for this AP. Must not be called from Rust.
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
     log_ok("AP", 520, "AP {} (LAPIC {}) booting");
