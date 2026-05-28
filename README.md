@@ -6,6 +6,8 @@ Yes it actually boots on real hardware. It is a work in progress but is already 
 
 In theory it should be able to run on any x86_64 UEFI-compatible system, manage USB devices, and ahci devices aswell as Virtio devices.
 
+After booting you can press ctrl+alt+x to spawn a shell and play arround. 
+
 ## Tested on: Fujitsu D3674-B13 -- ThinkPad T450s
 
 ## Building
