@@ -1,29 +1,25 @@
-//! PE base relocation table parsing
-//!
-//! Platform-neutral format, but application is platform-specific.
-//! The .reloc section contains blocks of relocations.
+//! PE base relocation table (PE/COFF §5.6). Format is platform-neutral,
+//! application is per-arch.
 
 use super::super::PeResult;
 
-/// Base relocation block header
+/// .reloc block header preceding `(block_size - 8) / 2` `u16` entries.
 #[repr(C, packed)]
 pub struct BaseRelocationBlock {
-    pub page_rva: u32,   // RVA of the page
-    pub block_size: u32, // Size of this block (including header)
+    pub page_rva: u32,
+    /// Total block size including this 8-byte header.
+    pub block_size: u32,
 }
 
 impl BaseRelocationBlock {
     pub const SIZE: usize = 8;
 
-    /// Number of relocation entries in this block
     pub fn entry_count(&self) -> usize {
         ((self.block_size as usize) - Self::SIZE) / 2
     }
 }
 
-/// Relocation entry (16 bits)
-/// Upper 4 bits: type
-/// Lower 12 bits: offset within page
+/// Packed relocation: upper 4 bits = type, lower 12 = page offset.
 #[derive(Debug, Clone, Copy)]
 pub struct RelocationEntry {
     raw: u16,
@@ -38,23 +34,24 @@ impl RelocationEntry {
         RelocationType::from_u16(self.raw >> 12)
     }
 
-    /// Get offset within page
     pub fn offset(&self) -> u16 {
         self.raw & 0x0FFF
     }
 }
 
-/// Relocation types (upper 4 bits of entry)
+/// IMAGE_REL_BASED_* codes (PE/COFF §5.6.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum RelocationType {
-    Absolute = 0, // Skip (padding)
-    High = 1,     // Add high 16 bits of delta
-    Low = 2,      // Add low 16 bits of delta
-    HighLow = 3,  // Add full 32-bit delta
-    HighAdj = 4,  // Complex ARM relocation
-    // 5-8 reserved/architecture-specific
-    Dir64 = 10, // Add full 64-bit delta (x86_64, ARM64)
+    /// Padding; skip.
+    Absolute = 0,
+    High = 1,
+    Low = 2,
+    HighLow = 3,
+    HighAdj = 4,
+    // 5-9: arch-specific.
+    /// 64-bit pointer fixup (x86_64, ARM64).
+    Dir64 = 10,
     Unknown,
 }
 
@@ -71,7 +68,6 @@ impl RelocationType {
         }
     }
 
-    /// Size of the relocated value in bytes
     pub fn size(&self) -> usize {
         match self {
             Self::Absolute => 0,
@@ -84,7 +80,6 @@ impl RelocationType {
     }
 }
 
-/// Iterator over relocation blocks
 pub struct RelocationBlockIter<'a> {
     data: &'a [u8],
     offset: usize,
@@ -132,7 +127,6 @@ impl<'a> Iterator for RelocationBlockIter<'a> {
         let entries_start = self.offset + BaseRelocationBlock::SIZE;
         let entry_count = ((block_size as usize) - BaseRelocationBlock::SIZE) / 2;
 
-        // Cast u8 slice to u16 slice (entries)
         let entries_ptr = self.data[entries_start..].as_ptr() as *const u16;
         let entries = unsafe { core::slice::from_raw_parts(entries_ptr, entry_count) };
 
@@ -142,15 +136,10 @@ impl<'a> Iterator for RelocationBlockIter<'a> {
     }
 }
 
-/// Trait for platform-specific relocation application
-///
-/// Different architectures implement this differently:
-/// - x86_64: Simple pointer fixups
-/// - ARM64: May involve ADRP/ADD instruction pairs
-/// - ARM32: Thumb mode considerations
+/// Per-arch fixup application. x86_64 = pointer add; ARM64 may also patch
+/// ADRP/ADD immediates; ARM32 needs Thumb-mode handling.
 pub trait RelocationEngine {
-    /// Apply relocation (add delta to relocated values)
-    /// Used when UEFI loads the image
+    /// Apply at UEFI load time (add delta).
     fn apply_relocation(
         &self,
         image_data: &mut [u8],
@@ -159,8 +148,7 @@ pub trait RelocationEngine {
         delta: i64,
     ) -> PeResult<()>;
 
-    /// Unapply relocation (subtract delta from relocated values)
-    /// Used when creating bootable image from memory
+    /// Reverse to recover the file-layout image (subtract delta).
     fn unapply_relocation(
         &self,
         image_data: &mut [u8],
@@ -169,6 +157,5 @@ pub trait RelocationEngine {
         delta: i64,
     ) -> PeResult<()>;
 
-    /// Get the architecture this engine handles
     fn arch(&self) -> super::super::PeArch;
 }

@@ -1,5 +1,4 @@
-//! Screen — framebuffer text console with the same API as the old UEFI version.
-//! Under the hood: display crate's TextConsole rendering 8x16 glyphs via ASM.
+//! Framebuffer text console, API-compatible with the old UEFI Screen.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -7,7 +6,6 @@ use morpheus_display::console::TextConsole;
 use morpheus_display::framebuffer::Framebuffer;
 use morpheus_display::types::FramebufferInfo;
 
-// VGA/EFI text color indices — same values the display crate expects
 pub const EFI_BLACK: usize = 0x00;
 pub const EFI_BLUE: usize = 0x01;
 pub const EFI_DARKGREEN: usize = 0x02;
@@ -34,7 +32,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// Build from raw framebuffer info gathered pre-EBS. Heap must be alive.
+    /// Heap must be initialized.
     pub unsafe fn from_framebuffer(info: FramebufferInfo) -> Self {
         let fb = Framebuffer::new(info);
         let console = TextConsole::new(fb);

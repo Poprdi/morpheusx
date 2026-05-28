@@ -3,13 +3,10 @@ resolver = "2"
 members = [
     "bootloader",
     "cli",
-    "core",
     "persistent",
     "updater",
-    "network",
     "iso9660",
     "display",
-    "hwinit",
     "ui",
     "helix",
     "libmorpheus",
@@ -20,10 +17,24 @@ members = [
     "init",
     "shelld",
     "settings",
+    "ping",
     "tests/syscall-e2e",
     "tests/netcheck",
     "tests/spinning-cube",
     "tests/system-visualizer",
+    "morpheus-hal-api",
+    "morpheus-foundation",
+    "morpheus-x86-asm",
+    "morpheus-hal-x86_64",
+    "morpheus-xhci",
+    "morpheus-storage-format",
+    "morpheus-virtio",
+    "morpheus-block",
+    "morpheus-nic",
+    "morpheus-net-stack",
+    "morpheus-kernel",
+    "keymap",
+    "keymap-gen",
 ]
 
 [workspace.package]
@@ -35,17 +46,37 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 # All workspace crates reference each other here
-morpheus-core = { path = "core" }
 morpheus-persistent = { path = "persistent" }
 morpheus-updater = { path = "updater" }
-morpheus-network = { path = "network" }
 morpheus-display = { path = "display", features = ["framebuffer-backend"] }
-morpheus-hwinit = { path = "hwinit" }
 # Keep dependency name `iso9660` for code imports, while the package is published as `iso9660-rs`
 iso9660 = { path = "iso9660", package = "iso9660-rs" }
 morpheus-ui = { path = "ui" }
 morpheus-helix = { path = "helix" }
+morpheus-hal-api = { path = "morpheus-hal-api" }
+morpheus-foundation = { path = "morpheus-foundation" }
+morpheus-x86-asm = { path = "morpheus-x86-asm" }
+morpheus-hal-x86_64 = { path = "morpheus-hal-x86_64" }
+morpheus-xhci = { path = "morpheus-xhci" }
+morpheus-storage-format = { path = "morpheus-storage-format" }
+morpheus-virtio = { path = "morpheus-virtio" }
+morpheus-block = { path = "morpheus-block" }
+morpheus-nic = { path = "morpheus-nic" }
+morpheus-net-stack = { path = "morpheus-net-stack" }
+morpheus-kernel = { path = "morpheus-kernel" }
+
+# Shared external dependencies — hoisted from per-crate Cargo.toml.
+# Canonical feature set picked to be the most restrictive across consumers.
+spin = { version = "0.9", default-features = false, features = ["lock_api", "spin_mutex"] }
+linked_list_allocator = "0.10"
+gpt_disk_io = { version = "0.16", default-features = false }
+gpt_disk_types = { version = "0.16", default-features = false }
 
 
 [profile.dev]
 panic = "abort"      # No unwinding in dev either
+
+[profile.release]
+opt-level = 3
+lto       = true
+panic     = "abort"

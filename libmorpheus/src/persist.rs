@@ -3,44 +3,34 @@
 use crate::raw::*;
 use crate::{is_error, EINVAL};
 
-// FFI structs — must match kernel handler exactly
+// FFI structs — must match the kernel handler layout exactly.
 
-/// Persistence backend status and usage statistics.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PersistInfo {
-    /// Bitmask: bit 0 = HelixFS backend active.
+    /// Bit 0 = HelixFS backend active.
     pub backend_flags: u32,
     pub _pad0: u32,
-    /// Number of keys currently stored.
     pub num_keys: u64,
-    /// Total bytes used by stored values.
     pub used_bytes: u64,
 }
 
-/// Binary format information returned by [`pe_info`].
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BinaryInfo {
-    /// Format: 0 = unknown, 1 = ELF64, 2 = PE32+.
+    /// 0 = unknown, 1 = ELF64, 2 = PE32+.
     pub format: u32,
-    /// Architecture: 0 = unknown, 1 = x86_64, 2 = aarch64, 3 = arm.
+    /// 0 = unknown, 1 = x86_64, 2 = aarch64, 3 = arm.
     pub arch: u32,
-    /// Entry point address (RVA for PE, virtual address for ELF).
+    /// RVA for PE, virtual address for ELF.
     pub entry_point: u64,
-    /// PE `ImageBase` or 0 for ELF.
+    /// PE `ImageBase` (0 for ELF).
     pub image_base: u64,
-    /// Total image/file size in bytes.
     pub image_size: u64,
-    /// Number of sections (PE) or program headers (ELF).
     pub num_sections: u32,
     pub _pad0: u32,
 }
 
-// error helper
-
-/// Convert a raw syscall return into `Result`.
-/// Non-error values are returned as `Ok(v)`.
 #[inline]
 fn to_result(ret: u64) -> Result<u64, u64> {
     if is_error(ret) {
@@ -50,16 +40,8 @@ fn to_result(ret: u64) -> Result<u64, u64> {
     }
 }
 
-// kv store
-
-/// Store a named blob to persistent storage.
-///
-/// Overwrites any existing value for `key`.
-/// Returns `Ok(())` on success or the raw kernel error code.
-///
-/// # Limits
-/// - `key`: 1–255 bytes, no `/` or `\0`.
-/// - `data`: at most 4 MiB.
+/// Store a blob under `key`, overwriting any existing value. Key must be
+/// 1–255 bytes with no `/` or NUL; `data` is capped at 4 MiB.
 pub fn put(key: &str, data: &[u8]) -> Result<(), u64> {
     if key.is_empty() || key.len() > 255 {
         return Err(EINVAL);
@@ -76,13 +58,8 @@ pub fn put(key: &str, data: &[u8]) -> Result<(), u64> {
     to_result(ret).map(|_| ())
 }
 
-/// Load a named blob from persistent storage into `buf`.
-///
-/// Returns `Ok(bytes_read)` — the number of bytes actually written to `buf`.
-/// If `buf` is shorter than the stored value, only `buf.len()` bytes are
-/// returned (no error).
-///
-/// Returns `Err(ENOENT)` if the key does not exist.
+/// Read `key` into `buf`, truncating silently if `buf` is too small.
+/// Returns bytes written, or `ENOENT`.
 pub fn get(key: &str, buf: &mut [u8]) -> Result<usize, u64> {
     if key.is_empty() || key.len() > 255 {
         return Err(EINVAL);
@@ -99,28 +76,15 @@ pub fn get(key: &str, buf: &mut [u8]) -> Result<usize, u64> {
     to_result(ret).map(|v| v as usize)
 }
 
-/// Query the size of a stored blob *without* reading its contents.
-///
-/// Returns `Ok(size_bytes)` or `Err(ENOENT)`.
+/// Stat the value size without reading. Null buf is the size-only protocol.
 pub fn get_size(key: &str) -> Result<u64, u64> {
     if key.is_empty() || key.len() > 255 {
         return Err(EINVAL);
     }
-    let ret = unsafe {
-        syscall4(
-            SYS_PERSIST_GET,
-            key.as_ptr() as u64,
-            key.len() as u64,
-            0, // null buf → return size
-            0, // zero length
-        )
-    };
+    let ret = unsafe { syscall4(SYS_PERSIST_GET, key.as_ptr() as u64, key.len() as u64, 0, 0) };
     to_result(ret)
 }
 
-/// Delete a key from persistent storage.
-///
-/// Returns `Ok(())` on success, `Err(ENOENT)` if not found.
 pub fn del(key: &str) -> Result<(), u64> {
     if key.is_empty() || key.len() > 255 {
         return Err(EINVAL);
@@ -129,13 +93,8 @@ pub fn del(key: &str) -> Result<(), u64> {
     to_result(ret).map(|_| ())
 }
 
-/// List keys in persistent storage.
-///
-/// Writes NUL-separated key names into `buf`.  `offset` skips that many
-/// entries (for pagination when the buffer is too small).
-///
-/// Returns the number of keys written to the buffer.  Use
-/// [`info`] to get the total key count.
+/// Write NUL-separated key names into `buf`, skipping the first `offset`
+/// entries. Returns number of keys written; total count via [`info`].
 pub fn list(buf: &mut [u8], offset: u64) -> Result<u64, u64> {
     let ret = unsafe {
         syscall3(
@@ -148,7 +107,6 @@ pub fn list(buf: &mut [u8], offset: u64) -> Result<u64, u64> {
     to_result(ret)
 }
 
-/// Get persistence subsystem status and usage statistics.
 pub fn info() -> Result<PersistInfo, u64> {
     let mut pi = PersistInfo {
         backend_flags: 0,
@@ -160,15 +118,8 @@ pub fn info() -> Result<PersistInfo, u64> {
     to_result(ret).map(|_| pi)
 }
 
-// binary introspection
-
-/// Parse PE32+ or ELF64 headers from a file and return binary metadata.
-///
-/// `path` must be a VFS path (e.g. `/bin/hello`).
-///
-/// Returns `Err(ENOENT)` if the file doesn't exist, `Err(EINVAL)` if too
-/// small or not a recognised binary format (though `format == 0` is also
-/// returned for unknown formats when the file *can* be read).
+/// Parse PE32+/ELF64 headers from a VFS file. Unknown formats return
+/// `format == 0` if the file is readable; `EINVAL` if it isn't.
 pub fn pe_info(path: &str) -> Result<BinaryInfo, u64> {
     if path.is_empty() {
         return Err(EINVAL);
@@ -193,23 +144,11 @@ pub fn pe_info(path: &str) -> Result<BinaryInfo, u64> {
     to_result(ret).map(|_| bi)
 }
 
-// iterators
-
-/// Parse a NUL-separated key listing (as returned by [`list`]) into
-/// individual key slices.
-///
-/// ```ignore
-/// let mut buf = [0u8; 4096];
-/// let count = persist::list(&mut buf, 0).unwrap();
-/// for key in persist::parse_key_list(&buf) {
-///     // key is &[u8]
-/// }
-/// ```
+/// Iterate over the NUL-separated key names produced by [`list`].
 pub fn parse_key_list(buf: &[u8]) -> KeyListIter<'_> {
     KeyListIter { buf, pos: 0 }
 }
 
-/// Iterator over NUL-separated key names in a listing buffer.
 pub struct KeyListIter<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -222,16 +161,14 @@ impl<'a> Iterator for KeyListIter<'a> {
         if self.pos >= self.buf.len() {
             return None;
         }
-        // Find next NUL or end of buffer.
         let start = self.pos;
         while self.pos < self.buf.len() && self.buf[self.pos] != 0 {
             self.pos += 1;
         }
         if self.pos == start {
-            return None; // empty name = end of data
+            return None; // trailing empty entry marks end
         }
         let key = &self.buf[start..self.pos];
-        // Skip the NUL separator.
         if self.pos < self.buf.len() {
             self.pos += 1;
         }

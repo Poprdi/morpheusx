@@ -1,14 +1,6 @@
 use super::{Mesh, MeshVertex};
 use crate::math::vec::{Vec2, Vec3};
 
-/// Generate a flat plane (useful for testing perspective and texturing).
-///
-/// `width`: size in X direction
-/// `height`: size in Z direction
-/// `segments_x`: divisions along X
-/// `segments_z`: divisions along Z
-///
-/// The plane lies in the XZ plane at Y=0, centered at origin.
 pub fn plane(width: f32, height: f32, segments_x: usize, segments_z: usize) -> Mesh {
     let segments_x = segments_x.max(1);
     let segments_z = segments_z.max(1);
@@ -19,7 +11,6 @@ pub fn plane(width: f32, height: f32, segments_x: usize, segments_z: usize) -> M
     let half_w = width * 0.5;
     let half_h = height * 0.5;
 
-    // Generate vertices
     for z in 0..=segments_z {
         let z_f = z as f32 / segments_z as f32;
         let z_pos = -half_h + z_f * height;
@@ -30,14 +21,13 @@ pub fn plane(width: f32, height: f32, segments_x: usize, segments_z: usize) -> M
 
             vertices.push(MeshVertex {
                 position: Vec3::new(x_pos, 0.0, z_pos),
-                normal: Vec3::new(0.0, 1.0, 0.0), // Pointing up
+                normal: Vec3::new(0.0, 1.0, 0.0),
                 uv: Vec2::new(x_f, z_f),
                 color: [255, 255, 255, 255],
             });
         }
     }
 
-    // Generate indices (two triangles per quad)
     for z in 0..segments_z {
         for x in 0..segments_x {
             let a = z * (segments_x + 1) + x;

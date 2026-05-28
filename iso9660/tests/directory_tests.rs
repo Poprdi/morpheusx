@@ -1,4 +1,4 @@
-//! Directory navigation and file finding tests
+//! Directory navigation and find_file tests.
 
 mod common;
 
@@ -11,7 +11,6 @@ fn test_find_root_directory() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
     let _volume = mount(&mut device, 0).expect("mount should succeed");
 
-    // Root directory is at the volume's root_extent_lba
     assert_eq!(_volume.root_extent_lba, 18);
 }
 
@@ -30,7 +29,6 @@ fn test_root_paths() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
     let volume = mount(&mut device, 0).expect("mount should succeed");
 
-    // These should all return the root directory
     let root_paths = vec!["", "/", "//", "/./"];
 
     for path in root_paths {
@@ -47,17 +45,14 @@ fn test_path_depth_limit() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
     let volume = mount(&mut device, 0).expect("mount should succeed");
 
-    // ISO9660 has max depth 8. Test deep path.
-    // We construct a dummy deep path
+    // Spec depth is 8; find_file rejects upfront, so 10 levels trip PathTooLong
+    // before any LBA lookup happens.
     let mut deep_path = String::new();
     for _ in 0..10 {
         deep_path.push_str("/level");
     }
 
     let result = find_file(&mut device, &volume, &deep_path);
-    // Since levels don't exist, it might fail with NotFound before PathTooLong
-    // But find_file checks depth upfront: `if components.len() > MAX_DIRECTORY_DEPTH`
-
     assert_eq!(result.unwrap_err(), Iso9660Error::PathTooLong);
 }
 
@@ -66,7 +61,5 @@ fn test_case_sensitivity() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
     let _volume = mount(&mut device, 0).expect("mount should succeed");
 
-    // ISO9660 is case-insensitive by spec
-    // If we add a file "TEST.TXT", both "/test.txt" and "/TEST.TXT" should find it
-    // TODO: Add actual file and test
+    // ISO9660 names are case-insensitive; needs a fixture.
 }

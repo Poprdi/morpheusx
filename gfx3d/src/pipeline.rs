@@ -61,7 +61,8 @@ pub struct FrameStats {
 pub struct Material<'a> {
     pub texture: Option<&'a MipChain>,
     pub specular_power: f32,
-    pub base_color: [f32; 3], // used if texture is None
+    /// Used if texture is None.
+    pub base_color: [f32; 3],
 }
 
 impl<'a> Material<'a> {
@@ -277,14 +278,14 @@ impl Pipeline {
                 self.stats.triangles_clipped += 1;
             }
 
-            // Copy out to release the clipper borrow before rasterizing.
+            // Copy out to drop the clipper borrow before rasterizing.
             let clipped_count = clipped.len();
             let mut clipped_buf = [Vertex::ZEROED; 12];
             for (i, v) in clipped.iter().enumerate() {
                 clipped_buf[i] = *v;
             }
 
-            // Fan-triangulate the clipped polygon.
+            // Fan-triangulate.
             for fan_idx in 1..(clipped_count - 1) {
                 let v0 = project_vertex(&clipped_buf[0], self.half_w, self.half_h);
                 let v1 = project_vertex(&clipped_buf[fan_idx], self.half_w, self.half_h);
@@ -331,9 +332,7 @@ impl Pipeline {
         }
     }
 
-    pub fn end_frame(&mut self) {
-        // Reserved for post-processing.
-    }
+    pub fn end_frame(&mut self) {}
 }
 
 /// Perspective divide + viewport transform. Stores 1/w in pos.w for perspective-correct interp.
@@ -358,7 +357,7 @@ fn project_vertex(v: &Vertex, half_w: f32, half_h: f32) -> Vertex {
     let screen_x = (ndc_x + 1.0) * half_w;
     let screen_y = (1.0 - ndc_y) * half_h; // screen Y is down
 
-    // Attributes pre-divided by w; rasterizer interpolates these and recovers w.
+    // Attributes pre-divided by w; rasterizer interpolates and recovers w.
     Vertex {
         pos: Vec4::new(screen_x, screen_y, ndc_z, inv_w),
         color: [v.color[0] * inv_w, v.color[1] * inv_w, v.color[2] * inv_w],
@@ -406,6 +405,7 @@ fn trivial_reject(tri: &[Vec4; 3]) -> bool {
 }
 
 /// Dispatch to the cheapest valid span path.
+#[allow(clippy::too_many_arguments)]
 fn fill_span(
     span: &Span,
     grads: &SpanGradients,
@@ -473,11 +473,12 @@ fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
         TargetPixelFormat::Rgbx => (r as u32) | ((g as u32) << 8) | ((b as u32) << 16),
         TargetPixelFormat::InternalRgba => {
             ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xFF
-        }
+        },
     }
 }
 
 /// Solid + no fog. Two divides per span, linear interp inside; pure 16.16 fixed inner loop.
+#[allow(clippy::too_many_arguments)]
 fn fill_span_solid(
     span: &Span,
     grads: &SpanGradients,
@@ -498,12 +499,12 @@ fn fill_span_solid(
     let x_start_fx = Fx16::from_i32(x_start as i32);
     let prestep_fx = x_start_fx - span.x_left;
 
-    // Base color as 8.8.
+    // 8.8 base color.
     let base_r = (material.base_color[0] * 256.0) as i32;
     let base_g = (material.base_color[1] * 256.0) as i32;
     let base_b = (material.base_color[2] * 256.0) as i32;
 
-    // Perspective-divide at span endpoints, then linear interp.
+    // Divide at span endpoints; linear interp between.
     let inv_w_start = span.inv_w_left + grads.inv_w_step.mul(prestep_fx);
     let w_start = if inv_w_start.0 != 0 {
         Fx16::ONE.div(inv_w_start)
@@ -579,6 +580,7 @@ fn fill_span_solid(
 const AFFINE_STEP: u32 = 8;
 
 /// Textured, no fog. Divide every AFFINE_STEP px; linear UV inside.
+#[allow(clippy::too_many_arguments)]
 fn fill_span_textured(
     span: &Span,
     grads: &SpanGradients,
@@ -718,6 +720,7 @@ fn fill_span_textured(
 }
 
 /// Fallback: per-pixel divide, supports fog.
+#[allow(clippy::too_many_arguments)]
 fn fill_span_full(
     span: &Span,
     grads: &SpanGradients,
@@ -809,13 +812,13 @@ fn fill_span_full(
         let mut out_b = b_f.to_f32() * tex_b;
 
         match *fog {
-            FogMode::None => {}
+            FogMode::None => {},
             _ => {
                 let fog_factor = fog.compute(fog_val.to_f32());
                 out_r = out_r * fog_factor + fog_color[0] * (1.0 - fog_factor);
                 out_g = out_g * fog_factor + fog_color[1] * (1.0 - fog_factor);
                 out_b = out_b * fog_factor + fog_color[2] * (1.0 - fog_factor);
-            }
+            },
         }
 
         let pr = fast::clamp_u8((out_r * 255.0) as i32);

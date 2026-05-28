@@ -10,7 +10,10 @@ pub struct DosHeader {
 impl DosHeader {
     pub const SIGNATURE: u16 = 0x5A4D; // "MZ"
 
-    /// SAFETY: `data..+size` must be readable; `size` must be at least 0x40.
+    /// # Safety
+    ///
+    /// `data` must be readable for at least `size` bytes, and `size` must be
+    /// at least `0x40` so the DOS header and `e_lfanew` field are in bounds.
     pub unsafe fn parse(data: *const u8, size: usize) -> PeResult<Self> {
         if size < 0x40 {
             return Err(PeError::InvalidOffset);

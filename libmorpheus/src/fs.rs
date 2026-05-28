@@ -346,39 +346,54 @@ impl OpenOptions {
     }
 }
 
-/// Mirrors `morpheus_helix::types::FileStat` — layout must match.
+/// Newtype over the canonical FFI struct. Layout = `morpheus_foundation::types::FileStat`.
 #[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct Metadata {
-    pub key: u64,
-    pub size: u64,
-    pub is_dir: bool,
-    /// TSC nanoseconds since boot.
-    pub created_ns: u64,
-    /// TSC nanoseconds since boot.
-    pub modified_ns: u64,
-    pub version_count: u32,
-    pub lsn: u64,
-    /// Creation LSN.
-    pub first_lsn: u64,
-    pub flags: u32,
-}
+#[repr(transparent)]
+pub struct Metadata(pub morpheus_foundation::types::FileStat);
 
 impl Metadata {
     pub fn len(&self) -> u64 {
-        self.size
+        self.0.size
     }
 
     pub fn is_empty(&self) -> bool {
-        self.size == 0
+        self.0.size == 0
     }
 
     pub fn is_dir(&self) -> bool {
-        self.is_dir
+        self.0.is_dir
     }
 
     pub fn is_file(&self) -> bool {
-        !self.is_dir
+        !self.0.is_dir
+    }
+
+    pub fn key(&self) -> u64 {
+        self.0.key
+    }
+
+    pub fn lsn(&self) -> u64 {
+        self.0.lsn
+    }
+
+    pub fn first_lsn(&self) -> u64 {
+        self.0.first_lsn
+    }
+
+    pub fn version_count(&self) -> u32 {
+        self.0.version_count
+    }
+
+    pub fn flags(&self) -> u32 {
+        self.0.flags
+    }
+
+    pub fn created_ns(&self) -> u64 {
+        self.0.created_ns
+    }
+
+    pub fn modified_ns(&self) -> u64 {
+        self.0.modified_ns
     }
 }
 
@@ -386,46 +401,39 @@ pub fn metadata(path: &str) -> error::Result<Metadata> {
     let mut buf = [0u8; 128];
     stat(path, &mut buf).map_err(Error::from_raw)?;
     // Kernel writes `FileStat` raw; reinterpret.
-    let ptr = buf.as_ptr() as *const Metadata;
-    Ok(unsafe { core::ptr::read_unaligned(ptr) })
+    let ptr = buf.as_ptr() as *const morpheus_foundation::types::FileStat;
+    Ok(Metadata(unsafe { core::ptr::read_unaligned(ptr) }))
 }
 
-/// Mirrors `morpheus_helix::types::DirEntry` — layout must match.
+/// Newtype over `morpheus_foundation::types::DirEntry` with ergonomic accessors.
 #[derive(Clone, Copy)]
-#[repr(C)]
-pub struct DirEntry {
-    name_buf: [u8; 256],
-    name_len: u16,
-    is_dir: bool,
-    size: u64,
-    modified_ns: u64,
-    version_count: u32,
-}
+#[repr(transparent)]
+pub struct DirEntry(pub morpheus_foundation::types::DirEntry);
 
 impl DirEntry {
     pub fn name(&self) -> &str {
-        let len = (self.name_len as usize).min(self.name_buf.len());
-        core::str::from_utf8(&self.name_buf[..len]).unwrap_or("")
+        let len = (self.0.name_len as usize).min(self.0.name.len());
+        core::str::from_utf8(&self.0.name[..len]).unwrap_or("")
     }
 
     pub fn is_dir(&self) -> bool {
-        self.is_dir
+        self.0.is_dir
     }
 
     pub fn is_file(&self) -> bool {
-        !self.is_dir
+        !self.0.is_dir
     }
 
     pub fn size(&self) -> u64 {
-        self.size
+        self.0.size
     }
 
     pub fn modified_ns(&self) -> u64 {
-        self.modified_ns
+        self.0.modified_ns
     }
 
     pub fn version_count(&self) -> u32 {
-        self.version_count
+        self.0.version_count
     }
 }
 
@@ -433,8 +441,8 @@ impl core::fmt::Debug for DirEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DirEntry")
             .field("name", &self.name())
-            .field("is_dir", &self.is_dir)
-            .field("size", &self.size)
+            .field("is_dir", &self.0.is_dir)
+            .field("size", &self.0.size)
             .finish()
     }
 }

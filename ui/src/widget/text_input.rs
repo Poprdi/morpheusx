@@ -135,7 +135,7 @@ impl Widget for TextInput {
                 } else {
                     EventResult::Ignored
                 }
-            }
+            },
             Key::Backspace => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
@@ -144,7 +144,7 @@ impl Widget for TextInput {
                 } else {
                     EventResult::Ignored
                 }
-            }
+            },
             Key::Delete => {
                 if self.cursor < self.text.len() {
                     self.text.remove(self.cursor);
@@ -152,27 +152,27 @@ impl Widget for TextInput {
                 } else {
                     EventResult::Ignored
                 }
-            }
+            },
             Key::Left => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 EventResult::Consumed
-            }
+            },
             Key::Right => {
                 if self.cursor < self.text.len() {
                     self.cursor += 1;
                 }
                 EventResult::Consumed
-            }
+            },
             Key::Home => {
                 self.cursor = 0;
                 EventResult::Consumed
-            }
+            },
             Key::End => {
                 self.cursor = self.text.len();
                 EventResult::Consumed
-            }
+            },
             _ => EventResult::Ignored,
         }
     }

@@ -1,0 +1,23 @@
+[package]
+name = "morpheus-xhci"
+version.workspace = true
+edition.workspace = true
+description = "Shared xHCI host controller for MorpheusX. Consumed by both HID input (hwinit) and USB-MSD storage (network/block)."
+
+[dependencies]
+# Phase 3.7 wave B1: dropped `morpheus-hal-x86_64` dep, replaced with
+# `morpheus-x86-asm` for the bare primitives this crate actually needs.
+# Diagnostic logging now flows through the `logger` module's hook (installed
+# by hal-x86_64 at boot) instead of a direct call into `serial::log_*`. The
+# resulting clean DAG unblocks hal-x86_64 consuming morpheus-xhci for its
+# UsbHost impl without forming a cycle.
+morpheus-x86-asm.workspace = true
+morpheus-foundation.workspace = true
+# Phase 3.7 wave C1c: USB HID class drivers + MSI wiring + runtime polling
+# moved here from hwinit. They reach back to the HAL via the kernel's `hal()`
+# accessor (for PIC/APIC/IDT/MSI), and use the kernel's spinlock + input
+# queue sinks. morpheus-kernel does NOT depend on morpheus-xhci, so xhci →
+# kernel → hal-api is acyclic. hal-x86_64 → xhci → kernel → hal-api stays
+# a clean DAG (kernel never sees a concrete HAL impl).
+morpheus-hal-api.workspace = true
+morpheus-kernel.workspace = true

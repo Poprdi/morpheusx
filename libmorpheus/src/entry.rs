@@ -2,7 +2,7 @@
 
 use crate::process;
 
-/// Emit `_start` that calls `$main` and exits with its return code.
+/// Emits `_start` that calls `$main` and exits with its return code.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
@@ -21,7 +21,7 @@ fn _panic(_info: &core::panic::PanicInfo) -> ! {
     let _ = unsafe {
         crate::raw::syscall3(
             crate::raw::SYS_WRITE,
-            2, // stderr
+            2,
             msg.as_ptr() as u64,
             msg.len() as u64,
         )

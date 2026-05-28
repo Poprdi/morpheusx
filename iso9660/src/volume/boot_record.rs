@@ -26,6 +26,7 @@ impl BootRecordVolumeDescriptor {
         self.boot_system_id.starts_with(Self::EL_TORITO_MAGIC)
     }
 
+    /// LBA of the El Torito boot catalog referenced by this record.
     pub fn catalog_lba(&self) -> u32 {
         self.boot_catalog_lba
     }

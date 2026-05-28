@@ -133,31 +133,31 @@ impl Widget for TextArea {
                     self.scroll_top -= 1;
                 }
                 EventResult::Consumed
-            }
+            },
             Key::Down => {
                 let max = self.lines.len().saturating_sub(1);
                 if self.scroll_top < max {
                     self.scroll_top += 1;
                 }
                 EventResult::Consumed
-            }
+            },
             Key::PageUp => {
                 self.scroll_top = self.scroll_top.saturating_sub(10);
                 EventResult::Consumed
-            }
+            },
             Key::PageDown => {
                 let max = self.lines.len().saturating_sub(1);
                 self.scroll_top = (self.scroll_top + 10).min(max);
                 EventResult::Consumed
-            }
+            },
             Key::Home => {
                 self.scroll_top = 0;
                 EventResult::Consumed
-            }
+            },
             Key::End => {
                 self.scroll_to_bottom();
                 EventResult::Consumed
-            }
+            },
             _ => EventResult::Ignored,
         }
     }

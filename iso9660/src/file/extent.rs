@@ -15,6 +15,7 @@ impl Extent {
         Self { lba, length }
     }
 
+    /// Number of 2048-byte sectors spanned by this extent.
     pub fn sector_count(&self) -> u32 {
         self.length.div_ceil(2048)
     }

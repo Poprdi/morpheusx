@@ -8,17 +8,22 @@
 use morpheus_helix::device::{MemBlockDevice, RawBlockDevice};
 /// In-RAM staged Helix partition (Some after successful RAM staging).
 static mut RAM_HELIX_DEVICE: Option<MemBlockDevice> = None;
-use morpheus_hwinit::dma::DmaRegion;
-use morpheus_hwinit::memory::{global_registry_mut, AllocateType, MemoryType};
-use morpheus_hwinit::paging::is_paging_initialized;
-use morpheus_hwinit::serial::{log_error, log_info, log_ok, log_warn, puts};
-use morpheus_hwinit::{kmap_mmio, pci_cfg_read16, pci_cfg_read32, PciAddr};
-use morpheus_network::device::UnifiedBlockError;
-use morpheus_network::{
-    create_unified_from_detected, scan_all_block_devices, AhciInitError, BlockDmaConfig,
-    BlockDriver, DetectedBlockDevice, SdhciInitError, UnifiedBlockDevice, UnifiedBlockIo,
-    UsbMsdInitError, VirtioBlkInitError,
+use morpheus_block::ahci::AhciInitError;
+use morpheus_block::boot_probe::{
+    create_unified_from_detected, scan_all_block_devices, BlockDmaConfig, DetectedBlockDevice,
 };
+use morpheus_block::device::{UnifiedBlockDevice, UnifiedBlockError};
+use morpheus_block::sdhci::SdhciInitError;
+use morpheus_block::unified_block_io::UnifiedBlockIo;
+use morpheus_block::usb_msd::UsbMsdInitError;
+use morpheus_block::virtio_blk::VirtioBlkInitError;
+use morpheus_block::BlockDriver;
+use morpheus_hal_x86_64::dma::DmaRegion;
+use morpheus_hal_x86_64::memory::{global_registry_mut, AllocateType, MemoryType};
+use morpheus_hal_x86_64::paging::is_paging_initialized;
+use morpheus_hal_x86_64::paging::kmap_mmio;
+use morpheus_hal_x86_64::pci::{pci_cfg_read16, pci_cfg_read32, PciAddr};
+use morpheus_hal_x86_64::serial::{log_error, log_info, log_ok, log_warn, puts};
 
 const VIRTIO_QUEUE_SIZE: u16 = 32;
 
@@ -54,17 +59,17 @@ unsafe fn dump_pci_devices() {
             let cmd = pci_cfg_read16(addr, 0x04);
 
             puts("[PCI-DUMP]   00:");
-            morpheus_hwinit::serial::put_hex8(dev);
+            morpheus_hal_x86_64::serial::put_hex8(dev);
             puts(".");
-            morpheus_hwinit::serial::put_hex8(func);
+            morpheus_hal_x86_64::serial::put_hex8(func);
             puts("  ven=");
-            morpheus_hwinit::serial::put_hex32(vendor_id as u32);
+            morpheus_hal_x86_64::serial::put_hex32(vendor_id as u32);
             puts(" dev=");
-            morpheus_hwinit::serial::put_hex32(device_id as u32);
+            morpheus_hal_x86_64::serial::put_hex32(device_id as u32);
             puts(" class=");
-            morpheus_hwinit::serial::put_hex32(class_code >> 8);
+            morpheus_hal_x86_64::serial::put_hex32(class_code >> 8);
             puts(" cmd=");
-            morpheus_hwinit::serial::put_hex32(cmd as u32);
+            morpheus_hal_x86_64::serial::put_hex32(cmd as u32);
             puts("\n");
 
             if vendor_id == 0x1AF4 {
@@ -75,18 +80,18 @@ unsafe fn dump_pci_devices() {
                         let is_io = raw & 0x01 != 0;
                         let is_64 = !is_io && (raw >> 1) & 0x03 == 0x02;
                         puts("[PCI-DUMP]     BAR");
-                        morpheus_hwinit::serial::put_hex8(bar_i);
+                        morpheus_hal_x86_64::serial::put_hex8(bar_i);
                         puts(" raw=");
-                        morpheus_hwinit::serial::put_hex32(raw);
+                        morpheus_hal_x86_64::serial::put_hex32(raw);
                         if is_64 && bar_i < 5 {
                             let high = pci_cfg_read32(addr, 0x10 + (bar_i + 1) * 4);
                             puts(" BAR");
-                            morpheus_hwinit::serial::put_hex8(bar_i + 1);
+                            morpheus_hal_x86_64::serial::put_hex8(bar_i + 1);
                             puts("=");
-                            morpheus_hwinit::serial::put_hex32(high);
+                            morpheus_hal_x86_64::serial::put_hex32(high);
                             let full = ((high as u64) << 32) | ((raw & 0xFFFFFFF0) as u64);
                             puts(" -> ");
-                            morpheus_hwinit::serial::put_hex64(full);
+                            morpheus_hal_x86_64::serial::put_hex64(full);
                         }
                         if is_io {
                             puts(" (IO)");
@@ -149,11 +154,11 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
 
         if base_addr != 0 {
             match kmap_mmio(base_addr, MAP_SIZE) {
-                Ok(()) => {}
+                Ok(()) => {},
                 Err(e) => {
                     let _ = (bar_idx, e);
                     log_warn("STORAGE", 821, "map_mmio for VirtIO BAR failed");
-                }
+                },
             }
         }
 
@@ -170,7 +175,7 @@ static mut STORAGE_REGION_SECTORS: u64 = 0;
 static mut PERSISTENT_READY: bool = false;
 
 const RAM_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
-static mut RAM_STAGE_LAST_REASON: &'static str = "none";
+static mut RAM_STAGE_LAST_REASON: &str = "none";
 
 const GPT_SIG: &[u8; 8] = b"EFI PART";
 /// ESP type GUID, little-endian on-disk.
@@ -214,7 +219,7 @@ fn le_u64(buf: &[u8], off: usize) -> u64 {
 fn select_largest_gpt_free_region(
     first_usable: u64,
     last_usable: u64,
-    used_ranges: &mut alloc::vec::Vec<(u64, u64)>,
+    used_ranges: &mut [(u64, u64)],
     sector_size: u32,
 ) -> Option<DataRegion> {
     if first_usable == 0 || last_usable < first_usable {
@@ -261,7 +266,7 @@ fn select_largest_gpt_free_region(
         }
     }
 
-    let min_free_sectors = ((64u64 * 1024 * 1024) + (sector_size as u64 - 1)) / sector_size as u64;
+    let min_free_sectors = (64u64 * 1024 * 1024).div_ceil(sector_size as u64);
     if best_sectors >= min_free_sectors {
         Some(DataRegion {
             lba_start: best_start,
@@ -286,8 +291,8 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
 
     let mut bio = UnifiedBlockIo::new(dev, io_buf, io_phys, timeout).ok()?;
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
 
     let mut first_two = alloc::vec![0u8; (sector_size as usize) * 2];
     if bio.read_blocks(GptLba(0), &mut first_two).is_err() {
@@ -433,6 +438,8 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
         let mut best_start = 0u64;
         let mut best_sectors = 0u64;
 
+        // Index `i` also computes the byte offset into the MBR table, not just a slice index.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..MBR_PARTS {
             let off = MBR_PART_OFF + (i * MBR_PART_SIZE);
             let ptype = first_two[off + 4];
@@ -513,77 +520,55 @@ unsafe fn select_data_region(sector_size: u32, total_sectors: u64) -> Option<Dat
     })
 }
 
-// spinner
-
 static mut SPIN_ACTIVE: bool = false;
 static mut SPIN_FRAME: usize = 0;
 static mut SPIN_LAST_TSC: u64 = 0;
 
 const SPIN_FRAMES: [u8; 4] = [b'|', b'/', b'-', b'\\'];
 
-/// Start a spinner on both serial and the framebuffer. The initial frame
-/// appears on the same line after the last log message.
 fn spinner_start() {
     unsafe {
         SPIN_ACTIVE = true;
         SPIN_FRAME = 0;
-        SPIN_LAST_TSC = morpheus_hwinit::tsc::read_tsc();
-        // Serial: write the opening frame (no newline — we'll overwrite in place)
-        morpheus_hwinit::serial::serial_puts("   ");
-        morpheus_hwinit::serial::serial_putc(SPIN_FRAMES[0]);
-        // Framebuffer: same
-        morpheus_hwinit::serial::fb_puts("   ");
-        morpheus_hwinit::serial::fb_putc(SPIN_FRAMES[0]);
+        SPIN_LAST_TSC = morpheus_hal_x86_64::cpu::tsc::read_tsc();
+        morpheus_hal_x86_64::serial::serial_puts("   ");
+        morpheus_hal_x86_64::serial::serial_putc(SPIN_FRAMES[0]);
+        morpheus_hal_x86_64::serial::fb_puts("   ");
+        morpheus_hal_x86_64::serial::fb_putc(SPIN_FRAMES[0]);
     }
 }
 
-/// Advance the spinner frame if ~100 ms have passed.
-/// Called at the top of every raw_read / raw_write so it fires naturally
-/// during helix I/O without needing a separate timer or thread.
+/// Advances every ~100 ms; called from raw_read/raw_write so I/O drives the animation.
 fn spinner_tick() {
     unsafe {
         if !SPIN_ACTIVE || STORAGE_TSC_FREQ == 0 {
             return;
         }
-        let now = morpheus_hwinit::tsc::read_tsc();
-        let interval = STORAGE_TSC_FREQ / 10; // 100 ms
+        let now = morpheus_hal_x86_64::cpu::tsc::read_tsc();
+        let interval = STORAGE_TSC_FREQ / 10;
         if now.wrapping_sub(SPIN_LAST_TSC) < interval {
             return;
         }
         SPIN_LAST_TSC = now;
         SPIN_FRAME = (SPIN_FRAME + 1) % SPIN_FRAMES.len();
         let frame = SPIN_FRAMES[SPIN_FRAME];
-        // Serial: backspace over previous frame, write new one
-        morpheus_hwinit::serial::serial_putc(b'\x08');
-        morpheus_hwinit::serial::serial_putc(frame);
-        // Framebuffer: same
-        morpheus_hwinit::serial::fb_putc(b'\x08');
-        morpheus_hwinit::serial::fb_putc(frame);
+        morpheus_hal_x86_64::serial::serial_putc(b'\x08');
+        morpheus_hal_x86_64::serial::serial_putc(frame);
+        morpheus_hal_x86_64::serial::fb_putc(b'\x08');
+        morpheus_hal_x86_64::serial::fb_putc(frame);
     }
 }
 
-/// Stop the spinner. \r returns cursor to col 0 on both serial and framebuffer
-/// so the next `puts()` call overwrites the spinner line with the result.
 fn spinner_done() {
     unsafe {
         SPIN_ACTIVE = false;
     }
-    morpheus_hwinit::serial::serial_putc(b'\r');
-    morpheus_hwinit::serial::fb_puts("\r");
+    morpheus_hal_x86_64::serial::serial_putc(b'\r');
+    morpheus_hal_x86_64::serial::fb_puts("\r");
 }
 
-// PUBLIC API
-
-/// Probe for a persistent block device and mount HelixFS on it.
-///
-/// If a device is found, replaces the in-memory root FS with the persistent
-/// one.  If no device is found, logs a warning and leaves the RAM-disk
-/// in place.
-///
 /// # Safety
-/// - `dma` must be a valid 2 MB DMA region from hwinit Phase 6.
-/// - `tsc_freq` must be the calibrated TSC frequency.
-/// - Must be called exactly once, after hwinit completes.
+/// `dma` must be the hwinit Phase 6 DMA region; `tsc_freq` calibrated; call once after hwinit.
 pub unsafe fn init_persistent_storage(
     dma: &DmaRegion,
     tsc_freq: u64,
@@ -614,37 +599,31 @@ pub unsafe fn init_persistent_storage(
                         827,
                         "pre-EBS staged root missing /bin/init; falling back to probe",
                     );
-                }
+                },
                 Err(_) => {
                     log_warn(
                         "STORAGE",
                         827,
                         "pre-EBS staged root mount failed; falling back to probe",
                     );
-                }
+                },
             }
         }
     }
 
-    // Dump PCI bus to serial for device identification diagnostics
-    // (Commenting out PCI dump — enable if debugging PCI device discovery)
-    // dump_pci_devices();
+    // dump_pci_devices(); // enable when debugging device discovery
 
     STORAGE_DMA = Some(*dma);
     STORAGE_TSC_FREQ = tsc_freq;
 
-    // NOTE: The DMA region is fully zeroed by hwinit Phase 6 at allocation
-    // time, so VirtIO queue structures (desc, avail, used, headers, status)
-    // are already clean.  No additional zeroing needed here.
+    // DMA region is zeroed by hwinit Phase 6; VirtIO queue structs are clean.
 
-    // build blockdmaconfig from the dma region
     let base_cpu = dma.cpu_base();
     let base_bus = dma.bus_base();
 
     let config = BlockDmaConfig {
         tsc_freq,
 
-        // VirtIO-blk
         virtio_desc_cpu: base_cpu.add(OFF_VIRTIO_DESC),
         virtio_desc_phys: base_bus + OFF_VIRTIO_DESC as u64,
         virtio_avail_cpu: base_cpu.add(OFF_VIRTIO_AVAIL),
@@ -655,10 +634,9 @@ pub unsafe fn init_persistent_storage(
         virtio_headers_phys: base_bus + OFF_VIRTIO_HEADERS as u64,
         virtio_status_cpu: base_cpu.add(OFF_VIRTIO_STATUS),
         virtio_status_phys: base_bus + OFF_VIRTIO_STATUS as u64,
-        virtio_notify_addr: 0, // Filled by driver from PCI caps
+        virtio_notify_addr: 0, // driver fills from PCI caps
         queue_size: VIRTIO_QUEUE_SIZE,
 
-        // AHCI
         ahci_cmd_list_cpu: base_cpu.add(OFF_AHCI_CMD_LIST),
         ahci_cmd_list_phys: base_bus + OFF_AHCI_CMD_LIST as u64,
         ahci_fis_cpu: base_cpu.add(OFF_AHCI_FIS),
@@ -669,7 +647,6 @@ pub unsafe fn init_persistent_storage(
         ahci_identify_phys: base_bus + OFF_AHCI_IDENTIFY as u64,
     };
 
-    // scan all block devices on pci bus
     let (devices, dev_count) = scan_all_block_devices();
 
     if dev_count == 0 {
@@ -683,9 +660,10 @@ pub unsafe fn init_persistent_storage(
         "block devices detected; selecting data disk",
     );
 
-    // Try each device: skip boot disks (GPT/MBR), use the first blank or HelixFS one.
+    // Skip boot disks (GPT/MBR), accept first blank or HelixFS device.
     let mut found_data_disk = false;
     let mut saw_unimplemented_backend = false;
+    #[allow(clippy::needless_range_loop)]
     'device_scan: for i in 0..dev_count {
         let detected = match &devices[i] {
             Some(d) => d,
@@ -695,49 +673,44 @@ pub unsafe fn init_persistent_storage(
         match detected {
             DetectedBlockDevice::Ahci(_) => {
                 log_info("STORAGE", 824, "probing AHCI candidate");
-            }
+            },
             DetectedBlockDevice::Sdhci(_) => {
                 log_info("STORAGE", 824, "probing SDHCI candidate");
-            }
+            },
             DetectedBlockDevice::UsbMsd(_) => {
                 log_info("STORAGE", 824, "probing USB xHCI/MSD candidate");
-            }
+            },
             DetectedBlockDevice::VirtIO { .. } => {
                 log_info("STORAGE", 824, "probing VirtIO-blk candidate");
-            }
+            },
         }
 
-        // Map high-address MMIO BARs before driver init touches them
+        // Map BARs UC before driver touches them.
         if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
             map_virtio_bars(pci_addr.bus, pci_addr.device, pci_addr.function);
         } else if let DetectedBlockDevice::Ahci(info) = detected {
             if is_paging_initialized() {
-                // ABAR covers generic HBA regs + up to 32 ports × 0x80 = 0x1100.
-                // 0x2000 rounds to 2 pages; UC flags set by kmap_mmio.
+                // ABAR: HBA regs + 32 ports × 0x80 = 0x1100, round to 2 pages.
                 let _ = kmap_mmio(info.abar, 0x2000);
             }
         } else if let DetectedBlockDevice::Sdhci(info) = detected {
             if is_paging_initialized() {
-                // SDHCI register space is typically < 4KB, map one page.
                 let _ = kmap_mmio(info.mmio_base, 0x1000);
             }
         } else if let DetectedBlockDevice::UsbMsd(info) = detected {
             if is_paging_initialized() {
-                // xHCI operational + runtime windows vary by controller; map a conservative range.
                 let _ = kmap_mmio(info.mmio_base, 0x4000);
             }
         }
 
         let is_ahci = matches!(detected, DetectedBlockDevice::Ahci(_));
 
-        // Disable BSP interrupts for the duration of hardware driver init.
-        // The BSP LAPIC timer fires at 100 Hz; a timer ISR during PCH MMIO
-        // access can extend bus cycles on real Intel hardware (same root
-        // cause as the AHCI BIOS/OS handoff stall). AHCI and VirtIO init
-        // use TSC-based polling exclusively — no interrupts required.
-        morpheus_hwinit::disable_interrupts();
+        // Mask BSP interrupts across driver init: 100 Hz LAPIC timer ISRs
+        // mid-PCH-MMIO extend bus cycles on real Intel silicon (same root
+        // cause as the AHCI BIOS/OS handoff stall). Init polls on TSC.
+        morpheus_hal_x86_64::cpu::idt::disable_interrupts();
         let device_result = create_unified_from_detected(detected, &config);
-        morpheus_hwinit::enable_interrupts();
+        morpheus_hal_x86_64::cpu::idt::enable_interrupts();
 
         let device = match device_result {
             Ok(dev) => dev,
@@ -747,65 +720,65 @@ pub unsafe fn init_persistent_storage(
                         match e {
                             AhciInitError::InvalidConfig => {
                                 log_warn("STORAGE", 825, "AHCI init failed: invalid config");
-                            }
+                            },
                             AhciInitError::ResetFailed => {
                                 log_warn("STORAGE", 825, "AHCI init failed: HBA reset timeout");
-                            }
+                            },
                             AhciInitError::NoDeviceFound => {
                                 log_warn("STORAGE", 825, "AHCI init failed: no SATA device found");
-                            }
+                            },
                             AhciInitError::PortStopTimeout => {
                                 log_warn("STORAGE", 825, "AHCI init failed: port stop timeout");
-                            }
+                            },
                             AhciInitError::PortStartFailed => {
                                 log_warn("STORAGE", 825, "AHCI init failed: port start failed");
-                            }
+                            },
                             AhciInitError::IdentifyFailed => {
                                 log_warn("STORAGE", 825, "AHCI init failed: IDENTIFY failed");
-                            }
+                            },
                             AhciInitError::No64BitSupport => {
                                 log_warn("STORAGE", 825, "AHCI init failed: no 64-bit DMA support");
-                            }
+                            },
                             AhciInitError::DeviceNotResponding => {
                                 log_warn("STORAGE", 825, "AHCI init failed: device not responding");
-                            }
+                            },
                             AhciInitError::DmaSetupFailed => {
                                 log_warn("STORAGE", 825, "AHCI init failed: DMA setup failed");
-                            }
+                            },
                         }
                         log_warn("STORAGE", 825, "AHCI candidate skipped");
-                    }
+                    },
                     UnifiedBlockError::VirtioError(e) => {
                         match e {
                             VirtioBlkInitError::ResetFailed => {
                                 log_warn("STORAGE", 825, "VirtIO init failed: reset failed");
-                            }
+                            },
                             VirtioBlkInitError::FeatureNegotiationFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "VirtIO init failed: feature negotiation failed",
                                 );
-                            }
+                            },
                             VirtioBlkInitError::QueueSetupFailed => {
                                 log_warn("STORAGE", 825, "VirtIO init failed: queue setup failed");
-                            }
+                            },
                             VirtioBlkInitError::DeviceFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "VirtIO init failed: device failed status",
                                 );
-                            }
+                            },
                             VirtioBlkInitError::InvalidConfig => {
                                 log_warn("STORAGE", 825, "VirtIO init failed: invalid config");
-                            }
+                            },
                             VirtioBlkInitError::TransportError => {
                                 log_warn("STORAGE", 825, "VirtIO init failed: transport error");
-                            }
+                            },
                         }
                         log_warn("STORAGE", 825, "VirtIO candidate skipped");
-                    }
+                    },
                     UnifiedBlockError::NoDevice => {
                         if is_ahci {
                             log_warn(
@@ -820,214 +793,214 @@ pub unsafe fn init_persistent_storage(
                                 "driver init failed for one candidate; skipping",
                             );
                         }
-                    }
+                    },
                     UnifiedBlockError::SdhciError(e) => {
                         match e {
                             SdhciInitError::InvalidConfig => {
                                 log_warn("STORAGE", 825, "SDHCI init failed: invalid config");
-                            }
+                            },
                             SdhciInitError::ControllerResetFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "SDHCI init failed: controller reset failed",
                                 );
-                            }
+                            },
                             SdhciInitError::NoCardPresent => {
                                 log_warn("STORAGE", 825, "SDHCI init failed: no card present");
-                            }
+                            },
                             SdhciInitError::VoltageSwitchFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "SDHCI init failed: voltage switch failed",
                                 );
-                            }
+                            },
                             SdhciInitError::ClockSetupFailed => {
                                 log_warn("STORAGE", 825, "SDHCI init failed: clock setup failed");
-                            }
+                            },
                             SdhciInitError::CommandTimeout => {
                                 log_warn("STORAGE", 825, "SDHCI init failed: command timeout");
-                            }
+                            },
                             SdhciInitError::DataTimeout => {
                                 log_warn("STORAGE", 825, "SDHCI init failed: data timeout");
-                            }
+                            },
                             SdhciInitError::IoError => {
                                 log_warn("STORAGE", 825, "SDHCI init failed: I/O error");
-                            }
+                            },
                             SdhciInitError::NotImplemented => {
                                 saw_unimplemented_backend = true;
                                 log_warn("STORAGE", 825, "SDHCI init failed: not implemented");
-                            }
+                            },
                         }
                         log_warn("STORAGE", 825, "SDHCI candidate skipped");
-                    }
+                    },
                     UnifiedBlockError::UsbMsdError(e) => {
                         match e {
                             UsbMsdInitError::InvalidConfig => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: invalid config");
-                            }
+                            },
                             UsbMsdInitError::ControllerInitFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: controller init failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ControllerProbeFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: controller probe failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ControllerResetFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: controller reset failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ControllerScratchpadUnsupported => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: scratchpad requirement unsupported",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ControllerStartFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: controller start failed (HCH stuck)",
                                 );
-                            }
+                            },
                             UsbMsdInitError::HubUnsupported => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: USB hub detected; downstream hub traversal not implemented");
-                            }
+                            },
                             UsbMsdInitError::PortResetFailed => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: port reset failed");
-                            }
+                            },
                             UsbMsdInitError::PortResetTimeout => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: port reset timeout");
-                            }
+                            },
                             UsbMsdInitError::PortResetHotCmdTimeout => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: hot reset command timeout",
                                 );
-                            }
+                            },
                             UsbMsdInitError::PortResetHotSettleTimeout => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: hot reset settle timeout",
                                 );
-                            }
+                            },
                             UsbMsdInitError::PortResetWarmTimeout => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: warm reset timeout");
-                            }
+                            },
                             UsbMsdInitError::PortResetNoLink => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: USB link not usable",
                                 );
-                            }
+                            },
                             UsbMsdInitError::EnableSlotFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: enable-slot command failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::AddressDeviceFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: address-device command failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::DeviceDescriptorFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: GET_DESCRIPTOR(device) failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ConfigDescriptorFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: GET_DESCRIPTOR(config) failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::MassStorageProtocolUnsupported => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: mass-storage protocol unsupported (need BOT)");
-                            }
+                            },
                             UsbMsdInitError::NoBotMassStorageInterface => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: no BOT mass-storage interface found",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ActivePortsNoConnectedDevice => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: root ports active but no connected device detected");
-                            }
+                            },
                             UsbMsdInitError::SetConfigurationFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: SET_CONFIGURATION failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::ConfigureEndpointsFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: configure endpoint command failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::DeviceEnumerationFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: device enumeration failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::TransportInitFailed => {
                                 log_warn(
                                     "STORAGE",
                                     825,
                                     "USB-MSD init failed: transport init failed",
                                 );
-                            }
+                            },
                             UsbMsdInitError::NoMedia => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: no media");
-                            }
+                            },
                             UsbMsdInitError::CommandTimeout => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: command timeout");
-                            }
+                            },
                             UsbMsdInitError::IoError => {
                                 log_warn("STORAGE", 825, "USB-MSD init failed: I/O error");
-                            }
+                            },
                             UsbMsdInitError::NotImplemented => {
                                 saw_unimplemented_backend = true;
                                 log_warn("STORAGE", 825, "USB-MSD init failed: not implemented");
-                            }
+                            },
                         }
                         log_warn("STORAGE", 825, "USB-MSD candidate skipped");
-                    }
+                    },
                 }
                 continue;
-            }
+            },
         };
 
         let info = device.info();
 
-        // Store temporarily to check if it's a boot disk.
+        // Park here so select_data_region/recovery probes can use it.
         BLOCK_DEVICE = Some(device);
 
         let region = match select_data_region(info.sector_size, info.total_sectors) {
@@ -1036,7 +1009,7 @@ pub unsafe fn init_persistent_storage(
                 log_info("STORAGE", 826, "boot/system disk detected; skipping");
                 BLOCK_DEVICE = None;
                 continue;
-            }
+            },
         };
 
         STORAGE_LBA_BASE = region.lba_start;
@@ -1051,11 +1024,10 @@ pub unsafe fn init_persistent_storage(
             continue;
         }
 
-        // Candidate selected. We only commit once it proves to hold HelixFS.
+        // Commit only after proving the candidate holds HelixFS.
         log_ok("STORAGE", 827, "selected data-disk candidate");
 
-        // try to recover or format helixfs
-        let mut raw_dev = make_raw_block_device();
+        let _raw_dev = make_raw_block_device();
 
         let needs_format = {
             let mut probe_dev = make_raw_block_device();
@@ -1065,7 +1037,7 @@ pub unsafe fn init_persistent_storage(
                 info.sector_size,
             ) {
                 Ok(sb) => {
-                    // Version mismatch: v2 changed the log payload format.
+                    // v2 changed the log payload format.
                     if sb.version != morpheus_helix::types::HELIX_VERSION {
                         log_warn(
                             "STORAGE",
@@ -1076,14 +1048,13 @@ pub unsafe fn init_persistent_storage(
                     } else {
                         false
                     }
-                }
+                },
                 Err(_) => true,
             }
         };
 
         if needs_format {
-            // Bring-up safety: never auto-format random host disks at boot.
-            // Keep scanning until we find an existing HelixFS root.
+            // Bring-up safety: never auto-format unknown disks. Keep scanning.
             log_warn(
                 "STORAGE",
                 829,
@@ -1101,7 +1072,7 @@ pub unsafe fn init_persistent_storage(
                 log_ok("STORAGE", 838, "helix partition staged into RAM");
                 mounted_from_ram = true;
                 mem_dev
-            }
+            },
             None => {
                 let reason = RAM_STAGE_LAST_REASON;
                 if reason == "none" {
@@ -1114,7 +1085,7 @@ pub unsafe fn init_persistent_storage(
                     log_warn("STORAGE", 838, reason);
                 }
                 make_raw_block_device()
-            }
+            },
         };
 
         spinner_start();
@@ -1150,12 +1121,12 @@ pub unsafe fn init_persistent_storage(
                                     "direct-media root still missing /bin/init",
                                 );
                             }
-                        }
+                        },
                         Err(_) => {
                             spinner_done();
                             root_has_init = false;
                             log_warn("STORAGE", 847, "direct-media root remount failed");
-                        }
+                        },
                     }
                 }
 
@@ -1188,14 +1159,14 @@ pub unsafe fn init_persistent_storage(
                 }
                 log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
                 break 'device_scan;
-            }
+            },
             Err(e) => {
                 spinner_done();
                 let _ = e;
                 log_error("STORAGE", 835, "failed to mount persistent filesystem");
                 BLOCK_DEVICE = None;
                 continue;
-            }
+            },
         }
     }
 
@@ -1229,23 +1200,11 @@ fn root_path_exists(path: &str) -> bool {
     morpheus_helix::vfs::vfs_stat(&fs.mount_table, path).is_ok()
 }
 
-/// Whether persistent storage is active (vs RAM-disk fallback).
 pub fn is_persistent() -> bool {
     unsafe { PERSISTENT_READY }
 }
 
-// BOOT DISK DETECTION
-
-/// Check if the currently probed block device is a boot disk (GPT or MBR).
-///
-/// We NEVER format a disk that has an existing partition table — it's
-/// almost certainly the system ESP or a user disk with data.
-///
-/// Checks:
-/// 1. LBA 0 bytes [510..512] == 0xAA55 (MBR signature)
-/// 2. LBA 1 bytes [0..8] == "EFI PART" (GPT header magic)
-///
-/// Returns `true` if partition table detected → disk should be skipped.
+/// True if LBA0/1 holds an MBR sig or GPT magic — never auto-format these.
 unsafe fn is_boot_disk(sector_size: u32) -> bool {
     let dev = match BLOCK_DEVICE.as_mut() {
         Some(d) => d,
@@ -1266,22 +1225,19 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
         Err(_) => return false,
     };
 
-    // Read first 2 sectors (need LBA 0 for MBR, LBA 1 for GPT).
     let read_size = (sector_size as usize) * 2;
     let mut buf = alloc::vec![0u8; read_size];
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
     if bio.read_blocks(GptLba(0), &mut buf).is_err() {
         return false;
     }
 
-    // Check MBR signature at offset 510-511
     if buf.len() >= 512 && buf[510] == 0x55 && buf[511] == 0xAA {
         return true;
     }
 
-    // Check GPT header at LBA 1
     let gpt_offset = sector_size as usize;
     if buf.len() >= gpt_offset + 8 && &buf[gpt_offset..gpt_offset + 8] == b"EFI PART" {
         return true;
@@ -1290,7 +1246,7 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
     false
 }
 
-/// Copy selected Helix partition content into RAM and expose it as RawBlockDevice.
+/// Copy selected Helix partition into RAM, return a RawBlockDevice over it.
 unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevice> {
     RAM_STAGE_LAST_REASON = "none";
     log_info("STORAGE", 843, "RAM stage attempt begin");
@@ -1302,10 +1258,10 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
             RAM_STAGE_LAST_REASON =
                 "RAM stage: superblock probe failed; mounting directly from media";
             return None;
-        }
+        },
     };
 
-    // Stage only live filesystem footprint, not full partition capacity.
+    // Live FS footprint only, not full partition capacity.
     let mut stage_blocks = 2u64;
     let log_hi = sb.log_end_block.saturating_add(1);
     if log_hi > stage_blocks {
@@ -1331,7 +1287,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
         None => {
             RAM_STAGE_LAST_REASON = "RAM stage: byte size overflow; mounting directly from media";
             return None;
-        }
+        },
     };
     if fs_bytes == 0 {
         return None;
@@ -1358,7 +1314,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
                 RAM_STAGE_LAST_REASON =
                     "RAM stage: alignment overflow; mounting directly from media";
                 return None;
-            }
+            },
         };
     }
 
@@ -1367,7 +1323,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
         None => {
             RAM_STAGE_LAST_REASON = "RAM stage: region size overflow; mounting directly from media";
             return None;
-        }
+        },
     };
     if copy_bytes > region_bytes {
         RAM_STAGE_LAST_REASON =
@@ -1389,7 +1345,7 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
                 RAM_STAGE_LAST_REASON =
                     "RAM stage: page allocation failed; mounting directly from media";
                 return None;
-            }
+            },
         }
     };
 
@@ -1429,12 +1385,9 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
     Some(MemBlockDevice::into_raw(mem_dev))
 }
 
-/// Create the standard initFS directory structure.
-///
-/// Idempotent — silently ignores directories that already exist.
-/// Called after the root FS is mounted (whether RAM-disk or persistent).
+/// Idempotent; call after root FS is mounted.
 pub fn create_init_directories() {
-    use morpheus_hwinit::cpu::tsc::read_tsc;
+    use morpheus_hal_x86_64::cpu::tsc::read_tsc;
 
     let dirs = ["/bin", "/etc", "/tmp", "/home", "/var", "/dev"];
 
@@ -1445,34 +1398,27 @@ pub fn create_init_directories() {
         None => {
             log_warn("INITFS", 840, "no root fs; skipping directory bootstrap");
             return;
-        }
+        },
     };
 
     for dir in &dirs {
         match morpheus_helix::vfs::vfs_mkdir(&mut fs.mount_table, dir, ts) {
-            Ok(_) => {}
-            Err(morpheus_helix::error::HelixError::AlreadyExists) => {}
+            Ok(_) => {},
+            Err(morpheus_helix::error::HelixError::AlreadyExists) => {},
             Err(_) => {
                 let _ = dir;
                 log_warn("INITFS", 841, "failed to create one startup directory");
-            }
+            },
         }
     }
 
     log_ok("INITFS", 842, "directory structure ready");
 }
 
-// RAW BLOCK DEVICE BRIDGE
-//
-// We create a `RawBlockDevice` whose function pointers call through
-// the network crate's `UnifiedBlockIo` adapter for each operation.
-// This reuses 100% of the existing synchronous DMA read/write logic
-// (chunked transfers, timeout, completion polling) without duplication.
+// RawBlockDevice fn-ptr vtable → UnifiedBlockIo, reuses chunked DMA r/w + timeout.
 
-/// Build a `RawBlockDevice` backed by the static `BLOCK_DEVICE`.
-///
 /// # Safety
-/// `BLOCK_DEVICE` must be `Some` before calling this.
+/// `BLOCK_DEVICE` must be `Some`.
 unsafe fn make_raw_block_device() -> RawBlockDevice {
     let dev = BLOCK_DEVICE.as_ref().unwrap();
     let info = dev.info();
@@ -1483,7 +1429,7 @@ unsafe fn make_raw_block_device() -> RawBlockDevice {
     };
 
     RawBlockDevice::new(
-        core::ptr::null_mut(), // ctx unused — we access statics directly
+        core::ptr::null_mut(), // ctx unused; callbacks access statics
         total,
         info.sector_size,
         raw_read,
@@ -1492,10 +1438,6 @@ unsafe fn make_raw_block_device() -> RawBlockDevice {
     )
 }
 
-/// Read callback for `RawBlockDevice`.
-///
-/// Creates a temporary `UnifiedBlockIo` from the static device + DMA
-/// region, then delegates to the existing chunked read_blocks() impl.
 unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
     spinner_tick();
     let dev = match BLOCK_DEVICE.as_mut() {
@@ -1510,7 +1452,7 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
     let io_cpu = dma.cpu_base().add(OFF_IO_BUFFER);
     let io_phys = dma.bus_at(OFF_IO_BUFFER);
     let io_buf = core::slice::from_raw_parts_mut(io_cpu, IO_BUFFER_SIZE);
-    let timeout = STORAGE_TSC_FREQ * 5; // 5 second timeout
+    let timeout = STORAGE_TSC_FREQ * 5;
 
     let mut bio = match UnifiedBlockIo::new(dev, io_buf, io_phys, timeout) {
         Ok(b) => b,
@@ -1519,13 +1461,12 @@ unsafe fn raw_read(_ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
 
     let dst_slice = core::slice::from_raw_parts_mut(dst, len);
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
     bio.read_blocks(GptLba(lba + STORAGE_LBA_BASE), dst_slice)
         .is_ok()
 }
 
-/// Write callback for `RawBlockDevice`.
 unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool {
     spinner_tick();
     let dev = match BLOCK_DEVICE.as_mut() {
@@ -1549,13 +1490,12 @@ unsafe fn raw_write(_ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool
 
     let src_slice = core::slice::from_raw_parts(src, len);
 
-    use morpheus_network::GptBlockIo;
-    use morpheus_network::GptLba;
+    use gpt_disk_io::BlockIo as GptBlockIo;
+    use gpt_disk_types::Lba as GptLba;
     bio.write_blocks(GptLba(lba + STORAGE_LBA_BASE), src_slice)
         .is_ok()
 }
 
-/// Flush callback for `RawBlockDevice`.
 unsafe fn raw_flush(_ctx: *mut u8) -> bool {
     let dev = match BLOCK_DEVICE.as_mut() {
         Some(d) => d,

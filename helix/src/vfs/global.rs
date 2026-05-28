@@ -59,10 +59,11 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
     let mem_dev = MEM_DEVICE.as_mut().unwrap();
 
     let total_sectors = size as u64 / sector_size as u64;
+    // "MXROOT\0..\x01"
     let uuid = [
         0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x01,
-    ]; // "MXROOT"
+    ];
 
     format::format_helix(mem_dev, 0, total_sectors, sector_size, "root", uuid)?;
 
@@ -82,13 +83,10 @@ pub unsafe fn init_root_fs(base: *mut u8, size: usize) -> Result<(), HelixError>
     Ok(())
 }
 
-/// Initialize the root filesystem on a pre-existing RawBlockDevice.
-///
-/// If `format` is true, formats the device before mounting.
-/// If false, tries to recover an existing HelixFS.
+/// Mount (or first-format) an existing RawBlockDevice at "/".
 ///
 /// # Safety
-/// The RawBlockDevice's backing storage must remain valid for the kernel lifetime.
+/// Backing storage must live for the kernel's lifetime.
 pub unsafe fn init_root_fs_raw(
     mut device: RawBlockDevice,
     do_format: bool,
@@ -99,8 +97,6 @@ pub unsafe fn init_root_fs_raw(
 
     let sector_size = {
         let bs = device.block_size();
-        // BlockSize wraps NonZeroU32; we extract via Display → parse.
-        // Simpler: match known sizes.
         if bs == gpt_disk_types::BlockSize::BS_512 {
             512u32
         } else if bs == gpt_disk_types::BlockSize::BS_4096 {
@@ -121,21 +117,17 @@ pub unsafe fn init_root_fs_raw(
 
     let sb = recover_superblock(&mut device, 0, sector_size)?;
 
-    // Version check: v2 includes paths in log payloads for replay.
-    // Older volumes must be reformatted.
+    // v2 added paths in log payloads; older volumes must be reformatted.
     if sb.version != HELIX_VERSION {
         return Err(HelixError::IncompatibleVersion);
     }
 
     let mut instance = HelixInstance::new(sb, 0, sector_size);
 
-    // Reload the head segment so flush() won't clobber existing records.
+    // Reload head so flush() doesn't clobber existing records.
     instance.log.reload_head_segment(&mut device)?;
 
-    // Replay the log to rebuild the in-memory index.
     replay_log(&mut device, &instance.log, &mut instance.index)?;
-
-    // Rebuild the bitmap so allocated blocks aren't re-used.
     rebuild_bitmap_from_index(&mut instance);
 
     let mut mount_table = MountTable::new();
@@ -153,17 +145,10 @@ pub fn is_fs_initialized() -> bool {
     unsafe { FS_INITIALIZED }
 }
 
-/// Replace the root filesystem device with a persistent block device.
-///
-/// Keeps all VFS state (open fds, etc.) but re-reads the superblock from
-/// the new device and re-mounts "/".
-///
-/// If `do_format` is true, formats the device before mounting.
-/// If false, tries to recover an existing HelixFS.
+/// Swap root storage. Preserves VFS state; re-reads SB and remounts "/".
 ///
 /// # Safety
-/// The RawBlockDevice's backing storage must remain valid for the kernel lifetime.
-/// Must be called while FS is not being accessed from another context.
+/// Backing storage must live for the kernel's lifetime. FS must be quiescent.
 pub unsafe fn replace_root_device(
     mut device: RawBlockDevice,
     do_format: bool,
@@ -190,20 +175,13 @@ pub unsafe fn replace_root_device(
 
     let sb = recover_superblock(&mut device, 0, sector_size)?;
 
-    // Version check: v2 includes paths in log payloads for replay.
     if sb.version != HELIX_VERSION {
         return Err(HelixError::IncompatibleVersion);
     }
 
     let mut instance = HelixInstance::new(sb, 0, sector_size);
-
-    // Reload the head segment so flush() won't clobber existing records.
     instance.log.reload_head_segment(&mut device)?;
-
-    // Replay the log to rebuild the in-memory index.
     replay_log(&mut device, &instance.log, &mut instance.index)?;
-
-    // Rebuild the bitmap so allocated blocks aren't re-used.
     rebuild_bitmap_from_index(&mut instance);
 
     let mut mount_table = MountTable::new();
@@ -217,19 +195,15 @@ pub unsafe fn replace_root_device(
     Ok(())
 }
 
-/// Get immutable reference to global FS state.
-///
 /// # Safety
-/// Must be called after `init_root_fs()`. Single-threaded access only.
+/// Post-init only; single-threaded access.
 #[allow(static_mut_refs)]
 pub unsafe fn fs_global() -> Option<&'static FsGlobal> {
     FS_GLOBAL.as_ref()
 }
 
-/// Get mutable reference to global FS state.
-///
 /// # Safety
-/// Must be called after `init_root_fs()`. Caller must ensure no aliasing.
+/// Post-init only; caller guarantees no aliasing.
 #[allow(static_mut_refs)]
 pub unsafe fn fs_global_mut() -> Option<&'static mut FsGlobal> {
     FS_GLOBAL.as_mut()

@@ -8,7 +8,6 @@ use crate::chambers::{
 use crate::layout;
 use crate::theme::OneiricTheme;
 
-// route ids — flat enum, zero-cost dispatch
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Route {
@@ -73,7 +72,6 @@ impl Route {
     }
 }
 
-// setting lifecycle states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FieldState {
@@ -84,7 +82,6 @@ pub enum FieldState {
     Failed = 4,
 }
 
-// safety mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SafetyMode {
@@ -92,7 +89,7 @@ pub enum SafetyMode {
     Severe = 1,
 }
 
-// armed confirmation for destructive actions
+/// Two-stage confirm for destructive actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ArmState {
@@ -101,14 +98,12 @@ pub enum ArmState {
     Confirmed = 2,
 }
 
-// pending change tracker
 pub struct PendingChange {
     pub chamber: Route,
     pub field_name: &'static str,
     pub state: FieldState,
 }
 
-// changelog entry for Archive of Echoes
 pub struct ChangeEntry {
     pub timestamp_ms: u64,
     pub chamber: Route,
@@ -127,30 +122,24 @@ pub struct Hitbox {
     pub widget_idx: usize,
 }
 
-// the master state machine
 pub struct SettingsApp {
-    // display surface
     pub surface: *mut u32,
     pub fb_w: u32,
     pub fb_h: u32,
     pub fb_stride: u32,
     pub is_bgrx: bool,
 
-    // navigation
     pub route: Route,
     pub prev_route: Route,
     pub rail_focus: usize,
     pub pane_focus: usize,
     pub focus_in_rail: bool,
 
-    // mode
     pub safety: SafetyMode,
     pub severe_arm: ArmState,
 
-    // theme
     pub theme: OneiricTheme,
 
-    // dirty tracking
     pub pending: Vec<PendingChange>,
     pub changelog: Vec<ChangeEntry>,
     pub frame_dirty: bool,
@@ -158,12 +147,10 @@ pub struct SettingsApp {
     pub status_len: usize,
     pub status_is_error: bool,
 
-    // mouse state
     pub mouse_x: i32,
     pub mouse_y: i32,
     pub last_buttons: u8,
 
-    // chamber states
     pub gateway: GatewayChamber,
     pub mist: MistChamber,
     pub mirror: MirrorChamber,
@@ -172,7 +159,6 @@ pub struct SettingsApp {
     pub archive: ArchiveChamber,
     pub hall: HallChamber,
 
-    // tick counter for animations
     pub tick_count: u64,
 
     pub hitboxes: RefCell<[Hitbox; 128]>,
@@ -263,15 +249,14 @@ impl SettingsApp {
     pub fn tick(&mut self) {
         self.tick_count += 1;
 
-        // poll input from compositor
         self.poll_input();
 
-        // periodic refresh for observatory chambers (every ~60 ticks ≈ 1 second)
+        // Observatory chambers refresh ~1 Hz.
         if self.tick_count % 60 == 0 {
             match self.route {
                 Route::SysObservatory => self.sys_obs.refresh(),
                 Route::NetObservatory => self.net_obs.refresh(),
-                _ => {}
+                _ => {},
             }
             self.frame_dirty = true;
         }
@@ -283,7 +268,6 @@ impl SettingsApp {
     }
 
     fn poll_input(&mut self) {
-        // keyboard
         let mut kbuf = [0u8; 32];
         loop {
             let avail = libmorpheus::io::stdin_available();
@@ -302,7 +286,6 @@ impl SettingsApp {
             }
         }
 
-        // mouse
         let ms = libmorpheus::hw::mouse_read();
         let buttons_changed = ms.buttons != self.last_buttons;
         if ms.dx != 0 || ms.dy != 0 || buttons_changed {
@@ -322,8 +305,7 @@ impl SettingsApp {
     fn handle_key(&mut self, key: u8) {
         self.frame_dirty = true;
 
-        // when a chamber owns text input, global hotkeys are disabled.
-        // otherwise typing an IP turns into navigation chaos.
+        // Text input swallows global hotkeys (an IP isn't navigation).
         if self.is_text_input_active() {
             self.chamber_key(key);
             return;
@@ -337,11 +319,10 @@ impl SettingsApp {
         }
 
         match key {
-            // Tab = toggle rail/pane focus
+            // Tab toggles rail/pane focus.
             0x0F | b'\t' => {
                 self.focus_in_rail = !self.focus_in_rail;
-            }
-            // up navigation
+            },
             b'k' | b'K' | b'w' | b'W' => {
                 if self.focus_in_rail {
                     if self.rail_focus > 0 {
@@ -350,8 +331,7 @@ impl SettingsApp {
                 } else {
                     self.pane_focus_up();
                 }
-            }
-            // down navigation
+            },
             b'j' | b'J' | b's' | b'S' => {
                 if self.focus_in_rail {
                     if self.rail_focus < Route::ALL.len() - 1 {
@@ -360,16 +340,15 @@ impl SettingsApp {
                 } else {
                     self.pane_focus_down();
                 }
-            }
-            // Enter = navigate to rail selection or activate pane widget
+            },
             0x1C | b'\r' | b'\n' => {
                 if self.focus_in_rail {
                     self.navigate(Route::from_index(self.rail_focus));
                 } else {
                     self.pane_activate();
                 }
-            }
-            // Escape = back to gateway or disarm
+            },
+            // Esc disarms if armed, else navigates back to Gateway.
             0x01 | 0x1B => {
                 if self.severe_arm == ArmState::Armed {
                     self.severe_arm = ArmState::Disarmed;
@@ -381,37 +360,32 @@ impl SettingsApp {
                         self.navigate(Route::Gateway);
                     }
                 }
-            }
-            // focus rail
+            },
             b'h' | b'H' => {
                 self.focus_in_rail = true;
-            }
-            // focus pane
+            },
             b'l' | b'L' => {
                 self.focus_in_rail = false;
-            }
-            // 'a' key (apply staged) — scancode 0x1E
+            },
+            // a/r/d mirror the bar buttons; raw scancodes alongside ASCII.
             0x1E | b'a' | b'A' => {
                 if !self.focus_in_rail {
                     self.apply_pending();
                 }
-            }
-            // 'r' key (revert) — scancode 0x13
+            },
             0x13 | b'r' | b'R' => {
                 if !self.focus_in_rail {
                     self.revert_pending();
                 }
-            }
-            // 'd' key (defaults)
+            },
             0x20 | b'd' | b'D' => {
                 if !self.focus_in_rail {
                     self.restore_defaults();
                 }
-            }
-            // forward to active chamber for chamber-specific keys
+            },
             _ => {
                 self.chamber_key(key);
-            }
+            },
         }
     }
 
@@ -422,7 +396,6 @@ impl SettingsApp {
         let strip_h = layout::STRIP_HEIGHT;
         let bar_h = layout::BAR_HEIGHT;
 
-        // click in rail?
         if x < rail_w as i32 && y >= strip_h as i32 && y < (self.fb_h - bar_h) as i32 {
             if let Some(idx) = self
                 .hitbox_at(x, y)
@@ -435,13 +408,11 @@ impl SettingsApp {
             return;
         }
 
-        // click in command bar?
         if y >= (self.fb_h - bar_h) as i32 {
             self.handle_bar_click(x);
             return;
         }
 
-        // click in pane — delegate to chamber
         if x >= rail_w as i32 && y >= strip_h as i32 {
             self.focus_in_rail = false;
             let pane_x = x - rail_w as i32;
@@ -477,12 +448,11 @@ impl SettingsApp {
         self.pane_focus = 0;
         self.focus_in_rail = false;
 
-        // refresh data for the target chamber
         match target {
             Route::NetObservatory => self.net_obs.refresh(),
             Route::SysObservatory => self.sys_obs.refresh(),
             Route::MistShore => self.mist.refresh(),
-            _ => {}
+            _ => {},
         }
     }
 
@@ -503,15 +473,15 @@ impl SettingsApp {
             Route::MistShore => {
                 self.mist.apply();
                 true
-            }
+            },
             Route::MirrorBasin => {
                 self.mirror.apply();
                 true
-            }
+            },
             Route::HallOfMasks => {
                 crate::chambers::hall::apply(self);
                 true
-            }
+            },
             _ => true,
         };
 
@@ -519,7 +489,7 @@ impl SettingsApp {
             return;
         }
 
-        // clear route-local pending only after successful apply path.
+        // Clear pending only on successful apply.
         self.clear_pending_for(route);
 
         if route != Route::NetObservatory {
@@ -541,7 +511,7 @@ impl SettingsApp {
             Route::NetObservatory => self.net_obs.revert(),
             Route::MistShore => self.mist.revert(),
             Route::MirrorBasin => self.mirror.revert(),
-            _ => {}
+            _ => {},
         }
         self.pending.retain(|p| p.chamber != route);
         self.set_status("Reverted", false);
@@ -553,7 +523,7 @@ impl SettingsApp {
             Route::NetObservatory => self.net_obs.restore_defaults(),
             Route::MistShore => self.mist.restore_defaults(),
             Route::MirrorBasin => self.mirror.restore_defaults(),
-            _ => {}
+            _ => {},
         }
         self.pending.retain(|p| p.chamber != route);
         self.set_status("Defaults restored", false);
@@ -664,7 +634,6 @@ impl SettingsApp {
     }
 
     pub fn mark_edited(&mut self, chamber: Route, field: &'static str) {
-        // upsert
         if let Some(p) = self
             .pending
             .iter_mut()
@@ -710,7 +679,7 @@ impl SettingsApp {
     }
 
     fn hitbox_at(&self, x: i32, y: i32) -> Option<usize> {
-        // last one wins in case of overlap
+        // Last-registered wins on overlap.
         let count = self.hitbox_count.get();
         let hitboxes = self.hitboxes.borrow();
         for i in (0..count).rev() {

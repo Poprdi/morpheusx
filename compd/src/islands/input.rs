@@ -4,7 +4,27 @@ use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, TI
 use crate::messages::{InputMsg, MouseSpatialMsg, MouseZRouteMsg};
 use libmorpheus::{compositor as compsys, hw, io, process};
 
-const CTRL_BRACKET: u8 = 0x1D; // Ctrl+] cycles focus.
+// Raw PS/2 Set 1 scancodes arrive via SYS_KEYBOARD_READ (no longer stdin).
+// `handle_scancode` runs the modifier state machine, consumes global hotkeys,
+// and decodes the rest to UTF-8 bytes via the active layout (`state.keymap`),
+// which compd forwards to the focused window.
+const EXTENDED_PREFIX: u8 = 0xE0;
+const BREAK_FLAG: u8 = 0x80;
+const SC_LCTRL: u8 = 0x1D;
+const SC_LSHIFT: u8 = 0x2A;
+const SC_RSHIFT: u8 = 0x36;
+const SC_LALT: u8 = 0x38; // right Alt (= AltGr) when 0xE0-prefixed
+const SC_CAPS: u8 = 0x3A;
+const SC_X: u8 = 0x2D; // Ctrl+Alt+X → spawn /bin/msh.
+const SC_RBRACKET: u8 = 0x1B; // Ctrl+(physical ]) → cycle focus.
+
+enum KeyAction {
+    None,
+    SpawnShell,
+    CycleFocus,
+    /// `n` decoded UTF-8 bytes were written into the caller's emit buffer.
+    Emit(usize),
+}
 
 pub fn poll(state: &mut CompState) {
     poll_keyboard(state);
@@ -13,44 +33,122 @@ pub fn poll(state: &mut CompState) {
 
 fn poll_keyboard(state: &mut CompState) {
     let mut kb = [0u8; 32];
-    let avail = io::stdin_available();
-    let n = if avail > 0 {
-        io::read_stdin(&mut kb)
-    } else {
-        0
-    };
+    let n = io::read_keyboard(&mut kb);
     if n == 0 {
         return;
     }
 
-    let mut has_cycle = false;
-    for b in kb.iter_mut().take(n) {
-        if *b == CTRL_BRACKET {
-            has_cycle = true;
-            *b = 0;
-        }
-    }
-
-    if has_cycle {
-        if let Err(_) = state.ch_input_to_focus.send(InputMsg::FocusCycleRequest) {
-            // Drop on full channel; user will press again.
-        }
-    }
-
-    let mut fwd = [0u8; 32];
+    // Decoded output can be multi-byte (UTF-8), so size for the worst case.
+    let mut fwd = [0u8; 128];
     let mut fi = 0usize;
-    for b in kb.iter().take(n) {
-        if *b != 0 || !has_cycle {
-            fwd[fi] = *b;
-            fi += 1;
+
+    for &byte in kb.iter().take(n) {
+        let mut emit = [0u8; 4];
+        match handle_scancode(state, byte, &mut emit) {
+            KeyAction::SpawnShell => {
+                let _ = process::spawn("/bin/msh");
+            },
+            KeyAction::CycleFocus => {
+                if state
+                    .ch_input_to_focus
+                    .send(InputMsg::FocusCycleRequest)
+                    .is_err()
+                {
+                    // Drop on full channel; user will press again.
+                }
+            },
+            KeyAction::Emit(len) => {
+                for b in emit.iter().take(len) {
+                    if fi < fwd.len() {
+                        fwd[fi] = *b;
+                        fi += 1;
+                    }
+                }
+            },
+            KeyAction::None => {},
         }
     }
+
     if fi > 0 {
         if let Some(focused_idx) = state.focused {
             if let Some(ref win) = state.windows[focused_idx] {
                 let _ = compsys::forward_input(win.pid, &fwd[..fi]);
             }
         }
+    }
+}
+
+/// Feed one raw PS/2 Set 1 byte into compd's modifier state machine. Updates
+/// modifier/lock state, consumes global hotkeys on their press edge, and
+/// otherwise decodes the key to UTF-8 bytes (written into `emit`) via the
+/// active layout. Returns the action for `poll_keyboard` to apply.
+fn handle_scancode(state: &mut CompState, byte: u8, emit: &mut [u8; 4]) -> KeyAction {
+    if byte == EXTENDED_PREFIX {
+        state.kbd_extended = true;
+        return KeyAction::None;
+    }
+    let is_break = (byte & BREAK_FLAG) != 0;
+    let make = byte & !BREAK_FLAG;
+    let was_extended = state.kbd_extended;
+    state.kbd_extended = false;
+
+    if was_extended {
+        // 0xE0-prefixed: right Ctrl, right Alt (= AltGr), and nav keys.
+        match make {
+            SC_LCTRL => state.kbd_ctrl = !is_break,
+            SC_LALT => state.kbd_altgr = !is_break,
+            _ => {}, // arrows / nav cluster — no character yet
+        }
+        return KeyAction::None;
+    }
+
+    // Modifiers / locks never produce output.
+    match make {
+        SC_LCTRL => {
+            state.kbd_ctrl = !is_break;
+            return KeyAction::None;
+        },
+        SC_LSHIFT | SC_RSHIFT => {
+            state.kbd_shift = !is_break;
+            return KeyAction::None;
+        },
+        SC_LALT => {
+            state.kbd_alt = !is_break;
+            return KeyAction::None;
+        },
+        SC_CAPS => {
+            if !is_break {
+                state.kbd_caps = !state.kbd_caps; // toggle on press
+            }
+            return KeyAction::None;
+        },
+        _ => {},
+    }
+
+    if is_break {
+        return KeyAction::None; // characters and hotkeys fire on the press edge only
+    }
+
+    // Global hotkeys consume their trigger key (not forwarded / not decoded).
+    if make == SC_X && state.kbd_ctrl && state.kbd_alt {
+        return KeyAction::SpawnShell;
+    }
+    if make == SC_RBRACKET && state.kbd_ctrl {
+        return KeyAction::CycleFocus;
+    }
+
+    // Decode to characters via the active layout.
+    let mods = keymap::Mods {
+        shift: state.kbd_shift,
+        altgr: state.kbd_altgr,
+        ctrl: state.kbd_ctrl,
+        caps: state.kbd_caps,
+    };
+    let len = state.keymap.decode(make, &mods, emit);
+    if len > 0 {
+        KeyAction::Emit(len)
+    } else {
+        KeyAction::None
     }
 }
 
@@ -121,7 +219,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                     }
                     state.capture = None;
                     route_to_child = false;
-                }
+                },
                 HitRegion::Title => {
                     if let Some(ref win) = state.windows[idx] {
                         state.capture = Some(MouseCapture::Move {
@@ -131,7 +229,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         });
                     }
                     route_to_child = false;
-                }
+                },
                 HitRegion::Resize => {
                     if let Some(ref win) = state.windows[idx] {
                         state.capture = Some(MouseCapture::Resize {
@@ -143,8 +241,8 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         });
                     }
                     route_to_child = false;
-                }
-                HitRegion::Content => {}
+                },
+                HitRegion::Content => {},
             }
         } else {
             enqueue_mouse_route(
@@ -172,7 +270,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         win.mouse_local_valid = false;
                     }
                     route_to_child = false;
-                }
+                },
                 MouseCapture::Resize {
                     idx,
                     start_mx,
@@ -192,7 +290,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         win.mouse_local_valid = false;
                     }
                     route_to_child = false;
-                }
+                },
             }
         }
     }
@@ -226,7 +324,7 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
     match msg {
         MouseZRouteMsg::Desktop { buttons } => {
             forward_to_desktop(state, buttons);
-        }
+        },
         MouseZRouteMsg::Child { idx, buttons } => {
             let idx = idx as usize;
             if let Some(ref mut win) = state.windows[idx] {
@@ -243,8 +341,8 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
                 let dy = dy.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
                 let _ = compsys::mouse_forward(win.pid, dx, dy, buttons);
             }
-        }
-        MouseZRouteMsg::None => {}
+        },
+        MouseZRouteMsg::None => {},
     }
 }
 

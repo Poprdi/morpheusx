@@ -3,6 +3,7 @@
 use crate::types::FileEntry;
 
 impl FileEntry {
+    /// The decoded entry name.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -22,6 +23,7 @@ impl FileEntry {
         self.flags.directory
     }
 
+    /// True if the hidden flag is set.
     pub fn is_hidden(&self) -> bool {
         self.flags.hidden
     }

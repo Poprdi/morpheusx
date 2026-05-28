@@ -10,6 +10,8 @@ pub fn update(state: &mut CompState) {
 
     let mut alive_pids = [0u32; MAX_WINDOWS];
     let alive_count = count.min(MAX_WINDOWS);
+    #[allow(clippy::needless_range_loop)]
+    // index drives both alive_pids (write) and surface_buf (read).
     for i in 0..alive_count {
         alive_pids[i] = state.surface_buf[i].pid;
     }
@@ -20,7 +22,7 @@ pub fn update(state: &mut CompState) {
         } else {
             continue;
         };
-        let still_alive = alive_pids[..alive_count].iter().any(|&p| p == pid);
+        let still_alive = alive_pids[..alive_count].contains(&pid);
         if !still_alive {
             if let Some(ref w) = state.windows[i] {
                 if w.mapped && w.surface_vaddr != 0 && w.surface_pages != 0 {
@@ -59,18 +61,15 @@ pub fn update(state: &mut CompState) {
         if let Some(idx) = slot {
             if let Some(ref mut win) = state.windows[idx] {
                 if !win.mapped {
-                    match compsys::surface_map(entry.pid) {
-                        Ok(ptr) => {
-                            win.surface_ptr = ptr as *const u32;
-                            win.surface_vaddr = ptr as u64;
-                            win.surface_pages = entry.pages;
-                            win.src_w = entry.width;
-                            win.src_h = entry.height;
-                            // entry.stride is bytes; blit math wants pixels.
-                            win.src_stride = (entry.stride / 4).max(entry.width.max(1));
-                            win.mapped = true;
-                        }
-                        Err(_) => {}
+                    if let Ok(ptr) = compsys::surface_map(entry.pid) {
+                        win.surface_ptr = ptr as *const u32;
+                        win.surface_vaddr = ptr as u64;
+                        win.surface_pages = entry.pages;
+                        win.src_w = entry.width;
+                        win.src_h = entry.height;
+                        // entry.stride is bytes; blit math wants pixels.
+                        win.src_stride = (entry.stride / 4).max(entry.width.max(1));
+                        win.mapped = true;
                     }
                 } else {
                     win.src_w = entry.width;
@@ -117,8 +116,7 @@ pub fn update(state: &mut CompState) {
                 state.desktop_idx = Some(idx);
             } else {
                 let step = CASCADE_STEP * (state.cascade_n % 5);
-                // Open at source size, clamped to visible work area so the title
-                // bar and resize grip stay reachable.
+                // Source size clamped to work area so title bar / resize grip stay reachable.
                 let max_w = state.fb_w.saturating_sub(40).max(160);
                 let max_h = state.fb_h.saturating_sub(TITLE_H + PANEL_H + 40).max(120);
                 let w = entry.width.max(1).min(max_w);
@@ -152,7 +150,7 @@ pub fn update(state: &mut CompState) {
                     z_layer: 1,
                 });
 
-                // Seed app-local cursor so the first click lands at the right local position.
+                // Seed app-local cursor so the first click lands at the right local pos.
                 if let Some(ref mut win) = state.windows[idx] {
                     let (local_x, local_y) =
                         map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);

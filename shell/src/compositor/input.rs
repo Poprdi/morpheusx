@@ -38,7 +38,7 @@ impl Compositor {
                         }
                         self.capture = None;
                         route_to_child = false;
-                    }
+                    },
                     HitRegion::Title => {
                         if let Some(win) = &self.windows[idx] {
                             self.capture = Some(MouseCapture::Move {
@@ -48,7 +48,7 @@ impl Compositor {
                             });
                         }
                         route_to_child = false;
-                    }
+                    },
                     HitRegion::Resize => {
                         if let Some(win) = &self.windows[idx] {
                             self.capture = Some(MouseCapture::Resize {
@@ -60,8 +60,8 @@ impl Compositor {
                             });
                         }
                         route_to_child = false;
-                    }
-                    HitRegion::Content => {}
+                    },
+                    HitRegion::Content => {},
                 }
             }
         }
@@ -79,7 +79,7 @@ impl Compositor {
                             win.y = ny.clamp(TITLE_H as i32, max_y);
                         }
                         route_to_child = false;
-                    }
+                    },
                     MouseCapture::Resize {
                         idx,
                         start_mx,
@@ -98,7 +98,7 @@ impl Compositor {
                             win.h = nh as u32;
                         }
                         route_to_child = false;
-                    }
+                    },
                 }
             }
         }

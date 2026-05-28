@@ -1,0 +1,21 @@
+[package]
+name = "morpheus-kernel"
+version.workspace = true
+edition.workspace = true
+description = "MorpheusX arch-agnostic kernel: process, scheduler, syscalls, ELF, IPC, FS glue"
+
+[features]
+default = []
+
+[dependencies]
+# Object-safe HAL trait surface — the ONLY arch contact point allowed.
+morpheus-hal-api.workspace = true
+# Shared arch-agnostic types + ABI constants.
+morpheus-foundation.workspace = true
+# HelixFS — kernel needs to mount the root FS + drive vfs ops in syscall handlers.
+morpheus-helix.workspace = true
+# PE parsing for the persist syscall path.
+morpheus-persistent.workspace = true
+# `Once` for the HAL global + spinlocks for process/sched state.
+# Need the `once` feature on top of the workspace defaults.
+spin = { workspace = true, features = ["once"] }

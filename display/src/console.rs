@@ -59,8 +59,7 @@ impl TextConsole {
         self.cursor_row = 0;
     }
 
-    /// Background fill via REP STOSD (one memset32 per row), then plot fg
-    /// pixels only. Cuts per-glyph writes by ~60-70% vs. per-pixel.
+    /// Bg via memset32, then plot fg pixels only.
     fn render_char(&mut self, c: char) {
         let glyph = get_glyph_or_space(c);
         let px = (self.cursor_col * FONT_WIDTH) as u32;
@@ -116,7 +115,7 @@ impl TextConsole {
                     self.cursor_col -= 1;
                 }
                 self.render_char(' ');
-            }
+            },
             '\t' => {
                 // Round up to next 8-column tabstop.
                 let next_tab = (self.cursor_col + 8) & !7;
@@ -124,15 +123,15 @@ impl TextConsole {
                     self.render_char(' ');
                     self.advance_cursor();
                 }
-            }
+            },
             c if (' '..='~').contains(&c) => {
                 self.render_char(c);
                 self.advance_cursor();
-            }
+            },
             _ => {
                 self.render_char(' ');
                 self.advance_cursor();
-            }
+            },
         }
     }
 

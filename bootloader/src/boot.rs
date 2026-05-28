@@ -36,14 +36,14 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use morpheus_display::console::TextConsole;
-use morpheus_hwinit::serial::{
+use morpheus_hal_x86_64::platform::PlatformInit;
+use morpheus_hal_x86_64::serial::{
     clear_live_console_hook, log_error, log_info, log_ok, log_warn, puts,
 };
 
 use crate::tui::input::Keyboard;
 use crate::tui::mouse::Mouse;
 use crate::{baremetal_ops, bsod, storage, tui, uefi_allocator};
-
 
 /// Raw framebuffer info from GOP.
 ///
@@ -213,7 +213,6 @@ unsafe fn live_console_putc(b: u8) {
         con.write_char(b as char);
     }
 }
-
 
 const LOADED_IMAGE_PROTOCOL_GUID: [u8; 16] = [
     0xA1, 0x31, 0x1B, 0x5B, 0x62, 0x95, 0xD2, 0x11, 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B,
@@ -387,7 +386,6 @@ struct Gop {
     mode: *mut GopMode,
 }
 
-
 /// EFI entry point. UEFI invokes this; we never return except via reset.
 ///
 /// All the actual work is in `run()`. This wrapper exists solely to honor
@@ -429,6 +427,7 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
 
     // Phase C — hardware: hwinit takes ownership of the machine.
     let platform = stage_c1_platform_init(&ctx);
+    stage_c1b_kernel_late_init(&platform);
     stage_c2_register_crash_hook();
     stage_c3_record_platform_outputs(&mut ctx, &platform);
 
@@ -442,7 +441,6 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     stage_e1_release_aps();
     stage_e2_enter_userspace(&ctx);
 }
-
 
 /// A1. Hand the global allocator the UEFI BootServices pointer so that
 /// pre-EBS allocations go through `allocate_pool`.
@@ -731,7 +729,6 @@ unsafe fn stage_a7_fetch_memory_map(ctx: &mut BootContext) {
     log_ok("EBS", 915, "memory map captured");
 }
 
-
 static EBS_MAP_KEY: AtomicUsize = AtomicUsize::new(0);
 
 /// B1. Call `ExitBootServices`. After this point UEFI services are dead.
@@ -800,7 +797,7 @@ unsafe fn stage_b5_start_live_console(ctx: &BootContext) {
     let mut con = TextConsole::new(raw_fb);
     con.clear();
     LIVE_CONSOLE = Some(con);
-    morpheus_hwinit::serial::set_live_console_hook(live_console_putc);
+    morpheus_hal_x86_64::serial::set_live_console_hook(live_console_putc);
 }
 
 /// B6. Publish framebuffer info for crash-context consumers.
@@ -808,12 +805,45 @@ fn stage_b6_publish_framebuffer(ctx: &BootContext) {
     publish_framebuffer(&ctx.framebuffer);
 }
 
-
 /// C1. Hand the memory map + boot stack + image bounds + ACPI RSDP to
-/// hwinit. After this returns, GDT/IDT/PIC→APIC/heap/TSC/DMA/PCI/paging/
-/// USB-input/scheduler/syscalls/SMP are all live.
-unsafe fn stage_c1_platform_init(ctx: &BootContext) -> morpheus_hwinit::PlatformInit {
-    let cfg = morpheus_hwinit::SelfContainedConfig {
+/// hal-x86_64. After this returns, machine bring-up phases 1-9 are complete
+/// (GDT/IDT/PIC/Heap/TSC/DMA/PCI/paging/USB-input) and the HAL singleton is
+/// installed on the kernel. Kernel late-init (scheduler/syscalls/FS) happens
+/// in `stage_c1b_kernel_late_init`; BootServices reclaim + SMP bring-up
+/// happen there too, AFTER the scheduler is up.
+unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
+    // Wire the 4 fn-pointer hooks hal-x86_64 phase 9 needs (kernel-side TSC
+    // publish + HID ringbuf init + xHCI MSI-X wiring + xHCI runtime install).
+    // Wave C1c moved the USB symbols to morpheus-xhci; we install them here
+    // BEFORE invoking platform init so phase 9's xHCI block can see them.
+    morpheus_hal_x86_64::platform::set_tsc_freq_publish_hook(
+        morpheus_kernel::schedular::set_tsc_frequency,
+    );
+    morpheus_hal_x86_64::platform::set_input_init_hook(kernel_input_init_shim);
+    morpheus_hal_x86_64::platform::set_xhci_msix_hook(xhci_msix_shim);
+    morpheus_hal_x86_64::platform::set_xhci_runtime_hook(
+        morpheus_xhci::usb::runtime::install_runtime,
+    );
+
+    // HID event sinks: the xHCI HID drivers deliver events here so the kernel
+    // input layer receives them. Must be installed before HID init runs.
+    //
+    // SAFETY: pre-scheduler, single-threaded; no HID parsing in flight.
+    unsafe {
+        morpheus_xhci::usb::hid::sink::set_keyboard_sink(morpheus_kernel::input::hid_keyboard_sink);
+        morpheus_xhci::usb::hid::sink::set_mouse_sink(morpheus_kernel::input::hid_mouse_sink);
+    }
+
+    // Install the HAL on the kernel BEFORE platform_init_selfcontained runs.
+    // Phase 9 inside platform init invokes the input_init_hook, which calls
+    // morpheus_kernel::input::init(); that touches kernel SpinLocks, which
+    // route IF management through hal() — so hal() must already be live.
+    //
+    // SAFETY: BSP, single-threaded; `HalImpl::new()` has no hardware
+    // preconditions (it's a zero-sized struct), so it's safe pre-phase-1.
+    morpheus_kernel::install_hal(unsafe { morpheus_hal_x86_64::platform::init() });
+
+    let cfg = morpheus_hal_x86_64::platform::SelfContainedConfig {
         memory_map_ptr: ctx.mmap_ptr,
         memory_map_size: ctx.mmap_size,
         descriptor_size: ctx.desc_size,
@@ -824,12 +854,111 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> morpheus_hwinit::Platform
         stack_pages: ctx.stack_pages,
         acpi_rsdp_phys: ctx.acpi_rsdp_phys,
     };
-    match morpheus_hwinit::platform_init_selfcontained(cfg) {
-        Ok(p) => {
-            log_ok("BOOT", 930, "platform init complete");
-            p
-        }
+    let result = match morpheus_hal_x86_64::platform::platform_init_selfcontained(cfg) {
+        Ok(p) => p,
         Err(_) => boot_panic("BOOT", "platform init failed"),
+    };
+
+    log_ok("BOOT", 930, "phase 1-9 complete (machine bring-up)");
+    result
+}
+
+/// xHCI MSI-X wiring shim. hal-x86_64 emits the hook with a
+/// `morpheus_hal_x86_64::pci::PciAddr`; morpheus-xhci accepts a
+/// `morpheus_hal_api::BusAddr`. Convert at the boundary.
+unsafe fn xhci_msix_shim(pci_addr: morpheus_hal_x86_64::pci::PciAddr, rt_base: u64) {
+    let bus_addr = morpheus_hal_api::BusAddr::new(pci_addr.bus, pci_addr.device, pci_addr.function);
+    // SAFETY: IDT + LAPIC + BAR all live by hal-x86_64 phase 9 entry.
+    unsafe { morpheus_xhci::usb::msi::wire_msix(bus_addr, rt_base) };
+}
+
+/// Tiny coercion shim from the hal's `unsafe fn()` hook type to the kernel's
+/// safe `fn input::init()`. Required because Rust does not auto-coerce a
+/// safe-fn pointer to an unsafe-fn pointer through a generic register call.
+unsafe fn kernel_input_init_shim() {
+    morpheus_kernel::input::init();
+}
+
+/// C1b. Mask the legacy 8259, run kernel late-init (scheduler / syscalls /
+/// FS), then reclaim BootServices RAM. Splits from C1 because the scheduler
+/// must be up before AP bring-up (LD16) and the reclaim must run with
+/// interrupts already live (post-LAPIC-takeover) so we know no UEFI-stage
+/// reference is in flight.
+unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
+    let hal = morpheus_kernel::hal();
+
+    // SAFETY: BSP, interrupts already off (B2 disabled them; late_init below
+    // re-enables once the LAPIC has taken over). PIC is quiesced — no UEFI
+    // driver thread is alive past ExitBootServices.
+    unsafe { hal.intr().disable_legacy_pic() };
+
+    const ROOT_FS_SIZE: usize = 16 * 1024 * 1024;
+
+    morpheus_kernel::late_init(
+        hal,
+        morpheus_kernel::InitParams {
+            timer_isr: hal.smp().timer_isr(),
+            root_fs_size: ROOT_FS_SIZE,
+            kernel_stack_top: platform.kernel_stack_top,
+        },
+    );
+    log_ok("BOOT", 932, "kernel late-init complete");
+
+    // Wire KernelCr3Guard's kernel-CR3 lookup. The kernel can't call the arch
+    // HAL directly (portability gate), so the bootloader installs the hook now
+    // that init_scheduler has set the kernel CR3. Without this the guard is a
+    // permanent no-op and phys walks under a user CR3 rely solely on the cloned
+    // kernel half.
+    //
+    // SAFETY: BSP, single-threaded, post-late_init (kernel CR3 is set).
+    unsafe {
+        morpheus_hal_x86_64::memory::set_kernel_cr3_hook(morpheus_kernel::init::kernel_cr3_hook);
+    }
+
+    // Phase 10.5: reclaim BootServices{Code,Data}. Must run AFTER late-init
+    // (timer IRQ live, no UEFI-stage reference outstanding) AND BEFORE the
+    // helixfs 16 MiB alloc — pre-refactor order. Reclaim's
+    // `validate_free_lists` walk has been observed to PF on real hardware
+    // when the buddy was already hammered by a prior large alloc.
+    //
+    // SAFETY: BSP, post-late_init per the trait contract. Byte count is
+    // discarded; the impl logs the figure internally.
+    let _ = unsafe { hal.phys().reclaim_boot_services() };
+
+    // Phase 11b: HelixFS root mount. Runs AFTER reclaim so the buddy is in
+    // a known-clean post-reclaim state when the 16 MiB alloc carves it.
+    log_info("BOOT", 112, "phase 11b/13: helixfs");
+    morpheus_kernel::init::mount_root_fs(hal, ROOT_FS_SIZE);
+
+    // Phase 12: SMP bring-up. Per LD16 this happens AFTER the kernel
+    // scheduler is initialized. Discovery returns an empty slice when MADT
+    // is absent / invalid; in that case fall back to CPUID brute-force
+    // enumeration (`start_aps`) rather than forcing single-core — real
+    // hardware with a quirky/missing MADT booted SMP pre-refactor.
+    //
+    // SAFETY: BSP, scheduler live, ACPI tables still identity-mapped per
+    // the HAL trait contract.
+    let lapic_ids = match unsafe { hal.smp().discover_ap_lapic_ids(platform.acpi_rsdp_phys) } {
+        Ok(ids) => ids,
+        Err(_) => {
+            log_warn("SMP", 213, "MADT discovery failed; trying CPUID scan");
+            &[]
+        },
+    };
+    if lapic_ids.is_empty() {
+        // No MADT APs: CPUID brute-force fallback (detects topology internally).
+        let cores = hal.smp().start_aps();
+        if cores > 1 {
+            log_ok("SMP", 215, "CPUID-fallback AP bring-up complete");
+        } else {
+            log_info("SMP", 215, "no APs via CPUID; single-core boot");
+        }
+    } else {
+        // SAFETY: BSP, post-discover, IF managed by the impl.
+        match unsafe { hal.smp().start_aps_from_list(lapic_ids) } {
+            Ok(_ap_count) => {},
+            Err(_) => log_warn("SMP", 214, "AP startup failed; continuing single-core"),
+        }
     }
 }
 
@@ -837,16 +966,13 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> morpheus_hwinit::Platform
 /// framebuffer snapshot was published in B6, so the hook can render even
 /// from exception context.
 unsafe fn stage_c2_register_crash_hook() {
-    morpheus_hwinit::set_crash_hook(bsod::show_crash_screen);
+    morpheus_hal_x86_64::cpu::idt::set_crash_hook(bsod::show_crash_screen);
     log_info("BOOT", 931, "crash hook registered");
 }
 
 /// C3. Record platform outputs (DMA region + TSC freq) into BootContext so
 /// later stages don't need to re-borrow the `PlatformInit`.
-fn stage_c3_record_platform_outputs(
-    ctx: &mut BootContext,
-    platform: &morpheus_hwinit::PlatformInit,
-) {
+fn stage_c3_record_platform_outputs(ctx: &mut BootContext, platform: &PlatformInit) {
     let dma = platform.dma();
     ctx.platform_dma_cpu = dma.cpu_base() as u64;
     ctx.platform_dma_bus = dma.bus_base();
@@ -854,16 +980,12 @@ fn stage_c3_record_platform_outputs(
     ctx.tsc_freq = platform.tsc_freq();
 }
 
-
 /// D1. Register the userspace-triggered network activation callback. The
 /// network stack stays offline until userspace explicitly opts in via
 /// `SYS_NET_CFG(NET_CFG_ACTIVATE)`.
-unsafe fn stage_d1_register_network_activation(
-    _ctx: &BootContext,
-    platform: &morpheus_hwinit::PlatformInit,
-) {
+unsafe fn stage_d1_register_network_activation(_ctx: &BootContext, platform: &PlatformInit) {
     baremetal_ops::network::init_userspace_network_activation(
-        morpheus_network::dma::DmaRegion::new(
+        morpheus_virtio::dma::DmaRegion::new(
             platform.dma().cpu_base(),
             platform.dma().bus_base(),
             platform.dma().size(),
@@ -878,7 +1000,7 @@ unsafe fn stage_d1_register_network_activation(
 ///   1. Pre-EBS staged `/morpheus/helix.img` (if A6 produced one)
 ///   2. Persistent block device with valid HelixFS superblock
 ///   3. RAM HelixFS already mounted by hwinit phase 11
-unsafe fn stage_d2_storage_init(ctx: &BootContext, platform: &morpheus_hwinit::PlatformInit) {
+unsafe fn stage_d2_storage_init(ctx: &BootContext, platform: &PlatformInit) {
     storage::init_persistent_storage(platform.dma(), ctx.tsc_freq, ctx.pre_ebs_helix);
 }
 
@@ -895,24 +1017,25 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
         return;
     }
     let stride_bytes = ctx.framebuffer.stride * 4;
-    morpheus_hwinit::register_framebuffer(morpheus_hwinit::FbInfo {
-        base: ctx.framebuffer.base,
-        size: ctx.framebuffer.size as u64,
-        width: ctx.framebuffer.width,
-        height: ctx.framebuffer.height,
-        stride: stride_bytes,
-        format: ctx.framebuffer.format,
-    });
+    morpheus_kernel::syscall::handler::register_framebuffer(
+        morpheus_kernel::syscall::handler::FbInfo {
+            base: ctx.framebuffer.base,
+            size: ctx.framebuffer.size as u64,
+            width: ctx.framebuffer.width,
+            height: ctx.framebuffer.height,
+            stride: stride_bytes,
+            format: ctx.framebuffer.format,
+        },
+    );
     log_ok("DISPLAY", 941, "framebuffer registered with syscall layer");
 }
-
 
 /// E1. Release the parked APs. From this point on, the system is fully SMP.
 ///
 /// Pre: every preceding stage has completed. Any boot work that is not
 /// SMP-safe must already have run.
 unsafe fn stage_e1_release_aps() {
-    morpheus_hwinit::cpu::ap_boot::release_parked_aps();
+    morpheus_hal_x86_64::cpu::ap_boot::release_parked_aps();
     log_ok("BOOT", 950, "APs released into scheduler");
 }
 
@@ -925,7 +1048,7 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     // keyboard was enumerated we don't need (and don't want) to probe PS/2 —
     // on boards without a PS/2 controller the full reset path floods the log
     // with warnings and accomplishes nothing.
-    let usb_kbd_present = morpheus_hwinit::usb::runtime::keyboard_present();
+    let usb_kbd_present = morpheus_xhci::usb::runtime::keyboard_present();
     let mut keyboard = if usb_kbd_present {
         log_info("BOOT", 963, "USB keyboard active; skipping PS/2 init");
         Keyboard::new_decoder_only()
@@ -950,19 +1073,14 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
         None => boot_panic("BOOT", "/bin/init not found"),
     };
 
-    let init_pid = match morpheus_hwinit::process::scheduler::spawn_user_process(
-        "init",
-        &elf_data,
-        &[],
-        0,
-        false,
-    ) {
-        Ok(pid) => {
-            log_ok("BOOT", 961, "init process spawned");
-            pid
-        }
-        Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
-    };
+    let init_pid =
+        match morpheus_kernel::schedular::spawn_user_process("init", &elf_data, &[], 0, false) {
+            Ok(pid) => {
+                log_ok("BOOT", 961, "init process spawned");
+                pid
+            },
+            Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
+        };
     let _ = init_pid;
 
     // The ELF buffer can drop now; init has its own address space.
@@ -972,23 +1090,22 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     input_forwarding_loop(&mut keyboard, &mut mouse);
 }
 
-
 /// Wait for any keypress before tearing down the live console.
 ///
 /// Primary path is USB HID; PS/2 is only polled as a fallback when no USB
 /// keyboard was detected during Phase 9 enumeration.
 fn boot_log_gate(keyboard: &mut Keyboard) {
     puts("\nPress any key to start userspace...");
-    let usb_active = morpheus_hwinit::usb::runtime::keyboard_present();
+    let usb_active = morpheus_xhci::usb::runtime::keyboard_present();
     loop {
         if usb_active {
             // USB-primary. Non-blocking peek + drain the unified queue.
             unsafe {
-                morpheus_hwinit::usb::runtime::poll_keyboard();
+                morpheus_xhci::usb::runtime::poll_keyboard();
             }
             let mut got_press = false;
-            while let Some(event) = morpheus_hwinit::poll_keyboard() {
-                if let morpheus_hwinit::InputEvent::Key(_scan, pressed) = event {
+            while let Some(event) = morpheus_kernel::input::poll_keyboard() {
+                if let morpheus_kernel::input::InputEvent::Key(_scan, pressed) = event {
                     if pressed {
                         got_press = true;
                     }
@@ -1019,7 +1136,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
         None => {
             log_error("BOOT", 970, "no root filesystem");
             return None;
-        }
+        },
     };
 
     let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
@@ -1027,7 +1144,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
         Err(_) => {
             log_error("BOOT", 971, "stat /bin/init failed");
             return None;
-        }
+        },
     };
     if stat.size == 0 {
         log_error("BOOT", 972, "/bin/init has zero size");
@@ -1035,7 +1152,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
     }
 
     let mut fd_table = morpheus_helix::vfs::FdTable::new();
-    let ts = morpheus_hwinit::cpu::tsc::read_tsc();
+    let ts = morpheus_hal_x86_64::cpu::tsc::read_tsc();
     let fd = match morpheus_helix::vfs::vfs_open(
         &mut fs.device,
         &mut fs.mount_table,
@@ -1048,7 +1165,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
         Err(_) => {
             log_error("BOOT", 973, "open /bin/init failed");
             return None;
-        }
+        },
     };
 
     let mut buf = alloc::vec![0u8; stat.size as usize];
@@ -1064,7 +1181,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
             let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
             log_error("BOOT", 974, "read /bin/init failed");
             return None;
-        }
+        },
     };
     buf.truncate(n);
     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
@@ -1074,29 +1191,35 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
 
 /// Kernel main loop: poll PS/2 keyboard + mouse, feed kernel stdin and the
 /// mouse accumulator. HLTs between batches to keep idle power low.
-fn input_forwarding_loop(keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
+///
+/// **Keyboard pipeline policy**: the bootloader does NOT decode scancodes to
+/// characters. It pushes the raw PS/2 Set 1 byte stream (including 0xE0
+/// extended prefixes and 0x80 break bits) straight into the kernel stdin
+/// queue. Userland (init) is responsible for tracking modifier state,
+/// recognizing hotkeys, applying the keyboard layout, and producing the
+/// final character stream for downstream processes. This makes layout
+/// configurable at runtime without rebooting and decouples Ctrl+X-style
+/// system hotkeys from US-vs-DE-vs-anything keymap concerns.
+///
+/// Mouse remains decoded at this layer — there's no mouse-layout concept.
+fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
     // Pin the primary-source decision once at entry. USB present in Phase 9
     // means USB is authoritative for the rest of uptime; PS/2 only polls if
     // USB enumeration found nothing.
-    let usb_active = morpheus_hwinit::usb::runtime::keyboard_present();
+    let usb_active = morpheus_xhci::usb::runtime::keyboard_present();
 
     loop {
         let mut had_work = false;
 
         if usb_active {
-            // USB-primary path.
+            // Pump the USB HID controller; parsed key events land in the kernel
+            // keyboard event ring via the HID sink. The compositor drains that
+            // ring through SYS_KEYBOARD_READ — we no longer bridge scancodes
+            // into stdin here. We idle-HLT below; the 100 Hz timer wakes us to
+            // pump again (HID poll latency ≈ one tick) and schedules compd to
+            // drain on the same ticks.
             unsafe {
-                morpheus_hwinit::usb::runtime::poll_keyboard();
-            }
-            while let Some(event) = morpheus_hwinit::poll_keyboard() {
-                if let morpheus_hwinit::InputEvent::Key(scan_code, pressed) = event {
-                    if pressed && scan_code != 0 {
-                        had_work = true;
-                        if let Some(input) = keyboard.feed_raw(scan_code) {
-                            forward_keyboard_byte(input);
-                        }
-                    }
-                }
+                morpheus_xhci::usb::runtime::poll_keyboard();
             }
         } else {
             // PS/2 fallback. Drains up to 64 buffered bytes per outer
@@ -1113,7 +1236,7 @@ fn input_forwarding_loop(keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
 
                 if device == 0x03 {
                     if let Some(pkt) = mouse.feed(byte) {
-                        morpheus_hwinit::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
+                        morpheus_kernel::mouse::accumulate(pkt.dx, pkt.dy, pkt.buttons);
                     }
                     continue;
                 }
@@ -1121,44 +1244,24 @@ fn input_forwarding_loop(keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
                     continue;
                 }
 
-                if let Some(input) = keyboard.feed_raw(byte) {
-                    forward_keyboard_byte(input);
-                }
+                // PS/2 keyboard feeds the same kernel event ring as USB HID,
+                // so the compositor drains both through SYS_KEYBOARD_READ.
+                // `pressed=true` is the ring's "process this byte" flag; make/
+                // break is encoded in the byte itself (|0x80).
+                morpheus_kernel::input::push_keyboard_event_internal(
+                    morpheus_kernel::input::InputEvent::Key(byte, true),
+                );
             }
         }
 
         if !had_work {
-            morpheus_hwinit::process::scheduler::mark_kernel_hlt();
+            morpheus_kernel::schedular::mark_kernel_hlt();
             unsafe {
                 core::arch::asm!("sti", "hlt", "cli", options(nostack, nomem));
             }
         }
     }
 }
-
-/// Route a decoded keyboard event into the kernel stdin ring buffer, with
-/// Ctrl+C routed as `SIGINT` to the foreground process if one is set.
-fn forward_keyboard_byte(input: crate::tui::input::InputKey) {
-    if input.unicode_char == 0 || input.unicode_char > 0xFF {
-        return;
-    }
-    let ch = input.unicode_char as u8;
-
-    if ch == 0x03 {
-        let fg = morpheus_hwinit::stdin::foreground_pid();
-        if fg != 0 {
-            unsafe {
-                let _ = morpheus_hwinit::process::SCHEDULER
-                    .send_signal(fg, morpheus_hwinit::process::signals::Signal::SIGINT);
-            }
-            return;
-        }
-    }
-
-    morpheus_hwinit::stdin::push(ch);
-    unsafe { morpheus_hwinit::process::wake_stdin_waiters() };
-}
-
 
 /// Unrecoverable boot error. Logs and halts the BSP. APs are either still
 /// parked (pre-E1) or will quiesce on their next tick; either way the

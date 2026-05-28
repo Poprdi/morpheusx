@@ -1,11 +1,5 @@
-//! Virtual Filesystem layer — mount table, fd operations, /sys/ nodes.
-//!
-//! This module sits between the syscall interface and the Helix on-disk
-//! implementation.  It provides:
-//!
-//! - **Mount table**: maps mount points to filesystem instances.
-//! - **File descriptor operations**: open / read / write / seek / close.
-//! - **`/sys/` virtual entries**: synthetic read-only nodes for system info.
+//! VFS layer: mount table, fd ops, `/sys/` virtual nodes. Sits between
+//! syscalls and the on-disk Helix implementation.
 
 pub mod global;
 
@@ -19,25 +13,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 
-
-/// A mounted HelixFS instance.
 pub struct HelixInstance {
-    /// The current superblock.
     pub sb: HelixSuperblock,
-    /// In-memory log engine.
     pub log: LogEngine,
-    /// In-memory namespace index.
     pub index: NamespaceIndex,
-    /// In-memory block bitmap.
     pub bitmap: BlockBitmap,
-    /// Partition start LBA on the device.
     pub partition_lba_start: u64,
-    /// Device block size (bytes).
     pub device_block_size: u32,
 }
 
 impl HelixInstance {
-    /// Create an instance from a superblock.
     pub fn new(sb: HelixSuperblock, partition_lba_start: u64, device_block_size: u32) -> Self {
         let log = LogEngine::new(&sb, partition_lba_start, device_block_size);
         let index = NamespaceIndex::new();
@@ -54,19 +39,14 @@ impl HelixInstance {
     }
 }
 
-
-/// Entry in the mount table.
 pub struct MountEntry {
-    /// Mount point path (e.g. "/" or "/data/").
+    /// e.g. "/" or "/data/".
     pub mount_point: [u8; 256],
     pub mount_point_len: u16,
-    /// The filesystem instance.
     pub fs: HelixInstance,
-    /// Whether this mount is read-only.
     pub read_only: bool,
 }
 
-/// Global mount table.
 pub struct MountTable {
     entries: [Option<MountEntry>; MAX_MOUNTS],
 }
@@ -79,7 +59,7 @@ impl Default for MountTable {
 
 impl MountTable {
     pub const fn new() -> Self {
-        // Can't use array::map in const context, use this pattern instead.
+        // array::map isn't const.
         Self {
             entries: [
                 None, None, None, None, None, None, None, None, None, None, None, None, None, None,
@@ -88,7 +68,6 @@ impl MountTable {
         }
     }
 
-    /// Mount a HelixFS instance at the given mount point.
     pub fn mount(
         &mut self,
         mount_point: &str,
@@ -114,7 +93,7 @@ impl MountTable {
         Err(HelixError::MountTableFull)
     }
 
-    /// Find the mount that handles a given path.
+    /// Longest matching prefix wins.
     pub fn resolve(&self, path: &str) -> Option<(u8, &MountEntry)> {
         let mut best: Option<(u8, &MountEntry, usize)> = None;
 
@@ -125,7 +104,7 @@ impl MountTable {
                     if path.starts_with(mp_str) {
                         let len = mp_str.len();
                         match &best {
-                            Some((_, _, best_len)) if *best_len >= len => {}
+                            Some((_, _, best_len)) if *best_len >= len => {},
                             _ => best = Some((idx as u8, entry, len)),
                         }
                     }
@@ -136,19 +115,15 @@ impl MountTable {
         best.map(|(idx, entry, _)| (idx, entry))
     }
 
-    /// Get a mutable reference to a mount entry by index.
     pub fn get_mut(&mut self, idx: u8) -> Option<&mut MountEntry> {
         self.entries.get_mut(idx as usize).and_then(|s| s.as_mut())
     }
 
-    /// Get an immutable reference to a mount entry by index.
     pub fn get(&self, idx: u8) -> Option<&MountEntry> {
         self.entries.get(idx as usize).and_then(|s| s.as_ref())
     }
 }
 
-
-/// Per-process file descriptor table.
 #[derive(Clone, Copy)]
 pub struct FdTable {
     pub fds: [FileDescriptor; MAX_FDS],
@@ -167,11 +142,7 @@ impl FdTable {
         }
     }
 
-    /// Allocate the lowest available fd.
-    ///
-    /// Indices 0–2 are reserved for stdin / stdout / stderr which are
-    /// handled directly by the syscall layer, so file descriptors start
-    /// at index 3.
+    /// Lowest free fd starting at 3 (0..=2 reserved for stdin/out/err).
     pub fn alloc(&mut self) -> Result<usize, HelixError> {
         for i in 3..MAX_FDS {
             if !self.fds[i].is_open() {
@@ -181,7 +152,6 @@ impl FdTable {
         Err(HelixError::TooManyOpenFiles)
     }
 
-    /// Get a file descriptor by index.
     pub fn get(&self, fd: usize) -> Result<&FileDescriptor, HelixError> {
         if fd >= MAX_FDS {
             return Err(HelixError::InvalidFd);
@@ -193,7 +163,6 @@ impl FdTable {
         Ok(desc)
     }
 
-    /// Get a mutable file descriptor by index.
     pub fn get_mut(&mut self, fd: usize) -> Result<&mut FileDescriptor, HelixError> {
         if fd >= MAX_FDS {
             return Err(HelixError::InvalidFd);
@@ -214,10 +183,6 @@ impl FdTable {
     }
 }
 
-
-/// Open a file or directory.
-///
-/// Returns the file descriptor index.
 pub fn vfs_open<B: BlockIo>(
     block_io: &mut B,
     mount_table: &mut MountTable,
@@ -226,23 +191,19 @@ pub fn vfs_open<B: BlockIo>(
     flags: u32,
     timestamp_ns: u64,
 ) -> Result<usize, HelixError> {
-    // Resolve mount.
     let (mount_idx, _entry) = mount_table.resolve(path).ok_or(HelixError::MountNotFound)?;
 
     let entry = mount_table.get_mut(mount_idx).unwrap();
 
-    // Enforce read-only.
     if entry.read_only
         && (flags & (open_flags::O_WRITE | open_flags::O_CREATE | open_flags::O_TRUNC) != 0)
     {
         return Err(HelixError::ReadOnly);
     }
 
-    // Check if the file exists.
     let exists = entry.fs.index.lookup(path).is_some();
 
     if !exists && flags & open_flags::O_CREATE != 0 {
-        // Create an empty file.
         ops::write::write_file(
             block_io,
             &mut entry.fs.log,
@@ -259,11 +220,9 @@ pub fn vfs_open<B: BlockIo>(
         return Err(HelixError::NotFound);
     }
 
-    // Look up the entry to get the key.
     let idx_entry = entry.fs.index.lookup(path).ok_or(HelixError::NotFound)?;
     let key = idx_entry.key;
 
-    // Allocate fd.
     let fd_idx = fd_table.alloc()?;
 
     let mut fd_path = [0u8; 256];
@@ -281,8 +240,7 @@ pub fn vfs_open<B: BlockIo>(
         pinned_lsn: 0,
     };
 
-    // Handle O_AT_LSN: pinned_lsn would be set by the caller.
-    // Handle O_TRUNC: truncate to 0.
+    // O_AT_LSN: caller sets pinned_lsn. O_TRUNC: write empty.
     if flags & open_flags::O_TRUNC != 0 {
         ops::write::write_file(
             block_io,
@@ -301,7 +259,6 @@ pub fn vfs_open<B: BlockIo>(
     Ok(fd_idx)
 }
 
-/// Read from an open file descriptor.
 pub fn vfs_read<B: BlockIo>(
     block_io: &mut B,
     mount_table: &MountTable,
@@ -322,10 +279,9 @@ pub fn vfs_read<B: BlockIo>(
         .get(mount_idx)
         .ok_or(HelixError::MountNotFound)?;
 
-    // Look up by full path to avoid hash-collision ambiguity.
+    // Look up by full path to dodge hash-collision ambiguity.
     let idx_entry = entry.fs.index.lookup(fd_path).ok_or(HelixError::NotFound)?;
 
-    // Read file data.
     let data = if idx_entry.flags & entry_flags::IS_INLINE != 0 {
         let size = idx_entry.size as usize;
         let mut v = alloc::vec![0u8; size];
@@ -333,35 +289,29 @@ pub fn vfs_read<B: BlockIo>(
         v
     } else {
         ops::read::read_file(
-            // We need a mutable block_io but mount_table is immutable.
-            // This means the caller must provide block_io separately.
             block_io,
             &entry.fs.index,
             entry.fs.partition_lba_start,
             entry.fs.sb.data_start_block,
             entry.fs.device_block_size,
-            // We need to reconstruct the path from the index entry.
             crate::index::btree::path_str(&idx_entry.path),
         )?
     };
 
-    // Copy from offset.
     let start = offset as usize;
     if start >= data.len() {
-        return Ok(0); // EOF
+        return Ok(0);
     }
     let available = data.len() - start;
     let to_copy = available.min(buf.len());
     buf[..to_copy].copy_from_slice(&data[start..start + to_copy]);
 
-    // Advance offset.
     let desc = fd_table.get_mut(fd)?;
     desc.offset += to_copy as u64;
 
     Ok(to_copy)
 }
 
-/// Write to an open file descriptor.
 pub fn vfs_write<B: BlockIo>(
     block_io: &mut B,
     mount_table: &mut MountTable,
@@ -386,7 +336,6 @@ pub fn vfs_write<B: BlockIo>(
         return Err(HelixError::ReadOnly);
     }
 
-    // Write (overwrite) the file.
     ops::write::write_file(
         block_io,
         &mut entry.fs.log,
@@ -400,14 +349,12 @@ pub fn vfs_write<B: BlockIo>(
         timestamp_ns,
     )?;
 
-    // Update offset.
     let desc = fd_table.get_mut(fd)?;
     desc.offset = data.len() as u64;
 
     Ok(data.len())
 }
 
-/// Seek within a file descriptor.
 pub fn vfs_seek(
     mount_table: &MountTable,
     fd_table: &mut FdTable,
@@ -431,7 +378,7 @@ pub fn vfs_seek(
                 return Err(HelixError::InvalidOffset);
             }
             offset as u64
-        }
+        },
         SEEK_CUR => {
             let cur = desc.offset as i64;
             let new = cur + offset;
@@ -439,7 +386,7 @@ pub fn vfs_seek(
                 return Err(HelixError::InvalidOffset);
             }
             new as u64
-        }
+        },
         SEEK_END => {
             let end = file_size as i64;
             let new = end + offset;
@@ -447,7 +394,7 @@ pub fn vfs_seek(
                 return Err(HelixError::InvalidOffset);
             }
             new as u64
-        }
+        },
         _ => return Err(HelixError::InvalidOffset),
     };
 
@@ -472,7 +419,6 @@ pub fn vfs_readdir(mount_table: &MountTable, path: &str) -> Result<Vec<DirEntry>
     ops::dir::readdir(&entry.fs.index, path)
 }
 
-/// Create a directory.
 pub fn vfs_mkdir(
     mount_table: &mut MountTable,
     path: &str,
@@ -490,7 +436,7 @@ pub fn vfs_mkdir(
     Ok(())
 }
 
-/// Unlink (delete) a file or empty directory.
+/// File or empty directory.
 pub fn vfs_unlink(
     mount_table: &mut MountTable,
     path: &str,
@@ -540,22 +486,20 @@ pub fn vfs_rename(
     Ok(())
 }
 
-/// Flush all pending writes to disk and update the superblock.
+/// Flush log; update both superblock slots.
 pub fn vfs_sync<B: BlockIo>(
     block_io: &mut B,
     mount_table: &mut MountTable,
 ) -> Result<(), HelixError> {
     for entry in mount_table.entries.iter_mut().flatten() {
-        // Flush the log.
         let committed_lsn = entry.fs.log.flush(block_io)?;
 
-        // Update superblock fields (write_superblock calls update_crc).
+        // write_superblock calls update_crc.
         entry.fs.sb.committed_lsn = committed_lsn;
         entry.fs.sb.log_head_segment = entry.fs.log.head_segment();
         entry.fs.sb.log_head_offset = entry.fs.log.head_offset();
         entry.fs.sb.log_tail_segment = entry.fs.log.tail_segment();
 
-        // Write both superblock slots.
         crate::log::recovery::write_superblock(
             block_io,
             entry.fs.partition_lba_start,

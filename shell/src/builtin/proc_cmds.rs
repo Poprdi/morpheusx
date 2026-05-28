@@ -85,7 +85,7 @@ fn parse_kill_args(args: &[String]) -> Option<(u32, u8)> {
         return None;
     }
     let first = &args[0];
-    // `kill -9 <pid>` syntax: first arg starts with '-' and rest is a number
+    // `kill -<sig> <pid>` form.
     if first.starts_with('-') && first.len() > 1 {
         if let Some(sig) = parse_u32(&first[1..]) {
             if sig <= 255 {
@@ -97,7 +97,7 @@ fn parse_kill_args(args: &[String]) -> Option<(u32, u8)> {
             }
         }
     }
-    // `kill <pid> [signal]` syntax
+    // `kill <pid> [sig]` form.
     let pid = parse_u32(first)?;
     let sig = if let Some(s) = args.get(1) {
         let n = parse_u32(s)?;
@@ -122,7 +122,7 @@ pub fn kill(args: &[String]) -> i32 {
         Err(e) => {
             libmorpheus::eprintln!("kill: pid {}: error 0x{:x}", pid, e);
             1
-        }
+        },
     }
 }
 
@@ -141,7 +141,7 @@ pub fn kill_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                 (170, 0, 0),
             );
             1
-        }
+        },
     }
 }
 
@@ -253,11 +253,11 @@ pub fn reboot(args: &[String]) -> i32 {
                     "reboot — restart the machine\n\nUSAGE\n  reboot [-f|--force]\n\nDefault is graceful reboot.\n",
                 );
                 return 0;
-            }
+            },
             _ => {
                 libmorpheus::eprintln!("reboot: unknown option: {}", arg);
                 return 1;
-            }
+            },
         }
     }
 
@@ -266,7 +266,7 @@ pub fn reboot(args: &[String]) -> i32 {
         Err(e) => {
             libmorpheus::eprintln!("reboot: error 0x{:x}", e);
             1
-        }
+        },
     }
 }
 
@@ -281,7 +281,7 @@ pub fn reboot_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                     "reboot — restart the machine\n\nUSAGE\n  reboot [-f|--force]\n\nDefault is graceful reboot.\n",
                 );
                 return 0;
-            }
+            },
             _ => {
                 con.write_colored(
                     fb,
@@ -289,7 +289,7 @@ pub fn reboot_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                     (170, 0, 0),
                 );
                 return 1;
-            }
+            },
         }
     }
 
@@ -298,7 +298,7 @@ pub fn reboot_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
         Err(e) => {
             con.write_colored(fb, &format!("reboot: error 0x{:x}\n", e), (170, 0, 0));
             1
-        }
+        },
     }
 }
 
@@ -315,11 +315,11 @@ pub fn shutdown(args: &[String]) -> i32 {
                     "shutdown — stop services and reset\n\nUSAGE\n  shutdown [-f|--force] [-p]\n\nDefault is graceful reset.\n  -f  immediate hard reset\n  -p  intentional kernel panic (BSOD) then reset\n",
                 );
                 return 0;
-            }
+            },
             _ => {
                 libmorpheus::eprintln!("shutdown: unknown option: {}", arg);
                 return 1;
-            }
+            },
         }
     }
 
@@ -339,7 +339,7 @@ pub fn shutdown(args: &[String]) -> i32 {
         Err(e) => {
             libmorpheus::eprintln!("shutdown: error 0x{:x}", e);
             1
-        }
+        },
     }
 }
 
@@ -357,7 +357,7 @@ pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 
                     "shutdown — stop services and reset\n\nUSAGE\n  shutdown [-f|--force] [-p]\n\nDefault is graceful reset.\n  -f  immediate hard reset\n  -p  intentional kernel panic (BSOD) then reset\n",
                 );
                 return 0;
-            }
+            },
             _ => {
                 con.write_colored(
                     fb,
@@ -365,7 +365,7 @@ pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 
                     (170, 0, 0),
                 );
                 return 1;
-            }
+            },
         }
     }
 
@@ -389,23 +389,23 @@ pub fn shutdown_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 
         Err(e) => {
             con.write_colored(fb, &format!("shutdown: error 0x{:x}\n", e), (170, 0, 0));
             1
-        }
+        },
     }
 }
 
 pub fn netup(args: &[String]) -> i32 {
-    for arg in args {
+    if let Some(arg) = args.first() {
         match arg.as_str() {
             "-h" | "--help" => {
                 libmorpheus::io::print(
                     "netup — activate networking from userspace\n\nUSAGE\n  netup\n\nBrings up NIC/driver on demand. Boot stays offline by default.\n",
                 );
                 return 0;
-            }
+            },
             _ => {
                 libmorpheus::eprintln!("netup: unknown option: {}", arg);
                 return 1;
-            }
+            },
         }
     }
 
@@ -422,10 +422,10 @@ pub fn netup(args: &[String]) -> i32 {
                 info.mac[4],
                 info.mac[5]
             );
-        }
+        },
         Err(e) => {
             libmorpheus::eprintln!("netup: nic_info pre-check failed: 0x{:x}", e);
-        }
+        },
     }
 
     match net::net_activate() {
@@ -449,22 +449,22 @@ pub fn netup(args: &[String]) -> i32 {
                         info.mac[4],
                         info.mac[5]
                     );
-                }
+                },
                 Err(e) => {
                     libmorpheus::eprintln!("netup: nic_info post-check failed: 0x{:x}", e);
-                }
+                },
             }
             0
-        }
+        },
         Err(e) => {
             libmorpheus::eprintln!("netup: activation failed: 0x{:x}", e);
             1
-        }
+        },
     }
 }
 
 pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
-    for arg in args {
+    if let Some(arg) = args.first() {
         match arg.as_str() {
             "-h" | "--help" => {
                 con.write_str(
@@ -472,7 +472,7 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                     "netup — activate networking from userspace\n\nUSAGE\n  netup\n\nBrings up NIC/driver on demand. Boot stays offline by default.\n",
                 );
                 return 0;
-            }
+            },
             _ => {
                 con.write_colored(
                     fb,
@@ -480,7 +480,7 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                     (170, 0, 0),
                 );
                 return 1;
-            }
+            },
         }
     }
 
@@ -500,14 +500,14 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                     info.mac[5]
                 ),
             );
-        }
+        },
         Err(e) => {
             con.write_colored(
                 fb,
                 &format!("netup: nic_info pre-check failed: 0x{:x}\n", e),
                 (170, 0, 0),
             );
-        }
+        },
     }
 
     match net::net_activate() {
@@ -534,17 +534,17 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                             info.mac[5]
                         ),
                     );
-                }
+                },
                 Err(e) => {
                     con.write_colored(
                         fb,
                         &format!("netup: nic_info post-check failed: 0x{:x}\n", e),
                         (170, 0, 0),
                     );
-                }
+                },
             }
             0
-        }
+        },
         Err(e) => {
             con.write_colored(
                 fb,
@@ -552,6 +552,6 @@ pub fn netup_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                 (170, 0, 0),
             );
             1
-        }
+        },
     }
 }

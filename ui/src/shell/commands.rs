@@ -48,21 +48,21 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
             } else {
                 CommandResult::OpenApp(String::from(arg))
             }
-        }
+        },
         "exec" | "run" => {
             if arg.is_empty() {
                 CommandResult::Output(String::from("Usage: exec <binary-name>"))
             } else {
                 CommandResult::SpawnProcess(String::from(arg))
             }
-        }
+        },
         "close" => {
             if let Some(id) = parse_u32(arg) {
                 CommandResult::CloseWindow(id)
             } else {
                 CommandResult::Output(String::from("Usage: close <window-id>"))
             }
-        }
+        },
         "list" | "windows" => CommandResult::ListWindows,
 
         "pwd" => CommandResult::Output(String::from(cwd)),
@@ -77,7 +77,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     path: resolve_path(cwd, arg),
                 })
             }
-        }
+        },
 
         "ls" => {
             let (long, path_arg) = parse_ls_args(arg);
@@ -87,7 +87,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                 resolve_path(cwd, path_arg)
             };
             CommandResult::FsCommand(FsOp::Ls { path, long })
-        }
+        },
 
         "mkdir" => {
             if arg.is_empty() {
@@ -97,7 +97,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     path: resolve_path(cwd, arg),
                 })
             }
-        }
+        },
 
         "touch" => {
             if arg.is_empty() {
@@ -107,7 +107,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     path: resolve_path(cwd, arg),
                 })
             }
-        }
+        },
 
         "cat" => {
             if arg.is_empty() {
@@ -117,7 +117,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     path: resolve_path(cwd, arg),
                 })
             }
-        }
+        },
 
         "rm" => {
             if arg.is_empty() {
@@ -127,7 +127,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     path: resolve_path(cwd, arg),
                 })
             }
-        }
+        },
 
         "mv" => {
             let mut mv_parts = arg.splitn(2, ' ');
@@ -141,7 +141,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     dst: resolve_path(cwd, dst),
                 })
             }
-        }
+        },
 
         "write" => {
             let mut w_parts = arg.splitn(2, ' ');
@@ -155,7 +155,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     content: String::from(content),
                 })
             }
-        }
+        },
 
         "stat" => {
             if arg.is_empty() {
@@ -165,7 +165,7 @@ pub fn execute(input: &str, _window_ids: &[u32], cwd: &str) -> CommandResult {
                     path: resolve_path(cwd, arg),
                 })
             }
-        }
+        },
 
         "sync" => CommandResult::FsCommand(FsOp::Sync),
 
@@ -191,10 +191,10 @@ fn normalize_path(path: &str) -> String {
     let mut components: Vec<&str> = Vec::new();
     for part in path.split('/') {
         match part {
-            "" | "." => {}
+            "" | "." => {},
             ".." => {
                 components.pop();
-            }
+            },
             other => components.push(other),
         }
     }

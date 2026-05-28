@@ -111,7 +111,7 @@ pub fn compose(state: &mut CompState) {
 fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     let fb_ptr = state.fb_ptr;
 
-    // Snapshot fields before any rendering call mutates state.
+    // Snapshot before rendering mutates state.
     let (
         win_x,
         win_y,
@@ -253,6 +253,7 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
 }
 
 /// Bilinear scale source surface into dest rect; clipped to fb bounds.
+#[allow(clippy::too_many_arguments)]
 fn blit_surface(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -370,6 +371,7 @@ fn blit_surface(
 }
 
 /// 1:1 copy of a horizontal strip from source to framebuffer. Used for z3 panel overlay.
+#[allow(clippy::too_many_arguments)]
 fn blit_strip(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -403,6 +405,7 @@ fn blit_strip(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn clip_fill(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -462,7 +465,7 @@ fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
     let cy = state.mouse_y;
     let px = state.pack(CURSOR_RGB.0, CURSOR_RGB.1, CURSOR_RGB.2);
 
-    // 9px crosshair with single-pixel black outline at the tips.
+    // 9px crosshair, black tip outline.
     for d in -4i32..=4 {
         raw_put(
             fb_ptr,

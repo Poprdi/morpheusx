@@ -311,7 +311,6 @@ pub const INTERNAL_ORDER: usize = 253;
 /// With 512-byte entries: (4096 - 32) / 512 = 7 entries per leaf block.
 pub const LEAF_ENTRIES_PER_BLOCK: usize = 7;
 
-
 /// A single extent: a contiguous run of data blocks.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -346,7 +345,6 @@ const _ASSERT_EXTHDR_SIZE: () = assert!(core::mem::size_of::<ExtentNodeHeader>()
 
 /// Extents per leaf = (4096 - 16) / 24 = 170.
 pub const EXTENTS_PER_LEAF: usize = 170;
-
 
 /// Open mode flags.
 ///
@@ -418,48 +416,8 @@ impl FileDescriptor {
     }
 }
 
-/// Directory entry returned by readdir.
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct DirEntry {
-    /// Filename (not full path — just the last component).
-    pub name: [u8; 256],
-    /// Name length in bytes.
-    pub name_len: u16,
-    /// Is this a directory?
-    pub is_dir: bool,
-    /// File size (0 for directories).
-    pub size: u64,
-    /// Last modification timestamp (TSC ns).
-    pub modified_ns: u64,
-    /// Version count.
-    pub version_count: u32,
-}
-
-/// File stat information.
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct FileStat {
-    /// Full path hash.
-    pub key: u64,
-    /// File size in bytes.
-    pub size: u64,
-    /// Is directory?
-    pub is_dir: bool,
-    /// Created timestamp (TSC ns).
-    pub created_ns: u64,
-    /// Modified timestamp (TSC ns).
-    pub modified_ns: u64,
-    /// Number of prior versions.
-    pub version_count: u32,
-    /// Current LSN.
-    pub lsn: Lsn,
-    /// First LSN (creation).
-    pub first_lsn: Lsn,
-    /// Entry flags.
-    pub flags: u32,
-}
-
+// Canonical kernel↔userland FFI types live in morpheus-foundation.
+pub use morpheus_foundation::types::{DirEntry, FileStat};
 
 /// `open(path_ptr, path_len, flags) → fd`
 pub const SYS_OPEN: u64 = 10;

@@ -1,0 +1,25 @@
+[package]
+name = "morpheus-hal-x86_64"
+version.workspace = true
+edition.workspace = true
+description = "x86_64 implementation of the morpheus-hal-api trait surface. Owns asm primitives, serial UART, and (in Phase 3) IDT/GDT/PIC/APIC/paging/PCI."
+build = "build.rs"
+
+[features]
+default = []
+
+[dependencies]
+morpheus-hal-api.workspace = true
+# Bare x86_64 asm primitives (port I/O, MMIO, barriers, cache, TSC, delay).
+# Extracted in Phase 3.7 wave B1 — shared with morpheus-xhci so that crate
+# does not have to take a dep on this one and form a cycle when hal-x86_64
+# consumes morpheus-xhci for its UsbHost impl.
+morpheus-x86-asm.workspace = true
+# Phase 3.7 wave B1: hal-x86_64 → morpheus-xhci is the now-clean direction.
+# We use it to wire morpheus-xhci's logger hook to our serial UART; future
+# work (UsbHost trait impl, runtime polling glue) lands here too.
+morpheus-xhci.workspace = true
+# Spinlock primitive for boot-time globals (heap, page-table singleton).
+spin.workspace = true
+# Heap allocator backing the kernel's `#[global_allocator]`.
+linked_list_allocator.workspace = true

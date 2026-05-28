@@ -79,14 +79,17 @@ impl<'a, B: BlockIo> FileReader<'a, B> {
         self.position = new_pos.min(self.file.size);
     }
 
+    /// Current read offset, in bytes.
     pub fn position(&self) -> u64 {
         self.position
     }
 
+    /// Total file size, in bytes.
     pub fn size(&self) -> u64 {
         self.file.size
     }
 
+    /// True once the read position has reached end of file.
     pub fn is_eof(&self) -> bool {
         self.position >= self.file.size
     }

@@ -7,7 +7,6 @@ extern crate alloc;
 use alloc::vec;
 
 mod chambers;
-mod font;
 mod layout;
 mod state;
 mod theme;
@@ -24,11 +23,11 @@ fn main() -> i32 {
     let surface_vaddr = hw::fb_map().expect("settings: fb_map failed");
     let mapped_surface_ptr = surface_vaddr as *mut u32;
 
-    // stride is bytes not pixels. yes again.
+    // fb_info.stride is bytes.
     let fb_stride_px = fb_info.stride / 4;
     let is_bgrx = fb_info.format == 1;
 
-    // render to private software buffer, then publish one memcpy per frame.
+    // Render to private backbuffer; publish one memcpy per frame.
     let mut backbuf = vec![0u32; (fb_stride_px as usize).saturating_mul(fb_info.height as usize)];
 
     let mut app = state::SettingsApp::new(

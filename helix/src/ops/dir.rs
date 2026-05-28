@@ -1,4 +1,4 @@
-//! Directory operations — mkdir, readdir, unlink.
+//! mkdir, readdir, unlink.
 
 use crate::crc::fnv1a_64;
 use crate::error::HelixError;
@@ -84,7 +84,6 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
         let filename = if child.flags & entry_flags::IS_DIR != 0 {
             let relative = &name_str[normalized.len()..];
             let trimmed = relative.trim_end_matches('/');
-            // Skip deeper descendants.
             if trimmed.contains('/') {
                 continue;
             }
@@ -126,7 +125,7 @@ pub fn unlink(
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    // Capture before any mut borrow of index. Path may lack trailing '/'.
+    // Capture before any &mut borrow of index. Path may lack trailing '/'.
     let (extent_root, size, is_inline, is_dir) = {
         let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
         if entry.flags & entry_flags::IS_DELETED != 0 {
@@ -172,8 +171,8 @@ pub fn unlink(
     let lsn = log.append(LogOp::Delete, hash, &payload, timestamp_ns)?;
     index.mark_deleted(&actual_path)?;
 
-    // Inline data and dirs never own blocks. For fragmented files only the
-    // first extent is freed here; GC reclaims the rest from the log.
+    // Inline + dirs own no blocks. Fragmented files: only first extent freed
+    // here; GC reclaims the rest from the log.
     if !is_inline && !is_dir && extent_root != crate::types::BLOCK_NULL {
         let blocks = size.div_ceil(crate::types::BLOCK_SIZE as u64);
         let _ = bitmap.free_range(extent_root, blocks);

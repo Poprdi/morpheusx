@@ -1,6 +1,4 @@
-// global frame layout — the three-column oneiric structure.
-// top strip, left rail, right console pane, bottom command bar.
-// every pixel accounted for, every margin deliberate.
+//! Frame: top strip, left rail, right pane, bottom command bar.
 
 use crate::state::{Route, SafetyMode, SettingsApp};
 
@@ -18,7 +16,7 @@ pub fn row_step(app: &SettingsApp, extra: u32) -> u32 {
     let pane_h = app
         .fb_h
         .saturating_sub(STRIP_HEIGHT + BAR_HEIGHT + 2 * PANE_PAD);
-    // grow spacing on taller panes so content doesn't collapse into the top third
+    // Stretch row spacing on taller panes (cap +8 px).
     let bonus = (pane_h / 120).saturating_sub(4).min(8);
     widgets::FONT_H + extra + bonus
 }
@@ -30,19 +28,11 @@ pub fn render_frame(app: &mut SettingsApp) {
     let h = app.fb_h;
     let t = &app.theme;
 
-    // clear entire surface
     widgets::fill_rect(s, st, 0, 0, w, h, t.substrate, w, h);
 
-    // top command strip
     render_strip(app);
-
-    // left rail
     render_rail(app);
-
-    // right console pane
     render_pane(app);
-
-    // bottom command bar
     render_bar(app);
 }
 
@@ -61,7 +51,6 @@ fn render_strip(app: &SettingsApp) {
     let title_x = 4 + 10 * widgets::FONT_W;
     widgets::draw_str(s, st, title_x, 4, label, t.glyph, t.strip_bg, w, h);
 
-    // mode badge
     let (badge, badge_color) = match app.safety {
         SafetyMode::Safe => ("SAFE", t.signal),
         SafetyMode::Severe => ("SEVERE", t.destructive),
@@ -69,7 +58,6 @@ fn render_strip(app: &SettingsApp) {
     let badge_x = w.saturating_sub((badge.len() as u32 + 2) * widgets::FONT_W);
     widgets::draw_str(s, st, badge_x, 2, badge, badge_color, t.strip_bg, w, h);
 
-    // pending indicator
     if app.has_any_pending() {
         let dot_x = badge_x.saturating_sub(3 * widgets::FONT_W);
         widgets::draw_str(s, st, dot_x, 2, "[*]", t.warning, t.strip_bg, w, h);
@@ -109,7 +97,6 @@ fn render_rail(app: &SettingsApp) {
 
         widgets::fill_rect(s, st, 0, y, RAIL_WIDTH - 1, RAIL_ITEM_HEIGHT, bg, w, h);
 
-        // focus ring
         if is_focused {
             widgets::rect_outline(
                 s,
@@ -124,7 +111,6 @@ fn render_rail(app: &SettingsApp) {
             );
         }
 
-        // sigil + label
         let sigil = route.sigil();
         let label = route.label();
         let fg = if is_current { t.glyph } else { t.glyph_dim };
@@ -142,14 +128,13 @@ fn render_rail(app: &SettingsApp) {
             14,
         );
 
-        // keyboard hint (1-7)
+        // 1-7 keyboard hint.
         let mut hint = [0u8; 1];
         hint[0] = b'1' + i as u8;
         let hint_str = core::str::from_utf8(&hint).unwrap_or("?");
         let hint_x = RAIL_WIDTH - 3 * widgets::FONT_W;
         widgets::draw_str(s, st, hint_x, y + 4, hint_str, t.glyph_dim, bg, w, h);
 
-        // pending dot for this chamber
         if app.has_pending_for(*route) {
             let dot_x = RAIL_WIDTH - 5 * widgets::FONT_W;
             widgets::draw_str(s, st, dot_x, y + 4, "*", t.warning, bg, w, h);
@@ -171,7 +156,6 @@ fn render_pane(app: &mut SettingsApp) {
 
     widgets::fill_rect(s, st, pane_x, pane_y, pane_w, pane_h, t.substrate, w, h);
 
-    // dispatch to the active chamber renderer
     match app.route {
         Route::Gateway => crate::chambers::gateway::render(app),
         Route::MistShore => crate::chambers::mist::render(app),
@@ -198,7 +182,6 @@ fn render_bar(app: &SettingsApp) {
     let btn_w = pane_w / 4;
     let btn_y = bar_y + 2;
 
-    // command buttons
     let buttons = ["[A]pply", "[R]evert", "[D]efaults", ""];
     for (i, label) in buttons.iter().enumerate() {
         if label.is_empty() {
@@ -213,7 +196,6 @@ fn render_bar(app: &SettingsApp) {
         widgets::draw_str(s, st, bx + 4, btn_y, label, fg, t.bar_bg, w, h);
     }
 
-    // status message (right-aligned in bar)
     if app.status_len > 0 {
         let msg = core::str::from_utf8(&app.status_msg[..app.status_len]).unwrap_or("");
         let fg = if app.status_is_error {
@@ -226,7 +208,6 @@ fn render_bar(app: &SettingsApp) {
     }
 }
 
-// section header — a labeled divider within the pane
 pub fn draw_section(app: &SettingsApp, x: u32, y: u32, title: &str) {
     let s = app.surface;
     let st = app.fb_stride;
@@ -249,7 +230,6 @@ pub fn draw_section(app: &SettingsApp, x: u32, y: u32, title: &str) {
     );
 }
 
-// labeled value row — "Label: value" with alignment
 pub fn draw_kv(app: &SettingsApp, x: u32, y: u32, key: &str, val: &str, val_color: u32) {
     let s = app.surface;
     let st = app.fb_stride;
@@ -275,7 +255,6 @@ pub fn draw_kv(app: &SettingsApp, x: u32, y: u32, key: &str, val: &str, val_colo
     );
 }
 
-// focusable field row — highlighted when focused
 pub fn draw_field_row(
     app: &SettingsApp,
     x: u32,
@@ -335,7 +314,6 @@ pub fn draw_field_row(
     );
 }
 
-// button row — rendered as a text button
 pub fn draw_button_row(
     app: &SettingsApp,
     x: u32,
@@ -385,7 +363,7 @@ pub fn draw_button_row(
     );
 }
 
-// risk band — a warning banner for destructive context
+/// Inverse banner for destructive context.
 pub fn draw_risk_band(app: &SettingsApp, x: u32, y: u32, msg: &str) {
     let s = app.surface;
     let st = app.fb_stride;

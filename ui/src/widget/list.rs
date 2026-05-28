@@ -138,34 +138,34 @@ impl Widget for List {
                     self.ensure_visible(10);
                 }
                 EventResult::Consumed
-            }
+            },
             Key::Down => {
                 if self.selected + 1 < self.items.len() {
                     self.selected += 1;
                     self.ensure_visible(10);
                 }
                 EventResult::Consumed
-            }
+            },
             Key::Home => {
                 self.selected = 0;
                 self.scroll_top = 0;
                 EventResult::Consumed
-            }
+            },
             Key::End => {
                 self.selected = self.items.len().saturating_sub(1);
                 self.ensure_visible(10);
                 EventResult::Consumed
-            }
+            },
             Key::PageUp => {
                 self.selected = self.selected.saturating_sub(10);
                 self.ensure_visible(10);
                 EventResult::Consumed
-            }
+            },
             Key::PageDown => {
                 self.selected = (self.selected + 10).min(self.items.len().saturating_sub(1));
                 self.ensure_visible(10);
                 EventResult::Consumed
-            }
+            },
             _ => EventResult::Ignored,
         }
     }

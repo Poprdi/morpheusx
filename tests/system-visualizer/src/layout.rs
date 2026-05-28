@@ -5,7 +5,7 @@ const MAX_PROCS: usize = 64;
 const REPULSION_ITERS: usize = 3;
 const MIN_SEP: f32 = 1.8;
 
-// Kernel (PID 0) is positioned at the galaxy location for thematic unity
+// PID 0 anchored at the galaxy.
 const KERNEL_GALAXY_POS: Vec3 = Vec3 {
     x: 0.0,
     y: -15.0,
@@ -29,6 +29,8 @@ impl ProcessLayout {
         }
     }
 
+    // `i` is used as a process index value across parallel arrays, not just to index one slice.
+    #[allow(clippy::needless_range_loop)]
     pub fn update(&mut self, state: &SystemState, dt: f32) {
         let n = state.proc_count;
         self.count = n;
@@ -85,7 +87,7 @@ impl ProcessLayout {
         let mut level_idx = [0u32; MAX_PROCS];
 
         for i in 0..n {
-            // Kernel lives at the galaxy position; exclude from ring layout counts
+            // Kernel is at the galaxy; skip in ring counts.
             if let Some(p) = state.process(i) {
                 if p.pid == 0 {
                     continue;
@@ -104,10 +106,8 @@ impl ProcessLayout {
                 None => continue,
             };
 
-            // Kernel (PID 0) is positioned at the galaxy center
             if proc.pid == 0 {
                 self.positions[i] = KERNEL_GALAXY_POS;
-                // Kernel gets a generous radius to make it prominent
                 self.radii[i] = 1.2;
                 continue;
             }
@@ -131,13 +131,8 @@ impl ProcessLayout {
                 0.0
             };
 
-            // --- 3-D scatter ---
-            // Base Y is deeper per depth level (was 1.5, now 2.5 for more
-            // vertical separation between hierarchy levels).
-            // Within a ring, offset Y sinusoidally so same-depth siblings
-            // form a loose helix rather than a flat disk.
-            // Alternate the ring radius slightly so adjacent siblings aren't
-            // all at the exact same distance from center.
+            // Helix scatter: Y by depth, sinusoidal lift within a ring,
+            // alternating radius nudge so siblings don't share a circle.
             let depth_y = -(d as f32) * 2.5;
             let helix_y = fast_sin(angle * 1.7) * 1.2;
             let radius_nudge = if (level_idx[i] & 1) == 0 { 0.0 } else { 0.5 };
@@ -152,8 +147,7 @@ impl ProcessLayout {
 
         for _ in 0..REPULSION_ITERS {
             for i in 0..n {
-                // Skip kernel entry at galaxy position — its radius would
-                // create phantom repulsion far from the process cloud.
+                // Kernel sits at the galaxy; including it would push the cloud away.
                 if let Some(p) = state.process(i) {
                     if p.pid == 0 {
                         continue;

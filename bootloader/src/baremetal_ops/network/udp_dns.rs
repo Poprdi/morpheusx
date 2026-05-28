@@ -67,7 +67,7 @@ pub(super) unsafe fn net_udp_recv_from_impl(
             core::ptr::copy_nonoverlapping((&port as *const u16).cast::<u8>(), src_out.add(4), 2);
             core::ptr::write_bytes(src_out.add(6), 0, 2);
             n as i64
-        }
+        },
         Err(_) => -1,
     }
 }
@@ -117,12 +117,12 @@ pub(super) unsafe fn net_dns_result_impl(query: i64, out: *mut u8) -> i64 {
             core::ptr::copy_nonoverlapping((&nbo as *const u32).cast::<u8>(), out, 4);
             state::clear_dns_query_slot(query);
             0
-        }
+        },
         Ok(None) => 1,
         Err(_) => {
             state::clear_dns_query_slot(query);
             -1
-        }
+        },
     }
 }
 

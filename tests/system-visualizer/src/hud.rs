@@ -120,8 +120,7 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let y1 = y0 + font::CELL_H + 2;
     fb.draw_str(px + 4, y1, "MEM:", COL_DIM);
-    // Always show in GB when the machine has >= 1 GB total RAM (avoids
-    // 2-digit truncation of large MB values like 12288 → "88").
+    // Prefer GB once total >= 1 GB; MB display truncates past 9999.
     let (mem_used_display, mem_total_display, unit) = if state.mem_total_mb() >= 1024 {
         let used_gb = state.mem_used_mb() as f32 / 1024.0;
         let total_gb = state.mem_total_mb() as f32 / 1024.0;
@@ -137,12 +136,10 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
             "MB",
         )
     };
-    // used: "UU,uu" (2+2 digits for int+frac)
     fb.draw_u32(px + 30, y1, mem_used_display.0, 2, COL_TEXT);
     fb.draw_char(px + 42, y1, b'.', COL_DIM);
     fb.draw_u32(px + 48, y1, mem_used_display.1, 2, COL_TEXT);
     fb.draw_str(px + 60, y1, "/", COL_DIM);
-    // total: "TT,tt" (2+2 digits)
     fb.draw_u32(px + 72, y1, mem_total_display.0, 2, COL_TEXT);
     fb.draw_char(px + 84, y1, b'.', COL_DIM);
     fb.draw_u32(px + 90, y1, mem_total_display.1, 2, COL_TEXT);
@@ -178,7 +175,7 @@ pub fn draw_system_panel(fb: &Framebuf, state: &SystemState) {
 
     let y3 = y2 + font::CELL_H + 1;
     fb.draw_str(px + 4, y3, "HEAP:", COL_DIM);
-    // Show kernel heap used / total in KB (heap is 4MB = 4096KB max → 4 digits)
+    // Heap is 4 MB; KB fits in 4 digits.
     let heap_used_kb = (state.heap_used / 1024).min(9999) as u32;
     let heap_total_kb = (state.heap_total / 1024).min(9999) as u32;
     fb.draw_u32(px + 36, y3, heap_used_kb, 4, COL_TEXT);
@@ -257,9 +254,7 @@ pub fn draw_process_panel(fb: &Framebuf, state: &SystemState, selected: Option<u
         fb.draw_str(px + 112, ry, trunc, name_color);
     }
 
-    // IDLE row — shown below the process list.
-    // idle_pct = fraction of wall-clock time the CPU spent in HLT.
-    // Together with per-process cpu_pct values they account for all 100%.
+    // IDLE row completes 100%: HLT fraction + per-process cpu_pct.
     let idle_row_y = base_y + count as u32 * row_h + 2;
     let idle_int = (state.idle_pct as u32).min(100);
     let idle_col = if idle_int > 80 {
@@ -286,7 +281,6 @@ pub fn draw_fps(fb: &Framebuf, fps: u32, latency_ms: u32, speed_mult: f32) {
     fb.draw_str(px + 52, py + 4, "MS:", COL_DIM);
     fb.draw_u32(px + 70, py + 4, latency_ms.min(999), 3, COL_TEXT);
 
-    // Speed indicator: "SPD:1.0x" — integral and one decimal, e.g. "1.0" "1.5"
     let spd_col = if speed_mult > 1.5 {
         COL_ACCENT
     } else if speed_mult < 1.0 {
@@ -436,7 +430,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
 
     let (gx, gy, gw, gh) = per_core_panel_rect(state);
 
-    // layered panel shell
     fb.fill_rect(gx, gy, gw, gh, COL_PANEL);
     fb.fill_rect(gx + 1, gy + 1, gw.saturating_sub(2), 1, 0x001E2834);
     fb.fill_rect(
@@ -449,7 +442,7 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     hline(fb, gx, gy, gw);
     fb.draw_str(gx + 2, gy + 2, "CORE UTILIZATION", COL_ACCENT);
 
-    // Header rollup metrics + compact legend.
+    // Header: rollup metrics + N/W/H legend.
     let mut sum = 0u32;
     let mut peak = 0u32;
     for core in 0..cores {
@@ -467,7 +460,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     fb.draw_u32(gx + 132, gy + 2, peak.min(100), 3, COL_WARN);
     fb.draw_char(gx + 150, gy + 2, b'%', COL_DIM);
 
-    // Compact threshold legend chips: N/W/H
     fb.fill_rect(gx + 156, gy + 3, 4, 4, COL_ACCENT);
     fb.draw_char(gx + 162, gy + 2, b'N', COL_DIM);
     fb.fill_rect(gx + 170, gy + 3, 4, 4, COL_WARN);
@@ -491,7 +483,7 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
     }
 
     for core in 0..cores {
-        // Evenly partition content so rows exactly fill the panel height.
+        // Partition content to fill panel height exactly.
         let y0 = content_y + (core as u32 * content_h) / cores as u32;
         let y1 = content_y + ((core as u32 + 1) * content_h) / cores as u32;
         let row_h = y1.saturating_sub(y0).max(3);
@@ -500,13 +492,11 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
         }
 
         let core_idx = core as u32;
-        // Idiomatic labels: CPU0, CPU1, ...
         fb.draw_str(content_x, y0, "CPU", COL_DIM);
         fb.draw_u32(content_x + 18, y0, core_idx, 2, COL_TEXT);
 
         let now_pct = state.per_core_util(core) as u32;
 
-        // Row background with threshold bands.
         fb.fill_rect(graph_x, y0, graph_w, row_h, COL_BG);
         let mid_50 = y0 + row_h.saturating_sub(1) - ((row_h.saturating_sub(1) * 50) / 100);
         let mid_80 = y0 + row_h.saturating_sub(1) - ((row_h.saturating_sub(1) * 80) / 100);
@@ -517,7 +507,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
             fb.fill_rect(graph_x, y0, graph_w, mid_80 - y0, 0x00160F14);
         }
 
-        // Temporal grid lines.
         let mut gx_tick = 0u32;
         while gx_tick < graph_w {
             for dy in 0..row_h {
@@ -526,7 +515,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
             gx_tick = gx_tick.saturating_add(16);
         }
 
-        // Threshold guide lines.
         for x in 0..graph_w {
             fb.put(graph_x + x, mid_50, 0x00307090);
             fb.put(graph_x + x, mid_80, 0x00806030);
@@ -560,7 +548,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
             }
             let py_top = y0 + row_h - 1 - h;
 
-            // Area fill.
             for dy in 0..h {
                 let py = y0 + row_h - 1 - dy;
                 let col = if dy + 1 == h || dy + 2 == h {
@@ -571,14 +558,13 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
                 fb.put(graph_x + x, py, col);
             }
 
-            // Connect neighboring points for a smoother waveform.
+            // Bridge to previous sample for smoother waveform.
             let y_min = py_top.min(prev_py);
             let y_max = py_top.max(prev_py);
             for py in y_min..=y_max {
                 fb.put(graph_x + x, py, hi_col);
             }
 
-            // faint glow rails around crest
             if py_top > y0 {
                 fb.put(graph_x + x, py_top - 1, 0x00406070);
             }
@@ -589,20 +575,18 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
             prev_py = py_top;
         }
 
-        // Peak-hold marker for this row.
         let peak_y =
             y0 + row_h.saturating_sub(1) - ((row_h.saturating_sub(1) * peak_h.min(100)) / 100);
         for x in (graph_x..(graph_x + graph_w)).step_by(6) {
             fb.put(x, peak_y, 0x00F0E070);
         }
 
-        // Animated sweep marker to add temporal direction cue.
+        // Sweep marker indicates time direction.
         let sweep_x = graph_x + ((state.uptime_ms as u32 / 32) % graph_w.max(1));
         for dy in 0..row_h {
             fb.put(sweep_x, y0 + dy, 0x002C3A4A);
         }
 
-        // Current sample beacon.
         let cur_h = (row_h.saturating_sub(1) * now_pct.min(100)) / 100;
         if cur_h > 0 {
             let cur_y = y0 + row_h - 1 - cur_h;
@@ -617,7 +601,6 @@ pub fn draw_per_core_graph(fb: &Framebuf, state: &SystemState) {
             }
         }
 
-        // One-pixel separator between rows.
         if y1 < content_y + content_h {
             for x in 0..content_w {
                 fb.put(content_x + x, y1.saturating_sub(1), 0x00203040);
@@ -635,9 +618,8 @@ pub fn draw_state_bar(fb: &Framebuf, state: &SystemState) {
     fb.fill_rect(px, py, pw, ph, COL_PANEL);
     hline(fb, px, py, pw);
 
-    // Use proc_count as the denominator so the bar always represents
-    // the fraction of ALL processes in each state.  The remainder
-    // (zombie/dead) is painted dark-gray so the bar is always full.
+    // Denominator = proc_count, so the bar always sums to full width;
+    // zombies/dead occupy the remainder in dark gray.
     let total = state.proc_count.max(1) as u32;
     let rw = (pw * state.ready_count) / total;
     let nw = (pw * state.run_count) / total;
@@ -661,7 +643,7 @@ pub fn draw_state_bar(fb: &Framebuf, state: &SystemState) {
 }
 
 pub fn draw_status_flags(fb: &Framebuf, paused: bool, slow_motion: bool, pinned: bool) {
-    // Compute total pixel width of all active flags so we can center the group.
+    // Sum widths first so the active flags are centered as a group.
     const GAP: u32 = 8;
     let mut total_w = 0u32;
     let mut count = 0u32;

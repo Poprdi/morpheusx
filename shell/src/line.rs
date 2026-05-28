@@ -10,14 +10,17 @@ use crate::console::Console;
 use crate::fb::Framebuffer;
 
 const MAX_LINE: usize = 1024;
+#[allow(dead_code)]
 const MAX_HISTORY: usize = 128;
 
+#[allow(dead_code)]
 pub struct LineEditor {
     history: Vec<String>,
     buf: [u8; MAX_LINE],
     len: usize,
 }
 
+#[allow(dead_code)]
 impl LineEditor {
     pub fn new() -> Self {
         Self {
@@ -52,28 +55,28 @@ impl LineEditor {
                     let line = self.current_str();
                     self.push_history(&line);
                     return Some(line);
-                }
+                },
                 0x08 | 0x7F => {
                     if self.len > 0 {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
-                }
+                },
                 0x03 => return None, // Ctrl+C
                 0x0C => {
-                    // Ctrl+L: clear and reprint
+                    // Ctrl+L
                     io::print("\x1b[2J\x1b[H");
                     return Some(String::from("\x0c"));
-                }
+                },
                 0x15 => {
-                    // Ctrl+U: kill line
+                    // Ctrl+U
                     while self.len > 0 {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
-                }
+                },
                 0x17 => {
-                    // Ctrl+W: kill word
+                    // Ctrl+W
                     while self.len > 0 && self.buf[self.len - 1] == b' ' {
                         self.len -= 1;
                         io::print("\x08 \x08");
@@ -82,17 +85,17 @@ impl LineEditor {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
-                }
+                },
                 c if (0x20..0x7F).contains(&c) => {
                     if self.len < MAX_LINE {
                         self.buf[self.len] = c;
                         self.len += 1;
                         let s = &self.buf[self.len - 1..self.len];
-                        // Safety: single ASCII byte is valid UTF-8
+                        // SAFETY: ASCII byte.
                         io::print(unsafe { core::str::from_utf8_unchecked(s) });
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }
@@ -119,7 +122,6 @@ impl LineEditor {
     }
 }
 
-/// Read a line using the framebuffer console.
 pub fn read_line_fb(
     fb: &Framebuffer,
     con: &mut Console,
@@ -149,24 +151,24 @@ pub fn read_line_fb(
             b'\r' | b'\n' => {
                 let s = core::str::from_utf8(&buf[..len]).unwrap_or("");
                 return Some(String::from(s));
-            }
+            },
             0x08 | 0x7F => {
                 if len > 0 {
                     len -= 1;
                     con.backspace(fb);
                 }
-            }
+            },
             0x03 => return None,
             0x0C => {
                 con.clear(fb);
                 return Some(String::from("\x0c"));
-            }
+            },
             0x15 => {
                 len = 0;
                 con.kill_to_start(fb, prompt_col);
-            }
+            },
             0x17 => {
-                // Ctrl+W: kill word
+                // Ctrl+W
                 while len > 0 && buf[len - 1] == b' ' {
                     len -= 1;
                     con.backspace(fb);
@@ -175,15 +177,15 @@ pub fn read_line_fb(
                     len -= 1;
                     con.backspace(fb);
                 }
-            }
+            },
             c if (0x20..0x7F).contains(&c) => {
                 if len < MAX_LINE {
                     buf[len] = c;
                     len += 1;
                     con.write_char(fb, c as char);
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }

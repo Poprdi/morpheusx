@@ -2,7 +2,6 @@ use crate::tui::debug::DebugOverlay;
 use crate::tui::input::{InputKey, Keyboard};
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_DARKGREEN, EFI_GREEN, EFI_LIGHTGREEN};
 
-// Smaller header that fits in the box
 const HEADER_ART: &[&str] = &[
     " __  __  ___  ____  ____  _   _ _____ _   _ ______  __",
     "|  \\/  |/ _ \\|  _ \\|  _ \\| | | | ____| | | / ___\\ \\/ /",
@@ -11,7 +10,7 @@ const HEADER_ART: &[&str] = &[
     "|_|  |_|\\___/|_| \\_\\_|   |_| |_|_____|\\___/|____/_/\\_\\",
 ];
 
-// Box width (inner content is 75 chars)
+/// 75 cols inner + 2 cols of borders.
 const BOX_WIDTH: usize = 77;
 const EMPTY_LINE: &str =
     "|                                                                           |";
@@ -82,11 +81,6 @@ impl MainMenu {
     }
 
     pub fn render(&mut self, screen: &mut Screen) {
-        // Calculate total menu height
-        // Top border (1) + empty (1) + header art (5) + empty (1) + divider (1) +
-        // empty (1) + instructions (1) + empty (1) + divider (1) +
-        // menu items (6 * 2 = 12) + empty lines between (5) +
-        // divider (1) + empty (1) + status (1) + empty (1) + bottom border (1) = ~34
         let total_height = 1
             + 1
             + HEADER_ART.len()
@@ -103,48 +97,37 @@ impl MainMenu {
             + 1
             + 1;
 
-        // Center horizontally and vertically
         let x = screen.center_x(BOX_WIDTH);
         let y = screen.center_y(total_height);
 
         let mut current_y = y;
 
-        // Draw top border
         screen.put_str_at(x, current_y, TOP_BORDER, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Empty line after top border
         screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Draw header ASCII art centered within border
         for line in HEADER_ART.iter() {
-            // Draw left border
             screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
 
-            // Center the art within the box (75 inner width)
             let padding = (75 - line.len()) / 2;
             let art_x = x + 1 + padding;
             screen.put_str_at(art_x, current_y, line, EFI_DARKGREEN, EFI_BLACK);
 
-            // Draw right border
             screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
             current_y += 1;
         }
 
-        // Empty line after header
         screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Divider after header
         screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Empty line before instructions
         screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Instructions line
         screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
         let instr = "[UP/DOWN] Navigate  |  [ENTER] Select  |  [ESC] Exit";
         let instr_padding = (75 - instr.len()) / 2;
@@ -158,27 +141,21 @@ impl MainMenu {
         screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Empty line after instructions
         screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Divider before menu
         screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Menu items
         for (i, item) in self.menu_items.iter().enumerate() {
-            // Draw item line with borders
             screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
 
-            // Build the menu item string: ">> [ICN] Label" or "   [ICN] Label"
             let item_text = if i == self.selected_index {
                 alloc::format!(">> {} {}", item.icon, item.label)
             } else {
                 alloc::format!("   {} {}", item.icon, item.label)
             };
 
-            // Center the item text within the box (75 inner width)
             let item_padding = (75 - item_text.len()) / 2;
             let item_x = x + 1 + item_padding;
 
@@ -191,22 +168,18 @@ impl MainMenu {
             screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
             current_y += 1;
 
-            // Empty line between menu items (except after last)
             if i < self.menu_items.len() - 1 {
                 screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
                 current_y += 1;
             }
         }
 
-        // Divider after menu
         screen.put_str_at(x, current_y, DIVIDER, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Empty line before status
         screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Status bar
         screen.put_str_at(x, current_y, "|", EFI_GREEN, EFI_BLACK);
         screen.put_str_at(x + 3, current_y, "Status: READY", EFI_LIGHTGREEN, EFI_BLACK);
         screen.put_str_at(x + 20, current_y, "|", EFI_GREEN, EFI_BLACK);
@@ -220,28 +193,23 @@ impl MainMenu {
         screen.put_str_at(x + 76, current_y, "|", EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Empty line after status
         screen.put_str_at(x, current_y, EMPTY_LINE, EFI_GREEN, EFI_BLACK);
         current_y += 1;
 
-        // Bottom border
         screen.put_str_at(x, current_y, BOTTOM_BORDER, EFI_GREEN, EFI_BLACK);
     }
 
     pub fn handle_input(&mut self, key: &InputKey) -> MenuAction {
-        // Arrow up
         if key.scan_code == 0x01 {
             self.select_prev();
             return MenuAction::Navigate;
         }
 
-        // Arrow down
         if key.scan_code == 0x02 {
             self.select_next();
             return MenuAction::Navigate;
         }
 
-        // Enter key
         if key.unicode_char == 0x0D {
             return match self.selected_index {
                 0 => MenuAction::DistroLauncher,
@@ -253,7 +221,6 @@ impl MainMenu {
             };
         }
 
-        // ESC key
         if key.scan_code == 0x17 {
             return MenuAction::ExitToFirmware;
         }
@@ -262,21 +229,16 @@ impl MainMenu {
     }
 
     pub fn run(&mut self, screen: &mut Screen, keyboard: &mut Keyboard) -> MenuAction {
-        // Initial render
         screen.clear();
         self.render(screen);
         self.debug.render(screen);
 
         loop {
-            // Render global rain if active
             crate::tui::rain::render_rain(screen);
-
-            // Always render debug overlay on top
             self.debug.render(screen);
 
-            // Check for input with frame limiting (~60 FPS)
+            // poll_key_with_delay caps to ~60 FPS.
             if let Some(key) = keyboard.poll_key_with_delay() {
-                // Debug overlay toggle
                 if key.unicode_char == b'd' as u16 || key.unicode_char == b'D' as u16 {
                     self.debug.toggle();
                     screen.clear();
@@ -285,7 +247,6 @@ impl MainMenu {
                     continue;
                 }
 
-                // Global rain toggle
                 if key.unicode_char == b'x' as u16 || key.unicode_char == b'X' as u16 {
                     crate::tui::rain::toggle_rain(screen);
                     screen.clear();
@@ -299,7 +260,6 @@ impl MainMenu {
                     return action;
                 }
 
-                // Re-render UI after navigation (without clearing)
                 self.render(screen);
                 self.debug.render(screen);
             }

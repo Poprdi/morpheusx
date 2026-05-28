@@ -37,7 +37,7 @@ impl RelocationEngine for X64RelocationEngine {
                 image_data[rva..rva + 8].copy_from_slice(&bytes);
 
                 Ok(())
-            }
+            },
             _ => Err(PeError::UnsupportedFormat),
         }
     }
@@ -73,7 +73,7 @@ impl RelocationEngine for X64RelocationEngine {
                 image_data[rva..rva + 8].copy_from_slice(&bytes);
 
                 Ok(())
-            }
+            },
             _ => Err(PeError::UnsupportedFormat),
         }
     }

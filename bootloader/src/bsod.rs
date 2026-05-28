@@ -2,12 +2,9 @@
 
 #[path = "bsod_bg_data.rs"]
 mod bsod_bg_data;
-#[path = "bsod_bg_data_v1.rs"]
-#[allow(dead_code)]
-mod bsod_bg_data_v1;
 
 use morpheus_display::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
-use morpheus_hwinit::serial::puts;
+use morpheus_hal_x86_64::serial::puts;
 
 use crate::boot;
 
@@ -393,42 +390,6 @@ fn dec32(val: u32, buf: &mut [u8; 10]) -> &str {
     unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
 }
 
-#[allow(dead_code)]
-const EXCEPTION_NAMES: [&str; 32] = [
-    "DIVIDE_BY_ZERO",
-    "DEBUG",
-    "NMI",
-    "BREAKPOINT",
-    "OVERFLOW",
-    "BOUND_RANGE_EXCEEDED",
-    "INVALID_OPCODE",
-    "DEVICE_NOT_AVAILABLE",
-    "DOUBLE_FAULT",
-    "COPROCESSOR_SEGMENT",
-    "INVALID_TSS",
-    "SEGMENT_NOT_PRESENT",
-    "STACK_SEGMENT_FAULT",
-    "GENERAL_PROTECTION_FAULT",
-    "PAGE_FAULT",
-    "RESERVED",
-    "X87_FLOATING_POINT",
-    "ALIGNMENT_CHECK",
-    "MACHINE_CHECK",
-    "SIMD_FLOATING_POINT",
-    "VIRTUALIZATION",
-    "CONTROL_PROTECTION",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-    "RESERVED",
-];
-
 /// Fixed-buffer string builder for crash-screen lines.
 struct Line {
     buf: [u8; 96],
@@ -463,13 +424,13 @@ impl Line {
 
 /// # Safety
 /// Only valid in a fatal state. Writes directly to the framebuffer, no alloc.
-pub unsafe fn show_crash_screen(info: &morpheus_hwinit::cpu::idt::CrashInfo) {
+pub unsafe fn show_crash_screen(info: &morpheus_hal_x86_64::cpu::idt::CrashInfo) {
     let fb_info = match boot::published_framebuffer() {
         Some(fb) if fb.base != 0 && fb.width > 0 && fb.height > 0 => fb,
         _ => {
             puts("[BSOD] No framebuffer available\n");
             return;
-        }
+        },
     };
 
     let fb = fb_info.base as *mut u32;

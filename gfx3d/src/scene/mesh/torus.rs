@@ -2,12 +2,7 @@ use super::{Mesh, MeshVertex};
 use crate::math::trig::TrigTable;
 use crate::math::vec::{Vec2, Vec3};
 
-/// Generate a torus (donut shape).
-///
-/// `major_radius`: distance from center of torus to center of tube
-/// `minor_radius`: radius of the tube itself
-/// `major_segments`: number of segments around the major ring
-/// `minor_segments`: number of segments around the minor circle
+/// Torus. major = ring radius, minor = tube radius.
 pub fn torus(
     major_radius: f32,
     minor_radius: f32,
@@ -23,7 +18,6 @@ pub fn torus(
 
     let two_pi = 2.0 * core::f32::consts::PI;
 
-    // Generate vertices
     for i in 0..major_segments {
         let i_f = i as f32 / major_segments as f32;
         let major_angle = two_pi * i_f;
@@ -34,16 +28,13 @@ pub fn torus(
             let minor_angle = two_pi * j_f;
             let (sin_min, cos_min) = trig.sin_cos(minor_angle);
 
-            // Position on the major ring
             let ring_x = major_radius * cos_maj;
             let ring_z = major_radius * sin_maj;
 
-            // Position on the minor circle, offset from the ring
             let x = ring_x + minor_radius * cos_min * cos_maj;
             let y = minor_radius * sin_min;
             let z = ring_z + minor_radius * cos_min * sin_maj;
 
-            // Normal points outward from the minor circle
             let nx = cos_min * cos_maj;
             let ny = sin_min;
             let nz = cos_min * sin_maj;
@@ -57,7 +48,6 @@ pub fn torus(
         }
     }
 
-    // Generate indices
     for i in 0..major_segments {
         for j in 0..minor_segments {
             let a = (i * minor_segments) + j;

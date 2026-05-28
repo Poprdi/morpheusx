@@ -1,8 +1,7 @@
 use crate::islands::{draw_text, raw_fill, ShellState, PANEL_H, START_BTN_W};
 use libmorpheus::time;
 
-/// panel island. taskbar at the bottom of the screen.
-/// renders START button, status text, and an uptime clock.
+/// START + status + uptime clock.
 pub fn tick(state: &mut ShellState) {
     if !state.panel_dirty {
         return;
@@ -12,7 +11,6 @@ pub fn tick(state: &mut ShellState) {
     let (pr, pg, pb) = state.panel_rgb;
     let panel_bg = state.pack(pr, pg, pb);
 
-    // panel background bar
     raw_fill(
         state.surface_ptr,
         state.fb_stride,
@@ -23,7 +21,6 @@ pub fn tick(state: &mut ShellState) {
         panel_bg,
     );
 
-    // START button
     let (sr, sg, sb) = if state.launcher_open {
         state.start_active_rgb
     } else {
@@ -47,7 +44,6 @@ pub fn tick(state: &mut ShellState) {
     };
     draw_text(state, 10, panel_y + 7, "START", start_fg, start_bg_rgb);
 
-    // status label
     draw_text(
         state,
         START_BTN_W + 12,
@@ -57,7 +53,6 @@ pub fn tick(state: &mut ShellState) {
         state.panel_rgb,
     );
 
-    // uptime clock on the right side
     let ns = time::clock_gettime();
     let secs = (ns / 1_000_000_000) as u32;
     let mins = secs / 60;
@@ -77,11 +72,10 @@ pub fn tick(state: &mut ShellState) {
         );
     }
 
-    // panel repaints every tick for the clock
+    // Repaint each tick so the clock updates.
     state.panel_dirty = true;
 }
 
-// format HH:MM:SS into a fixed buffer. no alloc. no format!. just digits.
 fn format_clock(buf: &mut [u8; 16], h: u32, m: u32, s: u32) -> usize {
     buf[0] = b'0' + (h / 10) as u8;
     buf[1] = b'0' + (h % 10) as u8;

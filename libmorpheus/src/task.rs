@@ -1,33 +1,6 @@
-//! # Architecture
-//!
-//! ```text
-//!  spawn(future) ──► TASK_QUEUE ──► worker loop ──► poll(future)
-//!                        ▲                              │
-//!                        │                              ▼
-//!                   Waker::wake()  ◄──────────  if Pending, park
-//!                   (futex-based)               via futex_wait
-//! ```
-//!
-//! ## Design for SMP
-//!
-//! The task queue is a lock-free(ish) structure protected by a Mutex backed
-//! by SYS_FUTEX.  When SMP lands, each core can run its own worker thread
-//! pulling from the shared queue — no architectural changes needed, just
-//! spawn more workers.
-//!
-//! ## Waker mechanism
-//!
-//! Each task has a `futex_word: AtomicU32` embedded in its allocation.
-//! When a future returns Pending, the worker parks on that futex.
-//! When Waker::wake() fires, it sets the word and calls FUTEX_WAKE,
-//! which unblocks the worker.
-//!
-//! ## Compatibility
-//!
-//! This executor implements the standard `core::task::{RawWaker, Waker, Context}`
-//! protocol.  Any future that compiles against core::future::Future works here.
-//! Tokio's `block_on` equivalent is our `block_on`.  For multi-threaded
-//! tokio-style work stealing, call `Runtime::new(n)` with n worker threads.
+//! Futex-driven async executor. Workers pull from a shared queue; pending
+//! tasks park on per-task notify words via `SYS_FUTEX`. Adding cores = adding
+//! workers; standard `core::task` vtable so any `Future` works.
 
 extern crate alloc;
 
@@ -44,61 +17,43 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use crate::raw::*;
 use crate::sync::Mutex;
 
-// -- Task representation --
-
-/// A spawned future + its wake state.
 struct Task {
-    /// The boxed, pinned future.
     future: Mutex<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
-    /// Futex word for parking/waking the worker polling this task.
-    /// 0 = sleeping, 1 = notified (ready to poll).
+    /// 0 = sleeping, 1 = notified.
     notify: AtomicU32,
-    /// Back-reference to the runtime's global queue for re-enqueue on wake.
     queue: Arc<TaskQueue>,
-    /// Self-reference (index in the slab or Arc to self).  Used by the waker.
     self_ref: AtomicUsize,
 }
 
-// SAFETY: Task is Send — the future inside is Send, all other fields are atomic/Mutex'd.
+// SAFETY: future is Send; everything else is atomic or under Mutex.
 unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
 
-// -- Waker vtable --
-
-/// Clone the Arc<Task> behind the waker.
 unsafe fn waker_clone(ptr: *const ()) -> RawWaker {
     let arc = Arc::from_raw(ptr as *const Task);
     let cloned = arc.clone();
-    // Don't drop the original — we're cloning, not moving.
     core::mem::forget(arc);
     RawWaker::new(Arc::into_raw(cloned) as *const (), &VTABLE)
 }
 
-/// Wake: set notify=1, push to queue, futex_wake.
 unsafe fn waker_wake(ptr: *const ()) {
     let arc = Arc::from_raw(ptr as *const Task);
     wake_inner(&arc);
-    // wake consumes the waker, so we drop the Arc here (it goes out of scope).
 }
 
-/// Wake by ref: same but don't drop the Arc.
 unsafe fn waker_wake_by_ref(ptr: *const ()) {
     let arc = Arc::from_raw(ptr as *const Task);
     wake_inner(&arc);
-    core::mem::forget(arc); // don't drop — caller still owns the waker
+    core::mem::forget(arc);
 }
 
-/// Drop the Arc behind the waker.
 unsafe fn waker_drop(ptr: *const ()) {
     let _ = Arc::from_raw(ptr as *const Task);
 }
 
 fn wake_inner(task: &Arc<Task>) {
-    // Mark as notified.
     task.notify.store(1, Ordering::Release);
-    // Re-enqueue so a worker will pick it up.
     task.queue.push(task.clone());
-    // Kick the park futex so blocked workers wake up.
     task.queue.unpark_one();
 }
 
@@ -110,14 +65,10 @@ fn task_to_waker(task: &Arc<Task>) -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(ptr, &VTABLE)) }
 }
 
-// -- Shared task queue --
-
 struct TaskQueue {
-    /// FIFO of tasks ready to be polled.
     queue: Mutex<VecDeque<Arc<Task>>>,
-    /// Futex word for parking idle workers.  0 = no tasks, 1 = tasks available.
+    /// 0 = empty, 1 = work pending.
     park_futex: AtomicU32,
-    /// Number of tasks still alive (not yet completed).
     active_count: AtomicUsize,
 }
 
@@ -132,7 +83,6 @@ impl TaskQueue {
 
     fn push(&self, task: Arc<Task>) {
         self.queue.lock().push_back(task);
-        // Signal that work is available.
         self.park_futex.store(1, Ordering::Release);
     }
 
@@ -145,20 +95,17 @@ impl TaskQueue {
         task
     }
 
-    /// Park the current thread/process until work arrives.
     fn park(&self) {
-        // Only sleep if park_futex == 0 (no work).
         unsafe {
             syscall3(
                 SYS_FUTEX,
                 &self.park_futex as *const AtomicU32 as u64,
                 FUTEX_WAIT,
-                0, // expected value = 0 (no work)
+                0,
             );
         }
     }
 
-    /// Wake one parked worker.
     fn unpark_one(&self) {
         self.park_futex.store(1, Ordering::Release);
         unsafe {
@@ -171,7 +118,6 @@ impl TaskQueue {
         }
     }
 
-    /// Wake all parked workers.
     fn unpark_all(&self) {
         self.park_futex.store(1, Ordering::Release);
         unsafe {
@@ -185,22 +131,24 @@ impl TaskQueue {
     }
 }
 
-// -- Runtime --
-
-/// The async runtime.  Create one per application (or use `block_on` for simple cases).
+/// Async runtime; one per application, or use [`block_on`].
 pub struct Runtime {
     queue: Arc<TaskQueue>,
 }
 
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runtime {
-    /// Create a new single-threaded runtime.
     pub fn new() -> Self {
         Self {
             queue: Arc::new(TaskQueue::new()),
         }
     }
 
-    /// Spawn a fire-and-forget task (no return value).
     pub fn spawn<F>(&self, future: F)
     where
         F: Future<Output = ()> + Send + 'static,
@@ -215,7 +163,7 @@ impl Runtime {
         self.queue.push(task);
     }
 
-    /// Spawn a task and get a handle to await its result.
+    /// Spawn and return a join handle for the result.
     pub fn spawn_with_handle<F>(&self, future: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -224,7 +172,6 @@ impl Runtime {
         let join_state: Arc<JoinState<F::Output>> = Arc::new(JoinState::new());
         let js = join_state.clone();
 
-        // Wrap the user's future: run it, stash the output, signal done.
         let wrapped = async move {
             let result = future.await;
             js.complete(result);
@@ -242,15 +189,10 @@ impl Runtime {
         JoinHandle { state: join_state }
     }
 
-    /// Run the event loop until all spawned tasks complete.
-    ///
-    /// Single-threaded: polls tasks from the queue in FIFO order.
-    /// When the queue is empty and tasks are still alive, parks via futex.
+    /// Single-threaded loop. FIFO poll; park on empty queue while tasks remain.
     pub fn run(&self) {
         loop {
-            // Drain all available work.
             while let Some(task) = self.queue.pop() {
-                // Clear the notification flag — we're about to poll.
                 task.notify.store(0, Ordering::Relaxed);
 
                 let waker = task_to_waker(&task);
@@ -260,31 +202,24 @@ impl Runtime {
                 match future.as_mut().poll(&mut cx) {
                     Poll::Ready(()) => {
                         drop(future);
-                        // Task complete — decrement active count.
                         self.queue.active_count.fetch_sub(1, Ordering::Relaxed);
-                    }
+                    },
                     Poll::Pending => {
                         drop(future);
-                        // Task will be re-enqueued when its Waker fires.
-                    }
+                    },
                 }
             }
 
-            // No more work in the queue.  Are we done?
             if self.queue.active_count.load(Ordering::Relaxed) == 0 {
                 break;
             }
 
-            // Park until a waker re-enqueues something.
             self.queue.park();
         }
     }
 
-    /// Run the event loop on `n` worker threads.
-    ///
-    /// Thread 0 = current thread.  Threads 1..n are spawned via SYS_THREAD_CREATE.
-    /// All workers pull from the same shared queue.
-    /// When SMP is enabled, these threads will naturally distribute across cores.
+    /// Run on `workers` threads sharing one queue. Current thread is worker 0;
+    /// the rest are spawned via `SYS_THREAD_CREATE`.
     pub fn run_threaded(&self, workers: usize) {
         let workers = workers.max(1);
 
@@ -293,7 +228,6 @@ impl Runtime {
             return;
         }
 
-        // Spawn (workers - 1) additional worker threads.
         let mut handles = Vec::new();
         for _ in 1..workers {
             let queue = self.queue.clone();
@@ -305,17 +239,14 @@ impl Runtime {
             }
         }
 
-        // Current thread is worker 0.
         worker_loop(&self.queue);
 
-        // Join all workers.
         for h in handles {
             let _ = h.join();
         }
     }
 }
 
-/// Worker loop — shared by all threads (including the main thread).
 fn worker_loop(queue: &Arc<TaskQueue>) {
     loop {
         while let Some(task) = queue.pop() {
@@ -329,10 +260,10 @@ fn worker_loop(queue: &Arc<TaskQueue>) {
                 Poll::Ready(()) => {
                     drop(future);
                     queue.active_count.fetch_sub(1, Ordering::Relaxed);
-                }
+                },
                 Poll::Pending => {
                     drop(future);
-                }
+                },
             }
         }
 
@@ -344,26 +275,13 @@ fn worker_loop(queue: &Arc<TaskQueue>) {
     }
 }
 
-// -- Convenience functions --
-
-/// Block the current thread on a single future until it completes.
-///
-/// This is the simplest way to run async code:
-/// ```ignore
-/// libmorpheus::task::block_on(async {
-///     let x = some_async_fn().await;
-///     println!("got: {}", x);
-/// });
-/// ```
+/// Block the current thread on a single future.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = core::pin::pin!(future);
 
-    // Build a waker that uses the same futex mechanism.
     let notify = AtomicU32::new(1);
 
     let waker = {
-        // Inline waker — no Arc needed for block_on since we own it on the stack.
-        // We use a simple futex-based waker that just sets notify=1 + FUTEX_WAKE.
         let ptr = &notify as *const AtomicU32 as *const ();
         unsafe { Waker::from_raw(RawWaker::new(ptr, &BLOCK_ON_VTABLE)) }
     };
@@ -374,22 +292,18 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(val) => return val,
             Poll::Pending => {
-                // Park until the waker fires.
-                // Only sleep if notify is still 0.
                 notify.store(0, Ordering::Release);
                 unsafe {
                     syscall3(SYS_FUTEX, &notify as *const AtomicU32 as u64, FUTEX_WAIT, 0);
                 }
-            }
+            },
         }
     }
 }
 
-// Waker vtable for block_on — doesn't need Arc, just pokes the futex.
+// Stack-local notify word; vtable just pokes the futex.
 static BLOCK_ON_VTABLE: RawWakerVTable = RawWakerVTable::new(
-    // clone: just return the same pointer (stack-local, outlives all polls)
     |ptr| RawWaker::new(ptr, &BLOCK_ON_VTABLE),
-    // wake: set + futex_wake, consuming (but we don't free stack memory)
     |ptr| {
         let atom = unsafe { &*(ptr as *const AtomicU32) };
         atom.store(1, Ordering::Release);
@@ -397,7 +311,6 @@ static BLOCK_ON_VTABLE: RawWakerVTable = RawWakerVTable::new(
             syscall3(SYS_FUTEX, ptr as u64, FUTEX_WAKE, 1);
         }
     },
-    // wake_by_ref: same thing
     |ptr| {
         let atom = unsafe { &*(ptr as *const AtomicU32) };
         atom.store(1, Ordering::Release);
@@ -405,28 +318,14 @@ static BLOCK_ON_VTABLE: RawWakerVTable = RawWakerVTable::new(
             syscall3(SYS_FUTEX, ptr as u64, FUTEX_WAKE, 1);
         }
     },
-    // drop: no-op (stack-allocated)
     |_| {},
 );
 
-// -- Yield point --
-
-/// Async yield point.  Causes the current task to be re-scheduled,
-/// giving other tasks a chance to run.
-///
-/// ```ignore
-/// async fn cooperative_work() {
-///     loop {
-///         do_some_work();
-///         libmorpheus::task::yield_now().await;
-///     }
-/// }
-/// ```
+/// Cooperative reschedule point.
 pub fn yield_now() -> YieldFuture {
     YieldFuture { yielded: false }
 }
 
-/// Future that yields once and then completes.
 pub struct YieldFuture {
     yielded: bool,
 }
@@ -439,20 +338,13 @@ impl Future for YieldFuture {
             Poll::Ready(())
         } else {
             self.yielded = true;
-            // Wake ourselves immediately so we get re-queued.
             cx.waker().wake_by_ref();
             Poll::Pending
         }
     }
 }
 
-// -- Async sleep --
-
-/// Sleep for `millis` milliseconds, yielding to the executor.
-///
-/// Uses FUTEX_WAIT with a kernel-side timeout so the process unblocks
-/// precisely when the deadline elapses — no busy-waiting, no blocking
-/// the executor's other tasks.
+/// Async sleep via timed `FUTEX_WAIT` — kernel timer unblocks at the deadline.
 pub fn sleep(millis: u64) -> SleepFuture {
     let deadline_ns = crate::time::clock_gettime().saturating_add(millis * 1_000_000);
     SleepFuture {
@@ -477,14 +369,11 @@ impl Future for SleepFuture {
 
         if !self.parked {
             self.parked = true;
-            // Compute remaining ms, round up.
             let remaining_ns = self.deadline_ns.saturating_sub(now);
             let remaining_ms = remaining_ns.div_ceil(1_000_000);
 
             if remaining_ms > 0 {
-                // Park using futex with timeout — the kernel timer ISR will
-                // unblock us after remaining_ms even if nobody wakes the futex.
-                // We use a dummy futex word on the stack.
+                // Dummy stack futex; the timeout is what matters.
                 let dummy = AtomicU32::new(0);
                 unsafe {
                     crate::raw::syscall4(
@@ -497,12 +386,10 @@ impl Future for SleepFuture {
                 }
             }
 
-            // Re-schedule ourselves for the next poll.
             cx.waker().wake_by_ref();
             Poll::Pending
         } else {
-            // We've been re-polled after the futex timeout — check the clock.
-            // Might be slightly early due to scheduling jitter; if so, spin once.
+            // Spurious wake or scheduling jitter; recheck the clock next poll.
             self.parked = false;
             cx.waker().wake_by_ref();
             Poll::Pending
@@ -510,15 +397,10 @@ impl Future for SleepFuture {
     }
 }
 
-// -- JoinHandle --
-
-/// Shared state between a spawned task and its JoinHandle.
 struct JoinState<T> {
-    /// The task's output value, written exactly once.
     value: UnsafeCell<Option<T>>,
     /// 0 = pending, 1 = complete.
     done: AtomicU32,
-    /// Waker to notify the JoinHandle poller when the task finishes.
     waker: Mutex<Option<Waker>>,
 }
 
@@ -534,7 +416,6 @@ impl<T> JoinState<T> {
         }
     }
 
-    /// Called by the wrapper future when the inner future completes.
     fn complete(&self, val: T) {
         unsafe { *self.value.get() = Some(val) };
         self.done.store(1, Ordering::Release);
@@ -543,13 +424,12 @@ impl<T> JoinState<T> {
         }
     }
 
-    /// Poll from the JoinHandle side.
     fn poll_join(&self, cx: &mut Context<'_>) -> Poll<T> {
         if self.done.load(Ordering::Acquire) == 1 {
             let val = unsafe { (*self.value.get()).take().unwrap() };
             return Poll::Ready(val);
         }
-        // Store waker first, then double-check (avoids lost wakeup).
+        // Register waker, then recheck — avoids lost wakeup.
         *self.waker.lock() = Some(cx.waker().clone());
         if self.done.load(Ordering::Acquire) == 1 {
             let val = unsafe { (*self.value.get()).take().unwrap() };
@@ -560,7 +440,6 @@ impl<T> JoinState<T> {
     }
 }
 
-/// Handle to a spawned task's result. Implements Future.
 pub struct JoinHandle<T> {
     state: Arc<JoinState<T>>,
 }

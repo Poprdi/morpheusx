@@ -1,6 +1,4 @@
-// hall of masks — preset bundles.
-// named theme+config presets with delta preview before apply.
-// "Default Dark", "Default Light", custom combos. snapshot → preview → apply.
+//! Named theme presets: snapshot, preview, apply.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{Route, SettingsApp};
@@ -159,7 +157,8 @@ pub fn render(app: &SettingsApp) {
     );
     cy += r8;
 
-    // preset cards
+    #[allow(clippy::needless_range_loop)]
+    // index used as selection/focus id and hitbox key, not just to index PRESETS.
     for i in 0..PRESET_COUNT {
         let p = &PRESETS[i];
         let is_selected = i == hall.selected;
@@ -181,15 +180,12 @@ pub fn render(app: &SettingsApp) {
         };
         widgets::rect_outline(s, st, px, cy, card_w, card_h, border, w, h);
 
-        // accent swatch
         let accent = theme::pack(p.accent_r, p.accent_g, p.accent_b);
         widgets::fill_rect(s, st, px + 4, cy + 4, 16, 16, accent, w, h);
 
-        // name
         let name_color = if is_selected { t.signal } else { t.glyph };
         widgets::draw_str(s, st, px + 24, cy + 4, p.name, name_color, card_bg, w, h);
 
-        // description
         widgets::draw_str(
             s,
             st,
@@ -202,7 +198,6 @@ pub fn render(app: &SettingsApp) {
             h,
         );
 
-        // selection marker
         if is_selected {
             widgets::draw_str(
                 s,
@@ -222,7 +217,6 @@ pub fn render(app: &SettingsApp) {
 
     cy += 8;
 
-    // delta preview
     if hall.preview_active {
         layout::draw_section(app, px, cy, "Delta Preview");
         cy += r4;
@@ -232,7 +226,6 @@ pub fn render(app: &SettingsApp) {
         layout::draw_kv(app, px, cy, "Mode:", mode_str, t.glyph);
         cy += r2;
 
-        // show accent color value
         let accent = theme::pack(p.accent_r, p.accent_g, p.accent_b);
         widgets::fill_rect(s, st, px + 80, cy, 48, 12, accent, w, h);
         widgets::draw_str(s, st, px, cy, "Accent:", t.glyph, t.substrate, w, h);
@@ -242,7 +235,6 @@ pub fn render(app: &SettingsApp) {
         cy += r8;
     }
 
-    // apply button
     let apply_label = if hall.preview_active {
         "Apply This Mask"
     } else {

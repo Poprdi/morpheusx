@@ -64,6 +64,7 @@ impl DirectoryRecord {
         ])
     }
 
+    /// Decoded data length (uses the LE half of the both-endian field).
     pub fn get_data_length(&self) -> u32 {
         u32::from_le_bytes([
             self.data_length[0],
@@ -73,6 +74,7 @@ impl DirectoryRecord {
         ])
     }
 
+    /// Decode the file-flags byte into a [`FileFlags`].
     pub fn get_flags(&self) -> FileFlags {
         FileFlags {
             hidden: self.file_flags & 0x01 != 0,
@@ -84,6 +86,7 @@ impl DirectoryRecord {
         }
     }
 
+    /// Whether the directory flag bit is set on this record.
     pub fn is_directory(&self) -> bool {
         self.file_flags & 0x02 != 0
     }

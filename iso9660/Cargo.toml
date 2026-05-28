@@ -10,12 +10,12 @@ categories = ["no-std", "filesystem", "parsing", "embedded"]
 repository = "https://github.com/Poprdi/morpheusx/tree/master/iso9660"
 documentation = "https://docs.rs/iso9660-rs"
 readme = "README.md"
-rust-version = "1.70"
+rust-version = "1.75"
 
 [dependencies]
 # Core dependencies (no_std compatible)
-gpt_disk_io = { version = "0.16", default-features = false }
-gpt_disk_types = { version = "0.16", default-features = false }
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true
 
 [dev-dependencies]
 # For std-based testing only
@@ -26,14 +26,8 @@ gpt_disk_types = { version = "0.16" }
 default = []
 # Enable Rock Ridge POSIX extensions
 rock-ridge = []
-# Enable Joliet long filename support  
-joliet = []
-# Enable all extensions
-all-extensions = ["rock-ridge", "joliet"]
-# Debug features
+# Trace logging
 trace = []
-debug = []
-debug-mount = []
 
 [lib]
 name = "iso9660"

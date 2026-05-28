@@ -115,8 +115,8 @@ impl StorageManager {
     }
 
     fn refresh_data(&mut self) {
-        if morpheus_hwinit::is_registry_initialized() {
-            let reg = unsafe { morpheus_hwinit::global_registry() };
+        if morpheus_hal_x86_64::memory::is_registry_initialized() {
+            let reg = unsafe { morpheus_hal_x86_64::memory::global_registry() };
             self.mem_stats.total_bytes = reg.total_memory();
             self.mem_stats.free_bytes = reg.free_memory();
             self.mem_stats.allocated_bytes = reg.allocated_memory();
@@ -137,18 +137,18 @@ impl StorageManager {
                         is_free: desc.mem_type.is_free(),
                         is_allocated: matches!(
                             desc.mem_type,
-                            morpheus_hwinit::MemoryType::Allocated
-                                | morpheus_hwinit::MemoryType::AllocatedDma
-                                | morpheus_hwinit::MemoryType::AllocatedStack
-                                | morpheus_hwinit::MemoryType::AllocatedPageTable
-                                | morpheus_hwinit::MemoryType::AllocatedHeap
+                            morpheus_hal_x86_64::memory::MemoryType::Allocated
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedDma
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedStack
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedPageTable
+                                | morpheus_hal_x86_64::memory::MemoryType::AllocatedHeap
                         ),
                     });
                 }
             }
         }
 
-        if let Some((total, used, free)) = morpheus_hwinit::heap_stats() {
+        if let Some((total, used, free)) = morpheus_hal_x86_64::heap::heap_stats() {
             self.heap_stats = HeapStats { total, used, free };
         }
 
@@ -212,7 +212,6 @@ impl StorageManager {
         let left_x = SECTION_PAD;
         let right_x = SECTION_PAD + col_w + SECTION_PAD;
 
-        // Left column: Physical Memory
         let mut y = content_y + SECTION_PAD;
 
         y = self.render_section_header(canvas, left_x, y, col_w, "Physical Memory", theme);
@@ -260,7 +259,6 @@ impl StorageManager {
         );
         y += 6;
 
-        // Animated memory usage bar
         y = self.render_labeled_bar(
             canvas,
             left_x + 4,
@@ -284,7 +282,6 @@ impl StorageManager {
         );
         y += SECTION_PAD;
 
-        // Memory composition chart (stacked bar)
         y = self.render_section_header(canvas, left_x, y, col_w, "Composition", theme);
         y += 4;
         self.render_stacked_bar(
@@ -296,7 +293,6 @@ impl StorageManager {
             theme,
         );
 
-        // Right column: System Info
         let mut y = content_y + SECTION_PAD;
 
         y = self.render_section_header(canvas, right_x, y, col_w, "System Info", theme);
@@ -324,7 +320,6 @@ impl StorageManager {
         );
         y += SECTION_PAD;
 
-        // Heap section
         y = self.render_section_header(canvas, right_x, y, col_w, "Heap Allocator", theme);
         y += 4;
 
@@ -372,7 +367,6 @@ impl StorageManager {
         );
         y += SECTION_PAD;
 
-        // Activity indicator
         y = self.render_section_header(canvas, right_x, y, col_w, "Activity", theme);
         y += 4;
         self.render_spinner(canvas, right_x + 4, y, theme);
@@ -398,7 +392,6 @@ impl StorageManager {
 
         let mut y = content_y + 4;
 
-        // Header
         let hdr = "  #   Type                   Address          Pages     Size";
         rect_fill(
             canvas,
@@ -446,7 +439,6 @@ impl StorageManager {
 
             rect_fill(canvas, SECTION_PAD, y, usable_w, row_h, bg);
 
-            // Color indicator bar
             let indicator_color = if region.is_free {
                 COLOR_FREE
             } else if region.is_allocated {
@@ -462,7 +454,6 @@ impl StorageManager {
             y += row_h;
         }
 
-        // Footer / scrollbar hint
         let footer_y = canvas.height().saturating_sub(font::FONT_HEIGHT + 4);
         hline(canvas, SECTION_PAD, footer_y, usable_w, theme.border);
         let status = format!(
@@ -480,7 +471,6 @@ impl StorageManager {
             &font::FONT_DATA,
         );
 
-        // Scrollbar
         if self.regions.len() > vis_rows as usize {
             let sb_x = w.saturating_sub(SECTION_PAD + 6);
             let sb_top = content_y + font::FONT_HEIGHT + 5;
@@ -506,7 +496,6 @@ impl StorageManager {
 
         let mut y = content_y + SECTION_PAD;
 
-        // Big heap stats
         y = self.render_section_header(
             canvas,
             SECTION_PAD,
@@ -517,7 +506,6 @@ impl StorageManager {
         );
         y += SECTION_PAD;
 
-        // Big numbers display
         let total_str = format_size(self.heap_stats.total as u64);
         let used_str = format_size(self.heap_stats.used as u64);
         let free_str = format_size(self.heap_stats.free as u64);
@@ -558,7 +546,6 @@ impl StorageManager {
 
         y = big_y + font::FONT_HEIGHT * 3 + SECTION_PAD;
 
-        // Full-width usage bar with animation
         y = self.render_section_header(canvas, SECTION_PAD, y, usable_w, "Usage", theme);
         y += 4;
         let bar_w = usable_w.saturating_sub(8);
@@ -574,7 +561,6 @@ impl StorageManager {
 
         y += BAR_HEIGHT + 8 + SECTION_PAD;
 
-        // Fragmentation visualization
         y = self.render_section_header(
             canvas,
             SECTION_PAD,
@@ -595,7 +581,6 @@ impl StorageManager {
 
         y += font::FONT_HEIGHT * 3 + SECTION_PAD;
 
-        // Utilization percentage
         let pct = if self.heap_stats.total > 0 {
             (self.heap_stats.used * 100) / self.heap_stats.total
         } else {
@@ -615,8 +600,6 @@ impl StorageManager {
             &font::FONT_DATA,
         );
     }
-
-    // drawing helpers
 
     fn render_section_header(
         &self,
@@ -758,7 +741,6 @@ impl StorageManager {
             vline(canvas, x + 1 + col, y + 1, h.saturating_sub(2), color);
         }
 
-        // Percentage text centered on bar
         let text = format_pct(pct);
         let tw = text.len() as u32 * font::FONT_WIDTH;
         let tx = x + 1 + fill_w.saturating_sub(tw) / 2;
@@ -810,7 +792,6 @@ impl StorageManager {
             rect_fill(canvas, cx, y + 1, free_w, inner_h, COLOR_FREE);
         }
 
-        // Legend below
         let ly = y + h + 2;
         self.render_legend_item(canvas, x, ly, "Allocated", COLOR_ALLOC, theme);
         self.render_legend_item(canvas, x + 100, ly, "Reserved", COLOR_RESERVED, theme);
@@ -913,13 +894,12 @@ impl StorageManager {
         let used_w =
             ((inner_w as u64 * self.heap_stats.used as u64) / self.heap_stats.total as u64) as u32;
 
-        // Simulated fragmentation pattern using tick-based determinism
+        // Synthetic fragmentation pattern; not real allocator state.
         let block_w = 6u32;
         let mut cx = 0u32;
         let mut block_i = 0u32;
         while cx + block_w <= inner_w {
             let in_used = cx < used_w;
-            // Create visual fragmentation pattern
             let is_gap = in_used && (block_i % 7 == 3 || block_i % 11 == 5);
             let color = if in_used && !is_gap {
                 COLOR_HEAP
@@ -1001,7 +981,6 @@ impl App for StorageManager {
             }
         }
 
-        // Bottom status bar
         let h = canvas.height();
         let w = canvas.width();
         let status_y = h.saturating_sub(font::FONT_HEIGHT + 2);
@@ -1109,14 +1088,10 @@ impl App for StorageManager {
     }
 }
 
-// color constants
-
 const COLOR_FREE: Color = Color::rgb(0, 200, 0);
 const COLOR_ALLOC: Color = Color::rgb(200, 100, 0);
 const COLOR_RESERVED: Color = Color::rgb(100, 100, 100);
 const COLOR_HEAP: Color = Color::rgb(60, 160, 220);
-
-// formatting helpers
 
 fn format_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
@@ -1159,27 +1134,27 @@ fn format_region_line(r: &MemRegion) -> String {
     )
 }
 
-fn mem_type_name(t: morpheus_hwinit::MemoryType) -> &'static str {
+fn mem_type_name(t: morpheus_hal_x86_64::memory::MemoryType) -> &'static str {
     match t {
-        morpheus_hwinit::MemoryType::Reserved => "Reserved",
-        morpheus_hwinit::MemoryType::LoaderCode => "Loader Code",
-        morpheus_hwinit::MemoryType::LoaderData => "Loader Data",
-        morpheus_hwinit::MemoryType::BootServicesCode => "BS Code",
-        morpheus_hwinit::MemoryType::BootServicesData => "BS Data",
-        morpheus_hwinit::MemoryType::RuntimeServicesCode => "RT Code",
-        morpheus_hwinit::MemoryType::RuntimeServicesData => "RT Data",
-        morpheus_hwinit::MemoryType::Conventional => "Conventional",
-        morpheus_hwinit::MemoryType::Unusable => "Unusable",
-        morpheus_hwinit::MemoryType::AcpiReclaim => "ACPI Reclaim",
-        morpheus_hwinit::MemoryType::AcpiNvs => "ACPI NVS",
-        morpheus_hwinit::MemoryType::Mmio => "MMIO",
-        morpheus_hwinit::MemoryType::MmioPortSpace => "MMIO Port",
-        morpheus_hwinit::MemoryType::PalCode => "PAL Code",
-        morpheus_hwinit::MemoryType::Persistent => "Persistent",
-        morpheus_hwinit::MemoryType::Allocated => "Allocated",
-        morpheus_hwinit::MemoryType::AllocatedDma => "Alloc DMA",
-        morpheus_hwinit::MemoryType::AllocatedStack => "Alloc Stack",
-        morpheus_hwinit::MemoryType::AllocatedPageTable => "Alloc PageTbl",
-        morpheus_hwinit::MemoryType::AllocatedHeap => "Alloc Heap",
+        morpheus_hal_x86_64::memory::MemoryType::Reserved => "Reserved",
+        morpheus_hal_x86_64::memory::MemoryType::LoaderCode => "Loader Code",
+        morpheus_hal_x86_64::memory::MemoryType::LoaderData => "Loader Data",
+        morpheus_hal_x86_64::memory::MemoryType::BootServicesCode => "BS Code",
+        morpheus_hal_x86_64::memory::MemoryType::BootServicesData => "BS Data",
+        morpheus_hal_x86_64::memory::MemoryType::RuntimeServicesCode => "RT Code",
+        morpheus_hal_x86_64::memory::MemoryType::RuntimeServicesData => "RT Data",
+        morpheus_hal_x86_64::memory::MemoryType::Conventional => "Conventional",
+        morpheus_hal_x86_64::memory::MemoryType::Unusable => "Unusable",
+        morpheus_hal_x86_64::memory::MemoryType::AcpiReclaim => "ACPI Reclaim",
+        morpheus_hal_x86_64::memory::MemoryType::AcpiNvs => "ACPI NVS",
+        morpheus_hal_x86_64::memory::MemoryType::Mmio => "MMIO",
+        morpheus_hal_x86_64::memory::MemoryType::MmioPortSpace => "MMIO Port",
+        morpheus_hal_x86_64::memory::MemoryType::PalCode => "PAL Code",
+        morpheus_hal_x86_64::memory::MemoryType::Persistent => "Persistent",
+        morpheus_hal_x86_64::memory::MemoryType::Allocated => "Allocated",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedDma => "Alloc DMA",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedStack => "Alloc Stack",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedPageTable => "Alloc PageTbl",
+        morpheus_hal_x86_64::memory::MemoryType::AllocatedHeap => "Alloc Heap",
     }
 }

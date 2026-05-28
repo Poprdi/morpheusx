@@ -50,6 +50,8 @@ pub fn find_file<B: BlockIo>(
 
         let mut found = None;
         let mut _entry_count = 0u32;
+        // `_entry_count` is a diagnostic-only tally, not a true index counter.
+        #[allow(clippy::explicit_counter_loop)]
         for result in iter {
             let entry = result?;
             _entry_count += 1;
@@ -69,7 +71,7 @@ pub fn find_file<B: BlockIo>(
                 }
                 current_lba = entry.extent_lba;
                 current_len = entry.data_length;
-            }
+            },
             None => return Err(Iso9660Error::NotFound),
         }
     }

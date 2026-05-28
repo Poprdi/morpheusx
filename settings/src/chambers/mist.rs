@@ -1,6 +1,4 @@
-// mist shore — display baseline controls.
-// framebuffer introspection, pixel format confirmation, stride/resolution readout.
-// read-only telemetry mostly — this is the calmest chamber.
+//! Read-only framebuffer telemetry: stride, format, geometry.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::SettingsApp;
@@ -53,12 +51,9 @@ impl MistChamber {
 }
 
 pub fn activate(app: &mut SettingsApp, idx: usize) {
-    match idx {
-        FIELD_REFRESH => {
-            app.mist.refresh();
-            app.set_status("Display info refreshed", false);
-        }
-        _ => {}
+    if idx == FIELD_REFRESH {
+        app.mist.refresh();
+        app.set_status("Display info refreshed", false);
     }
 }
 
@@ -82,7 +77,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_section(app, px, cy, "Framebuffer");
     cy += r4;
 
-    // resolution
     let mut buf = [0u8; 32];
     let mut res = [0u8; 24];
     let mut ri = 0;
@@ -98,20 +92,17 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Resolution:", res_str, t.telemetry);
     cy += r2;
 
-    // stride
     let n = widgets::u64_to_str(mist.fb_stride as u64, &mut buf);
     let stride_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Stride (bytes):", stride_str, t.telemetry);
     cy += r2;
 
-    // stride in pixels
     let stride_px = mist.fb_stride / 4;
     let n = widgets::u64_to_str(stride_px as u64, &mut buf);
     let spx_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Stride (pixels):", spx_str, t.telemetry);
     cy += r2;
 
-    // pixel format
     let fmt_str = match mist.fb_format {
         0 => "RGBX (0)",
         1 => "BGRX (1)",
@@ -122,20 +113,17 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Pixel Format:", fmt_str, t.immutable);
     cy += r2;
 
-    // fb size
     let n = widgets::format_bytes(mist.fb_size, &mut buf);
     let size_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "FB Size:", size_str, t.telemetry);
     cy += r2;
 
-    // base address
     let mut hex_buf = [0u8; 18];
     let hex_len = format_hex(mist.fb_base, &mut hex_buf);
     let hex_str = core::str::from_utf8(&hex_buf[..hex_len]).unwrap_or("0x???");
     layout::draw_kv(app, px, cy, "Base Addr:", hex_str, t.immutable);
     cy += r8;
 
-    // pixel math section
     layout::draw_section(app, px, cy, "Pixel Math");
     cy += r4;
 
@@ -145,14 +133,12 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Bytes/Pixel:", bpp_str, t.telemetry);
     cy += r2;
 
-    // total pixels
     let total_px = mist.fb_width as u64 * mist.fb_height as u64;
     let n = widgets::u64_to_str(total_px, &mut buf);
     let tpx_str = core::str::from_utf8(&buf[..n]).unwrap_or("?");
     layout::draw_kv(app, px, cy, "Total Pixels:", tpx_str, t.telemetry);
     cy += r2;
 
-    // scanline padding
     let pad = mist.fb_stride.saturating_sub(mist.fb_width * bpp);
     let pad_label = if pad == 0 { "None" } else { "Present" };
     let pad_color = if pad == 0 { t.success } else { t.warning };
@@ -168,7 +154,6 @@ pub fn render(app: &SettingsApp) {
 
     cy += 8;
 
-    // packing reminder
     layout::draw_section(app, px, cy, "Packing Reference");
     cy += r4;
 
@@ -200,7 +185,7 @@ fn format_hex(val: u64, buf: &mut [u8; 18]) -> usize {
     buf[0] = b'0';
     buf[1] = b'x';
     let mut i = 2;
-    // skip leading zeros but keep at least one digit
+    // Strip leading zeros, but always emit at least one nibble.
     let mut started = false;
     for shift in (0..16).rev() {
         let nib = ((val >> (shift * 4)) & 0xF) as usize;

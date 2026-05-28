@@ -1,19 +1,14 @@
-# CI Pipeline for MorpheusX
-#
-# Runs on every push/PR to master branch.
-# Fast feedback: lint → build-host → test-host (cascade, fail-fast)
-#
-# Separate workflows:
-# - UEFI builds and E2E tests → manual only (uefi-e2e.yml)
-# - Documentation → tags only (cargo-doc.yml)
-# - Security audit → weekly + dependency changes (audit.yml)
-# - Releases → tags only (release.yml)
-#
-# Requirements:
-# - Rust 1.75+ (workspace minimum)
-# - NASM (for bootloader assembly, but not needed for host tests)
-
 name: CI
+
+# Focused host CI: format, clippy, build, test. Runs on master.
+#
+# This is a mixed workspace: most crates are host-buildable libraries + host
+# tools, but the userland apps and the bootloader are `no_std`/`#![no_main]`
+# binaries for a custom bare-metal target — they cannot link for the host
+# (their `_start` collides with the host crt0). So we lint everything (clippy
+# type-checks bins without linking), but only *build* libraries + host tools
+# and only *test* the host-runnable crates. The bare-metal images are built
+# for their real target via `setup-dev.sh` / `testing/build.sh`.
 
 on:
   push:
@@ -24,135 +19,53 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Pin toolchain for reproducibility
-  RUST_VERSION: "1.85"
 
-# Cancel in-progress runs for same PR/branch
+# Cancel superseded runs for the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════════════════
-  # LINT: Format and clippy checks
-  # ═══════════════════════════════════════════════════════════════════════════
-  lint:
-    name: Lint
+  ci:
+    name: fmt · clippy · build · test
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
+      # Pinned toolchain matches rust-toolchain.toml (1.92.0).
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_VERSION }}
+          toolchain: "1.92.0"
           components: rustfmt, clippy
 
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+
+      # build.rs in several crates assembles x86_64 `.s` files with NASM.
       - name: Install NASM
         run: sudo apt-get update -qq && sudo apt-get install -y -qq nasm
 
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-lint-
-            ${{ runner.os }}-cargo-
-
-      - name: Check formatting
+      - name: Format
         run: cargo fmt --all -- --check
 
-      # Clippy on lib and bins only - tests have host/no_std conflicts
-      # Exclude bootloader (UEFI-only, has #![no_main])
-      - name: Clippy (libraries and binaries)
+      - name: Clippy
+        run: cargo clippy --workspace --exclude morpheus-bootloader --all-features --lib --bins -- -W warnings
+
+      - name: Build (libraries + host tools)
         run: |
-          cargo clippy --workspace --exclude morpheus-bootloader --all-features --lib --bins -- -W warnings
+          cargo build --workspace --lib --all-features
+          cargo build -p morpheus-cli -p keymap-gen
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # BUILD-HOST: Compile all crates for host target
-  # ═══════════════════════════════════════════════════════════════════════════
-  build-host:
-    name: Build (Host)
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-            ${{ runner.os }}-cargo-
-
-      # Bootloader is UEFI-only (#![no_main], uses efi_main) - exclude from host builds
-      - name: Build (all features, exclude bootloader)
-        run: cargo build --workspace --exclude morpheus-bootloader --all-features
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # TEST-HOST: Run all tests on host target
-  # ═══════════════════════════════════════════════════════════════════════════
-  test-host:
-    name: Test (Host)
-    runs-on: ubuntu-latest
-    needs: build-host
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-            ${{ runner.os }}-cargo-
-
-      # Install tools for ISO/FAT fixture generation (optional tests)
-      - name: Install test dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq genisoimage mtools dosfstools
-
-      # Test workspace crates that support host tests
-      # Note: morpheus-bootloader is UEFI-only (has #[panic_handler])
-      - name: Run tests (host-testable crates)
+      - name: Test (host-runnable crates)
         run: |
           cargo test --all-features \
             -p iso9660-rs \
-            -p morpheus-core \
-            -p morpheus-network \
-            -p updater
-
-      # Run iso9660 integration tests that create fixtures
-      - name: Run ISO9660 extended tests
-        run: |
-          cd iso9660
-          cargo test --test integration_tests create_test_iso -- --ignored --nocapture || true
-        continue-on-error: true
-
+            -p morpheus-storage-format \
+            -p morpheus-helix \
+            -p morpheus-gfx3d \
+            -p morpheus-ui \
+            -p morpheus-ping \
+            -p morpheus-block \
+            -p morpheus-nic \
+            -p morpheus-net-stack

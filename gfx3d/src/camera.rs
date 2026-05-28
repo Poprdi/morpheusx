@@ -29,6 +29,8 @@ impl Camera {
     }
 
     /// Deltas in radians (typical mouse sensitivity ~0.002 rad/count).
+    // clamp() differs from this branch form on NaN; keep explicit branches.
+    #[allow(clippy::manual_clamp)]
     pub fn rotate(&mut self, delta_yaw: f32, delta_pitch: f32) {
         self.yaw += delta_yaw;
         self.pitch += delta_pitch;

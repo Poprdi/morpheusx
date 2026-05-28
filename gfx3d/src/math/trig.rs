@@ -7,9 +7,14 @@ const TABLE_MASK: usize = TABLE_SIZE - 1;
 const INV_TABLE: f32 = TABLE_SIZE as f32 / (2.0 * core::f32::consts::PI);
 const TABLE_TO_RAD: f32 = (2.0 * core::f32::consts::PI) / TABLE_SIZE as f32;
 #[allow(clippy::excessive_precision)]
-
 pub struct TrigTable {
     sin_table: Box<[f32; TABLE_SIZE]>,
+}
+
+impl Default for TrigTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TrigTable {

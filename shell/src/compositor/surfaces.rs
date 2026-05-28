@@ -35,7 +35,7 @@ impl Compositor {
                             focused_exit = Some(code);
                         }
                         true
-                    }
+                    },
                     _ => false,
                 }
             } else {

@@ -1,7 +1,7 @@
 use crate::islands::{draw_text, raw_fill, ShellState, ICON_SIZE, LAUNCHER_H, LAUNCHER_W, PANEL_H};
 use libmorpheus::{io, process};
 
-/// launcher island. application launcher overlay triggered by clicking START.
+/// Overlay opened by START.
 pub fn tick(state: &mut ShellState) {
     if !state.launcher_open || !state.launcher_dirty {
         return;
@@ -10,7 +10,6 @@ pub fn tick(state: &mut ShellState) {
     let lx = 8u32;
     let ly = state.fb_h.saturating_sub(PANEL_H + LAUNCHER_H + 8);
 
-    // launcher background
     let (lr, lg, lb) = state.launcher_bg_rgb;
     let launcher_bg = state.pack(lr, lg, lb);
     raw_fill(
@@ -23,7 +22,6 @@ pub fn tick(state: &mut ShellState) {
         launcher_bg,
     );
 
-    // launcher title bar
     let (sr, sg, sb) = state.start_rgb;
     let title_bg = state.pack(sr, sg, sb);
     raw_fill(
@@ -44,7 +42,6 @@ pub fn tick(state: &mut ShellState) {
         state.start_rgb,
     );
 
-    // shell icon
     let icon_x = lx + 16;
     let icon_y = ly + 40;
     let (ir, ig, ib) = state.icon_bg_rgb;
@@ -87,12 +84,10 @@ pub fn tick(state: &mut ShellState) {
     state.launcher_dirty = false;
 }
 
-/// handle a click at (mx, my) in shell surface coordinates.
-/// returns true if the click was consumed by the launcher.
+/// Returns true if the launcher consumed the click.
 pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
     let panel_y = state.fb_h.saturating_sub(PANEL_H) as i32;
 
-    // check START button click
     if my >= panel_y
         && my < panel_y + PANEL_H as i32
         && mx >= 0
@@ -100,15 +95,14 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
     {
         state.launcher_open = !state.launcher_open;
         state.launcher_dirty = true;
-        // if closing launcher, repaint wallpaper over where it was
         if !state.launcher_open {
+            // Repaint wallpaper underneath.
             state.wallpaper_dirty = true;
         }
         state.panel_dirty = true;
         return true;
     }
 
-    // check launcher icon click (only if open)
     if state.launcher_open {
         let lx = 8i32;
         let ly = (state.fb_h.saturating_sub(PANEL_H + LAUNCHER_H + 8)) as i32;
@@ -120,16 +114,14 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
             && my >= icon_y
             && my < icon_y + ICON_SIZE as i32 + 24
         {
-            // spawn shell
             match process::spawn("/bin/msh") {
                 Ok(_pid) => {
                     io::println("shelld: spawned msh");
-                }
+                },
                 Err(e) => {
                     libmorpheus::println!("shelld: failed to spawn msh err=0x{:x}", e);
-                }
+                },
             }
-            // close launcher after spawning
             state.launcher_open = false;
             state.launcher_dirty = false;
             state.wallpaper_dirty = true;
@@ -137,12 +129,12 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
             return true;
         }
 
-        // click inside launcher but not on icon — consume it
+        // Consume clicks inside launcher bounds.
         if mx >= lx && mx < lx + LAUNCHER_W as i32 && my >= ly && my < ly + LAUNCHER_H as i32 {
             return true;
         }
 
-        // click outside launcher — close it
+        // Click outside closes.
         state.launcher_open = false;
         state.launcher_dirty = false;
         state.wallpaper_dirty = true;

@@ -1,6 +1,4 @@
-// system observatory — telemetry dashboard and power controls.
-// memory, cpu uptime, heap stats, reboot, shutdown.
-// the power buttons have arm→consequence→confirm because bricking on accident is not a feature.
+//! System telemetry + power controls. Power buttons require two-stage arm.
 
 use crate::layout::{self, PANE_PAD, RAIL_WIDTH, STRIP_HEIGHT};
 use crate::state::{ArmState, Route, SettingsApp};
@@ -25,7 +23,6 @@ pub struct SysObsChamber {
     pub cpu_count: u32,
     pub idle_pct: u32,
 
-    // power action arming
     pub reboot_arm: ArmState,
     pub shutdown_arm: ArmState,
 }
@@ -56,7 +53,7 @@ impl SysObsChamber {
         self.heap_used = info.heap_used;
         self.heap_total = info.heap_total;
         self.cpu_count = info.cpu_count;
-        // idle fraction: idle_tsc / uptime_ticks. both are TSC-derived.
+        // idle_tsc and uptime_ticks share the TSC scale.
         self.idle_pct = if info.idle_tsc > 0 && info.uptime_ticks > 0 {
             ((info.idle_tsc * 100) / info.uptime_ticks) as u32
         } else {
@@ -74,50 +71,50 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
         FIELD_REFRESH => {
             app.sys_obs.refresh();
             app.set_status("Telemetry refreshed", false);
-        }
+        },
         FIELD_REBOOT => match app.sys_obs.reboot_arm {
             ArmState::Disarmed => {
                 app.sys_obs.reboot_arm = ArmState::Armed;
                 app.set_status("Reboot ARMED. Press again to confirm.", false);
-            }
+            },
             ArmState::Armed => {
                 app.sys_obs.reboot_arm = ArmState::Confirmed;
                 app.log_change(Route::SysObservatory, "power", "Graceful reboot", true);
                 let _ = sys::reboot(false);
-            }
-            ArmState::Confirmed => {}
+            },
+            ArmState::Confirmed => {},
         },
         FIELD_SHUTDOWN => match app.sys_obs.shutdown_arm {
             ArmState::Disarmed => {
                 app.sys_obs.shutdown_arm = ArmState::Armed;
                 app.set_status("Shutdown ARMED. Press again to confirm.", false);
-            }
+            },
             ArmState::Armed => {
                 app.sys_obs.shutdown_arm = ArmState::Confirmed;
                 app.log_change(Route::SysObservatory, "power", "Graceful shutdown", true);
                 let _ = sys::shutdown(false);
-            }
-            ArmState::Confirmed => {}
+            },
+            ArmState::Confirmed => {},
         },
         FIELD_FORCE_REBOOT => match app.sys_obs.reboot_arm {
             ArmState::Armed => {
                 app.log_change(Route::SysObservatory, "power", "Force reboot", true);
                 let _ = sys::reboot(true);
-            }
+            },
             _ => {
                 app.set_status("Arm reboot first (Enter on Reboot)", false);
-            }
+            },
         },
         FIELD_FORCE_SHUTDOWN => match app.sys_obs.shutdown_arm {
             ArmState::Armed => {
                 app.log_change(Route::SysObservatory, "power", "Force shutdown", true);
                 let _ = sys::shutdown(true);
-            }
+            },
             _ => {
                 app.set_status("Arm shutdown first (Enter on Shutdown)", false);
-            }
+            },
         },
-        _ => {}
+        _ => {},
     }
 }
 
@@ -144,7 +141,6 @@ pub fn render(app: &SettingsApp) {
     let r8 = layout::row_step(app, 8);
     let r12 = layout::row_step(app, 12);
 
-    // memory section
     layout::draw_section(app, px, cy, "Memory");
     cy += r4;
 
@@ -164,7 +160,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Free:", free_str, t.success);
     cy += r4;
 
-    // memory usage bar
     let bar_w = (w - RAIL_WIDTH).saturating_sub(2 * PANE_PAD);
     let pct = if sys.total_mem > 0 {
         ((sys.used_mem * 100) / sys.total_mem) as u32
@@ -195,7 +190,6 @@ pub fn render(app: &SettingsApp) {
     );
     cy += (r4 / 2).max(10);
 
-    // heap section
     layout::draw_section(app, px, cy, "Heap");
     cy += r4;
 
@@ -209,7 +203,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Total:", ht_str, t.telemetry);
     cy += r8;
 
-    // cpu section
     layout::draw_section(app, px, cy, "CPU");
     cy += r4;
 
@@ -223,7 +216,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Idle %:", idle_str, t.telemetry);
     cy += r8;
 
-    // uptime
     layout::draw_section(app, px, cy, "Uptime");
     cy += r4;
 
@@ -232,14 +224,12 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "Since boot:", up_str, t.immutable);
     cy += r12;
 
-    // power controls
     layout::draw_section(app, px, cy, "Power Controls");
     cy += r4;
 
     layout::draw_button_row(app, px, cy, "Refresh Telemetry", FIELD_REFRESH, t.glyph);
     cy += r8;
 
-    // reboot
     let rb_label = match sys.reboot_arm {
         ArmState::Disarmed => "Reboot (graceful)",
         ArmState::Armed => "!! CONFIRM REBOOT !!",
@@ -267,7 +257,6 @@ pub fn render(app: &SettingsApp) {
         cy += r4;
     }
 
-    // shutdown
     let sd_label = match sys.shutdown_arm {
         ArmState::Disarmed => "Shutdown (graceful)",
         ArmState::Armed => "!! CONFIRM SHUTDOWN !!",

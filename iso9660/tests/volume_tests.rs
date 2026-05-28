@@ -1,4 +1,4 @@
-//! Volume descriptor parsing tests
+//! Volume descriptor parsing.
 
 mod common;
 
@@ -22,7 +22,6 @@ fn test_mount_minimal_iso() {
 #[test]
 fn test_mount_invalid_signature() {
     let mut device = MemoryBlockDevice::new(vec![0u8; 64 * 2048]);
-    // No valid volume descriptor - should fail
 
     let result = mount(&mut device, 0);
     assert!(result.is_err());
@@ -32,7 +31,6 @@ fn test_mount_invalid_signature() {
 #[test]
 fn test_mount_empty_device() {
     let mut device = MemoryBlockDevice::new(vec![0u8; 10 * 2048]);
-    // Device too small for proper volume descriptors
 
     let result = mount(&mut device, 0);
     assert!(result.is_err());
@@ -42,7 +40,6 @@ fn test_mount_empty_device() {
 fn test_mount_with_offset() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
 
-    // Should work at offset 0
     let result = mount(&mut device, 0);
     assert!(result.is_ok());
 }
@@ -52,7 +49,6 @@ fn test_volume_info_fields() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
     let volume = mount(&mut device, 0).expect("mount should succeed");
 
-    // Check expected values from minimal ISO
     assert_eq!(volume.logical_block_size, 2048, "Block size should be 2048");
     assert_eq!(
         volume.volume_space_size, 64,
@@ -71,7 +67,6 @@ fn test_volume_info_fields() {
 fn test_mount_read_only() {
     let mut device = MemoryBlockDevice::create_minimal_iso();
 
-    // Mount should not modify device
     let data_before = device.data.clone();
     let _ = mount(&mut device, 0);
     assert_eq!(device.data, data_before, "Mount should not modify device");

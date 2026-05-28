@@ -28,10 +28,12 @@ impl Console {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cols(&self) -> u32 {
         self.cols
     }
 
+    #[allow(dead_code)]
     pub fn rows(&self) -> u32 {
         self.rows
     }
@@ -97,10 +99,10 @@ impl Console {
                 if self.cy >= self.rows {
                     self.scroll(fb);
                 }
-            }
+            },
             '\r' => {
                 self.cx = 0;
-            }
+            },
             '\t' => {
                 let next = (self.cx + 4) & !3;
                 while self.cx < next && self.cx < self.cols {
@@ -114,7 +116,7 @@ impl Console {
                         self.scroll(fb);
                     }
                 }
-            }
+            },
             c if c >= ' ' && (c as u32) < 0x7F => {
                 if self.cx >= self.cols {
                     self.cx = 0;
@@ -125,8 +127,8 @@ impl Console {
                 }
                 self.draw_cell(fb, self.cx, self.cy, c, FG, BG);
                 self.cx += 1;
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -168,7 +170,6 @@ impl Console {
         self.cursor_visible = false;
         let px = self.cx * font::FONT_WIDTH as u32;
         let py = self.cy * font::FONT_HEIGHT as u32;
-        // Erase cursor with blank cell
         fb.draw_glyph(font::get_glyph_or_space(' '), px, py, FG, BG);
     }
 
@@ -182,7 +183,7 @@ impl Console {
                     if self.cy >= self.rows {
                         self.scroll(fb);
                     }
-                }
+                },
                 c if c >= ' ' && (c as u32) < 0x7F => {
                     if self.cx >= self.cols {
                         self.cx = 0;
@@ -193,8 +194,8 @@ impl Console {
                     }
                     self.draw_cell(fb, self.cx, self.cy, c, fg, BG);
                     self.cx += 1;
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         self.show_cursor(fb);

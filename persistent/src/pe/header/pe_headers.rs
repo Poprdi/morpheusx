@@ -14,7 +14,10 @@ pub struct PeHeaders {
 }
 
 impl PeHeaders {
-    /// SAFETY: `image_base..+image_size` must be a readable PE image.
+    /// # Safety
+    ///
+    /// `image_base` must be readable for at least `image_size` bytes and
+    /// reference a PE image; nested header parsers trust offsets within it.
     pub unsafe fn parse(image_base: *const u8, image_size: usize) -> PeResult<Self> {
         let dos = DosHeader::parse(image_base, image_size)?;
         let coff = CoffHeader::parse(image_base, dos.e_lfanew, image_size)?;
@@ -40,7 +43,10 @@ impl PeHeaders {
     /// that each implied original pointer lands in a known section RVA range.
     /// Returns `(image_base, validated_relocs, total_relocs)`.
     ///
-    /// SAFETY: `image_base..+image_size` must be a relocated PE image.
+    /// # Safety
+    ///
+    /// `image_base` must be readable for at least `image_size` bytes and
+    /// reference the relocated PE image these headers were parsed from.
     pub unsafe fn reconstruct_original_image_base(
         &self,
         image_base: *const u8,
@@ -213,6 +219,9 @@ impl PeHeaders {
         // 90% threshold; fall through with best guess otherwise.
         let min_valid = (reloc_count as u32 * 9) / 10;
 
+        // Both branches intentionally return the best guess; the threshold
+        // check documents the confidence distinction without altering output.
+        #[allow(clippy::if_same_then_else)]
         if best_valid_count >= min_valid {
             Ok((best_candidate, best_valid_count, reloc_count as u32))
         } else {
@@ -223,7 +232,10 @@ impl PeHeaders {
     /// Reverse the load-time relocation: restore .reloc from embedded data,
     /// undo DIR64 fixups, and rewrite ImageBase. Returns the applied delta.
     ///
-    /// SAFETY: `image_data` must be the current relocated PE in RVA layout.
+    /// # Safety
+    ///
+    /// `image_data` must be the current relocated PE image in RVA (memory)
+    /// layout that these headers were parsed from; it is rewritten in place.
     pub unsafe fn unrelocate_image(
         &self,
         image_data: &mut [u8],
@@ -257,7 +269,10 @@ impl PeHeaders {
     /// Convert RVA layout (sections at VirtualAddress) back to file layout
     /// (sections at PointerToRawData), then drop in the embedded .reloc data.
     ///
-    /// SAFETY: `rva_image` must be a PE image in memory layout.
+    /// # Safety
+    ///
+    /// `rva_image` must be a PE image in RVA (memory) layout matching these
+    /// headers; section offsets read from it are trusted to be in bounds.
     pub unsafe fn rva_to_file_layout(&self, rva_image: &[u8]) -> PeResult<alloc::vec::Vec<u8>> {
         // Parse from the unmodified header region; unrelocate must not touch it.
         let section_offset =

@@ -67,8 +67,8 @@ fn split_pipe(s: &str) -> Vec<&str> {
             b'|' if !in_single && !in_double => {
                 segments.push(&s[start..i]);
                 start = i + 1;
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     segments.push(&s[start..]);
@@ -92,21 +92,21 @@ fn tokenize(s: &str) -> Vec<String> {
         match ch {
             '\\' if !in_single => {
                 escape = true;
-            }
+            },
             '\'' if !in_double => {
                 in_single = !in_single;
-            }
+            },
             '"' if !in_single => {
                 in_double = !in_double;
-            }
+            },
             ' ' | '\t' if !in_single && !in_double => {
                 if !current.is_empty() {
                     tokens.push(core::mem::take(&mut current));
                 }
-            }
+            },
             _ => {
                 current.push(ch);
-            }
+            },
         }
     }
 
@@ -126,7 +126,7 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
         match tok.as_str() {
             "<" => {
                 stdin_file = iter.next();
-            }
+            },
             ">" => {
                 if let Some(path) = iter.next() {
                     stdout_file = Some(Redirect {
@@ -134,16 +134,16 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
                         append: false,
                     });
                 }
-            }
+            },
             ">>" => {
                 if let Some(path) = iter.next() {
                     stdout_file = Some(Redirect { path, append: true });
                 }
-            }
+            },
             _ => {
                 if let Some(rest) = tok.strip_prefix('>') {
-                    let (append, path_part) = if rest.starts_with('>') {
-                        (true, &rest[1..])
+                    let (append, path_part) = if let Some(stripped) = rest.strip_prefix('>') {
+                        (true, stripped)
                     } else {
                         (false, rest)
                     };
@@ -165,7 +165,7 @@ fn build_command(tokens: Vec<String>) -> Option<SimpleCommand> {
                 } else {
                     argv.push(tok);
                 }
-            }
+            },
         }
     }
 

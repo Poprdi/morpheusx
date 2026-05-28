@@ -1,9 +1,8 @@
-// Runtime diagnostics and memory tracking
+//! Allocation counters + togglable on-screen overlay.
 
 use crate::tui::renderer::{Screen, EFI_BLACK, EFI_GREEN, EFI_LIGHTGREEN, EFI_WHITE};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-// Global allocation tracking
 static TOTAL_ALLOCATED: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_FREED: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -45,7 +44,6 @@ impl MemoryStats {
     }
 }
 
-// Debug overlay that can be toggled on any screen
 pub struct DebugOverlay {
     enabled: bool,
 }
@@ -72,7 +70,6 @@ impl DebugOverlay {
         let x = screen.width().saturating_sub(35);
         let y = 0;
 
-        // Memory stats box
         screen.put_str_at(x, y, "┌─ MEMORY STATS ─────────────┐", EFI_GREEN, EFI_BLACK);
 
         let allocated_kb = stats.total_allocated / 1024;
@@ -133,7 +130,6 @@ impl DebugOverlay {
         let mut buf = [0u8; 10];
         let len = format_number(num, &mut buf);
 
-        // Right align within 6 char field
         let padding = 6usize.saturating_sub(len);
         for i in 0..padding {
             screen.put_char_at(x + i, y, ' ', EFI_GREEN, EFI_BLACK);

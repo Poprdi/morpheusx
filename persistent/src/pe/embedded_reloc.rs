@@ -9,7 +9,11 @@ pub struct EmbeddedRelocData {
     pub data: &'static [u8],
 }
 
-/// SAFETY: `image_base..+image_size` must be a mapped PE image.
+/// # Safety
+///
+/// `image_base` must point to a mapped PE image of at least `image_size`
+/// bytes that stays readable for the duration of the call. The parsed
+/// section table offsets are trusted to lie within that region.
 pub unsafe fn find_embedded_reloc(
     image_base: *const u8,
     image_size: usize,

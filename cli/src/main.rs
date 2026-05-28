@@ -1,18 +1,5 @@
-//! morpheus-cli — host-side HelixFS utility for MorpheusX development.
-//!
-//! Injects files into a `helix-data.img` raw disk image from the host,
-//! so they are available at runtime when MorpheusX boots in QEMU.
-//!
-//! # Usage
-//!
-//! ```text
-//! morpheus-cli inject <disk-image> <elf-binary> [--dest /bin/name]
-//! ```
-//!
-//! # Inject with a custom path inside HelixFS
-//! cargo run -p morpheus-cli -- inject testing/helix-data.img \
-//!     target/x86_64-morpheus/release/syscall-e2e --dest /bin/e2e
-//! ```
+//! Host-side HelixFS utility: inject ELF binaries into `helix-data.img` so they
+//! exist when MorpheusX boots in QEMU.
 
 use std::env;
 use std::fs::{File, OpenOptions};
@@ -31,7 +18,6 @@ use morpheus_helix::types::*;
 use morpheus_helix::vfs::{self};
 use morpheus_helix::vfs::{FdTable, HelixInstance, MountTable};
 
-
 const SECTOR_SIZE: u32 = 512;
 
 struct FileBlockDevice {
@@ -44,7 +30,7 @@ impl FileBlockDevice {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
         let mut len = file.metadata()?.len();
         if len == 0 {
-            // Block devices may report 0 via metadata; use seek-to-end as fallback.
+            // Block devices report 0 via metadata; fall back to seek-to-end.
             len = file.seek(SeekFrom::End(0))?;
         }
         let total_sectors = len / SECTOR_SIZE as u64;
@@ -95,7 +81,6 @@ impl BlockIo for FileBlockDevice {
         self.file.flush().map_err(|_| FileIoError)
     }
 }
-
 
 fn usage() {
     eprintln!("morpheus-cli — MorpheusX HelixFS host utility");
@@ -201,8 +186,6 @@ fn cmd_pack(disk: &str, output: &str, max_mb: u64) -> Result<(), String> {
     Ok(())
 }
 
-// Mount an existing or fresh HelixFS from a FileBlockDevice.
-// Returns (device, mount_table).
 fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
     let mut dev =
         FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
@@ -212,7 +195,6 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
         dev.total_sectors, SECTOR_SIZE
     );
 
-    // Try to recover an existing superblock.
     let (sb, do_replay) = match recover_superblock(&mut dev, 0, SECTOR_SIZE) {
         Ok(sb) => {
             if sb.version != HELIX_VERSION {
@@ -221,20 +203,19 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
                     sb.version, HELIX_VERSION
                 );
                 let sb = do_format(&mut dev)?;
-                (sb, false) // fresh format, nothing to replay
+                (sb, false)
             } else {
                 println!("[helix] found valid superblock (version {})", sb.version);
                 (sb, true)
             }
-        }
+        },
         Err(_) => {
             println!("[helix] no valid superblock found — formatting");
             let sb = do_format(&mut dev)?;
             (sb, false)
-        }
+        },
     };
 
-    // Build in-memory HelixInstance.
     let mut instance = HelixInstance {
         sb,
         log: morpheus_helix::log::LogEngine::new(&sb, 0, SECTOR_SIZE),
@@ -244,18 +225,17 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
         device_block_size: SECTOR_SIZE,
     };
 
-    // Reload the head log segment (so future writes append correctly).
+    // Reload head log segment so future writes append correctly.
     instance
         .log
         .reload_head_segment(&mut dev)
         .map_err(|e| format!("reload_head_segment: {:?}", e))?;
 
     if do_replay {
-        // Replay the log to rebuild the in-memory index.
         replay_log(&mut dev, &instance.log, &mut instance.index)
             .map_err(|e| format!("replay_log: {:?}", e))?;
 
-        // Rebuild bitmap so we don't overwrite existing file data.
+        // Rebuild bitmap so existing file data isn't overwritten.
         rebuild_bitmap(&mut instance);
 
         println!(
@@ -283,7 +263,7 @@ fn do_format(dev: &mut FileBlockDevice) -> Result<HelixSuperblock, String> {
     recover_superblock(dev, 0, SECTOR_SIZE).map_err(|e| format!("recover after format: {:?}", e))
 }
 
-/// Rebuild the block bitmap from index entries (mirrors vfs/global.rs private fn).
+/// Rebuild block bitmap from index entries; mirrors vfs/global.rs private fn.
 fn rebuild_bitmap(instance: &mut HelixInstance) {
     for entry in instance.index.all_entries() {
         if entry.flags & entry_flags::IS_DELETED != 0 {
@@ -305,13 +285,11 @@ fn rebuild_bitmap(instance: &mut HelixInstance) {
     }
 }
 
-
 fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     println!("[inject] disk   : {}", disk);
     println!("[inject] binary : {}", binary);
     println!("[inject] dest   : {}", dest);
 
-    // Read ELF bytes from host filesystem.
     let elf_bytes =
         std::fs::read(binary).map_err(|e| format!("cannot read '{}': {}", binary, e))?;
     println!(
@@ -320,27 +298,37 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
         elf_bytes.len() as f64 / 1024.0
     );
 
-    // Validate it looks like an ELF64.
     if elf_bytes.len() < 4 || &elf_bytes[0..4] != b"\x7fELF" {
-        return Err(format!("'{}' does not appear to be an ELF binary", binary));
+        // Not an executable — a data file (e.g. a .kmap layout). Allowed.
+        println!(
+            "[inject] note: '{}' is not an ELF — injecting as a data file",
+            binary
+        );
     }
 
     let (mut dev, mut mt) = mount(disk)?;
     let mut fdt = FdTable::new();
 
-    // Ensure /bin directory exists (note: mkdir is index-only, no block_io needed).
-    match vfs::vfs_mkdir(&mut mt, "/bin", 0) {
-        Ok(()) => println!("[inject] created /bin"),
-        Err(HelixError::AlreadyExists) => println!("[inject] /bin already exists"),
-        Err(e) => return Err(format!("vfs_mkdir /bin: {:?}", e)),
+    // Create every parent directory of `dest` (mkdir -p). Index-only; no
+    // block_io needed. Lets inject target any path, e.g. /system/keymaps/de.kmap.
+    {
+        let comps: Vec<&str> = dest.split('/').filter(|c| !c.is_empty()).collect();
+        let mut path = String::new();
+        for comp in comps.iter().take(comps.len().saturating_sub(1)) {
+            path.push('/');
+            path.push_str(comp);
+            match vfs::vfs_mkdir(&mut mt, &path, 0) {
+                Ok(()) => println!("[inject] created {}", path),
+                Err(HelixError::AlreadyExists) => {},
+                Err(e) => return Err(format!("vfs_mkdir {}: {:?}", path, e)),
+            }
+        }
     }
 
-    // Open (create / overwrite) destination path.
     let flags = open_flags::O_WRITE | open_flags::O_CREATE | open_flags::O_TRUNC;
     let fd = vfs::vfs_open(&mut dev, &mut mt, &mut fdt, dest, flags, 0)
         .map_err(|e| format!("vfs_open {}: {:?}", dest, e))?;
 
-    // Write ELF data.
     let written = vfs::vfs_write(&mut dev, &mut mt, &mut fdt, fd, &elf_bytes, 0)
         .map_err(|e| format!("vfs_write: {:?}", e))?;
 
@@ -361,7 +349,6 @@ fn dest_name(dest: &str) -> &str {
     dest.rsplit('/').next().unwrap_or(dest)
 }
 
-
 fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     let (_dev, mt) = mount(disk)?;
     let entries =
@@ -375,7 +362,6 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 fn cmd_format(disk: &str) -> Result<(), String> {
     let mut dev =
@@ -392,11 +378,10 @@ fn cmd_mkbin(disk: &str) -> Result<(), String> {
         Ok(()) | Err(HelixError::AlreadyExists) => {
             println!("[mkbin] /bin ready");
             Ok(())
-        }
+        },
         Err(e) => Err(format!("vfs_mkdir: {:?}", e)),
     }
 }
-
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -428,7 +413,7 @@ fn main() {
                 .map(|w| w[1].as_str())
                 .unwrap_or(&default_dest);
             cmd_inject(disk, binary, dest)
-        }
+        },
         "ls" => {
             if args.len() < 3 {
                 eprintln!("Usage: morpheus-cli ls <disk-image> [path]");
@@ -437,14 +422,14 @@ fn main() {
             let disk = &args[2];
             let path = args.get(3).map(|s| s.as_str()).unwrap_or("/");
             cmd_ls(disk, path)
-        }
+        },
         "mkbin" => {
             if args.len() < 3 {
                 eprintln!("Usage: morpheus-cli mkbin <disk-image>");
                 std::process::exit(1);
             }
             cmd_mkbin(&args[2])
-        }
+        },
         "pack" => {
             if args.len() < 4 {
                 eprintln!("Usage: morpheus-cli pack <disk-image> <output-image> [--max-mb N]");
@@ -458,18 +443,18 @@ fn main() {
                 .and_then(|w| w[1].parse::<u64>().ok())
                 .unwrap_or(512);
             cmd_pack(disk, output, max_mb)
-        }
+        },
         "format" => {
             if args.len() < 3 {
                 eprintln!("Usage: morpheus-cli format <disk-image>");
                 std::process::exit(1);
             }
             cmd_format(&args[2])
-        }
+        },
         _ => {
             usage();
             std::process::exit(1);
-        }
+        },
     };
 
     if let Err(e) = result {

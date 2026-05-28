@@ -173,11 +173,11 @@ impl Shell {
                                 self.push_output(&s);
                             }
                             ShellAction::None
-                        }
+                        },
                         CommandResult::Clear => {
                             self.output.clear();
                             ShellAction::None
-                        }
+                        },
                         CommandResult::OpenApp(name) => ShellAction::OpenApp(name),
                         CommandResult::CloseWindow(id) => ShellAction::CloseWindow(id),
                         CommandResult::ListWindows => ShellAction::ListWindows,
@@ -187,23 +187,23 @@ impl Shell {
                         CommandResult::Unknown(cmd) => {
                             self.push_output(&format!("Unknown command: {}", cmd));
                             ShellAction::None
-                        }
+                        },
                     };
 
                     self.scroll_to_bottom_internal();
                     return action;
-                }
+                },
                 Key::PageUp => {
                     self.scroll_top = self.scroll_top.saturating_sub(10);
                     return ShellAction::None;
-                }
+                },
                 Key::PageDown => {
                     self.scroll_to_bottom_internal();
                     return ShellAction::None;
-                }
+                },
                 _ => {
                     self.input.handle_event(event);
-                }
+                },
             }
         }
         ShellAction::None

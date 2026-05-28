@@ -89,6 +89,16 @@ pub struct CompState {
     pub last_buttons: u8,
     pub capture: Option<MouseCapture>,
 
+    // keyboard modifier state machine (PS/2 Set 1 scancodes via SYS_KEYBOARD_READ)
+    pub kbd_ctrl: bool,
+    pub kbd_alt: bool,   // left Alt — hotkey modifier (Ctrl+Alt+X)
+    pub kbd_altgr: bool, // right Alt — selects the AltGr layout column
+    pub kbd_shift: bool,
+    pub kbd_caps: bool,
+    pub kbd_extended: bool,
+    // active keyboard layout (hot-swappable from /system/keymap.kmap).
+    pub keymap: keymap::Keymap,
+
     pub desktop_rgb: (u8, u8, u8),
     pub title_focused_rgb: (u8, u8, u8),
     pub border_focused_rgb: (u8, u8, u8),
@@ -117,6 +127,13 @@ impl CompState {
             mouse_y: (fb_h / 2) as i32,
             last_buttons: 0,
             capture: None,
+            kbd_ctrl: false,
+            kbd_alt: false,
+            kbd_altgr: false,
+            kbd_shift: false,
+            kbd_caps: false,
+            kbd_extended: false,
+            keymap: keymap::german_default(),
             desktop_rgb: (26, 26, 46),
             title_focused_rgb: (0, 85, 0),
             border_focused_rgb: (0, 170, 0),

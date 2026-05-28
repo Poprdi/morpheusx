@@ -1,8 +1,6 @@
 use crate::islands::{raw_fill, ShellState};
 
-/// wallpaper island. renders a solid color desktop background into the
-/// shell's surface buffer. compd blends it at z-layer 0 (background).
-/// not fancy. doesn't need to be. it's a desktop.
+/// Solid-color background; compd composites at z=0.
 pub fn tick(state: &mut ShellState) {
     if !state.wallpaper_dirty {
         return;

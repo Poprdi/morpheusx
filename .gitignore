@@ -33,4 +33,10 @@ crates.io
 .env
 .env.local
 /cavealloc
-.continue 
+.continue/**
+.claude/**
+# Keep GitHub Copilot config (skills/prompts/instructions) untracked, but DO
+# track CI workflows.
+.github/**
+!.github/workflows/
+!.github/workflows/**

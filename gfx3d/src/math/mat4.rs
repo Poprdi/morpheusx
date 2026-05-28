@@ -273,6 +273,8 @@ impl Mat4 {
     }
 
     /// Gauss-Jordan with partial pivoting. Returns None if singular.
+    // Matrix-math loops index the augmented matrix by row/column.
+    #[allow(clippy::needless_range_loop)]
     pub fn inverse(&self) -> Option<Self> {
         let mut aug = [[0.0f32; 8]; 4];
 

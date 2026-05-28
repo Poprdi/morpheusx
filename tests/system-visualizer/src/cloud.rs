@@ -26,6 +26,7 @@ impl CloudAssets {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_cloud<T: RenderTarget>(
     pipeline: &mut Pipeline,
     target: &mut T,
@@ -39,7 +40,6 @@ pub fn render_cloud<T: RenderTarget>(
 ) {
     let n = layout.count.min(state.proc_count);
 
-    // Process spheres
     for i in 0..n {
         let proc = match state.process(i) {
             Some(p) => p,
@@ -60,6 +60,8 @@ pub fn render_cloud<T: RenderTarget>(
         let dist_sq = dx * dx + dy * dy + dz * dz;
         let screen_size = radius / (dist_sq.max(1.0) * fast_inv_sqrt(dist_sq.max(1.0)));
 
+        // Selected and large-on-screen both intentionally pick the hi mesh.
+        #[allow(clippy::if_same_then_else)]
         let mesh = if is_sel {
             &assets.sphere_hi
         } else if screen_size > 0.08 {
@@ -106,7 +108,7 @@ fn process_color(state: u32, cpu_pct: f32) -> (f32, f32, f32) {
                 i if i < 0.9 => (0.95, 0.5, 0.1), // orange
                 _ => (0.8, 0.1, 0.1),             // dark red
             }
-        }
+        },
         0 => (0.3, 0.2, 0.1), // idle: dark brown
         2 => (0.2, 0.4, 0.8), // sleeping: blue
         3 => (0.4, 0.4, 0.4), // stopped: gray
