@@ -20,19 +20,18 @@ fn main() {
         exit(1);
     }
 
-    let layouts: [(&str, &str, fn() -> keymap::Keymap); 2] = [
-        ("de.kmap", "German (DE)", keymap::german_default),
-        ("us.kmap", "US (QWERTY)", keymap::us_default),
-    ];
+    write_layout(dir, "de.kmap", "German (DE)", keymap::german_default());
+    write_layout(dir, "us.kmap", "US (QWERTY)", keymap::us_default());
+}
 
-    for (file, name, build) in layouts {
-        let mut buf = [0u8; keymap::KMAP_FILE_SIZE];
-        build().serialize(name, &mut buf);
-        let path = dir.join(file);
-        if let Err(e) = std::fs::write(&path, &buf[..]) {
-            eprintln!("keymap-gen: cannot write {}: {}", path.display(), e);
-            exit(1);
-        }
-        println!("keymap-gen: wrote {} ({} bytes)", path.display(), buf.len());
+/// Serialize one layout to `<dir>/<file>`; exits the process on I/O error.
+fn write_layout(dir: &Path, file: &str, name: &str, km: keymap::Keymap) {
+    let mut buf = [0u8; keymap::KMAP_FILE_SIZE];
+    km.serialize(name, &mut buf);
+    let path = dir.join(file);
+    if let Err(e) = std::fs::write(&path, &buf[..]) {
+        eprintln!("keymap-gen: cannot write {}: {}", path.display(), e);
+        exit(1);
     }
+    println!("keymap-gen: wrote {} ({} bytes)", path.display(), buf.len());
 }
