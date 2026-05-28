@@ -36,13 +36,13 @@
 
 mod interface;
 
-use morpheus_nic::device::NetworkDevice;
 use core::marker::PhantomData;
+use morpheus_nic::device::NetworkDevice;
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
-pub use morpheus_nic::device::pci::ecam_bases;
 pub use interface::{NetConfig, NetInterface, NetState, MAX_TCP_SOCKETS};
+pub use morpheus_nic::device::pci::ecam_bases;
 pub use smoltcp::iface::SocketHandle;
 pub use smoltcp::socket::dns::QueryHandle as DnsQueryHandle;
 
@@ -101,7 +101,7 @@ impl<D: NetworkDevice> Device for DeviceAdapter<D> {
                         _p: PhantomData,
                     },
                 ))
-            }
+            },
             _ => None, // No packet available
         }
     }
@@ -176,12 +176,12 @@ impl<'a, D: NetworkDevice> TxToken for AdapterTxToken<'a, D> {
         match unsafe { (*self.device).transmit(&buffer[..len]) } {
             Ok(()) => {
                 // TX succeeded
-            }
+            },
             Err(_e) => {
                 // TX failed - log to static flag for debugging
                 // In a real implementation, we'd have a proper error channel
                 TX_ERROR_COUNTER.increment();
-            }
+            },
         }
 
         result
@@ -295,7 +295,7 @@ pub fn debug_log(stage: u32, msg: &str) {
     // Serial first — visible even if the ring lock is wedged.
     #[cfg(target_arch = "x86_64")]
     {
-        use morpheus_hal_x86_64::serial::{puts, puts_dec_u32, putc};
+        use morpheus_hal_x86_64::serial::{putc, puts, puts_dec_u32};
         puts("[NET:");
         puts_dec_u32(stage);
         puts("] ");

@@ -81,7 +81,7 @@ pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
             let proc = SCHEDULER.current_process_mut();
             proc.set_cwd(path);
             0
-        }
+        },
         Err(_) => ENOENT,
     }
 }

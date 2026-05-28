@@ -6,12 +6,12 @@ use alloc::boxed::Box;
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::time::Instant;
 
-use morpheus_block::block_traits::BlockDriver;
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_block::block_traits::BlockDriver;
+use morpheus_nic::traits::NetworkDriver;
 
 /// Success terminal state.
 pub(crate) struct DoneState {
@@ -114,12 +114,12 @@ impl<D: NetworkDriver> State<D> for DoneState {
                         serial::println(match e {
                             morpheus_block::block_traits::BlockError::Unsupported => {
                                 "not supported (assuming durable)"
-                            }
+                            },
                             morpheus_block::block_traits::BlockError::Timeout => "timeout",
                             morpheus_block::block_traits::BlockError::DeviceError => "device error",
                             _ => "unknown",
                         });
-                    }
+                    },
                 }
             }
         }

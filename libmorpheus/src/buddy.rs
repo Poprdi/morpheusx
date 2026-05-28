@@ -177,7 +177,7 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
                 }
             }
             refound?
-        }
+        },
     };
 
     let block = list_pop(state, found_order).unwrap();

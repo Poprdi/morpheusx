@@ -6,7 +6,7 @@ pub fn process_msgs(state: &mut CompState) {
         match msg {
             InputMsg::FocusCycleRequest => {
                 cycle_focus(state);
-            }
+            },
             InputMsg::WindowClosed { idx, .. } => {
                 if state.focused == Some(idx as usize) {
                     // Refocus next z1 window (z0 desktop is not focusable).
@@ -17,7 +17,7 @@ pub fn process_msgs(state: &mut CompState) {
                         .find(|(_, w)| w.as_ref().map(|w| w.z_layer == 1).unwrap_or(false))
                         .map(|(i, _)| i);
                 }
-            }
+            },
         }
     }
 }

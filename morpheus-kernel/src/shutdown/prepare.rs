@@ -70,7 +70,12 @@ fn deadline_from_timeout_ms(timeout_ms: u64) -> Option<u64> {
         return None;
     }
     let ticks_per_ms = (tsc_hz / 1000).max(1);
-    Some(hal().timer().read_tsc().saturating_add(timeout_ms.saturating_mul(ticks_per_ms)))
+    Some(
+        hal()
+            .timer()
+            .read_tsc()
+            .saturating_add(timeout_ms.saturating_mul(ticks_per_ms)),
+    )
 }
 
 pub fn run_prepare_handlers(kind: TransitionKind, timeout_ms: u64) -> bool {

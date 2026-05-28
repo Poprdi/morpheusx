@@ -395,14 +395,22 @@ impl Keyboard {
         scan_ok &= f4_ack == Some(0xFA);
 
         if !scan_ok {
-            morpheus_hal_x86_64::serial::log_warn("INPUT", 931, "keyboard scan-set programming failed");
+            morpheus_hal_x86_64::serial::log_warn(
+                "INPUT",
+                931,
+                "keyboard scan-set programming failed",
+            );
         }
 
         Self::drain_all(128);
 
         self.initialized = ctl_ok && port1_ok && reset_ok && scan_ok;
         if self.initialized {
-            morpheus_hal_x86_64::serial::log_ok("INPUT", 930, "PS/2 keyboard ready (full reset path)");
+            morpheus_hal_x86_64::serial::log_ok(
+                "INPUT",
+                930,
+                "PS/2 keyboard ready (full reset path)",
+            );
         } else {
             morpheus_hal_x86_64::serial::log_warn(
                 "INPUT",
@@ -537,7 +545,7 @@ impl Keyboard {
                 SC_LSHIFT | SC_RSHIFT => self.shift = false,
                 SC_LCTRL => self.ctrl = false,
                 SC_LALT => self.alt = false,
-                _ => {}
+                _ => {},
             }
             return None;
         }
@@ -546,20 +554,20 @@ impl Keyboard {
             SC_LSHIFT | SC_RSHIFT => {
                 self.shift = true;
                 return None;
-            }
+            },
             SC_LCTRL => {
                 self.ctrl = true;
                 return None;
-            }
+            },
             SC_LALT => {
                 self.alt = true;
                 return None;
-            }
+            },
             SC_CAPSLOCK => {
                 self.caps_lock = !self.caps_lock;
                 return None;
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         if make == SC_ESC {
@@ -622,8 +630,8 @@ impl Keyboard {
                     } else {
                         self.alt = false;
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
             return None;
         }
@@ -632,7 +640,7 @@ impl Keyboard {
             SC_LCTRL => {
                 self.ctrl = true;
                 return None;
-            }
+            },
             SC_LALT => {
                 if self.layout == KeyLayout::De {
                     self.altgr = true;
@@ -640,8 +648,8 @@ impl Keyboard {
                     self.alt = true;
                 }
                 return None;
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         if make == 0x1C {
@@ -703,7 +711,7 @@ impl Keyboard {
                 } else {
                     base
                 }
-            }
+            },
             KeyLayout::De => {
                 if self.altgr {
                     return DE_ALTGR[idx];
@@ -725,7 +733,7 @@ impl Keyboard {
                 } else {
                     base
                 }
-            }
+            },
         }
     }
 }

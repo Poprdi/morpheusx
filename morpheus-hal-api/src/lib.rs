@@ -5,7 +5,6 @@
 
 #![no_std]
 
-
 /// UEFI memory taxonomy + custom allocator tags (0x8000_xxxx range).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -129,7 +128,6 @@ pub struct Pml4Handle(pub u64);
 #[repr(transparent)]
 pub struct IsrFn(pub unsafe extern "C" fn());
 
-
 /// Opaque per-task register file. Sized for any arch (x86_64 uses 160 B, aarch64 ~256 B).
 /// Kernel stores inline but mutates only via `Cpu` trait methods.
 #[repr(C, align(16))]
@@ -227,7 +225,6 @@ impl KernelHooks {
         }
     }
 }
-
 
 /// Top-level HAL trait. Per-arch crate provides one `HalImpl`; bootloader leaks it
 /// as `&'static dyn Hal`. Narrow sub-trait accessors so drivers see only the cap they need.
@@ -365,12 +362,7 @@ pub trait Serial: Send + Sync {
 /// Physical memory allocator over a buddy + the UEFI memory map.
 pub trait PhysAlloc: Send + Sync {
     /// Allocate `pages` contiguous 4 KiB pages; returns physical base.
-    fn allocate_pages(
-        &self,
-        kind: AllocKind,
-        mt: MemoryType,
-        pages: u64,
-    ) -> Result<u64, MemError>;
+    fn allocate_pages(&self, kind: AllocKind, mt: MemoryType, pages: u64) -> Result<u64, MemError>;
     fn free_pages(&self, addr: u64, pages: u64) -> Result<(), MemError>;
     fn is_initialized(&self) -> bool;
     fn page_size(&self) -> u64;
@@ -560,6 +552,12 @@ pub trait Smp: Send + Sync {
 
     /// Online AP count (excludes BSP).
     fn ap_online_count(&self) -> u32;
+
+    /// True once per-CPU (GS-relative) state is live on the calling core.
+    /// Unlike [`Smp::ap_online_count`], this counts the BSP, so it is true on a
+    /// single-core machine. Gate GS-relative per-CPU reads/writes on this — NOT
+    /// on `ap_online_count() > 0`, which is false single-core.
+    fn percpu_ready(&self) -> bool;
 
     /// Parse MADT (or equivalent) and return AP LAPIC IDs excluding BSP.
     ///

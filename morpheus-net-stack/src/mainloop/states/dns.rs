@@ -8,11 +8,11 @@ use smoltcp::socket::dns::{GetQueryResultError, QueryHandle, Socket as DnsSocket
 use smoltcp::time::Instant;
 use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
 
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{ConnectState, FailedState};
 
@@ -88,7 +88,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
                     Box::new(FailedState::new("no DNS server")),
                     StepResult::Failed("no DNS"),
                 );
-            }
+            },
         };
 
         if !self.dns_handle_added {
@@ -111,7 +111,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
                     Box::new(FailedState::new("no DNS socket")),
                     StepResult::Failed("no socket"),
                 );
-            }
+            },
         };
 
         if self.query_handle.is_none() {
@@ -120,14 +120,14 @@ impl<D: NetworkDriver> State<D> for DnsState {
                 Ok(handle) => {
                     serial::println("[DNS] Query sent");
                     self.query_handle = Some(handle);
-                }
+                },
                 Err(_) => {
                     serial::println("[DNS] ERROR: Query start failed");
                     return (
                         Box::new(FailedState::new("DNS query failed")),
                         StepResult::Failed("query"),
                     );
-                }
+                },
             }
             return (self, StepResult::Continue);
         }
@@ -152,7 +152,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
                     Box::new(FailedState::new("no IPv4")),
                     StepResult::Failed("no IPv4"),
                 )
-            }
+            },
             Err(GetQueryResultError::Pending) => (self, StepResult::Continue),
             Err(GetQueryResultError::Failed) => {
                 serial::println("[DNS] ERROR: Query failed");
@@ -160,7 +160,7 @@ impl<D: NetworkDriver> State<D> for DnsState {
                     Box::new(FailedState::new("DNS failed")),
                     StepResult::Failed("DNS failed"),
                 )
-            }
+            },
         }
     }
 

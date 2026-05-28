@@ -105,7 +105,7 @@ fn process_color(state: u32, cpu_pct: f32) -> (f32, f32, f32) {
                 i if i < 0.9 => (0.95, 0.5, 0.1), // orange
                 _ => (0.8, 0.1, 0.1),             // dark red
             }
-        }
+        },
         0 => (0.3, 0.2, 0.1), // idle: dark brown
         2 => (0.2, 0.4, 0.8), // sleeping: blue
         3 => (0.4, 0.4, 0.4), // stopped: gray

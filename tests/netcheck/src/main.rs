@@ -18,11 +18,11 @@ fn main() -> i32 {
             } else {
                 println("[netcheck] network already active");
             }
-        }
+        },
         Err(_) => {
             println("[netcheck] activation failed");
             return 1;
-        }
+        },
     }
 
     if net::net_dhcp().is_err() {
@@ -35,7 +35,7 @@ fn main() -> i32 {
         None => {
             println("[netcheck] no dhcp lease");
             return 3;
-        }
+        },
     };
     println("[netcheck] lease acquired");
     print("[netcheck] ip=");
@@ -49,7 +49,7 @@ fn main() -> i32 {
         None => {
             println("[netcheck] dns resolve failed");
             return 4;
-        }
+        },
     };
     print("[netcheck] dns example.com=");
     print_ipv4(dns_ip);
@@ -60,7 +60,7 @@ fn main() -> i32 {
         Err(_) => {
             println("[netcheck] tcp connect failed");
             return 5;
-        }
+        },
     };
 
     if !wait_connected(&stream, 5000) {
@@ -80,7 +80,7 @@ fn main() -> i32 {
         _ => {
             println("[netcheck] tcp recv timeout");
             return 8;
-        }
+        },
     };
 
     if n >= 4 && &buf[0..4] == b"HTTP" {
@@ -130,7 +130,7 @@ fn resolve_with_timeout(host: &str, timeout_ms: u64) -> Option<u32> {
         let _ = net::net_poll_drive(now);
         match net::dns_poll(q) {
             Ok(Some(ip)) => return Some(ip),
-            Ok(None) => {}
+            Ok(None) => {},
             Err(_) => return None,
         }
         if now.saturating_sub(start) >= timeout_ms {
@@ -148,7 +148,7 @@ fn wait_connected(stream: &TcpStream, timeout_ms: u64) -> bool {
         match stream.state() {
             Ok(TcpState::Established) => return true,
             Ok(TcpState::Closed) => return false,
-            _ => {}
+            _ => {},
         }
         if now.saturating_sub(start) >= timeout_ms {
             return false;
@@ -164,7 +164,7 @@ fn recv_with_timeout(stream: &TcpStream, buf: &mut [u8], timeout_ms: u64) -> Opt
         let _ = net::net_poll_drive(now);
         match net::tcp_recv(stream.handle(), buf) {
             Ok(n) if n > 0 => return Some(n),
-            Ok(_) => {}
+            Ok(_) => {},
             Err(_) => return None,
         }
         if now.saturating_sub(start) >= timeout_ms {

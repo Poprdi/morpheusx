@@ -1,10 +1,10 @@
 //! Stateful pinger: builds echo requests, parses replies, tracks stats.
 
-use crate::types::{Ipv4Addr, PingConfig, PingResult, PingStats};
 use crate::packet::{
-    build_ip_header, build_icmp_echo_request, parse_icmp_reply,
-    IcmpType, ICMP_PROTOCOL, IP_HEADER_SIZE, ICMP_HEADER_SIZE, MIN_PACKET_SIZE,
+    build_icmp_echo_request, build_ip_header, parse_icmp_reply, IcmpType, ICMP_HEADER_SIZE,
+    ICMP_PROTOCOL, IP_HEADER_SIZE, MIN_PACKET_SIZE,
 };
+use crate::types::{Ipv4Addr, PingConfig, PingResult, PingStats};
 use core::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

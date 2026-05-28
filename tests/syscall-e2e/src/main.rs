@@ -357,12 +357,12 @@ fn test_fs() {
             check("SYS_WRITE(vfs)", wr.is_ok(), "write failed");
             let _ = fs::close(fd);
             ok("SYS_CLOSE");
-        }
+        },
         Err(_) => {
             fail("SYS_OPEN(create)", "open failed");
             fail("SYS_WRITE(vfs)", "skipped (open failed)");
             fail("SYS_CLOSE", "skipped (open failed)");
-        }
+        },
     }
 
     // OPEN + READ
@@ -373,10 +373,10 @@ fn test_fs() {
             let rd = fs::read(fd, &mut buf);
             check("SYS_READ(vfs)", rd.is_ok(), "read failed");
             let _ = fs::close(fd);
-        }
+        },
         Err(_) => {
             fail("SYS_OPEN(read)", "open for read failed");
-        }
+        },
     }
 
     // SEEK
@@ -390,7 +390,7 @@ fn test_fs() {
                 "seek returned 0",
             );
             let _ = fs::close(fd);
-        }
+        },
         Err(_) => fail("SYS_SEEK setup", "open failed"),
     }
 
@@ -502,11 +502,11 @@ fn test_mmap_munmap() {
             // Unmap the same page.
             let ur = libmorpheus::mem::munmap(vaddr, 1);
             check("SYS_MUNMAP(1 page)", ur.is_ok(), "munmap failed");
-        }
+        },
         Err(_) => {
             fail("SYS_MMAP(1 page)", "alloc failed");
             fail("SYS_MUNMAP(1 page)", "skipped (mmap failed)");
-        }
+        },
     }
 }
 
@@ -770,13 +770,13 @@ fn test_pe_info() {
             check("SYS_PE_INFO(arch)", info.arch == 1, "not x86_64");
             check("SYS_PE_INFO(entry)", info.entry_point != 0, "entry=0");
             check("SYS_PE_INFO(size)", info.image_size > 0, "size=0");
-        }
+        },
         Err(_) => {
             fail("SYS_PE_INFO(format)", "pe_info returned error");
             fail("SYS_PE_INFO(arch)", "skipped");
             fail("SYS_PE_INFO(entry)", "skipped");
             fail("SYS_PE_INFO(size)", "skipped");
-        }
+        },
     }
 }
 
@@ -839,11 +839,11 @@ fn test_dma() {
             check("SYS_DMA_ALLOC(1)", phys < 0x1_0000_0000, "not below 4GB");
             let free_r = libmorpheus::hw::dma_free(phys, 1);
             check("SYS_DMA_FREE(1)", free_r.is_ok(), "free failed");
-        }
+        },
         Err(_) => {
             fail("SYS_DMA_ALLOC(1)", "alloc failed");
             fail("SYS_DMA_FREE(1)", "skipped (alloc failed)");
-        }
+        },
     }
 }
 
@@ -864,18 +864,18 @@ fn test_map_phys() {
                     // Unmap the user-space mapping (does not free the physical page).
                     let ur = libmorpheus::mem::munmap(vaddr, 1);
                     check("SYS_MUNMAP(map_phys)", ur.is_ok(), "munmap failed");
-                }
+                },
                 Err(_) => {
                     fail("SYS_MAP_PHYS(1 page)", "map failed");
                     fail("SYS_MUNMAP(map_phys)", "skipped (map failed)");
-                }
+                },
             }
             let _ = libmorpheus::hw::dma_free(phys, 1);
-        }
+        },
         Err(_) => {
             fail("SYS_MAP_PHYS(1 page)", "dma_alloc failed");
             fail("SYS_MUNMAP(map_phys)", "skipped (dma_alloc failed)");
-        }
+        },
     }
 }
 
@@ -928,12 +928,12 @@ fn test_fb_info() {
             check("SYS_FB_INFO width", info.width > 0, "width=0");
             check("SYS_FB_INFO height", info.height > 0, "height=0");
             check("SYS_FB_INFO base", info.base > 0, "base=0");
-        }
+        },
         Err(_) => {
             fail("SYS_FB_INFO", "returned error (FB not registered?)");
             fail("SYS_FB_INFO height", "skipped (no FB)");
             fail("SYS_FB_INFO base", "skipped (no FB)");
-        }
+        },
     }
 }
 
@@ -948,11 +948,11 @@ fn test_fb_map() {
             // exercise the munmap path (VMA tracks the real size).
             // Skip unmapping — the FB stays mapped for the rest of the test.
             ok("SYS_FB_MAP(mapped)");
-        }
+        },
         Err(_) => {
             fail("SYS_FB_MAP", "map failed");
             fail("SYS_FB_MAP(mapped)", "skipped (map failed)");
-        }
+        },
     }
 }
 
@@ -991,11 +991,11 @@ fn test_priority() {
             check("SYS_SETPRIORITY", r2.is_ok(), "set failed");
             // Restore
             let _ = libmorpheus::process::setpriority(pid, prio);
-        }
+        },
         Err(_) => {
             fail("SYS_GETPRIORITY", "returned error");
             fail("SYS_SETPRIORITY", "skipped (getpriority failed)");
-        }
+        },
     }
 }
 
@@ -1059,7 +1059,7 @@ fn test_memmap() {
             print("  MEMMAP entries: ");
             print_u32(n as u32);
             println("");
-        }
+        },
         Err(_) => fail("SYS_MEMMAP(read)", "returned error"),
     }
 }
@@ -1087,12 +1087,12 @@ fn test_shm_grant() {
             check("SYS_SHM_GRANT(0 pages)", r.is_err(), "should fail");
 
             let _ = libmorpheus::mem::munmap(vaddr, 1);
-        }
+        },
         Err(_) => {
             fail("SYS_SHM_GRANT(self)", "mmap failed");
             fail("SYS_SHM_GRANT(bad pid)", "mmap failed");
             fail("SYS_SHM_GRANT(0 pages)", "mmap failed");
-        }
+        },
     }
 }
 
@@ -1117,13 +1117,13 @@ fn test_mprotect() {
             check("SYS_MPROTECT(bad pages)", r.is_err(), "should fail");
 
             let _ = libmorpheus::mem::munmap(vaddr, 1);
-        }
+        },
         Err(_) => {
             fail("SYS_MPROTECT(RO)", "mmap failed");
             fail("SYS_MPROTECT(RW)", "mmap failed");
             fail("SYS_MPROTECT(bad prot)", "mmap failed");
             fail("SYS_MPROTECT(bad pages)", "mmap failed");
-        }
+        },
     }
 }
 
@@ -1154,12 +1154,12 @@ fn test_pipe() {
                 syscall1(SYS_CLOSE, read_fd as u64);
                 syscall1(SYS_CLOSE, write_fd as u64);
             }
-        }
+        },
         Err(_) => {
             fail("SYS_PIPE(create)", "pipe() failed");
             fail("SYS_PIPE(write)", "no pipe");
             fail("SYS_PIPE(read)", "no pipe");
-        }
+        },
     }
 }
 
@@ -1191,12 +1191,12 @@ fn test_dup2() {
                 syscall1(SYS_CLOSE, write_fd as u64);
                 syscall1(SYS_CLOSE, 10);
             }
-        }
+        },
         Err(_) => {
             fail("SYS_DUP2(ok)", "no pipe");
             fail("SYS_DUP2(data)", "no pipe");
             fail("SYS_DUP2(bad)", "no pipe");
-        }
+        },
     }
 }
 
@@ -1275,7 +1275,7 @@ fn test_thread_create_join() {
             let _ = h.join();
             let val = SENTINEL.load(Ordering::Acquire);
             check("SYS_THREAD_CREATE+JOIN", val == 0xDEAD, "sentinel mismatch");
-        }
+        },
         Err(_) => fail("SYS_THREAD_CREATE+JOIN", "spawn failed"),
     }
 }
@@ -1305,7 +1305,7 @@ fn test_thread_shared_memory() {
             let _ = h2.join();
             let val = COUNTER.load(Ordering::SeqCst);
             check("THREAD(shared_mem)", val == 200, "count mismatch");
-        }
+        },
         _ => fail("THREAD(shared_mem)", "spawn failed"),
     }
 }

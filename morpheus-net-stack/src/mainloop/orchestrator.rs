@@ -33,13 +33,13 @@ use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer}
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress};
 
-use morpheus_block::device::UnifiedBlockDevice;
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::{Context, DownloadConfig};
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
 use crate::mainloop::states::InitState;
+use morpheus_block::device::UnifiedBlockDevice;
+use morpheus_nic::traits::NetworkDriver;
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -150,11 +150,11 @@ pub fn download_with_config<D: NetworkDriver>(
                 // No forward progress — hint the CPU to reduce power and yield
                 // execution resources to a sibling hyperthread.
                 core::hint::spin_loop();
-            }
+            },
             StepResult::Transition => {
                 serial::print("State: ");
                 serial::println(current_state.name());
-            }
+            },
             StepResult::Done => {
                 serial::println("---------------------------------");
                 serial::print("Downloaded: ");
@@ -169,13 +169,13 @@ pub fn download_with_config<D: NetworkDriver>(
                     bytes_downloaded: ctx.bytes_downloaded,
                     bytes_written: ctx.bytes_written,
                 };
-            }
+            },
             StepResult::Failed(reason) => {
                 serial::println("---------------------------------");
                 serial::print("FAILED: ");
                 serial::println(reason);
                 return DownloadResult::Failed { reason };
-            }
+            },
         }
     }
 }

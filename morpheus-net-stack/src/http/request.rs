@@ -108,7 +108,6 @@ mod tests {
         Url::parse("http://example.com/api/test").unwrap()
     }
 
-
     #[test]
     fn test_new_request() {
         let request = Request::new(HttpMethod::Get, test_url());
@@ -146,7 +145,6 @@ mod tests {
         assert!(matches!(request.method, HttpMethod::Delete));
     }
 
-
     #[test]
     fn test_default_host_header() {
         let request = Request::get(test_url());
@@ -178,7 +176,6 @@ mod tests {
         assert_eq!(request.headers.get("Connection"), Some("close"));
     }
 
-
     #[test]
     fn test_with_body() {
         let body = b"Hello, World!".to_vec();
@@ -202,7 +199,6 @@ mod tests {
         assert_eq!(request.headers.content_type(), Some("application/json"));
     }
 
-
     #[test]
     fn test_method_str_get() {
         let request = Request::get(test_url());
@@ -214,7 +210,6 @@ mod tests {
         let request = Request::post(test_url());
         assert_eq!(request.method_str(), "POST");
     }
-
 
     #[test]
     fn test_to_wire_format_request_line() {
@@ -263,7 +258,6 @@ mod tests {
 
         assert!(wire.starts_with("GET /search?q=rust HTTP/1.1\r\n"));
     }
-
 
     #[test]
     fn test_iso_download_request() {

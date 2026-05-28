@@ -71,50 +71,50 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
         FIELD_REFRESH => {
             app.sys_obs.refresh();
             app.set_status("Telemetry refreshed", false);
-        }
+        },
         FIELD_REBOOT => match app.sys_obs.reboot_arm {
             ArmState::Disarmed => {
                 app.sys_obs.reboot_arm = ArmState::Armed;
                 app.set_status("Reboot ARMED. Press again to confirm.", false);
-            }
+            },
             ArmState::Armed => {
                 app.sys_obs.reboot_arm = ArmState::Confirmed;
                 app.log_change(Route::SysObservatory, "power", "Graceful reboot", true);
                 let _ = sys::reboot(false);
-            }
-            ArmState::Confirmed => {}
+            },
+            ArmState::Confirmed => {},
         },
         FIELD_SHUTDOWN => match app.sys_obs.shutdown_arm {
             ArmState::Disarmed => {
                 app.sys_obs.shutdown_arm = ArmState::Armed;
                 app.set_status("Shutdown ARMED. Press again to confirm.", false);
-            }
+            },
             ArmState::Armed => {
                 app.sys_obs.shutdown_arm = ArmState::Confirmed;
                 app.log_change(Route::SysObservatory, "power", "Graceful shutdown", true);
                 let _ = sys::shutdown(false);
-            }
-            ArmState::Confirmed => {}
+            },
+            ArmState::Confirmed => {},
         },
         FIELD_FORCE_REBOOT => match app.sys_obs.reboot_arm {
             ArmState::Armed => {
                 app.log_change(Route::SysObservatory, "power", "Force reboot", true);
                 let _ = sys::reboot(true);
-            }
+            },
             _ => {
                 app.set_status("Arm reboot first (Enter on Reboot)", false);
-            }
+            },
         },
         FIELD_FORCE_SHUTDOWN => match app.sys_obs.shutdown_arm {
             ArmState::Armed => {
                 app.log_change(Route::SysObservatory, "power", "Force shutdown", true);
                 let _ = sys::shutdown(true);
-            }
+            },
             _ => {
                 app.set_status("Arm shutdown first (Enter on Shutdown)", false);
-            }
+            },
         },
-        _ => {}
+        _ => {},
     }
 }
 

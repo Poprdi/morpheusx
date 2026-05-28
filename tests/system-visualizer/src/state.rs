@@ -173,7 +173,7 @@ impl SystemState {
                     // First sample: seed baseline; lifetime cpu_tsc isn't a 250ms delta.
                     self.set_prev_cpu_tsc(r.pid, r.cpu_tsc);
                     continue;
-                }
+                },
             };
             let delta_tsc = r.cpu_tsc.wrapping_sub(prev_tsc);
             let slot = self.acc_slot_for_pid(r.pid);
@@ -257,7 +257,7 @@ impl SystemState {
                 0 => ready += 1,
                 1 => run += 1,
                 2 => blocked += 1,
-                _ => {}
+                _ => {},
             }
         }
         self.ready_count = ready;

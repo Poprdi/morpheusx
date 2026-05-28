@@ -472,7 +472,7 @@ fn pack_rgb_for_format(r: u8, g: u8, b: u8, format: TargetPixelFormat) -> u32 {
         TargetPixelFormat::Rgbx => (r as u32) | ((g as u32) << 8) | ((b as u32) << 16),
         TargetPixelFormat::InternalRgba => {
             ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xFF
-        }
+        },
     }
 }
 
@@ -808,13 +808,13 @@ fn fill_span_full(
         let mut out_b = b_f.to_f32() * tex_b;
 
         match *fog {
-            FogMode::None => {}
+            FogMode::None => {},
             _ => {
                 let fog_factor = fog.compute(fog_val.to_f32());
                 out_r = out_r * fog_factor + fog_color[0] * (1.0 - fog_factor);
                 out_g = out_g * fog_factor + fog_color[1] * (1.0 - fog_factor);
                 out_b = out_b * fog_factor + fog_color[2] * (1.0 - fog_factor);
-            }
+            },
         }
 
         let pr = fast::clamp_u8((out_r * 255.0) as i32);

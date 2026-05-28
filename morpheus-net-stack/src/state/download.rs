@@ -158,7 +158,7 @@ impl DownloadProgress {
                         (5 + pct).min(95) as u8
                     }
                 })
-            }
+            },
             DownloadPhase::Verifying => Some(95),
             DownloadPhase::Complete => Some(100),
         }
@@ -276,12 +276,12 @@ impl IsoDownloadState {
                             pending_write: 0,
                             bytes_written: 0,
                         };
-                    }
+                    },
                     Err(e) => {
                         *self = IsoDownloadState::Failed {
                             error: DownloadError::HttpError(e),
                         };
-                    }
+                    },
                 }
             } else {
                 // Need DHCP first
@@ -364,7 +364,7 @@ impl IsoDownloadState {
             IsoDownloadState::Init { config } => {
                 // Not started yet
                 (IsoDownloadState::Init { config }, StepResult::Pending)
-            }
+            },
 
             IsoDownloadState::WaitingForNetwork { mut dhcp, config } => {
                 // Step DHCP state machine
@@ -391,7 +391,7 @@ impl IsoDownloadState {
                                     },
                                     StepResult::Pending,
                                 )
-                            }
+                            },
                             Err(e) => (
                                 IsoDownloadState::Failed {
                                     error: DownloadError::HttpError(e),
@@ -399,7 +399,7 @@ impl IsoDownloadState {
                                 StepResult::Failed,
                             ),
                         }
-                    }
+                    },
                     StepResult::Pending => (
                         IsoDownloadState::WaitingForNetwork { dhcp, config },
                         StepResult::Pending,
@@ -418,9 +418,9 @@ impl IsoDownloadState {
                             },
                             StepResult::Failed,
                         )
-                    }
+                    },
                 }
-            }
+            },
 
             IsoDownloadState::Downloading {
                 mut http,
@@ -437,7 +437,7 @@ impl IsoDownloadState {
                             bytes_written += written;
                             pending_write = pending_write.saturating_sub(written);
                             disk_position += (written / config.sector_size) as u64;
-                        }
+                        },
                         Err(()) => {
                             return (
                                 IsoDownloadState::Failed {
@@ -445,7 +445,7 @@ impl IsoDownloadState {
                                 },
                                 StepResult::Failed,
                             );
-                        }
+                        },
                     }
                 }
 
@@ -517,7 +517,7 @@ impl IsoDownloadState {
                                 StepResult::Done,
                             )
                         }
-                    }
+                    },
                     StepResult::Pending => (
                         IsoDownloadState::Downloading {
                             http,
@@ -537,7 +537,7 @@ impl IsoDownloadState {
                             },
                             StepResult::Timeout,
                         )
-                    }
+                    },
                     StepResult::Failed => {
                         let error = http.error().cloned().unwrap_or(HttpError::ConnectionClosed);
                         (
@@ -546,9 +546,9 @@ impl IsoDownloadState {
                             },
                             StepResult::Failed,
                         )
-                    }
+                    },
                 }
-            }
+            },
 
             IsoDownloadState::Verifying {
                 result,
@@ -562,11 +562,11 @@ impl IsoDownloadState {
 
                 // Just mark as done for now
                 (IsoDownloadState::Done { result }, StepResult::Done)
-            }
+            },
 
             IsoDownloadState::Done { result } => {
                 (IsoDownloadState::Done { result }, StepResult::Done)
-            }
+            },
 
             IsoDownloadState::Failed { error } => {
                 let result = match &error {
@@ -576,7 +576,7 @@ impl IsoDownloadState {
                     _ => StepResult::Failed,
                 };
                 (IsoDownloadState::Failed { error }, result)
-            }
+            },
         }
     }
 
@@ -610,7 +610,7 @@ impl IsoDownloadState {
                     total_bytes: http_progress.and_then(|p| p.total),
                     bytes_written: *bytes_written,
                 }
-            }
+            },
             IsoDownloadState::Verifying { result, .. } => DownloadProgress {
                 phase: DownloadPhase::Verifying,
                 bytes_downloaded: result.total_bytes,

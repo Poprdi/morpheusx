@@ -1,8 +1,8 @@
 //! e1000e `NetworkDriver` impl. See 82579 datasheet §10.
 
 use crate::asm::{asm_intel_link_status, LinkStatusResult};
-use crate::traits::{DriverInit, MacAddress, NetworkDriver, RxError, TxError};
 use crate::serial::serial_println;
+use crate::traits::{DriverInit, MacAddress, NetworkDriver, RxError, TxError};
 
 use super::init::{init_e1000e, E1000eConfig, E1000eInitError};
 use super::phy::PhyManager;

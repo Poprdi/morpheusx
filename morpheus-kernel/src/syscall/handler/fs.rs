@@ -91,7 +91,7 @@ pub unsafe fn sys_fs_stat(path_ptr: u64, path_len: u64, stat_buf: u64) -> u64 {
                 *dst = stat;
             }
             0
-        }
+        },
         Err(e) => helix_err_to_errno(e),
     }
 }
@@ -121,7 +121,7 @@ pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64) -> u64 
                 }
             }
             count as u64
-        }
+        },
         Err(e) => helix_err_to_errno(e),
     }
 }

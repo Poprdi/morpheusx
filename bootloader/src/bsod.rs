@@ -430,7 +430,7 @@ pub unsafe fn show_crash_screen(info: &morpheus_hal_x86_64::cpu::idt::CrashInfo)
         _ => {
             puts("[BSOD] No framebuffer available\n");
             return;
-        }
+        },
     };
 
     let fb = fb_info.base as *mut u32;

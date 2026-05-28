@@ -821,16 +821,16 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
     );
     morpheus_hal_x86_64::platform::set_input_init_hook(kernel_input_init_shim);
     morpheus_hal_x86_64::platform::set_xhci_msix_hook(xhci_msix_shim);
-    morpheus_hal_x86_64::platform::set_xhci_runtime_hook(morpheus_xhci::usb::runtime::install_runtime);
+    morpheus_hal_x86_64::platform::set_xhci_runtime_hook(
+        morpheus_xhci::usb::runtime::install_runtime,
+    );
 
     // HID event sinks: the xHCI HID drivers deliver events here so the kernel
     // input layer receives them. Must be installed before HID init runs.
     //
     // SAFETY: pre-scheduler, single-threaded; no HID parsing in flight.
     unsafe {
-        morpheus_xhci::usb::hid::sink::set_keyboard_sink(
-            morpheus_kernel::input::hid_keyboard_sink,
-        );
+        morpheus_xhci::usb::hid::sink::set_keyboard_sink(morpheus_kernel::input::hid_keyboard_sink);
         morpheus_xhci::usb::hid::sink::set_mouse_sink(morpheus_kernel::input::hid_mouse_sink);
     }
 
@@ -867,8 +867,7 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
 /// `morpheus_hal_x86_64::pci::PciAddr`; morpheus-xhci accepts a
 /// `morpheus_hal_api::BusAddr`. Convert at the boundary.
 unsafe fn xhci_msix_shim(pci_addr: morpheus_hal_x86_64::pci::PciAddr, rt_base: u64) {
-    let bus_addr =
-        morpheus_hal_api::BusAddr::new(pci_addr.bus, pci_addr.device, pci_addr.function);
+    let bus_addr = morpheus_hal_api::BusAddr::new(pci_addr.bus, pci_addr.device, pci_addr.function);
     // SAFETY: IDT + LAPIC + BAR all live by hal-x86_64 phase 9 entry.
     unsafe { morpheus_xhci::usb::msi::wire_msix(bus_addr, rt_base) };
 }
@@ -905,6 +904,17 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
     );
     log_ok("BOOT", 932, "kernel late-init complete");
 
+    // Wire KernelCr3Guard's kernel-CR3 lookup. The kernel can't call the arch
+    // HAL directly (portability gate), so the bootloader installs the hook now
+    // that init_scheduler has set the kernel CR3. Without this the guard is a
+    // permanent no-op and phys walks under a user CR3 rely solely on the cloned
+    // kernel half.
+    //
+    // SAFETY: BSP, single-threaded, post-late_init (kernel CR3 is set).
+    unsafe {
+        morpheus_hal_x86_64::memory::set_kernel_cr3_hook(morpheus_kernel::init::kernel_cr3_hook);
+    }
+
     // Phase 10.5: reclaim BootServices{Code,Data}. Must run AFTER late-init
     // (timer IRQ live, no UEFI-stage reference outstanding) AND BEFORE the
     // helixfs 16 MiB alloc — pre-refactor order. Reclaim's
@@ -922,22 +932,33 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
 
     // Phase 12: SMP bring-up. Per LD16 this happens AFTER the kernel
     // scheduler is initialized. Discovery returns an empty slice when MADT
-    // is absent / invalid; `start_aps_from_list` treats that as a 0-AP
-    // single-core machine.
+    // is absent / invalid; in that case fall back to CPUID brute-force
+    // enumeration (`start_aps`) rather than forcing single-core — real
+    // hardware with a quirky/missing MADT booted SMP pre-refactor.
     //
     // SAFETY: BSP, scheduler live, ACPI tables still identity-mapped per
     // the HAL trait contract.
     let lapic_ids = match unsafe { hal.smp().discover_ap_lapic_ids(platform.acpi_rsdp_phys) } {
         Ok(ids) => ids,
         Err(_) => {
-            log_warn("SMP", 213, "MADT discovery failed; single-core boot");
+            log_warn("SMP", 213, "MADT discovery failed; trying CPUID scan");
             &[]
-        }
+        },
     };
-    // SAFETY: BSP, post-discover, IF managed by the impl.
-    match unsafe { hal.smp().start_aps_from_list(lapic_ids) } {
-        Ok(_ap_count) => {}
-        Err(_) => log_warn("SMP", 214, "AP startup failed; continuing single-core"),
+    if lapic_ids.is_empty() {
+        // No MADT APs: CPUID brute-force fallback (detects topology internally).
+        let cores = hal.smp().start_aps();
+        if cores > 1 {
+            log_ok("SMP", 215, "CPUID-fallback AP bring-up complete");
+        } else {
+            log_info("SMP", 215, "no APs via CPUID; single-core boot");
+        }
+    } else {
+        // SAFETY: BSP, post-discover, IF managed by the impl.
+        match unsafe { hal.smp().start_aps_from_list(lapic_ids) } {
+            Ok(_ap_count) => {},
+            Err(_) => log_warn("SMP", 214, "AP startup failed; continuing single-core"),
+        }
     }
 }
 
@@ -951,10 +972,7 @@ unsafe fn stage_c2_register_crash_hook() {
 
 /// C3. Record platform outputs (DMA region + TSC freq) into BootContext so
 /// later stages don't need to re-borrow the `PlatformInit`.
-fn stage_c3_record_platform_outputs(
-    ctx: &mut BootContext,
-    platform: &PlatformInit,
-) {
+fn stage_c3_record_platform_outputs(ctx: &mut BootContext, platform: &PlatformInit) {
     let dma = platform.dma();
     ctx.platform_dma_cpu = dma.cpu_base() as u64;
     ctx.platform_dma_bus = dma.bus_base();
@@ -965,10 +983,7 @@ fn stage_c3_record_platform_outputs(
 /// D1. Register the userspace-triggered network activation callback. The
 /// network stack stays offline until userspace explicitly opts in via
 /// `SYS_NET_CFG(NET_CFG_ACTIVATE)`.
-unsafe fn stage_d1_register_network_activation(
-    _ctx: &BootContext,
-    platform: &PlatformInit,
-) {
+unsafe fn stage_d1_register_network_activation(_ctx: &BootContext, platform: &PlatformInit) {
     baremetal_ops::network::init_userspace_network_activation(
         morpheus_virtio::dma::DmaRegion::new(
             platform.dma().cpu_base(),
@@ -1002,14 +1017,16 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
         return;
     }
     let stride_bytes = ctx.framebuffer.stride * 4;
-    morpheus_kernel::syscall::handler::register_framebuffer(morpheus_kernel::syscall::handler::FbInfo {
-        base: ctx.framebuffer.base,
-        size: ctx.framebuffer.size as u64,
-        width: ctx.framebuffer.width,
-        height: ctx.framebuffer.height,
-        stride: stride_bytes,
-        format: ctx.framebuffer.format,
-    });
+    morpheus_kernel::syscall::handler::register_framebuffer(
+        morpheus_kernel::syscall::handler::FbInfo {
+            base: ctx.framebuffer.base,
+            size: ctx.framebuffer.size as u64,
+            width: ctx.framebuffer.width,
+            height: ctx.framebuffer.height,
+            stride: stride_bytes,
+            format: ctx.framebuffer.format,
+        },
+    );
     log_ok("DISPLAY", 941, "framebuffer registered with syscall layer");
 }
 
@@ -1056,19 +1073,14 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
         None => boot_panic("BOOT", "/bin/init not found"),
     };
 
-    let init_pid = match morpheus_kernel::schedular::spawn_user_process(
-        "init",
-        &elf_data,
-        &[],
-        0,
-        false,
-    ) {
-        Ok(pid) => {
-            log_ok("BOOT", 961, "init process spawned");
-            pid
-        }
-        Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
-    };
+    let init_pid =
+        match morpheus_kernel::schedular::spawn_user_process("init", &elf_data, &[], 0, false) {
+            Ok(pid) => {
+                log_ok("BOOT", 961, "init process spawned");
+                pid
+            },
+            Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
+        };
     let _ = init_pid;
 
     // The ELF buffer can drop now; init has its own address space.
@@ -1124,7 +1136,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
         None => {
             log_error("BOOT", 970, "no root filesystem");
             return None;
-        }
+        },
     };
 
     let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
@@ -1132,7 +1144,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
         Err(_) => {
             log_error("BOOT", 971, "stat /bin/init failed");
             return None;
-        }
+        },
     };
     if stat.size == 0 {
         log_error("BOOT", 972, "/bin/init has zero size");
@@ -1153,7 +1165,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
         Err(_) => {
             log_error("BOOT", 973, "open /bin/init failed");
             return None;
-        }
+        },
     };
 
     let mut buf = alloc::vec![0u8; stat.size as usize];
@@ -1169,7 +1181,7 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
             let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
             log_error("BOOT", 974, "read /bin/init failed");
             return None;
-        }
+        },
     };
     buf.truncate(n);
     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);

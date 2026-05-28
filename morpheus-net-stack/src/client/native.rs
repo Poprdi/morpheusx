@@ -55,12 +55,12 @@ use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp::State as TcpState;
 
 use crate::client::HttpClient;
-use morpheus_nic::device::NetworkDevice;
 use crate::error::{NetworkError, Result};
 use crate::http::{Headers, Request, Response};
 use crate::stack::{NetConfig, NetInterface, NetState};
 use crate::types::{HttpMethod, ProgressCallback};
 use crate::url::Url;
+use morpheus_nic::device::NetworkDevice;
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
@@ -236,18 +236,18 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 Ok(Some(ip)) => {
                     crate::stack::debug_log(44, "DNS resolved OK");
                     return Ok(ip);
-                }
+                },
                 Ok(None) => {
                     if now - start > timeout_ms {
                         crate::stack::debug_log(45, "DNS timeout");
                         return Err(NetworkError::DnsResolutionFailed);
                     }
                     morpheus_nic::device::pci::tsc_delay_us(1000); // 1ms
-                }
+                },
                 Err(_) => {
                     crate::stack::debug_log(46, "DNS query failed");
                     return Err(NetworkError::DnsResolutionFailed);
-                }
+                },
             }
         }
     }
@@ -445,7 +445,7 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                     if response_data.len() > self.config.max_response_size {
                         return Err(NetworkError::ResponseTooLarge);
                     }
-                }
+                },
                 Err(e) => return Err(e),
             }
         }
@@ -483,11 +483,11 @@ impl<D: NetworkDevice> NativeHttpClient<D> {
                 Ok(n) => {
                     callback(&buffer[..n])?;
                     total += n;
-                }
+                },
                 Err(e) => {
                     crate::stack::debug_log(71, "recv error");
                     return Err(e);
-                }
+                },
             }
         }
 

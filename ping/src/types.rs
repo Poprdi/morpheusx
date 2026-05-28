@@ -238,7 +238,7 @@ mod tests {
     fn test_ipv4_addr() {
         let addr = Ipv4Addr::new(192, 168, 1, 1);
         assert_eq!(addr.octets(), [192, 168, 1, 1]);
-        
+
         let addr2 = Ipv4Addr::from_u32(0xC0A80101);
         assert_eq!(addr, addr2);
     }
@@ -247,7 +247,7 @@ mod tests {
     fn test_ping_config() {
         let config = PingConfig::default();
         assert_eq!(config.packet_size(), 20 + 8 + 56);
-        
+
         let quick = PingConfig::quick();
         assert_eq!(quick.count, 1);
     }
@@ -255,14 +255,14 @@ mod tests {
     #[test]
     fn test_ping_stats() {
         let mut stats = PingStats::new();
-        
+
         stats.record_sent();
         stats.record_reply(10);
         stats.record_sent();
         stats.record_reply(20);
         stats.record_sent();
         stats.record_lost();
-        
+
         assert_eq!(stats.sent, 3);
         assert_eq!(stats.received, 2);
         assert_eq!(stats.lost, 1);

@@ -256,7 +256,7 @@ impl SettingsApp {
             match self.route {
                 Route::SysObservatory => self.sys_obs.refresh(),
                 Route::NetObservatory => self.net_obs.refresh(),
-                _ => {}
+                _ => {},
             }
             self.frame_dirty = true;
         }
@@ -322,7 +322,7 @@ impl SettingsApp {
             // Tab toggles rail/pane focus.
             0x0F | b'\t' => {
                 self.focus_in_rail = !self.focus_in_rail;
-            }
+            },
             b'k' | b'K' | b'w' | b'W' => {
                 if self.focus_in_rail {
                     if self.rail_focus > 0 {
@@ -331,7 +331,7 @@ impl SettingsApp {
                 } else {
                     self.pane_focus_up();
                 }
-            }
+            },
             b'j' | b'J' | b's' | b'S' => {
                 if self.focus_in_rail {
                     if self.rail_focus < Route::ALL.len() - 1 {
@@ -340,14 +340,14 @@ impl SettingsApp {
                 } else {
                     self.pane_focus_down();
                 }
-            }
+            },
             0x1C | b'\r' | b'\n' => {
                 if self.focus_in_rail {
                     self.navigate(Route::from_index(self.rail_focus));
                 } else {
                     self.pane_activate();
                 }
-            }
+            },
             // Esc disarms if armed, else navigates back to Gateway.
             0x01 | 0x1B => {
                 if self.severe_arm == ArmState::Armed {
@@ -360,32 +360,32 @@ impl SettingsApp {
                         self.navigate(Route::Gateway);
                     }
                 }
-            }
+            },
             b'h' | b'H' => {
                 self.focus_in_rail = true;
-            }
+            },
             b'l' | b'L' => {
                 self.focus_in_rail = false;
-            }
+            },
             // a/r/d mirror the bar buttons; raw scancodes alongside ASCII.
             0x1E | b'a' | b'A' => {
                 if !self.focus_in_rail {
                     self.apply_pending();
                 }
-            }
+            },
             0x13 | b'r' | b'R' => {
                 if !self.focus_in_rail {
                     self.revert_pending();
                 }
-            }
+            },
             0x20 | b'd' | b'D' => {
                 if !self.focus_in_rail {
                     self.restore_defaults();
                 }
-            }
+            },
             _ => {
                 self.chamber_key(key);
-            }
+            },
         }
     }
 
@@ -452,7 +452,7 @@ impl SettingsApp {
             Route::NetObservatory => self.net_obs.refresh(),
             Route::SysObservatory => self.sys_obs.refresh(),
             Route::MistShore => self.mist.refresh(),
-            _ => {}
+            _ => {},
         }
     }
 
@@ -473,15 +473,15 @@ impl SettingsApp {
             Route::MistShore => {
                 self.mist.apply();
                 true
-            }
+            },
             Route::MirrorBasin => {
                 self.mirror.apply();
                 true
-            }
+            },
             Route::HallOfMasks => {
                 crate::chambers::hall::apply(self);
                 true
-            }
+            },
             _ => true,
         };
 
@@ -511,7 +511,7 @@ impl SettingsApp {
             Route::NetObservatory => self.net_obs.revert(),
             Route::MistShore => self.mist.revert(),
             Route::MirrorBasin => self.mirror.revert(),
-            _ => {}
+            _ => {},
         }
         self.pending.retain(|p| p.chamber != route);
         self.set_status("Reverted", false);
@@ -523,7 +523,7 @@ impl SettingsApp {
             Route::NetObservatory => self.net_obs.restore_defaults(),
             Route::MistShore => self.mist.restore_defaults(),
             Route::MirrorBasin => self.mirror.restore_defaults(),
-            _ => {}
+            _ => {},
         }
         self.pending.retain(|p| p.chamber != route);
         self.set_status("Defaults restored", false);

@@ -1,7 +1,7 @@
 //! ICMP packet build/parse (RFC 792).
 
-use crate::types::Ipv4Addr;
 use crate::checksum::calculate_checksum;
+use crate::types::Ipv4Addr;
 
 pub const ICMP_PROTOCOL: u8 = 1;
 

@@ -117,7 +117,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
         Err(_) => {
             let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
             return EIO;
-        }
+        },
     };
 
     let file_size = stat.size as usize;
@@ -128,17 +128,17 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
 
     // Drop registry before spawn_user_process — load_elf64 reacquires it.
     let pages_needed = file_size.div_ceil(PAGE_SIZE as usize) as u64;
-    let buf_phys = match hal().phys().allocate_pages(
-        AllocKind::AnyPages,
-        MemoryType::Allocated,
-        pages_needed,
-    ) {
-        Ok(addr) => addr,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            return ENOMEM;
-        }
-    };
+    let buf_phys =
+        match hal()
+            .phys()
+            .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages_needed)
+        {
+            Ok(addr) => addr,
+            Err(_) => {
+                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                return ENOMEM;
+            },
+        };
 
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, file_size);
     let bytes_read =
@@ -148,7 +148,7 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
                 let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
                 let _ = hal().phys().free_pages(buf_phys, pages_needed);
                 return EIO;
-            }
+            },
         };
 
     let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);

@@ -84,7 +84,7 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 }
                 len
             }
-        }
+        },
         _ => EBADF,
     }
 }
@@ -171,7 +171,7 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 }
                 hal().cpu().halt_wait_irq();
             }
-        }
+        },
         _ => EBADF,
     }
 }
@@ -243,18 +243,18 @@ pub unsafe fn sys_system_control(mode: u64) -> u64 {
             // Take the crash-handler path: shows BSOD, then resets.
             hal().cpu().set_reset_on_crash(true);
             hal().cpu().crash_now()
-        }
+        },
         SYSCTL_REBOOT_GRACEFUL => {
             graceful_reset_now(crate::shutdown::TransitionKind::RebootGraceful)
-        }
+        },
         SYSCTL_SHUTDOWN_GRACEFUL => {
             graceful_reset_now(crate::shutdown::TransitionKind::ShutdownGraceful)
-        }
+        },
         _ => {
             SYSTEM_CONTROL_IN_PROGRESS.store(false, core::sync::atomic::Ordering::Release);
             hal().smp().clear_reboot_owner();
             EINVAL
-        }
+        },
     }
 }
 
@@ -287,10 +287,7 @@ unsafe fn graceful_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
             let pid = p.pid;
             if pid == 0
                 || pid == caller
-                || matches!(
-                    p.state,
-                    ProcessState::Terminated | ProcessState::Zombie
-                )
+                || matches!(p.state, ProcessState::Terminated | ProcessState::Zombie)
             {
                 continue;
             }
@@ -329,11 +326,11 @@ unsafe fn hard_reset_now(kind: crate::shutdown::TransitionKind) -> ! {
         crate::shutdown::TransitionKind::RebootGraceful
         | crate::shutdown::TransitionKind::RebootForce => {
             crate::shutdown::run_restart_handlers(kind);
-        }
+        },
         crate::shutdown::TransitionKind::ShutdownGraceful
         | crate::shutdown::TransitionKind::ShutdownForce => {
             crate::shutdown::run_poweroff_handlers(kind);
-        }
+        },
     }
     hal().reset().reset_machine()
 }

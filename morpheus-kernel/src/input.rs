@@ -186,20 +186,20 @@ pub fn drain_mouse() -> (i32, i32, u8) {
             Some(InputEvent::Move(dx_i, dy_i)) => {
                 dx += dx_i as i32;
                 dy += dy_i as i32;
-            }
+            },
             Some(InputEvent::Button(idx, pressed)) => {
                 if pressed {
                     buttons |= 1 << idx;
                 } else {
                     buttons &= !(1 << idx);
                 }
-            }
+            },
             Some(InputEvent::Wheel(delta)) => {
                 // Folded into dx; no dedicated wheel channel yet.
                 dx += delta as i32;
-            }
+            },
             None => break,
-            _ => {}
+            _ => {},
         }
     }
 

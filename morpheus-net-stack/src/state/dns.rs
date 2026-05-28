@@ -88,7 +88,7 @@ impl DnsResolveState {
             DnsResolveState::Init => {
                 // Not started yet
                 StepResult::Pending
-            }
+            },
 
             DnsResolveState::Resolving { start_tsc, .. } => {
                 // Check timeout first
@@ -104,19 +104,19 @@ impl DnsResolveState {
                     Ok(Some(ip)) => {
                         *self = DnsResolveState::Resolved { ip };
                         StepResult::Done
-                    }
+                    },
                     Ok(None) => {
                         // Still pending
                         StepResult::Pending
-                    }
+                    },
                     Err(_) => {
                         *self = DnsResolveState::Failed {
                             error: DnsError::QueryFailed,
                         };
                         StepResult::Failed
-                    }
+                    },
                 }
-            }
+            },
 
             DnsResolveState::Resolved { .. } => StepResult::Done,
             DnsResolveState::Failed { error } => {
@@ -125,7 +125,7 @@ impl DnsResolveState {
                 } else {
                     StepResult::Failed
                 }
-            }
+            },
         }
     }
 

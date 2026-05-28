@@ -118,8 +118,8 @@ fn restart_marker(kind: TransitionKind) {
     match kind {
         TransitionKind::RebootGraceful | TransitionKind::RebootForce => {
             crate::serial::checkpoint("shutdown-restart-handlers-done");
-        }
-        TransitionKind::ShutdownGraceful | TransitionKind::ShutdownForce => {}
+        },
+        TransitionKind::ShutdownGraceful | TransitionKind::ShutdownForce => {},
     }
 }
 
@@ -127,8 +127,8 @@ fn poweroff_marker(kind: TransitionKind) {
     match kind {
         TransitionKind::ShutdownGraceful | TransitionKind::ShutdownForce => {
             crate::serial::checkpoint("shutdown-poweroff-handlers-done");
-        }
-        TransitionKind::RebootGraceful | TransitionKind::RebootForce => {}
+        },
+        TransitionKind::RebootGraceful | TransitionKind::RebootForce => {},
     }
 }
 

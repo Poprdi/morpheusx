@@ -109,7 +109,7 @@ pub fn dispatch_fb(argv: &[String], cwd: &str, fb: &Framebuffer, con: &mut Conso
         "clear" => {
             con.clear(fb);
             Some(0)
-        }
+        },
         "true" => Some(0),
         "false" => Some(1),
         "help" => Some(help_cmd_fb(args, fb, con)),
@@ -166,11 +166,11 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
             Some(p) => {
                 libmorpheus::println!("{}", p);
                 p
-            }
+            },
             None => {
                 libmorpheus::eprintln!("cd: OLDPWD not set");
                 return 1;
-            }
+            },
         },
         Some(p) => path::resolve(cwd, p),
     };
@@ -181,11 +181,11 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
                     libmorpheus::eprintln!("cd: {}: Not a directory", target);
                     return 1;
                 }
-            }
+            },
             Err(_) => {
                 libmorpheus::eprintln!("cd: {}: No such directory", target);
                 return 1;
-            }
+            },
         }
     }
     save_prev_dir(cwd);
@@ -194,7 +194,7 @@ fn cd_cmd(args: &[String], cwd: &str) -> i32 {
         Err(e) => {
             libmorpheus::eprintln!("cd: {}: {}", target, e);
             1
-        }
+        },
     }
 }
 
@@ -206,11 +206,11 @@ fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
                 con.write_str(fb, &p);
                 con.write_str(fb, "\n");
                 p
-            }
+            },
             None => {
                 con.write_colored(fb, "cd: OLDPWD not set\n", (170, 0, 0));
                 return 1;
-            }
+            },
         },
         Some(p) => path::resolve(cwd, p),
     };
@@ -225,7 +225,7 @@ fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
                     );
                     return 1;
                 }
-            }
+            },
             Err(_) => {
                 con.write_colored(
                     fb,
@@ -233,7 +233,7 @@ fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
                     (170, 0, 0),
                 );
                 return 1;
-            }
+            },
         }
     }
     save_prev_dir(cwd);
@@ -242,7 +242,7 @@ fn cd_cmd_fb(args: &[String], cwd: &str, fb: &Framebuffer, con: &mut Console) ->
         Err(e) => {
             con.write_colored(fb, &format!("cd: {}: {}\n", target, e), (170, 0, 0));
             1
-        }
+        },
     }
 }
 
@@ -251,11 +251,11 @@ fn pwd_cmd() -> i32 {
         Ok(cwd) => {
             libmorpheus::println!("{}", cwd);
             0
-        }
+        },
         Err(e) => {
             libmorpheus::eprintln!("pwd: {}", e);
             1
-        }
+        },
     }
 }
 
@@ -265,11 +265,11 @@ fn pwd_cmd_fb(fb: &Framebuffer, con: &mut Console) -> i32 {
             con.write_str(fb, &cwd);
             con.write_str(fb, "\n");
             0
-        }
+        },
         Err(e) => {
             con.write_colored(fb, &format!("pwd: {}\n", e), (170, 0, 0));
             1
-        }
+        },
     }
 }
 
@@ -306,11 +306,11 @@ fn help_cmd(args: &[String]) -> i32 {
             Some(text) => {
                 libmorpheus::io::print(text);
                 return 0;
-            }
+            },
             None => {
                 libmorpheus::eprintln!("help: unknown command: {}", cmd);
                 return 1;
-            }
+            },
         }
     }
 
@@ -324,7 +324,7 @@ fn help_cmd_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
             Some(text) => {
                 con.write_str(fb, text);
                 return 0;
-            }
+            },
             None => {
                 con.write_colored(
                     fb,
@@ -332,7 +332,7 @@ fn help_cmd_fb(args: &[String], fb: &Framebuffer, con: &mut Console) -> i32 {
                     (170, 0, 0),
                 );
                 return 1;
-            }
+            },
         }
     }
 

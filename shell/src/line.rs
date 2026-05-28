@@ -52,26 +52,26 @@ impl LineEditor {
                     let line = self.current_str();
                     self.push_history(&line);
                     return Some(line);
-                }
+                },
                 0x08 | 0x7F => {
                     if self.len > 0 {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
-                }
+                },
                 0x03 => return None, // Ctrl+C
                 0x0C => {
                     // Ctrl+L
                     io::print("\x1b[2J\x1b[H");
                     return Some(String::from("\x0c"));
-                }
+                },
                 0x15 => {
                     // Ctrl+U
                     while self.len > 0 {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
-                }
+                },
                 0x17 => {
                     // Ctrl+W
                     while self.len > 0 && self.buf[self.len - 1] == b' ' {
@@ -82,7 +82,7 @@ impl LineEditor {
                         self.len -= 1;
                         io::print("\x08 \x08");
                     }
-                }
+                },
                 c if (0x20..0x7F).contains(&c) => {
                     if self.len < MAX_LINE {
                         self.buf[self.len] = c;
@@ -91,8 +91,8 @@ impl LineEditor {
                         // SAFETY: ASCII byte.
                         io::print(unsafe { core::str::from_utf8_unchecked(s) });
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
     }
@@ -148,22 +148,22 @@ pub fn read_line_fb(
             b'\r' | b'\n' => {
                 let s = core::str::from_utf8(&buf[..len]).unwrap_or("");
                 return Some(String::from(s));
-            }
+            },
             0x08 | 0x7F => {
                 if len > 0 {
                     len -= 1;
                     con.backspace(fb);
                 }
-            }
+            },
             0x03 => return None,
             0x0C => {
                 con.clear(fb);
                 return Some(String::from("\x0c"));
-            }
+            },
             0x15 => {
                 len = 0;
                 con.kill_to_start(fb, prompt_col);
-            }
+            },
             0x17 => {
                 // Ctrl+W
                 while len > 0 && buf[len - 1] == b' ' {
@@ -174,15 +174,15 @@ pub fn read_line_fb(
                     len -= 1;
                     con.backspace(fb);
                 }
-            }
+            },
             c if (0x20..0x7F).contains(&c) => {
                 if len < MAX_LINE {
                     buf[len] = c;
                     len += 1;
                     con.write_char(fb, c as char);
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }

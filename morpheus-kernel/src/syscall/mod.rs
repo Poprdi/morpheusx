@@ -171,7 +171,7 @@ pub unsafe extern "C" fn syscall_dispatch(
                 fb_mark_dirty();
             }
             0
-        }
+        },
         SYS_COMPOSITOR_SET => sys_compositor_set(),
         SYS_WIN_SURFACE_LIST => sys_win_surface_list(a1, a2),
         SYS_WIN_SURFACE_MAP => sys_win_surface_map(a1),
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn syscall_dispatch(
             let _ = unknown;
             let _ = ProcessState::Ready;
             ENOSYS_RET
-        }
+        },
     }
 }
 

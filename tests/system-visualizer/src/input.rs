@@ -89,7 +89,7 @@ impl InputState {
                 b'd' | b'D' => self.held |= HELD_D,
                 b'z' | b'Z' | b'=' | b'+' => self.held |= HELD_Z,
                 b'x' | b'X' | b'-' => self.held |= HELD_X,
-                _ => {}
+                _ => {},
             }
 
             let action = match buf[i] {

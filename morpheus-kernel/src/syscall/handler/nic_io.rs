@@ -41,8 +41,12 @@ pub unsafe fn sys_nic_tx(frame_ptr: u64, frame_len: u64) -> u64 {
     match NIC_OPS.tx {
         Some(tx_fn) => {
             let rc = tx_fn(frame_ptr as *const u8, frame_len as usize);
-            if rc < 0 { EIO } else { 0 }
-        }
+            if rc < 0 {
+                EIO
+            } else {
+                0
+            }
+        },
         None => ENODEV,
     }
 }
@@ -54,8 +58,12 @@ pub unsafe fn sys_nic_rx(buf_ptr: u64, buf_len: u64) -> u64 {
     match NIC_OPS.rx {
         Some(rx_fn) => {
             let rc = rx_fn(buf_ptr as *mut u8, buf_len as usize);
-            if rc < 0 { EIO } else { rc as u64 }
-        }
+            if rc < 0 {
+                EIO
+            } else {
+                rc as u64
+            }
+        },
         None => ENODEV,
     }
 }
@@ -76,7 +84,7 @@ pub unsafe fn sys_nic_mac(buf_ptr: u64) -> u64 {
         Some(f) => {
             f(buf_ptr as *mut u8);
             0
-        }
+        },
         None => ENODEV,
     }
 }
@@ -86,7 +94,7 @@ pub unsafe fn sys_nic_refill() -> u64 {
         Some(f) => {
             f();
             0
-        }
+        },
         None => ENODEV,
     }
 }
@@ -96,8 +104,12 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     match NIC_OPS.ctrl {
         Some(f) => {
             let rc = f(cmd as u32, arg);
-            if rc < 0 { EIO } else { rc as u64 }
-        }
+            if rc < 0 {
+                EIO
+            } else {
+                rc as u64
+            }
+        },
         None => ENODEV,
     }
 }
@@ -128,7 +140,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
                 core::ptr::write(arg as *mut u32, avail as u32);
             }
             avail as u64
-        }
+        },
         (0..=2, IOCTL_TIOCGWINSZ) => {
             if arg != 0 && validate_user_buf(arg, 8) {
                 let (rows, cols, xpix, ypix) = match fb_registered() {
@@ -136,7 +148,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
                         let c = fb.width / 8;
                         let r = fb.height / 16;
                         (r as u16, c as u16, fb.width as u16, fb.height as u16)
-                    }
+                    },
                     None => (25, 80, 0, 0),
                 };
                 let buf = arg as *mut u16;
@@ -146,7 +158,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
                 *buf.add(3) = ypix;
             }
             0
-        }
+        },
         _ => EINVAL,
     }
 }
@@ -214,9 +226,7 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
                 let fd_table = SCHEDULER.current_fd_table_mut();
                 if let Ok(desc) = fd_table.get(0) {
                     if desc.flags & O_PIPE_READ != 0 {
-                        if pfd.events & POLLIN != 0
-                            && pipe::pipe_available(desc.mount_idx) > 0
-                        {
+                        if pfd.events & POLLIN != 0 && pipe::pipe_available(desc.mount_idx) > 0 {
                             pfd.revents |= POLLIN;
                             ready += 1;
                         }
@@ -227,13 +237,13 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
                     pfd.revents |= POLLIN;
                     ready += 1;
                 }
-            }
+            },
             1 | 2 => {
                 if pfd.events & POLLOUT != 0 {
                     pfd.revents |= POLLOUT;
                     ready += 1;
                 }
-            }
+            },
             fd if fd >= 3 => {
                 if pfd.events & POLLIN != 0 {
                     pfd.revents |= POLLIN;
@@ -244,11 +254,11 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
                 if pfd.revents != 0 {
                     ready += 1;
                 }
-            }
+            },
             _ => {
                 pfd.revents = POLLERR;
                 ready += 1;
-            }
+            },
         }
     }
 

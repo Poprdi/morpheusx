@@ -4,8 +4,8 @@
 //! per LD27. All other handler files reach the VFS through `vfs_lock()` or
 //! `current_fd_table_and_fs`.
 
-use morpheus_helix::vfs::FdTable;
 use morpheus_helix::vfs::global::FsGlobal;
+use morpheus_helix::vfs::FdTable;
 
 pub(crate) const ENOSYS: u64 = u64::MAX - 37;
 pub(crate) const EINVAL: u64 = u64::MAX;
@@ -90,7 +90,7 @@ pub(crate) unsafe fn vfs_lock() -> Option<VfsGuard> {
         None => {
             VFS_LOCK.unlock();
             None
-        }
+        },
     }
 }
 
@@ -105,9 +105,8 @@ pub(crate) unsafe fn vfs_lock() -> Option<VfsGuard> {
 /// Single-core-effective access — caller must ensure no other core is
 /// touching the FS or fd table concurrently.
 #[allow(dead_code)]
-pub(crate) unsafe fn current_fd_table_and_fs()
-    -> Option<(&'static mut FdTable, &'static mut FsGlobal)>
-{
+pub(crate) unsafe fn current_fd_table_and_fs(
+) -> Option<(&'static mut FdTable, &'static mut FsGlobal)> {
     let fs = morpheus_helix::vfs::global::fs_global_mut()?;
     let fd_table = crate::schedular::SCHEDULER.current_fd_table_mut();
     Some((fd_table, fs))

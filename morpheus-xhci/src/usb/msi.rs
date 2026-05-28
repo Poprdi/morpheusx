@@ -117,14 +117,14 @@ pub unsafe fn wire_msix(pci_addr: BusAddr, rt_base: u64) {
         Ok(_) => {
             crate::logger::ok("XHCI", 950, "MSI-X enabled (vector 0x40)");
             return;
-        }
+        },
         Err(MsiError::CapabilityNotFound) => {
             crate::logger::info("XHCI", 951, "no MSI-X capability; trying MSI");
-        }
+        },
         Err(_) => {
             crate::logger::warn("XHCI", 952, "MSI-X enable failed; falling back to polling");
             return;
-        }
+        },
     }
 
     match intr.enable_msi_single(pci_addr, apic_id, XHCI_VECTOR) {

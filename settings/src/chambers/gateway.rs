@@ -54,12 +54,12 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                     app.severe_arm = ArmState::Confirmed;
                     app.set_status("Severe mode ACTIVE", true);
                 }
-            }
+            },
             SafetyMode::Severe => {
                 app.safety = SafetyMode::Safe;
                 app.severe_arm = ArmState::Disarmed;
                 app.set_status("Safe mode restored", false);
-            }
+            },
         }
     } else if idx <= Route::ALL.len() {
         let target = Route::from_index(idx - 1);

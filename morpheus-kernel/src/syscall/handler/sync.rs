@@ -63,11 +63,11 @@ pub unsafe fn sys_futex(addr: u64, op: u64, val: u64, timeout_ms: u64) -> u64 {
             }
             hal().cpu().halt_wait_irq();
             0
-        }
+        },
         FUTEX_WAKE => {
             let count = if val == 0 { 1 } else { val as u32 };
             crate::schedular::wake_futex_waiters(addr, count) as u64
-        }
+        },
         _ => EINVAL,
     }
 }

@@ -83,7 +83,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                 app.set_status("DE appearance sync failed", true);
             }
             app.mark_edited(Route::MirrorBasin, "theme_mode");
-        }
+        },
         FIELD_ACCENT_PREV => {
             app.mirror.accent_idx = if app.mirror.accent_idx == 0 {
                 ACCENT_COUNT - 1
@@ -99,7 +99,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                 app.set_status("DE appearance sync failed", true);
             }
             app.mark_edited(Route::MirrorBasin, "accent");
-        }
+        },
         FIELD_ACCENT_NEXT => {
             app.mirror.accent_idx = (app.mirror.accent_idx + 1) % ACCENT_COUNT;
             rebuild_theme(app);
@@ -111,7 +111,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                 app.set_status("DE appearance sync failed", true);
             }
             app.mark_edited(Route::MirrorBasin, "accent");
-        }
+        },
         FIELD_APPLY => {
             let accent_name = ACCENTS[app.mirror.accent_idx].3;
             match sync_global_from_local(app) {
@@ -120,24 +120,24 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                     app.clear_pending_for(Route::MirrorBasin);
                     app.set_status("DE appearance applied", false);
                     app.log_change(Route::MirrorBasin, "appearance", accent_name, false);
-                }
+                },
                 Err(code) => {
                     libmorpheus::println!(
                         "[settings/mirror] de appearance apply failed err=0x{:x}",
                         code
                     );
                     app.set_status("DE appearance apply failed", true);
-                }
+                },
             }
-        }
+        },
         FIELD_REVERT => {
             app.mirror.revert();
             rebuild_theme(app);
             let _ = sync_global_from_local(app);
             app.clear_pending_for(Route::MirrorBasin);
             app.set_status("Appearance reverted", false);
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 

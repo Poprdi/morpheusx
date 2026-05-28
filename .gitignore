@@ -33,4 +33,6 @@ crates.io
 .env
 .env.local
 /cavealloc
-.continue 
+.continue/**
+.claude/**
+.github/**

@@ -7,12 +7,12 @@ use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::Socket as TcpSocket;
 use smoltcp::time::Instant;
 
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::disk_writer::DiskWriter;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{DoneState, FailedState, ManifestState};
 
@@ -202,7 +202,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
 
                 self.phase = HttpPhase::ReceiveHeaders;
                 self.last_activity_tsc = tsc;
-            }
+            },
 
             HttpPhase::ReceiveHeaders => {
                 if !socket.may_recv() {
@@ -227,7 +227,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
                 }
 
                 match socket.recv_slice(&mut self.header_buf[self.header_len..]) {
-                    Ok(0) => {}
+                    Ok(0) => {},
                     Ok(n) => {
                         self.header_len += n;
                         self.last_activity_tsc = tsc;
@@ -288,10 +288,10 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             self.phase = HttpPhase::ReceiveBody;
                             serial::println("[HTTP] Receiving body...");
                         }
-                    }
-                    Err(_) => {}
+                    },
+                    Err(_) => {},
                 }
-            }
+            },
 
             HttpPhase::ReceiveBody => {
                 if !socket.may_recv() {
@@ -351,7 +351,7 @@ impl<D: NetworkDriver> State<D> for HttpState {
                 // Read body data
                 let mut buf = [0u8; 4096];
                 match socket.recv_slice(&mut buf) {
-                    Ok(0) => {}
+                    Ok(0) => {},
                     Ok(n) => {
                         self.bytes_received += n as u64;
                         self.last_activity_tsc = tsc;
@@ -377,8 +377,8 @@ impl<D: NetworkDriver> State<D> for HttpState {
                             let written = writer.write(blk, &buf[..n]);
                             ctx.bytes_written += written as u64;
                         }
-                    }
-                    Err(_) => {}
+                    },
+                    Err(_) => {},
                 }
 
                 // Check if download complete
@@ -405,13 +405,13 @@ impl<D: NetworkDriver> State<D> for HttpState {
                         );
                     }
                 }
-            }
+            },
 
             HttpPhase::Complete => {
                 // Already transitioned to ManifestState via completion paths above.
                 // If we somehow land here, just go to Done directly.
                 return (Box::new(DoneState::new()), StepResult::Transition);
-            }
+            },
         }
 
         (self, StepResult::Continue)

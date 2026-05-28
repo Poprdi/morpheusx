@@ -6,14 +6,14 @@ use alloc::boxed::Box;
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::time::Instant;
 
-use morpheus_block::device::UnifiedBlockDevice;
-use morpheus_nic::traits::NetworkDriver;
-use morpheus_block::unified_block_io::UnifiedBlockIo;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_block::device::UnifiedBlockDevice;
 use morpheus_block::transfer::disk::{DiskError, GptOps};
+use morpheus_block::unified_block_io::UnifiedBlockIo;
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{FailedState, LinkWaitState};
 
@@ -60,7 +60,7 @@ impl GptPrepState {
             Ok(true) => {
                 serial::println("[GPT] ✓ Range verified free");
                 return Ok((requested_start, requested_end));
-            }
+            },
             Ok(false) => {
                 serial::println("[GPT] WARNING: Requested range overlaps existing partition");
                 serial::print("[GPT] Requested: ");
@@ -68,7 +68,7 @@ impl GptPrepState {
                 serial::print(" - ");
                 serial::print_hex(requested_end);
                 serial::println("");
-            }
+            },
             Err(e) => {
                 serial::print("[GPT] ERROR: Could not verify range: ");
                 serial::println(match e {
@@ -77,7 +77,7 @@ impl GptPrepState {
                     _ => "Unknown error",
                 });
                 return Err("range verification failed");
-            }
+            },
         }
 
         serial::println("[GPT] Searching for alternative free space...");
@@ -114,7 +114,7 @@ impl GptPrepState {
                     serial::println(" GB needed)");
                     Err("insufficient free space")
                 }
-            }
+            },
             Err(e) => {
                 serial::print("[GPT] ERROR: Could not find free space: ");
                 serial::println(match e {
@@ -124,7 +124,7 @@ impl GptPrepState {
                     _ => "Unknown error",
                 });
                 Err("no free space found")
-            }
+            },
         }
     }
 
@@ -171,24 +171,32 @@ impl GptPrepState {
                     0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x78, 0x12,
                     0x34, 0x56, 0x78,
                 ])
-            }
+            },
             Err(e) => {
                 serial::print("[GPT] ERROR: Failed to create partition: ");
                 serial::println(match e {
                     morpheus_storage_format::disk::gpt_ops::GptError::IoError => "IO error",
-                    morpheus_storage_format::disk::gpt_ops::GptError::InvalidHeader => "Invalid GPT header",
-                    morpheus_storage_format::disk::gpt_ops::GptError::InvalidSize => "Invalid size/range",
-                    morpheus_storage_format::disk::gpt_ops::GptError::NoSpace => "No free partition slot",
+                    morpheus_storage_format::disk::gpt_ops::GptError::InvalidHeader => {
+                        "Invalid GPT header"
+                    },
+                    morpheus_storage_format::disk::gpt_ops::GptError::InvalidSize => {
+                        "Invalid size/range"
+                    },
+                    morpheus_storage_format::disk::gpt_ops::GptError::NoSpace => {
+                        "No free partition slot"
+                    },
                     morpheus_storage_format::disk::gpt_ops::GptError::PartitionNotFound => {
                         "Partition not found"
-                    }
+                    },
                     morpheus_storage_format::disk::gpt_ops::GptError::OverlappingPartitions => {
                         "Range overlaps"
-                    }
-                    morpheus_storage_format::disk::gpt_ops::GptError::AlignmentError => "Alignment error",
+                    },
+                    morpheus_storage_format::disk::gpt_ops::GptError::AlignmentError => {
+                        "Alignment error"
+                    },
                 });
                 Err("partition creation failed")
-            }
+            },
         }
     }
 }
@@ -229,7 +237,7 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
                     serial::println("[GPT] No block device available, skipping partition setup");
                     self.completed = true;
                     return (self, StepResult::Continue);
-                }
+                },
             };
 
             serial::println("=================================");
@@ -268,7 +276,7 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
                             Box::new(FailedState::new("gpt prep failed")),
                             StepResult::Failed("gpt"),
                         );
-                    }
+                    },
                 };
 
             ctx.actual_start_sector = actual_start;
@@ -279,12 +287,12 @@ impl<D: NetworkDriver> State<D> for GptPrepState {
                 Ok(uuid) => {
                     serial::println("[GPT] ISO partition created and claimed");
                     let _ = uuid;
-                }
+                },
                 Err(msg) => {
                     serial::print("[GPT] WARNING: ");
                     serial::println(msg);
                     serial::println("[GPT] Continuing anyway (data may be in unmapped space)");
-                }
+                },
             }
 
             self.completed = true;

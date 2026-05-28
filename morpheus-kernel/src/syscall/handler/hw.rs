@@ -49,15 +49,15 @@ pub unsafe fn sys_pci_cfg_write(bdf: u64, offset: u64, width: u64, value: u64) -
         1 => {
             hal().bus().cfg_write8(addr, off, value as u8);
             0
-        }
+        },
         2 => {
             hal().bus().cfg_write16(addr, off, value as u16);
             0
-        }
+        },
         4 => {
             hal().bus().cfg_write32(addr, off, value as u32);
             0
-        }
+        },
         _ => EINVAL,
     }
 }
@@ -80,7 +80,7 @@ pub unsafe fn sys_dma_alloc(pages: u64) -> u64 {
         Ok(addr) => {
             core::ptr::write_bytes(addr as *mut u8, 0, (pages * 4096) as usize);
             addr
-        }
+        },
         Err(_) => ENOMEM,
     }
 }

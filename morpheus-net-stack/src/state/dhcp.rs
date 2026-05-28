@@ -118,7 +118,7 @@ impl DhcpState {
             DhcpState::Init => {
                 // Not started yet
                 StepResult::Pending
-            }
+            },
 
             DhcpState::Discovering { start_tsc } => {
                 // Check timeout first
@@ -140,7 +140,7 @@ impl DhcpState {
 
                 // Still discovering
                 StepResult::Pending
-            }
+            },
 
             DhcpState::Bound { .. } => StepResult::Done,
 
@@ -150,7 +150,7 @@ impl DhcpState {
                 } else {
                     StepResult::Failed
                 }
-            }
+            },
         }
     }
 

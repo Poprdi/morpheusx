@@ -25,12 +25,7 @@ pub unsafe fn parse_mouse_report(
     // Push a single composite event to the kernel sink. Kernel translates
     // it into the InputEvent stream (move / button / wheel) as needed.
     let buttons_bits = report.buttons & 0x07;
-    sink::push_mouse(
-        report.x as i16,
-        report.y as i16,
-        buttons_bits,
-        report.wheel,
-    );
+    sink::push_mouse(report.x as i16, report.y as i16, buttons_bits, report.wheel);
 
     Ok(())
 }

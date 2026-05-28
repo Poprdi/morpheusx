@@ -189,7 +189,7 @@ pub unsafe fn probe_and_create_driver(
             // Create driver
             let driver = E1000eDriver::new(info.mmio_base, config)?;
             Ok(ProbeResult::Intel(driver))
-        }
+        },
 
         DetectedNic::VirtIO {
             pci_addr,
@@ -225,7 +225,7 @@ pub unsafe fn probe_and_create_driver(
                 VirtioNetDriver::new(mmio_base, config)?
             };
             Ok(ProbeResult::VirtIO(driver))
-        }
+        },
     }
 }
 

@@ -203,7 +203,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
         Err(_) => {
             let _ = morpheus_helix::vfs::vfs_close(fd_table, read_fd);
             return ENOMEM;
-        }
+        },
     };
     fd_table.fds[write_fd] = morpheus_helix::types::FileDescriptor {
         key: 0,

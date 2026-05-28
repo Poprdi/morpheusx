@@ -6,11 +6,11 @@ use alloc::boxed::Box;
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::time::Instant;
 
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{DhcpState, FailedState};
 

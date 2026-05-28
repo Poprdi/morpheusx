@@ -3,12 +3,12 @@
 //! Rust orchestration layer for receive operations.
 //! All hardware access is via ASM bindings.
 
-use morpheus_hal_x86_64::asm::barriers::{lfence, sfence};
 use crate::asm::{
     asm_intel_rx_clear_desc, asm_intel_rx_init_desc, asm_intel_rx_poll, asm_intel_rx_update_tail,
     RxPollResult,
 };
 use crate::serial::{serial_print, serial_print_hex, serial_println};
+use morpheus_hal_x86_64::asm::barriers::{lfence, sfence};
 
 /// Size of a single RX descriptor in bytes.
 pub const RX_DESC_SIZE: usize = 16;

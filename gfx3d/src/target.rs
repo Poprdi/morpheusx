@@ -190,12 +190,12 @@ pub fn convert_pixel(rgba: u32, format: TargetPixelFormat) -> u32 {
             let g = (rgba >> 16) & 0xFF;
             let b = (rgba >> 8) & 0xFF;
             r | (g << 8) | (b << 16)
-        }
+        },
         TargetPixelFormat::Bgrx => {
             let r = (rgba >> 24) & 0xFF;
             let g = (rgba >> 16) & 0xFF;
             let b = (rgba >> 8) & 0xFF;
             b | (g << 8) | (r << 16)
-        }
+        },
     }
 }

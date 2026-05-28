@@ -97,7 +97,7 @@ pub fn collect_completions(tx_state: &mut VirtqueueState, tx_pool: &mut BufferPo
                     }
                     tx_pool.free(buf_idx);
                 }
-            }
+            },
             None => break, // No more completions
         }
     }

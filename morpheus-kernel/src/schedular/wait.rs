@@ -53,7 +53,7 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return u64::MAX - 3;
-            }
+            },
         };
 
         if child_parent != current {
@@ -101,7 +101,7 @@ pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
         None => {
             PROCESS_TABLE_LOCK.unlock();
             return u64::MAX - 3;
-        }
+        },
     };
 
     if child_parent != current {

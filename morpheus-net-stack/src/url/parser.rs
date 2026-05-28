@@ -64,7 +64,7 @@ impl Url {
                     Some(q.to_string())
                 };
                 (&rest[..idx], query)
-            }
+            },
             None => (rest, None),
         };
 
@@ -122,7 +122,7 @@ impl Url {
                     .parse::<u16>()
                     .map_err(|_| NetworkError::InvalidUrl)?;
                 Ok((host, Some(port)))
-            }
+            },
             None => Ok((authority, None)),
         }
     }
@@ -140,7 +140,7 @@ impl Url {
         match self.port {
             Some(port) if port != self.scheme.default_port() => {
                 alloc::format!("{}:{}", self.host, port)
-            }
+            },
             _ => self.host.clone(),
         }
     }
@@ -178,7 +178,6 @@ mod tests {
     use super::*;
     use alloc::string::ToString;
 
-
     #[test]
     fn test_scheme_parse_http() {
         assert_eq!(Scheme::parse("http"), Some(Scheme::Http));
@@ -201,7 +200,6 @@ mod tests {
         assert_eq!(Scheme::Http.default_port(), 80);
         assert_eq!(Scheme::Https.default_port(), 443);
     }
-
 
     #[test]
     fn test_parse_simple_http() {
@@ -252,7 +250,6 @@ mod tests {
         assert_eq!(url.query, Some("format=json".to_string()));
     }
 
-
     #[test]
     fn test_port_or_default_http() {
         let url = Url::parse("http://example.com").unwrap();
@@ -270,7 +267,6 @@ mod tests {
         let url = Url::parse("http://example.com:9000").unwrap();
         assert_eq!(url.port_or_default(), 9000);
     }
-
 
     #[test]
     fn test_host_header_no_port() {
@@ -290,7 +286,6 @@ mod tests {
         assert_eq!(url.host_header(), "example.com:8080");
     }
 
-
     #[test]
     fn test_request_uri_path_only() {
         let url = Url::parse("http://example.com/api/users").unwrap();
@@ -302,7 +297,6 @@ mod tests {
         let url = Url::parse("http://example.com/search?q=rust").unwrap();
         assert_eq!(url.request_uri(), "/search?q=rust");
     }
-
 
     #[test]
     fn test_parse_ipv4_address() {
@@ -317,7 +311,6 @@ mod tests {
         assert_eq!(url.host, "10.0.0.1");
         assert_eq!(url.port, Some(3000));
     }
-
 
     #[test]
     fn test_parse_ipv6_localhost() {
@@ -339,7 +332,6 @@ mod tests {
         assert_eq!(url.host, "[2001:db8::1]");
         assert_eq!(url.port, Some(9000));
     }
-
 
     #[test]
     fn test_parse_missing_scheme() {
@@ -376,7 +368,6 @@ mod tests {
         assert!(Url::parse("").is_err());
     }
 
-
     #[test]
     fn test_parse_root_path() {
         let url = Url::parse("http://example.com/").unwrap();
@@ -394,7 +385,6 @@ mod tests {
         let url = Url::parse("http://example.com/path?key").unwrap();
         assert_eq!(url.query, Some("key".to_string()));
     }
-
 
     #[test]
     fn test_parse_ubuntu_iso() {

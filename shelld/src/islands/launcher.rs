@@ -117,10 +117,10 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
             match process::spawn("/bin/msh") {
                 Ok(_pid) => {
                     io::println("shelld: spawned msh");
-                }
+                },
                 Err(e) => {
                     libmorpheus::println!("shelld: failed to spawn msh err=0x{:x}", e);
-                }
+                },
             }
             state.launcher_open = false;
             state.launcher_dirty = false;

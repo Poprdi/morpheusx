@@ -10,8 +10,8 @@ use crate::asm::{
     asm_intel_reset, asm_intel_set_link_up, asm_intel_setup_rx_ring, asm_intel_setup_tx_ring,
     asm_intel_write_mac, disable_ulp, phy_is_accessible, phy_read, phy_write, toggle_lanphypc,
 };
-use crate::traits::MacAddress;
 use crate::serial::{serial_print, serial_print_decimal, serial_println};
+use crate::traits::MacAddress;
 use morpheus_virtio::dma::DmaRegion;
 
 use super::regs;
@@ -357,20 +357,20 @@ unsafe fn ensure_phy_accessible(mmio_base: u64, tsc_freq: u64) -> bool {
                 while morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(start) < delay {
                     core::hint::spin_loop();
                 }
-            }
+            },
             1 => {
                 // Second attempt: toggle LANPHYPC to power cycle PHY
                 serial_println("    Recovery: toggling LANPHYPC...");
                 let _ = toggle_lanphypc(mmio_base, tsc_freq);
-            }
+            },
             2 => {
                 // Third attempt: force SMBus mode and toggle again
                 serial_println("    Recovery: SMBus mode + LANPHYPC...");
                 crate::asm::force_smbus_mode(mmio_base);
                 let _ = toggle_lanphypc(mmio_base, tsc_freq);
                 crate::asm::clear_smbus_mode(mmio_base);
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -451,7 +451,9 @@ unsafe fn wake_phy(mmio_base: u64, tsc_freq: u64) {
     // Small delay after reset before continuing (10ms)
     let post_reset_start = morpheus_hal_x86_64::asm::tsc::read_tsc();
     let post_reset_delay = tsc_freq / 100; // 10ms
-    while morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(post_reset_start) < post_reset_delay {
+    while morpheus_hal_x86_64::asm::tsc::read_tsc().wrapping_sub(post_reset_start)
+        < post_reset_delay
+    {
         core::hint::spin_loop();
     }
 

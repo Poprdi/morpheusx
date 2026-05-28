@@ -121,11 +121,9 @@ pub fn program_headers<'a>(data: &'a [u8], ehdr: &Elf64Ehdr) -> Result<&'a [Elf6
 
 /// Pick a HAL `PageFlags` preset for an ELF segment.
 ///
-/// The HAL exposes presets only; we don't have an arbitrary "USER + W + X"
-/// option. ELF segments with both PF_W and PF_X are nonconformant (modern
-/// linkers split them); we promote them to `USER_CODE` (executable, USER, no
-/// W). The kernel writes the segment image into the physical pages before
-/// mapping, so initial contents are still set up correctly even without W.
+/// A segment carrying both PF_W and PF_X maps writable+executable (USER_RWX),
+/// preserving pre-refactor behavior for binaries that ship a single merged RWX
+/// PT_LOAD (e.g. a linker script without separate RW/RX segments).
 fn elf_flags_to_preset(p_flags: u32) -> PageFlags {
     let writable = p_flags & PF_W != 0;
     let executable = p_flags & PF_X != 0;
@@ -133,8 +131,7 @@ fn elf_flags_to_preset(p_flags: u32) -> PageFlags {
         (false, false) => PageFlags::USER_RO,
         (true, false) => PageFlags::USER_RW,
         (false, true) => PageFlags::USER_CODE,
-        // Misconfigured W+X segment — defer to USER_CODE (executable, USER).
-        (true, true) => PageFlags::USER_CODE,
+        (true, true) => PageFlags::USER_RWX,
     }
 }
 
@@ -158,9 +155,7 @@ pub unsafe fn load_elf64(data: &[u8]) -> Result<Box<LoadedElfImage>, ElfError> {
 
     // Fresh PML4 + clone kernel half (entries 256-511) so the new address
     // space can take interrupts / run kernel-mode handlers.
-    let pml4 = paging
-        .pml4_new_empty()
-        .map_err(|_| ElfError::AllocFailed)?;
+    let pml4 = paging.pml4_new_empty().map_err(|_| ElfError::AllocFailed)?;
     paging
         .pml4_clone_kernel_half(pml4)
         .map_err(|_| ElfError::AllocFailed)?;

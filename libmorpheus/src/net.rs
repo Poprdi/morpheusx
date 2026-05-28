@@ -413,7 +413,7 @@ pub fn dns_resolve(hostname: &str) -> Result<u32, u64> {
             None => {
                 // sleep(1) not yield: avoids spinning when sole runnable proc.
                 crate::process::sleep(1);
-            }
+            },
         }
     }
 }
@@ -794,7 +794,7 @@ impl TcpStream {
                 _ => {
                     // sleep(1) not yield: avoids spinning when sole runnable proc.
                     crate::process::sleep(1);
-                }
+                },
             }
         }
     }
@@ -807,7 +807,7 @@ impl TcpStream {
                 Ok(0) => match self.state()? {
                     TcpState::Established | TcpState::CloseWait => {
                         crate::process::sleep(1);
-                    }
+                    },
                     _ => return Err(Error::new(ErrorKind::BrokenPipe)),
                 },
                 Ok(n) => data = &data[n..],
@@ -825,7 +825,7 @@ impl TcpStream {
                 Ok(0) => match self.state()? {
                     TcpState::Established | TcpState::SynSent | TcpState::SynReceived => {
                         crate::process::sleep(1);
-                    }
+                    },
                     _ => return Ok(0), // EOF
                 },
                 Ok(n) => return Ok(n),
@@ -889,7 +889,7 @@ impl TcpListener {
                 Ok(stream) => return Ok(stream),
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
                     crate::process::sleep(1);
-                }
+                },
                 Err(e) => return Err(e),
             }
         }
@@ -939,10 +939,10 @@ impl UdpSocket {
             match udp_recv_from(self.handle, buf) {
                 Ok((0, _, _)) => {
                     crate::process::sleep(1);
-                }
+                },
                 Ok((n, ip_nbo, port)) => {
                     return Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port));
-                }
+                },
                 Err(e) => return Err(Error::from_raw(e)),
             }
         }

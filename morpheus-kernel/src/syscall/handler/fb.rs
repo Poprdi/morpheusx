@@ -2,9 +2,7 @@
 
 use super::common::*;
 use super::hw::sys_map_phys;
-use super::nic_fb::{
-    fb_registered, FbInfo, FB_BACK_PAGES, FB_BACK_PHYS, FB_DIRTY, FB_SHADOW_PHYS,
-};
+use super::nic_fb::{fb_registered, FbInfo, FB_BACK_PAGES, FB_BACK_PHYS, FB_DIRTY, FB_SHADOW_PHYS};
 use crate::hal;
 use crate::schedular::SCHEDULER;
 use morpheus_foundation::PAGE_SIZE;
@@ -68,7 +66,7 @@ pub unsafe fn sys_fb_info(buf_ptr: u64) -> u64 {
         Some(info) => {
             core::ptr::write(buf_ptr as *mut FbInfo, info);
             0
-        }
+        },
         None => ENODEV,
     }
 }
@@ -103,8 +101,8 @@ pub unsafe fn release_fb_lock_if_holder(pid: u32) {
         use crate::schedular::PROCESS_TABLE;
         for proc in PROCESS_TABLE.iter().flatten() {
             if !proc.is_free() && proc.pid != pid && proc.fb_surface_phys != 0 {
-                let _ = SCHEDULER
-                    .send_signal_inner(proc.pid, crate::process::signals::Signal::SIGKILL);
+                let _ =
+                    SCHEDULER.send_signal_inner(proc.pid, crate::process::signals::Signal::SIGKILL);
             }
         }
         COMPOSITOR_PID.store(0, Relaxed);
@@ -167,7 +165,7 @@ pub unsafe fn sys_fb_map() -> u64 {
         None => {
             crate::serial::log_warn("FB", 790, "fb_map with no framebuffer registered");
             return ENODEV;
-        }
+        },
     };
 
     if is_composited_client() {
@@ -201,11 +199,10 @@ unsafe fn sys_fb_map_surface(info: &FbInfo) -> u64 {
     // Drop registry before sys_map_phys — ensure_user_table re-acquires
     // GLOBAL_REGISTRY and would deadlock otherwise.
     let pages = info.size.div_ceil(PAGE_SIZE);
-    let phys = match hal().phys().allocate_pages(
-        AllocKind::AnyPages,
-        MemoryType::Allocated,
-        pages,
-    ) {
+    let phys = match hal()
+        .phys()
+        .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages)
+    {
         Ok(p) => p,
         Err(_) => return ENOMEM,
     };
@@ -232,17 +229,17 @@ unsafe fn fb_map_alloc_buffers(info: &FbInfo) -> Result<(), u64> {
         .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages)
         .map_err(|_| ENOMEM)?;
 
-    let shadow_phys = match hal().phys().allocate_pages(
-        AllocKind::AnyPages,
-        MemoryType::Allocated,
-        pages,
-    ) {
-        Ok(p) => p,
-        Err(_) => {
-            let _ = hal().phys().free_pages(back_phys, pages);
-            return Err(ENOMEM);
-        }
-    };
+    let shadow_phys =
+        match hal()
+            .phys()
+            .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages)
+        {
+            Ok(p) => p,
+            Err(_) => {
+                let _ = hal().phys().free_pages(back_phys, pages);
+                return Err(ENOMEM);
+            },
+        };
 
     // Identity-mapped phys access requires kernel CR3.
     {

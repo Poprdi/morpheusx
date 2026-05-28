@@ -43,8 +43,7 @@ pub enum SchedulerTransitionReason {
     ThermalEmergency = 6,
 }
 
-pub static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] =
-    [const { None }; MAX_PROCESSES];
+pub static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = [const { None }; MAX_PROCESSES];
 
 pub static PROCESS_TABLE_LOCK: crate::sync::IsrSafeRawSpinLock =
     crate::sync::IsrSafeRawSpinLock::new();
@@ -518,7 +517,7 @@ pub fn try_set_earliest_deadline(old: u64, new: u64) -> bool {
 
 #[inline(always)]
 pub(super) unsafe fn this_core_pid() -> u32 {
-    if hal().smp().ap_online_count() > 0 {
+    if hal().smp().percpu_ready() {
         hal().smp().current_pid()
     } else {
         CURRENT_PID.load(Ordering::Relaxed)
@@ -528,14 +527,14 @@ pub(super) unsafe fn this_core_pid() -> u32 {
 #[inline(always)]
 pub(super) unsafe fn set_this_core_pid(pid: u32) {
     CURRENT_PID.store(pid, Ordering::SeqCst);
-    if hal().smp().ap_online_count() > 0 {
+    if hal().smp().percpu_ready() {
         hal().smp().set_current_pid(pid);
     }
 }
 
 #[inline(always)]
 pub(super) unsafe fn this_core_index() -> u32 {
-    if hal().smp().ap_online_count() > 0 {
+    if hal().smp().percpu_ready() {
         hal().smp().current_core_index()
     } else {
         0
@@ -544,14 +543,14 @@ pub(super) unsafe fn this_core_index() -> u32 {
 
 #[inline(always)]
 pub(super) unsafe fn set_percpu_next_cr3(cr3: u64) {
-    if hal().smp().ap_online_count() > 0 {
+    if hal().smp().percpu_ready() {
         hal().smp().pcpu_set_next_cr3(cr3);
     }
 }
 
 #[inline(always)]
 pub(super) unsafe fn set_percpu_fpu_ptr(ptr: u64) {
-    if hal().smp().ap_online_count() > 0 {
+    if hal().smp().percpu_ready() {
         hal().smp().pcpu_set_fpu_ptr(ptr);
     }
 }
@@ -753,11 +752,7 @@ impl Scheduler {
         result
     }
 
-    pub unsafe fn send_signal_inner(
-        &self,
-        pid: u32,
-        sig: Signal,
-    ) -> Result<(), &'static str> {
+    pub unsafe fn send_signal_inner(&self, pid: u32, sig: Signal) -> Result<(), &'static str> {
         let slot = match PROCESS_TABLE.get_mut(pid as usize).and_then(|s| s.as_mut()) {
             Some(s) => s,
             None => return Err("send_signal: PID not found"),
@@ -778,7 +773,7 @@ impl Scheduler {
                     puts("\n");
                     terminate_process_inner(slot, -9);
                 }
-            }
+            },
             Signal::SIGSTOP => {
                 if slot.running_on != u32::MAX {
                     slot.pending_signals.raise(Signal::SIGSTOP);
@@ -786,20 +781,20 @@ impl Scheduler {
                     clear_waiter_all(pid);
                     slot.state = ProcessState::Blocked(BlockReason::Io);
                 }
-            }
+            },
             Signal::SIGCONT => {
                 if let ProcessState::Blocked(_) = slot.state {
                     clear_waiter_all(pid);
                     slot.state = ProcessState::Ready;
                 }
-            }
+            },
             other => {
                 slot.pending_signals.raise(other);
                 if matches!(slot.state, ProcessState::Blocked(BlockReason::StdinRead)) {
                     clear_stdin_waiter(pid);
                     slot.state = ProcessState::Ready;
                 }
-            }
+            },
         }
         Ok(())
     }
@@ -811,7 +806,7 @@ impl Scheduler {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return Err("set_priority: PID not found");
-            }
+            },
         };
         if slot.is_free() {
             PROCESS_TABLE_LOCK.unlock();
@@ -829,7 +824,7 @@ impl Scheduler {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return Err("set_importance: PID not found");
-            }
+            },
         };
         if slot.is_free() {
             PROCESS_TABLE_LOCK.unlock();
@@ -852,7 +847,7 @@ impl Scheduler {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return Err("set_power_mode: PID not found");
-            }
+            },
         };
         if slot.is_free() {
             PROCESS_TABLE_LOCK.unlock();
@@ -875,7 +870,7 @@ impl Scheduler {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return Err("set_policy_class: PID not found");
-            }
+            },
         };
         if slot.is_free() {
             PROCESS_TABLE_LOCK.unlock();
@@ -897,7 +892,7 @@ impl Scheduler {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return Err("get_scheduler_policy: PID not found");
-            }
+            },
         };
         if slot.is_free() {
             PROCESS_TABLE_LOCK.unlock();
@@ -915,7 +910,7 @@ impl Scheduler {
             None => {
                 PROCESS_TABLE_LOCK.unlock();
                 return Err("get_priority: PID not found");
-            }
+            },
         };
         if slot.is_free() {
             PROCESS_TABLE_LOCK.unlock();

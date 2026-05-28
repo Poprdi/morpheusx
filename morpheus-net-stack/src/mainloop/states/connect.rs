@@ -8,11 +8,11 @@ use smoltcp::socket::tcp::{Socket as TcpSocket, State as TcpState};
 use smoltcp::time::Instant;
 use smoltcp::wire::{IpAddress, IpEndpoint};
 
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{FailedState, HttpState};
 
@@ -82,10 +82,10 @@ impl<D: NetworkDriver> State<D> for ConnectState {
                             Box::new(FailedState::new("no IP")),
                             StepResult::Failed("no IP"),
                         );
-                    }
+                    },
                 };
                 IpEndpoint::new(ip, ctx.resolved_port)
-            }
+            },
         };
 
         let tcp_handle = match ctx.tcp_handle {
@@ -96,7 +96,7 @@ impl<D: NetworkDriver> State<D> for ConnectState {
                     Box::new(FailedState::new("no TCP socket")),
                     StepResult::Failed("no socket"),
                 );
-            }
+            },
         };
 
         let socket = sockets.get_mut::<TcpSocket>(tcp_handle);
@@ -137,16 +137,16 @@ impl<D: NetworkDriver> State<D> for ConnectState {
                     HttpState::new(tcp_handle)
                 };
                 return (Box::new(http_state), StepResult::Transition);
-            }
-            TcpState::SynSent | TcpState::SynReceived => {}
+            },
+            TcpState::SynSent | TcpState::SynReceived => {},
             TcpState::Closed | TcpState::TimeWait => {
                 serial::println("[TCP] ERROR: Connection closed/reset");
                 return (
                     Box::new(FailedState::new("connection closed")),
                     StepResult::Failed("closed"),
                 );
-            }
-            _ => {}
+            },
+            _ => {},
         }
 
         (self, StepResult::Continue)

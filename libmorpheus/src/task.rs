@@ -197,10 +197,10 @@ impl Runtime {
                     Poll::Ready(()) => {
                         drop(future);
                         self.queue.active_count.fetch_sub(1, Ordering::Relaxed);
-                    }
+                    },
                     Poll::Pending => {
                         drop(future);
-                    }
+                    },
                 }
             }
 
@@ -254,10 +254,10 @@ fn worker_loop(queue: &Arc<TaskQueue>) {
                 Poll::Ready(()) => {
                     drop(future);
                     queue.active_count.fetch_sub(1, Ordering::Relaxed);
-                }
+                },
                 Poll::Pending => {
                     drop(future);
-                }
+                },
             }
         }
 
@@ -290,7 +290,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
                 unsafe {
                     syscall3(SYS_FUTEX, &notify as *const AtomicU32 as u64, FUTEX_WAIT, 0);
                 }
-            }
+            },
         }
     }
 }

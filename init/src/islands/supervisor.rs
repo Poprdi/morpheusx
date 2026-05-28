@@ -66,13 +66,13 @@ pub fn tick(state: &mut SupervisorState) {
                         Ok(new_pid) => state.compd_pid = Some(new_pid),
                         Err(_) => {
                             libmorpheus::io::println("init: failed to respawn compd");
-                        }
+                        },
                     }
                 } else {
                     libmorpheus::io::println("init: compd exceeded MAX_RESTARTS, giving up");
                 }
-            }
-            _ => {} // still running or error
+            },
+            _ => {}, // still running or error
         }
     }
 
@@ -87,13 +87,13 @@ pub fn tick(state: &mut SupervisorState) {
                         Ok(new_pid) => state.shelld_pid = Some(new_pid),
                         Err(_) => {
                             libmorpheus::io::println("init: failed to respawn shelld");
-                        }
+                        },
                     }
                 } else {
                     libmorpheus::io::println("init: shelld exceeded MAX_RESTARTS, giving up");
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -118,8 +118,8 @@ pub fn tick(state: &mut SupervisorState) {
                 // state machine consistent.
                 process::set_foreground(0);
                 io::println("init: user shell exited; Ctrl+X to spawn another");
-            }
-            _ => {}
+            },
+            _ => {},
         }
     } else {
         // Non-blocking read: SYS_READ on stdin returns 0 if the queue is
@@ -155,11 +155,11 @@ fn handle_scancode(state: &mut SupervisorState, byte: u8) -> bool {
         match make {
             SC_LCTRL => {
                 state.kbd_ctrl = !is_break;
-            }
+            },
             SC_LALT => {
                 state.kbd_alt = !is_break;
-            }
-            _ => {}
+            },
+            _ => {},
         }
         return false;
     }
@@ -167,20 +167,20 @@ fn handle_scancode(state: &mut SupervisorState, byte: u8) -> bool {
     match make {
         SC_LCTRL => {
             state.kbd_ctrl = !is_break;
-        }
+        },
         SC_LSHIFT | SC_RSHIFT => {
             state.kbd_shift = !is_break;
-        }
+        },
         SC_LALT => {
             state.kbd_alt = !is_break;
-        }
+        },
         SC_X => {
             // Spawn-shell hotkey: fire only on the press edge with Ctrl held.
             if !is_break && state.kbd_ctrl {
                 return true;
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
     false
 }
@@ -193,7 +193,7 @@ fn spawn_user_shell(state: &mut SupervisorState) {
             // Foreground = shell so Ctrl+C from inside the shell would
             // (once we wire it back up) deliver SIGINT to msh, not init.
             process::set_foreground(new_pid);
-        }
+        },
         Err(_) => io::println("init: failed to spawn /bin/msh"),
     }
 }

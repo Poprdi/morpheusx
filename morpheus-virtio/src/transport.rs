@@ -92,7 +92,7 @@ impl VirtioTransport {
         match self.transport_type {
             TransportType::Mmio => mmio_device::set_status(self.base, status),
             TransportType::PciModern => unsafe { pci_modern::set_status(self.base, status) },
-            TransportType::PciLegacy => {} // Not supported
+            TransportType::PciLegacy => {}, // Not supported
         }
     }
 
@@ -117,7 +117,7 @@ impl VirtioTransport {
         match self.transport_type {
             TransportType::Mmio => mmio_device::write_features(self.base, features),
             TransportType::PciModern => unsafe { pci_modern::write_features(self.base, features) },
-            TransportType::PciLegacy => {}
+            TransportType::PciLegacy => {},
         }
     }
 
@@ -137,9 +137,9 @@ impl VirtioTransport {
                     let queue_sel_addr = self.base + 0x030;
                     core::ptr::write_volatile(queue_sel_addr as *mut u32, queue_idx as u32);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
-                }
+                },
                 TransportType::PciModern => pci_modern::select_queue(self.base, queue_idx),
-                TransportType::PciLegacy => {}
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -150,7 +150,7 @@ impl VirtioTransport {
                 TransportType::Mmio => {
                     let queue_num_max_addr = self.base + 0x034;
                     core::ptr::read_volatile(queue_num_max_addr as *const u32) as u16
-                }
+                },
                 TransportType::PciModern => pci_modern::get_queue_size(self.base) as u16,
                 TransportType::PciLegacy => 0,
             }
@@ -164,9 +164,9 @@ impl VirtioTransport {
                     let queue_num_addr = self.base + 0x038;
                     core::ptr::write_volatile(queue_num_addr as *mut u32, size as u32);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
-                }
+                },
                 TransportType::PciModern => pci_modern::set_queue_size(self.base, size),
-                TransportType::PciLegacy => {}
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -180,9 +180,9 @@ impl VirtioTransport {
                     core::ptr::write_volatile(lo_addr as *mut u32, addr as u32);
                     core::ptr::write_volatile(hi_addr as *mut u32, (addr >> 32) as u32);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
-                }
+                },
                 TransportType::PciModern => pci_modern::set_queue_desc(self.base, addr),
-                TransportType::PciLegacy => {}
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -196,9 +196,9 @@ impl VirtioTransport {
                     core::ptr::write_volatile(lo_addr as *mut u32, addr as u32);
                     core::ptr::write_volatile(hi_addr as *mut u32, (addr >> 32) as u32);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
-                }
+                },
                 TransportType::PciModern => pci_modern::set_queue_avail(self.base, addr),
-                TransportType::PciLegacy => {}
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -212,9 +212,9 @@ impl VirtioTransport {
                     core::ptr::write_volatile(lo_addr as *mut u32, addr as u32);
                     core::ptr::write_volatile(hi_addr as *mut u32, (addr >> 32) as u32);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
-                }
+                },
                 TransportType::PciModern => pci_modern::set_queue_used(self.base, addr),
-                TransportType::PciLegacy => {}
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -226,9 +226,9 @@ impl VirtioTransport {
                     let queue_ready_addr = self.base + 0x044;
                     core::ptr::write_volatile(queue_ready_addr as *mut u32, 1);
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
-                }
+                },
                 TransportType::PciModern => pci_modern::enable_queue(self.base, 1),
-                TransportType::PciLegacy => {}
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -240,7 +240,7 @@ impl VirtioTransport {
             TransportType::Mmio => {
                 // MMIO: fixed notify register
                 self.base + 0x050
-            }
+            },
             TransportType::PciModern => {
                 // PCI Modern: need to select queue and read notify_off
                 unsafe {
@@ -250,7 +250,7 @@ impl VirtioTransport {
                     self.pci_modern.notify_cfg
                         + (queue_notify_off as u64 * self.pci_modern.notify_off_multiplier as u64)
                 }
-            }
+            },
             TransportType::PciLegacy => 0,
         }
     }
@@ -262,12 +262,12 @@ impl VirtioTransport {
                     let notify_addr = self.base + 0x050;
                     core::arch::asm!("mfence", options(nostack, preserves_flags));
                     core::ptr::write_volatile(notify_addr as *mut u32, queue_idx as u32);
-                }
+                },
                 TransportType::PciModern => {
                     let notify_addr = self.get_notify_addr(queue_idx);
                     pci_modern::notify_queue(notify_addr, queue_idx);
-                }
-                TransportType::PciLegacy => {}
+                },
+                TransportType::PciLegacy => {},
             }
         }
     }
@@ -282,7 +282,7 @@ impl VirtioTransport {
                 } else {
                     false
                 }
-            }
+            },
             TransportType::PciModern => {
                 if self.pci_modern.device_cfg != 0 {
                     unsafe {
@@ -292,7 +292,7 @@ impl VirtioTransport {
                 } else {
                     false
                 }
-            }
+            },
             TransportType::PciLegacy => false,
         }
     }
@@ -348,7 +348,7 @@ impl VirtioTransport {
                     let config_base = self.base + 0x100;
                     core::ptr::read_volatile(config_base as *const u64)
                 }
-            }
+            },
             TransportType::PciModern => {
                 // PCI Modern: device_cfg points to device-specific config
                 if self.pci_modern.device_cfg != 0 {
@@ -356,7 +356,7 @@ impl VirtioTransport {
                 } else {
                     0
                 }
-            }
+            },
             TransportType::PciLegacy => 0,
         }
     }
@@ -378,7 +378,7 @@ impl VirtioTransport {
                 } else {
                     512
                 }
-            }
+            },
             TransportType::PciLegacy => 512,
         }
     }

@@ -130,8 +130,7 @@ pub unsafe fn poll_keyboard() -> bool {
     // of the slot's output context. 2 = Halted, 4 = Error.
     {
         let cs = controller.ctx_size as u64;
-        let out_ctx =
-            controller.dma_base + crate::dma::slot_out_ctx_offset(kb.slot_id) as u64;
+        let out_ctx = controller.dma_base + crate::dma::slot_out_ctx_offset(kb.slot_id) as u64;
         let ep_ctx = out_ctx + (dci as u64) * cs;
         let ep_state = crate::rings::vr32(ep_ctx) & 0x7;
         if ep_state == 2 || ep_state == 4 {
@@ -187,7 +186,7 @@ pub unsafe fn poll_keyboard() -> bool {
             controller.ring_xfer_doorbell(dci);
 
             true
-        }
+        },
         Err(_) => false,
     }
 }

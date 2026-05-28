@@ -55,8 +55,8 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
         FIELD_REFRESH => {
             app.mist.refresh();
             app.set_status("Display info refreshed", false);
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 

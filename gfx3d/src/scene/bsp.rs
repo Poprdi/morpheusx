@@ -71,7 +71,7 @@ impl BspTree {
                     } else {
                         node.back
                     };
-                }
+                },
                 BspChild::Leaf(idx) => return Some(idx),
                 BspChild::Empty => return None,
             }
@@ -111,11 +111,11 @@ impl BspTree {
                 };
                 self.traverse_recursive(first, camera_pos, callback);
                 self.traverse_recursive(second, camera_pos, callback);
-            }
+            },
             BspChild::Leaf(idx) => {
                 callback(idx);
-            }
-            BspChild::Empty => {}
+            },
+            BspChild::Empty => {},
         }
     }
 
@@ -180,7 +180,7 @@ impl BspTree {
                     }
                     self.trace_recursive(far, origin, dir, t_split, t_max)
                 }
-            }
+            },
             BspChild::Leaf(idx) => Some((t_min, idx)),
             BspChild::Empty => None,
         }

@@ -45,7 +45,8 @@ unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
     // CpuContext is opaque (morpheus-hal-api); reset the slot then init via
     // the HAL — KERNEL_CS / KERNEL_DS selectors live inside the HAL impl.
     *ctx = CpuContext::zeroed();
-    hal().cpu()
+    hal()
+        .cpu()
         .ctx_init_kernel(ctx, ap_idle_hlt_loop as u64, boot_rsp);
     ctx
 }
@@ -54,9 +55,7 @@ unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
 pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static CpuContext {
     let core_idx = this_core_index();
 
-    if hal().smp().shutdown_quiesce_requested()
-        && !hal().smp().is_reboot_owner(core_idx)
-    {
+    if hal().smp().shutdown_quiesce_requested() && !hal().smp().is_reboot_owner(core_idx) {
         ap_quiesce_hlt_loop(core_idx);
     }
 
@@ -123,8 +122,12 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             next.running_on = core_idx;
 
             if next.kernel_stack_top != 0 {
-                hal().smp().set_kernel_stack_for_core(core_idx, next.kernel_stack_top);
-                hal().smp().pcpu_set_kernel_syscall_rsp(next.kernel_stack_top);
+                hal()
+                    .smp()
+                    .set_kernel_stack_for_core(core_idx, next.kernel_stack_top);
+                hal()
+                    .smp()
+                    .pcpu_set_kernel_syscall_rsp(next.kernel_stack_top);
             }
             if hal().phys().is_valid_cr3(next.cr3) {
                 set_percpu_next_cr3(next.cr3);
@@ -238,9 +241,13 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         next.running_on = core_idx;
 
         if next.kernel_stack_top != 0 {
-            hal().smp().set_kernel_stack_for_core(core_idx, next.kernel_stack_top);
-            if hal().smp().ap_online_count() > 0 {
-                hal().smp().pcpu_set_kernel_syscall_rsp(next.kernel_stack_top);
+            hal()
+                .smp()
+                .set_kernel_stack_for_core(core_idx, next.kernel_stack_top);
+            if hal().smp().percpu_ready() {
+                hal()
+                    .smp()
+                    .pcpu_set_kernel_syscall_rsp(next.kernel_stack_top);
             }
         }
 
@@ -302,7 +309,7 @@ pub(super) unsafe fn wake_expired_sleepers() {
                     new_earliest = new_earliest.min(deadline);
                     found_any = true;
                 }
-            }
+            },
             ProcessState::Blocked(BlockReason::FutexWait(_)) => {
                 if proc.futex_deadline != 0 && now >= proc.futex_deadline {
                     if let ProcessState::Blocked(BlockReason::FutexWait(addr)) = proc.state {
@@ -315,8 +322,8 @@ pub(super) unsafe fn wake_expired_sleepers() {
                     new_earliest = new_earliest.min(proc.futex_deadline);
                     found_any = true;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -329,9 +336,7 @@ pub(super) unsafe fn wake_expired_sleepers() {
 }
 
 unsafe fn pick_next(current: usize, skip_kernel: bool, core_idx: u32) -> usize {
-    if hal().smp().shutdown_quiesce_requested()
-        && hal().smp().is_reboot_owner(core_idx)
-    {
+    if hal().smp().shutdown_quiesce_requested() && hal().smp().is_reboot_owner(core_idx) {
         return 0;
     }
 
@@ -678,8 +683,7 @@ pub(super) unsafe fn deliver_pending_signals(pid: u32) {
             let h = hal();
             let aligned_rsp = (h.cpu().ctx_get_sp(&proc.context) & !0xF) - 8;
             h.cpu().ctx_set_ip(&mut proc.context, handler);
-            h.cpu()
-                .ctx_set_arg(&mut proc.context, 0, sig as u8 as u64);
+            h.cpu().ctx_set_arg(&mut proc.context, 0, sig as u8 as u64);
             h.cpu().ctx_set_sp(&mut proc.context, aligned_rsp);
 
             return;
@@ -691,19 +695,19 @@ pub(super) unsafe fn deliver_pending_signals(pid: u32) {
                 puts(" terminated\n");
                 terminate_process_inner(proc, -(sig as u8 as i32));
                 return;
-            }
+            },
             SignalAction::Stop => {
                 clear_waiter_all(pid);
                 proc.state = ProcessState::Blocked(BlockReason::Io);
                 return;
-            }
+            },
             SignalAction::Continue => {
                 if let ProcessState::Blocked(_) = proc.state {
                     clear_waiter_all(pid);
                     proc.state = ProcessState::Ready;
                 }
-            }
-            SignalAction::Ignore => {}
+            },
+            SignalAction::Ignore => {},
         }
     }
 }

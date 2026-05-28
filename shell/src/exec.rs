@@ -56,7 +56,7 @@ fn run_single(cmd: &SimpleCommand, cwd: &str) -> i32 {
         None => {
             libmorpheus::eprintln!("msh: command not found: {}", cmd.argv[0]);
             return 127;
-        }
+        },
     };
 
     let saved_in = save_fd(0);
@@ -94,7 +94,7 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
                 restore_fd(saved_in, 0);
                 restore_fd(saved_out, 1);
                 return 1;
-            }
+            },
         }
     }
 
@@ -131,7 +131,7 @@ fn run_pipeline(commands: &[SimpleCommand], cwd: &str) -> i32 {
                         let _ = process::dup2(*s, 1);
                     }
                     continue;
-                }
+                },
             };
 
             if let Some(pid) = spawn_child(&binary, &cmd.argv) {
@@ -179,7 +179,7 @@ fn spawn_and_wait(binary: &str, argv: &[String]) -> i32 {
         Err(e) => {
             libmorpheus::eprintln!("msh: spawn {}: error 0x{:x}", binary, e);
             return 126;
-        }
+        },
     };
 
     process::set_foreground(pid);
@@ -197,7 +197,7 @@ fn spawn_child(binary: &str, argv: &[String]) -> Option<u32> {
         Err(e) => {
             libmorpheus::eprintln!("msh: spawn {}: error 0x{:x}", binary, e);
             None
-        }
+        },
     }
 }
 
@@ -208,7 +208,7 @@ pub fn spawn_composited(binary: &str, args: &[&str]) -> Option<u32> {
         Err(e) => {
             libmorpheus::eprintln!("msh: spawn {}: error 0x{:x}", binary, e);
             return None;
-        }
+        },
     };
 
     Some(pid)
@@ -221,11 +221,11 @@ fn setup_redirects(cmd: &SimpleCommand, cwd: &str) -> Result<(), i32> {
             Ok(fd) => {
                 let _ = process::dup2(fd as u32, 0);
                 let _ = fs::close(fd);
-            }
+            },
             Err(_) => {
                 libmorpheus::eprintln!("msh: {}: cannot open for reading", p);
                 return Err(1);
-            }
+            },
         }
     }
 
@@ -240,11 +240,11 @@ fn setup_redirects(cmd: &SimpleCommand, cwd: &str) -> Result<(), i32> {
             Ok(fd) => {
                 let _ = process::dup2(fd as u32, 1);
                 let _ = fs::close(fd);
-            }
+            },
             Err(_) => {
                 libmorpheus::eprintln!("msh: {}: cannot open for writing", p);
                 return Err(1);
-            }
+            },
         }
     }
 

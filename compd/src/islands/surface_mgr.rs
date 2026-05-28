@@ -69,8 +69,8 @@ pub fn update(state: &mut CompState) {
                             // entry.stride is bytes; blit math wants pixels.
                             win.src_stride = (entry.stride / 4).max(entry.width.max(1));
                             win.mapped = true;
-                        }
-                        Err(_) => {}
+                        },
+                        Err(_) => {},
                     }
                 } else {
                     win.src_w = entry.width;

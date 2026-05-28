@@ -1,12 +1,12 @@
 //! DEPRECATED: thin wrapper over `mainloop` download orchestrator (kept for bringup).
 //! TODO: rework once the real network path stabilizes.
 
-use morpheus_nic::boot_probe::{scan_for_nic, DetectedNic, ProbeError};
-use morpheus_virtio::dma::DmaRegion;
-use morpheus_nic::intel::{E1000eConfig, E1000eDriver};
-use morpheus_nic::virtio::{VirtioConfig, VirtioNetDriver};
 use crate::mainloop::serial::{print, print_hex, println};
 use crate::mainloop::{download_with_config, DownloadConfig, DownloadResult};
+use morpheus_nic::boot_probe::{scan_for_nic, DetectedNic, ProbeError};
+use morpheus_nic::intel::{E1000eConfig, E1000eDriver};
+use morpheus_nic::virtio::{VirtioConfig, VirtioNetDriver};
+use morpheus_virtio::dma::DmaRegion;
 
 /// url/iso_name are `'static` because the orchestrator stashes them in statics.
 pub struct RunConfig<'a> {
@@ -39,7 +39,7 @@ pub unsafe fn run_download(config: RunConfig<'_>) -> RunResult {
         None => {
             println("[NET] ERROR: No network device found");
             return RunResult::NoDevice;
-        }
+        },
     };
 
     match nic {
@@ -48,13 +48,13 @@ pub unsafe fn run_download(config: RunConfig<'_>) -> RunResult {
             print_hex(mmio_base);
             println("");
             run_with_virtio(config, mmio_base)
-        }
+        },
         DetectedNic::Intel(info) => {
             print("[NET] Found Intel e1000e @ ");
             print_hex(info.mmio_base);
             println("");
             run_with_intel(config, info.mmio_base)
-        }
+        },
     }
 }
 
@@ -72,7 +72,7 @@ unsafe fn run_with_virtio(config: RunConfig<'_>, mmio_base: u64) -> RunResult {
         Err(_) => {
             println("[NET] VirtIO driver init failed");
             return RunResult::DriverInitFailed;
-        }
+        },
     };
 
     println("[NET] VirtIO driver initialized");
@@ -94,7 +94,7 @@ unsafe fn run_with_intel(config: RunConfig<'_>, mmio_base: u64) -> RunResult {
         Err(_) => {
             println("[NET] Intel driver init failed");
             return RunResult::DriverInitFailed;
-        }
+        },
     };
 
     println("[NET] Intel e1000e driver initialized");
@@ -126,11 +126,11 @@ fn run_download_with_driver<D: morpheus_nic::traits::NetworkDriver>(
             RunResult::Success {
                 bytes: bytes_written,
             }
-        }
+        },
         DownloadResult::Failed { reason } => {
             print("[NET] Download failed: ");
             println(reason);
             RunResult::DownloadFailed
-        }
+        },
     }
 }

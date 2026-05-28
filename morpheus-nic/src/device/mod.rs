@@ -27,8 +27,8 @@ use crate::intel::{E1000eDriver, E1000eError};
 use crate::virtio::{VirtioInitError, VirtioNetDriver};
 // Wave 4 sank `NetworkError` into `morpheus-foundation` so this crate and
 // `morpheus-net-stack` share one source of truth.
-use morpheus_foundation::error::{NetworkError, Result};
 use crate::traits::NetworkDriver;
+use morpheus_foundation::error::{NetworkError, Result};
 
 pub mod pci;
 pub mod registers;
@@ -198,15 +198,11 @@ impl NetworkDevice for UnifiedNetDevice {
     fn receive(&mut self, buffer: &mut [u8]) -> Result<Option<usize>> {
         match self {
             UnifiedNetDevice::VirtIO(d) => d.receive(buffer).map_err(|e| match e {
-                crate::traits::RxError::BufferTooSmall { .. } => {
-                    NetworkError::BufferTooSmall
-                }
+                crate::traits::RxError::BufferTooSmall { .. } => NetworkError::BufferTooSmall,
                 crate::traits::RxError::DeviceError => NetworkError::ReceiveError,
             }),
             UnifiedNetDevice::Intel(d) => d.receive(buffer).map_err(|e| match e {
-                crate::traits::RxError::BufferTooSmall { .. } => {
-                    NetworkError::BufferTooSmall
-                }
+                crate::traits::RxError::BufferTooSmall { .. } => NetworkError::BufferTooSmall,
                 crate::traits::RxError::DeviceError => NetworkError::ReceiveError,
             }),
         }

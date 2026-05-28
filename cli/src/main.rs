@@ -208,12 +208,12 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
                 println!("[helix] found valid superblock (version {})", sb.version);
                 (sb, true)
             }
-        }
+        },
         Err(_) => {
             println!("[helix] no valid superblock found — formatting");
             let sb = do_format(&mut dev)?;
             (sb, false)
-        }
+        },
     };
 
     let mut instance = HelixInstance {
@@ -365,7 +365,7 @@ fn cmd_mkbin(disk: &str) -> Result<(), String> {
         Ok(()) | Err(HelixError::AlreadyExists) => {
             println!("[mkbin] /bin ready");
             Ok(())
-        }
+        },
         Err(e) => Err(format!("vfs_mkdir: {:?}", e)),
     }
 }
@@ -400,7 +400,7 @@ fn main() {
                 .map(|w| w[1].as_str())
                 .unwrap_or(&default_dest);
             cmd_inject(disk, binary, dest)
-        }
+        },
         "ls" => {
             if args.len() < 3 {
                 eprintln!("Usage: morpheus-cli ls <disk-image> [path]");
@@ -409,14 +409,14 @@ fn main() {
             let disk = &args[2];
             let path = args.get(3).map(|s| s.as_str()).unwrap_or("/");
             cmd_ls(disk, path)
-        }
+        },
         "mkbin" => {
             if args.len() < 3 {
                 eprintln!("Usage: morpheus-cli mkbin <disk-image>");
                 std::process::exit(1);
             }
             cmd_mkbin(&args[2])
-        }
+        },
         "pack" => {
             if args.len() < 4 {
                 eprintln!("Usage: morpheus-cli pack <disk-image> <output-image> [--max-mb N]");
@@ -430,18 +430,18 @@ fn main() {
                 .and_then(|w| w[1].parse::<u64>().ok())
                 .unwrap_or(512);
             cmd_pack(disk, output, max_mb)
-        }
+        },
         "format" => {
             if args.len() < 3 {
                 eprintln!("Usage: morpheus-cli format <disk-image>");
                 std::process::exit(1);
             }
             cmd_format(&args[2])
-        }
+        },
         _ => {
             usage();
             std::process::exit(1);
-        }
+        },
     };
 
     if let Err(e) = result {

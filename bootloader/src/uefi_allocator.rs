@@ -169,13 +169,13 @@ unsafe fn try_init_overflow() -> Option<OverflowState> {
                 base,
                 size: OVERFLOW_GROW_CHUNK,
             })
-        }
+        },
         Err(_) => {
             morpheus_hal_x86_64::serial::puts(
                 "[ALLOC] ERROR: MemoryRegistry refused overflow allocation!\n",
             );
             None
-        }
+        },
     }
 }
 
@@ -208,14 +208,14 @@ unsafe fn try_grow_overflow(state: &mut OverflowState, _needed: usize) -> bool {
             OVERFLOW_SIZE.store(state.size, Ordering::SeqCst);
 
             true
-        }
+        },
         Err(_) => {
             // Adjacent pages taken; we don't support disjoint heap regions.
             morpheus_hal_x86_64::serial::puts(
                 "[ALLOC] Overflow grow failed: address not free in registry\n",
             );
             false
-        }
+        },
     }
 }
 

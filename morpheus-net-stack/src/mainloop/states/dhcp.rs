@@ -8,11 +8,11 @@ use smoltcp::socket::dhcpv4::{Event as DhcpEvent, Socket as DhcpSocket};
 use smoltcp::time::Instant;
 use smoltcp::wire::IpCidr;
 
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{DnsState, FailedState};
 
@@ -74,7 +74,7 @@ impl<D: NetworkDriver> State<D> for DhcpState {
                     Box::new(FailedState::new("no DHCP socket")),
                     StepResult::Failed("no socket"),
                 );
-            }
+            },
         };
 
         let socket = sockets.get_mut::<DhcpSocket>(dhcp_handle);
@@ -115,10 +115,10 @@ impl<D: NetworkDriver> State<D> for DhcpState {
                     }
 
                     self.got_ip = true;
-                }
+                },
                 DhcpEvent::Deconfigured => {
                     serial::println("[DHCP] Deconfigured, retrying...");
-                }
+                },
             }
         }
 

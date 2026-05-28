@@ -31,11 +31,10 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
     let vaddr = proc.mmap_brk;
 
     // Drop registry before map_user_page — ensure_user_table re-acquires it.
-    let phys = match hal().phys().allocate_pages(
-        AllocKind::AnyPages,
-        MemoryType::Allocated,
-        pages,
-    ) {
+    let phys = match hal()
+        .phys()
+        .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages)
+    {
         Ok(addr) => addr,
         Err(_) => return ENOMEM,
     };

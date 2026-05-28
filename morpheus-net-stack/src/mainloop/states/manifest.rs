@@ -15,13 +15,13 @@ use smoltcp::time::Instant;
 
 use morpheus_storage_format::iso::{IsoManifest, MAX_MANIFEST_SIZE};
 
-use morpheus_block::device::UnifiedBlockDevice;
-use morpheus_nic::traits::NetworkDriver;
-use morpheus_block::unified_block_io::UnifiedBlockIo;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_block::device::UnifiedBlockDevice;
+use morpheus_block::unified_block_io::UnifiedBlockIo;
+use morpheus_nic::traits::NetworkDriver;
 
 use super::{DoneState, FailedState};
 
@@ -242,11 +242,11 @@ impl ManifestState {
                 serial::print_u32(len as u32);
                 serial::println(" bytes");
                 len
-            }
+            },
             Err(_) => {
                 serial::println("[MANIFEST] ERROR: Failed to serialize manifest");
                 return false;
-            }
+            },
         };
 
         // Create BlockIo adapter for FAT32 operations
@@ -266,11 +266,11 @@ impl ManifestState {
             Ok(a) => {
                 serial::println("[MANIFEST] BlockIo adapter created");
                 a
-            }
+            },
             Err(_) => {
                 serial::println("[MANIFEST] ERROR: Failed to create BlockIo adapter");
                 return false;
-            }
+            },
         };
 
         // Generate 8.3 compatible manifest filename
@@ -294,18 +294,24 @@ impl ManifestState {
             Ok(()) => {
                 serial::println("[MANIFEST] OK: Written to ESP");
                 true
-            }
+            },
             Err(e) => {
                 serial::print("[MANIFEST] ERROR: FAT32 write failed: ");
                 serial::println(match e {
                     morpheus_storage_format::fs::Fat32Error::IoError => "IO error",
-                    morpheus_storage_format::fs::Fat32Error::PartitionTooSmall => "Partition too small",
-                    morpheus_storage_format::fs::Fat32Error::PartitionTooLarge => "Partition too large",
-                    morpheus_storage_format::fs::Fat32Error::InvalidBlockSize => "Invalid block size",
+                    morpheus_storage_format::fs::Fat32Error::PartitionTooSmall => {
+                        "Partition too small"
+                    },
+                    morpheus_storage_format::fs::Fat32Error::PartitionTooLarge => {
+                        "Partition too large"
+                    },
+                    morpheus_storage_format::fs::Fat32Error::InvalidBlockSize => {
+                        "Invalid block size"
+                    },
                     morpheus_storage_format::fs::Fat32Error::NotImplemented => "Not implemented",
                 });
                 false
-            }
+            },
         }
     }
 
@@ -328,7 +334,7 @@ impl ManifestState {
             Err(_) => {
                 serial::println("[MANIFEST] ERROR: Serialize failed");
                 return false;
-            }
+            },
         };
 
         serial::print("[MANIFEST] Serialized ");
@@ -362,7 +368,7 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                     serial::println("[MANIFEST] Skipping (not configured)");
                     self.completed = true;
                     return (self, StepResult::Continue);
-                }
+                },
                 ManifestMode::Fat32 { esp_start_lba } => {
                     serial::println("=================================");
                     serial::println("     WRITING ISO MANIFEST        ");
@@ -389,7 +395,7 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                                 Box::new(FailedState::new("no block device")),
                                 StepResult::Failed("no blk"),
                             );
-                        }
+                        },
                     };
 
                     if self.write_fat32(blk, esp_start_lba) {
@@ -401,7 +407,7 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                             StepResult::Failed("write"),
                         );
                     }
-                }
+                },
                 ManifestMode::RawSector { sector } => {
                     serial::println("=================================");
                     serial::println("     WRITING ISO MANIFEST        ");
@@ -420,7 +426,7 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                                 Box::new(FailedState::new("no block device")),
                                 StepResult::Failed("no blk"),
                             );
-                        }
+                        },
                     };
 
                     if self.write_raw_sector(blk, sector) {
@@ -432,7 +438,7 @@ impl<D: NetworkDriver> State<D> for ManifestState {
                             StepResult::Failed("write"),
                         );
                     }
-                }
+                },
             }
         }
 
@@ -508,7 +514,7 @@ pub fn write_manifest_standalone(blk: &mut UnifiedBlockDevice, config: &Manifest
         ManifestMode::Skip => {
             serial::println("[MANIFEST] Skipping (not configured)");
             true
-        }
+        },
         ManifestMode::Fat32 { esp_start_lba } => state.write_fat32(blk, esp_start_lba),
         ManifestMode::RawSector { sector } => state.write_raw_sector(blk, sector),
     }

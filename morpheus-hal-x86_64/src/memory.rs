@@ -642,17 +642,22 @@ impl MemoryRegistry {
         self.allocate_pages(AllocateType::AnyPages, MemoryType::AllocatedStack, pages)
     }
 
-    /// Catches OVMF 0xAFAFAFAF scrub poison. Non-canonical addrs (bits 48-63
-    /// not sign-extended from bit 47) trigger #GP on deref. Null returns true;
-    /// callers null-check separately.
+    /// Validates a free-list pointer. Buddy FreeNodes always live in
+    /// identity-mapped phys RAM (lower half), so we reject:
+    ///   - non-canonical addresses (bits 47..63 not sign-extended)
+    ///   - canonical kernel-half addresses (top17 == 0x1FFFF; e.g. !0,
+    ///     OVMF/firmware poison, real-HW UEFI residue that's canonical but
+    ///     always unmapped from the kernel PT — observed crashing the
+    ///     post-reclaim validate walk on Intel silicon)
+    /// Null returns true; callers null-check separately.
     #[inline]
     fn is_canonical(ptr: *mut FreeNode) -> bool {
         if ptr.is_null() {
             return true;
         }
         let addr = ptr as u64;
-        let top17 = addr >> 47;
-        top17 == 0 || top17 == 0x1FFFF
+        // Lower-half canonical only.
+        addr >> 47 == 0
     }
 
     /// # Safety

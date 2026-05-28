@@ -278,7 +278,7 @@ impl DiskWriterState {
     ) -> Result<(), DiskWriterError> {
         // State check
         match self.state {
-            WriterState::Ready | WriterState::Writing => {}
+            WriterState::Ready | WriterState::Writing => {},
             WriterState::Init => return Err(DiskWriterError::InvalidState),
             WriterState::Flushing => return Err(DiskWriterError::InvalidState),
             WriterState::Done => return Err(DiskWriterError::InvalidState),
@@ -341,8 +341,8 @@ impl DiskWriterState {
                 } else {
                     self.state = WriterState::Flushing;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -367,7 +367,7 @@ impl DiskWriterState {
                 } else {
                     StepResult::Pending
                 }
-            }
+            },
             WriterState::Done => StepResult::Done,
             WriterState::Failed => StepResult::Failed,
         }

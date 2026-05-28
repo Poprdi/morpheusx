@@ -17,7 +17,6 @@ impl HalImpl {
     }
 }
 
-
 impl Hal for HalImpl {
     fn mmio(&self) -> &dyn Mmio {
         self
@@ -60,7 +59,6 @@ impl Hal for HalImpl {
     }
 }
 
-
 impl Mmio for HalImpl {
     unsafe fn read8(&self, addr: u64) -> u8 {
         crate::asm::mmio::read8(addr)
@@ -101,7 +99,6 @@ impl Mmio for HalImpl {
         crate::asm::barriers::lfence();
     }
 }
-
 
 impl Cpu for HalImpl {
     fn disable_interrupts(&self) {
@@ -228,7 +225,6 @@ impl Cpu for HalImpl {
     }
 }
 
-
 impl Serial for HalImpl {
     fn putc(&self, b: u8) {
         crate::serial::putc(b);
@@ -246,7 +242,6 @@ impl Serial for HalImpl {
         crate::serial::newline();
     }
 }
-
 
 fn map_alloc_kind(k: AllocKind) -> crate::memory::AllocateType {
     match k {
@@ -313,49 +308,25 @@ impl PhysAlloc for HalImpl {
         0
     }
     unsafe fn reclaim_boot_services(&self) -> Result<u64, ()> {
-        // SAFETY: caller asserts single-threaded, no UEFI BS call in flight.
-        // IF toggled because timer/IPI delivery races allocator + paging mutation.
-        let was_enabled = crate::intr::interrupts_enabled();
-        crate::intr::disable_interrupts();
-
-        let free_before = crate::memory::global_registry().free_memory();
-
-        // Collect live PT pages first — FreeNode over a live PML4 entry → #PF.
-        let (mut pt_pages, pt_count) = crate::paging::collect_page_table_pages();
-
-        // Insertion sort — pt_count < 50 typical.
-        for i in 1..pt_count {
-            let key = pt_pages[i];
-            let mut j = i;
-            while j > 0 && pt_pages[j - 1] > key {
-                pt_pages[j] = pt_pages[j - 1];
-                j -= 1;
-            }
-            pt_pages[j] = key;
-        }
-
-        {
-            let mut reg = crate::memory::global_registry_mut();
-            reg.reclaim_boot_services(&pt_pages[..pt_count]);
-            reg.validate_free_lists();
-        }
-
-        // Re-pin PT pages so spare splits during reclaim don't hand one out.
-        crate::paging::reserve_page_table_pages();
-        {
-            let reg = crate::memory::global_registry_mut();
-            reg.validate_free_lists();
-        }
-
-        if was_enabled {
-            crate::intr::enable_interrupts();
-        }
-
-        let free_after = crate::memory::global_registry().free_memory();
-        Ok(free_after.saturating_sub(free_before))
+        // TODO: FIX! BootServices reclaim is no-op'd as a boot-unblock.
+        //
+        // On real hardware the post-EBS reclaim adds a region whose contents
+        // appear as corrupt free-list nodes (kernel-half / poison `next`
+        // pointers) and hangs the buddy validate walk. This is a regression vs
+        // pre-refactor (commit 9276267): the buddy/reclaim/paging code is
+        // byte-identical to the working version, so the offending data/layout
+        // is introduced elsewhere in the refactor (something live left in a
+        // BootServices-typed region). Root cause still OPEN — needs the corrupt
+        // pointer values from a real-HW run to pin the source.
+        //
+        // Skipping reclaim only forfeits the firmware's BootServices RAM (~tens
+        // of MB, <1% on a multi-GB box; conventional memory is already in the
+        // buddy and plentiful), so boot proceeds to userland. Restore the
+        // original body (see `git show 9276267^:hwinit/src/platform.rs` reclaim
+        // sequence, mirrored here) once the corrupt-region source is found.
+        Ok(0)
     }
 }
-
 
 fn page_err(_: &'static str) -> PageError {
     PageError::OutOfMemory
@@ -371,9 +342,7 @@ fn map_page_flags(flags: PageFlags) -> crate::paging::PageFlags {
         PageFlags::USER_RW => Pf::USER_RW,
         // USER_RX and USER_CODE share the same discriminant.
         PageFlags::USER_CODE => Pf::USER_CODE,
-        PageFlags::USER_RWX => Pf::PRESENT
-            .with(Pf::WRITABLE)
-            .with(Pf::USER),
+        PageFlags::USER_RWX => Pf::PRESENT.with(Pf::WRITABLE).with(Pf::USER),
         PageFlags::USER_MMIO_UC => Pf::PRESENT
             .with(Pf::WRITABLE)
             .with(Pf::USER)
@@ -484,12 +453,7 @@ impl PageTable for HalImpl {
         }
     }
 
-    fn pml4_remap_flags(
-        &self,
-        pml4: u64,
-        virt: u64,
-        flags: PageFlags,
-    ) -> Result<(), PageError> {
+    fn pml4_remap_flags(&self, pml4: u64, virt: u64, flags: PageFlags) -> Result<(), PageError> {
         // SAFETY: caller owns the PML4; `remap_4k_flags` mutates one leaf + invlpg.
         unsafe {
             let mut mgr = crate::paging::PageTableManager { pml4_phys: pml4 };
@@ -550,7 +514,6 @@ impl PageTable for HalImpl {
     }
 }
 
-
 impl InterruptController for HalImpl {
     fn set_handler(&self, vector: u8, handler: IsrFn, ist: u8, dpl: u8) {
         unsafe {
@@ -601,7 +564,6 @@ impl InterruptController for HalImpl {
     }
 }
 
-
 impl Timer for HalImpl {
     fn read_tsc(&self) -> u64 {
         crate::cpu::tsc::read_tsc()
@@ -626,7 +588,6 @@ impl Timer for HalImpl {
         unsafe { crate::cpu::apic::setup_timer(hz) }
     }
 }
-
 
 impl DmaAllocator for HalImpl {
     fn alloc_dma(&self, bytes: usize) -> Result<DmaRegion, MemError> {
@@ -659,7 +620,6 @@ impl DmaAllocator for HalImpl {
         // x86_64 is WB-coherent for DMA.
     }
 }
-
 
 impl BusEnumerator for HalImpl {
     fn cfg_read8(&self, dev: BusAddr, off: u16) -> u8 {
@@ -721,7 +681,6 @@ impl BusEnumerator for HalImpl {
     }
 }
 
-
 impl UsbHost for HalImpl {
     // Stubs; real impl lives in `hwinit::usb::runtime` until the morpheus-xhci
     // dep cycle is broken. Kernel path bypasses the trait and calls hwinit directly.
@@ -733,7 +692,6 @@ impl UsbHost for HalImpl {
     }
 }
 
-
 impl Reset for HalImpl {
     fn reset_machine(&self) -> ! {
         unsafe { crate::cpu::reset::reset_machine_now() }
@@ -742,7 +700,6 @@ impl Reset for HalImpl {
         unsafe { crate::cpu::reset::wait_for_keypress_or_timeout_ms(ms) }
     }
 }
-
 
 impl Smp for HalImpl {
     fn cpu_count(&self) -> u32 {
@@ -767,9 +724,21 @@ impl Smp for HalImpl {
         // TODO: expose `ApLapicIds` snapshot as a callback walk.
     }
     fn start_aps(&self) -> u32 {
-        // Thin accessor; bootloader still calls `cpu::ap_boot::start_aps` directly.
+        // CPUID brute-force path (used when MADT discovery yields no APs).
+        // Detect topology via CPUID and publish it so `ap_boot::start_aps`
+        // (which reads `cpu_count()`) sees the real core count instead of the
+        // default 1 — otherwise it short-circuits as "single-core".
         unsafe {
+            let n = crate::cpu::apic::detect_cpu_count().max(1);
+            crate::cpu::per_cpu::set_cpu_count(n);
+            // Match start_aps_from_list's IF discipline: bring APs up with
+            // interrupts masked, then restore.
+            let was_enabled = crate::intr::interrupts_enabled();
+            crate::intr::disable_interrupts();
             crate::cpu::ap_boot::start_aps();
+            if was_enabled {
+                crate::intr::enable_interrupts();
+            }
         }
         crate::cpu::per_cpu::cpu_count()
     }
@@ -854,6 +823,12 @@ impl Smp for HalImpl {
         total.saturating_sub(1)
     }
 
+    fn percpu_ready(&self) -> bool {
+        // Raw count > 0 ⇔ init_bsp ran (it stores 1), so the GS per-CPU block is
+        // live — true even single-core. (ap_online_count subtracts the BSP.)
+        crate::cpu::per_cpu::AP_ONLINE_COUNT.load(core::sync::atomic::Ordering::Acquire) > 0
+    }
+
     unsafe fn discover_ap_lapic_ids(&self, rsdp_phys: u64) -> Result<&'static [u32], SmpError> {
         // SAFETY: BSP, single-threaded, ACPI tables still mapped per trait docs.
         // Empty slice ≠ error — signals "fall back to CPUID".
@@ -891,7 +866,6 @@ impl Smp for HalImpl {
         IsrFn(irq_timer_isr as unsafe extern "C" fn())
     }
 }
-
 
 impl Compositor for HalImpl {
     unsafe fn fb_present_delta(

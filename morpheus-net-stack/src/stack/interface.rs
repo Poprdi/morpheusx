@@ -75,8 +75,8 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr};
 
 use super::DeviceAdapter;
-use morpheus_nic::device::NetworkDevice;
 use crate::error::{NetworkError, Result};
+use morpheus_nic::device::NetworkDevice;
 
 /// Network interface configuration.
 #[derive(Debug, Clone)]
@@ -225,7 +225,7 @@ impl<D: NetworkDevice> NetInterface<D> {
                 super::set_debug_stage(20); // Stage 20: DHCP socket added
                 super::debug_log(20, "DHCP socket added");
                 (NetState::DhcpDiscovering, Some(handle), None, None)
-            }
+            },
             NetConfig::Static {
                 ip,
                 prefix_len,
@@ -248,7 +248,7 @@ impl<D: NetworkDevice> NetInterface<D> {
                 let dns_addr = dns.map(|d| Ipv4Address::from_bytes(&d.octets()));
 
                 (NetState::Ready, None, gw, dns_addr)
-            }
+            },
         };
 
         super::set_debug_stage(25); // Stage 25: about to return Self
@@ -370,12 +370,12 @@ impl<D: NetworkDevice> NetInterface<D> {
                 }
                 super::debug_log(83, "DNS no IPv4 addr");
                 Err(NetworkError::DnsResolutionFailed)
-            }
+            },
             Err(GetQueryResultError::Pending) => Ok(None),
             Err(GetQueryResultError::Failed) => {
                 super::debug_log(84, "DNS query failed");
                 Err(NetworkError::DnsResolutionFailed)
-            }
+            },
         }
     }
 
@@ -432,7 +432,7 @@ impl<D: NetworkDevice> NetInterface<D> {
 
                     self.state = NetState::Ready;
                     super::debug_log(31, "DHCP state -> Ready");
-                }
+                },
                 Some(DhcpEvent::Deconfigured) => {
                     super::debug_log(32, "DHCP deconfigured");
                     self.iface.update_ip_addrs(|addrs| addrs.clear());
@@ -440,8 +440,8 @@ impl<D: NetworkDevice> NetInterface<D> {
                     self.gateway = None;
                     self.dns = None;
                     self.state = NetState::DhcpDiscovering;
-                }
-                None => {}
+                },
+                None => {},
             }
         }
 
@@ -622,7 +622,7 @@ impl<D: NetworkDevice> NetInterface<D> {
                     Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]),
                     meta.endpoint.port,
                 ))
-            }
+            },
             Err(_) => Ok((0, Ipv4Addr::new(0, 0, 0, 0), 0)),
         }
     }

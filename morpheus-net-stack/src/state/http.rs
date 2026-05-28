@@ -469,7 +469,7 @@ impl HttpDownloadState {
             HttpDownloadState::Init { url } => {
                 // Not started yet
                 (HttpDownloadState::Init { url }, StepResult::Pending)
-            }
+            },
 
             HttpDownloadState::Resolving {
                 mut dns,
@@ -505,7 +505,7 @@ impl HttpDownloadState {
                             },
                             StepResult::Pending,
                         )
-                    }
+                    },
                     StepResult::Pending => (
                         HttpDownloadState::Resolving {
                             dns,
@@ -530,9 +530,9 @@ impl HttpDownloadState {
                             },
                             StepResult::Failed,
                         )
-                    }
+                    },
                 }
-            }
+            },
 
             HttpDownloadState::Connecting {
                 mut tcp,
@@ -559,7 +559,7 @@ impl HttpDownloadState {
                             },
                             StepResult::Pending,
                         )
-                    }
+                    },
                     StepResult::Pending => (
                         HttpDownloadState::Connecting {
                             tcp,
@@ -584,9 +584,9 @@ impl HttpDownloadState {
                             },
                             StepResult::Failed,
                         )
-                    }
+                    },
                 }
-            }
+            },
 
             HttpDownloadState::SendingRequest {
                 socket_handle,
@@ -637,7 +637,7 @@ impl HttpDownloadState {
                         StepResult::Pending,
                     )
                 }
-            }
+            },
 
             HttpDownloadState::ReceivingHeaders {
                 socket_handle,
@@ -698,12 +698,12 @@ impl HttpDownloadState {
                                         },
                                         StepResult::Pending,
                                     )
-                                }
+                                },
                                 Err(e) => {
                                     (HttpDownloadState::Failed { error: e }, StepResult::Failed)
-                                }
+                                },
                             }
-                        }
+                        },
                         Ok(false) => {
                             // Headers not complete yet
                             (
@@ -714,7 +714,7 @@ impl HttpDownloadState {
                                 },
                                 StepResult::Pending,
                             )
-                        }
+                        },
                         Err(e) => (HttpDownloadState::Failed { error: e }, StepResult::Failed),
                     }
                 } else {
@@ -728,7 +728,7 @@ impl HttpDownloadState {
                         StepResult::Pending,
                     )
                 }
-            }
+            },
 
             HttpDownloadState::ReceivingBody {
                 socket_handle,
@@ -806,7 +806,7 @@ impl HttpDownloadState {
                     },
                     StepResult::Pending,
                 )
-            }
+            },
 
             HttpDownloadState::Done {
                 response_info,
@@ -829,7 +829,7 @@ impl HttpDownloadState {
                     _ => StepResult::Failed,
                 };
                 (HttpDownloadState::Failed { error }, result)
-            }
+            },
         }
     }
 

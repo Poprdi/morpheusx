@@ -24,10 +24,10 @@ pub fn normalize(path: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for seg in path.split('/') {
         match seg {
-            "" | "." => {}
+            "" | "." => {},
             ".." => {
                 parts.pop();
-            }
+            },
             s => parts.push(s),
         }
     }

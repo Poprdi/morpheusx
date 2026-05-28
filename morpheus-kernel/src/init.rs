@@ -70,9 +70,13 @@ pub unsafe fn mount_root_fs(hal: &'static dyn Hal, size_bytes: usize) {
     {
         Ok(p) => p,
         Err(_) => {
-            crate::serial::log_warn("FS", 412, "root fs allocation failed; continuing without fs");
+            crate::serial::log_warn(
+                "FS",
+                412,
+                "root fs allocation failed; continuing without fs",
+            );
             return;
-        }
+        },
     };
 
     core::ptr::write_bytes(base as *mut u8, 0, size_bytes);
@@ -100,6 +104,12 @@ pub fn build_kernel_hooks() -> KernelHooks {
     }
 }
 
-unsafe fn kernel_cr3_hook() -> u64 {
+/// Kernel CR3 accessor for `KernelCr3Guard`. The bootloader installs this into
+/// the HAL (`morpheus_hal_x86_64::memory::set_kernel_cr3_hook`) after `init` —
+/// the kernel can't call the arch HAL directly (portability gate).
+///
+/// # Safety
+/// Returns 0 until `init_scheduler` sets the kernel CR3; callers tolerate 0.
+pub unsafe fn kernel_cr3_hook() -> u64 {
     crate::schedular::get_kernel_cr3()
 }

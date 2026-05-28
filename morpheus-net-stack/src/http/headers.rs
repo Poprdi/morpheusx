@@ -172,7 +172,6 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-
     #[test]
     fn test_new_headers_empty() {
         let headers = Headers::new();
@@ -201,7 +200,6 @@ mod tests {
         assert_eq!(headers.get("Content-Type"), None);
     }
 
-
     #[test]
     fn test_get_case_insensitive() {
         let mut headers = Headers::new();
@@ -221,7 +219,6 @@ mod tests {
         assert!(headers.contains("HOST"));
         assert!(headers.contains("Host"));
     }
-
 
     #[test]
     fn test_add_allows_duplicates() {
@@ -253,7 +250,6 @@ mod tests {
         assert_eq!(headers.len(), 1);
         assert_eq!(headers.get("content-type"), Some("application/json"));
     }
-
 
     #[test]
     fn test_remove_header() {
@@ -289,7 +285,6 @@ mod tests {
         assert_eq!(headers.len(), 1);
     }
 
-
     #[test]
     fn test_content_length() {
         let mut headers = Headers::new();
@@ -316,7 +311,6 @@ mod tests {
         headers.set_content_length(42);
         assert_eq!(headers.get("Content-Length"), Some("42"));
     }
-
 
     #[test]
     fn test_is_chunked() {
@@ -345,7 +339,6 @@ mod tests {
         assert!(!headers.is_chunked());
     }
 
-
     #[test]
     fn test_host_header() {
         let mut headers = Headers::new();
@@ -360,7 +353,6 @@ mod tests {
         assert_eq!(headers.host(), Some("example.com:8080"));
     }
 
-
     #[test]
     fn test_keep_alive() {
         let mut headers = Headers::new();
@@ -374,7 +366,6 @@ mod tests {
         headers.add("Connection", "close");
         assert!(!headers.keep_alive());
     }
-
 
     #[test]
     fn test_iter() {
@@ -395,7 +386,6 @@ mod tests {
         headers.clear();
         assert!(headers.is_empty());
     }
-
 
     #[test]
     fn test_to_wire_format() {
@@ -441,7 +431,6 @@ mod tests {
         assert_eq!(headers.get("ValidHeader"), Some("value"));
     }
 
-
     #[test]
     fn test_typical_request_headers() {
         let mut headers = Headers::new();
@@ -474,7 +463,6 @@ mod tests {
         assert_eq!(headers.content_length(), Some(1048576));
         assert_eq!(headers.connection(), Some("close"));
     }
-
 
     #[test]
     fn test_header_name_matches() {

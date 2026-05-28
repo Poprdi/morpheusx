@@ -160,8 +160,12 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
         NET_TCP_SOCKET => match NET_STACK_OPS.tcp_socket {
             Some(f) => {
                 let h = f();
-                if h < 0 { ENOMEM } else { h as u64 }
-            }
+                if h < 0 {
+                    ENOMEM
+                } else {
+                    h as u64
+                }
+            },
             None => ENOSYS_NET,
         },
         NET_TCP_CONNECT => {
@@ -171,11 +175,15 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_connect {
                 Some(f) => {
                     let rc = f(handle, ip, port);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_SEND => {
             let handle = a2 as i64;
             if a4 > 0 && !validate_user_buf(a3, a4) {
@@ -184,11 +192,15 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_send {
                 Some(f) => {
                     let rc = f(handle, a3 as *const u8, a4 as usize);
-                    if rc < 0 { EIO } else { rc as u64 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_RECV => {
             let handle = a2 as i64;
             if a4 > 0 && !validate_user_buf(a3, a4) {
@@ -197,87 +209,119 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.tcp_recv {
                 Some(f) => {
                     let rc = f(handle, a3 as *mut u8, a4 as usize);
-                    if rc < 0 { EIO } else { rc as u64 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_CLOSE => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_close {
                 Some(f) => {
                     f(handle);
                     0
-                }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_STATE => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_state {
                 Some(f) => {
                     let s = f(handle);
-                    if s < 0 { EINVAL } else { s as u64 }
-                }
+                    if s < 0 {
+                        EINVAL
+                    } else {
+                        s as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_LISTEN => {
             let handle = a2 as i64;
             let port = a3 as u16;
             match NET_STACK_OPS.tcp_listen {
                 Some(f) => {
                     let rc = f(handle, port);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_ACCEPT => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_accept {
                 Some(f) => {
                     let h = f(handle);
-                    if h < 0 { EIO } else { h as u64 }
-                }
+                    if h < 0 {
+                        EIO
+                    } else {
+                        h as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_SHUTDOWN => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_shutdown {
                 Some(f) => {
                     let rc = f(handle);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_NODELAY => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_nodelay {
                 Some(f) => {
                     let rc = f(handle, a3 as i64);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_TCP_KEEPALIVE => {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_keepalive {
                 Some(f) => {
                     let rc = f(handle, a3);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_UDP_SOCKET => match NET_STACK_OPS.udp_socket {
             Some(f) => {
                 let h = f();
-                if h < 0 { ENOMEM } else { h as u64 }
-            }
+                if h < 0 {
+                    ENOMEM
+                } else {
+                    h as u64
+                }
+            },
             None => ENOSYS_NET,
         },
         NET_UDP_SEND_TO => {
@@ -300,11 +344,15 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.udp_send_to {
                 Some(f) => {
                     let rc = f(handle, ip, port, buf_ptr as *const u8, buf_len as usize);
-                    if rc < 0 { EIO } else { rc as u64 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_UDP_RECV_FROM => {
             let handle = a2 as i64;
             let desc_size = 24u64;
@@ -321,21 +369,25 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             match NET_STACK_OPS.udp_recv_from {
                 Some(f) => {
                     let rc = f(handle, buf_ptr as *mut u8, buf_len as usize, src_out);
-                    if rc < 0 { EIO } else { rc as u64 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_UDP_CLOSE => {
             let handle = a2 as i64;
             match NET_STACK_OPS.udp_close {
                 Some(f) => {
                     f(handle);
                     0
-                }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         _ => EINVAL,
     }
 }
@@ -356,11 +408,15 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
             match NET_STACK_OPS.dns_start {
                 Some(f) => {
                     let h = f(a2 as *const u8, a3 as usize);
-                    if h < 0 { EIO } else { h as u64 }
-                }
+                    if h < 0 {
+                        EIO
+                    } else {
+                        h as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         DNS_RESULT => {
             let query = a2 as i64;
             if !validate_user_buf(a3, 4) {
@@ -369,11 +425,15 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
             match NET_STACK_OPS.dns_result {
                 Some(f) => {
                     let rc = f(query, a3 as *mut u8);
-                    if rc < 0 { EIO } else { rc as u64 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        rc as u64
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         DNS_SET_SERVERS => {
             let count = a3;
             if count == 0 || count > 4 {
@@ -385,11 +445,15 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
             match NET_STACK_OPS.dns_set_servers {
                 Some(f) => {
                     let rc = f(a2 as *const u32, count as usize);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         _ => EINVAL,
     }
 }
@@ -404,14 +468,18 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
             match NET_STACK_OPS.cfg_get {
                 Some(f) => {
                     let rc = f(a2 as *mut u8);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => {
                     core::ptr::write_bytes(a2 as *mut u8, 0, size as usize);
                     0
-                }
+                },
             }
-        }
+        },
         NET_CFG_ACTIVATE => match NET_ACTIVATE_FN {
             Some(f) => {
                 let rc = f();
@@ -423,15 +491,19 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
                     -5 => EFAULT,
                     _ => EIO,
                 }
-            }
+            },
             None => ENODEV,
         },
         _ if !net_stack_present() => ENODEV,
         NET_CFG_DHCP => match NET_STACK_OPS.cfg_dhcp {
             Some(f) => {
                 let rc = f();
-                if rc < 0 { EIO } else { 0 }
-            }
+                if rc < 0 {
+                    EIO
+                } else {
+                    0
+                }
+            },
             None => ENOSYS_NET,
         },
         NET_CFG_STATIC => {
@@ -441,11 +513,15 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
             match NET_STACK_OPS.cfg_static_ip {
                 Some(f) => {
                     let rc = f(ip_nbo, prefix_len, gw_nbo);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         NET_CFG_HOSTNAME => {
             if a3 == 0 || a3 > 63 {
                 return EINVAL;
@@ -456,15 +532,19 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
             match NET_STACK_OPS.cfg_hostname {
                 Some(f) => {
                     let rc = f(a2 as *const u8, a3 as usize);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         128.. => {
             let nic_cmd = (subcmd - 128) as u32;
             sys_nic_ctrl(nic_cmd as u64, a2)
-        }
+        },
         _ => EINVAL,
     }
 }
@@ -478,8 +558,12 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
         NET_POLL_DRIVE => match NET_STACK_OPS.poll_drive {
             Some(f) => {
                 let rc = f(a2);
-                if rc < 0 { EIO } else { rc as u64 }
-            }
+                if rc < 0 {
+                    EIO
+                } else {
+                    rc as u64
+                }
+            },
             None => ENOSYS_NET,
         },
         NET_POLL_STATS => {
@@ -490,11 +574,15 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
             match NET_STACK_OPS.poll_stats {
                 Some(f) => {
                     let rc = f(a2 as *mut u8);
-                    if rc < 0 { EIO } else { 0 }
-                }
+                    if rc < 0 {
+                        EIO
+                    } else {
+                        0
+                    }
+                },
                 None => ENOSYS_NET,
             }
-        }
+        },
         _ => EINVAL,
     }
 }

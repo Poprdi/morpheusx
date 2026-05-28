@@ -121,7 +121,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                     }
                     state.capture = None;
                     route_to_child = false;
-                }
+                },
                 HitRegion::Title => {
                     if let Some(ref win) = state.windows[idx] {
                         state.capture = Some(MouseCapture::Move {
@@ -131,7 +131,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         });
                     }
                     route_to_child = false;
-                }
+                },
                 HitRegion::Resize => {
                     if let Some(ref win) = state.windows[idx] {
                         state.capture = Some(MouseCapture::Resize {
@@ -143,8 +143,8 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         });
                     }
                     route_to_child = false;
-                }
-                HitRegion::Content => {}
+                },
+                HitRegion::Content => {},
             }
         } else {
             enqueue_mouse_route(
@@ -172,7 +172,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         win.mouse_local_valid = false;
                     }
                     route_to_child = false;
-                }
+                },
                 MouseCapture::Resize {
                     idx,
                     start_mx,
@@ -192,7 +192,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         win.mouse_local_valid = false;
                     }
                     route_to_child = false;
-                }
+                },
             }
         }
     }
@@ -226,7 +226,7 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
     match msg {
         MouseZRouteMsg::Desktop { buttons } => {
             forward_to_desktop(state, buttons);
-        }
+        },
         MouseZRouteMsg::Child { idx, buttons } => {
             let idx = idx as usize;
             if let Some(ref mut win) = state.windows[idx] {
@@ -243,8 +243,8 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
                 let dy = dy.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
                 let _ = compsys::mouse_forward(win.pid, dx, dy, buttons);
             }
-        }
-        MouseZRouteMsg::None => {}
+        },
+        MouseZRouteMsg::None => {},
     }
 }
 

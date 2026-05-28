@@ -88,13 +88,13 @@ pub fn read_line(buf: &mut [u8]) -> usize {
             b'\r' | b'\n' => {
                 print("\n");
                 return pos;
-            }
+            },
             0x08 | 0x7F => {
                 if pos > 0 {
                     pos -= 1;
                     print("\x08 \x08");
                 }
-            }
+            },
             c => {
                 if pos < buf.len() {
                     buf[pos] = c;
@@ -102,7 +102,7 @@ pub fn read_line(buf: &mut [u8]) -> usize {
                     let s = unsafe { core::str::from_utf8_unchecked(core::slice::from_ref(&c)) };
                     print(s);
                 }
-            }
+            },
         }
     }
 }
@@ -210,7 +210,7 @@ pub trait Read {
             Ok(s) => {
                 buf.push_str(s);
                 Ok(n)
-            }
+            },
             Err(_) => Err(Error::new(ErrorKind::InvalidInput)),
         }
     }
@@ -244,7 +244,7 @@ pub trait Write {
                     Err(e) => {
                         self.error = Some(e);
                         Err(core::fmt::Error)
-                    }
+                    },
                 }
             }
         }
@@ -283,11 +283,11 @@ pub trait BufRead: Read {
                 Some(i) => {
                     buf.extend_from_slice(&available[..=i]);
                     i + 1
-                }
+                },
                 None => {
                     buf.extend_from_slice(available);
                     available.len()
-                }
+                },
             };
             self.consume(used);
             if buf.last() == Some(&byte) {
@@ -304,7 +304,7 @@ pub trait BufRead: Read {
             Ok(s) => {
                 buf.push_str(s);
                 Ok(n)
-            }
+            },
             Err(_) => Err(Error::new(ErrorKind::InvalidInput)),
         }
     }
@@ -336,7 +336,7 @@ impl<B: BufRead> Iterator for Lines<B> {
                     }
                 }
                 Some(Ok(buf))
-            }
+            },
             Err(e) => Some(Err(e)),
         }
     }
@@ -473,7 +473,7 @@ impl<W: Write> BufWriter<W> {
                 Err(e) => {
                     self.buf.drain(..written);
                     return Err(e);
-                }
+                },
             }
         }
         self.buf.clear();

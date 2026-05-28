@@ -24,7 +24,7 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
         None => {
             PROCESS_TABLE_LOCK.unlock();
             return Err("no current process");
-        }
+        },
     };
     let parent_cr3 = parent.cr3;
     let parent_mmap_brk = parent.mmap_brk;

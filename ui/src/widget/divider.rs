@@ -45,10 +45,10 @@ impl Widget for Divider {
         match self.orientation {
             Orientation::Horizontal => {
                 hline(canvas, 0, 0, w, theme.border);
-            }
+            },
             Orientation::Vertical => {
                 vline(canvas, 0, 0, h, theme.border);
-            }
+            },
         }
     }
 

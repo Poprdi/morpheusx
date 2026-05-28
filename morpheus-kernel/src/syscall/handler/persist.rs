@@ -177,7 +177,7 @@ pub unsafe fn sys_persist_get(key_ptr: u64, key_len: u64, buf_ptr: u64, buf_len:
             Err(e) => {
                 let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
                 return helix_err_to_errno(e);
-            }
+            },
         };
 
     let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
@@ -212,7 +212,7 @@ pub unsafe fn sys_persist_del(key_ptr: u64, key_len: u64) -> u64 {
         Ok(()) => {
             let _ = morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table);
             0
-        }
+        },
         Err(e) => helix_err_to_errno(e),
     }
 }
@@ -352,14 +352,14 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
     let read_size = file_size.min(65536);
     let pages_needed = read_size.div_ceil(PAGE_SIZE as usize) as u64;
 
-    let buf_phys = match hal().phys().allocate_pages(
-        AllocKind::AnyPages,
-        MemoryType::Allocated,
-        pages_needed,
-    ) {
-        Ok(addr) => addr,
-        Err(_) => return ENOMEM,
-    };
+    let buf_phys =
+        match hal()
+            .phys()
+            .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages_needed)
+        {
+            Ok(addr) => addr,
+            Err(_) => return ENOMEM,
+        };
 
     let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = hal().timer().read_tsc();
@@ -376,7 +376,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
         Err(e) => {
             let _ = hal().phys().free_pages(buf_phys, pages_needed);
             return helix_err_to_errno(e);
-        }
+        },
     };
 
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, read_size);
@@ -387,7 +387,7 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
                 let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
                 let _ = hal().phys().free_pages(buf_phys, pages_needed);
                 return helix_err_to_errno(e);
-            }
+            },
         };
     let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
 

@@ -129,7 +129,7 @@ pub unsafe fn sys_win_surface_map(target_pid: u64) -> u64 {
         let result = match PROCESS_TABLE.get(target_pid_u32 as usize) {
             Some(Some(proc)) if !proc.is_free() && proc.fb_surface_phys != 0 => {
                 Some((proc.fb_surface_phys, proc.fb_surface_pages))
-            }
+            },
             _ => None,
         };
         PROCESS_TABLE_LOCK.unlock();
@@ -160,7 +160,7 @@ pub unsafe fn sys_mouse_forward(target_pid: u64, packed: u64) -> u64 {
             proc.mouse_dy = proc.mouse_dy.saturating_add(dy);
             proc.mouse_buttons = buttons;
             0
-        }
+        },
         _ => EINVAL,
     };
     PROCESS_TABLE_LOCK.unlock();
@@ -180,7 +180,7 @@ pub unsafe fn sys_win_surface_dirty_clear(target_pid: u64) -> u64 {
         Some(Some(proc)) if !proc.is_free() => {
             proc.fb_surface_dirty = false;
             0
-        }
+        },
         _ => EINVAL,
     };
     PROCESS_TABLE_LOCK.unlock();
@@ -222,11 +222,11 @@ pub unsafe fn sys_forward_input(target_pid: u64, ptr: u64, len: u64) -> u64 {
                 n += 1;
             }
             n
-        }
+        },
         _ => {
             PROCESS_TABLE_LOCK.unlock();
             return EINVAL;
-        }
+        },
     };
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(target as usize) {
         if matches!(

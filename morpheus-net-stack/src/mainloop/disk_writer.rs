@@ -3,9 +3,9 @@
 //! Accumulates data in a static buffer and flushes to disk in
 //! sector-aligned chunks. Works with both VirtIO-blk and AHCI.
 
-use morpheus_block::device::UnifiedBlockDevice;
-use morpheus_block::block_traits::BlockDriver;
 use crate::mainloop::serial;
+use morpheus_block::block_traits::BlockDriver;
+use morpheus_block::device::UnifiedBlockDevice;
 
 /// Write buffer size: 64KB = 128 sectors.
 const BUFFER_SIZE: usize = 64 * 1024;

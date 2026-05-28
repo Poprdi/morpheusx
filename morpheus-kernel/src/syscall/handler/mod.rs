@@ -21,6 +21,7 @@ pub mod sysinfo;
 
 // Registration helpers + structs wired up from the boot path.
 pub use fb::shutdown_release_display_ownership;
+pub use ipc::{PROT_EXEC, PROT_READ, PROT_WRITE};
 pub use net::{
     register_net_activation, register_net_stack, NetConfigInfo, NetStackOps, NetStats, DNS_RESULT,
     DNS_SET_SERVERS, DNS_START, NET_CFG_DHCP, NET_CFG_GET, NET_CFG_HOSTNAME, NET_CFG_STATIC,
@@ -30,11 +31,10 @@ pub use net::{
     NET_UDP_SEND_TO, NET_UDP_SOCKET,
 };
 pub use nic_fb::{
-    fb_mark_dirty, register_framebuffer, register_nic, FbInfo, NicHwStats, NicOps, NIC_CAP_IRQ_COALESCE,
-    NIC_CAP_MAC_SET, NIC_CAP_MULTICAST, NIC_CAP_PROMISC, NIC_CAP_RX_CSUM, NIC_CAP_TSO,
-    NIC_CAP_TX_CSUM, NIC_CAP_VLAN, NIC_CTRL_CAPS, NIC_CTRL_IRQ_COALESCE, NIC_CTRL_MAC_SET,
-    NIC_CTRL_MTU, NIC_CTRL_MULTICAST, NIC_CTRL_PROMISC, NIC_CTRL_RX_CSUM, NIC_CTRL_RX_RING_SIZE,
-    NIC_CTRL_STATS, NIC_CTRL_STATS_RESET, NIC_CTRL_TSO, NIC_CTRL_TX_CSUM, NIC_CTRL_TX_RING_SIZE,
-    NIC_CTRL_VLAN,
+    fb_mark_dirty, register_framebuffer, register_nic, FbInfo, NicHwStats, NicOps,
+    NIC_CAP_IRQ_COALESCE, NIC_CAP_MAC_SET, NIC_CAP_MULTICAST, NIC_CAP_PROMISC, NIC_CAP_RX_CSUM,
+    NIC_CAP_TSO, NIC_CAP_TX_CSUM, NIC_CAP_VLAN, NIC_CTRL_CAPS, NIC_CTRL_IRQ_COALESCE,
+    NIC_CTRL_MAC_SET, NIC_CTRL_MTU, NIC_CTRL_MULTICAST, NIC_CTRL_PROMISC, NIC_CTRL_RX_CSUM,
+    NIC_CTRL_RX_RING_SIZE, NIC_CTRL_STATS, NIC_CTRL_STATS_RESET, NIC_CTRL_TSO, NIC_CTRL_TX_CSUM,
+    NIC_CTRL_TX_RING_SIZE, NIC_CTRL_VLAN,
 };
-pub use ipc::{PROT_EXEC, PROT_READ, PROT_WRITE};

@@ -3,15 +3,15 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-mod types;
+mod checksum;
 mod packet;
 mod pinger;
-mod checksum;
+mod types;
 
-pub use types::{Ipv4Addr, MacAddress, PingConfig, PingResult, PingStats};
-pub use packet::{IcmpType, ICMP_PROTOCOL};
-pub use pinger::{Pinger, PingError};
 pub use checksum::{calculate_checksum, verify_checksum};
+pub use packet::{IcmpType, ICMP_PROTOCOL};
+pub use pinger::{PingError, Pinger};
+pub use types::{Ipv4Addr, MacAddress, PingConfig, PingResult, PingStats};
 
 pub mod targets {
     use crate::Ipv4Addr;

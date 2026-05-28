@@ -139,10 +139,10 @@ impl NetObsChamber {
                 self.tx_bytes = stats.tx_bytes;
                 self.rx_bytes = stats.rx_bytes;
                 self.stack_available = true;
-            }
+            },
             Err(_) => {
                 self.stack_available = false;
-            }
+            },
         }
 
         // HW counters beat software-side numbers when both exist.
@@ -247,7 +247,7 @@ fn run_dhcp_request(app: &mut SettingsApp, source: &'static str) -> bool {
                 );
             }
             true
-        }
+        },
         Err(e) => {
             if e == ENODEV {
                 // NIC up, but kernel-side IP stack ops aren't registered.
@@ -261,7 +261,7 @@ fn run_dhcp_request(app: &mut SettingsApp, source: &'static str) -> bool {
                 app.set_status("DHCP request failed", true);
             }
             false
-        }
+        },
     }
 }
 
@@ -278,17 +278,17 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
         FIELD_MODE_DHCP => {
             app.net_obs.edit_dhcp = true;
             app.mark_edited(Route::NetObservatory, "dhcp");
-        }
+        },
         FIELD_MODE_STATIC => {
             app.net_obs.edit_dhcp = false;
             app.mark_edited(Route::NetObservatory, "dhcp");
-        }
+        },
         FIELD_DHCP_REQUEST => {
             let _ = run_dhcp_request(app, "button");
-        }
+        },
         FIELD_HOSTNAME | FIELD_IP | FIELD_GATEWAY | FIELD_DNS1 | FIELD_DNS2 => {
             app.net_obs.editing_field = Some(idx);
-        }
+        },
         FIELD_PREFIX => {
             app.net_obs.edit_prefix = match app.net_obs.edit_prefix {
                 8 => 16,
@@ -297,7 +297,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                 _ => 8,
             };
             app.mark_edited(Route::NetObservatory, "prefix");
-        }
+        },
         FIELD_APPLY => {
             libmorpheus::io::print("[settings/net] apply requested\n");
             if apply(app) {
@@ -307,7 +307,7 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
             } else {
                 libmorpheus::io::print("[settings/net] apply failed\n");
             }
-        }
+        },
         FIELD_ACTIVATE => match net::net_activate() {
             Ok(rc) => {
                 libmorpheus::println!("[settings/net] activation rc={}", rc);
@@ -317,18 +317,18 @@ pub fn activate(app: &mut SettingsApp, idx: usize) {
                 } else {
                     app.set_status("Networking already active", false);
                 }
-            }
+            },
             Err(e) => {
                 libmorpheus::println!("[settings/net] activation failed err=0x{:x}", e);
                 app.set_status("Networking activation failed", true);
-            }
+            },
         },
         FIELD_REFRESH => {
             libmorpheus::io::print("[settings/net] refresh requested\n");
             app.net_obs.refresh();
             app.set_status("Network refreshed", false);
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -371,14 +371,14 @@ pub fn apply(app: &mut SettingsApp) -> bool {
             Err(_) => {
                 app.set_status("Invalid static IP", true);
                 return false;
-            }
+            },
         };
         let gw = match parse_ipv4_strict(&app.net_obs.edit_gateway[..gw_len]) {
             Ok(v) => v,
             Err(_) => {
                 app.set_status("Invalid gateway IP", true);
                 return false;
-            }
+            },
         };
         if let Err(_) = net::net_static_ip(ip, prefix, gw) {
             app.set_status("Static IP set failed", true);
@@ -393,14 +393,14 @@ pub fn apply(app: &mut SettingsApp) -> bool {
             Err(_) => {
                 app.set_status("Invalid primary DNS", true);
                 return false;
-            }
+            },
         };
         let d2 = match parse_ipv4_or_empty(&app.net_obs.edit_dns2[..d2_len]) {
             Ok(v) => v,
             Err(_) => {
                 app.set_status("Invalid secondary DNS", true);
                 return false;
-            }
+            },
         };
         let servers = [d1, d2];
         if let Err(_) = net::dns_set_servers(&servers) {
@@ -419,21 +419,21 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
         match scancode {
             0x01 => {
                 app.net_obs.editing_field = None;
-            }
+            },
             0x1C => {
                 app.net_obs.editing_field = None;
                 app.mark_edited(Route::NetObservatory, field_name(field));
-            }
+            },
             0x0E => {
                 app.net_obs.text_backspace(field);
                 app.mark_edited(Route::NetObservatory, field_name(field));
-            }
+            },
             _ => {
                 if let Some(ch) = scancode_to_char(scancode) {
                     app.net_obs.text_insert(field, ch);
                     app.mark_edited(Route::NetObservatory, field_name(field));
                 }
-            }
+            },
         }
         app.frame_dirty = true;
         return;
@@ -447,7 +447,7 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
                 app.net_obs.text_backspace(app.pane_focus);
                 app.mark_edited(Route::NetObservatory, field_name(app.pane_focus));
                 app.frame_dirty = true;
-            }
+            },
             _ => {
                 if let Some(ch) = scancode_to_char(scancode) {
                     app.net_obs.editing_field = Some(app.pane_focus);
@@ -455,7 +455,7 @@ pub fn handle_key(app: &mut SettingsApp, scancode: u8) {
                     app.mark_edited(Route::NetObservatory, field_name(app.pane_focus));
                     app.frame_dirty = true;
                 }
-            }
+            },
         }
     }
 }

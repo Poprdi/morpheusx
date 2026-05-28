@@ -171,6 +171,33 @@ pub unsafe fn platform_init_selfcontained(
         }
     }
 
+    // Enable EFER.NXE on the BSP. Our page-table presets set the NX bit (63) on
+    // data pages (USER_RW / KERNEL_RW / intermediate table entries). With NXE=0
+    // that bit is RESERVED, so the first access to any such PTE faults with a
+    // reserved-bit #PF (error bit 3) — e.g. /bin/init's first stack write. UEFI
+    // happens to leave NXE set on some firmware but not all; don't depend on it.
+    // The AP trampoline already forces NXE for the same reason — mirror it here.
+    // SAFETY: BSP, single-threaded; RMW of IA32_EFER preserves SCE/LME/LMA.
+    {
+        const IA32_EFER: u32 = 0xC000_0080;
+        let (mut lo, hi): (u32, u32);
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") IA32_EFER,
+            out("eax") lo,
+            out("edx") hi,
+            options(nomem, nostack, preserves_flags),
+        );
+        lo |= 1 << 11; // NXE
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") IA32_EFER,
+            in("eax") lo,
+            in("edx") hi,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+
     log_info("BOOT", 100, "taking ownership of platform init");
 
     log_info("BOOT", 101, "phase 1/13: memory");
@@ -501,8 +528,7 @@ pub unsafe fn platform_init_selfcontained(
                                 let msix_raw = XHCI_MSIX_HOOK.load(Ordering::Acquire);
                                 if !msix_raw.is_null() {
                                     // SAFETY: registered fn pointer, matching ABI.
-                                    let f: XhciMsixHook =
-                                        unsafe { core::mem::transmute(msix_raw) };
+                                    let f: XhciMsixHook = unsafe { core::mem::transmute(msix_raw) };
                                     unsafe {
                                         f(addr, controller.rt_base);
                                     }
@@ -518,8 +544,7 @@ pub unsafe fn platform_init_selfcontained(
                                                 log_ok("USB", 911, "USB mouse detected");
                                                 usb_init_count += 1;
                                             }
-                                            if result.keyboard.is_none() && result.mouse.is_none()
-                                            {
+                                            if result.keyboard.is_none() && result.mouse.is_none() {
                                                 log_info(
                                                     "USB",
                                                     912,
@@ -527,12 +552,12 @@ pub unsafe fn platform_init_selfcontained(
                                                 );
                                             }
                                             result.keyboard
-                                        }
+                                        },
                                         Err(e) => {
                                             log_warn("USB", 920, "USB enumeration failed");
                                             let _ = e;
                                             None
-                                        }
+                                        },
                                     };
                                 // Hand the xHC to the runtime polling module so
                                 // the input loop can fetch reports later. Without
@@ -547,11 +572,11 @@ pub unsafe fn platform_init_selfcontained(
                                         f(controller, kbd_for_runtime);
                                     }
                                 }
-                            }
+                            },
                             Err(e) => {
                                 log_warn("USB", 921, "xHCI controller init failed");
                                 let _ = e;
-                            }
+                            },
                         }
                     }
                 }
@@ -571,7 +596,11 @@ pub unsafe fn platform_init_selfcontained(
     // End phases 1-9. Bootloader calls `install_hal`, then `morpheus_kernel::init`
     // (phases 10/11/11b), then 10.5 reclaim + phase 12 SMP via HAL methods.
 
-    log_ok("BOOT", 199, "phase 1-9 complete; handing off to kernel late-init");
+    log_ok(
+        "BOOT",
+        199,
+        "phase 1-9 complete; handing off to kernel late-init",
+    );
 
     let allocator = fallback_allocator();
 

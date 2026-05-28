@@ -33,20 +33,20 @@ impl ArchiveChamber {
         match idx {
             0 => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
-            }
+            },
             1 => {
                 // Caller bounds-clamps against changelog_len during render.
                 self.scroll_offset += 1;
-            }
+            },
             2 => {
                 self.searching = !self.searching;
                 if !self.searching {
                     self.search_len = 0;
                 }
-            }
+            },
             _ => {
                 self.selected = idx - 3 + self.scroll_offset;
-            }
+            },
         }
     }
 
@@ -63,15 +63,15 @@ impl ArchiveChamber {
                 0x01 => {
                     self.searching = false;
                     self.search_len = 0;
-                }
+                },
                 0x0E => {
                     if self.search_len > 0 {
                         self.search_len -= 1;
                     }
-                }
+                },
                 0x1C => {
                     self.searching = false;
-                }
+                },
                 _ => {
                     if let Some(ch) = super::net_obs::scancode_to_char(scancode) {
                         if self.search_len < self.search_buf.len() {
@@ -79,7 +79,7 @@ impl ArchiveChamber {
                             self.search_len += 1;
                         }
                     }
-                }
+                },
             }
         }
     }

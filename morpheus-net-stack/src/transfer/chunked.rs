@@ -85,7 +85,7 @@ impl ChunkedDecoder {
                         }
                         self.size_buffer.push(byte);
                     }
-                }
+                },
                 DecoderState::ReadingData => {
                     self.output.push(byte);
                     self.chunk_bytes_read += 1;
@@ -93,21 +93,21 @@ impl ChunkedDecoder {
                     if self.chunk_bytes_read == self.current_chunk_size {
                         self.state = DecoderState::ExpectingCR;
                     }
-                }
+                },
                 DecoderState::ExpectingCR => {
                     if byte == b'\r' {
                         self.state = DecoderState::ExpectingLF;
                     } else {
                         return Err(NetworkError::InvalidResponse);
                     }
-                }
+                },
                 DecoderState::ExpectingLF => {
                     if byte == b'\n' {
                         self.state = DecoderState::ReadingSize;
                     } else {
                         return Err(NetworkError::InvalidResponse);
                     }
-                }
+                },
                 DecoderState::Done => break,
             }
         }
@@ -178,7 +178,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-
     #[test]
     fn test_decode_hex_lowercase() {
         let data = b"a\r\n0123456789\r\n0\r\n\r\n";
@@ -201,7 +200,6 @@ mod tests {
         assert_eq!(result, b"0123456789ABCDEF");
     }
 
-
     #[test]
     fn test_decode_with_chunk_extension() {
         // Extensions are ignored per RFC 7230
@@ -209,7 +207,6 @@ mod tests {
         let result = ChunkedDecoder::decode(data).unwrap();
         assert_eq!(result, b"Hello");
     }
-
 
     #[test]
     fn test_incremental_feed() {
@@ -237,7 +234,6 @@ mod tests {
         assert!(decoder.is_done());
         assert_eq!(decoder.output(), b"ABC");
     }
-
 
     #[test]
     fn test_initial_state() {
@@ -271,7 +267,6 @@ mod tests {
         assert_eq!(decoder.state(), DecoderState::ReadingSize);
     }
 
-
     #[test]
     fn test_take_output() {
         let data = b"5\r\nHello\r\n0\r\n\r\n";
@@ -281,7 +276,6 @@ mod tests {
         let output = decoder.take_output();
         assert_eq!(output, b"Hello");
     }
-
 
     #[test]
     fn test_decode_incomplete() {
@@ -296,7 +290,6 @@ mod tests {
         let result = ChunkedDecoder::decode(data);
         assert!(result.is_err());
     }
-
 
     #[test]
     fn test_typical_response() {

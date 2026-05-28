@@ -3,12 +3,12 @@
 //! Rust orchestration layer for transmit operations.
 //! All hardware access is via ASM bindings.
 
-use morpheus_hal_x86_64::asm::barriers::sfence;
 use crate::asm::{
     asm_intel_tx_clear_desc, asm_intel_tx_init_desc, asm_intel_tx_poll, asm_intel_tx_submit,
     asm_intel_tx_update_tail,
 };
 use crate::serial::{serial_print, serial_print_hex, serial_println};
+use morpheus_hal_x86_64::asm::barriers::sfence;
 
 /// Size of a single TX descriptor in bytes.
 pub const TX_DESC_SIZE: usize = 16;

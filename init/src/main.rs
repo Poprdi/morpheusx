@@ -18,20 +18,20 @@ fn main() -> i32 {
         Ok(pid) => {
             io::println("init: spawned compd");
             state.compd_pid = Some(pid);
-        }
+        },
         Err(_) => {
             io::println("init: FATAL — failed to spawn compd");
-        }
+        },
     }
 
     match process::spawn("/bin/shelld") {
         Ok(pid) => {
             io::println("init: spawned shelld");
             state.shelld_pid = Some(pid);
-        }
+        },
         Err(_) => {
             io::println("init: FATAL — failed to spawn shelld");
-        }
+        },
     }
 
     let _ = process::sigaction(

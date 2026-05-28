@@ -115,7 +115,7 @@ impl TextConsole {
                     self.cursor_col -= 1;
                 }
                 self.render_char(' ');
-            }
+            },
             '\t' => {
                 // Round up to next 8-column tabstop.
                 let next_tab = (self.cursor_col + 8) & !7;
@@ -123,15 +123,15 @@ impl TextConsole {
                     self.render_char(' ');
                     self.advance_cursor();
                 }
-            }
+            },
             c if (' '..='~').contains(&c) => {
                 self.render_char(c);
                 self.advance_cursor();
-            }
+            },
             _ => {
                 self.render_char(' ');
                 self.advance_cursor();
-            }
+            },
         }
     }
 

@@ -33,7 +33,7 @@ fn main() -> i32 {
         None => {
             libmorpheus::io::print("msh: failed to map framebuffer\n");
             return 1;
-        }
+        },
     };
 
     let is_compositor = libmorpheus::compositor::compositor_set().is_ok();
@@ -67,7 +67,7 @@ fn main() -> i32 {
                 con.write_str(&framebuffer, "^C\n");
                 last_status = 130;
                 continue;
-            }
+            },
         };
 
         con.newline(&framebuffer);
@@ -109,7 +109,7 @@ fn main() -> i32 {
                     con.write_str(&framebuffer, ": not a known command\n");
                     last_status = 0;
                     continue;
-                }
+                },
             };
 
             if !is_compositor {
@@ -131,12 +131,12 @@ fn main() -> i32 {
                         con.clear(&framebuffer);
                         comp.did_compose = false;
                     }
-                }
+                },
                 None => {
                     con.write_colored(&framebuffer, &cmd.argv[0], (255, 85, 85));
                     con.write_str(&framebuffer, ": failed to spawn\n");
                     last_status = 126;
-                }
+                },
             }
 
             continue;

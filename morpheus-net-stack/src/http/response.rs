@@ -174,7 +174,6 @@ impl Response {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_new_response() {
         let response = Response::new(200);
@@ -189,7 +188,6 @@ mod tests {
         assert_eq!(response.status_code, 404);
         assert_eq!(response.reason, "Not Found");
     }
-
 
     #[test]
     fn test_is_success() {
@@ -227,7 +225,6 @@ mod tests {
         assert!(!Response::new(404).is_server_error());
     }
 
-
     #[test]
     fn test_default_reason() {
         assert_eq!(Response::default_reason(200), "OK");
@@ -235,7 +232,6 @@ mod tests {
         assert_eq!(Response::default_reason(500), "Internal Server Error");
         assert_eq!(Response::default_reason(999), "Unknown");
     }
-
 
     #[test]
     fn test_parse_simple_response() {
@@ -277,7 +273,6 @@ mod tests {
         assert!(!response.is_success());
     }
 
-
     #[test]
     fn test_parse_redirect_response() {
         let data = b"HTTP/1.1 302 Found\r\nLocation: http://example.com/new\r\n\r\n";
@@ -298,7 +293,6 @@ mod tests {
         assert_eq!(response.location(), Some("https://secure.example.com/"));
     }
 
-
     #[test]
     fn test_parse_chunked_response() {
         let data = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
@@ -307,7 +301,6 @@ mod tests {
         assert!(response.is_chunked());
         assert_eq!(response.content_length(), None);
     }
-
 
     #[test]
     fn test_parse_headers_only() {
@@ -320,7 +313,6 @@ mod tests {
                                            // 17 (status line) + 22 (header) + 2 (blank line) = 41 bytes
         assert_eq!(body_offset, 41); // Where body starts
     }
-
 
     #[test]
     fn test_parse_invalid_no_headers_end() {
@@ -345,7 +337,6 @@ mod tests {
         let data = b"";
         assert!(Response::parse(data).is_err());
     }
-
 
     #[test]
     fn test_parse_no_reason_phrase() {
@@ -372,7 +363,6 @@ mod tests {
 
         assert_eq!(response.body, b"Short");
     }
-
 
     #[test]
     fn test_parse_iso_download_response() {

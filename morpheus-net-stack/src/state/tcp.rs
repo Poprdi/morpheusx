@@ -211,7 +211,7 @@ impl TcpConnState {
             TcpConnState::Closed => {
                 // Not started
                 StepResult::Pending
-            }
+            },
 
             TcpConnState::Connecting {
                 socket_handle,
@@ -254,12 +254,12 @@ impl TcpConnState {
 
                 // Still connecting
                 StepResult::Pending
-            }
+            },
 
             TcpConnState::Established { .. } => {
                 // Already connected
                 StepResult::Done
-            }
+            },
 
             TcpConnState::Closing {
                 socket_handle,
@@ -282,7 +282,7 @@ impl TcpConnState {
                 // Still closing
                 let _ = socket_handle;
                 StepResult::Pending
-            }
+            },
 
             TcpConnState::Error { error } => match error {
                 TcpError::ConnectTimeout | TcpError::CloseTimeout => StepResult::Timeout,

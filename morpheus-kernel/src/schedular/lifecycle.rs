@@ -77,6 +77,10 @@ pub unsafe fn init_scheduler() {
     SCHEDULER_READY = true;
 
     if let Some(p) = PROCESS_TABLE[0].as_mut() {
+        // PID 0 never goes through alloc_kernel_stack (it allocates no kernel
+        // stack), so seed its FPU control words here (FCW=0x037F, MXCSR=0x1F80)
+        // rather than leaving the zeroed state spawned procs avoid.
+        hal().cpu().fpu_init(&mut p.fpu_state);
         let fpu_ptr = &mut p.fpu_state as *mut morpheus_hal_api::FpuState as u64;
         set_percpu_fpu_ptr(fpu_ptr);
     }
@@ -131,7 +135,8 @@ pub unsafe fn spawn_kernel_thread(
         // selector constants (KERNEL_CS / KERNEL_DS) live arch-side and are
         // applied inside the HAL.
         proc.context = CpuContext::zeroed();
-        hal().cpu()
+        hal()
+            .cpu()
             .ctx_init_kernel(&mut proc.context, entry_fn, proc.kernel_stack_top);
     }
 

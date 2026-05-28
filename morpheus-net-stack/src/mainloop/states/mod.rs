@@ -18,6 +18,6 @@ pub(crate) use gpt::GptPrepState;
 pub(crate) use http::HttpState;
 pub(crate) use init::InitState;
 pub(crate) use link::LinkWaitState;
+pub(crate) use manifest::ManifestState;
 pub use manifest::{regenerate_manifest, write_manifest_standalone};
 pub use manifest::{ManifestConfig, ManifestMode};
-pub(crate) use manifest::ManifestState;

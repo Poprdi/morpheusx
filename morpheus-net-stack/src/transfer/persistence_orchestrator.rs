@@ -354,7 +354,7 @@ impl PersistenceOrchestrator {
                 // Step disk writer to process completions
                 self.disk_writer.step(block_driver);
                 OrchestratorResult::Pending
-            }
+            },
 
             OrchestratorState::Flushing => {
                 // Step disk writer
@@ -369,7 +369,7 @@ impl PersistenceOrchestrator {
                             self.state = OrchestratorState::Done;
                             return OrchestratorResult::Done(self.result);
                         }
-                    }
+                    },
                     StepResult::Failed => {
                         let err = self
                             .disk_writer
@@ -379,12 +379,12 @@ impl PersistenceOrchestrator {
                         self.error = Some(err);
                         self.state = OrchestratorState::Failed;
                         return OrchestratorResult::Failed(err);
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
 
                 OrchestratorResult::Pending
-            }
+            },
 
             OrchestratorState::Verifying => {
                 // TODO: Read back data and verify checksum
@@ -392,13 +392,13 @@ impl PersistenceOrchestrator {
                 self.finalize(now_tsc);
                 self.state = OrchestratorState::Done;
                 OrchestratorResult::Done(self.result)
-            }
+            },
 
             OrchestratorState::Done => OrchestratorResult::Done(self.result),
 
             OrchestratorState::Failed => {
                 OrchestratorResult::Failed(self.error.unwrap_or(OrchestratorError::InvalidState))
-            }
+            },
         }
     }
 

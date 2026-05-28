@@ -47,13 +47,13 @@ impl Color {
                     | ((self.g as u32) << 8)
                     | ((self.r as u32) << 16)
                     | ((self.a as u32) << 24)
-            }
+            },
             PixelFormat::Rgbx => {
                 (self.r as u32)
                     | ((self.g as u32) << 8)
                     | ((self.b as u32) << 16)
                     | ((self.a as u32) << 24)
-            }
+            },
         }
     }
 

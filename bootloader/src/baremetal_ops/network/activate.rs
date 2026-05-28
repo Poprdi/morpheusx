@@ -26,11 +26,11 @@ unsafe fn activate_network_from_userspace() -> i64 {
         Ok(ProbeResult::VirtIO(v)) => {
             morpheus_hal_x86_64::serial::log_info("NET", 949, "probe selected virtio NIC");
             UnifiedNetDevice::VirtIO(v)
-        }
+        },
         Ok(ProbeResult::Intel(i)) => {
             morpheus_hal_x86_64::serial::log_info("NET", 951, "probe selected intel NIC");
             UnifiedNetDevice::Intel(i)
-        }
+        },
         Err(ProbeError::NoDevice) => {
             morpheus_hal_x86_64::serial::log_error(
                 "NET",
@@ -39,23 +39,23 @@ unsafe fn activate_network_from_userspace() -> i64 {
             );
             nic::log_pci_network_candidates();
             return -2;
-        }
+        },
         Err(ProbeError::VirtioInitFailed) => {
             morpheus_hal_x86_64::serial::log_error("NET", 950, "virtio init failed");
             return -3;
-        }
+        },
         Err(ProbeError::IntelInitFailed) => {
             morpheus_hal_x86_64::serial::log_error("NET", 952, "intel init failed");
             return -3;
-        }
+        },
         Err(ProbeError::DeviceNotResponding) => {
             morpheus_hal_x86_64::serial::log_error("NET", 955, "nic mmio not responding");
             return -4;
-        }
+        },
         Err(ProbeError::BarMappingFailed) => {
             morpheus_hal_x86_64::serial::log_error("NET", 956, "nic bar mapping failure");
             return -5;
-        }
+        },
     };
 
     morpheus_hal_x86_64::serial::log_ok("NET", 945, "driver initialized");
@@ -75,32 +75,34 @@ unsafe fn activate_network_from_userspace() -> i64 {
     });
 
     morpheus_hal_x86_64::serial::log_info("NET", 957, "registering net stack ops");
-    morpheus_kernel::syscall::handler::register_net_stack(morpheus_kernel::syscall::handler::NetStackOps {
-        tcp_socket: Some(tcp::net_tcp_socket_impl),
-        tcp_connect: Some(tcp::net_tcp_connect_impl),
-        tcp_send: Some(tcp::net_tcp_send_impl),
-        tcp_recv: Some(tcp::net_tcp_recv_impl),
-        tcp_close: Some(tcp::net_tcp_close_impl),
-        tcp_state: Some(tcp::net_tcp_state_impl),
-        tcp_listen: Some(tcp::net_tcp_listen_impl),
-        tcp_accept: Some(tcp::net_tcp_accept_impl),
-        tcp_shutdown: Some(tcp::net_tcp_shutdown_impl),
-        tcp_nodelay: Some(tcp::net_tcp_nodelay_impl),
-        tcp_keepalive: Some(tcp::net_tcp_keepalive_impl),
-        udp_socket: Some(udp_dns::net_udp_socket_impl),
-        udp_send_to: Some(udp_dns::net_udp_send_to_impl),
-        udp_recv_from: Some(udp_dns::net_udp_recv_from_impl),
-        udp_close: Some(udp_dns::net_udp_close_impl),
-        dns_start: Some(udp_dns::net_dns_start_impl),
-        dns_result: Some(udp_dns::net_dns_result_impl),
-        dns_set_servers: Some(udp_dns::net_dns_set_servers_impl),
-        cfg_get: Some(config::net_cfg_get),
-        cfg_dhcp: Some(config::net_cfg_dhcp),
-        cfg_static_ip: Some(config::net_cfg_static_ip),
-        cfg_hostname: Some(config::net_cfg_hostname),
-        poll_drive: Some(config::net_poll_drive),
-        poll_stats: Some(config::net_poll_stats),
-    });
+    morpheus_kernel::syscall::handler::register_net_stack(
+        morpheus_kernel::syscall::handler::NetStackOps {
+            tcp_socket: Some(tcp::net_tcp_socket_impl),
+            tcp_connect: Some(tcp::net_tcp_connect_impl),
+            tcp_send: Some(tcp::net_tcp_send_impl),
+            tcp_recv: Some(tcp::net_tcp_recv_impl),
+            tcp_close: Some(tcp::net_tcp_close_impl),
+            tcp_state: Some(tcp::net_tcp_state_impl),
+            tcp_listen: Some(tcp::net_tcp_listen_impl),
+            tcp_accept: Some(tcp::net_tcp_accept_impl),
+            tcp_shutdown: Some(tcp::net_tcp_shutdown_impl),
+            tcp_nodelay: Some(tcp::net_tcp_nodelay_impl),
+            tcp_keepalive: Some(tcp::net_tcp_keepalive_impl),
+            udp_socket: Some(udp_dns::net_udp_socket_impl),
+            udp_send_to: Some(udp_dns::net_udp_send_to_impl),
+            udp_recv_from: Some(udp_dns::net_udp_recv_from_impl),
+            udp_close: Some(udp_dns::net_udp_close_impl),
+            dns_start: Some(udp_dns::net_dns_start_impl),
+            dns_result: Some(udp_dns::net_dns_result_impl),
+            dns_set_servers: Some(udp_dns::net_dns_set_servers_impl),
+            cfg_get: Some(config::net_cfg_get),
+            cfg_dhcp: Some(config::net_cfg_dhcp),
+            cfg_static_ip: Some(config::net_cfg_static_ip),
+            cfg_hostname: Some(config::net_cfg_hostname),
+            poll_drive: Some(config::net_poll_drive),
+            poll_stats: Some(config::net_poll_stats),
+        },
+    );
 
     let _ = nic::user_net_refill();
 

@@ -198,10 +198,10 @@ impl FogMode {
             FogMode::None => 1.0,
             FogMode::Linear { start, end } => {
                 saturate((end - distance) * crate::math::fast::fast_recip(end - start))
-            }
+            },
             FogMode::Exponential { density } => {
                 saturate(crate::math::fast::fast_exp2(-density * distance))
-            }
+            },
         }
     }
 }

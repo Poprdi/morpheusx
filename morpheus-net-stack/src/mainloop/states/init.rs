@@ -6,11 +6,11 @@ use alloc::boxed::Box;
 use smoltcp::iface::{Interface, SocketSet};
 use smoltcp::time::Instant;
 
-use morpheus_nic::traits::NetworkDriver;
 use crate::mainloop::adapter::SmoltcpAdapter;
 use crate::mainloop::context::Context;
 use crate::mainloop::serial;
 use crate::mainloop::state::{State, StepResult};
+use morpheus_nic::traits::NetworkDriver;
 
 use super::GptPrepState;
 
@@ -80,7 +80,7 @@ impl<D: NetworkDriver> State<D> for InitState {
                 let port_str = &host_port_slice[colon_idx + 1..];
                 let port = parse_port(port_str).unwrap_or(default_port);
                 (scheme_end + colon_idx, port)
-            }
+            },
             None => (host_end, default_port),
         };
 

@@ -372,13 +372,11 @@ impl ProgressTracker {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
     use core::cell::Cell;
-
 
     #[test]
     fn test_stream_config_default() {
@@ -401,7 +399,6 @@ mod tests {
         assert_eq!(config.buffer_size, 256 * 1024);
         assert!(config.max_size.is_none());
     }
-
 
     #[test]
     fn test_stream_reader_new() {
@@ -523,7 +520,6 @@ mod tests {
         assert!(reader.data().is_empty());
     }
 
-
     #[test]
     fn test_stream_writer_new() {
         let writer = StreamWriter::new(100, 10);
@@ -568,7 +564,6 @@ mod tests {
         writer.chunk_sent(50);
         assert_eq!(writer.progress_percent(), 100);
     }
-
 
     #[test]
     fn test_progress_tracker_new() {
@@ -616,7 +611,6 @@ mod tests {
         let tracker = ProgressTracker::new(Some(0));
         assert_eq!(tracker.percent(), Some(100));
     }
-
 
     // Note: Testing callbacks requires thread_local or similar mechanism
     // For no_std, we use a simple static counter pattern in integration tests
