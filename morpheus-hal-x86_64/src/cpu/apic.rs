@@ -3,7 +3,7 @@
 
 use crate::asm::pio::outb;
 use crate::cpu::per_cpu;
-use crate::serial::{log_info, log_ok, log_warn};
+use crate::serial::log_warn;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// BSP-calibrated timer init count. APs reuse this to skip the PIT race
@@ -119,10 +119,6 @@ pub unsafe fn probe_lapic_base() -> u64 {
     let base = raw & 0xFFFF_FFFF_FFFF_F000;
     LAPIC_BASE_ACTUAL = base;
 
-    if base != DEFAULT_LAPIC_BASE {
-        log_info("LAPIC", 720, "detected relocated LAPIC base");
-    }
-
     base
 }
 
@@ -192,7 +188,6 @@ pub unsafe fn init_bsp() {
 
     let _id = lapic_read(base, LAPIC_ID) >> 24;
     let _ver = lapic_read(base, LAPIC_VER);
-    log_ok("LAPIC", 721, "bsp lapic initialized");
 }
 
 /// Per-AP LAPIC enable, called from `ap_rust_entry`.
@@ -308,10 +303,6 @@ pub unsafe fn setup_timer(target_hz: u32) {
     // Publish before arming so APs never touch the PIT.
     LAPIC_TIMER_INIT_COUNT.store(init_count, Ordering::Release);
 
-    if crate::cpu::per_cpu::current_core_index() == 0 {
-        log_ok("LAPIC", 724, "timer configured");
-    }
-
     lapic_write(base, LAPIC_LVT_TIMER, TIMER_PERIODIC | TIMER_VECTOR as u32);
     lapic_write(base, LAPIC_TIMER_DIV, 0x03);
     lapic_write(base, LAPIC_TIMER_INIT, init_count);
@@ -325,7 +316,6 @@ pub unsafe fn setup_timer(target_hz: u32) {
 pub unsafe fn disable_pic8259() {
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
-    log_info("LAPIC", 725, "legacy PIC disabled");
 }
 
 /// INIT IPI assert. Caller waits >=200us then `send_init_deassert`.

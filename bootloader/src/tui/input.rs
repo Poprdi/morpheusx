@@ -301,7 +301,6 @@ impl Keyboard {
 
     unsafe fn init_controller(&mut self) {
         // Full i8042+keyboard reinit. No partial-trust path.
-        morpheus_hal_x86_64::serial::log_info("INPUT", 935, "keyboard controller init begin");
         self.aux_as_kbd = false;
         self.initialized = false;
 
@@ -403,13 +402,7 @@ impl Keyboard {
         Self::drain_all(128);
 
         self.initialized = ctl_ok && port1_ok && reset_ok && scan_ok;
-        if self.initialized {
-            morpheus_hal_x86_64::serial::log_ok(
-                "INPUT",
-                930,
-                "PS/2 keyboard ready (full reset path)",
-            );
-        } else {
+        if !self.initialized {
             morpheus_hal_x86_64::serial::log_warn(
                 "INPUT",
                 941,

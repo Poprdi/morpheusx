@@ -27,10 +27,8 @@ use crate::memory::{
     PhysicalAllocator,
 };
 use crate::paging::{collect_page_table_pages, init_kernel_page_table};
-use crate::pci::{
-    dump, offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, pci_cfg_write16, PciAddr,
-};
-use crate::serial::{checkpoint, log_error, log_info, log_ok, log_warn};
+use crate::pci::{offset, pci_cfg_read16, pci_cfg_read32, pci_cfg_read8, pci_cfg_write16, PciAddr};
+use crate::serial::{boot_step_ok, checkpoint, log_error, log_warn};
 use crate::HalImpl;
 
 const CMD_MEM_SPACE: u16 = 1 << 1;
@@ -49,8 +47,9 @@ fn xhci_log_sink(
     msg: &'static str,
 ) {
     match level {
-        morpheus_xhci::logger::LogLevel::Info => crate::serial::log_info(component, code, msg),
-        morpheus_xhci::logger::LogLevel::Ok => crate::serial::log_ok(component, code, msg),
+        // Happy-path enumeration chatter is collapsed into the single
+        // "usb input" checklist row; only surface problems.
+        morpheus_xhci::logger::LogLevel::Info | morpheus_xhci::logger::LogLevel::Ok => {},
         morpheus_xhci::logger::LogLevel::Warn => crate::serial::log_warn(component, code, msg),
         morpheus_xhci::logger::LogLevel::Error => crate::serial::log_error(component, code, msg),
     }
@@ -205,10 +204,6 @@ pub unsafe fn platform_init_selfcontained(
         );
     }
 
-    log_info("BOOT", 100, "taking ownership of platform init");
-
-    log_info("BOOT", 101, "phase 1/13: memory");
-
     // Collect live PT/GDT/IDT/stack pages BEFORE buddy init. The buddy writes a
     // 16-byte FreeNode at every free block base (incl. spare splits); landing
     // that on a live PT rewrites the first two PTEs → #PF/#GP next TLB miss.
@@ -325,7 +320,7 @@ pub unsafe fn platform_init_selfcontained(
         }
     }
 
-    log_info("BOOT", 102, "phase 2/13: cpu state");
+    boot_step_ok("memory + buddy allocator");
     checkpoint("phase2-begin");
 
     // Guard MUST drop before next relock — SpinLock recursion deadlocks instantly.
@@ -365,13 +360,13 @@ pub unsafe fn platform_init_selfcontained(
         checkpoint("phase2-percpu-done");
     }
 
-    log_info("BOOT", 103, "phase 3/13: pic");
+    boot_step_ok("cpu: gdt / idt / sse / lapic");
     checkpoint("phase3-pic");
 
     init_pic();
+    boot_step_ok("interrupts");
     checkpoint("phase3-done");
 
-    log_info("BOOT", 104, "phase 4/13: heap");
     checkpoint("phase4-heap-begin");
 
     // GLOBAL_REGISTRY unlocked — phase 2 dropped the guard.
@@ -379,9 +374,9 @@ pub unsafe fn platform_init_selfcontained(
         log_error("HEAP", 401, e);
         return Err(InitError::NoFreeMemory);
     }
+    boot_step_ok("heap");
     checkpoint("phase4-heap-done");
 
-    log_info("BOOT", 105, "phase 5/13: tsc");
     checkpoint("phase5-tsc-calibrate");
 
     let tsc_freq = calibrate_tsc_pit();
@@ -444,7 +439,7 @@ pub unsafe fn platform_init_selfcontained(
         }
     }
 
-    log_info("BOOT", 106, "phase 6/13: dma");
+    boot_step_ok("timing (tsc)");
     checkpoint("phase6-dma-alloc");
 
     let dma_pages = DMA_SIZE.div_ceil(4096) as u64;
@@ -469,13 +464,13 @@ pub unsafe fn platform_init_selfcontained(
     // SAFETY: page-aligned, identity-mapped, owned.
     let dma_region = unsafe { DmaRegion::new(dma_phys as *mut u8, dma_phys, DMA_SIZE) };
 
-    log_info("BOOT", 107, "phase 7/13: pci");
+    boot_step_ok("dma region");
     checkpoint("phase7-pci-begin");
 
     enable_all_pci_devices();
+    boot_step_ok("pci bus");
     checkpoint("phase7-done");
 
-    log_info("BOOT", 108, "phase 8/13: paging");
     checkpoint("phase8-paging-begin");
 
     init_kernel_page_table();
@@ -488,15 +483,7 @@ pub unsafe fn platform_init_selfcontained(
 
     // USB input enumerates pre-scheduler so user processes never see a
     // half-built input subsystem.
-    log_info("BOOT", 109, "phase 9/13: USB input init");
     checkpoint("phase9-usb-begin");
-
-    // Dump every USB host before the xHCI-only scan — exposes EHCI/UHCI/OHCI
-    // controllers we don't (yet) drive.
-    // SAFETY: PCI config space is always accessible.
-    unsafe {
-        dump::dump_usb_controllers();
-    }
 
     {
         // HID ringbuf init (kernel-side; bootloader wires the hook).
@@ -510,7 +497,9 @@ pub unsafe fn platform_init_selfcontained(
         }
 
         // PCI class 0x0C / subclass 0x03 = Serial Bus / USB; prog_if 0x30 = xHCI (only one we drive).
-        let mut usb_init_count = 0usize;
+        let mut usb_kbd = false;
+        let mut usb_mouse = false;
+        let mut usb_dev_no_hid = false;
         for bus in 0..=255u8 {
             for device in 0..32u8 {
                 let addr = PciAddr::new(bus, device, 0);
@@ -544,19 +533,13 @@ pub unsafe fn platform_init_selfcontained(
                                     match unsafe { enumerate_and_bind_inputs(&mut controller) } {
                                         Ok(result) => {
                                             if result.keyboard.is_some() {
-                                                log_ok("USB", 910, "USB keyboard detected");
-                                                usb_init_count += 1;
+                                                usb_kbd = true;
                                             }
                                             if result.mouse.is_some() {
-                                                log_ok("USB", 911, "USB mouse detected");
-                                                usb_init_count += 1;
+                                                usb_mouse = true;
                                             }
                                             if result.keyboard.is_none() && result.mouse.is_none() {
-                                                log_info(
-                                                    "USB",
-                                                    912,
-                                                    "USB device found but no HID interface",
-                                                );
+                                                usb_dev_no_hid = true;
                                             }
                                             result.keyboard
                                         },
@@ -592,22 +575,20 @@ pub unsafe fn platform_init_selfcontained(
             }
         }
 
-        if usb_init_count == 0 {
-            log_info("USB", 930, "no USB input devices; PS/2 remains primary");
-        } else {
-            log_ok("USB", 931, "USB input initialization complete");
-        }
+        // Collapse enumeration into one checklist row describing what bound.
+        let usb_label = match (usb_kbd, usb_mouse) {
+            (true, true) => "usb input (keyboard + mouse)",
+            (true, false) => "usb input (keyboard)",
+            (false, true) => "usb input (mouse)",
+            (false, false) if usb_dev_no_hid => "usb input (device, no HID interface)",
+            (false, false) => "usb input (none; ps/2 primary)",
+        };
+        boot_step_ok(usb_label);
     }
     checkpoint("phase9-usb-done");
 
     // End phases 1-9. Bootloader calls `install_hal`, then `morpheus_kernel::init`
     // (phases 10/11/11b), then 10.5 reclaim + phase 12 SMP via HAL methods.
-
-    log_ok(
-        "BOOT",
-        199,
-        "phase 1-9 complete; handing off to kernel late-init",
-    );
 
     let allocator = fallback_allocator();
 

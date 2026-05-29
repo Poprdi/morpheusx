@@ -1,7 +1,7 @@
 //! 8259 PIC remap to vectors 0x20-0x2F. APIC support stubs at the bottom.
 
 use crate::asm::pio::{inb, outb};
-use crate::serial::{log_info, log_ok, log_warn};
+use crate::serial::log_warn;
 
 const PIC1_COMMAND: u16 = 0x20;
 const PIC1_DATA: u16 = 0x21;
@@ -75,8 +75,6 @@ pub unsafe fn init_pic() {
     PIC_MASK1 = 0xFF;
     PIC_MASK2 = 0xFF;
     PIC_INITIALIZED = true;
-
-    log_ok("PIC", 751, "remapped to vectors 0x20-0x2f");
 }
 
 /// Mask all IRQs on both PICs (when using APIC).
@@ -87,7 +85,6 @@ pub unsafe fn init_pic() {
 pub unsafe fn disable_pic() {
     outb(PIC1_DATA, 0xFF);
     outb(PIC2_DATA, 0xFF);
-    log_info("PIC", 752, "disabled");
 }
 
 /// # Safety

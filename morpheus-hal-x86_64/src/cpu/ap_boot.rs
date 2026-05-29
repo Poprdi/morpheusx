@@ -9,7 +9,7 @@ use crate::cpu::apic;
 use crate::cpu::gdt;
 use crate::cpu::per_cpu::{self, MAX_CPUS};
 use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
-use crate::serial::{log_error, log_info, log_ok, log_warn};
+use crate::serial::{log_error, log_warn};
 use core::sync::atomic::{AtomicBool, Ordering};
 /// Trampoline physical address. Page-aligned, <1 MiB. 0x8000 is traditional.
 const AP_TRAMPOLINE_PHYS: u64 = 0x8000;
@@ -188,9 +188,7 @@ fn park_until_scheduler_release() {
 /// Release parked APs into LAPIC-timer scheduling. APs are brought up early
 /// but held IF=0 until BSP finishes driver init.
 pub fn release_parked_aps() {
-    if !AP_SCHEDULER_RELEASED.swap(true, Ordering::Release) {
-        log_ok("AP", 530, "parked APs released for scheduling");
-    }
+    let _ = AP_SCHEDULER_RELEASED.swap(true, Ordering::Release);
 }
 
 /// Preferred AP bring-up path: use MADT-discovered LAPIC IDs.
@@ -205,8 +203,6 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
     if ap_lapic_ids.is_empty() {
         return;
     }
-
-    log_info("AP", 504, "starting AP bring-up from MADT list");
 
     if !setup_trampoline() {
         return;
@@ -241,8 +237,6 @@ pub unsafe fn start_aps_from_list(ap_lapic_ids: &[u32]) {
 
         budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
-
-    log_ok("AP", 505, "MADT AP bring-up pass complete");
 }
 
 /// CPUID fallback: brute-force LAPIC IDs 0..255. Ghosts free their stacks.
@@ -257,7 +251,6 @@ pub unsafe fn start_aps() {
 
     let total_cpus = per_cpu::cpu_count();
     if total_cpus <= 1 {
-        log_info("AP", 507, "single-core detected; no AP startup needed");
         return;
     }
 
@@ -291,10 +284,6 @@ pub unsafe fn start_aps() {
             break;
         }
 
-        if (lapic_id & 0x1F) == 0 {
-            log_info("AP", 511, "AP scan progress checkpoint");
-        }
-
         if boot_single_ap(core_idx, lapic_id) {
             core_idx += 1;
             online += 1;
@@ -303,8 +292,6 @@ pub unsafe fn start_aps() {
         // Upper bound: INIT delay + SIPI delays + wait timeout.
         scan_budget_used_us += 10_400 + AP_WAIT_TIMEOUT_US;
     }
-
-    log_ok("AP", 509, "brute-force AP bring-up pass complete");
 }
 
 /// AP entry from trampoline. Long mode, IF=0, kernel CR3, BSP GDT.
@@ -316,8 +303,6 @@ pub unsafe fn start_aps() {
 /// into the trampoline handoff block for this AP. Must not be called from Rust.
 #[no_mangle]
 pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
-    log_ok("AP", 520, "AP {} (LAPIC {}) booting");
-
     let stack_top = core::ptr::read_volatile((AP_TRAMPOLINE_PHYS + TD_STACK) as *const u64);
     gdt::init_gdt_for_ap(stack_top, core_idx);
     crate::cpu::idt::load_idt_for_ap();
@@ -331,7 +316,6 @@ pub unsafe extern "sysv64" fn ap_rust_entry(core_idx: u32, lapic_id: u32) -> ! {
 
     core::ptr::write_volatile((AP_TRAMPOLINE_PHYS + TD_READY) as *mut u32, 1);
     crate::cpu::per_cpu::AP_ONLINE_COUNT.fetch_add(1, Ordering::Release);
-    log_ok("AP", 527, "AP {} online and parked");
 
     park_until_scheduler_release();
     apic::setup_timer(100);

@@ -76,7 +76,6 @@ impl Mouse {
         asm_ps2_flush();
         self.fill = 0;
         self.desync_count = 0;
-        morpheus_hal_x86_64::serial::log_ok("INPUT", 934, "PS/2 mouse ready");
     }
 
     /// Returns a packet once 3 aux-port bytes are accumulated.

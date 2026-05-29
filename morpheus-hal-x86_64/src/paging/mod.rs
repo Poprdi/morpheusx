@@ -7,7 +7,7 @@ pub mod table;
 pub use entry::{PageFlags, PageTable, PageTableEntry};
 pub use table::{MappedPageSize, PageTableManager, VirtAddr};
 
-use crate::serial::{log_info, log_ok, log_warn};
+use crate::serial::{log_info, log_warn};
 use crate::sync::SpinLock;
 
 static KERNEL_PT: SpinLock<Option<PageTableManager>> = SpinLock::new(None);
@@ -35,7 +35,6 @@ pub unsafe fn init_kernel_page_table() {
             in(reg) cr0 & !(1u64 << 16),
             options(nomem, nostack),
         );
-        log_info("PAGING", 731, "cleared CR0.WP");
 
         // Full TLB flush; some HW caches R/W=0 under WP=1 and faults later.
         let cr3_val: u64;
@@ -251,8 +250,6 @@ pub unsafe fn reserve_page_table_pages() -> usize {
             },
         }
     }
-
-    log_ok("PAGING", 732, "reserved live page-table pages");
 
     reserved
 }

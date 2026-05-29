@@ -23,7 +23,7 @@ use morpheus_hal_x86_64::memory::{global_registry_mut, AllocateType, MemoryType}
 use morpheus_hal_x86_64::paging::is_paging_initialized;
 use morpheus_hal_x86_64::paging::kmap_mmio;
 use morpheus_hal_x86_64::pci::{pci_cfg_read16, pci_cfg_read32, PciAddr};
-use morpheus_hal_x86_64::serial::{log_error, log_info, log_ok, log_warn, puts};
+use morpheus_hal_x86_64::serial::{log_error, log_warn, puts};
 
 const VIRTIO_QUEUE_SIZE: u16 = 32;
 
@@ -574,10 +574,7 @@ pub unsafe fn init_persistent_storage(
     tsc_freq: u64,
     pre_ebs_helix: Option<crate::boot::PreEbsHelixImage>,
 ) {
-    log_info("STORAGE", 822, "probing block devices");
-
     if let Some(img) = pre_ebs_helix {
-        log_info("STORAGE", 822, "using pre-EBS staged Helix image");
         RAM_HELIX_DEVICE = Some(MemBlockDevice::new(
             img.base as *mut u8,
             img.size,
@@ -591,7 +588,6 @@ pub unsafe fn init_persistent_storage(
                 Ok(()) => {
                     if root_path_exists("/bin/init") {
                         PERSISTENT_READY = true;
-                        log_ok("STORAGE", 827, "mounted pre-EBS staged Helix root");
                         return;
                     }
                     log_warn(
@@ -654,11 +650,6 @@ pub unsafe fn init_persistent_storage(
         return;
     }
     let _ = dev_count;
-    log_info(
-        "STORAGE",
-        824,
-        "block devices detected; selecting data disk",
-    );
 
     // Skip boot disks (GPT/MBR), accept first blank or HelixFS device.
     let mut found_data_disk = false;
@@ -669,21 +660,6 @@ pub unsafe fn init_persistent_storage(
             Some(d) => d,
             None => continue,
         };
-
-        match detected {
-            DetectedBlockDevice::Ahci(_) => {
-                log_info("STORAGE", 824, "probing AHCI candidate");
-            },
-            DetectedBlockDevice::Sdhci(_) => {
-                log_info("STORAGE", 824, "probing SDHCI candidate");
-            },
-            DetectedBlockDevice::UsbMsd(_) => {
-                log_info("STORAGE", 824, "probing USB xHCI/MSD candidate");
-            },
-            DetectedBlockDevice::VirtIO { .. } => {
-                log_info("STORAGE", 824, "probing VirtIO-blk candidate");
-            },
-        }
 
         // Map BARs UC before driver touches them.
         if let DetectedBlockDevice::VirtIO { pci_addr, .. } = detected {
@@ -1006,7 +982,6 @@ pub unsafe fn init_persistent_storage(
         let region = match select_data_region(info.sector_size, info.total_sectors) {
             Some(r) => r,
             None => {
-                log_info("STORAGE", 826, "boot/system disk detected; skipping");
                 BLOCK_DEVICE = None;
                 continue;
             },
@@ -1015,18 +990,12 @@ pub unsafe fn init_persistent_storage(
         STORAGE_LBA_BASE = region.lba_start;
         STORAGE_REGION_SECTORS = region.sectors;
 
-        if region.lba_start != 0 {
-            log_info("STORAGE", 837, "selected non-zero LBA data region");
-        }
-
         if region.sectors == 0 {
             BLOCK_DEVICE = None;
             continue;
         }
 
         // Commit only after proving the candidate holds HelixFS.
-        log_ok("STORAGE", 827, "selected data-disk candidate");
-
         let _raw_dev = make_raw_block_device();
 
         let needs_format = {
@@ -1062,14 +1031,11 @@ pub unsafe fn init_persistent_storage(
             );
             BLOCK_DEVICE = None;
             continue;
-        } else {
-            log_info("STORAGE", 833, "valid helixfs found; mounting");
         }
 
         let mut mounted_from_ram = false;
         let mount_dev = match stage_selected_region_to_ram(info.sector_size) {
             Some(mem_dev) => {
-                log_ok("STORAGE", 838, "helix partition staged into RAM");
                 mounted_from_ram = true;
                 mem_dev
             },
@@ -1108,11 +1074,6 @@ pub unsafe fn init_persistent_storage(
                             spinner_done();
                             if root_path_exists("/bin/init") {
                                 root_has_init = true;
-                                log_ok(
-                                    "STORAGE",
-                                    845,
-                                    "direct-media root remount restored /bin/init",
-                                );
                             } else {
                                 root_has_init = false;
                                 log_warn(
@@ -1142,22 +1103,15 @@ pub unsafe fn init_persistent_storage(
 
                 PERSISTENT_READY = true;
                 found_data_disk = true;
-                if root_path_exists("/bin/init") {
-                    log_ok("STORAGE", 848, "root check: /bin/init present");
-                } else {
+                if !root_path_exists("/bin/init") {
                     log_warn("STORAGE", 848, "root check: /bin/init missing");
                 }
-                if root_path_exists("/bin/compd") {
-                    log_ok("STORAGE", 849, "root check: /bin/compd present");
-                } else {
+                if !root_path_exists("/bin/compd") {
                     log_warn("STORAGE", 849, "root check: /bin/compd missing");
                 }
-                if root_path_exists("/bin/shelld") {
-                    log_ok("STORAGE", 850, "root check: /bin/shelld present");
-                } else {
+                if !root_path_exists("/bin/shelld") {
                     log_warn("STORAGE", 850, "root check: /bin/shelld missing");
                 }
-                log_ok("STORAGE", 834, "persistent root filesystem mounted at /");
                 break 'device_scan;
             },
             Err(e) => {
@@ -1249,7 +1203,6 @@ unsafe fn is_boot_disk(sector_size: u32) -> bool {
 /// Copy selected Helix partition into RAM, return a RawBlockDevice over it.
 unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevice> {
     RAM_STAGE_LAST_REASON = "none";
-    log_info("STORAGE", 843, "RAM stage attempt begin");
 
     let mut probe = make_raw_block_device();
     let sb = match morpheus_helix::log::recovery::recover_superblock(&mut probe, 0, sector_size) {
@@ -1332,7 +1285,6 @@ unsafe fn stage_selected_region_to_ram(sector_size: u32) -> Option<RawBlockDevic
     }
 
     let stage_pages = copy_bytes.div_ceil(4096);
-    log_info("STORAGE", 843, "RAM stage: allocating page-backed image");
     let stage_base = {
         let mut registry = global_registry_mut();
         match registry.allocate_pages(
@@ -1411,8 +1363,6 @@ pub fn create_init_directories() {
             },
         }
     }
-
-    log_ok("INITFS", 842, "directory structure ready");
 }
 
 // RawBlockDevice fn-ptr vtable → UnifiedBlockIo, reuses chunked DMA r/w + timeout.
