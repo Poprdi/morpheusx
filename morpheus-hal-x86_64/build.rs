@@ -130,8 +130,7 @@ fn provision_trampoline(target: &str, out_dir: &Path) {
                 .unwrap_or(0)
         );
     } else {
-        std::fs::write(&trampoline_bin, [])
-            .expect("write empty ap_trampoline.bin placeholder");
+        std::fs::write(&trampoline_bin, []).expect("write empty ap_trampoline.bin placeholder");
     }
 }
 
