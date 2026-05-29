@@ -6,7 +6,11 @@ description = "x86_64 implementation of the morpheus-hal-api trait surface. Owns
 build = "build.rs"
 
 [features]
-default = []
+default = ["smp"]
+# Multi-core bring-up. Gates `AP_TRAMPOLINE_BIN` in cpu/ap_boot.rs: when off,
+# the trampoline is `&[]` and start_aps* no-op with "smp disabled". Restored
+# after the hwinit→hal-x86_64 split (71df7ef) dropped the original declaration.
+smp = []
 
 [dependencies]
 morpheus-hal-api.workspace = true
