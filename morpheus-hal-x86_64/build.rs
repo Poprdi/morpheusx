@@ -31,6 +31,14 @@ fn main() {
 
     println!("cargo:rerun-if-changed=build.rs");
 
+    // The AP trampoline is `include_bytes!`d unconditionally when the `smp`
+    // feature is on, so the file must exist for EVERY target — including the
+    // host target used by `cargo clippy`/`check --all-features`, which type-
+    // checks the code but never runs it. Real UEFI builds assemble the flat
+    // binary; other targets get an empty placeholder (=> AP_TRAMPOLINE_BIN is
+    // empty => smp bring-up no-ops, matching the pre-smp-feature behavior).
+    provision_trampoline(&target, &out_dir);
+
     if !target.contains("x86_64") {
         println!(
             "cargo:warning=Skipping ASM for non-x86_64 target: {}",
@@ -69,12 +77,35 @@ fn main() {
         }
     }
 
-    // AP trampoline: flat binary, `include_bytes!`d by `cpu/ap_boot.rs`.
+    if objects.is_empty() {
+        println!("cargo:warning=No ASM files assembled");
+        return;
+    }
+
+    let lib = out_dir.join("libmorpheus_hal_x86_64_asm.a");
+    let mut args: Vec<String> = vec!["crs".into(), lib.to_str().unwrap().into()];
+    args.extend(objects.iter().map(|p| p.to_str().unwrap().into()));
+
+    let out = Command::new("ar").args(&args).output().expect("ar failed");
+    if !out.status.success() {
+        panic!("ar failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=morpheus_hal_x86_64_asm");
+}
+
+/// Ensure `ap_trampoline.bin` exists in OUT_DIR. Assembles the flat binary on
+/// real x86_64-UEFI targets; writes an empty placeholder elsewhere so the
+/// unconditional `include_bytes!` in `cpu/ap_boot.rs` always resolves.
+fn provision_trampoline(target: &str, out_dir: &Path) {
+    let trampoline_bin = out_dir.join("ap_trampoline.bin");
     let trampoline_src = "asm/cpu/ap_trampoline.s";
-    if Path::new(trampoline_src).exists() {
+
+    let is_uefi_x86 = target.contains("x86_64") && target.contains("uefi");
+    if is_uefi_x86 && Path::new(trampoline_src).exists() {
         println!("cargo:rerun-if-changed={}", trampoline_src);
 
-        let trampoline_bin = out_dir.join("ap_trampoline.bin");
         let out = Command::new("nasm")
             .args([
                 "-f",
@@ -98,24 +129,10 @@ fn main() {
                 .map(|m| m.len())
                 .unwrap_or(0)
         );
+    } else {
+        std::fs::write(&trampoline_bin, [])
+            .expect("write empty ap_trampoline.bin placeholder");
     }
-
-    if objects.is_empty() {
-        println!("cargo:warning=No ASM files assembled");
-        return;
-    }
-
-    let lib = out_dir.join("libmorpheus_hal_x86_64_asm.a");
-    let mut args: Vec<String> = vec!["crs".into(), lib.to_str().unwrap().into()];
-    args.extend(objects.iter().map(|p| p.to_str().unwrap().into()));
-
-    let out = Command::new("ar").args(&args).output().expect("ar failed");
-    if !out.status.success() {
-        panic!("ar failed: {}", String::from_utf8_lossy(&out.stderr));
-    }
-
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=morpheus_hal_x86_64_asm");
 }
 
 fn assemble(path: &str, out_dir: &Path, fmt: &str) -> Result<PathBuf, String> {
