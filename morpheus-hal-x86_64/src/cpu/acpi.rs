@@ -225,9 +225,6 @@ unsafe fn parse_madt(madt_phys: u64, bsp_lapic_id: u32) -> ApLapicIds {
 
     let madt_fixed = (madt_phys + SDT_HEADER_SIZE as u64) as *const MadtFixed;
     let reported_lapic_addr = (*madt_fixed).local_apic_addr;
-    puts("[ACPI] MADT LAPIC addr: ");
-    put_hex32(reported_lapic_addr);
-    puts("\n");
 
     // Cross-check MADT LAPIC addr vs IA32_APIC_BASE; mismatch = firmware lying.
     let probed_base = crate::cpu::apic::lapic_base() as u32;
@@ -385,8 +382,6 @@ pub unsafe fn discover_ap_lapic_ids(bsp_lapic_id: u32) -> ApLapicIds {
     if result.count == 0 {
         crate::serial::log_warn("ACPI", 763, "MADT parsed but no usable AP LAPIC entries");
     }
-
-    crate::serial::log_ok("ACPI", 762, "MADT parsed");
 
     result
 }

@@ -84,8 +84,6 @@ pub unsafe fn init_scheduler() {
         let fpu_ptr = &mut p.fpu_state as *mut morpheus_hal_api::FpuState as u64;
         set_percpu_fpu_ptr(fpu_ptr);
     }
-
-    puts("[SCHED] initialized - kernel is PID 0\n");
 }
 
 pub unsafe fn spawn_kernel_thread(

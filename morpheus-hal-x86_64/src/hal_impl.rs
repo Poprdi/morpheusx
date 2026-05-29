@@ -247,6 +247,18 @@ impl Serial for HalImpl {
     fn newline(&self) {
         crate::serial::newline();
     }
+    fn boot_banner(&self, title: &str, version: &str) {
+        crate::serial::boot_banner(title, version);
+    }
+    fn boot_step_ok(&self, label: &str) {
+        crate::serial::boot_step_ok(label);
+    }
+    fn boot_step_warn(&self, label: &str) {
+        crate::serial::boot_step_warn(label);
+    }
+    fn boot_step_fail(&self, label: &str) {
+        crate::serial::boot_step_fail(label);
+    }
 }
 
 fn map_alloc_kind(k: AllocKind) -> crate::memory::AllocateType {

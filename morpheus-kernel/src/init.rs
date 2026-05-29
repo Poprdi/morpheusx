@@ -31,12 +31,11 @@ pub struct InitParams {
 /// run against a buddy that's already been hammered.
 pub unsafe fn init(hal: &'static dyn Hal, params: InitParams) {
     // ----- Phase 10: scheduler -----
-    crate::serial::log_info("BOOT", 110, "phase 10/13: scheduler");
     crate::schedular::init_scheduler();
     crate::schedular::set_tsc_frequency(hal.timer().tsc_frequency());
+    hal.serial().boot_step_ok("scheduler");
 
     // ----- Phase 11a: syscall MSRs + LAPIC periodic timer takeover -----
-    crate::serial::log_info("BOOT", 111, "phase 11/13: syscalls");
     crate::syscall::init_syscall();
 
     // 100 Hz preemption, calibrated against TSC inside the HAL.
@@ -50,9 +49,9 @@ pub unsafe fn init(hal: &'static dyn Hal, params: InitParams) {
     // PID 0's SYSCALL entry reads kernel_syscall_rsp from the per-CPU block.
     hal.smp()
         .pcpu_set_kernel_syscall_rsp(params.kernel_stack_top);
+    hal.serial().boot_step_ok("syscalls");
 
     let _ = params.root_fs_size;
-    crate::serial::log_ok("BOOT", 199, "kernel late-init complete");
 }
 
 /// Phase 11b: bootloader calls this AFTER `hal.phys().reclaim_boot_services()`.
@@ -70,6 +69,7 @@ pub unsafe fn mount_root_fs(hal: &'static dyn Hal, size_bytes: usize) {
     {
         Ok(p) => p,
         Err(_) => {
+            hal.serial().boot_step_warn("filesystem (helixfs)");
             crate::serial::log_warn(
                 "FS",
                 412,
@@ -82,8 +82,11 @@ pub unsafe fn mount_root_fs(hal: &'static dyn Hal, size_bytes: usize) {
     core::ptr::write_bytes(base as *mut u8, 0, size_bytes);
 
     match morpheus_helix::vfs::global::init_root_fs(base as *mut u8, size_bytes) {
-        Ok(()) => crate::serial::log_ok("FS", 112, "bootstrap RAM helixfs mounted at /"),
-        Err(_) => crate::serial::log_warn("FS", 412, "root fs init failed; continuing without fs"),
+        Ok(()) => hal.serial().boot_step_ok("filesystem (helixfs)"),
+        Err(_) => {
+            hal.serial().boot_step_warn("filesystem (helixfs)");
+            crate::serial::log_warn("FS", 412, "root fs init failed; continuing without fs");
+        },
     }
 }
 

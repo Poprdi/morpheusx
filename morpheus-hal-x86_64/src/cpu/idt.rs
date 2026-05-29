@@ -909,7 +909,6 @@ pub unsafe fn init_idt() {
     );
 
     IDT_INITIALIZED = true;
-    crate::serial::log_ok("IDT", 741, "exception vectors installed");
 }
 
 /// Set a custom interrupt handler for a vector.

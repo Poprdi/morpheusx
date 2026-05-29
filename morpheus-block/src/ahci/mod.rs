@@ -236,19 +236,13 @@ impl AhciDriver {
         let tsc_freq = config.tsc_freq;
 
         // BIOS/OS handoff must precede any GHC access on Intel PCH.
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 0: bios handoff\n");
         ahci_bios_handoff(abar, tsc_freq);
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 0: done\n");
 
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 1: hba reset\n");
         if asm_ahci_hba_reset(abar, tsc_freq) != 0 {
-            morpheus_hal_x86_64::serial::puts("[AHCI] step 1: TIMEOUT\n");
             return Err(AhciInitError::ResetFailed);
         }
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 1: done\n");
         asm_ahci_enable(abar);
 
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 2: read caps\n");
         let _cap = asm_ahci_read_cap(abar);
         let num_slots = asm_ahci_get_num_cmd_slots(abar);
         let ports_impl = asm_ahci_read_pi(abar);
@@ -258,11 +252,9 @@ impl AhciDriver {
             return Err(AhciInitError::No64BitSupport);
         }
 
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 3: disable irq\n");
         asm_ahci_disable_interrupts(abar);
 
         // Strict ATA sigs first, then anything that looked alive during the settle window.
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 4: port scan\n");
         let mut strict_ports = [u32::MAX; 32];
         let mut strict_count = 0usize;
         let mut fallback_ports = [u32::MAX; 32];
@@ -355,7 +347,6 @@ impl AhciDriver {
             candidate_count += 1;
         }
 
-        morpheus_hal_x86_64::serial::puts("[AHCI] step 5: try candidates\n");
         let mut last_err = AhciInitError::NoDeviceFound;
 
         #[allow(clippy::needless_range_loop)]

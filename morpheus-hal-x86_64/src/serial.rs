@@ -315,6 +315,56 @@ pub fn log_error(component: &str, code: u16, msg: &str) {
     log_level(ANSI_RED, "ERR", component, code, msg);
 }
 
+/// Boot-chain title banner. One blank line, indented title + version, blank
+/// line. Cyan when ANSI is enabled.
+pub fn boot_banner(title: &str, version: &str) {
+    let ansi = LOG_ANSI_ENABLED.load(Ordering::Acquire);
+    puts("\n  ");
+    if ansi {
+        puts(ANSI_CYAN);
+    }
+    puts(title);
+    if ansi {
+        puts(ANSI_RESET);
+    }
+    puts("  ");
+    puts(version);
+    puts("\n\n");
+}
+
+/// One checklist row: `  [TAG]  label`. `tag` is the 4-char status text
+/// (`" OK "`, `"WARN"`, `"FAIL"`); `color` tints only the bracketed tag.
+fn boot_step(color: &str, tag: &str, label: &str) {
+    let ansi = LOG_ANSI_ENABLED.load(Ordering::Acquire);
+    puts("  [");
+    if ansi {
+        puts(color);
+    }
+    puts(tag);
+    if ansi {
+        puts(ANSI_RESET);
+    }
+    puts("]  ");
+    puts(label);
+    puts("\n");
+}
+
+/// Happy-path checklist marker — green `[ OK ]`.
+pub fn boot_step_ok(label: &str) {
+    boot_step(ANSI_GREEN, " OK ", label);
+}
+
+/// Non-fatal checklist marker — yellow `[WARN]`. The detailed `log_warn`
+/// lines that follow carry the specifics.
+pub fn boot_step_warn(label: &str) {
+    boot_step(ANSI_YELLOW, "WARN", label);
+}
+
+/// Fatal checklist marker — red `[FAIL]`.
+pub fn boot_step_fail(label: &str) {
+    boot_step(ANSI_RED, "FAIL", label);
+}
+
 pub fn set_checkpoints_enabled(enabled: bool) {
     CHECKPOINTS_ENABLED.store(enabled, Ordering::Release);
 }

@@ -4,7 +4,7 @@
 //! FIELD OFFSETS ARE ABI. context_switch.s and syscall.s hardcode `gs:[offset]`.
 //! Reordering without updating the asm + constants below = next tick is your last.
 
-use crate::serial::{log_ok, put_hex32, puts};
+use crate::serial::{put_hex32, puts};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 pub const MAX_CPUS: usize = 16;
@@ -198,8 +198,6 @@ pub unsafe fn init_bsp(lapic_id: u32, lapic_base: u64) {
     wrmsr(IA32_KERNEL_GS_BASE, 0);
 
     AP_ONLINE_COUNT.store(1, Ordering::SeqCst);
-
-    log_ok("PERCPU", 601, "BSP per-cpu context online");
 
     debug_assert_offsets();
 }

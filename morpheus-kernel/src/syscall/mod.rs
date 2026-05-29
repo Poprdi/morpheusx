@@ -231,8 +231,6 @@ pub unsafe fn init_syscall() {
     crate::sched_hooks::install_fb_present_tick(fb_present_tick_trampoline);
     crate::sched_hooks::install_compositor_active(compositor_active_trampoline);
     crate::sched_hooks::install_release_fb_lock_if_holder(release_fb_lock_trampoline);
-
-    crate::serial::log_ok("SYSCALL", 800, "syscall/sysret path enabled");
 }
 
 // `extern "C"` trampolines: `sched_hooks` declares the hook types with that

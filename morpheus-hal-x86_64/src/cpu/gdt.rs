@@ -221,7 +221,6 @@ pub unsafe fn init_gdt(kernel_stack: u64) {
     load_tss(TSS_SEL);
 
     GDT_INITIALIZED = true;
-    crate::serial::log_ok("GDT", 711, "gdt+tss initialized");
 }
 
 #[inline(always)]

@@ -365,6 +365,34 @@ pub trait Serial: Send + Sync {
     fn put_hex32(&self, v: u32);
     fn put_hex64(&self, v: u64);
     fn newline(&self);
+
+    /// Boot-checklist title banner. Default is an uncolored fallback; arch
+    /// HALs may override to add color.
+    fn boot_banner(&self, title: &str, version: &str) {
+        self.puts("\n  ");
+        self.puts(title);
+        self.puts("  ");
+        self.puts(version);
+        self.puts("\n\n");
+    }
+    /// Happy-path checklist row (`[ OK ]  label`).
+    fn boot_step_ok(&self, label: &str) {
+        self.puts("  [ OK ]  ");
+        self.puts(label);
+        self.newline();
+    }
+    /// Non-fatal checklist row (`[WARN]  label`); detail follows via `log_warn`.
+    fn boot_step_warn(&self, label: &str) {
+        self.puts("  [WARN]  ");
+        self.puts(label);
+        self.newline();
+    }
+    /// Fatal checklist row (`[FAIL]  label`).
+    fn boot_step_fail(&self, label: &str) {
+        self.puts("  [FAIL]  ");
+        self.puts(label);
+        self.newline();
+    }
 }
 
 /// Physical memory allocator over a buddy + the UEFI memory map.

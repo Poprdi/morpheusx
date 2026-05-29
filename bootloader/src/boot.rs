@@ -38,7 +38,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 use morpheus_display::console::TextConsole;
 use morpheus_hal_x86_64::platform::PlatformInit;
 use morpheus_hal_x86_64::serial::{
-    clear_live_console_hook, log_error, log_info, log_ok, log_warn, puts,
+    boot_banner, boot_step_fail, boot_step_ok, boot_step_warn, clear_live_console_hook, log_error,
+    log_warn, puts, set_log_style,
 };
 
 use crate::tui::input::Keyboard;
@@ -406,7 +407,9 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     ctx.image_handle = image_handle;
     ctx.system_table = system_table;
 
-    log_info("UEFI", 900, "efi_main entry");
+    // Color on, numeric event codes off — the framebuffer console parses ANSI
+    // SGR, so warn/error lines stand out and the happy-path checklist stays clean.
+    set_log_style(true, false);
 
     // Phase A — pre-EBS: UEFI still alive, allocator points at UEFI pool.
     stage_a1_arm_uefi_allocator(&ctx);
@@ -424,6 +427,11 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     stage_b4_switch_stack(&ctx);
     stage_b5_start_live_console(&ctx);
     stage_b6_publish_framebuffer(&ctx);
+
+    // Console (if any) is live and cleared — paint the banner and the first
+    // checklist row summarizing all the pre-EBS firmware work.
+    boot_banner("MorpheusX", concat!("v", env!("CARGO_PKG_VERSION")));
+    boot_step_ok("firmware handoff (UEFI/GOP)");
 
     // Phase C — hardware: hwinit takes ownership of the machine.
     let platform = stage_c1_platform_init(&ctx);
@@ -481,7 +489,6 @@ unsafe fn stage_a2_query_gop(ctx: &mut BootContext) {
             stride: info.pixels_per_scan_line,
             format: info.pixel_format,
         };
-        log_ok("UEFI", 901, "GOP framebuffer captured");
     } else {
         log_warn("UEFI", 902, "GOP not present; boot will run headless");
     }
@@ -505,14 +512,12 @@ unsafe fn stage_a3_collect_acpi_rsdp(ctx: &mut BootContext) {
     for t in tables {
         if t.vendor_guid == ACPI_20_TABLE_GUID {
             ctx.acpi_rsdp_phys = t.vendor_table as u64;
-            log_ok("ACPI", 902, "RSDP (ACPI 2.0) found");
             return;
         }
     }
     for t in tables {
         if t.vendor_guid == ACPI_10_TABLE_GUID {
             ctx.acpi_rsdp_phys = t.vendor_table as u64;
-            log_ok("ACPI", 903, "RSDP (ACPI 1.0) found");
             return;
         }
     }
@@ -554,7 +559,6 @@ unsafe fn stage_a5_allocate_kernel_stack(ctx: &mut BootContext) {
     ctx.stack_base = base;
     ctx.stack_pages = KERNEL_STACK_PAGES as u64;
     ctx.stack_top = base + KERNEL_STACK_SIZE as u64;
-    log_ok("EBS", 905, "kernel stack allocated");
 }
 
 /// A6. Best-effort load of `/morpheus/helix.img` from the ESP into RAM
@@ -686,7 +690,6 @@ unsafe fn stage_a6_stage_helix_image(ctx: &mut BootContext) {
         size: usable,
         sector_size: HELIX_IMG_SECTOR_SIZE,
     });
-    log_ok("EBS", 914, "pre-EBS staged /morpheus/helix.img into RAM");
 }
 
 /// A7. Capture the UEFI memory map immediately before EBS.
@@ -726,7 +729,6 @@ unsafe fn stage_a7_fetch_memory_map(ctx: &mut BootContext) {
     // (which intentionally takes only `&ctx`) can read it without making
     // BootContext store firmware-internal handles.
     EBS_MAP_KEY.store(map_key, Ordering::Relaxed);
-    log_ok("EBS", 915, "memory map captured");
 }
 
 static EBS_MAP_KEY: AtomicUsize = AtomicUsize::new(0);
@@ -740,7 +742,6 @@ unsafe fn stage_b1_exit_boot_services(ctx: &BootContext) {
     let bs = &*st.boot_services;
     let map_key = EBS_MAP_KEY.load(Ordering::Relaxed);
 
-    log_info("EBS", 920, "calling ExitBootServices");
     let status = (bs.exit_boot_services)(ctx.image_handle, map_key);
     if status != 0 {
         // OVMF DEBUG scrubs freed BootServicesCode with 0xAF, so a stale
@@ -749,7 +750,6 @@ unsafe fn stage_b1_exit_boot_services(ctx: &BootContext) {
         log_error("EBS", 921, "ExitBootServices failed");
         halt_forever();
     }
-    log_ok("EBS", 922, "machine ownership transferred");
 }
 
 /// B2. Belt-and-suspenders `cli`. UEFI's PIC/APIC timer may still be armed
@@ -854,13 +854,10 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
         stack_pages: ctx.stack_pages,
         acpi_rsdp_phys: ctx.acpi_rsdp_phys,
     };
-    let result = match morpheus_hal_x86_64::platform::platform_init_selfcontained(cfg) {
+    match morpheus_hal_x86_64::platform::platform_init_selfcontained(cfg) {
         Ok(p) => p,
         Err(_) => boot_panic("BOOT", "platform init failed"),
-    };
-
-    log_ok("BOOT", 930, "phase 1-9 complete (machine bring-up)");
-    result
+    }
 }
 
 /// xHCI MSI-X wiring shim. hal-x86_64 emits the hook with a
@@ -902,7 +899,6 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
             kernel_stack_top: platform.kernel_stack_top,
         },
     );
-    log_ok("BOOT", 932, "kernel late-init complete");
 
     // Wire KernelCr3Guard's kernel-CR3 lookup. The kernel can't call the arch
     // HAL directly (portability gate), so the bootloader installs the hook now
@@ -927,7 +923,6 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
 
     // Phase 11b: HelixFS root mount. Runs AFTER reclaim so the buddy is in
     // a known-clean post-reclaim state when the 16 MiB alloc carves it.
-    log_info("BOOT", 112, "phase 11b/13: helixfs");
     morpheus_kernel::init::mount_root_fs(hal, ROOT_FS_SIZE);
 
     // Phase 12: SMP bring-up. Per LD16 this happens AFTER the kernel
@@ -945,21 +940,58 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
             &[]
         },
     };
+    let mut smp_buf = [0u8; 32];
     if lapic_ids.is_empty() {
         // No MADT APs: CPUID brute-force fallback (detects topology internally).
         let cores = hal.smp().start_aps();
-        if cores > 1 {
-            log_ok("SMP", 215, "CPUID-fallback AP bring-up complete");
-        } else {
-            log_info("SMP", 215, "no APs via CPUID; single-core boot");
-        }
+        boot_step_ok(fmt_smp_label(&mut smp_buf, cores.max(1)));
     } else {
         // SAFETY: BSP, post-discover, IF managed by the impl.
         match unsafe { hal.smp().start_aps_from_list(lapic_ids) } {
-            Ok(_ap_count) => {},
-            Err(_) => log_warn("SMP", 214, "AP startup failed; continuing single-core"),
+            // ap_count excludes the BSP.
+            Ok(ap_count) => boot_step_ok(fmt_smp_label(&mut smp_buf, ap_count + 1)),
+            Err(_) => {
+                boot_step_warn("smp");
+                log_warn("SMP", 214, "AP startup failed; continuing single-core");
+            },
         }
     }
+}
+
+/// Format `smp (N cpu online)` into `buf`, returning the rendered slice. No
+/// alloc — used for the SMP checklist row where the CPU count is only known
+/// at runtime.
+fn fmt_smp_label(buf: &mut [u8], cpus: u32) -> &str {
+    const PREFIX: &[u8] = b"smp (";
+    const SUFFIX: &[u8] = b" cpu online)";
+    let mut i = 0;
+    for &b in PREFIX {
+        buf[i] = b;
+        i += 1;
+    }
+    if cpus == 0 {
+        buf[i] = b'0';
+        i += 1;
+    } else {
+        let mut digits = [0u8; 10];
+        let mut n = cpus;
+        let mut d = 0;
+        while n > 0 {
+            digits[d] = b'0' + (n % 10) as u8;
+            n /= 10;
+            d += 1;
+        }
+        while d > 0 {
+            d -= 1;
+            buf[i] = digits[d];
+            i += 1;
+        }
+    }
+    for &b in SUFFIX {
+        buf[i] = b;
+        i += 1;
+    }
+    core::str::from_utf8(&buf[..i]).unwrap_or("smp")
 }
 
 /// C2. Wire the BSoD as the crash hook. Safe to do now because the
@@ -967,7 +999,6 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
 /// from exception context.
 unsafe fn stage_c2_register_crash_hook() {
     morpheus_hal_x86_64::cpu::idt::set_crash_hook(bsod::show_crash_screen);
-    log_info("BOOT", 931, "crash hook registered");
 }
 
 /// C3. Record platform outputs (DMA region + TSC freq) into BootContext so
@@ -1027,7 +1058,6 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
             format: ctx.framebuffer.format,
         },
     );
-    log_ok("DISPLAY", 941, "framebuffer registered with syscall layer");
 }
 
 /// E1. Release the parked APs. From this point on, the system is fully SMP.
@@ -1036,24 +1066,19 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
 /// SMP-safe must already have run.
 unsafe fn stage_e1_release_aps() {
     morpheus_hal_x86_64::cpu::ap_boot::release_parked_aps();
-    log_ok("BOOT", 950, "APs released into scheduler");
 }
 
 /// E2. Final stage. Load `/bin/init`, spawn it, and become the kernel
 /// PS/2 input-forwarding loop until reset.
 unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
-    log_info("BOOT", 960, "preparing to launch /bin/init");
-
     // Pick input init based on what Phase 9 actually detected. If a USB
     // keyboard was enumerated we don't need (and don't want) to probe PS/2 —
     // on boards without a PS/2 controller the full reset path floods the log
     // with warnings and accomplishes nothing.
     let usb_kbd_present = morpheus_xhci::usb::runtime::keyboard_present();
     let mut keyboard = if usb_kbd_present {
-        log_info("BOOT", 963, "USB keyboard active; skipping PS/2 init");
         Keyboard::new_decoder_only()
     } else {
-        log_info("BOOT", 963, "no USB keyboard; trying PS/2 init");
         Keyboard::new()
     };
     boot_log_gate(&mut keyboard);
@@ -1075,10 +1100,7 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
 
     let init_pid =
         match morpheus_kernel::schedular::spawn_user_process("init", &elf_data, &[], 0, false) {
-            Ok(pid) => {
-                log_ok("BOOT", 961, "init process spawned");
-                pid
-            },
+            Ok(pid) => pid,
             Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
         };
     let _ = init_pid;
@@ -1086,7 +1108,6 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     // The ELF buffer can drop now; init has its own address space.
     drop(elf_data);
 
-    log_info("BOOT", 962, "entering input forwarding loop");
     input_forwarding_loop(&mut keyboard, &mut mouse);
 }
 
@@ -1095,7 +1116,7 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
 /// Primary path is USB HID; PS/2 is only polled as a fallback when no USB
 /// keyboard was detected during Phase 9 enumeration.
 fn boot_log_gate(keyboard: &mut Keyboard) {
-    puts("\nPress any key to start userspace...");
+    puts("\n  press any key to start userspace\n");
     let usb_active = morpheus_xhci::usb::runtime::keyboard_present();
     loop {
         if usb_active {
@@ -1185,7 +1206,6 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
     };
     buf.truncate(n);
     let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
-    log_ok("BOOT", 975, "/bin/init loaded");
     Some(buf)
 }
 
@@ -1267,6 +1287,7 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
 /// parked (pre-E1) or will quiesce on their next tick; either way the
 /// machine is dead from the user's perspective.
 fn boot_panic(component: &'static str, msg: &'static str) -> ! {
+    boot_step_fail(msg);
     log_error(component, 999, msg);
     halt_forever();
 }

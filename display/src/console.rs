@@ -1,9 +1,19 @@
 //! 8x16 text console over a framebuffer.
 
-use crate::colors::{attr_bg, attr_fg, efi};
+use crate::colors::{attr_bg, attr_fg, efi, make_attr};
 use crate::font::{get_glyph_or_space, FONT_HEIGHT, FONT_WIDTH};
 use crate::framebuffer::Framebuffer;
 use crate::types::Color;
+
+/// Minimal ANSI escape parser state. We only consume CSI SGR (`\x1b[..m`)
+/// color sequences so the serial log mirror renders colored, not as literal
+/// `[32m` text. Every other escape is swallowed.
+#[derive(Clone, Copy)]
+enum AnsiState {
+    Normal,
+    Escape,
+    Csi,
+}
 
 pub struct TextConsole {
     fb: Framebuffer,
@@ -14,6 +24,8 @@ pub struct TextConsole {
     fg_color: Color,
     bg_color: Color,
     attr: u8,
+    ansi: AnsiState,
+    ansi_param: u16,
 }
 
 impl TextConsole {
@@ -31,7 +43,26 @@ impl TextConsole {
             fg_color: attr_fg(efi::DEFAULT_ATTR),
             bg_color: attr_bg(efi::DEFAULT_ATTR),
             attr: efi::DEFAULT_ATTR,
+            ansi: AnsiState::Normal,
+            ansi_param: 0,
         }
+    }
+
+    /// Apply a single SGR parameter. Foreground colors map to the EFI palette;
+    /// `0` resets to the default attribute. Unsupported codes are ignored.
+    fn apply_sgr(&mut self, code: u16) {
+        let fg = match code {
+            0 => efi::DEFAULT_ATTR,
+            31 => efi::LIGHTRED,
+            32 => efi::LIGHTGREEN,
+            33 => efi::YELLOW,
+            34 => efi::LIGHTBLUE,
+            35 => efi::LIGHTMAGENTA,
+            36 => efi::LIGHTCYAN,
+            37 => efi::WHITE,
+            _ => return,
+        };
+        self.set_attribute(make_attr(fg, efi::BLACK));
     }
 
     pub fn cols(&self) -> usize {
@@ -107,6 +138,47 @@ impl TextConsole {
     }
 
     pub fn write_char(&mut self, c: char) {
+        // Consume ANSI SGR color escapes before rendering. The live serial
+        // mirror feeds bytes one at a time, so the parser state persists
+        // across calls.
+        match self.ansi {
+            AnsiState::Normal => {
+                if c == '\x1b' {
+                    self.ansi = AnsiState::Escape;
+                    return;
+                }
+            },
+            AnsiState::Escape => {
+                if c == '[' {
+                    self.ansi = AnsiState::Csi;
+                    self.ansi_param = 0;
+                } else {
+                    self.ansi = AnsiState::Normal;
+                }
+                return;
+            },
+            AnsiState::Csi => {
+                match c {
+                    '0'..='9' => {
+                        self.ansi_param = self
+                            .ansi_param
+                            .saturating_mul(10)
+                            .saturating_add(c as u16 - '0' as u16);
+                    },
+                    ';' => {
+                        self.apply_sgr(self.ansi_param);
+                        self.ansi_param = 0;
+                    },
+                    'm' => {
+                        self.apply_sgr(self.ansi_param);
+                        self.ansi = AnsiState::Normal;
+                    },
+                    _ => self.ansi = AnsiState::Normal,
+                }
+                return;
+            },
+        }
+
         match c {
             '\n' => self.newline(),
             '\r' => self.cursor_col = 0,

@@ -545,7 +545,6 @@ impl MemoryRegistry {
 
         let reclaimed_mb = (reclaimed_pages * PAGE_SIZE) >> 20;
         let _ = reclaimed_mb;
-        crate::serial::log_info("MEM", 762, "reclaimed boot services memory");
     }
 
     /// Add `[start, end)`, skipping `holes`. `holes` must be sorted ascending.
@@ -1048,9 +1047,7 @@ impl MemoryRegistry {
                 }
             }
         }
-        if corrupt == 0 {
-            crate::serial::log_ok("MEM", 760, "free-list validation passed");
-        } else {
+        if corrupt != 0 {
             crate::serial::log_warn("MEM", 761, "free-list validation found corruption");
         }
         corrupt
@@ -1082,7 +1079,6 @@ impl MemoryRegistry {
         let total_mb = (self.total_pages * PAGE_SIZE) >> 20;
         let free_mb = (self.free_pages * PAGE_SIZE) >> 20;
         let _ = (total_mb, free_mb);
-        crate::serial::log_ok("MEM", 763, "buddy allocator ready");
     }
 }
 
