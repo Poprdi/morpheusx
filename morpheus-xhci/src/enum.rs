@@ -167,6 +167,7 @@ impl XhciController {
         &mut self,
         dci_in: u8,
         mpkt_in: u16,
+        ring_off: usize,
     ) -> Result<(), XhciError> {
         let cs = self.ctx_size as u64;
         let in_ctx = self.dma_base + dma::OFF_IN_CTX as u64;
@@ -209,17 +210,22 @@ impl XhciController {
             ep_in + 4,
             (3u32 << 1) | (7u32 << 3) | ((mpkt_in as u32) << 16),
         );
-        // DW2/DW3: TR Dequeue Pointer for this endpoint's ring, DCS=1
-        // (fresh ring). HID interrupt-IN reuses the bulk-IN ring slot.
-        let ring_in = self.dma_base + dma::OFF_XFER_BIN as u64;
+        // DW2/DW3: TR Dequeue Pointer for this endpoint's ring, DCS=1.
+        // Keyboard reuses OFF_XFER_BIN; the mouse has its own ring so both
+        // interrupt-IN endpoints can stay armed at once.
+        let ring_in = self.dma_base + ring_off as u64;
         vw32(ep_in + 8, (ring_in as u32 & !0xF) | 1);
         vw32(ep_in + 12, (ring_in >> 32) as u32);
         // DW4: Average TRB Length — short reports for keyboards/mice.
         vw32(ep_in + 16, 8);
 
-        // Reset the producer state on the bulk-IN ring so the first interrupt
-        // transfer goes at offset 0 with cycle=1, matching the dequeue we just set.
-        self.bin.reset();
+        // Reset the producer so the first interrupt transfer goes at offset 0
+        // with cycle=1, matching the dequeue we just set.
+        if ring_off == dma::OFF_XFER_MOUSE {
+            self.mouse_ring.reset();
+        } else {
+            self.bin.reset();
+        }
 
         let ctrl = TRB_CONFIGURE_EP | ((self.slot_id as u32) << 24);
         self.cmd_ring.enqueue(in_ctx, 0, ctrl);

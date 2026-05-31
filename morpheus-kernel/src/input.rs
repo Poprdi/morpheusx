@@ -78,13 +78,9 @@ pub fn hid_keyboard_sink(byte: u8, pressed: bool) {
 /// Public hook target: the HAL HID mouse driver calls this (through the
 /// `KernelHooks::mouse_sink` function pointer the bootloader installs).
 pub fn hid_mouse_sink(dx: i16, dy: i16, buttons: u8, wheel: i8) {
-    push_mouse_event_internal(InputEvent::Move(dx, dy));
-    push_mouse_event_internal(InputEvent::Button(0, (buttons & 0x01) != 0));
-    push_mouse_event_internal(InputEvent::Button(1, (buttons & 0x02) != 0));
-    push_mouse_event_internal(InputEvent::Button(2, (buttons & 0x04) != 0));
-    if wheel != 0 {
-        push_mouse_event_internal(InputEvent::Wheel(wheel));
-    }
+    // Converge with PS/2 at the kernel accumulator — what SYS_MOUSE_READ drains
+    // and the compositor cursor reads. The MOUSE_EVENTS queue below is unused.
+    crate::mouse::accumulate_full(dx, dy, buttons & 0x07, wheel);
 }
 
 /// Panics on duplicate registration; PS/2 and USB are mutually exclusive.

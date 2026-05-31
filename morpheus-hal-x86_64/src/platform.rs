@@ -117,8 +117,8 @@ type TscFreqPublishHook = unsafe fn(u64);
 type InputInitHook = unsafe fn();
 /// `usb::msi::wire_msix(pci_addr, rt_base)`.
 type XhciMsixHook = unsafe fn(PciAddr, u64);
-/// `usb::runtime::install_runtime(controller, keyboard)`. Hook owns the controller after the call.
-type XhciRuntimeHook = unsafe fn(XhciController, Option<UsbInputDevice>);
+/// `usb::runtime::install_runtime(controller, keyboard, mouse)`. Hook owns the controller after the call.
+type XhciRuntimeHook = unsafe fn(XhciController, Option<UsbInputDevice>, Option<UsbInputDevice>);
 
 static TSC_FREQ_PUBLISH_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 static INPUT_INIT_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
@@ -529,7 +529,7 @@ pub unsafe fn platform_init_selfcontained(
                                         f(addr, controller.rt_base);
                                     }
                                 }
-                                let kbd_for_runtime =
+                                let (kbd_for_runtime, mouse_for_runtime) =
                                     match unsafe { enumerate_and_bind_inputs(&mut controller) } {
                                         Ok(result) => {
                                             if result.keyboard.is_some() {
@@ -541,12 +541,12 @@ pub unsafe fn platform_init_selfcontained(
                                             if result.keyboard.is_none() && result.mouse.is_none() {
                                                 usb_dev_no_hid = true;
                                             }
-                                            result.keyboard
+                                            (result.keyboard, result.mouse)
                                         },
                                         Err(e) => {
                                             log_warn("USB", 920, "USB enumeration failed");
                                             let _ = e;
-                                            None
+                                            (None, None)
                                         },
                                     };
                                 // Hand the xHC to the runtime polling module so
@@ -559,7 +559,7 @@ pub unsafe fn platform_init_selfcontained(
                                     let f: XhciRuntimeHook =
                                         unsafe { core::mem::transmute(rt_raw) };
                                     unsafe {
-                                        f(controller, kbd_for_runtime);
+                                        f(controller, kbd_for_runtime, mouse_for_runtime);
                                     }
                                 }
                             },
