@@ -138,9 +138,10 @@ pub unsafe fn sys_mouse_read() -> u64 {
         let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
         return (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32);
     }
-    let (dx, dy, buttons) = mouse::drain();
+    let (dx, dy, buttons, wheel) = mouse::drain();
     let _ = process::ProcessState::Ready; // touch to keep import used
     let dx16 = (dx.clamp(-32768, 32767) as i16) as u16;
     let dy16 = (dy.clamp(-32768, 32767) as i16) as u16;
-    (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32)
+    let wheel8 = (wheel.clamp(-128, 127) as i8) as u8;
+    (dx16 as u64) | ((dy16 as u64) << 16) | ((buttons as u64) << 32) | ((wheel8 as u64) << 48)
 }

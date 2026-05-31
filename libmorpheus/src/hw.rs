@@ -301,6 +301,7 @@ pub struct MouseState {
     pub dy: i16,
     /// Bit 0 = left, bit 1 = right, bit 2 = middle.
     pub buttons: u8,
+    pub wheel: i8,
 }
 
 /// Read and reset the per-process motion accumulator.
@@ -310,6 +311,7 @@ pub fn mouse_read() -> MouseState {
         dx: raw as i16,
         dy: (raw >> 16) as i16,
         buttons: (raw >> 32) as u8,
+        wheel: (raw >> 48) as i8,
     }
 }
 

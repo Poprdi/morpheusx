@@ -65,6 +65,7 @@ pub struct XhciController {
     pub ep0: XferRing,
     pub bout: XferRing,
     pub bin: XferRing,
+    pub mouse_ring: XferRing,
 }
 
 impl XhciController {
@@ -253,6 +254,7 @@ impl XhciController {
             ep0: XferRing::new(dma_base + dma::OFF_XFER_EP0 as u64, XFER_RING_LEN),
             bout: XferRing::new(dma_base + dma::OFF_XFER_BOUT as u64, XFER_RING_LEN),
             bin: XferRing::new(dma_base + dma::OFF_XFER_BIN as u64, XFER_RING_LEN),
+            mouse_ring: XferRing::new(dma_base + dma::OFF_XFER_MOUSE as u64, XFER_RING_LEN),
         })
     }
 
@@ -495,6 +497,23 @@ impl XhciController {
             }
             core::hint::spin_loop();
         }
+    }
+
+    /// # Safety
+    /// The controller's event ring and MMIO base must be valid; the caller must
+    /// hold exclusive access while the ring is drained.
+    pub unsafe fn poll_xfer_event(&mut self) -> Option<(u8, u32, u32)> {
+        while let Some((_, status, ctrl)) = self.evt_ring.peek() {
+            let ty = ctrl & Self::TYPE_MASK;
+            let sid = (ctrl >> 24) as u8;
+            let dci = (ctrl >> 16) & 0x1F;
+            self.evt_ring.advance();
+            self.update_erdp();
+            if ty == TRB_TRANSFER_EVENT {
+                return Some((sid, dci, status & 0x00FF_FFFF));
+            }
+        }
+        None
     }
 
     /// # Safety

@@ -1,205 +1,197 @@
-//! Runtime USB HID polling — keeps the xHC alive past Phase 9 and lets the
-//! bootloader's input loop fetch keyboard reports while the kernel is up.
+//! Runtime USB HID polling — keeps the xHC alive past Phase 9 so the
+//! bootloader's input loop can fetch keyboard and mouse reports.
 //!
-//! Phase 9 used to drop the `XhciController` at the end of platform init,
-//! leaving no way to actually use the enumerated keyboard. This module:
-//!   * stores the controller + the discovered keyboard's slot/endpoint info
-//!     in static locks so they survive past Phase 9
-//!   * arms one interrupt-IN transfer on the keyboard's endpoint
-//!   * exposes a non-blocking `poll_keyboard()` that the input loop calls
-//!     each iteration — peeks the event ring, parses any report that arrived,
-//!     pushes keystrokes into the unified input queue, and re-arms
-//!
-//! Polling model: *one outstanding transfer at all times*. The xHC waits for
-//! the device to actually send a report (the controller does NAK retries
-//! internally based on the endpoint's bInterval), at which point it writes
-//! the report into `OFF_REPORT` and posts a TRANSFER_EVENT. Our poll just
-//! peeks for that event with `wait_xfer(slot, dci, 0)` (timeout=0 → returns
-//! immediately if nothing's there).
+//! Keyboard and mouse live on the same controller and share one event ring, so
+//! `poll_input()` drains that ring once per tick and dispatches each transfer
+//! event to the matching device by slot id. Each device has its own transfer
+//! ring + report buffer (keyboard: OFF_XFER_BIN/OFF_REPORT, mouse:
+//! OFF_XFER_MOUSE/OFF_REPORT_MOUSE) so both stay armed concurrently — a single
+//! shared ring would corrupt the other slot's outstanding transfer.
 
 use crate::controller::XhciController;
 use crate::dma;
 use crate::enumerate::UsbInputDevice;
 use crate::regs::{TRB_IOC, TRB_ISP, TRB_NORMAL};
 use crate::usb::hid::keyboard::{parse_keyboard_report, KeyboardReport};
+use crate::usb::hid::mouse::{parse_mouse_report, MouseReport};
 use crate::usb::hid::HIDInterface;
 use morpheus_kernel::sync::SpinLock;
 
 static USB_CONTROLLER: SpinLock<Option<XhciController>> = SpinLock::new(None);
 static USB_KEYBOARD: SpinLock<Option<UsbInputDevice>> = SpinLock::new(None);
+static USB_MOUSE: SpinLock<Option<UsbInputDevice>> = SpinLock::new(None);
 
-/// Move the xHC and the discovered keyboard into static storage so they live
-/// past Phase 9. Arms the first interrupt-IN transfer so the controller is
-/// ready to receive a report the next time the keyboard sends one.
-///
-/// Call once at the end of platform Phase 9 with the controller that just
-/// finished enumeration. Passing `keyboard = None` is fine — no polling will
-/// happen but the controller is still preserved for future use.
+const ARM_FLAGS: u32 = TRB_NORMAL | TRB_IOC | TRB_ISP;
+
+/// Move the xHC and the discovered HID devices into static storage so they
+/// survive past Phase 9, and arm one interrupt-IN transfer on each.
 ///
 /// # Safety
 /// `controller` must be a fully enumerated xHCI controller with valid MMIO/DMA
-/// mappings; must be called once from Phase 9 with no concurrent USB access.
-pub unsafe fn install_runtime(controller: XhciController, keyboard: Option<UsbInputDevice>) {
+/// mappings; call once from Phase 9 with no concurrent USB access.
+pub unsafe fn install_runtime(
+    controller: XhciController,
+    keyboard: Option<UsbInputDevice>,
+    mouse: Option<UsbInputDevice>,
+) {
     {
-        let mut c = USB_CONTROLLER.lock();
-        *c = Some(controller);
+        *USB_CONTROLLER.lock() = Some(controller);
     }
     {
-        let mut k = USB_KEYBOARD.lock();
-        *k = keyboard;
+        *USB_KEYBOARD.lock() = keyboard;
     }
-    arm_keyboard_transfer();
+    {
+        *USB_MOUSE.lock() = mouse;
+    }
+
+    let mut ctrl_guard = USB_CONTROLLER.lock();
+    if let Some(controller) = ctrl_guard.as_mut() {
+        if let Some(k) = USB_KEYBOARD.lock().as_ref() {
+            arm_device(controller, k, false);
+        }
+        if let Some(m) = USB_MOUSE.lock().as_ref() {
+            arm_device(controller, m, true);
+        }
+    }
 }
 
-/// Enqueue one interrupt-IN TRB on the keyboard's transfer ring and ring its
-/// doorbell. The xHC will populate `OFF_REPORT` from the device the next time
-/// the device sends a report packet, then post a TRANSFER_EVENT.
-///
-/// Before arming, checks the EP context's State field. On real hardware the
-/// LS keyboard often arrives in Halted state by the time we get here — the
-/// controller polled it 3 times right after CONFIGURE_ENDPOINT, hit USB
-/// errors (timing-sensitive LS-on-HS via the PCH's internal TT, or a STALL
-/// while SET_PROTOCOL was still applying), CErr counted down to 0, endpoint
-/// halted. A halted endpoint silently ignores doorbell rings forever; we
-/// MUST clear it with RESET_ENDPOINT + SET_TR_DEQUEUE_POINTER before our
-/// transfer goes anywhere.
-unsafe fn arm_keyboard_transfer() {
-    let mut ctrl_guard = USB_CONTROLLER.lock();
-    let kb_guard = USB_KEYBOARD.lock();
-    let (controller, kb) = match (ctrl_guard.as_mut(), kb_guard.as_ref()) {
-        (Some(c), Some(k)) => (c, k),
-        _ => return,
-    };
+#[inline]
+fn dci_of(dev: &UsbInputDevice) -> u32 {
+    ((dev.ep_in & 0x7F) as u32) * 2 + 1
+}
 
-    let dci = ((kb.ep_in & 0x7F) as u32) * 2 + 1;
+#[inline]
+fn rings_of(mouse: bool) -> (usize, usize) {
+    if mouse {
+        (dma::OFF_XFER_MOUSE, dma::OFF_REPORT_MOUSE)
+    } else {
+        (dma::OFF_XFER_BIN, dma::OFF_REPORT)
+    }
+}
 
-    // Check current EP state in the slot's output context.
+fn iface_of(dev: &UsbInputDevice) -> HIDInterface {
+    HIDInterface {
+        interface_num: dev.interface_num,
+        protocol: dev.protocol,
+        ep_in: dev.ep_in,
+        ep_out: dev.ep_out,
+        max_packet_in: dev.max_packet_size,
+    }
+}
+
+/// EP State 2 = Halted, 4 = Error (xHCI 4.8.3). Both ignore doorbell rings
+/// until RESET_ENDPOINT clears them — real LS keyboards/mice often land here
+/// right after CONFIGURE_ENDPOINT.
+unsafe fn ep_halted(controller: &XhciController, dev: &UsbInputDevice) -> bool {
     let cs = controller.ctx_size as u64;
-    let out_ctx = controller.dma_base + dma::slot_out_ctx_offset(kb.slot_id) as u64;
-    let ep_ctx = out_ctx + (dci as u64) * cs;
-    let ep_state = crate::rings::vr32(ep_ctx) & 0x7;
+    let out_ctx = controller.dma_base + dma::slot_out_ctx_offset(dev.slot_id) as u64;
+    let ep_ctx = out_ctx + (dci_of(dev) as u64) * cs;
+    let st = crate::rings::vr32(ep_ctx) & 0x7;
+    st == 2 || st == 4
+}
 
-    if ep_state == 2 || ep_state == 4 {
-        // 2 = Halted, 4 = Error — both require reset before further use.
-        crate::logger::warn("USB", 970, "EP halted/error; issuing RESET_ENDPOINT");
-        if let Err(_e) = controller.reset_endpoint(kb.slot_id, dci) {
+unsafe fn ring_enqueue(controller: &mut XhciController, mouse: bool, buf: u64, mpkt: u32) {
+    if mouse {
+        controller.mouse_ring.enqueue(buf, mpkt, ARM_FLAGS);
+    } else {
+        controller.bin.enqueue(buf, mpkt, ARM_FLAGS);
+    }
+}
+
+/// Reset a halted endpoint if needed, then enqueue one interrupt-IN transfer.
+unsafe fn arm_device(controller: &mut XhciController, dev: &UsbInputDevice, mouse: bool) {
+    let dci = dci_of(dev);
+    let (ring_off, report_off) = rings_of(mouse);
+
+    if ep_halted(controller, dev) {
+        if controller.reset_endpoint(dev.slot_id, dci).is_err() {
             crate::logger::warn("USB", 971, "reset_endpoint failed");
             return;
         }
-        // After reset the EP is in Stopped state; the TR Dequeue Pointer is
-        // wherever the xHC halted, which is probably the offending TRB.
-        // Point dequeue back at offset 0 of our ring with cycle=1, and
-        // reset our Rust-side producer to match.
-        controller.bin.reset();
-        let ring_base = controller.dma_base + dma::OFF_XFER_BIN as u64;
-        let deq = (ring_base & !0xF) | 1; // DCS=1
-        if let Err(_e) = controller.set_tr_dequeue_pointer(kb.slot_id, dci, deq) {
+        if mouse {
+            controller.mouse_ring.reset();
+        } else {
+            controller.bin.reset();
+        }
+        let deq = ((controller.dma_base + ring_off as u64) & !0xF) | 1;
+        if controller
+            .set_tr_dequeue_pointer(dev.slot_id, dci, deq)
+            .is_err()
+        {
             crate::logger::warn("USB", 972, "set_tr_dequeue_pointer failed");
             return;
         }
-        crate::logger::info("USB", 973, "EP recovered, re-arming");
     }
 
-    let buf = controller.dma_base + dma::OFF_REPORT as u64;
-    let mpkt = kb.max_packet_size as u32;
-
-    controller.slot_id = kb.slot_id;
-    controller
-        .bin
-        .enqueue(buf, mpkt, TRB_NORMAL | TRB_IOC | TRB_ISP);
+    let buf = controller.dma_base + report_off as u64;
+    controller.slot_id = dev.slot_id;
+    ring_enqueue(controller, mouse, buf, dev.max_packet_size as u32);
     controller.ring_xfer_doorbell(dci);
 }
 
-/// Non-blocking poll: if the keyboard has produced a report since the last
-/// call, parse it (pushing keystrokes into the unified input queue via
-/// `input::push_keyboard_event_internal`) and re-arm.
-///
-/// Returns true if a report was consumed this call, false otherwise. The
-/// caller can use the return value to keep `had_work = true` so the idle HLT
-/// doesn't fire while keystrokes are arriving.
+/// Drain the shared event ring once and dispatch each transfer event to the
+/// keyboard or mouse by slot id, re-arming the matching ring. Returns true if
+/// any report was consumed.
 ///
 /// # Safety
-/// Must run only after `install_runtime`; the stored controller's MMIO/DMA
-/// mappings must remain valid and no other code may touch the controller.
-pub unsafe fn poll_keyboard() -> bool {
+/// Run only after `install_runtime`; the stored controller's MMIO/DMA mappings
+/// must remain valid and no other code may touch the controller.
+pub unsafe fn poll_input() -> bool {
     let mut ctrl_guard = USB_CONTROLLER.lock();
     let kb_guard = USB_KEYBOARD.lock();
-    let (controller, kb) = match (ctrl_guard.as_mut(), kb_guard.as_ref()) {
-        (Some(c), Some(k)) => (c, k),
-        _ => return false,
+    let mouse_guard = USB_MOUSE.lock();
+    let controller = match ctrl_guard.as_mut() {
+        Some(c) => c,
+        None => return false,
     };
+    let kb = kb_guard.as_ref();
+    let mouse = mouse_guard.as_ref();
 
-    let dci = ((kb.ep_in & 0x7F) as u32) * 2 + 1;
-
-    // Halt recovery, runs every poll. An endpoint that halted between
-    // arming and now (USB errors, CErr decremented to 0) is silently
-    // unresponsive to doorbell rings until RESET_ENDPOINT clears it.
-    // Detect by reading EP State (bits [2:0] of the EP context DW0) out
-    // of the slot's output context. 2 = Halted, 4 = Error.
-    {
-        let cs = controller.ctx_size as u64;
-        let out_ctx = controller.dma_base + crate::dma::slot_out_ctx_offset(kb.slot_id) as u64;
-        let ep_ctx = out_ctx + (dci as u64) * cs;
-        let ep_state = crate::rings::vr32(ep_ctx) & 0x7;
-        if ep_state == 2 || ep_state == 4 {
-            if controller.reset_endpoint(kb.slot_id, dci).is_ok() {
-                controller.bin.reset();
-                let ring_base = controller.dma_base + dma::OFF_XFER_BIN as u64;
-                let deq = (ring_base & !0xF) | 1;
-                let _ = controller.set_tr_dequeue_pointer(kb.slot_id, dci, deq);
-                // Re-arm — controller is now Stopped; ring doorbell to restart.
-                let buf = controller.dma_base + dma::OFF_REPORT as u64;
-                let mpkt = kb.max_packet_size as u32;
-                controller.slot_id = kb.slot_id;
-                controller
-                    .bin
-                    .enqueue(buf, mpkt, TRB_NORMAL | TRB_IOC | TRB_ISP);
-                controller.ring_xfer_doorbell(dci);
-            }
-            // Don't try to peek the event ring this round — let the
-            // controller's next poll cycle produce something.
-            return false;
+    if let Some(k) = kb {
+        if ep_halted(controller, k) {
+            arm_device(controller, k, false);
+        }
+    }
+    if let Some(m) = mouse {
+        if ep_halted(controller, m) {
+            arm_device(controller, m, true);
         }
     }
 
-    // wait_xfer with timeout_ms=0 is the non-blocking variant — peeks the
-    // event ring, drains any unrelated TRBs it finds (per the
-    // [[usb-event-ring-drain-invariant]]), and returns CommandTimeout if
-    // nothing matches.
-    match controller.wait_xfer(kb.slot_id, dci, 0) {
-        Ok(_residue) => {
-            // Got a report. Snapshot the bytes from the DMA buffer before
-            // re-arming so we don't race the next packet writing over it.
-            let buf = controller.dma_base + dma::OFF_REPORT as u64;
-            let report_ptr = buf as *const KeyboardReport;
-
-            // parse_keyboard_report currently ignores ctl/iface (predates this
-            // polling layer); passed anyway for forward compat.
-            let iface = HIDInterface {
-                interface_num: kb.interface_num,
-                protocol: kb.protocol,
-                ep_in: kb.ep_in,
-                ep_out: kb.ep_out,
-                max_packet_in: kb.max_packet_size,
-            };
-            let _ = parse_keyboard_report(controller, &iface, report_ptr);
-
-            // Re-arm immediately so we never miss a report.
-            controller.slot_id = kb.slot_id;
-            controller.bin.enqueue(
-                buf,
-                kb.max_packet_size as u32,
-                TRB_NORMAL | TRB_IOC | TRB_ISP,
-            );
-            controller.ring_xfer_doorbell(dci);
-
-            true
-        },
-        Err(_) => false,
+    let mut worked = false;
+    while let Some((sid, _dci, _residue)) = controller.poll_xfer_event() {
+        if let Some(k) = kb {
+            if sid == k.slot_id {
+                let buf = controller.dma_base + dma::OFF_REPORT as u64;
+                let iface = iface_of(k);
+                let _ = parse_keyboard_report(controller, &iface, buf as *const KeyboardReport);
+                controller.slot_id = k.slot_id;
+                ring_enqueue(controller, false, buf, k.max_packet_size as u32);
+                controller.ring_xfer_doorbell(dci_of(k));
+                worked = true;
+                continue;
+            }
+        }
+        if let Some(m) = mouse {
+            if sid == m.slot_id {
+                let buf = controller.dma_base + dma::OFF_REPORT_MOUSE as u64;
+                let iface = iface_of(m);
+                let _ = parse_mouse_report(controller, &iface, buf as *const MouseReport);
+                controller.slot_id = m.slot_id;
+                ring_enqueue(controller, true, buf, m.max_packet_size as u32);
+                controller.ring_xfer_doorbell(dci_of(m));
+                worked = true;
+                continue;
+            }
+        }
     }
+    worked
 }
 
-/// Has a USB keyboard been installed for runtime polling?
 pub fn keyboard_present() -> bool {
     USB_KEYBOARD.lock().is_some()
+}
+
+pub fn mouse_present() -> bool {
+    USB_MOUSE.lock().is_some()
 }

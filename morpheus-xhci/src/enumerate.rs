@@ -22,6 +22,7 @@
 //! coherent across slot transitions.
 
 use crate::controller::{XhciController, XhciError};
+use crate::dma;
 use crate::hid_iface as hid;
 use crate::hub::{HubInfo, PORT_STAT_CONNECTION, USB_CLASS_HUB};
 use crate::regs::*;
@@ -225,7 +226,12 @@ unsafe fn enumerate_device(
         let _ = controller.set_hid_protocol_boot(hid.interface_num);
         controller.delay_ms(50);
 
-        if let Err(e) = controller.configure_hid_endpoint(dci_in, hid.max_packet_in) {
+        let ring_off = if hid.protocol == hid::USB_PROTOCOL_MOUSE {
+            dma::OFF_XFER_MOUSE
+        } else {
+            dma::OFF_XFER_BIN
+        };
+        if let Err(e) = controller.configure_hid_endpoint(dci_in, hid.max_packet_in, ring_off) {
             crate::logger::warn("USB", 217, "step: configure_hid_endpoint failed");
             return Err(e);
         }
