@@ -10,6 +10,11 @@ After booting you can press ctrl+alt+x to spawn a shell and play arround.
 
 ## Tested on: Fujitsu D3674-B13 -- ThinkPad T450s
 
+## Serial console
+
+COM1, **115200 8N1, no flow control**. The kernel programs the UART itself, so
+the baud is fixed regardless of firmware.
+
 ## Building
 
 ```bash

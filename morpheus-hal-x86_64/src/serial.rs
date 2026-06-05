@@ -7,6 +7,10 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::sync::SpinLock;
 
 const COM1: u16 = 0x3F8;
+const COM1_IER: u16 = COM1 + 1; // doubles as DLM (divisor high) when DLAB=1
+const COM1_FCR: u16 = COM1 + 2;
+const COM1_LCR: u16 = COM1 + 3;
+const COM1_MCR: u16 = COM1 + 4;
 const COM1_LSR: u16 = COM1 + 5;
 const LSR_TX_EMPTY: u8 = 0x20;
 
@@ -20,6 +24,7 @@ unsafe impl Sync for LogBuf {}
 static BOOT_LOG_BUF: LogBuf = LogBuf(UnsafeCell::new([0u8; BOOT_LOG_SIZE]));
 static BOOT_LOG_LEN: AtomicUsize = AtomicUsize::new(0);
 static CHECKPOINTS_ENABLED: AtomicBool = AtomicBool::new(false);
+static SERIAL_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static LOG_ANSI_ENABLED: AtomicBool = AtomicBool::new(false);
 static LOG_CODES_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -75,10 +80,22 @@ pub fn boot_log() -> &'static str {
     }
 }
 
+/// Writes a byte to COM1, translating LF -> CRLF. Raw serial terminals
+/// (screen/minicom) treat `\n` as line-feed only (down, not return), so without
+/// the CR every line staircases. The FB mirror gets the untranslated byte
+/// (its console handles bare `\n`), so this lives in the COM1 writer only.
+#[inline]
+fn putc_raw(b: u8) {
+    if b == b'\n' {
+        putc_raw_one(b'\r');
+    }
+    putc_raw_one(b);
+}
+
 /// Bounded ~100-spin wait for THR-empty before the OUT. Caller holds SERIAL_LOCK
 /// or accepts interleaving.
 #[inline]
-fn putc_raw(b: u8) {
+fn putc_raw_one(b: u8) {
     unsafe {
         for _ in 0..100 {
             let status: u8;
@@ -108,18 +125,87 @@ pub fn putc(b: u8) {
     putc_raw(b);
 }
 
-/// COM1 + boot-log + (if installed) live FB console.
-pub fn puts(s: &str) {
-    log_capture(s);
-    let _guard = SERIAL_LOCK.lock();
-    for b in s.bytes() {
-        unsafe {
-            if let Some(f) = LIVE_PUTC {
-                f(b);
+#[inline]
+unsafe fn outb(port: u16, val: u8) {
+    core::arch::asm!(
+        "out dx, al",
+        in("dx") port,
+        in("al") val,
+        options(nostack, preserves_flags),
+    );
+}
+
+/// Program COM1 to a known 115200 8N1 polled config, independent of firmware.
+/// The rest of this module only ever writes THR / reads LSR, so without this it
+/// inherits whatever baud + line control UEFI happened to leave — undefined
+/// across boards, which silently produces garbage or nothing on a real RS-232
+/// link. Idempotent; BSP-only, single-threaded early boot.
+///
+/// # Safety
+/// Touches the `0x3F8` I/O-port range; call once on the BSP before any serial
+/// output (`checkpoint`/log).
+pub unsafe fn serial_init() {
+    if SERIAL_INIT_DONE.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // Divisor = 115200 / 115200 = 1 (use 0x0C for 9600).
+    outb(COM1_IER, 0x00); // interrupts off — we poll
+    outb(COM1_LCR, 0x80); // DLAB=1: next two writes are the divisor latch
+    outb(COM1, 0x01); // DLL (divisor low)
+    outb(COM1_IER, 0x00); // DLM (divisor high)
+    outb(COM1_LCR, 0x03); // DLAB=0, 8 data bits / no parity / 1 stop
+    outb(COM1_FCR, 0xC7); // FIFO enable + clear RX/TX, 14-byte trigger
+    outb(COM1_MCR, 0x0B); // DTR + RTS + OUT2 asserted
+}
+
+/// Writes to every sink (boot-log ring, FB console, COM1) with NO locking —
+/// only valid while the caller holds `SERIAL_LOCK` via [`line`].
+pub struct LineWriter;
+
+impl LineWriter {
+    /// Append a string to the in-progress line.
+    #[inline]
+    pub fn str(&mut self, s: &str) {
+        log_capture(s);
+        put_str_raw(s);
+    }
+
+    /// Append `v` as decimal digits to the in-progress line.
+    #[inline]
+    pub fn dec_u16(&mut self, v: u16) {
+        let mut tmp = [0u8; 5];
+        let mut n = v;
+        let mut i = tmp.len();
+        if v == 0 {
+            log_capture("0");
+        } else {
+            while n > 0 {
+                i -= 1;
+                tmp[i] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+            if let Ok(s) = core::str::from_utf8(&tmp[i..]) {
+                log_capture(s);
             }
         }
-        putc_raw(b);
+        put_dec_u16_raw(v);
     }
+}
+
+/// Emit one complete line atomically: holds `SERIAL_LOCK` once across the whole
+/// closure, so output never interleaves across cores. This is THE global
+/// primitive — `puts`, `log_*`, `boot_step_*`, and any future producer funnel
+/// through it and inherit atomicity for free. Build the entire line inside a
+/// single `line(...)` call; never call a locking fn (`puts`/`putc`) from inside
+/// the closure (the lock is not reentrant).
+pub fn line(f: impl FnOnce(&mut LineWriter)) {
+    let _guard = SERIAL_LOCK.lock();
+    f(&mut LineWriter);
+}
+
+/// COM1 + boot-log + (if installed) live FB console — one atomic line.
+pub fn puts(s: &str) {
+    line(|w| w.str(s));
 }
 
 /// Low `n` hex nibbles, MSB-first, into `buf[..n]`.
@@ -249,65 +335,25 @@ fn put_dec_u16_raw(mut val: u16) {
 fn log_level(color: &str, level: &str, component: &str, code: u16, msg: &str) {
     let ansi = LOG_ANSI_ENABLED.load(Ordering::Acquire);
     let codes = LOG_CODES_ENABLED.load(Ordering::Acquire);
-
-    // Boot-log capture mirrors the wire.
-    if ansi {
-        log_capture(color);
-    }
-    log_capture("[");
-    log_capture(level);
-    log_capture("] [");
-    log_capture(component);
-    if codes {
-        log_capture(":");
-        {
-            let mut tmp = [0u8; 5];
-            let mut n = code;
-            let mut i = 0usize;
-            if n == 0 {
-                log_capture("0");
-            } else {
-                while n > 0 {
-                    tmp[i] = b'0' + (n % 10) as u8;
-                    i += 1;
-                    n /= 10;
-                }
-                while i > 0 {
-                    i -= 1;
-                    let b = [tmp[i]];
-                    if let Ok(s) = core::str::from_utf8(&b) {
-                        log_capture(s);
-                    }
-                }
-            }
+    line(|w| {
+        if ansi {
+            w.str(color);
         }
-    }
-    log_capture("] ");
-    log_capture(msg);
-    if ansi {
-        log_capture(ANSI_RESET);
-    }
-    log_capture("\n");
-
-    // One line under one lock — no SMP interleave.
-    let _guard = SERIAL_LOCK.lock();
-    if ansi {
-        put_str_raw(color);
-    }
-    put_str_raw("[");
-    put_str_raw(level);
-    put_str_raw("] [");
-    put_str_raw(component);
-    if codes {
-        put_str_raw(":");
-        put_dec_u16_raw(code);
-    }
-    put_str_raw("] ");
-    put_str_raw(msg);
-    if ansi {
-        put_str_raw(ANSI_RESET);
-    }
-    put_str_raw("\n");
+        w.str("[");
+        w.str(level);
+        w.str("] [");
+        w.str(component);
+        if codes {
+            w.str(":");
+            w.dec_u16(code);
+        }
+        w.str("] ");
+        w.str(msg);
+        if ansi {
+            w.str(ANSI_RESET);
+        }
+        w.str("\n");
+    });
 }
 
 pub fn log_info(component: &str, code: u16, msg: &str) {
@@ -347,17 +393,19 @@ pub fn boot_banner(title: &str, version: &str) {
 /// (`" OK "`, `"WARN"`, `"FAIL"`); `color` tints only the bracketed tag.
 fn boot_step(color: &str, tag: &str, label: &str) {
     let ansi = LOG_ANSI_ENABLED.load(Ordering::Acquire);
-    puts("  [");
-    if ansi {
-        puts(color);
-    }
-    puts(tag);
-    if ansi {
-        puts(ANSI_RESET);
-    }
-    puts("]  ");
-    puts(label);
-    puts("\n");
+    line(|w| {
+        w.str("  [");
+        if ansi {
+            w.str(color);
+        }
+        w.str(tag);
+        if ansi {
+            w.str(ANSI_RESET);
+        }
+        w.str("]  ");
+        w.str(label);
+        w.str("\n");
+    });
 }
 
 /// Happy-path checklist marker — green `[ OK ]`.

@@ -407,6 +407,10 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     ctx.image_handle = image_handle;
     ctx.system_table = system_table;
 
+    // Lock COM1 to 115200 8N1 before any serial output — firmware leaves the
+    // UART baud/line-control undefined, which breaks a real RS-232 link.
+    morpheus_hal_x86_64::serial::serial_init();
+
     // Color on, numeric event codes off — the framebuffer console parses ANSI
     // SGR, so warn/error lines stand out and the happy-path checklist stays clean.
     set_log_style(true, false);
