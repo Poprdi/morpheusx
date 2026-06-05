@@ -20,8 +20,63 @@ pub fn print(s: &str) {
 }
 
 pub fn println(s: &str) {
-    print(s);
-    print("\n");
+    let mut w = FdWriter::new(1);
+    use core::fmt::Write;
+    let _ = w.write_str(s);
+    let _ = w.write_str("\n");
+}
+
+/// Stack-buffered writer that coalesces a whole formatted message into a single
+/// `SYS_WRITE`. `format_args!` calls `write_str` once per literal/argument, so
+/// without this a `println!("[{}] {}", a, b)` becomes several syscalls — each
+/// its own atomic line on the serial console — and interleaves with other
+/// cores. Buffering makes one call = one line. Lines longer than the buffer
+/// flush in chunks (still far fewer writes than per fragment). Flushes on drop.
+pub(crate) struct FdWriter {
+    fd: u32,
+    len: usize,
+    buf: [u8; 512],
+}
+
+impl FdWriter {
+    #[inline]
+    pub(crate) fn new(fd: u32) -> Self {
+        Self {
+            fd,
+            len: 0,
+            buf: [0u8; 512],
+        }
+    }
+
+    #[inline]
+    fn flush(&mut self) {
+        if self.len > 0 {
+            let _ = write_fd(self.fd, &self.buf[..self.len]);
+            self.len = 0;
+        }
+    }
+}
+
+impl core::fmt::Write for FdWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let mut rest = s.as_bytes();
+        while !rest.is_empty() {
+            if self.len == self.buf.len() {
+                self.flush();
+            }
+            let n = (self.buf.len() - self.len).min(rest.len());
+            self.buf[self.len..self.len + n].copy_from_slice(&rest[..n]);
+            self.len += n;
+            rest = &rest[n..];
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FdWriter {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 pub fn write_fd(fd: u32, data: &[u8]) -> Result<usize, u64> {
@@ -147,12 +202,15 @@ impl core::fmt::Write for Stderr {
 
 #[doc(hidden)]
 pub fn _print_fmt(args: core::fmt::Arguments<'_>) {
-    let _ = core::fmt::Write::write_fmt(&mut Stdout, args);
+    // One buffered writer -> one SYS_WRITE for the whole line (see FdWriter).
+    let mut w = FdWriter::new(1);
+    let _ = core::fmt::Write::write_fmt(&mut w, args);
 }
 
 #[doc(hidden)]
 pub fn _eprint_fmt(args: core::fmt::Arguments<'_>) {
-    let _ = core::fmt::Write::write_fmt(&mut Stderr, args);
+    let mut w = FdWriter::new(2);
+    let _ = core::fmt::Write::write_fmt(&mut w, args);
 }
 
 #[macro_export]

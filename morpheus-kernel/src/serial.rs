@@ -1,68 +1,51 @@
-//! Kernel-side log helpers built on top of the HAL `Serial` primitives.
+//! Kernel-side log helpers. Thin forwarders onto `morpheus-console` so kernel
+//! log lines share the ONE console lock (no second serial path, no interleave).
 
-use crate::hal;
-use core::sync::atomic::{AtomicBool, Ordering};
-
-static CHECKPOINTS_ENABLED: AtomicBool = AtomicBool::new(true);
+use morpheus_console as console;
 
 #[inline]
 pub fn putc(b: u8) {
-    hal().serial().putc(b);
+    console::putc(b);
 }
 
 #[inline]
 pub fn puts(s: &str) {
-    hal().serial().puts(s);
+    console::puts(s);
 }
 
 #[inline]
 pub fn newline() {
-    hal().serial().newline();
+    console::newline();
 }
 
 #[inline]
 pub fn put_hex32(v: u32) {
-    hal().serial().put_hex32(v);
+    console::put_hex32(v);
 }
 
 #[inline]
 pub fn put_hex64(v: u64) {
-    hal().serial().put_hex64(v);
+    console::put_hex64(v);
 }
 
 #[inline]
 pub fn put_hex(v: u64) {
-    hal().serial().put_hex64(v);
+    console::put_hex64(v);
 }
 
-fn put_dec_u16(v: u16) {
-    let mut buf = [0u8; 5];
-    let mut n = v;
-    let mut i = buf.len();
-    if n == 0 {
-        putc(b'0');
-        return;
-    }
-    while n > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    for &b in &buf[i..] {
-        putc(b);
-    }
-}
-
+/// One atomic line: `[TAG] component <code>: msg\n` (single lock acquisition).
 fn log_with_tag(tag: &str, component: &str, code: u16, msg: &str) {
-    puts("[");
-    puts(tag);
-    puts("] ");
-    puts(component);
-    puts(" ");
-    put_dec_u16(code);
-    puts(": ");
-    puts(msg);
-    newline();
+    console::line(|w| {
+        w.str("[");
+        w.str(tag);
+        w.str("] ");
+        w.str(component);
+        w.str(" ");
+        w.dec_u16(code);
+        w.str(": ");
+        w.str(msg);
+        w.str("\n");
+    });
 }
 
 #[inline]
@@ -87,25 +70,22 @@ pub fn log_error(component: &str, code: u16, msg: &str) {
 
 #[inline]
 pub fn checkpoint(label: &str) {
-    if !CHECKPOINTS_ENABLED.load(Ordering::Relaxed) {
-        return;
-    }
-    puts("CHK ");
-    puts(label);
-    newline();
+    console::checkpoint(label);
 }
 
 #[inline]
 pub fn set_checkpoints_enabled(enabled: bool) {
-    CHECKPOINTS_ENABLED.store(enabled, Ordering::Relaxed);
+    console::set_checkpoints_enabled(enabled);
 }
 
-/// Stub: ring lives in HAL; trait lacks an accessor.
+/// Boot-log ring (now the real console ring, not a stub).
 #[inline]
 pub fn boot_log() -> &'static str {
-    ""
+    console::boot_log()
 }
 
-/// Stub: FB console still owned bootloader-side.
+/// FB-only transient output.
 #[inline]
-pub fn fb_puts(_s: &str) {}
+pub fn fb_puts(s: &str) {
+    console::fb_puts(s);
+}

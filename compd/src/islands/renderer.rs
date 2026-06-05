@@ -2,7 +2,7 @@ use crate::font;
 use crate::islands::*;
 use core::sync::atomic::{AtomicBool, Ordering};
 use libmorpheus::compositor as compsys;
-use libmorpheus::io;
+use libmorpheus::info;
 static COMPOSE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Painter's algorithm: z0 desktop (shelld fullscreen), z1 app windows
@@ -11,9 +11,9 @@ static COMPOSE_LOGGED: AtomicBool = AtomicBool::new(false);
 pub fn compose(state: &mut CompState) {
     if !COMPOSE_LOGGED.swap(true, Ordering::Relaxed) {
         if state.desktop_idx.is_some() {
-            io::println("compd: first compose WITH desktop");
+            info!("first compose WITH desktop");
         } else {
-            io::println("compd: first compose NO desktop — solid fill");
+            info!("first compose NO desktop — solid fill");
         }
     }
     let fb_ptr = state.fb_ptr;

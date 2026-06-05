@@ -20,6 +20,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use libmorpheus::entry;
 use libmorpheus::env;
 use libmorpheus::process;
+use libmorpheus::{error, info};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
@@ -31,14 +32,14 @@ fn main() -> i32 {
     let framebuffer = match fb::Framebuffer::init() {
         Some(fb) => fb,
         None => {
-            libmorpheus::io::print("msh: failed to map framebuffer\n");
+            error!("failed to map framebuffer");
             return 1;
         },
     };
 
     let is_compositor = libmorpheus::compositor::compositor_set().is_ok();
     if !is_compositor {
-        libmorpheus::io::print("msh: running in client mode\n");
+        info!("running in client mode");
     }
 
     let mut con = console::Console::new(&framebuffer);
