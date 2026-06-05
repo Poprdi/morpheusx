@@ -13,7 +13,7 @@ use crate::dma;
 use crate::enumerate::UsbInputDevice;
 use crate::regs::{TRB_IOC, TRB_ISP, TRB_NORMAL};
 use crate::usb::hid::keyboard::{parse_keyboard_report, KeyboardReport};
-use crate::usb::hid::mouse::{parse_mouse_report, MouseReport};
+use crate::usb::hid::mouse::dispatch_mouse;
 use crate::usb::hid::HIDInterface;
 use morpheus_kernel::sync::SpinLock;
 
@@ -76,6 +76,7 @@ fn iface_of(dev: &UsbInputDevice) -> HIDInterface {
         ep_in: dev.ep_in,
         ep_out: dev.ep_out,
         max_packet_in: dev.max_packet_size,
+        report_desc_len: 0,
     }
 }
 
@@ -175,8 +176,9 @@ pub unsafe fn poll_input() -> bool {
         if let Some(m) = mouse {
             if sid == m.slot_id {
                 let buf = controller.dma_base + dma::OFF_REPORT_MOUSE as u64;
-                let iface = iface_of(m);
-                let _ = parse_mouse_report(controller, &iface, buf as *const MouseReport);
+                let len = (m.max_packet_size as usize).min(64);
+                let raw = core::slice::from_raw_parts(buf as *const u8, len);
+                dispatch_mouse(&m.mouse_layout, raw);
                 controller.slot_id = m.slot_id;
                 ring_enqueue(controller, true, buf, m.max_packet_size as u32);
                 controller.ring_xfer_doorbell(dci_of(m));

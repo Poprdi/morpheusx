@@ -49,6 +49,9 @@ pub struct UsbInputDevice {
     pub ep_in: u8,
     pub ep_out: u8,
     pub max_packet_size: u16,
+    /// Decoded report layout for mice (boot layout or parsed from the report
+    /// descriptor). Unused for keyboards.
+    pub mouse_layout: hid::MouseLayout,
 }
 
 /// Result of USB input device enumeration.
@@ -93,6 +96,31 @@ pub unsafe fn enumerate_and_bind_inputs(
     }
 
     Ok(result)
+}
+
+/// Fetch a mouse interface's report descriptor and parse its motion layout.
+/// Returns `None` if the device reports no descriptor length, the fetch fails,
+/// or no X+Y pair is found.
+///
+/// # Safety
+/// `controller` must be a fully addressed/configured controller with valid
+/// MMIO/DMA mappings and the caller must hold exclusive access.
+unsafe fn parse_mouse_layout_from_device(
+    controller: &mut XhciController,
+    hid: &hid::HIDInterface,
+) -> Option<hid::MouseLayout> {
+    if hid.report_desc_len == 0 {
+        return None;
+    }
+    // Bounded by the OFF_DESC scratch span; we request exactly this many bytes so
+    // the device short-packets at the real length and the slice holds no stale
+    // data. DESC_BUF_SIZE comfortably exceeds any real HID report descriptor.
+    let cap = hid.report_desc_len.min(dma::DESC_BUF_SIZE as u16);
+    let ptr = controller
+        .get_hid_report_descriptor(hid.interface_num, cap)
+        .ok()?;
+    let desc = core::slice::from_raw_parts(ptr, cap as usize);
+    crate::usb::hid::mouse::parse_mouse_layout(desc)
 }
 
 /// Read PORTSC and decide whether a device is present + what speed it links at.
@@ -153,6 +181,11 @@ unsafe fn enumerate_device(
     };
     if let Err(e) = controller.address_device(root_port, speed, route, parent_slot, parent_port) {
         crate::logger::warn("USB", 213, "step: address_device failed");
+        return Err(e);
+    }
+
+    if let Err(e) = controller.correct_ep0_mps(speed) {
+        crate::logger::warn("USB", 225, "step: ep0 mps correction failed");
         return Err(e);
     }
 
@@ -223,10 +256,32 @@ unsafe fn enumerate_device(
             return Err(e);
         }
         let _ = controller.set_hid_idle(hid.interface_num);
-        let _ = controller.set_hid_protocol_boot(hid.interface_num);
-        controller.delay_ms(50);
+        let is_mouse = hid.protocol == hid::USB_PROTOCOL_MOUSE;
 
-        let ring_off = if hid.protocol == hid::USB_PROTOCOL_MOUSE {
+        let mouse_layout = if is_mouse {
+            let _ = controller.set_hid_protocol(hid.interface_num, 1); // report
+            controller.delay_ms(50);
+            match parse_mouse_layout_from_device(controller, &hid) {
+                Some(l) => {
+                    crate::logger::ok("USB", 227, "mouse: report-descriptor layout");
+                    l
+                },
+                None => {
+                    // Descriptor unreadable/unparsable: fall back to boot.
+                    let _ = controller.set_hid_protocol_boot(hid.interface_num);
+                    crate::logger::warn("USB", 228, "mouse: descriptor parse failed, boot layout");
+                    hid::BOOT_MOUSE_LAYOUT
+                },
+            }
+        } else {
+            if controller.set_hid_protocol_boot(hid.interface_num).is_err() {
+                crate::logger::warn("USB", 226, "step: set_protocol(boot) failed");
+            }
+            controller.delay_ms(50);
+            hid::BOOT_MOUSE_LAYOUT
+        };
+
+        let ring_off = if is_mouse {
             dma::OFF_XFER_MOUSE
         } else {
             dma::OFF_XFER_BIN
@@ -243,6 +298,7 @@ unsafe fn enumerate_device(
             ep_in: hid.ep_in,
             ep_out: hid.ep_out,
             max_packet_size: hid.max_packet_in,
+            mouse_layout,
         };
         match dev.protocol {
             hid::USB_PROTOCOL_KEYBOARD => result.keyboard = Some(dev),

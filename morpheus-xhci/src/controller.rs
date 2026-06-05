@@ -66,6 +66,10 @@ pub struct XhciController {
     pub bout: XferRing,
     pub bin: XferRing,
     pub mouse_ring: XferRing,
+    // Last non-success completion code from wait_cmd/wait_xfer. Load-bearing:
+    // control_in/control_nodata read this (== 6 STALL) to drive EP0 stall
+    // recovery + retry. Not just diagnostics — do not remove.
+    pub last_cc: u8,
 }
 
 impl XhciController {
@@ -255,6 +259,7 @@ impl XhciController {
             bout: XferRing::new(dma_base + dma::OFF_XFER_BOUT as u64, XFER_RING_LEN),
             bin: XferRing::new(dma_base + dma::OFF_XFER_BIN as u64, XFER_RING_LEN),
             mouse_ring: XferRing::new(dma_base + dma::OFF_XFER_MOUSE as u64, XFER_RING_LEN),
+            last_cc: 0,
         })
     }
 
@@ -445,6 +450,7 @@ impl XhciController {
                     let cc = (status >> 24) as u8;
                     let sid = (ctrl >> 24) as u8;
                     if cc != 1 {
+                        self.last_cc = cc;
                         return Err(XhciError::IoError);
                     }
                     return Ok((sid, cc));
@@ -485,6 +491,7 @@ impl XhciController {
                     self.update_erdp();
                     let cc = (status >> 24) as u8;
                     if cc != 1 && cc != 13 {
+                        self.last_cc = cc;
                         return Err(XhciError::IoError);
                     }
                     return Ok(status & 0x00FF_FFFF);
