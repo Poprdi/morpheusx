@@ -17,6 +17,7 @@ pub mod error;
 pub mod fs;
 pub mod hw;
 pub mod io;
+pub mod log;
 pub mod mem;
 pub mod net;
 pub mod persist;

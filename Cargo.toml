@@ -24,6 +24,7 @@ members = [
     "tests/system-visualizer",
     "morpheus-hal-api",
     "morpheus-foundation",
+    "morpheus-console",
     "morpheus-x86-asm",
     "morpheus-hal-x86_64",
     "morpheus-xhci",
@@ -55,6 +56,7 @@ morpheus-ui = { path = "ui" }
 morpheus-helix = { path = "helix" }
 morpheus-hal-api = { path = "morpheus-hal-api" }
 morpheus-foundation = { path = "morpheus-foundation" }
+morpheus-console = { path = "morpheus-console" }
 morpheus-x86-asm = { path = "morpheus-x86-asm" }
 morpheus-hal-x86_64 = { path = "morpheus-hal-x86_64" }
 morpheus-xhci = { path = "morpheus-xhci" }

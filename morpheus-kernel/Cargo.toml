@@ -12,6 +12,8 @@ default = []
 morpheus-hal-api.workspace = true
 # Shared arch-agnostic types + ABI constants.
 morpheus-foundation.workspace = true
+# Portable console/log subsystem — the single coalescing serial chokepoint.
+morpheus-console.workspace = true
 # HelixFS — kernel needs to mount the root FS + drive vfs ops in syscall handlers.
 morpheus-helix.workspace = true
 # PE parsing for the persist syscall path.

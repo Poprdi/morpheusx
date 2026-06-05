@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-use libmorpheus::{compositor as compsys, entry, hw, io, process};
+use libmorpheus::{compositor as compsys, entry, hw, info, process};
 
 mod font;
 mod islands;
@@ -11,7 +11,7 @@ mod islands;
 entry!(main);
 
 fn main() -> i32 {
-    io::println("shelld: starting");
+    info!("starting");
 
     // surface_list returns usize::MAX until compd registers.
     loop {
@@ -34,7 +34,7 @@ fn main() -> i32 {
         process::yield_cpu();
     }
 
-    io::println("shelld: compositor detected");
+    info!("compositor detected");
 
     let fb_info = hw::fb_info().expect("shelld: fb_info failed");
 
@@ -46,7 +46,7 @@ fn main() -> i32 {
     let fb_stride_px = fb_info.stride / 4;
     let is_bgrx = fb_info.format == 1;
 
-    io::println("shelld: surface mapped, entering main loop");
+    info!("surface mapped, entering main loop");
 
     let mut state = islands::ShellState::new(
         surface_ptr,

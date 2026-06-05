@@ -14,6 +14,10 @@ smp = []
 
 [dependencies]
 morpheus-hal-api.workspace = true
+# Portable console/log subsystem. The HAL installs its x86 byte-out + IRQ
+# save/restore as hooks; everything else (ring, line lock, format helpers) is
+# re-exported from here so existing `serial::*` call sites resolve unchanged.
+morpheus-console.workspace = true
 # Bare x86_64 asm primitives (port I/O, MMIO, barriers, cache, TSC, delay).
 # Extracted in Phase 3.7 wave B1 — shared with morpheus-xhci so that crate
 # does not have to take a dep on this one and form a cycle when hal-x86_64

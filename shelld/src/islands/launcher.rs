@@ -1,5 +1,5 @@
 use crate::islands::{draw_text, raw_fill, ShellState, ICON_SIZE, LAUNCHER_H, LAUNCHER_W, PANEL_H};
-use libmorpheus::{io, process};
+use libmorpheus::{error, info, process};
 
 /// Overlay opened by START.
 pub fn tick(state: &mut ShellState) {
@@ -116,10 +116,10 @@ pub fn handle_click(state: &mut ShellState, mx: i32, my: i32) -> bool {
         {
             match process::spawn("/bin/msh") {
                 Ok(_pid) => {
-                    io::println("shelld: spawned msh");
+                    info!("spawned msh");
                 },
                 Err(e) => {
-                    libmorpheus::println!("shelld: failed to spawn msh err=0x{:x}", e);
+                    error!("failed to spawn msh err=0x{:x}", e);
                 },
             }
             state.launcher_open = false;

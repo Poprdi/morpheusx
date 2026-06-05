@@ -120,6 +120,15 @@ type XhciMsixHook = unsafe fn(PciAddr, u64);
 /// `usb::runtime::install_runtime(controller, keyboard, mouse)`. Hook owns the controller after the call.
 type XhciRuntimeHook = unsafe fn(XhciController, Option<UsbInputDevice>, Option<UsbInputDevice>);
 
+/// Console `[c<core>]` accessor. Reads `gs:` (per-cpu), so it is installed only
+/// after `per_cpu::init_bsp` (and APs set their own `gs:` in `init_ap` before
+/// they log) — calling it before per-cpu init would fault.
+fn console_cpu_index() -> u32 {
+    // SAFETY: only installed into the console after per-cpu init, so GS_BASE
+    // points at this core's PerCpu whenever the console invokes this hook.
+    unsafe { per_cpu::current_core_index() }
+}
+
 static TSC_FREQ_PUBLISH_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 static INPUT_INIT_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 static XHCI_MSIX_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
@@ -358,6 +367,11 @@ pub unsafe fn platform_init_selfcontained(
         checkpoint("phase2-percpu-init");
         per_cpu::init_bsp(bsp_lapic_id, actual_base);
         checkpoint("phase2-percpu-done");
+
+        // Per-cpu gs: is now valid on the BSP (and every AP sets its own in
+        // init_ap before it logs), so the console can stamp `[c<core>]` per line
+        // without faulting. Until this point the default-0 hook showed `[c0]`.
+        morpheus_console::set_cpu_id(console_cpu_index);
     }
 
     boot_step_ok("cpu: gdt / idt / sse / lapic");

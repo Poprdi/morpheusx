@@ -3,34 +3,34 @@
 
 extern crate alloc;
 
-use libmorpheus::{entry, io, process};
+use libmorpheus::{entry, error, info, process};
 
 mod islands;
 
 entry!(main);
 
 fn main() -> i32 {
-    io::println("init: starting MorpheusX Desktop Environment");
+    info!("starting MorpheusX Desktop Environment");
 
     let mut state = islands::supervisor::SupervisorState::new();
 
     match process::spawn("/bin/compd") {
         Ok(pid) => {
-            io::println("init: spawned compd");
+            info!("spawned compd pid={}", pid);
             state.compd_pid = Some(pid);
         },
-        Err(_) => {
-            io::println("init: FATAL — failed to spawn compd");
+        Err(e) => {
+            error!("failed to spawn compd: {:#x}", e);
         },
     }
 
     match process::spawn("/bin/shelld") {
         Ok(pid) => {
-            io::println("init: spawned shelld");
+            info!("spawned shelld pid={}", pid);
             state.shelld_pid = Some(pid);
         },
-        Err(_) => {
-            io::println("init: FATAL — failed to spawn shelld");
+        Err(e) => {
+            error!("failed to spawn shelld: {:#x}", e);
         },
     }
 

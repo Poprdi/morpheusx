@@ -12,12 +12,12 @@ mod state;
 mod theme;
 mod widgets;
 
-use libmorpheus::{entry, hw, io};
+use libmorpheus::{entry, hw, info};
 
 entry!(main);
 
 fn main() -> i32 {
-    io::println("settings: starting");
+    info!("starting");
 
     let fb_info = hw::fb_info().expect("settings: fb_info failed");
     let surface_vaddr = hw::fb_map().expect("settings: fb_map failed");

@@ -1,4 +1,4 @@
-use libmorpheus::{compositor as compsys, io, process};
+use libmorpheus::{compositor as compsys, error, process, warn};
 
 // pid table is 64 slots. we stop restarting before we eat them all.
 const MAX_RESTARTS: u32 = 5;
@@ -40,10 +40,10 @@ pub fn tick(state: &mut SupervisorState) {
                 let _ = compsys::compositor_set();
                 match process::spawn("/bin/compd") {
                     Ok(new_pid) => state.compd_pid = Some(new_pid),
-                    Err(_) => io::println("init: failed to respawn compd"),
+                    Err(e) => error!("failed to respawn compd: {:#x}", e),
                 }
             } else {
-                io::println("init: compd exceeded MAX_RESTARTS, giving up");
+                warn!("compd exceeded MAX_RESTARTS, giving up");
             }
         }
     }
@@ -56,10 +56,10 @@ pub fn tick(state: &mut SupervisorState) {
                 state.shelld_restarts += 1;
                 match process::spawn("/bin/shelld") {
                     Ok(new_pid) => state.shelld_pid = Some(new_pid),
-                    Err(_) => io::println("init: failed to respawn shelld"),
+                    Err(e) => error!("failed to respawn shelld: {:#x}", e),
                 }
             } else {
-                io::println("init: shelld exceeded MAX_RESTARTS, giving up");
+                warn!("shelld exceeded MAX_RESTARTS, giving up");
             }
         }
     }
