@@ -147,6 +147,48 @@ impl XhciController {
         self.wait_cmd(2000)?;
         Ok(())
     }
+    /// we guess a size of 64 here at first
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
+    pub unsafe fn correct_ep0_mps(&mut self, speed: u8) -> Result<u16, XhciError> {
+        let desc_buf = self.dma_base + dma::OFF_DESC as u64;
+        let param = pack_setup(0x80, 0x06, 0x0100, 0, 8);
+        self.control_in(param, desc_buf, 8)?;
+
+        let bmps0 = core::ptr::read_volatile((desc_buf as *const u8).add(7));
+        // SS encodes MPS as a power of two (always 9 → 512); other speeds use the
+        // literal byte. A zero/garbage read falls back to the speed guess.
+        let real = match speed {
+            4 => 512,
+            _ if bmps0 == 0 => ep0_max_packet(speed),
+            _ => bmps0 as u16,
+        };
+        if real != ep0_max_packet(speed) {
+            self.evaluate_ep0_mps(real)?;
+        }
+        Ok(real)
+    }
+
+    /// Issue Evaluate Context to update only EP0's Max Packet Size.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
+    pub unsafe fn evaluate_ep0_mps(&mut self, max_pkt: u16) -> Result<(), XhciError> {
+        let cs = self.ctx_size as u64;
+        let in_ctx = self.dma_base + dma::OFF_IN_CTX as u64;
+        core::ptr::write_bytes(in_ctx as *mut u8, 0, (3 * cs) as usize);
+        // A1 = EP0 context only, Evaluate Context reads just Max Packet Size.
+        vw32(in_ctx + 4, 1u32 << 1);
+        let ep0 = in_ctx + 2 * cs;
+        vw32(ep0 + 4, (max_pkt as u32) << 16);
+        let ctrl = TRB_EVALUATE_CONTEXT | ((self.slot_id as u32) << 24);
+        self.cmd_ring.enqueue(in_ctx, 0, ctrl);
+        self.ring_cmd_doorbell();
+        self.wait_cmd(2000)?;
+        Ok(())
+    }
 
     /// Configure a single interrupt-IN endpoint (for an HID device).
     ///
@@ -167,6 +209,7 @@ impl XhciController {
         &mut self,
         dci_in: u8,
         mpkt_in: u16,
+        ring_off: usize,
     ) -> Result<(), XhciError> {
         let cs = self.ctx_size as u64;
         let in_ctx = self.dma_base + dma::OFF_IN_CTX as u64;
@@ -209,17 +252,22 @@ impl XhciController {
             ep_in + 4,
             (3u32 << 1) | (7u32 << 3) | ((mpkt_in as u32) << 16),
         );
-        // DW2/DW3: TR Dequeue Pointer for this endpoint's ring, DCS=1
-        // (fresh ring). HID interrupt-IN reuses the bulk-IN ring slot.
-        let ring_in = self.dma_base + dma::OFF_XFER_BIN as u64;
+        // DW2/DW3: TR Dequeue Pointer for this endpoint's ring, DCS=1.
+        // Keyboard reuses OFF_XFER_BIN; the mouse has its own ring so both
+        // interrupt-IN endpoints can stay armed at once.
+        let ring_in = self.dma_base + ring_off as u64;
         vw32(ep_in + 8, (ring_in as u32 & !0xF) | 1);
         vw32(ep_in + 12, (ring_in >> 32) as u32);
         // DW4: Average TRB Length — short reports for keyboards/mice.
         vw32(ep_in + 16, 8);
 
-        // Reset the producer state on the bulk-IN ring so the first interrupt
-        // transfer goes at offset 0 with cycle=1, matching the dequeue we just set.
-        self.bin.reset();
+        // Reset the producer so the first interrupt transfer goes at offset 0
+        // with cycle=1, matching the dequeue we just set.
+        if ring_off == dma::OFF_XFER_MOUSE {
+            self.mouse_ring.reset();
+        } else {
+            self.bin.reset();
+        }
 
         let ctrl = TRB_CONFIGURE_EP | ((self.slot_id as u32) << 24);
         self.cmd_ring.enqueue(in_ctx, 0, ctrl);
@@ -281,6 +329,83 @@ impl XhciController {
         Ok(())
     }
 
+    /// A fresh SETUP clears the device-side protocol stall on the default
+    /// pipe (USB 2.0 §9.4.5), so the caller only needs to retry the request.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO/DMA mappings, the
+    /// caller must hold exclusive access, and EP0 must currently be halted.
+    pub(crate) unsafe fn recover_ep0(&mut self) -> Result<(), XhciError> {
+        let slot_id = self.slot_id;
+        self.reset_endpoint(slot_id, 1)?;
+        let cur_pos = self.dma_base + dma::OFF_XFER_EP0 as u64 + (self.ep0.enq as u64) * 16;
+        let dcs = self.ep0.cycle as u64 & 1;
+        self.set_tr_dequeue_pointer(slot_id, 1, (cur_pos & !0xF) | dcs)
+    }
+
+    /// Control-IN transfer on EP0 (with data stage) with stall recovery. Cheap
+    /// full-speed dongles STALL the first GET_DESCRIPTOR(CONFIG) even after
+    /// GET_DESCRIPTOR(DEVICE) succeeded; the spec-mandated host response is to
+    /// clear the halt and retry, not abandon enumeration. Retries with a growing
+    /// settle delay so a device that's merely not-ready-yet gets a chance.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO/DMA mappings and the
+    /// caller must hold exclusive access; `self.slot_id` must be addressed and
+    /// `buf .. buf+len` must lie within the DMA region.
+    pub(crate) unsafe fn control_in(
+        &mut self,
+        param: u64,
+        buf: u64,
+        len: u16,
+    ) -> Result<(), XhciError> {
+        let slot_id = self.slot_id;
+        let mut attempt = 0u8;
+        loop {
+            self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT | TRB_TRT_IN);
+            self.ep0
+                .enqueue(buf, len as u32, TRB_DATA | TRB_ISP | TRB_DIR_IN);
+            self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC);
+            self.ring_xfer_doorbell(1);
+            match self.wait_xfer(slot_id, 1, 5000) {
+                Ok(_) => return Ok(()),
+                Err(XhciError::IoError) if self.last_cc == 6 && attempt < 3 => {
+                    attempt += 1;
+                    self.recover_ep0()?;
+                    self.delay_ms(10 * attempt as u64);
+                },
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// No-data control-OUT on EP0 (SET_CONFIGURATION/SET_IDLE/SET_PROTOCOL) with
+    /// the same stall recovery as [`control_in`]. SET_PROTOCOL(boot) silently
+    /// failing here is what leaves a stall-prone mouse in report protocol, so
+    /// these must recover and retry rather than be fired and forgotten.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO/DMA mappings and the
+    /// caller must hold exclusive access; `self.slot_id` must be addressed.
+    pub(crate) unsafe fn control_nodata(&mut self, param: u64) -> Result<(), XhciError> {
+        let slot_id = self.slot_id;
+        let mut attempt = 0u8;
+        loop {
+            self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT);
+            self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC | TRB_DIR_IN);
+            self.ring_xfer_doorbell(1);
+            match self.wait_xfer(slot_id, 1, 2000) {
+                Ok(_) => return Ok(()),
+                Err(XhciError::IoError) if self.last_cc == 6 && attempt < 3 => {
+                    attempt += 1;
+                    self.recover_ep0()?;
+                    self.delay_ms(10 * attempt as u64);
+                },
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// Fetch device descriptor (18 bytes). Returns pointer into DMA buffer.
     ///
     /// # Safety
@@ -288,14 +413,8 @@ impl XhciController {
     /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn get_device_descriptor(&mut self) -> Result<*const u8, XhciError> {
         let desc_buf = self.dma_base + dma::OFF_DESC as u64;
-        let slot_id = self.slot_id;
         let param = pack_setup(0x80, 0x06, 0x0100, 0, 18);
-        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT | TRB_TRT_IN);
-        self.ep0
-            .enqueue(desc_buf, 18, TRB_DATA | TRB_ISP | TRB_DIR_IN);
-        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC);
-        self.ring_xfer_doorbell(1);
-        self.wait_xfer(slot_id, 1, 5000)?;
+        self.control_in(param, desc_buf, 18)?;
         Ok(desc_buf as *const u8)
     }
 
@@ -306,14 +425,8 @@ impl XhciController {
     /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn get_config_descriptor(&mut self, len: u16) -> Result<*const u8, XhciError> {
         let desc_buf = self.dma_base + dma::OFF_DESC as u64;
-        let slot_id = self.slot_id;
         let param = pack_setup(0x80, 0x06, 0x0200, 0, len);
-        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT | TRB_TRT_IN);
-        self.ep0
-            .enqueue(desc_buf, len as u32, TRB_DATA | TRB_ISP | TRB_DIR_IN);
-        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC);
-        self.ring_xfer_doorbell(1);
-        self.wait_xfer(slot_id, 1, 5000)?;
+        self.control_in(param, desc_buf, len)?;
         Ok(desc_buf as *const u8)
     }
 
@@ -323,13 +436,8 @@ impl XhciController {
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn set_configuration(&mut self, cfg_val: u8) -> Result<(), XhciError> {
-        let slot_id = self.slot_id;
         let param = pack_setup(0x00, 0x09, cfg_val as u16, 0, 0);
-        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT);
-        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC | TRB_DIR_IN);
-        self.ring_xfer_doorbell(1);
-        self.wait_xfer(slot_id, 1, 5000)?;
-        Ok(())
+        self.control_nodata(param)
     }
 
     /// Parse configuration descriptor. Returns (cfg_val, ep_in, ep_out, mpkt_in, mpkt_out).

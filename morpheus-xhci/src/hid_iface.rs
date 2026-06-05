@@ -8,7 +8,6 @@
 use crate::controller::{XhciController, XhciError};
 use crate::dma;
 use crate::pack_setup;
-use crate::regs::*;
 
 // USB HID class/subclass/protocol constants (HID spec 1.11 §4.2)
 pub const USB_CLASS_HID: u8 = 0x03;
@@ -24,7 +23,58 @@ pub struct HIDInterface {
     pub ep_in: u8,
     pub ep_out: u8,
     pub max_packet_in: u16,
+    /// wDescriptorLength of the report descriptor (HID descriptor offset 7-8);
+    /// 0 if no HID descriptor was found in the interface.
+    pub report_desc_len: u16,
 }
+
+/// One Data,Variable field located in a HID report: where it sits and how wide.
+/// `bit_size == 0` means the field is absent.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HidField {
+    pub bit_offset: u16,
+    pub bit_size: u8,
+    pub signed: bool,
+}
+
+/// Decoded bit layout of a mouse's motion report. Either the spec-fixed boot
+/// layout or the result of parsing the device's report descriptor — both feed
+/// the same decoder, so any mouse is handled uniformly.
+#[derive(Debug, Clone, Copy)]
+pub struct MouseLayout {
+    /// 0 = reports have no report-ID prefix byte.
+    pub report_id: u8,
+    pub buttons: HidField,
+    pub x: HidField,
+    pub y: HidField,
+    pub wheel: HidField,
+}
+
+/// HID 1.11 §B.2 boot-protocol mouse report: byte0 buttons, byte1 X(i8),
+/// byte2 Y(i8), byte3 wheel(i8, de-facto extension).
+pub const BOOT_MOUSE_LAYOUT: MouseLayout = MouseLayout {
+    report_id: 0,
+    buttons: HidField {
+        bit_offset: 0,
+        bit_size: 8,
+        signed: false,
+    },
+    x: HidField {
+        bit_offset: 8,
+        bit_size: 8,
+        signed: true,
+    },
+    y: HidField {
+        bit_offset: 16,
+        bit_size: 8,
+        signed: true,
+    },
+    wheel: HidField {
+        bit_offset: 24,
+        bit_size: 8,
+        signed: true,
+    },
+};
 
 impl XhciController {
     /// Fetch the HID report descriptor into the DMA buffer.
@@ -38,7 +88,8 @@ impl XhciController {
         len: u16,
     ) -> Result<*const u8, XhciError> {
         let desc_buf = self.dma_base + dma::OFF_DESC as u64;
-        let slot_id = self.slot_id;
+        // bmRequestType=0x81 (D2H, Standard, Interface), GET_DESCRIPTOR,
+        // wValue=0x2200 (Report descriptor), wIndex=interface.
         let param = pack_setup(
             0x81,
             0x06,
@@ -46,12 +97,7 @@ impl XhciController {
             interface_num as u16,
             len,
         );
-        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT | TRB_TRT_IN);
-        self.ep0
-            .enqueue(desc_buf, len as u32, TRB_DATA | TRB_ISP | TRB_DIR_IN);
-        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC);
-        self.ring_xfer_doorbell(1);
-        self.wait_xfer(slot_id, 1, 5000)?;
+        self.control_in(param, desc_buf, len)?;
         Ok(desc_buf as *const u8)
     }
 
@@ -61,13 +107,8 @@ impl XhciController {
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn set_hid_idle(&mut self, interface_num: u8) -> Result<(), XhciError> {
-        let slot_id = self.slot_id;
         let param = pack_setup(0x21, 0x0A, 0, interface_num as u16, 0);
-        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT);
-        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC | TRB_DIR_IN);
-        self.ring_xfer_doorbell(1);
-        self.wait_xfer(slot_id, 1, 2000)?;
-        Ok(())
+        self.control_nodata(param)
     }
 
     /// SET_PROTOCOL(0 = boot) on a HID interface.
@@ -82,16 +123,39 @@ impl XhciController {
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be addressed.
     pub unsafe fn set_hid_protocol_boot(&mut self, interface_num: u8) -> Result<(), XhciError> {
-        let slot_id = self.slot_id;
-        // bmRequestType=0x21 (H2D, Class, Interface), bRequest=0x0B (SET_PROTOCOL),
-        // wValue=0 (boot), wIndex=interface_num.
-        let param = pack_setup(0x21, 0x0B, 0, interface_num as u16, 0);
-        self.ep0.enqueue(param, 8, TRB_SETUP | TRB_IDT);
-        self.ep0.enqueue(0, 0, TRB_STATUS | TRB_IOC | TRB_DIR_IN);
-        self.ring_xfer_doorbell(1);
-        self.wait_xfer(slot_id, 1, 2000)?;
-        Ok(())
+        self.set_hid_protocol(interface_num, 0)
     }
+
+    /// SET_PROTOCOL on a HID interface. `protocol` 0 = boot, 1 = report.
+    ///
+    /// # Safety
+    /// The controller must be initialized with valid MMIO and DMA mappings and
+    /// the caller must hold exclusive access; `self.slot_id` must be addressed.
+    pub unsafe fn set_hid_protocol(
+        &mut self,
+        interface_num: u8,
+        protocol: u8,
+    ) -> Result<(), XhciError> {
+        // bmRequestType=0x21 (H2D, Class, Interface), bRequest=0x0B (SET_PROTOCOL),
+        // wValue=protocol, wIndex=interface_num.
+        let param = pack_setup(0x21, 0x0B, protocol as u16, interface_num as u16, 0);
+        self.control_nodata(param)
+    }
+
+    // GET_PROTOCOL (returns 0 = boot, 1 = report) is parked for now. I had tried
+    // using it to decide boot-vs-report decoding, but real hardware lies (ofcourse) they
+    // answer "boot" via GET_PROTOCOL yet emit report-format data so the mouse
+    // path for now unconditionally forces report protocol and decodes from the report
+    // descriptor. I left in in commented out because we might need it in future
+    // versions of the driver.
+    //
+    // pub unsafe fn get_hid_protocol(&mut self, interface_num: u8) -> Result<u8, XhciError> {
+    //     // bmRequestType=0xA1 (D2H, Class, Interface), bRequest=0x03 (GET_PROTOCOL).
+    //     let buf = self.dma_base + dma::OFF_DESC as u64;
+    //     let param = pack_setup(0xA1, 0x03, 0, interface_num as u16, 1);
+    //     self.control_in(param, buf, 1)?;
+    //     Ok(core::ptr::read_volatile(buf as *const u8))
+    // }
 
     /// Find the first HID boot interface from the already-fetched config descriptor.
     /// Returns a HIDInterface if a boot-class keyboard or mouse is found.
@@ -122,6 +186,7 @@ impl XhciController {
         let mut ep_in: u8 = 0;
         let mut ep_out: u8 = 0;
         let mut mp_in: u16 = 64;
+        let mut report_desc_len: u16 = 0;
         let mut in_hid_boot = false;
 
         while off + 2 <= limit {
@@ -154,6 +219,15 @@ impl XhciController {
                 }
             }
 
+            // HID descriptor (0x21): wDescriptorLength of the report descriptor
+            // is at offset 7-8 (first class descriptor, always the report one).
+            if btype == 0x21 && blen >= 9 && in_hid_boot {
+                report_desc_len = u16::from_le_bytes([
+                    core::ptr::read_volatile(d.add(off + 7)),
+                    core::ptr::read_volatile(d.add(off + 8)),
+                ]);
+            }
+
             if btype == 5 && blen >= 7 && in_hid_boot {
                 // Endpoint descriptor
                 let addr = core::ptr::read_volatile(d.add(off + 2));
@@ -183,6 +257,7 @@ impl XhciController {
                 ep_in,
                 ep_out,
                 max_packet_in: mp_in,
+                report_desc_len,
             })
         } else {
             None

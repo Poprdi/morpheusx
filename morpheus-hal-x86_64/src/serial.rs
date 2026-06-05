@@ -217,10 +217,21 @@ fn put_str_raw(s: &str) {
 
 #[inline]
 fn put_dec_u16_raw(mut val: u16) {
+    // Mirror digits to the FB console (LIVE_PUTC) as well as COM1, matching
+    // put_str_raw — otherwise log codes only ever reach serial, not the screen.
+    #[inline]
+    fn emit(b: u8) {
+        unsafe {
+            if let Some(f) = LIVE_PUTC {
+                f(b);
+            }
+        }
+        putc_raw(b);
+    }
     let mut buf = [0u8; 5];
     let mut i = 0usize;
     if val == 0 {
-        putc_raw(b'0');
+        emit(b'0');
         return;
     }
     while val > 0 {
@@ -230,7 +241,7 @@ fn put_dec_u16_raw(mut val: u16) {
     }
     while i > 0 {
         i -= 1;
-        putc_raw(buf[i]);
+        emit(buf[i]);
     }
 }
 

@@ -14,15 +14,21 @@ pub const OFF_IN_CTX: usize = 0x3000; // 2.5KB
 pub const OFF_XFER_EP0: usize = 0x4000; // 256B
 pub const OFF_XFER_BOUT: usize = 0x4100; // 256B
 pub const OFF_XFER_BIN: usize = 0x4200; // 256B
-pub const OFF_DESC: usize = 0x4480; // 256B
+pub const OFF_DESC: usize = 0x4480; // descriptor scratch, spans up to OFF_DATA
 pub const OFF_DATA: usize = 0x5000; // 4KB bounce buffer
-pub const OFF_REPORT: usize = 0x4300; // 64B — HID interrupt report buffer
+pub const OFF_REPORT: usize = 0x4300; // 64B — HID interrupt report buffer (keyboard)
+pub const OFF_REPORT_MOUSE: usize = 0x4340; // 64B — second HID report buffer (mouse)
+pub const OFF_XFER_MOUSE: usize = 0x6000; // 256B
 pub const OFF_CBW: usize = 0x4400; // 64B
 pub const OFF_CSW: usize = 0x4440; // 64B
 pub const OFF_SCRATCH_ARR: usize = 0x7000; // 64B
 pub const OFF_SCRATCH_PG: usize = 0x8000; // scratchpad pages (up to MAX_SCRATCH × 4 KB)
 pub const MAX_SCRATCH: usize = 64;
 pub const DATA_BUF_SIZE: usize = 4096;
+
+/// Usable span of OFF_DESC before OFF_DATA. Bounds descriptor reads
+/// (config + report) so they never run into the bounce buffer.
+pub const DESC_BUF_SIZE: usize = OFF_DATA - OFF_DESC; // 2944 B
 
 /// Sized 4 KB per slot (worst case is 33 endpoint contexts × 64 B = 2112 B,
 /// rounded up). MaxSlotsEnabled in OP_CONFIG is capped to this count so the

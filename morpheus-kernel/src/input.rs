@@ -2,9 +2,10 @@
 //! single handler each; the desktop drains the unified queues. All
 //! registration must happen before the scheduler starts.
 //!
-//! HID-to-input bridging: the HAL HID driver calls `push_keyboard_event_internal`
-//! / `push_mouse_event_internal` via the `KernelHooks::{keyboard_sink, mouse_sink}`
-//! callbacks the bootloader installs before `HalImpl::init`. The kernel
+//! HID-to-input bridging: the HAL HID driver calls the `KernelHooks::{keyboard_sink,
+//! mouse_sink}` callbacks the bootloader installs before `HalImpl::init`. The
+//! keyboard sink feeds the queue below; the mouse sink converges with PS/2 at
+//! the `crate::mouse` accumulator (what SYS_MOUSE_READ drains). The kernel
 //! exports the public sink functions below; the bootloader wires them as
 //! function pointers when it builds the hooks struct.
 
@@ -25,12 +26,9 @@ static KEYBOARD_HANDLERS: SpinLock<Option<KeyboardHandler>> = SpinLock::new(None
 static MOUSE_HANDLERS: SpinLock<Option<MouseHandler>> = SpinLock::new(None);
 
 static KEYBOARD_EVENTS: SpinLock<[Option<InputEvent>; 32]> = SpinLock::new([None; 32]);
-static MOUSE_EVENTS: SpinLock<[Option<InputEvent>; 16]> = SpinLock::new([None; 16]);
 
 static KEYBOARD_HEAD: SpinLock<usize> = SpinLock::new(0);
 static KEYBOARD_TAIL: SpinLock<usize> = SpinLock::new(0);
-static MOUSE_HEAD: SpinLock<usize> = SpinLock::new(0);
-static MOUSE_TAIL: SpinLock<usize> = SpinLock::new(0);
 
 static KEYBOARD_REGISTERED: SpinLock<bool> = SpinLock::new(false);
 static MOUSE_REGISTERED: SpinLock<bool> = SpinLock::new(false);
@@ -52,14 +50,6 @@ pub fn init() {
         *tail = 0;
     }
     {
-        let mut head = MOUSE_HEAD.lock();
-        *head = 0;
-    }
-    {
-        let mut tail = MOUSE_TAIL.lock();
-        *tail = 0;
-    }
-    {
         let mut handlers = KEYBOARD_HANDLERS.lock();
         *handlers = None;
     }
@@ -78,13 +68,9 @@ pub fn hid_keyboard_sink(byte: u8, pressed: bool) {
 /// Public hook target: the HAL HID mouse driver calls this (through the
 /// `KernelHooks::mouse_sink` function pointer the bootloader installs).
 pub fn hid_mouse_sink(dx: i16, dy: i16, buttons: u8, wheel: i8) {
-    push_mouse_event_internal(InputEvent::Move(dx, dy));
-    push_mouse_event_internal(InputEvent::Button(0, (buttons & 0x01) != 0));
-    push_mouse_event_internal(InputEvent::Button(1, (buttons & 0x02) != 0));
-    push_mouse_event_internal(InputEvent::Button(2, (buttons & 0x04) != 0));
-    if wheel != 0 {
-        push_mouse_event_internal(InputEvent::Wheel(wheel));
-    }
+    // Converge with PS/2 at the kernel accumulator — what SYS_MOUSE_READ drains
+    // and the compositor cursor reads.
+    crate::mouse::accumulate_full(dx, dy, buttons & 0x07, wheel);
 }
 
 /// Panics on duplicate registration; PS/2 and USB are mutually exclusive.
@@ -124,21 +110,6 @@ pub fn push_keyboard_event_internal(event: InputEvent) {
     }
 }
 
-/// Driver-side injection into the mouse queue.
-pub fn push_mouse_event_internal(event: InputEvent) {
-    const MASK: usize = 15;
-
-    let mut head = MOUSE_HEAD.lock();
-    let tail = MOUSE_TAIL.lock();
-    let next = (*head + 1) & MASK;
-
-    if next != *tail {
-        let mut events = MOUSE_EVENTS.lock();
-        events[*head] = Some(event);
-        *head = next;
-    }
-}
-
 pub fn poll_keyboard() -> Option<InputEvent> {
     let head = KEYBOARD_HEAD.lock();
     let mut tail = KEYBOARD_TAIL.lock();
@@ -155,55 +126,6 @@ pub fn poll_keyboard() -> Option<InputEvent> {
     drop(head);
 
     event
-}
-
-pub fn poll_mouse() -> Option<InputEvent> {
-    let head = MOUSE_HEAD.lock();
-    let mut tail = MOUSE_TAIL.lock();
-
-    if *head == *tail {
-        return None;
-    }
-
-    let mut events = MOUSE_EVENTS.lock();
-    let event = events[*tail].take();
-    *tail = (*tail + 1) & 15;
-    drop(events);
-    drop(tail);
-    drop(head);
-
-    event
-}
-
-/// (dx, dy, buttons) — buttons is bit0=L, bit1=R, bit2=M.
-pub fn drain_mouse() -> (i32, i32, u8) {
-    let mut dx: i32 = 0;
-    let mut dy: i32 = 0;
-    let mut buttons: u8 = 0;
-
-    loop {
-        match poll_mouse() {
-            Some(InputEvent::Move(dx_i, dy_i)) => {
-                dx += dx_i as i32;
-                dy += dy_i as i32;
-            },
-            Some(InputEvent::Button(idx, pressed)) => {
-                if pressed {
-                    buttons |= 1 << idx;
-                } else {
-                    buttons &= !(1 << idx);
-                }
-            },
-            Some(InputEvent::Wheel(delta)) => {
-                // Folded into dx; no dedicated wheel channel yet.
-                dx += delta as i32;
-            },
-            None => break,
-            _ => {},
-        }
-    }
-
-    (dx, dy, buttons)
 }
 
 pub fn has_keyboard() -> bool {

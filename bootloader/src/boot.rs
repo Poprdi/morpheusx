@@ -1116,13 +1116,14 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
 /// Primary path is USB HID; PS/2 is only polled as a fallback when no USB
 /// keyboard was detected during Phase 9 enumeration.
 fn boot_log_gate(keyboard: &mut Keyboard) {
-    puts("\n  press any key to start userspace\n");
-    let usb_active = morpheus_xhci::usb::runtime::keyboard_present();
+    puts("\nPress any key to start userspace...");
+    let usb_active = morpheus_xhci::usb::runtime::keyboard_present()
+        || morpheus_xhci::usb::runtime::mouse_present();
     loop {
         if usb_active {
             // USB-primary. Non-blocking peek + drain the unified queue.
             unsafe {
-                morpheus_xhci::usb::runtime::poll_keyboard();
+                morpheus_xhci::usb::runtime::poll_input();
             }
             let mut got_press = false;
             while let Some(event) = morpheus_kernel::input::poll_keyboard() {
@@ -1226,7 +1227,8 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
     // Pin the primary-source decision once at entry. USB present in Phase 9
     // means USB is authoritative for the rest of uptime; PS/2 only polls if
     // USB enumeration found nothing.
-    let usb_active = morpheus_xhci::usb::runtime::keyboard_present();
+    let usb_active = morpheus_xhci::usb::runtime::keyboard_present()
+        || morpheus_xhci::usb::runtime::mouse_present();
 
     loop {
         let mut had_work = false;
@@ -1239,7 +1241,7 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
             // pump again (HID poll latency ≈ one tick) and schedules compd to
             // drain on the same ticks.
             unsafe {
-                morpheus_xhci::usb::runtime::poll_keyboard();
+                morpheus_xhci::usb::runtime::poll_input();
             }
         } else {
             // PS/2 fallback. Drains up to 64 buffered bytes per outer
