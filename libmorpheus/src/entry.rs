@@ -16,16 +16,14 @@ macro_rules! entry {
 
 #[cfg(not(test))]
 #[panic_handler]
-fn _panic(_info: &core::panic::PanicInfo) -> ! {
-    let msg = "User Process shit the bed!\n";
-    let _ = unsafe {
-        crate::raw::syscall3(
-            crate::raw::SYS_WRITE,
-            2,
-            msg.as_ptr() as u64,
-            msg.len() as u64,
-        )
-    };
+fn _panic(info: &core::panic::PanicInfo) -> ! {
+    use core::fmt::Write;
+    // `PanicInfo`'s Display gives "panicked at <file>:<line>:<col>:\n<message>".
+    // FdWriter buffers on the stack (no alloc) and flushes on drop.
+    {
+        let mut w = crate::io::FdWriter::new(2);
+        let _ = write!(w, "User Process shit the bed! {info}\n");
+    }
 
     process::exit(101);
 }

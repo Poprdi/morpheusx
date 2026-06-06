@@ -15,6 +15,35 @@ use morpheus_hal_api::{AllocKind, MemoryType};
 /// Includes PID 0 (kernel).
 pub const MAX_PROCESSES: usize = 64;
 
+/// FIONBIO state, one bit per PID (fits `MAX_PROCESSES` in a u64). Kept out of
+/// `Process` so the struct's ABI layout stays byte-identical — `Process` feeds
+/// fixed-offset asm (context_switch.s / syscall.s) and array-strided FXSAVE
+/// areas, so growing it is a real-hardware footgun. fd 0 has no descriptor to
+/// hang a flag on, hence a side table. Bit set ⇒ `SYS_READ(0)` returns EAGAIN
+/// instead of blocking on an empty stdin.
+static STDIN_NONBLOCK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// True if `pid` requested non-blocking stdin. Out-of-range PIDs read false.
+pub fn stdin_nonblock(pid: u32) -> bool {
+    if pid as usize >= MAX_PROCESSES {
+        return false;
+    }
+    STDIN_NONBLOCK.load(core::sync::atomic::Ordering::Relaxed) & (1 << pid) != 0
+}
+
+/// Set/clear `pid`'s non-blocking stdin bit. No-op for out-of-range PIDs.
+pub fn set_stdin_nonblock(pid: u32, enable: bool) {
+    if pid as usize >= MAX_PROCESSES {
+        return;
+    }
+    let bit = 1u64 << pid;
+    if enable {
+        STDIN_NONBLOCK.fetch_or(bit, core::sync::atomic::Ordering::Relaxed);
+    } else {
+        STDIN_NONBLOCK.fetch_and(!bit, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub const PROCESS_KERNEL_STACK_SIZE: usize = 128 * 1024;
 
 pub const SCHED_CAP_CAN_MIGRATE: u32 = 1 << 0;

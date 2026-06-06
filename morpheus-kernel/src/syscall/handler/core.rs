@@ -132,6 +132,8 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
             // Others: global stdin ring fed by the PS/2 ISR.
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
 
+            let nonblock = crate::process::stdin_nonblock(SCHEDULER.current_process_mut().pid);
+
             if is_composited_client() {
                 loop {
                     let proc = SCHEDULER.current_process_mut();
@@ -143,6 +145,9 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                     }
                     if n > 0 {
                         return n as u64;
+                    }
+                    if nonblock {
+                        return EAGAIN;
                     }
                     if !proc.pending_signals.is_empty() {
                         return 0;
@@ -157,6 +162,9 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
                 let n = crate::stdin::read(buf);
                 if n > 0 {
                     return n as u64;
+                }
+                if nonblock {
+                    return EAGAIN;
                 }
                 {
                     let proc = SCHEDULER.current_process_mut();

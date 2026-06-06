@@ -318,8 +318,19 @@ impl PhysAlloc for HalImpl {
     fn find_largest_free_below_4gb(&self) -> Option<(u64, u64)> {
         unsafe { crate::memory::global_registry().find_largest_free_below_4gb() }
     }
-    fn for_each_descriptor(&self, _f: &mut dyn FnMut(&MemoryDescriptor)) {
-        // TODO: bridge buddy iterator into hal-api shape; no caller today.
+    fn for_each_descriptor(&self, f: &mut dyn FnMut(&MemoryDescriptor)) {
+        // SAFETY: BSP/handler context; the registry snapshot is read-only here.
+        let reg = unsafe { crate::memory::global_registry() };
+        reg.for_each_descriptor(&mut |d| {
+            let api = MemoryDescriptor {
+                mem_type: MemoryType::from_raw(d.mem_type as u32),
+                phys_start: d.physical_start,
+                virt_start: d.virtual_start,
+                num_pages: d.number_of_pages,
+                attribute: morpheus_hal_api::MemoryAttribute(d.attribute.0),
+            };
+            f(&api);
+        });
     }
     fn export_e820(&self, _out: &mut [E820Entry]) -> usize {
         // TODO: legacy bootloader E820 handoff.

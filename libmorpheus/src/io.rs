@@ -595,6 +595,7 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
 }
 
 const IOCTL_FIONREAD: u64 = 0x541B;
+const IOCTL_FIONBIO: u64 = 0x5421;
 const IOCTL_TIOCGWINSZ: u64 = 0x5413;
 
 pub fn ioctl(fd: u32, cmd: u64, arg: u64) -> Result<u64, u64> {
@@ -618,4 +619,11 @@ pub fn stdin_available() -> usize {
     let mut avail = 0u32;
     let _ = ioctl(0, IOCTL_FIONREAD, &mut avail as *mut u32 as u64);
     avail as usize
+}
+
+/// Toggle non-blocking stdin (FIONBIO). When enabled, `read(0, ..)` returns
+/// EAGAIN instead of blocking on an empty input buffer.
+pub fn set_stdin_nonblocking(enable: bool) -> Result<(), u64> {
+    let flag: u32 = enable as u32;
+    ioctl(0, IOCTL_FIONBIO, &flag as *const u32 as u64).map(|_| ())
 }
