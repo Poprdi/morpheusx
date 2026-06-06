@@ -22,7 +22,7 @@ fn _panic(info: &core::panic::PanicInfo) -> ! {
     // FdWriter buffers on the stack (no alloc) and flushes on drop.
     {
         let mut w = crate::io::FdWriter::new(2);
-        let _ = write!(w, "User Process shit the bed! {info}\n");
+        let _ = write!(w, "User Process shit the bed! {info}");
     }
 
     process::exit(101);
