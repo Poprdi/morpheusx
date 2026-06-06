@@ -1,0 +1,2 @@
+[alias]
+test-host = "test --all-features -p iso9660-rs -p morpheus-storage-format -p morpheus-helix -p morpheus-gfx3d -p morpheus-ui -p morpheus-ping -p morpheus-block -p morpheus-nic -p morpheus-net-stack"
