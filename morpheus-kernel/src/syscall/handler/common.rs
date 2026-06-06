@@ -14,6 +14,7 @@ pub(crate) const ENOENT: u64 = u64::MAX - 2;
 pub(crate) const ESRCH: u64 = u64::MAX - 3;
 pub(crate) const EIO: u64 = u64::MAX - 5;
 pub(crate) const EBADF: u64 = u64::MAX - 9;
+pub(crate) const EAGAIN: u64 = u64::MAX - 11;
 pub(crate) const ENOMEM: u64 = u64::MAX - 12;
 pub(crate) const EFAULT: u64 = u64::MAX - 14;
 pub(crate) const ENOTDIR: u64 = u64::MAX - 20;

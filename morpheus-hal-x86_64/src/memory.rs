@@ -300,6 +300,7 @@ impl MemoryRegistry {
     /// # Safety
     /// Once, single-threaded, pre-first-alloc. `map_ptr` describes a valid UEFI
     /// memory map of `map_size` bytes with `descriptor_size` stride.
+    #[allow(clippy::too_many_arguments)]
     pub unsafe fn import_uefi_map(
         &mut self,
         map_ptr: *const u8,
@@ -308,12 +309,28 @@ impl MemoryRegistry {
         _descriptor_version: u32,
         exclude_base: u64,
         exclude_pages: u64,
+        helix_base: u64,
+        helix_pages: u64,
         hw_holes: &[u64],
     ) {
         let excl_start = exclude_base;
         let excl_end = exclude_base + exclude_pages * PAGE_SIZE;
         self.excl_start = excl_start;
         self.excl_end = excl_end;
+
+        // Exclusion windows that must never enter the pool: the PE image (so
+        // .text/.data/.bss aren't freed) and the pre-EBS-staged HelixFS image
+        // (UEFI LoaderData that this kernel keeps using as a RAM block device —
+        // adding it would write FreeNode headers into the filesystem). Sorted
+        // ascending by start for `add_range_excluding`.
+        let mut windows: [(u64, u64); 2] = [
+            (excl_start, excl_end),
+            (helix_base, helix_base + helix_pages * PAGE_SIZE),
+        ];
+        if windows[0].0 > windows[1].0 {
+            windows.swap(0, 1);
+        }
+
         let entry_count = map_size / descriptor_size;
 
         for i in 0..entry_count {
@@ -358,18 +375,9 @@ impl MemoryRegistry {
                 let region_end = phys + pages * PAGE_SIZE;
                 let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
                 if start < region_end {
-                    // Clip PE image first, then punch hw_holes so FreeNode never
-                    // lands in a live CPU structure.
-                    if excl_end > excl_start && start < excl_end && region_end > excl_start {
-                        if start < excl_start {
-                            self.add_range_punching_holes(start, excl_start, hw_holes);
-                        }
-                        if region_end > excl_end {
-                            self.add_range_punching_holes(excl_end, region_end, hw_holes);
-                        }
-                    } else {
-                        self.add_range_punching_holes(start, region_end, hw_holes);
-                    }
+                    // Clip exclusion windows, then punch hw_holes so a FreeNode
+                    // never lands in a live CPU structure or excluded image.
+                    self.add_range_excluding(start, region_end, &windows, hw_holes);
                 }
             }
         }
@@ -463,6 +471,13 @@ impl MemoryRegistry {
 
     pub fn get_memory_map(&self) -> (u64, usize) {
         (self.map_key, self.map_count)
+    }
+
+    /// Visit each live snapshot descriptor (UEFI regions + kernel allocations).
+    pub fn for_each_descriptor(&self, f: &mut dyn FnMut(&MemoryDescriptor)) {
+        for d in &self.map[..self.map_count] {
+            f(d);
+        }
     }
     pub fn get_map_key(&self) -> u64 {
         self.map_key
@@ -575,6 +590,36 @@ impl MemoryRegistry {
         }
 
         added
+    }
+
+    /// Add `[start, end)` to the buddy, carving out each exclusion window in
+    /// `windows` (sorted ascending by start, non-overlapping; empty windows
+    /// ignored) and punching `hw_holes` in the surviving sub-ranges.
+    ///
+    /// # Safety
+    /// `[start, end)` is a real, page-aligned, identity-mapped physical range.
+    unsafe fn add_range_excluding(
+        &mut self,
+        start: u64,
+        end: u64,
+        windows: &[(u64, u64)],
+        hw_holes: &[u64],
+    ) {
+        let mut cur = start;
+        for &(ws, we) in windows {
+            let ws = ws.max(start);
+            let we = we.min(end);
+            if we <= ws {
+                continue; // window empty or outside [start, end)
+            }
+            if ws > cur {
+                self.add_range_punching_holes(cur, ws, hw_holes);
+            }
+            cur = cur.max(we);
+        }
+        if cur < end {
+            self.add_range_punching_holes(cur, end, hw_holes);
+        }
     }
 
     pub fn allocated_memory(&self) -> u64 {
@@ -1179,6 +1224,7 @@ static REGISTRY_INITIALIZED: core::sync::atomic::AtomicBool =
 /// # Safety
 /// Once, single-threaded, immediately after `ExitBootServices`. `hw_holes`
 /// sorted ascending — live PT pages, GDT, IDT, etc.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn init_global_registry(
     map_ptr: *const u8,
     map_size: usize,
@@ -1186,6 +1232,8 @@ pub unsafe fn init_global_registry(
     descriptor_version: u32,
     exclude_base: u64,
     exclude_pages: u64,
+    helix_base: u64,
+    helix_pages: u64,
     hw_holes: &[u64],
 ) {
     if REGISTRY_INITIALIZED.load(core::sync::atomic::Ordering::Relaxed) {
@@ -1199,6 +1247,8 @@ pub unsafe fn init_global_registry(
         descriptor_version,
         exclude_base,
         exclude_pages,
+        helix_base,
+        helix_pages,
         hw_holes,
     );
     REGISTRY_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
@@ -1272,7 +1322,7 @@ pub unsafe fn parse_uefi_memory_map(
     desc_size: usize,
 ) -> MemoryRegistry {
     let mut r = MemoryRegistry::new();
-    r.import_uefi_map(map_ptr, map_size, desc_size, 1, 0, 0, &[]);
+    r.import_uefi_map(map_ptr, map_size, desc_size, 1, 0, 0, 0, 0, &[]);
     r
 }
 

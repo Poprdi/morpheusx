@@ -8,6 +8,7 @@ pub mod cpu;
 pub mod dma;
 pub mod heap;
 pub mod intr;
+pub mod io;
 pub mod memory;
 pub mod paging;
 pub mod pci;

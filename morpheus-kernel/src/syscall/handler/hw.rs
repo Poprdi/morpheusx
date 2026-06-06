@@ -6,16 +6,51 @@ use crate::hal;
 use crate::schedular::SCHEDULER;
 use morpheus_hal_api::{AllocKind, BusAddr, MemoryType, PageFlags, Pml4Handle};
 
-/// `width`: 1/2/4 bytes.
-///
-/// LD25: x86-only. The HAL trait surface intentionally has no port-IO methods
-/// so non-x86 arches can't get tempted to ship a stub. Returns ENOSYS.
-pub unsafe fn sys_port_in(_port: u64, _width: u64) -> u64 {
-    ENOSYS
+// Port-IO seam (LD25): port I/O is x86-only and deliberately kept out of the
+// HAL trait so a non-x86 arch can't ship a broken stub. Instead the x86 HAL
+// installs these fn-pointer hooks; arches that don't install them leave port
+// I/O at ENOSYS. Exokernel: ports are exposed raw to userland — a caller with
+// the syscall can touch any port, by design.
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+type PortInFn = fn(u16, u8) -> u32;
+type PortOutFn = fn(u16, u8, u32);
+
+static PORT_IN_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static PORT_OUT_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Install the platform port-IO primitives. Call once at boot (x86 only).
+pub fn set_port_io_hooks(port_in: PortInFn, port_out: PortOutFn) {
+    PORT_IN_HOOK.store(port_in as *mut (), Ordering::Release);
+    PORT_OUT_HOOK.store(port_out as *mut (), Ordering::Release);
 }
 
-pub unsafe fn sys_port_out(_port: u64, _width: u64, _value: u64) -> u64 {
-    ENOSYS
+/// `width`: 1/2/4 bytes. Returns the read value, or ENOSYS if no platform hook.
+pub unsafe fn sys_port_in(port: u64, width: u64) -> u64 {
+    if port > 0xFFFF || !matches!(width, 1 | 2 | 4) {
+        return EINVAL;
+    }
+    let p = PORT_IN_HOOK.load(Ordering::Acquire);
+    if p.is_null() {
+        return ENOSYS;
+    }
+    // SAFETY: pointer was installed from a `PortInFn` by `set_port_io_hooks`.
+    let f: PortInFn = core::mem::transmute(p);
+    f(port as u16, width as u8) as u64
+}
+
+pub unsafe fn sys_port_out(port: u64, width: u64, value: u64) -> u64 {
+    if port > 0xFFFF || !matches!(width, 1 | 2 | 4) {
+        return EINVAL;
+    }
+    let p = PORT_OUT_HOOK.load(Ordering::Acquire);
+    if p.is_null() {
+        return ENOSYS;
+    }
+    // SAFETY: pointer was installed from a `PortOutFn` by `set_port_io_hooks`.
+    let f: PortOutFn = core::mem::transmute(p);
+    f(port as u16, width as u8, value as u32);
+    0
 }
 
 /// bdf = (bus << 16) | (dev << 8) | func.
@@ -101,7 +136,10 @@ pub unsafe fn sys_dma_free(phys: u64, pages: u64) -> u64 {
 /// flags: bit0 W, bit1 UC. Physical pages are caller-owned; MUNMAP only
 /// drops PTEs, never frees the backing memory.
 pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
-    if phys == 0 || pages == 0 || pages > 1024 {
+    // 16384 pages = 64 MiB per call. The old 4 MiB (1024-page) cap rejected
+    // whole-framebuffer maps on real panels (1080p = 2025 pages, 4K = 8100) —
+    // QEMU's default FB stays under 4 MiB, so it only bit on hardware.
+    if phys == 0 || pages == 0 || pages > 16384 {
         return EINVAL;
     }
     if phys & 0xFFF != 0 {

@@ -829,6 +829,13 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
         morpheus_xhci::usb::runtime::install_runtime,
     );
 
+    // Port-IO seam: SYS_PORT_IN/OUT call these x86 primitives (kept out of the
+    // HAL trait per LD25 so non-x86 stays ENOSYS).
+    morpheus_kernel::syscall::handler::hw::set_port_io_hooks(
+        morpheus_hal_x86_64::io::port_in,
+        morpheus_hal_x86_64::io::port_out,
+    );
+
     // HID event sinks: the xHCI HID drivers deliver events here so the kernel
     // input layer receives them. Must be installed before HID init runs.
     //
@@ -847,6 +854,14 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
     // preconditions (it's a zero-sized struct), so it's safe pre-phase-1.
     morpheus_kernel::install_hal(unsafe { morpheus_hal_x86_64::platform::init() });
 
+    // Keep the pre-EBS HelixFS image out of the buddy: it's UEFI LoaderData
+    // (which import would otherwise reclaim and scribble FreeNodes into) but the
+    // RAM block device reads/writes it for the system's lifetime.
+    let (helix_base, helix_pages) = match ctx.pre_ebs_helix.as_ref() {
+        Some(img) => (img.base, (img.size as u64).div_ceil(4096)),
+        None => (0, 0),
+    };
+
     let cfg = morpheus_hal_x86_64::platform::SelfContainedConfig {
         memory_map_ptr: ctx.mmap_ptr,
         memory_map_size: ctx.mmap_size,
@@ -856,6 +871,8 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
         image_pages: ctx.image_pages,
         stack_base: ctx.stack_base,
         stack_pages: ctx.stack_pages,
+        helix_base,
+        helix_pages,
         acpi_rsdp_phys: ctx.acpi_rsdp_phys,
     };
     match morpheus_hal_x86_64::platform::platform_init_selfcontained(cfg) {

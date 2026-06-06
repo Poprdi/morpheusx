@@ -50,6 +50,8 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
         })?;
 
     let tid = slot_idx as u32;
+    // Fresh occupant of a reused slot starts with blocking stdin.
+    crate::process::set_stdin_nonblock(tid, false);
 
     PROCESS_TABLE[slot_idx] = Some(Process::empty());
     let thread = PROCESS_TABLE[slot_idx].as_mut().ok_or_else(|| {
@@ -135,6 +137,8 @@ pub unsafe fn spawn_user_process(
         })?;
 
     let pid = slot_idx as u32;
+    // Fresh occupant of a reused slot starts with blocking stdin.
+    crate::process::set_stdin_nonblock(pid, false);
 
     let mut proc = Process::empty();
     proc.pid = pid;

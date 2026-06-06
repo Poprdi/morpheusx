@@ -165,6 +165,13 @@ pub unsafe fn sys_fb_map() -> u64 {
         },
     };
 
+    // Page count of a whole-framebuffer map; must stay under sys_map_phys's cap.
+    crate::serial::log_info(
+        "FB",
+        info.size.div_ceil(PAGE_SIZE) as u16,
+        "framebuffer map pages",
+    );
+
     if is_composited_client() {
         crate::serial::log_info("FB", 791, "mapped private composited surface");
         return sys_fb_map_surface(&info);

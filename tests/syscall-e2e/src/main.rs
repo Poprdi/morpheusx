@@ -278,14 +278,22 @@ fn test_write() {
 }
 
 fn test_read() {
-    // Non-blocking read from stdin — should return 0 (no keys pressed)
+    // SYS_READ(0) blocks until input by default; a blind read here would hang
+    // forever (this process is never a focused window). Switch stdin to
+    // non-blocking via FIONBIO, then expect EAGAIN with no keys buffered.
+    let nb = libmorpheus::io::set_stdin_nonblocking(true);
+    check("SYS_IOCTL(FIONBIO on)", nb.is_ok(), "fionbio failed");
+
     let mut buf = [0u8; 16];
     let ret = unsafe { syscall3(SYS_READ, 0, buf.as_mut_ptr() as u64, buf.len() as u64) };
+    // EAGAIN = u64::MAX - 11
     check(
-        "SYS_READ(0) stdin non-blocking",
-        !libmorpheus::is_error(ret),
-        "returned error",
+        "SYS_READ(0) non-blocking EAGAIN",
+        ret == u64::MAX - 11,
+        "expected EAGAIN",
     );
+
+    let _ = libmorpheus::io::set_stdin_nonblocking(false);
 }
 
 fn test_yield() {

@@ -31,6 +31,35 @@ pub enum MemoryType {
     AllocatedHeap = 0x8000_0004,
 }
 
+impl MemoryType {
+    /// Map a raw discriminant (UEFI type or kernel `Allocated*` tag) to a
+    /// variant; unknown values fall back to `Reserved`.
+    pub fn from_raw(value: u32) -> Self {
+        match value {
+            1 => Self::LoaderCode,
+            2 => Self::LoaderData,
+            3 => Self::BootServicesCode,
+            4 => Self::BootServicesData,
+            5 => Self::RuntimeServicesCode,
+            6 => Self::RuntimeServicesData,
+            7 => Self::Conventional,
+            8 => Self::Unusable,
+            9 => Self::AcpiReclaim,
+            10 => Self::AcpiNvs,
+            11 => Self::Mmio,
+            12 => Self::MmioPortSpace,
+            13 => Self::PalCode,
+            14 => Self::Persistent,
+            0x8000_0000 => Self::Allocated,
+            0x8000_0001 => Self::AllocatedDma,
+            0x8000_0002 => Self::AllocatedStack,
+            0x8000_0003 => Self::AllocatedPageTable,
+            0x8000_0004 => Self::AllocatedHeap,
+            _ => Self::Reserved,
+        }
+    }
+}
+
 /// UEFI EFI_MEMORY_* attribute bits, raw so HAL impls can pass through unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]

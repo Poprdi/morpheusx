@@ -86,6 +86,10 @@ pub struct SelfContainedConfig {
     /// Boot stack — also excluded.
     pub stack_base: u64,
     pub stack_pages: u64,
+    /// Pre-EBS-staged HelixFS image (UEFI LoaderData kept as a RAM block device).
+    /// Excluded from the buddy so import never writes FreeNodes into it. 0 = none.
+    pub helix_base: u64,
+    pub helix_pages: u64,
     /// 0 = unavailable.
     pub acpi_rsdp_phys: u64,
 }
@@ -313,6 +317,8 @@ pub unsafe fn platform_init_selfcontained(
         config.descriptor_version,
         config.image_base,
         config.image_pages,
+        config.helix_base,
+        config.helix_pages,
         &hw_holes[..hw_count],
     );
 

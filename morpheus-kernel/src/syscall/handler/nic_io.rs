@@ -115,6 +115,7 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
 }
 
 const IOCTL_FIONREAD: u64 = 0x541B;
+const IOCTL_FIONBIO: u64 = 0x5421;
 const IOCTL_TIOCGWINSZ: u64 = 0x5413;
 
 pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
@@ -140,6 +141,18 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
                 core::ptr::write(arg as *mut u32, avail as u32);
             }
             avail as u64
+        },
+        (0, IOCTL_FIONBIO) => {
+            // arg -> *const i32: nonzero enables non-blocking stdin for this
+            // process. Reads of fd 0 then return EAGAIN instead of blocking.
+            let enable = if arg != 0 && validate_user_buf(arg, 4) {
+                core::ptr::read(arg as *const u32) != 0
+            } else {
+                false
+            };
+            let pid = SCHEDULER.current_process_mut().pid;
+            crate::process::set_stdin_nonblock(pid, enable);
+            0
         },
         (0..=2, IOCTL_TIOCGWINSZ) => {
             if arg != 0 && validate_user_buf(arg, 8) {
