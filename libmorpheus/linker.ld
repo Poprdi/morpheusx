@@ -33,6 +33,25 @@ SECTIONS
         *(.data .data.*)
     }
 
+    /* Thread-local template (variant II, local-exec — target is reloc-model
+     * static). crt0 copies [__tls_start, __tdata_end) (.tdata) and zeroes the
+     * rest of the block into each thread's TLS; FS base = block top (the TCB).
+     *
+     * crt0 can't read PT_TLS p_align at runtime (the phdrs aren't mapped: the
+     * first PT_LOAD starts at file offset 0x1000). To stay align-independent we
+     * pad the segment size up to 64 *inside* .tbss — lld counts an intra-section
+     * `. = ALIGN` in p_memsz — so the tpoff block size `alignTo(p_memsz,p_align)`
+     * equals `__tls_end - __tls_start` for any thread-local alignment <= 64.
+     * When there are no thread-locals the location is already 64-aligned, the
+     * pad is a no-op, and __tls_end == __tls_start (size 0) so crt0 skips TLS. */
+    .tdata ALIGN(64) : {
+        __tls_start = .;
+        *(.tdata .tdata.*)
+        *(.tbss .tbss.*)
+        . = ALIGN(64);
+        __tls_end = .;
+    }
+
     .bss ALIGN(4K) : {
         __bss_start = .;
         *(.bss .bss.*)

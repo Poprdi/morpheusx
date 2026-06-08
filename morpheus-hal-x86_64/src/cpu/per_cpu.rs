@@ -173,8 +173,20 @@ unsafe fn rdmsr(msr: u32) -> u64 {
     (hi as u64) << 32 | lo as u64
 }
 
+const IA32_FS_BASE: u32 = 0xC000_0100;
 const IA32_GS_BASE: u32 = 0xC000_0101;
 const IA32_KERNEL_GS_BASE: u32 = 0xC000_0102;
+
+/// Write the user TLS base (IA32_FS_BASE). FSGSBASE is off, so this MSR is the
+/// sole FS-base mutation path and `Process.tls_base` stays authoritative.
+///
+/// # Safety
+/// `tp` must be canonical (Intel SDM Vol 3 §2.2.1: writing a non-canonical
+/// IA32_FS_BASE `#GP`s). Enforced at the syscall boundary via `USER_ADDR_LIMIT`.
+#[inline]
+pub unsafe fn set_user_tls_base(tp: u64) {
+    wrmsr(IA32_FS_BASE, tp);
+}
 
 /// # Safety
 /// Once on BSP, after GDT, before IF=1.

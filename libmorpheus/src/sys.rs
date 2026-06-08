@@ -113,3 +113,30 @@ pub fn shutdown(force: bool) -> Result<(), u64> {
 pub fn shutdown_panic() -> Result<(), u64> {
     system_control(SystemControlMode::ShutdownPanic)
 }
+
+/// Fill `buf` with hardware random bytes. Returns the number written (may be
+/// short on transient entropy starvation). `Err(ENOSYS)` if the platform has
+/// no RNG. Linux-`getrandom`-shaped; the seed source for std's HashMap etc.
+pub fn getrandom(buf: &mut [u8]) -> Result<usize, u64> {
+    getrandom_flags(buf, 0)
+}
+
+/// `getrandom` with raw flags (e.g. `GRND_NONBLOCK`).
+pub fn getrandom_flags(buf: &mut [u8], flags: u64) -> Result<usize, u64> {
+    if buf.is_empty() {
+        return Ok(0);
+    }
+    let ret = unsafe {
+        syscall3(
+            SYS_GETRANDOM,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+            flags,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret as usize)
+    }
+}

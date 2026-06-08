@@ -199,6 +199,11 @@ pub struct Process {
     pub input_tail: u8,
 
     pub running_on: u32,
+
+    /// User TLS base (x86 FS base), set via SYS_SET_THREAD_POINTER and restored
+    /// on every switch-to-user. Rust-only field (no asm reads it), so appending
+    /// it is layout-safe — unlike fields the fixed-offset asm consumes.
+    pub tls_base: u64,
 }
 
 impl Process {
@@ -259,6 +264,7 @@ impl Process {
             input_tail: 0,
             // Not on any core.
             running_on: u32::MAX,
+            tls_base: 0,
         }
     }
 

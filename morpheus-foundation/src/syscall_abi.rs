@@ -138,6 +138,19 @@ pub const SYS_SYSTEM_CONTROL: u64 = 98;
 /// The compositor reads input through this instead of the stdin byte stream.
 pub const SYS_KEYBOARD_READ: u64 = 99;
 
+/// `arch_prctl(ARCH_SET_FS)` analogue: set the calling thread's TLS base (x86 FS
+/// base). Userland owns the TCB / variant-II layout; the kernel only stores and
+/// per-switch restores the opaque pointer. Returns 0, or EINVAL if non-canonical.
+pub const SYS_SET_THREAD_POINTER: u64 = 100;
+
+/// `getrandom(buf, len, flags) -> bytes_written`. Linux-shaped so a Rust std PAL
+/// and mlibc map 1:1. `flags` bit0 = GRND_NONBLOCK (advisory; RDRAND rarely
+/// blocks). ENOSYS if the platform has no hardware RNG.
+pub const SYS_GETRANDOM: u64 = 101;
+
+/// getrandom flag: do not block on entropy. Advisory on RDRAND-backed systems.
+pub const GRND_NONBLOCK: u64 = 0x0001;
+
 // Seek whence constants.
 pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;

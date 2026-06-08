@@ -134,6 +134,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             }
             let fpu_ptr = &mut next.fpu_state as *mut morpheus_hal_api::FpuState as u64;
             set_percpu_fpu_ptr(fpu_ptr);
+            hal().cpu().set_user_tls_base(next.tls_base);
             &next.context
         } else {
             set_this_core_pid(0);
@@ -257,6 +258,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
         let fpu_ptr = &mut next.fpu_state as *mut morpheus_hal_api::FpuState as u64;
         set_percpu_fpu_ptr(fpu_ptr);
+        hal().cpu().set_user_tls_base(next.tls_base);
 
         &next.context
     } else {

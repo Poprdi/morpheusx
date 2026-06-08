@@ -53,6 +53,35 @@ pub unsafe fn sys_port_out(port: u64, width: u64, value: u64) -> u64 {
     0
 }
 
+/// getrandom(buf, len, flags) -> bytes written. Fills `[buf, buf+len)` from the
+/// platform RNG (x86 RDRAND). `flags` bit0 = GRND_NONBLOCK (advisory; RDRAND
+/// doesn't truly block). ENOSYS if the platform has no RNG; EFAULT on a bad buf.
+pub unsafe fn sys_getrandom(buf: u64, len: u64, _flags: u64) -> u64 {
+    if len == 0 {
+        return 0;
+    }
+    if !validate_user_buf(buf, len) {
+        return EFAULT;
+    }
+    let total = len as usize;
+    let dst = buf as *mut u8;
+    let mut written = 0usize;
+    while written < total {
+        let word = match hal().cpu().hw_random() {
+            Some(w) => w,
+            // No RNG → ENOSYS; transient starvation after a partial fill → return
+            // what we have (a short read, like Linux getrandom under signal).
+            None if written == 0 => return ENOSYS,
+            None => break,
+        };
+        let bytes = word.to_ne_bytes();
+        let take = core::cmp::min(8, total - written);
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.add(written), take);
+        written += take;
+    }
+    written as u64
+}
+
 /// bdf = (bus << 16) | (dev << 8) | func.
 pub unsafe fn sys_pci_cfg_read(bdf: u64, offset: u64, width: u64) -> u64 {
     let bus = ((bdf >> 16) & 0xFF) as u8;

@@ -30,8 +30,8 @@ use handler::fs::{
     sys_fs_snapshot, sys_fs_stat, sys_fs_sync, sys_fs_truncate, sys_fs_unlink, sys_fs_versions,
 };
 use handler::hw::{
-    sys_cache_flush, sys_dma_alloc, sys_dma_free, sys_irq_ack, sys_irq_attach, sys_map_phys,
-    sys_pci_cfg_read, sys_pci_cfg_write, sys_port_in, sys_port_out, sys_virt_to_phys,
+    sys_cache_flush, sys_dma_alloc, sys_dma_free, sys_getrandom, sys_irq_ack, sys_irq_attach,
+    sys_map_phys, sys_pci_cfg_read, sys_pci_cfg_write, sys_port_in, sys_port_out, sys_virt_to_phys,
 };
 use handler::ipc::{sys_dup2, sys_getargs, sys_mprotect, sys_pipe, sys_set_fg, sys_shm_grant};
 use handler::mem::{sys_mmap, sys_munmap};
@@ -45,7 +45,7 @@ use handler::persist::{
     sys_pe_info, sys_persist_del, sys_persist_get, sys_persist_info, sys_persist_list,
     sys_persist_put,
 };
-use handler::proc::{sys_clock, sys_getppid, sys_spawn, sys_sysinfo};
+use handler::proc::{sys_clock, sys_getppid, sys_set_thread_pointer, sys_spawn, sys_sysinfo};
 use handler::sync::{
     sys_futex, sys_mouse_read, sys_sigreturn, sys_thread_create, sys_thread_exit, sys_thread_join,
 };
@@ -181,6 +181,8 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_TRY_WAIT => sys_try_wait(a1),
         SYS_FORWARD_INPUT => sys_forward_input(a1, a2, a3),
         SYS_SYSTEM_CONTROL => sys_system_control(a1),
+        SYS_SET_THREAD_POINTER => sys_set_thread_pointer(a1),
+        SYS_GETRANDOM => sys_getrandom(a1, a2, a3),
         unknown => {
             crate::serial::log_warn("SYSCALL", 801, "unknown syscall number");
             let _ = unknown;

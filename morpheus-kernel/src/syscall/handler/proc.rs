@@ -20,6 +20,21 @@ pub unsafe fn sys_clock() -> u64 {
     nanos_wide as u64
 }
 
+/// SYS_SET_THREAD_POINTER: set the calling thread's TLS base (x86 FS base).
+/// Validates the canonical-user range (which also makes the `wrmsr` safe),
+/// records it on the Process for per-switch restore, and applies it live for
+/// the current thread. `tp == 0` clears TLS.
+pub unsafe fn sys_set_thread_pointer(tp: u64) -> u64 {
+    // Canonical lower-half: both the user/kernel boundary and wrmsr-#GP safety
+    // (AMD64 Vol 2 §5.3). 0 is allowed and falls inside the range.
+    if tp >= USER_ADDR_LIMIT {
+        return EINVAL;
+    }
+    SCHEDULER.current_process_mut().tls_base = tp;
+    hal().cpu().set_user_tls_base(tp);
+    0
+}
+
 /// Must match `libmorpheus::sys::SysInfo` byte-for-byte.
 #[repr(C)]
 pub struct SysInfo {

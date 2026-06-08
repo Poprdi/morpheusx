@@ -3,6 +3,7 @@
 
 #![no_std]
 #![no_main]
+#![feature(thread_local)]
 
 use libmorpheus::entry;
 use libmorpheus::io::{print, println};
@@ -219,6 +220,13 @@ fn main() -> i32 {
     test_async_join_handle();
     test_async_sleep();
     test_async_chained_await();
+
+    // ── TLS / RNG (100-101) ───────────────────────────────────────
+    println("");
+    println("── TLS / RNG (100-101) ──");
+    test_set_thread_pointer(); // 100
+    test_thread_local(); // 100 (crt0 variant-II TLS)
+    test_getrandom(); // 101
 
     // ── Summary ──────────────────────────────────────────────────────
     println("");
@@ -1330,5 +1338,121 @@ fn test_async_chained_await() {
         "async(chained)",
         SUM.load(Ordering::SeqCst) == 60,
         "chained await sum wrong",
+    );
+}
+
+// ── TLS / RNG (100-101) ──────────────────────────────────────────────
+// Plumbing-level: verifies the SYS_SET_THREAD_POINTER / SYS_GETRANDOM ABI.
+// Full variant-II `#[thread_local]` coverage lands with the crt0 TLS setup.
+
+fn test_set_thread_pointer() {
+    // Kernel-half pointer → EINVAL (canonical-user check, also wrmsr-#GP guard).
+    let bad = unsafe { syscall1(SYS_SET_THREAD_POINTER, 0xFFFF_8000_0000_0000) };
+    check(
+        "SYS_SET_THREAD_POINTER(bad) EINVAL",
+        bad == u64::MAX,
+        "expected EINVAL",
+    );
+    // A canonical user-range value is accepted (no TLS access follows here).
+    let set = unsafe { syscall1(SYS_SET_THREAD_POINTER, 0x1000) };
+    check_ok("SYS_SET_THREAD_POINTER(ok)", set);
+    // Restore to 0 so no later test inherits a bogus FS base.
+    let _ = unsafe { syscall1(SYS_SET_THREAD_POINTER, 0) };
+}
+
+// Non-zero initializers keep these in `.tdata` (not `.tbss`), so the test also
+// proves crt0 copied the template correctly. Variant-II local-exec via FS base.
+#[thread_local]
+static TLS_A: core::cell::Cell<u32> = core::cell::Cell::new(0xA5A5_1234);
+#[thread_local]
+static TLS_B: core::cell::Cell<u64> = core::cell::Cell::new(0xDEAD_BEEF_CAFE_0000);
+
+fn test_thread_local() {
+    // Template copied by crt0 → initial values intact.
+    check(
+        "TLS .tdata init A",
+        TLS_A.get() == 0xA5A5_1234,
+        "tdata copy wrong",
+    );
+    check(
+        "TLS .tdata init B",
+        TLS_B.get() == 0xDEAD_BEEF_CAFE_0000,
+        "tdata copy wrong",
+    );
+    // Read/write through the FS base.
+    TLS_A.set(0x1111_2222);
+    TLS_B.set(0x3333_4444_5555_6666);
+    check("TLS rw A", TLS_A.get() == 0x1111_2222, "write/read failed");
+    check(
+        "TLS rw B",
+        TLS_B.get() == 0x3333_4444_5555_6666,
+        "write/read failed",
+    );
+    // Distinct thread-locals must not alias.
+    let pa = TLS_A.as_ptr() as *const ();
+    let pb = TLS_B.as_ptr() as *const ();
+    check(
+        "TLS distinct addrs",
+        !core::ptr::eq(pa, pb),
+        "thread-locals alias",
+    );
+
+    // Per-thread isolation: a spawned thread (its own crt-less trampoline sets
+    // up its own TLS block) must see the template default, not the main thread's
+    // mutated value, and its writes must not leak back.
+    use core::sync::atomic::{AtomicU32, Ordering};
+    static CHILD_SAW: AtomicU32 = AtomicU32::new(0);
+    static CHILD_OK: AtomicU32 = AtomicU32::new(0);
+    let h = libmorpheus::thread::spawn(|| {
+        CHILD_SAW.store(TLS_A.get(), Ordering::SeqCst); // expect template 0xA5A5_1234
+        TLS_A.set(0x9999_9999);
+        CHILD_OK.store((TLS_A.get() == 0x9999_9999) as u32, Ordering::SeqCst);
+    });
+    match h {
+        Ok(handle) => {
+            let _ = handle.join();
+            check(
+                "TLS thread sees template",
+                CHILD_SAW.load(Ordering::SeqCst) == 0xA5A5_1234,
+                "child saw main's TLS",
+            );
+            check(
+                "TLS thread rw isolated",
+                CHILD_OK.load(Ordering::SeqCst) == 1,
+                "child write failed",
+            );
+            // Main thread's value survived the child's write → no cross-talk.
+            check(
+                "TLS no cross-talk",
+                TLS_A.get() == 0x1111_2222,
+                "child clobbered main TLS",
+            );
+        },
+        Err(_) => check("TLS thread spawn", false, "spawn failed"),
+    }
+}
+
+fn test_getrandom() {
+    let mut buf = [0u8; 32];
+    let ret = unsafe { syscall3(SYS_GETRANDOM, buf.as_mut_ptr() as u64, buf.len() as u64, 0) };
+    if libmorpheus::is_error(ret) {
+        // ENOSYS on a CPU without RDRAND is acceptable (not a hard fail).
+        check(
+            "SYS_GETRANDOM (no HW RNG)",
+            ret == u64::MAX - 37,
+            "unexpected error",
+        );
+        return;
+    }
+    check("SYS_GETRANDOM len", ret == 32, "short read");
+    // P(32 genuinely-zero bytes) ≈ 2^-256, so all-zero means it didn't fill.
+    let any_nonzero = buf.iter().any(|&b| b != 0);
+    check("SYS_GETRANDOM entropy", any_nonzero, "all zero bytes");
+    // Kernel-half buffer → EFAULT.
+    let ef = unsafe { syscall3(SYS_GETRANDOM, 0xFFFF_8000_0000_0000, 8, 0) };
+    check(
+        "SYS_GETRANDOM(bad buf) EFAULT",
+        ef == u64::MAX - 14,
+        "expected EFAULT",
     );
 }
