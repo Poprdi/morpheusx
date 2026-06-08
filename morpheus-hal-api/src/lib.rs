@@ -385,6 +385,19 @@ pub trait Cpu: Send + Sync {
 
     /// Arm/disarm the "BSoD then hard reset" IDT path used by `SYS_SYSTEM_CONTROL(SHUTDOWN_PANIC)`.
     fn set_reset_on_crash(&self, enable: bool);
+
+    /// Set the user thread pointer (TLS base) for the next user thread to run.
+    /// x86_64: writes IA32_FS_BASE. Userland owns the variant-II TCB layout;
+    /// the kernel only stores/restores this opaque value per thread.
+    ///
+    /// Caller guarantees `tp` is a canonical address — a non-canonical value
+    /// `#GP`s in `wrmsr` (validated at the syscall boundary). `tp == 0` is fine.
+    fn set_user_tls_base(&self, tp: u64);
+
+    /// One word of hardware entropy, or `None` if unavailable/exhausted.
+    /// x86_64: RDRAND (CF=0 ⇒ no entropy this attempt; absent ⇒ `None`). Non-x86
+    /// without an RNG returns `None`, so the kernel surfaces ENOSYS (cf. `cpuid`).
+    fn hw_random(&self) -> Option<u64>;
 }
 
 /// Lock-free, panic-safe UART output.

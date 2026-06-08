@@ -229,6 +229,17 @@ impl Cpu for HalImpl {
     fn set_reset_on_crash(&self, enable: bool) {
         crate::cpu::idt::set_reset_on_crash(enable);
     }
+
+    fn set_user_tls_base(&self, tp: u64) {
+        // SAFETY: `tp` validated canonical at the syscall boundary; FSGSBASE is
+        // off so this MSR is the sole FS-base mutation path, and the kernel uses
+        // GS (not FS) for per-cpu state, so writing FS only affects user code.
+        unsafe { crate::cpu::per_cpu::set_user_tls_base(tp) };
+    }
+
+    fn hw_random(&self) -> Option<u64> {
+        crate::cpu::rng::hw_random()
+    }
 }
 
 impl Serial for HalImpl {
