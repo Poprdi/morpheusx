@@ -348,28 +348,10 @@ pub const EXTENTS_PER_LEAF: usize = 170;
 
 /// Open mode flags.
 ///
-/// MUST match the constants in `libmorpheus/src/fs.rs` exactly — these
-/// values cross the syscall ABI boundary verbatim.
-pub mod open_flags {
-    /// Open for reading.
-    pub const O_READ: u32 = 1 << 0; // 0x01
-    /// Open for writing.
-    pub const O_WRITE: u32 = 1 << 1; // 0x02
-    pub const O_CREATE: u32 = 1 << 2; // 0x04
-                                      // bit 3 (0x08) reserved — not used in libmorpheus ABI
-    /// Truncate on open.
-    pub const O_TRUNC: u32 = 1 << 4; // 0x10  (matches libmorpheus)
-    pub const O_APPEND: u32 = 1 << 5; // 0x20  (matches libmorpheus)
-    /// Open a directory for iteration.
-    pub const O_DIR: u32 = 1 << 6; // 0x40
-    /// Open at a specific LSN (temporal read).
-    pub const O_AT_LSN: u32 = 1 << 7; // 0x80
-                                      // ── Pipe markers (kernel-internal, not user-visible) ─────────
-    /// This fd is the read end of a kernel pipe.
-    pub const O_PIPE_READ: u32 = 1 << 8;
-    /// This fd is the write end of a kernel pipe.
-    pub const O_PIPE_WRITE: u32 = 1 << 9;
-}
+/// Canonical open flags live in `morpheus_foundation::flags::open_flags`; this
+/// re-export keeps the `helix::types::open_flags::*` path while single-sourcing
+/// the values.
+pub use morpheus_foundation::flags::open_flags;
 
 /// A file descriptor — per-process, in-memory only.
 #[derive(Clone, Copy, Debug)]
@@ -416,34 +398,11 @@ impl FileDescriptor {
     }
 }
 
-// Canonical kernel↔userland FFI types live in morpheus-foundation.
+// Canonical kernel↔userland FFI types, syscall numbers, and seek whence all live
+// in morpheus-foundation — the single source of truth. Re-exported (not
+// re-declared) so the values can never desync.
+pub use morpheus_foundation::syscall_abi::{
+    SEEK_CUR, SEEK_END, SEEK_SET, SYS_CLOSE, SYS_MKDIR, SYS_OPEN, SYS_READDIR, SYS_RENAME,
+    SYS_SEEK, SYS_SNAPSHOT, SYS_STAT, SYS_SYNC, SYS_TRUNCATE, SYS_UNLINK, SYS_VERSIONS,
+};
 pub use morpheus_foundation::types::{DirEntry, FileStat};
-
-/// `open(path_ptr, path_len, flags) → fd`
-pub const SYS_OPEN: u64 = 10;
-/// `close(fd) → 0`
-pub const SYS_CLOSE: u64 = 11;
-/// `seek(fd, offset, whence) → new_offset`
-pub const SYS_SEEK: u64 = 12;
-/// `stat(path_ptr, path_len, stat_buf_ptr) → 0`
-pub const SYS_STAT: u64 = 13;
-/// `readdir(fd, entry_buf_ptr, max_entries) → count`
-pub const SYS_READDIR: u64 = 14;
-/// `mkdir(path_ptr, path_len) → 0`
-pub const SYS_MKDIR: u64 = 15;
-/// `unlink(path_ptr, path_len) → 0`
-pub const SYS_UNLINK: u64 = 16;
-/// `rename(old_ptr, old_len, new_ptr, new_len) → 0`
-pub const SYS_RENAME: u64 = 17;
-/// `truncate(fd, new_size) → 0`
-pub const SYS_TRUNCATE: u64 = 18;
-/// `sync() → 0` — flush all pending writes and checkpoint.
-pub const SYS_SYNC: u64 = 19;
-/// `snapshot(name_ptr, name_len) → snapshot_id`
-pub const SYS_SNAPSHOT: u64 = 20;
-/// `versions(path_ptr, path_len, buf_ptr, max) → count`
-pub const SYS_VERSIONS: u64 = 21;
-
-pub const SEEK_SET: u64 = 0;
-pub const SEEK_CUR: u64 = 1;
-pub const SEEK_END: u64 = 2;

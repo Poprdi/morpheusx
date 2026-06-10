@@ -29,18 +29,9 @@ pub mod task;
 pub mod thread;
 pub mod time;
 
-/// Kernel error codes (returned as high u64 values).
-pub const ENOSYS: u64 = u64::MAX - 37;
-pub const EINVAL: u64 = u64::MAX;
-pub const ENOMEM: u64 = u64::MAX - 12;
-pub const ENOENT: u64 = u64::MAX - 2;
-pub const EBADF: u64 = u64::MAX - 9;
-pub const EPIPE: u64 = u64::MAX - 32;
-pub const EFAULT: u64 = u64::MAX - 14;
-pub const ESRCH: u64 = u64::MAX - 3;
-pub const EIO: u64 = u64::MAX - 5;
-
-#[inline]
-pub fn is_error(ret: u64) -> bool {
-    ret > 0xFFFF_FFFF_FFFF_FF00
-}
+// Kernel error codes + `is_error` are canonical in morpheus-foundation — single
+// source of truth across the syscall seam. Re-exported to keep `libmorpheus::EINVAL`
+// etc. paths stable.
+pub use morpheus_foundation::errno::{
+    is_error, EBADF, EFAULT, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, EPIPE, ESRCH,
+};

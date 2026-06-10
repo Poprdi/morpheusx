@@ -10,13 +10,8 @@ use crate::error::{self, Error, ErrorKind};
 use crate::io;
 use crate::raw::*;
 
-#[repr(C)]
-pub struct NicInfo {
-    /// 6-byte MAC, padded to 8.
-    pub mac: [u8; 8],
-    pub link_up: u32,
-    pub present: u32,
-}
+// Net boundary structs are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::types::{NetConfigInfo, NetStats, NicHwStats, NicInfo};
 
 pub fn nic_info() -> Result<NicInfo, u64> {
     let mut info = NicInfo {
@@ -91,19 +86,7 @@ pub use morpheus_foundation::net::{
     NIC_CTRL_TX_RING_SIZE, NIC_CTRL_VLAN,
 };
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct NicHwStats {
-    pub tx_packets: u64,
-    pub rx_packets: u64,
-    pub tx_bytes: u64,
-    pub rx_bytes: u64,
-    pub tx_errors: u64,
-    pub rx_errors: u64,
-    pub rx_dropped: u64,
-    pub rx_crc_errors: u64,
-    pub collisions: u64,
-}
+// NicHwStats: canonical in morpheus_foundation::types (re-exported above).
 
 /// Generic entry. Prefer the typed wrappers below.
 pub fn nic_ctrl(cmd: u32, arg: u64) -> Result<u64, u64> {
@@ -417,22 +400,7 @@ const CFG_STATIC: u64 = 2;
 const CFG_HOSTNAME: u64 = 3;
 const CFG_ACTIVATE: u64 = 4;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NetConfigInfo {
-    pub state: u32,
-    pub flags: u32,
-    pub ipv4_addr: u32,
-    pub prefix_len: u8,
-    pub _pad0: [u8; 3],
-    pub gateway: u32,
-    pub dns_primary: u32,
-    pub dns_secondary: u32,
-    pub mac: [u8; 6],
-    pub _pad1: [u8; 2],
-    pub mtu: u32,
-    pub hostname: [u8; 64],
-}
+// NetConfigInfo: canonical in morpheus_foundation::types (re-exported above).
 
 pub use morpheus_foundation::net::{
     NET_FLAG_DHCP, NET_FLAG_HAS_DNS, NET_FLAG_HAS_GATEWAY, NET_STATE_DHCP_DISCOVERING,
@@ -501,18 +469,7 @@ pub fn net_activate() -> Result<u64, u64> {
 const POLL_DRIVE: u64 = 0;
 const POLL_STATS: u64 = 1;
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct NetStats {
-    pub tx_packets: u64,
-    pub rx_packets: u64,
-    pub tx_bytes: u64,
-    pub rx_bytes: u64,
-    pub tx_errors: u64,
-    pub rx_errors: u64,
-    pub tcp_active: u32,
-    pub _pad: u32,
-}
+// NetStats: canonical in morpheus_foundation::types (re-exported above).
 
 /// Drives DHCP/ARP/TCP timers. Call periodically; returns true on activity.
 pub fn net_poll_drive(timestamp_ms: u64) -> bool {

@@ -6,19 +6,11 @@
 // cannot drift.
 pub use morpheus_foundation::syscall_abi::*;
 
-// libmorpheus-private constants kept here for now: futex ops + sysctl modes
-// are userland-internal flag spaces that don't cross the syscall number ABI.
-// (They will move to foundation later if the kernel ever needs to discriminate
-// them by name, but for today they're values the kernel reads as opaque u64.)
-pub const FUTEX_WAIT: u64 = 0;
-pub const FUTEX_WAKE: u64 = 1;
-
-// SYS_SYSTEM_CONTROL modes
-pub const SYSCTL_REBOOT_GRACEFUL: u64 = 0;
-pub const SYSCTL_REBOOT_FORCE: u64 = 1;
-pub const SYSCTL_SHUTDOWN_GRACEFUL: u64 = 2;
-pub const SYSCTL_SHUTDOWN_FORCE: u64 = 3;
-pub const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
+// futex ops + sysctl modes are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::flags::{
+    FUTEX_WAIT, FUTEX_WAKE, SYSCTL_REBOOT_FORCE, SYSCTL_REBOOT_GRACEFUL, SYSCTL_SHUTDOWN_FORCE,
+    SYSCTL_SHUTDOWN_GRACEFUL, SYSCTL_SHUTDOWN_PANIC,
+};
 
 /// # Safety
 /// `nr` must be a valid syscall number for the kernel ABI. The caller is

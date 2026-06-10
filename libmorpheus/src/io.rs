@@ -594,9 +594,7 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
     }
 }
 
-const IOCTL_FIONREAD: u64 = 0x541B;
-const IOCTL_FIONBIO: u64 = 0x5421;
-const IOCTL_TIOCGWINSZ: u64 = 0x5413;
+use morpheus_foundation::flags::{IOCTL_FIONBIO, IOCTL_FIONREAD, IOCTL_TIOCGWINSZ};
 
 pub fn ioctl(fd: u32, cmd: u64, arg: u64) -> Result<u64, u64> {
     let ret = unsafe { syscall3(SYS_IOCTL, fd as u64, cmd, arg) };

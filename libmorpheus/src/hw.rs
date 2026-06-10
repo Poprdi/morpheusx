@@ -155,13 +155,8 @@ pub fn cache_flush(addr: u64, len: u64) -> Result<(), u64> {
     }
 }
 
-#[repr(C)]
-pub struct CpuidResult {
-    pub eax: u32,
-    pub ebx: u32,
-    pub ecx: u32,
-    pub edx: u32,
-}
+// Boundary structs are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::types::{CpuidResult, FbInfo, MemmapEntry, TscResult};
 
 pub fn cpuid(leaf: u32, subleaf: u32) -> CpuidResult {
     let mut result = CpuidResult {
@@ -181,12 +176,6 @@ pub fn cpuid(leaf: u32, subleaf: u32) -> CpuidResult {
     result
 }
 
-#[repr(C)]
-pub struct TscResult {
-    pub tsc: u64,
-    pub frequency: u64,
-}
-
 /// TSC value plus calibrated frequency.
 pub fn rdtsc() -> TscResult {
     let mut result = TscResult {
@@ -201,17 +190,6 @@ pub fn rdtsc() -> TscResult {
 /// TSC only; skips the frequency lookup.
 pub fn rdtsc_raw() -> u64 {
     unsafe { syscall1(SYS_RDTSC, 0) }
-}
-
-#[repr(C)]
-pub struct FbInfo {
-    pub base: u64,
-    pub size: u64,
-    pub width: u32,
-    pub height: u32,
-    pub stride: u32,
-    /// 0 = RGBX, 1 = BGRX.
-    pub format: u32,
 }
 
 pub fn fb_info() -> Result<FbInfo, u64> {
@@ -328,15 +306,7 @@ pub fn boot_log(buf: &mut [u8]) -> Result<usize, u64> {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct MemmapEntry {
-    pub phys_start: u64,
-    pub num_pages: u64,
-    /// UEFI EFI_MEMORY_TYPE.
-    pub mem_type: u32,
-    pub _pad: u32,
-}
+// MemmapEntry: canonical in morpheus_foundation::types (re-exported above).
 
 pub fn memmap_count() -> u64 {
     unsafe { syscall2(SYS_MEMMAP, 0, 0) }
