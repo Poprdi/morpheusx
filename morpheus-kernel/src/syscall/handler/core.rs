@@ -231,7 +231,7 @@ pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
     };
     match SCHEDULER.send_signal(pid as u32, sig) {
         Ok(_) => 0,
-        Err(_) => u64::MAX - 3, // ESRCH
+        Err(_) => ESRCH,
     }
 }
 
