@@ -7,20 +7,11 @@
 use morpheus_helix::vfs::global::FsGlobal;
 use morpheus_helix::vfs::FdTable;
 
-pub(crate) const ENOSYS: u64 = u64::MAX - 37;
-pub(crate) const EINVAL: u64 = u64::MAX;
-pub(crate) const EPERM: u64 = u64::MAX - 1;
-pub(crate) const ENOENT: u64 = u64::MAX - 2;
-pub(crate) const ESRCH: u64 = u64::MAX - 3;
-pub(crate) const EIO: u64 = u64::MAX - 5;
-pub(crate) const EBADF: u64 = u64::MAX - 9;
-pub(crate) const EAGAIN: u64 = u64::MAX - 11;
-pub(crate) const ENOMEM: u64 = u64::MAX - 12;
-pub(crate) const EFAULT: u64 = u64::MAX - 14;
-pub(crate) const ENOTDIR: u64 = u64::MAX - 20;
-pub(crate) const EPIPE: u64 = u64::MAX - 32;
-pub(crate) const EBUSY: u64 = u64::MAX - 16;
-pub(crate) const ENODEV: u64 = u64::MAX - 19;
+// Canonical errno values live in morpheus-foundation — single source of truth.
+pub(crate) use morpheus_foundation::errno::{
+    EACCES, EAGAIN, EBADF, EBUSY, EEXIST, EFAULT, EINVAL, EIO, EISDIR, EMFILE, ENODEV, ENOENT,
+    ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTEMPTY, EPERM, EPIPE, EROFS, ESRCH,
+};
 
 /// Canonical lower-half limit (AMD64 Vol 2 §5.3). Same split applies on
 /// ARM HALs; arch-specific deviation belongs in HAL paging helpers, not
@@ -54,15 +45,15 @@ pub(crate) fn helix_err_to_errno(_e: morpheus_helix::error::HelixError) -> u64 {
     use morpheus_helix::error::HelixError::*;
     match _e {
         NotFound => ENOENT,
-        AlreadyExists => u64::MAX - 17, // EEXIST
+        AlreadyExists => EEXIST,
         InvalidFd => EBADF,
-        TooManyOpenFiles => u64::MAX - 24,  // EMFILE
-        ReadOnly => u64::MAX - 30,          // EROFS
-        IsADirectory => u64::MAX - 21,      // EISDIR
-        DirectoryNotEmpty => u64::MAX - 39, // ENOTEMPTY
-        NoSpace => u64::MAX - 28,           // ENOSPC
+        TooManyOpenFiles => EMFILE,
+        ReadOnly => EROFS,
+        IsADirectory => EISDIR,
+        DirectoryNotEmpty => ENOTEMPTY,
+        NoSpace => ENOSPC,
         MountNotFound => ENOENT,
-        PermissionDenied => u64::MAX - 13, // EACCES
+        PermissionDenied => EACCES,
         InvalidOffset => EINVAL,
         IoReadFailed | IoWriteFailed | IoFlushFailed => EIO,
         _ => EINVAL,

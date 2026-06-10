@@ -593,6 +593,9 @@ impl XhciController {
             }
             let speed = ((psn >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
             if psn & PORTSC_PED != 0 || ((psn & PORTSC_CCS) != 0 && speed != 0) {
+                // 10 ms delay is should be sufficient for the device to recover from reset and be ready for the next command, 
+                // Dont remove it or you will debug the same issue as i did for hours :) 
+                Self::tsc_delay(self.tsc_freq, 10);
                 return Ok(speed);
             }
             if tsc::read_tsc().wrapping_sub(start2) > timeout {

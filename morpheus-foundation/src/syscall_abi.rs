@@ -1,5 +1,17 @@
 //! Syscall ABI constants — sole source of truth for `SYS_*` numbers.
 //! Numbers are ABI-stable: they ship in compiled user binaries.
+//!
+//! # ABI is LOCKED and APPEND-ONLY
+//! These numbers are encoded in every shipped user/std binary, so they can NEVER
+//! be renumbered, reordered, or reused. To add a syscall:
+//!
+//! 1. add its `SYS_*` const below with the next free number (== `SYSCALL_COUNT`),
+//! 2. append its name to the END of `SYSCALL_TABLE`,
+//! 3. bump `SYSCALL_COUNT` by one.
+//!
+//! The `const _` check at the bottom fails to COMPILE if any existing number
+//! changes, the order shifts, a number is duplicated/skipped, or the table and
+//! count disagree — so the only edit the compiler accepts is a correct append.
 
 // Core (0-9)
 pub const SYS_EXIT: u64 = 0;
@@ -155,3 +167,44 @@ pub const GRND_NONBLOCK: u64 = 0x0001;
 pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;
 pub const SEEK_END: u64 = 2;
+
+// ── ABI LOCK ─────────────────────────────────────────────────────────────────
+// Append-only manifest of every syscall number, in ABI order. The const check
+// below enforces that the Nth entry has value N, which makes a renumber, reorder,
+// insertion, gap, duplicate, or table/count mismatch a COMPILE error. See the
+// module header for the (only) correct way to add a syscall.
+
+/// Number of defined syscalls. Bump by exactly one when appending.
+pub const SYSCALL_COUNT: usize = 102;
+
+/// Every `SYS_*` number in ABI order. Length is pinned to `SYSCALL_COUNT`, so a
+/// missing/extra entry is itself a compile error.
+pub const SYSCALL_TABLE: [u64; SYSCALL_COUNT] = [
+    SYS_EXIT, SYS_WRITE, SYS_READ, SYS_YIELD, SYS_ALLOC, SYS_FREE, SYS_GETPID, SYS_KILL, SYS_WAIT,
+    SYS_SLEEP, SYS_OPEN, SYS_CLOSE, SYS_SEEK, SYS_STAT, SYS_READDIR, SYS_MKDIR, SYS_UNLINK,
+    SYS_RENAME, SYS_TRUNCATE, SYS_SYNC, SYS_SNAPSHOT, SYS_VERSIONS, SYS_CLOCK, SYS_SYSINFO,
+    SYS_GETPPID, SYS_SPAWN, SYS_MMAP, SYS_MUNMAP, SYS_DUP, SYS_SYSLOG, SYS_GETCWD, SYS_CHDIR,
+    SYS_NIC_INFO, SYS_NIC_TX, SYS_NIC_RX, SYS_NIC_LINK, SYS_NIC_MAC, SYS_NIC_REFILL, SYS_NET,
+    SYS_DNS, SYS_NET_CFG, SYS_NET_POLL, SYS_IOCTL, SYS_MOUNT, SYS_UMOUNT, SYS_POLL, SYS_PERSIST_PUT,
+    SYS_PERSIST_GET, SYS_PERSIST_DEL, SYS_PERSIST_LIST, SYS_PERSIST_INFO, SYS_PE_INFO, SYS_PORT_IN,
+    SYS_PORT_OUT, SYS_PCI_CFG_READ, SYS_PCI_CFG_WRITE, SYS_DMA_ALLOC, SYS_DMA_FREE, SYS_MAP_PHYS,
+    SYS_VIRT_TO_PHYS, SYS_IRQ_ATTACH, SYS_IRQ_ACK, SYS_CACHE_FLUSH, SYS_FB_INFO, SYS_FB_MAP, SYS_PS,
+    SYS_SIGACTION, SYS_SETPRIORITY, SYS_GETPRIORITY, SYS_CPUID, SYS_RDTSC, SYS_BOOT_LOG, SYS_MEMMAP,
+    SYS_SHM_GRANT, SYS_MPROTECT, SYS_PIPE, SYS_DUP2, SYS_SET_FG, SYS_GETARGS, SYS_FUTEX,
+    SYS_THREAD_CREATE, SYS_THREAD_EXIT, SYS_THREAD_JOIN, SYS_SIGRETURN, SYS_MOUSE_READ, SYS_FB_LOCK,
+    SYS_FB_UNLOCK, SYS_FB_IS_LOCKED, SYS_FB_PRESENT, SYS_FB_BLIT, SYS_FB_MARK_DIRTY,
+    SYS_COMPOSITOR_SET, SYS_WIN_SURFACE_LIST, SYS_WIN_SURFACE_MAP, SYS_MOUSE_FORWARD,
+    SYS_WIN_SURFACE_DIRTY_CLEAR, SYS_TRY_WAIT, SYS_FORWARD_INPUT, SYS_SYSTEM_CONTROL,
+    SYS_KEYBOARD_READ, SYS_SET_THREAD_POINTER, SYS_GETRANDOM,
+];
+
+const _: () = {
+    let mut i = 0;
+    while i < SYSCALL_TABLE.len() {
+        assert!(
+            SYSCALL_TABLE[i] == i as u64,
+            "syscall ABI violation: numbers must be contiguous, ordered, and append-only"
+        );
+        i += 1;
+    }
+};

@@ -180,6 +180,16 @@ pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
         return ENOSYS;
     }
 
+    // Same per-address-space serialization as mmap (this also backs the fb
+    // mappers, which delegate their address-space mutation here).
+    let lock = SCHEDULER.current_address_space_lock();
+    lock.lock();
+    let ret = map_phys_locked(phys, pages, flags);
+    lock.unlock();
+    ret
+}
+
+unsafe fn map_phys_locked(phys: u64, pages: u64, flags: u64) -> u64 {
     let proc = SCHEDULER.current_memory_leader_mut();
     if proc.mmap_brk == 0 {
         proc.mmap_brk = USER_MMAP_BASE;

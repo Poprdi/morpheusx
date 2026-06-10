@@ -1019,7 +1019,15 @@ fn fmt_smp_label(buf: &mut [u8], cpus: u32) -> &str {
 /// framebuffer snapshot was published in B6, so the hook can render even
 /// from exception context.
 unsafe fn stage_c2_register_crash_hook() {
-    morpheus_hal_x86_64::cpu::idt::set_crash_hook(bsod::show_crash_screen);
+    use morpheus_hal_x86_64::cpu::idt;
+    idt::set_crash_hook(bsod::show_crash_screen);
+    // Without these, every USER fault fell through to the BSoD + SYSTEM HALTED
+    // (the exit hook was never installed) and crash dumps misattributed to PID 0
+    // / [kernel]. Wire them so a faulting user thread is terminated and the box
+    // keeps scheduling, with the real pid/name in the dump.
+    idt::set_process_exit_hook(morpheus_kernel::schedular::exit_process);
+    idt::set_current_pid_hook(morpheus_kernel::schedular::state::idt_current_pid);
+    idt::set_process_lookup_hook(morpheus_kernel::schedular::state::idt_lookup_name);
 }
 
 /// C3. Record platform outputs (DMA region + TSC freq) into BootContext so

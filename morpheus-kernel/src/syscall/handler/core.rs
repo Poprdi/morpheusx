@@ -10,11 +10,10 @@ use crate::schedular::{exit_process, SCHEDULER};
 use crate::serial::puts;
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
-const SYSCTL_REBOOT_GRACEFUL: u64 = 0;
-const SYSCTL_REBOOT_FORCE: u64 = 1;
-const SYSCTL_SHUTDOWN_GRACEFUL: u64 = 2;
-const SYSCTL_SHUTDOWN_FORCE: u64 = 3;
-const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
+use morpheus_foundation::flags::{
+    SYSCTL_REBOOT_FORCE, SYSCTL_REBOOT_GRACEFUL, SYSCTL_SHUTDOWN_FORCE, SYSCTL_SHUTDOWN_GRACEFUL,
+    SYSCTL_SHUTDOWN_PANIC,
+};
 
 static SYSTEM_CONTROL_IN_PROGRESS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -228,7 +227,7 @@ pub unsafe fn sys_getpid() -> u64 {
 pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
     let sig = match Signal::from_u8(signum as u8) {
         Some(s) => s,
-        None => return u64::MAX - 22, // EINVAL
+        None => return EINVAL, // bad signal number
     };
     match SCHEDULER.send_signal(pid as u32, sig) {
         Ok(_) => 0,

@@ -22,6 +22,18 @@ pub unsafe fn sys_mmap(pages: u64) -> u64 {
         return ENOSYS;
     }
 
+    // Serialize against sibling threads sharing this address space (shared CR3):
+    // mmap_brk + vma_table + page-table edits are not otherwise atomic, so two
+    // concurrent mmaps would hand back the same vaddr and a munmap of one would
+    // tear down the page the other is mid-write on.
+    let lock = SCHEDULER.current_address_space_lock();
+    lock.lock();
+    let ret = mmap_locked(pages);
+    lock.unlock();
+    ret
+}
+
+unsafe fn mmap_locked(pages: u64) -> u64 {
     let proc = SCHEDULER.current_memory_leader_mut();
 
     if proc.mmap_brk == 0 {
@@ -90,6 +102,15 @@ pub unsafe fn sys_munmap(vaddr: u64, pages: u64) -> u64 {
         return ENOSYS;
     }
 
+    // Same per-address-space lock as mmap — see sys_mmap.
+    let lock = SCHEDULER.current_address_space_lock();
+    lock.lock();
+    let ret = munmap_locked(vaddr, pages);
+    lock.unlock();
+    ret
+}
+
+unsafe fn munmap_locked(vaddr: u64, pages: u64) -> u64 {
     let proc = SCHEDULER.current_memory_leader_mut();
 
     let (idx, vma) = match proc.vma_table.find_exact(vaddr) {

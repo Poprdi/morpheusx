@@ -7,32 +7,8 @@ use crate::schedular::SCHEDULER;
 use morpheus_foundation::PAGE_SIZE;
 use morpheus_hal_api::{AllocKind, MemoryType};
 
-/// Must match `libmorpheus::persist::PersistInfo`.
-#[repr(C)]
-pub struct PersistInfo {
-    /// bit 0 = HelixFS
-    pub backend_flags: u32,
-    pub _pad0: u32,
-    pub num_keys: u64,
-    pub used_bytes: u64,
-}
-
-/// Must match `libmorpheus::persist::BinaryInfo`.
-/// format: 0 unknown / 1 ELF64 / 2 PE32+.
-/// arch: 0 unknown / 1 x86_64 / 2 aarch64 / 3 arm.
-#[repr(C)]
-pub struct BinaryInfo {
-    pub format: u32,
-    pub arch: u32,
-    /// PE: RVA; ELF: virtual.
-    pub entry_point: u64,
-    /// PE only; 0 on ELF.
-    pub image_base: u64,
-    pub image_size: u64,
-    /// PE sections or ELF program headers.
-    pub num_sections: u32,
-    pub _pad0: u32,
-}
+// Canonical boundary structs live in morpheus-foundation — single source.
+pub use morpheus_foundation::types::{BinaryInfo, PersistInfo};
 
 /// Keys: 1-255 bytes, no `/` or NUL.
 unsafe fn persist_path<'a>(key: &str, buf: &'a mut [u8; 272]) -> Option<&'a str> {

@@ -6,7 +6,7 @@ use crate::schedular::SCHEDULER;
 use morpheus_foundation::PAGE_SIZE;
 use morpheus_hal_api::{AllocKind, MemoryType};
 
-const SYSINFO_MAX_CPUS: usize = 16;
+use morpheus_foundation::types::{SysInfo, SYSINFO_MAX_CPUS};
 
 /// Monotonic ns from TSC. 0 if TSC isn't calibrated.
 pub unsafe fn sys_clock() -> u64 {
@@ -35,25 +35,7 @@ pub unsafe fn sys_set_thread_pointer(tp: u64) -> u64 {
     0
 }
 
-/// Must match `libmorpheus::sys::SysInfo` byte-for-byte.
-#[repr(C)]
-pub struct SysInfo {
-    pub total_mem: u64,
-    pub free_mem: u64,
-    pub num_procs: u32,
-    pub cpu_count: u32,
-    pub uptime_ticks: u64,
-    pub tsc_freq: u64,
-    pub heap_total: u64,
-    pub heap_used: u64,
-    pub heap_free: u64,
-    pub sched_ticks: u64,
-    /// Total HLT TSC across all cores. Pair with `uptime_ticks` delta for
-    /// idle_pct = idle_tsc_delta / uptime_ticks_delta.
-    pub idle_tsc: u64,
-    /// HLT TSC per core; valid for indices `0..cpu_count`.
-    pub per_core_idle_tsc: [u64; SYSINFO_MAX_CPUS],
-}
+// `SysInfo` is the canonical `morpheus_foundation::types::SysInfo` (imported above).
 
 pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
     let size = core::mem::size_of::<SysInfo>() as u64;

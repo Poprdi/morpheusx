@@ -9,6 +9,7 @@ use super::mem::USER_MMAP_BASE;
 use crate::hal;
 use crate::pipe;
 use crate::schedular::SCHEDULER;
+pub use morpheus_foundation::flags::{PROT_EXEC, PROT_READ, PROT_WRITE};
 use morpheus_hal_api::{PageFlags, Pml4Handle};
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
@@ -24,10 +25,6 @@ fn prot_to_user_preset(prot: u64) -> PageFlags {
         (true, true) => PageFlags::USER_RWX,
     }
 }
-
-pub const PROT_READ: u64 = 0;
-pub const PROT_WRITE: u64 = 1;
-pub const PROT_EXEC: u64 = 2;
 
 pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
     let _ = sys_yield; // silence unused warning if reflow is needed.
@@ -51,7 +48,39 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
     if caller_pid == 0 {
         return EPERM;
     }
+    // Range-check the user-supplied target before it indexes the lock array.
+    if target_pid >= crate::process::MAX_PROCESSES as u64 {
+        return ESRCH;
+    }
 
+    // The grant mutates the TARGET's address space while reading the CALLER's,
+    // so hold both per-address-space locks. Acquire in leader-pid order so a
+    // concurrent reverse grant can't deadlock; equal leaders (a sibling-thread
+    // target) collapse to a single lock.
+    let caller_leader = SCHEDULER.current_memory_leader_pid();
+    let target_leader = SCHEDULER.memory_leader_pid_of(target_pid as u32);
+    let lo = caller_leader.min(target_leader);
+    let hi = caller_leader.max(target_leader);
+    let lock_lo = SCHEDULER.address_space_lock(lo);
+    lock_lo.lock();
+    let lock_hi = if hi != lo {
+        let l = SCHEDULER.address_space_lock(hi);
+        l.lock();
+        Some(l)
+    } else {
+        None
+    };
+
+    let ret = shm_grant_locked(target_pid, src_vaddr, pages, flags);
+
+    if let Some(l) = lock_hi {
+        l.unlock();
+    }
+    lock_lo.unlock();
+    ret
+}
+
+unsafe fn shm_grant_locked(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
     let phys = {
         let caller_proc = SCHEDULER.current_memory_leader_mut();
         let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
@@ -264,21 +293,29 @@ pub unsafe fn sys_set_fg(pid: u64) -> u64 {
     0
 }
 
-/// Copies NUL-separated argv blob; returns argc.
+/// Copies the NUL-separated argv blob into `buf`. Two forms:
+///   - query (`buf_ptr == 0` or `buf_len == 0`): returns `argc`.
+///   - fill (buffer given): returns the number of BYTES written.
+///
+/// The fill form must return bytes, not argc: callers (`getargs()`,
+/// `env::args()`) slice `buf[..ret]`, so returning argc truncated the blob to
+/// argc bytes (1 arg → "s", 2 args → "be").
 pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     let proc = SCHEDULER.current_process_mut();
     let argc = proc.argc;
     let args_len = proc.args_len as usize;
 
-    if buf_ptr != 0 && buf_len > 0 {
-        let copy_len = core::cmp::min(args_len, buf_len as usize);
-        if validate_user_buf(buf_ptr, copy_len as u64) {
-            let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
-            dst.copy_from_slice(&proc.args[..copy_len]);
-        }
+    if buf_ptr == 0 || buf_len == 0 {
+        return argc as u64;
     }
 
-    argc as u64
+    let copy_len = core::cmp::min(args_len, buf_len as usize);
+    if copy_len == 0 || !validate_user_buf(buf_ptr, copy_len as u64) {
+        return 0;
+    }
+    let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
+    dst.copy_from_slice(&proc.args[..copy_len]);
+    copy_len as u64
 }
 
 // Helper — blocking pipe read
