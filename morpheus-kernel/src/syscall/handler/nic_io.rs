@@ -114,9 +114,7 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     }
 }
 
-const IOCTL_FIONREAD: u64 = 0x541B;
-const IOCTL_FIONBIO: u64 = 0x5421;
-const IOCTL_TIOCGWINSZ: u64 = 0x5413;
+use morpheus_foundation::flags::{IOCTL_FIONBIO, IOCTL_FIONREAD, IOCTL_TIOCGWINSZ};
 
 pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     match (fd, cmd) {
@@ -212,9 +210,7 @@ struct PollFd {
     revents: i16,
 }
 
-const POLLIN: i16 = 0x0001;
-const POLLOUT: i16 = 0x0004;
-const POLLERR: i16 = 0x0008;
+use morpheus_foundation::flags::{POLLERR, POLLIN, POLLOUT};
 
 /// fd 0: POLLIN iff stdin has data. fd 1/2: POLLOUT always. fd≥3 (VFS): both.
 pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {

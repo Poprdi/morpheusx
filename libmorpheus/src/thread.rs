@@ -29,6 +29,21 @@ pub unsafe fn set_thread_pointer(tp: u64) -> Result<(), u64> {
     }
 }
 
+/// Read this thread's TLS base (x86 FS base) via the variant-II self-pointer at
+/// `%fs:0` (`install_thread_tls` stores `*(tp) = tp`). Pure userspace — no
+/// syscall. Useful to save/restore the thread pointer around code that
+/// temporarily reprograms it.
+///
+/// # Safety
+/// TLS must already be installed for this thread (crt0 or `thread_trampoline`);
+/// with `fs:base == 0` this dereferences address 0 and faults.
+#[inline]
+pub unsafe fn get_thread_pointer() -> u64 {
+    let tp: u64;
+    core::arch::asm!("mov {}, fs:0", out(reg) tp, options(nostack, readonly, preserves_flags));
+    tp
+}
+
 /// Must be joined; otherwise the thread is detached on drop.
 pub struct JoinHandle<T> {
     tid: u32,

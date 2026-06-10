@@ -5,6 +5,8 @@
 #![no_main]
 #![feature(thread_local)]
 
+mod bench;
+
 use libmorpheus::entry;
 use libmorpheus::io::{print, println};
 use libmorpheus::raw::*;
@@ -15,9 +17,35 @@ static mut PASS: u32 = 0;
 static mut FAIL: u32 = 0;
 static mut TOTAL: u32 = 0;
 
-fn ok(name: &str) {
-    print("[PASS] ");
-    println(name);
+/// Names of failed checks, dumped as a clean roster after the summary. The
+/// serial console prefixes and may interleave per-write across cores, so a
+/// compact end-of-run list (printed when the other procs are quiet) is the only
+/// reliable way to see *which* checks failed.
+static mut FAILED: [&str; 64] = [""; 64];
+static mut NFAILED: usize = 0;
+
+/// Emit one fully-formed line in a SINGLE `SYS_WRITE`. `println` coalesces the
+/// slice + newline into one write via libmorpheus' `FdWriter`, so the whole
+/// `[PASS]/[FAIL] …` line lands atomically and can't be split or dropped by
+/// another core writing mid-line — unlike the previous multi-`print()` pattern.
+pub(crate) fn emit_line(parts: &[&str]) {
+    let mut buf = [0u8; 256];
+    let mut n = 0;
+    for p in parts {
+        let b = p.as_bytes();
+        let take = core::cmp::min(b.len(), buf.len() - n);
+        buf[n..n + take].copy_from_slice(&b[..take]);
+        n += take;
+        if n == buf.len() {
+            break;
+        }
+    }
+    // SAFETY: every byte came from a &str, so the prefix is valid UTF-8.
+    println(unsafe { core::str::from_utf8_unchecked(&buf[..n]) });
+}
+
+fn ok(name: &'static str) {
+    emit_line(&["[PASS] ", name]);
     unsafe {
         let p = core::ptr::addr_of_mut!(PASS);
         let v = core::ptr::read_volatile(p);
@@ -28,11 +56,8 @@ fn ok(name: &str) {
     }
 }
 
-fn fail(name: &str, detail: &str) {
-    print("[FAIL] ");
-    print(name);
-    print(" — ");
-    println(detail);
+fn fail(name: &'static str, detail: &str) {
+    emit_line(&["[FAIL] ", name, " — ", detail]);
     unsafe {
         let p = core::ptr::addr_of_mut!(FAIL);
         let v = core::ptr::read_volatile(p);
@@ -40,10 +65,17 @@ fn fail(name: &str, detail: &str) {
         let t = core::ptr::addr_of_mut!(TOTAL);
         let tv = core::ptr::read_volatile(t);
         core::ptr::write_volatile(t, tv + 1);
+        // Record for the end-of-run roster (bounded; ignore overflow).
+        let nf = core::ptr::addr_of_mut!(NFAILED);
+        let i = core::ptr::read_volatile(nf);
+        if i < 64 {
+            (*core::ptr::addr_of_mut!(FAILED))[i] = name;
+            core::ptr::write_volatile(nf, i + 1);
+        }
     }
 }
 
-fn check(name: &str, cond: bool, detail: &str) {
+fn check(name: &'static str, cond: bool, detail: &str) {
     if cond {
         ok(name);
     } else {
@@ -52,7 +84,7 @@ fn check(name: &str, cond: bool, detail: &str) {
 }
 
 /// Asserts `ret` is NOT an error code.
-fn check_ok(name: &str, ret: u64) {
+fn check_ok(name: &'static str, ret: u64) {
     if libmorpheus::is_error(ret) {
         fail(name, "returned error");
     } else {
@@ -61,7 +93,7 @@ fn check_ok(name: &str, ret: u64) {
 }
 
 /// Asserts `ret` IS an error (stubs / bad args).
-fn check_err(name: &str, ret: u64) {
+fn check_err(name: &'static str, ret: u64) {
     if libmorpheus::is_error(ret) {
         ok(name);
     } else {
@@ -81,7 +113,112 @@ fn print_hex(val: u64) {
     print(s);
 }
 
+/// Entry point: dispatch on `argv[1]` to the selected bench mode. Defaults to
+/// `smoke` (the one-shot correctness gate) when no mode is given — preserving
+/// the historical behavior of a bare launch. Modes `threads`/`swarm` are the
+/// torture/soak vehicles (see docs/superpowers/specs/2026-06-08-syscall-torture-soak-design.md).
 fn main() -> i32 {
+    let mut argbuf = [0u8; 256];
+    let n = libmorpheus::process::getargs(&mut argbuf);
+    // The shell strips argv[0] (the command name) before spawn, so the blob holds
+    // only the real arguments: arg 0 is the mode, arg 1 is N, etc. No args (a bare
+    // launch, e.g. the boot path) → default to `smoke`.
+    let mode = nth_arg(&argbuf[..n], 0).unwrap_or("smoke");
+
+    match mode {
+        "smoke" => run_smoke(),
+        "threads" => {
+            // threads [N] [secs] [--seed HEX]   (note: `n` is the arg-blob byte length)
+            let blob = &argbuf[..n];
+            let nthreads = nth_arg(blob, 1).and_then(parse_u64).unwrap_or(4) as usize;
+            // secs omitted (or 0) → run until Ctrl-C.
+            let secs = nth_arg(blob, 2).and_then(parse_u64).unwrap_or(0);
+            // --seed for replay; otherwise derive from the monotonic clock (printed).
+            let seed = flag_value(blob, "--seed")
+                .and_then(parse_hex)
+                .unwrap_or_else(|| libmorpheus::time::clock_gettime() | 1);
+            bench::run_threads(nthreads, secs, seed)
+        },
+        "swarm" => {
+            // swarm [N] [secs] [--seed HEX] [--self PATH]
+            let blob = &argbuf[..n];
+            let nchildren = nth_arg(blob, 1).and_then(parse_u64).unwrap_or(4) as usize;
+            let secs = nth_arg(blob, 2).and_then(parse_u64).unwrap_or(0);
+            let seed = flag_value(blob, "--seed")
+                .and_then(parse_hex)
+                .unwrap_or_else(|| libmorpheus::time::clock_gettime() | 1);
+            let self_path = flag_value(blob, "--self").unwrap_or(bench::SELF_PATH);
+            bench::run_swarm(nchildren, secs, seed, self_path)
+        },
+        "_worker" => {
+            // Hidden swarm child sub-mode: _worker <seed HEX> <secs> <pipe_rfd>
+            let blob = &argbuf[..n];
+            let seed = nth_arg(blob, 1).and_then(parse_hex).unwrap_or(1);
+            let secs = nth_arg(blob, 2).and_then(parse_u64).unwrap_or(0);
+            let rfd = nth_arg(blob, 3).and_then(parse_u64).unwrap_or(0) as u32;
+            bench::run_worker(seed, secs, rfd)
+        },
+        other => {
+            emit_line(&["[bench] unknown mode: ", other]);
+            println("usage: bench [smoke | threads N secs | swarm N secs] [--seed HEX]");
+            2
+        },
+    }
+}
+
+/// Parse a decimal `u64` from `s`; `None` on any non-digit.
+fn parse_u64(s: &str) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut v: u64 = 0;
+    for &b in s.as_bytes() {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        v = v.checked_mul(10)?.checked_add((b - b'0') as u64)?;
+    }
+    Some(v)
+}
+
+/// Parse a hex `u64` from `s` (optional `0x` prefix); `None` on any non-hex digit.
+fn parse_hex(s: &str) -> Option<u64> {
+    let s = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    if s.is_empty() {
+        return None;
+    }
+    let mut v: u64 = 0;
+    for &b in s.as_bytes() {
+        let d = (b as char).to_digit(16)?;
+        v = v.checked_mul(16)?.checked_add(d as u64)?;
+    }
+    Some(v)
+}
+
+/// Return the token following `flag` in the NUL-separated argv blob, if present.
+fn flag_value<'a>(blob: &'a [u8], flag: &str) -> Option<&'a str> {
+    let mut it = blob.split(|&b| b == 0).filter(|s| !s.is_empty());
+    while let Some(tok) = it.next() {
+        if tok == flag.as_bytes() {
+            return it.next().and_then(|v| core::str::from_utf8(v).ok());
+        }
+    }
+    None
+}
+
+/// Return the `idx`-th NUL-separated token in the argv blob, if present.
+fn nth_arg(blob: &[u8], idx: usize) -> Option<&str> {
+    blob.split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .nth(idx)
+        .and_then(|s| core::str::from_utf8(s).ok())
+}
+
+/// One-shot correctness gate: exercise every syscall once. Exit code = failures.
+fn run_smoke() -> i32 {
     // Explicitly zero counters — BSS may not be zeroed by ELF loader
     unsafe {
         core::ptr::write_volatile(core::ptr::addr_of_mut!(PASS), 0);
@@ -234,21 +371,50 @@ fn main() -> i32 {
     let total = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(TOTAL)) };
     let p = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(PASS)) };
     let f = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(FAIL)) };
-    print("TOTAL: ");
-    print_u32(total);
-    print("  PASS: ");
-    print_u32(p);
-    print("  FAIL: ");
-    print_u32(f);
-    println("");
+    // Single atomic line: "TOTAL: N  PASS: N  FAIL: N".
+    emit_line(&[
+        "TOTAL: ",
+        u32_str(total, &mut [0u8; 10]),
+        "  PASS: ",
+        u32_str(p, &mut [0u8; 10]),
+        "  FAIL: ",
+        u32_str(f, &mut [0u8; 10]),
+    ]);
     if f == 0 {
         println("ALL TESTS PASSED");
     } else {
         println("SOME TESTS FAILED");
+        // Definitive roster — one atomic line per failure, printed now that the
+        // rest of the suite is quiet, so the list survives serial interleaving.
+        println("──────────────── FAILURES ────────────────");
+        let nf = unsafe { core::ptr::read_volatile(core::ptr::addr_of!(NFAILED)) };
+        for i in 0..nf {
+            let name = unsafe { (*core::ptr::addr_of!(FAILED))[i] };
+            emit_line(&["  ✗ ", name]);
+        }
     }
     println("════════════════════════════════════════════");
 
     f as i32 // exit code = number of failures
+}
+
+/// Format `v` into `buf` and return it as a `&str` (decimal, no leading zeros).
+fn u32_str(v: u32, buf: &mut [u8; 10]) -> &str {
+    if v == 0 {
+        buf[0] = b'0';
+        return unsafe { core::str::from_utf8_unchecked(&buf[..1]) };
+    }
+    let mut n = v;
+    let mut i = 10usize;
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    // Shift the digits to the front so the returned slice borrows `buf` cleanly.
+    let len = 10 - i;
+    buf.copy_within(i..10, 0);
+    unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
 }
 
 fn print_u32(v: u32) {
@@ -1131,13 +1297,25 @@ fn test_set_fg() {
 }
 
 fn test_getargs() {
-    // We were spawned without args, so argc should be 0.
+    // Launch-agnostic: this binary may run with a mode arg (e.g. "smoke") or
+    // none. Validate the getargs contract rather than a fixed argc.
     let c = libmorpheus::process::argc();
-    check("SYS_GETARGS(argc=0)", c == 0, "expected 0 args");
+    let mut buf = [0u8; 256];
+    let n = libmorpheus::process::getargs(&mut buf);
 
-    let mut buf = [0u8; 64];
-    let c2 = libmorpheus::process::getargs(&mut buf);
-    check("SYS_GETARGS(buf)", c2 == 0, "expected 0 args");
+    // The fill form returns BYTES written, not argc. The months-old bug returned
+    // argc here, so the blob was truncated to argc bytes (1 arg → "s"). Every
+    // real arg is ≥1 char + a NUL ≥ 2 bytes, so n must be ≥ 2*argc.
+    check(
+        "SYS_GETARGS byte count",
+        c == 0 || n >= 2 * c,
+        "getargs returned argc as byte count",
+    );
+
+    // Roundtrip: the returned blob must parse back into exactly argc tokens.
+    let mut strs: [&str; 16] = [""; 16];
+    let parsed = libmorpheus::process::parse_args(&buf[..n], &mut strs);
+    check("SYS_GETARGS roundtrip", parsed == c, "argc/blob mismatch");
 }
 
 fn test_futex() {
@@ -1346,6 +1524,12 @@ fn test_async_chained_await() {
 // Full variant-II `#[thread_local]` coverage lands with the crt0 TLS setup.
 
 fn test_set_thread_pointer() {
+    // Save the real TLS base crt0 installed. We temporarily reprogram FS base
+    // below; restoring it to 0 (as a naive "clear" would) null-faults the very
+    // next #[thread_local] access, since variant-II address generation begins
+    // with a `mov %fs:0` self-pointer load.
+    let saved_tp = unsafe { libmorpheus::thread::get_thread_pointer() };
+
     // Kernel-half pointer → EINVAL (canonical-user check, also wrmsr-#GP guard).
     let bad = unsafe { syscall1(SYS_SET_THREAD_POINTER, 0xFFFF_8000_0000_0000) };
     check(
@@ -1356,8 +1540,8 @@ fn test_set_thread_pointer() {
     // A canonical user-range value is accepted (no TLS access follows here).
     let set = unsafe { syscall1(SYS_SET_THREAD_POINTER, 0x1000) };
     check_ok("SYS_SET_THREAD_POINTER(ok)", set);
-    // Restore to 0 so no later test inherits a bogus FS base.
-    let _ = unsafe { syscall1(SYS_SET_THREAD_POINTER, 0) };
+    // Restore the genuine thread pointer so later #[thread_local] use is valid.
+    let _ = unsafe { syscall1(SYS_SET_THREAD_POINTER, saved_tp) };
 }
 
 // Non-zero initializers keep these in `.tdata` (not `.tbss`), so the test also

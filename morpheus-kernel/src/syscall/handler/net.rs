@@ -5,71 +5,20 @@
 
 use super::common::*;
 use super::nic_io::sys_nic_ctrl;
+use morpheus_foundation::types::{UdpRecvDesc, UdpSendDesc};
 
-// SYS_NET sub-commands
-pub const NET_TCP_SOCKET: u64 = 0;
-pub const NET_TCP_CONNECT: u64 = 1;
-pub const NET_TCP_SEND: u64 = 2;
-pub const NET_TCP_RECV: u64 = 3;
-pub const NET_TCP_CLOSE: u64 = 4;
-pub const NET_TCP_STATE: u64 = 5;
-pub const NET_TCP_LISTEN: u64 = 6;
-pub const NET_TCP_ACCEPT: u64 = 7;
-pub const NET_TCP_SHUTDOWN: u64 = 8;
-pub const NET_TCP_NODELAY: u64 = 9;
-pub const NET_TCP_KEEPALIVE: u64 = 10;
-// UDP
-pub const NET_UDP_SOCKET: u64 = 11;
-pub const NET_UDP_SEND_TO: u64 = 12;
-pub const NET_UDP_RECV_FROM: u64 = 13;
-pub const NET_UDP_CLOSE: u64 = 14;
+// Canonical net subcommand codes live in morpheus_foundation::net; re-exported
+// here so kernel code referencing handler::net::NET_* still resolves.
+pub use morpheus_foundation::net::{
+    DNS_RESULT, DNS_SET_SERVERS, DNS_START, NET_CFG_ACTIVATE, NET_CFG_DHCP, NET_CFG_GET,
+    NET_CFG_HOSTNAME, NET_CFG_STATIC, NET_POLL_DRIVE, NET_POLL_STATS, NET_TCP_ACCEPT,
+    NET_TCP_CLOSE, NET_TCP_CONNECT, NET_TCP_KEEPALIVE, NET_TCP_LISTEN, NET_TCP_NODELAY,
+    NET_TCP_RECV, NET_TCP_SEND, NET_TCP_SHUTDOWN, NET_TCP_SOCKET, NET_TCP_STATE, NET_UDP_CLOSE,
+    NET_UDP_RECV_FROM, NET_UDP_SEND_TO, NET_UDP_SOCKET,
+};
 
-// SYS_DNS
-pub const DNS_START: u64 = 0;
-pub const DNS_RESULT: u64 = 1;
-pub const DNS_SET_SERVERS: u64 = 2;
-
-// SYS_NET_CFG
-pub const NET_CFG_GET: u64 = 0;
-pub const NET_CFG_DHCP: u64 = 1;
-pub const NET_CFG_STATIC: u64 = 2;
-pub const NET_CFG_HOSTNAME: u64 = 3;
-pub const NET_CFG_ACTIVATE: u64 = 4;
-
-// SYS_NET_POLL
-pub const NET_POLL_DRIVE: u64 = 0;
-pub const NET_POLL_STATS: u64 = 1;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NetConfigInfo {
-    pub state: u32,
-    pub flags: u32,
-    pub ipv4_addr: u32,
-    pub prefix_len: u8,
-    pub _pad0: [u8; 3],
-    pub gateway: u32,
-    pub dns_primary: u32,
-    pub dns_secondary: u32,
-    pub mac: [u8; 6],
-    pub _pad1: [u8; 2],
-    pub mtu: u32,
-    /// NUL-terminated, ≤63 chars.
-    pub hostname: [u8; 64],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NetStats {
-    pub tx_packets: u64,
-    pub rx_packets: u64,
-    pub tx_bytes: u64,
-    pub rx_bytes: u64,
-    pub tx_errors: u64,
-    pub rx_errors: u64,
-    pub tcp_active: u32,
-    pub _pad: u32,
-}
+// Canonical boundary structs live in morpheus-foundation — single source.
+pub use morpheus_foundation::types::{NetConfigInfo, NetStats};
 
 type UdpSendFn =
     unsafe fn(handle: i64, dest_ip: u32, dest_port: u16, buf: *const u8, len: usize) -> i64;
@@ -149,8 +98,6 @@ fn net_stack_present() -> bool {
     unsafe { NET_STACK_OPS.tcp_socket.is_some() }
 }
 
-const ENOSYS_NET: u64 = u64::MAX - 37;
-
 pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     if !net_stack_present() {
         return ENODEV;
@@ -166,7 +113,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                     h as u64
                 }
             },
-            None => ENOSYS_NET,
+            None => ENOSYS,
         },
         NET_TCP_CONNECT => {
             let handle = a2 as i64;
@@ -181,7 +128,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_SEND => {
@@ -198,7 +145,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         rc as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_RECV => {
@@ -215,7 +162,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         rc as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_CLOSE => {
@@ -225,7 +172,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                     f(handle);
                     0
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_STATE => {
@@ -239,7 +186,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         s as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_LISTEN => {
@@ -254,7 +201,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_ACCEPT => {
@@ -268,7 +215,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         h as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_SHUTDOWN => {
@@ -282,7 +229,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_NODELAY => {
@@ -296,7 +243,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_TCP_KEEPALIVE => {
@@ -310,7 +257,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_UDP_SOCKET => match NET_STACK_OPS.udp_socket {
@@ -322,19 +269,18 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                     h as u64
                 }
             },
-            None => ENOSYS_NET,
+            None => ENOSYS,
         },
         NET_UDP_SEND_TO => {
             let handle = a2 as i64;
-            let desc_size = 24u64;
-            if !validate_user_buf(a3, desc_size) {
+            if !validate_user_buf(a3, core::mem::size_of::<UdpSendDesc>() as u64) {
                 return EFAULT;
             }
-            let desc = a3 as *const u8;
-            let ip = *(desc as *const u32);
-            let port = *((desc.add(4)) as *const u16);
-            let buf_ptr = *((desc.add(8)) as *const u64);
-            let buf_len = *((desc.add(16)) as *const u64);
+            let desc = &*(a3 as *const UdpSendDesc);
+            let ip = desc.ip;
+            let port = desc.port;
+            let buf_ptr = desc.buf as u64;
+            let buf_len = desc.len;
             if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) {
                 return EFAULT;
             }
@@ -350,22 +296,21 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         rc as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_UDP_RECV_FROM => {
             let handle = a2 as i64;
-            let desc_size = 24u64;
-            if !validate_user_buf(a3, desc_size) {
+            if !validate_user_buf(a3, core::mem::size_of::<UdpRecvDesc>() as u64) {
                 return EFAULT;
             }
-            let desc = a3 as *mut u8;
-            let buf_ptr = *(desc as *const u64);
-            let buf_len = *((desc.add(8)) as *const u64);
+            let desc = &mut *(a3 as *mut UdpRecvDesc);
+            let buf_ptr = desc.buf as u64;
+            let buf_len = desc.buf_len;
             if buf_len > 0 && !validate_user_buf(buf_ptr, buf_len) {
                 return EFAULT;
             }
-            let src_out = desc.add(16);
+            let src_out = (&mut desc.src_ip) as *mut u32 as *mut u8;
             match NET_STACK_OPS.udp_recv_from {
                 Some(f) => {
                     let rc = f(handle, buf_ptr as *mut u8, buf_len as usize, src_out);
@@ -375,7 +320,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                         rc as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_UDP_CLOSE => {
@@ -385,7 +330,7 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
                     f(handle);
                     0
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         _ => EINVAL,
@@ -414,7 +359,7 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
                         h as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         DNS_RESULT => {
@@ -431,7 +376,7 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
                         rc as u64
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         DNS_SET_SERVERS => {
@@ -451,7 +396,7 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         _ => EINVAL,
@@ -504,7 +449,7 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
                     0
                 }
             },
-            None => ENOSYS_NET,
+            None => ENOSYS,
         },
         NET_CFG_STATIC => {
             let ip_nbo = a2 as u32;
@@ -519,7 +464,7 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         NET_CFG_HOSTNAME => {
@@ -538,7 +483,7 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         128.. => {
@@ -564,7 +509,7 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
                     rc as u64
                 }
             },
-            None => ENOSYS_NET,
+            None => ENOSYS,
         },
         NET_POLL_STATS => {
             let size = core::mem::size_of::<NetStats>() as u64;
@@ -580,7 +525,7 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
                         0
                     }
                 },
-                None => ENOSYS_NET,
+                None => ENOSYS,
             }
         },
         _ => EINVAL,

@@ -105,6 +105,11 @@ impl XhciController {
                 } else {
                     1 // FS
                 };
+                // USB 2.0 §7.1.7.5 TRSTRCY: give the downstream device its
+                // reset-recovery interval (>=10 ms) before it's addressed,
+                // mirroring root-port `port_reset`. Slow/old devices NAK the
+                // Address Device SET_ADDRESS otherwise.
+                self.delay_ms(10);
                 return Ok(speed);
             }
             if morpheus_x86_asm::tsc::read_tsc().wrapping_sub(start) > timeout {

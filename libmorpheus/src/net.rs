@@ -83,29 +83,13 @@ pub fn nic_refill() -> Result<(), u64> {
 // NIC hardware control routes through SYS_NET_CFG with subcmd >= 128,
 // dispatching directly to the NIC driver's ctrl function pointer.
 
-pub const NIC_CTRL_PROMISC: u32 = 1;
-pub const NIC_CTRL_MAC_SET: u32 = 2;
-pub const NIC_CTRL_STATS: u32 = 3;
-pub const NIC_CTRL_STATS_RESET: u32 = 4;
-pub const NIC_CTRL_MTU: u32 = 5;
-pub const NIC_CTRL_MULTICAST: u32 = 6;
-pub const NIC_CTRL_VLAN: u32 = 7;
-pub const NIC_CTRL_TX_CSUM: u32 = 8;
-pub const NIC_CTRL_RX_CSUM: u32 = 9;
-pub const NIC_CTRL_TSO: u32 = 10;
-pub const NIC_CTRL_RX_RING_SIZE: u32 = 11;
-pub const NIC_CTRL_TX_RING_SIZE: u32 = 12;
-pub const NIC_CTRL_IRQ_COALESCE: u32 = 13;
-pub const NIC_CTRL_CAPS: u32 = 14;
-
-pub const NIC_CAP_PROMISC: u64 = 1 << 0;
-pub const NIC_CAP_MAC_SET: u64 = 1 << 1;
-pub const NIC_CAP_MULTICAST: u64 = 1 << 2;
-pub const NIC_CAP_VLAN: u64 = 1 << 3;
-pub const NIC_CAP_TX_CSUM: u64 = 1 << 4;
-pub const NIC_CAP_RX_CSUM: u64 = 1 << 5;
-pub const NIC_CAP_TSO: u64 = 1 << 6;
-pub const NIC_CAP_IRQ_COALESCE: u64 = 1 << 7;
+pub use morpheus_foundation::net::{
+    NIC_CAP_IRQ_COALESCE, NIC_CAP_MAC_SET, NIC_CAP_MULTICAST, NIC_CAP_PROMISC, NIC_CAP_RX_CSUM,
+    NIC_CAP_TSO, NIC_CAP_TX_CSUM, NIC_CAP_VLAN, NIC_CTRL_CAPS, NIC_CTRL_IRQ_COALESCE,
+    NIC_CTRL_MAC_SET, NIC_CTRL_MTU, NIC_CTRL_MULTICAST, NIC_CTRL_PROMISC, NIC_CTRL_RX_CSUM,
+    NIC_CTRL_RX_RING_SIZE, NIC_CTRL_STATS, NIC_CTRL_STATS_RESET, NIC_CTRL_TSO, NIC_CTRL_TX_CSUM,
+    NIC_CTRL_TX_RING_SIZE, NIC_CTRL_VLAN,
+};
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -123,7 +107,7 @@ pub struct NicHwStats {
 
 /// Generic entry. Prefer the typed wrappers below.
 pub fn nic_ctrl(cmd: u32, arg: u64) -> Result<u64, u64> {
-    let subcmd = 128 + cmd as u64;
+    let subcmd = morpheus_foundation::net::NIC_CTRL_BASE + cmd as u64;
     let ret = unsafe { syscall3(SYS_NET_CFG, subcmd, arg, 0) };
     if crate::is_error(ret) {
         Err(ret)
@@ -193,19 +177,13 @@ pub fn nic_caps() -> Result<u64, u64> {
     Ok(caps)
 }
 
-// TCP sockets (smoltcp). Subcmds must match kernel.
+// TCP sockets (smoltcp). Subcmds are canonical in morpheus_foundation::net.
 
-const NET_TCP_SOCKET: u64 = 0;
-const NET_TCP_CONNECT: u64 = 1;
-const NET_TCP_SEND: u64 = 2;
-const NET_TCP_RECV: u64 = 3;
-const NET_TCP_CLOSE: u64 = 4;
-const NET_TCP_STATE: u64 = 5;
-const NET_TCP_LISTEN: u64 = 6;
-const NET_TCP_ACCEPT: u64 = 7;
-const NET_TCP_SHUTDOWN: u64 = 8;
-const NET_TCP_NODELAY: u64 = 9;
-const NET_TCP_KEEPALIVE: u64 = 10;
+use morpheus_foundation::net::{
+    NET_TCP_ACCEPT, NET_TCP_CLOSE, NET_TCP_CONNECT, NET_TCP_KEEPALIVE, NET_TCP_LISTEN,
+    NET_TCP_NODELAY, NET_TCP_RECV, NET_TCP_SEND, NET_TCP_SHUTDOWN, NET_TCP_SOCKET, NET_TCP_STATE,
+    NET_UDP_CLOSE, NET_UDP_RECV_FROM, NET_UDP_SEND_TO, NET_UDP_SOCKET,
+};
 
 pub type TcpHandle = u64;
 
@@ -367,9 +345,7 @@ pub fn tcp_set_keepalive(handle: TcpHandle, interval_ms: u64) -> Result<(), u64>
     }
 }
 
-const DNS_START_CMD: u64 = 0;
-const DNS_RESULT_CMD: u64 = 1;
-const DNS_SET_SERVERS_CMD: u64 = 2;
+use morpheus_foundation::net::{DNS_RESULT, DNS_SET_SERVERS, DNS_START};
 
 pub type DnsQuery = u64;
 
@@ -378,7 +354,7 @@ pub fn dns_start(hostname: &str) -> Result<DnsQuery, u64> {
     let ret = unsafe {
         syscall3(
             SYS_DNS,
-            DNS_START_CMD,
+            DNS_START,
             hostname.as_ptr() as u64,
             hostname.len() as u64,
         )
@@ -393,7 +369,7 @@ pub fn dns_start(hostname: &str) -> Result<DnsQuery, u64> {
 /// `Ok(Some(ip_nbo))` when resolved, `Ok(None)` if pending.
 pub fn dns_poll(query: DnsQuery) -> Result<Option<u32>, u64> {
     let mut ip: u32 = 0;
-    let ret = unsafe { syscall3(SYS_DNS, DNS_RESULT_CMD, query, &mut ip as *mut u32 as u64) };
+    let ret = unsafe { syscall3(SYS_DNS, DNS_RESULT, query, &mut ip as *mut u32 as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else if ret == 1 {
@@ -423,7 +399,7 @@ pub fn dns_set_servers(servers: &[u32]) -> Result<(), u64> {
     let ret = unsafe {
         syscall3(
             SYS_DNS,
-            DNS_SET_SERVERS_CMD,
+            DNS_SET_SERVERS,
             servers.as_ptr() as u64,
             servers.len() as u64,
         )
@@ -458,14 +434,10 @@ pub struct NetConfigInfo {
     pub hostname: [u8; 64],
 }
 
-pub const NET_STATE_UNCONFIGURED: u32 = 0;
-pub const NET_STATE_DHCP_DISCOVERING: u32 = 1;
-pub const NET_STATE_READY: u32 = 2;
-pub const NET_STATE_ERROR: u32 = 3;
-
-pub const NET_FLAG_DHCP: u32 = 1 << 0;
-pub const NET_FLAG_HAS_GATEWAY: u32 = 1 << 1;
-pub const NET_FLAG_HAS_DNS: u32 = 1 << 2;
+pub use morpheus_foundation::net::{
+    NET_FLAG_DHCP, NET_FLAG_HAS_DNS, NET_FLAG_HAS_GATEWAY, NET_STATE_DHCP_DISCOVERING,
+    NET_STATE_ERROR, NET_STATE_READY, NET_STATE_UNCONFIGURED,
+};
 
 pub fn net_config() -> Result<NetConfigInfo, u64> {
     let mut info = unsafe { core::mem::zeroed::<NetConfigInfo>() };
@@ -568,34 +540,10 @@ pub const fn ipv4_bytes(ip: u32) -> [u8; 4] {
     ip.to_be_bytes()
 }
 
-// UDP subcmds must match hwinit/src/syscall/handler.rs.
-const UDP_SOCKET: u64 = 11;
-const UDP_SEND_TO: u64 = 12;
-const UDP_RECV_FROM: u64 = 13;
-const UDP_CLOSE: u64 = 14;
-
-/// Read from `a3` by `SYS_NET(UDP_SEND_TO, handle, &desc, 0)`.
-#[repr(C)]
-pub struct UdpSendDesc {
-    pub ip: u32,
-    pub port: u16,
-    pub _pad: u16,
-    pub buf: *const u8,
-    pub len: u64,
-}
-
-/// Kernel reads `buf`/`buf_len`, writes back `src_ip`/`src_port` on success.
-#[repr(C)]
-pub struct UdpRecvDesc {
-    pub buf: *mut u8,
-    pub buf_len: u64,
-    pub src_ip: u32,
-    pub src_port: u16,
-    pub _pad: u16,
-}
+pub use morpheus_foundation::types::{UdpRecvDesc, UdpSendDesc};
 
 pub fn udp_socket() -> Result<u64, u64> {
-    let ret = unsafe { syscall2(SYS_NET, UDP_SOCKET, 0) };
+    let ret = unsafe { syscall2(SYS_NET, NET_UDP_SOCKET, 0) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
@@ -615,7 +563,7 @@ pub fn udp_send_to(handle: u64, ip: u32, port: u16, data: &[u8]) -> Result<(), u
     let ret = unsafe {
         syscall4(
             SYS_NET,
-            UDP_SEND_TO,
+            NET_UDP_SEND_TO,
             handle,
             &desc as *const UdpSendDesc as u64,
             0,
@@ -640,7 +588,7 @@ pub fn udp_recv_from(handle: u64, buf: &mut [u8]) -> Result<(u64, u32, u16), u64
     let ret = unsafe {
         syscall4(
             SYS_NET,
-            UDP_RECV_FROM,
+            NET_UDP_RECV_FROM,
             handle,
             &mut desc as *mut UdpRecvDesc as u64,
             0,
@@ -654,7 +602,7 @@ pub fn udp_recv_from(handle: u64, buf: &mut [u8]) -> Result<(u64, u32, u16), u64
 }
 
 pub fn udp_close(handle: u64) -> Result<(), u64> {
-    let ret = unsafe { syscall2(SYS_NET, UDP_CLOSE, handle) };
+    let ret = unsafe { syscall2(SYS_NET, NET_UDP_CLOSE, handle) };
     if crate::is_error(ret) {
         Err(ret)
     } else {

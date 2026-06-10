@@ -177,7 +177,7 @@ BANNER
 }
 
 detect_distro() {
-    [[ -f /etc/os-release ]] && { source /etc/os-release; echo "${ID}"; return; }
+    [[ -f /etc/os-release ]] && { ID=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'); echo "${ID}"; return; }
     echo "unknown"
 }
 
