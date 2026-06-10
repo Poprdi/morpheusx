@@ -13,6 +13,7 @@ pub const ENOENT: u64 = u64::MAX - 2; // no such file/entry
 pub const ESRCH: u64 = u64::MAX - 3; // no such process
 pub const EIO: u64 = u64::MAX - 5; // I/O error
 pub const EBADF: u64 = u64::MAX - 9; // bad file descriptor
+pub const ECHILD: u64 = u64::MAX - 10; // no child processes (wait)
 pub const EAGAIN: u64 = u64::MAX - 11; // try again / would block
 pub const ENOMEM: u64 = u64::MAX - 12; // out of memory
 pub const EACCES: u64 = u64::MAX - 13; // permission denied

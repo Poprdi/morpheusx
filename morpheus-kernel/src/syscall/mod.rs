@@ -57,7 +57,7 @@ use handler::sysinfo::{
 // Canonical SYS_* numbers re-exported for legacy callers (`crate::syscall::SYS_*`).
 pub use morpheus_foundation::syscall_abi::*;
 
-const ENOSYS_RET: u64 = u64::MAX - 37;
+use morpheus_foundation::errno::ENOSYS;
 
 /// Dispatched from `syscall_entry` (MS x64 ABI). All args are user-controlled.
 ///
@@ -187,7 +187,7 @@ pub unsafe extern "C" fn syscall_dispatch(
             crate::serial::log_warn("SYSCALL", 801, "unknown syscall number");
             let _ = unknown;
             let _ = ProcessState::Ready;
-            ENOSYS_RET
+            ENOSYS
         },
     }
 }

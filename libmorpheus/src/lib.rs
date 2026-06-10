@@ -33,5 +33,6 @@ pub mod time;
 // source of truth across the syscall seam. Re-exported to keep `libmorpheus::EINVAL`
 // etc. paths stable.
 pub use morpheus_foundation::errno::{
-    is_error, EBADF, EFAULT, EINVAL, EIO, ENOENT, ENOMEM, ENOSYS, EPIPE, ESRCH,
+    is_error, EACCES, EAGAIN, EBADF, EBUSY, ECHILD, EEXIST, EFAULT, EINVAL, EIO, EISDIR, EMFILE,
+    ENODEV, ENOENT, ENOMEM, ENOSPC, ENOSYS, ENOTDIR, ENOTEMPTY, EPERM, EPIPE, EROFS, ESRCH,
 };

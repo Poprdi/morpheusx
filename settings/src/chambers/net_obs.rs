@@ -5,8 +5,7 @@ use crate::state::{Route, SettingsApp};
 use crate::widgets;
 
 use libmorpheus::net;
-
-const ENODEV: u64 = u64::MAX - 19;
+use libmorpheus::ENODEV;
 
 const FIELD_MODE_DHCP: usize = 0;
 const FIELD_MODE_STATIC: usize = 1;
