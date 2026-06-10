@@ -11,15 +11,9 @@ use crate::io::{self, Read, Seek, SeekFrom, Write};
 use crate::is_error;
 use crate::raw::*;
 
-pub const O_READ: u32 = 0x01;
-pub const O_WRITE: u32 = 0x02;
-pub const O_CREATE: u32 = 0x04;
-pub const O_TRUNC: u32 = 0x10;
-pub const O_APPEND: u32 = 0x20;
-
-pub const SEEK_SET: u64 = 0;
-pub const SEEK_CUR: u64 = 1;
-pub const SEEK_END: u64 = 2;
+// open flags + seek whence are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::flags::open_flags::{O_APPEND, O_CREATE, O_READ, O_TRUNC, O_WRITE};
+pub use morpheus_foundation::syscall_abi::{SEEK_CUR, SEEK_END, SEEK_SET};
 
 pub fn open(path: &str, flags: u32) -> Result<usize, u64> {
     let ret = unsafe {

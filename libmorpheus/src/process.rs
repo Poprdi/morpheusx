@@ -60,8 +60,7 @@ pub fn wait(pid: u32) -> Result<i32, u64> {
 /// `Ok(None)` means still running.
 pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
     let ret = unsafe { syscall1(SYS_TRY_WAIT, pid as u64) };
-    const EAGAIN: u64 = u64::MAX - 11;
-    if ret == EAGAIN {
+    if ret == morpheus_foundation::errno::EAGAIN {
         Ok(None)
     } else if is_error(ret) {
         Err(ret)
@@ -105,42 +104,8 @@ pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
     }
 }
 
-/// Process table entry from `ps()`.
-#[repr(C)]
-pub struct PsEntry {
-    pub pid: u32,
-    pub ppid: u32,
-    /// 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated.
-    pub state: u32,
-    pub priority: u32,
-    pub cpu_ticks: u64,
-    /// Active TSC cycles. PID 0 excludes HLT idle — divide by `SysInfo::uptime_ticks`
-    /// delta for absolute CPU utilization %.
-    pub cpu_tsc: u64,
-    pub pages_alloc: u64,
-    /// NUL-terminated.
-    pub name: [u8; 32],
-}
-
-impl PsEntry {
-    pub const fn zeroed() -> Self {
-        Self {
-            pid: 0,
-            ppid: 0,
-            state: 0,
-            priority: 0,
-            cpu_ticks: 0,
-            cpu_tsc: 0,
-            pages_alloc: 0,
-            name: [0u8; 32],
-        }
-    }
-
-    pub fn name_str(&self) -> &str {
-        let end = self.name.iter().position(|&b| b == 0).unwrap_or(32);
-        core::str::from_utf8(&self.name[..end]).unwrap_or("")
-    }
-}
+// `PsEntry` (+ `zeroed`/`name_str`) is canonical in morpheus-foundation.
+pub use morpheus_foundation::types::PsEntry;
 
 pub fn ps_count() -> u32 {
     unsafe { syscall2(SYS_PS, 0, 0) as u32 }
@@ -156,15 +121,9 @@ pub fn ps(entries: &mut [PsEntry]) -> usize {
     }
 }
 
-pub mod signal {
-    pub const SIGINT: u8 = 2;
-    pub const SIGKILL: u8 = 9;
-    pub const SIGSEGV: u8 = 11;
-    pub const SIGTERM: u8 = 15;
-    pub const SIGCHLD: u8 = 17;
-    pub const SIGCONT: u8 = 18;
-    pub const SIGSTOP: u8 = 19;
-}
+// Signal numbers are canonical in morpheus-foundation; re-export keeps the
+// `process::signal::SIG*` path while single-sourcing the values.
+pub use morpheus_foundation::flags::signal;
 
 /// sigaction. handler=0 → default, handler=1 → ignore.
 pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64> {
