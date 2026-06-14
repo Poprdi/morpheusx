@@ -737,7 +737,7 @@ impl Scheduler {
         out
     }
 
-    pub unsafe fn current_fd_table_mut(&self) -> &'static mut morpheus_helix::vfs::FdTable {
+    pub unsafe fn current_fd_table_mut(&self) -> &'static mut crate::storage::fs_api::FdTable {
         let pid = this_core_pid() as usize;
         &mut PROCESS_TABLE[pid].as_mut().unwrap().fd_table
     }

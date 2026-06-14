@@ -20,6 +20,7 @@ pub const EACCES: u64 = u64::MAX - 13; // permission denied
 pub const EFAULT: u64 = u64::MAX - 14; // bad address
 pub const EBUSY: u64 = u64::MAX - 16; // resource busy
 pub const EEXIST: u64 = u64::MAX - 17; // already exists
+pub const EXDEV: u64 = u64::MAX - 18; // cross-device link (rename across mounts)
 pub const ENODEV: u64 = u64::MAX - 19; // no such device
 pub const ENOTDIR: u64 = u64::MAX - 20; // not a directory
 pub const EISDIR: u64 = u64::MAX - 21; // is a directory

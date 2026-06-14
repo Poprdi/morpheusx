@@ -9,16 +9,16 @@ use std::path::Path;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::{BlockSize, Lba};
 
-use morpheus_helix::bitmap::BlockBitmap;
 use morpheus_helix::error::HelixError;
-use morpheus_helix::format;
-use morpheus_helix::index::btree::NamespaceIndex;
-use morpheus_helix::log::recovery::{recover_superblock, replay_log};
-use morpheus_helix::types::*;
-use morpheus_helix::vfs::{self};
-use morpheus_helix::vfs::{FdTable, HelixInstance, MountTable};
+use morpheus_helix::log::recovery::recover_superblock;
+use morpheus_helix::HelixFs;
 
 const SECTOR_SIZE: u32 = 512;
+
+/// "MXROOT" volume UUID stamped into a freshly formatted image.
+const MXROOT_UUID: [u8; 16] = [
+    0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+];
 
 struct FileBlockDevice {
     file: File,
@@ -186,7 +186,10 @@ fn cmd_pack(disk: &str, output: &str, max_mb: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
+/// Open `disk` and mount its HelixFS engine, formatting if there's no valid /
+/// compatible superblock. `HelixFs::mount` does superblock recovery, log replay,
+/// and bitmap rebuild internally.
+fn mount(disk: &str) -> Result<(FileBlockDevice, HelixFs), String> {
     let mut dev =
         FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
 
@@ -195,94 +198,32 @@ fn mount(disk: &str) -> Result<(FileBlockDevice, MountTable), String> {
         dev.total_sectors, SECTOR_SIZE
     );
 
-    let (sb, do_replay) = match recover_superblock(&mut dev, 0, SECTOR_SIZE) {
-        Ok(sb) => {
-            if sb.version != HELIX_VERSION {
-                println!(
-                    "[helix] version mismatch (disk={} expected={}) — reformatting",
-                    sb.version, HELIX_VERSION
-                );
-                let sb = do_format(&mut dev)?;
-                (sb, false)
-            } else {
-                println!("[helix] found valid superblock (version {})", sb.version);
-                (sb, true)
-            }
+    let fs = match HelixFs::mount(&mut dev, 0, SECTOR_SIZE) {
+        Ok(fs) => {
+            println!(
+                "[helix] mounted existing superblock (version {})",
+                fs.sb.version
+            );
+            fs
         },
-        Err(_) => {
-            println!("[helix] no valid superblock found — formatting");
-            let sb = do_format(&mut dev)?;
-            (sb, false)
+        Err(e) => {
+            println!("[helix] {:?} — formatting", e);
+            format_disk(&mut dev)?;
+            HelixFs::mount(&mut dev, 0, SECTOR_SIZE)
+                .map_err(|e| format!("mount after format: {:?}", e))?
         },
     };
 
-    let mut instance = HelixInstance {
-        sb,
-        log: morpheus_helix::log::LogEngine::new(&sb, 0, SECTOR_SIZE),
-        index: NamespaceIndex::new(),
-        bitmap: BlockBitmap::new(sb.data_block_count),
-        partition_lba_start: 0,
-        device_block_size: SECTOR_SIZE,
-    };
-
-    // Reload head log segment so future writes append correctly.
-    instance
-        .log
-        .reload_head_segment(&mut dev)
-        .map_err(|e| format!("reload_head_segment: {:?}", e))?;
-
-    if do_replay {
-        replay_log(&mut dev, &instance.log, &mut instance.index)
-            .map_err(|e| format!("replay_log: {:?}", e))?;
-
-        // Rebuild bitmap so existing file data isn't overwritten.
-        rebuild_bitmap(&mut instance);
-
-        println!(
-            "[helix] replayed log — {} index entries",
-            instance.index.all_entries().len()
-        );
-    }
-
-    let mut mount_table = MountTable::new();
-    mount_table
-        .mount("/", instance, false)
-        .map_err(|e| format!("mount: {:?}", e))?;
-
-    Ok((dev, mount_table))
+    Ok((dev, fs))
 }
 
-fn do_format(dev: &mut FileBlockDevice) -> Result<HelixSuperblock, String> {
+/// Format `dev` as a clean HelixFS over its whole extent.
+fn format_disk(dev: &mut FileBlockDevice) -> Result<(), String> {
     let total_sectors = dev.total_sectors;
-    let uuid = [
-        0x4D, 0x58, 0x52, 0x4F, 0x4F, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01,
-    ]; // "MXROOT"
-    format::format_helix(dev, 0, total_sectors, SECTOR_SIZE, "root", uuid)
+    morpheus_helix::format::format_helix(dev, 0, total_sectors, SECTOR_SIZE, "root", MXROOT_UUID)
         .map_err(|e| format!("format_helix: {:?}", e))?;
-    recover_superblock(dev, 0, SECTOR_SIZE).map_err(|e| format!("recover after format: {:?}", e))
-}
-
-/// Rebuild block bitmap from index entries; mirrors vfs/global.rs private fn.
-fn rebuild_bitmap(instance: &mut HelixInstance) {
-    for entry in instance.index.all_entries() {
-        if entry.flags & entry_flags::IS_DELETED != 0 {
-            continue;
-        }
-        if entry.flags & entry_flags::IS_DIR != 0 {
-            continue;
-        }
-        if entry.flags & entry_flags::IS_INLINE != 0 {
-            continue;
-        }
-        if entry.extent_root == BLOCK_NULL {
-            continue;
-        }
-        let blocks = entry.size.div_ceil(BLOCK_SIZE as u64);
-        if blocks > 0 {
-            instance.bitmap.mark_range_used(entry.extent_root, blocks);
-        }
-    }
+    dev.flush()
+        .map_err(|_| "flush after format failed".to_string())
 }
 
 fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
@@ -306,37 +247,32 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
         );
     }
 
-    let (mut dev, mut mt) = mount(disk)?;
-    let mut fdt = FdTable::new();
+    let (mut dev, mut fs) = mount(disk)?;
 
-    // Create every parent directory of `dest` (mkdir -p). Index-only; no
-    // block_io needed. Lets inject target any path, e.g. /system/keymaps/de.kmap.
+    // Create every parent directory of `dest` (mkdir -p). Lets inject target any
+    // path, e.g. /system/keymaps/de.kmap. write() also auto-creates parents, but
+    // doing it explicitly surfaces per-dir errors and keeps the log tidy.
     {
         let comps: Vec<&str> = dest.split('/').filter(|c| !c.is_empty()).collect();
         let mut path = String::new();
         for comp in comps.iter().take(comps.len().saturating_sub(1)) {
             path.push('/');
             path.push_str(comp);
-            match vfs::vfs_mkdir(&mut mt, &path, 0) {
+            match fs.mkdir(&path, 0) {
                 Ok(()) => println!("[inject] created {}", path),
                 Err(HelixError::AlreadyExists) => {},
-                Err(e) => return Err(format!("vfs_mkdir {}: {:?}", path, e)),
+                Err(e) => return Err(format!("mkdir {}: {:?}", path, e)),
             }
         }
     }
 
-    let flags = open_flags::O_WRITE | open_flags::O_CREATE | open_flags::O_TRUNC;
-    let fd = vfs::vfs_open(&mut dev, &mut mt, &mut fdt, dest, flags, 0)
-        .map_err(|e| format!("vfs_open {}: {:?}", dest, e))?;
-
-    let written = vfs::vfs_write(&mut dev, &mut mt, &mut fdt, fd, &elf_bytes, 0)
-        .map_err(|e| format!("vfs_write: {:?}", e))?;
-
-    vfs::vfs_close(&mut fdt, fd).map_err(|e| format!("vfs_close: {:?}", e))?;
+    fs.write(&mut dev, dest, &elf_bytes, 0)
+        .map_err(|e| format!("write {}: {:?}", dest, e))?;
 
     // Flush log + update superblock.
-    vfs::vfs_sync(&mut dev, &mut mt).map_err(|e| format!("vfs_sync: {:?}", e))?;
+    fs.sync(&mut dev).map_err(|e| format!("sync: {:?}", e))?;
 
+    let written = elf_bytes.len();
     println!("[inject] OK — wrote {} bytes to {}", written, dest);
     println!(
         "[inject] flush complete. Boot MorpheusX and run:  exec {}",
@@ -350,9 +286,10 @@ fn dest_name(dest: &str) -> &str {
 }
 
 fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
-    let (_dev, mt) = mount(disk)?;
-    let entries =
-        vfs::vfs_readdir(&mt, path).map_err(|e| format!("vfs_readdir {}: {:?}", path, e))?;
+    let (_dev, fs) = mount(disk)?;
+    let entries = fs
+        .readdir(path)
+        .map_err(|e| format!("readdir {}: {:?}", path, e))?;
 
     println!("{}/  ({} entries)", path, entries.len());
     for e in &entries {
@@ -367,20 +304,21 @@ fn cmd_format(disk: &str) -> Result<(), String> {
     let mut dev =
         FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
     println!("[format] wiping and reformatting {}", disk);
-    do_format(&mut dev)?;
+    format_disk(&mut dev)?;
     println!("[format] done — clean HelixFS ready");
     Ok(())
 }
 
 fn cmd_mkbin(disk: &str) -> Result<(), String> {
-    let (_dev, mut mt) = mount(disk)?;
-    match vfs::vfs_mkdir(&mut mt, "/bin", 0) {
-        Ok(()) | Err(HelixError::AlreadyExists) => {
-            println!("[mkbin] /bin ready");
-            Ok(())
-        },
-        Err(e) => Err(format!("vfs_mkdir: {:?}", e)),
+    let (mut dev, mut fs) = mount(disk)?;
+    match fs.mkdir("/bin", 0) {
+        Ok(()) | Err(HelixError::AlreadyExists) => {},
+        Err(e) => return Err(format!("mkdir: {:?}", e)),
     }
+    // Persist the directory record (mkdir only touches the in-memory log).
+    fs.sync(&mut dev).map_err(|e| format!("sync: {:?}", e))?;
+    println!("[mkbin] /bin ready");
+    Ok(())
 }
 
 fn main() {

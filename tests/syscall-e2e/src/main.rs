@@ -5,8 +5,11 @@
 #![no_main]
 #![feature(thread_local)]
 
+extern crate alloc;
+
 mod bench;
 
+use alloc::vec::Vec;
 use libmorpheus::entry;
 use libmorpheus::io::{print, println};
 use libmorpheus::raw::*;
@@ -282,9 +285,12 @@ fn run_smoke() -> i32 {
     println("");
     println("── Device (42-45) ──");
     test_ioctl(); // 42
-    test_mount(); // 43
-    test_umount(); // 44
     test_poll(); // 45
+
+    // ── Storage subsystem (102-103 + 43/44 redef) ────────────────────
+    println("");
+    println("── Storage (volumes/mount/umount) ──");
+    test_storage(); // SYS_VOLUMES, SYS_MOUNTS, SYS_MOUNT(43), SYS_UMOUNT(44)
 
     // ── Persistence (46-51) ──────────────────────────────────────────
     println("");
@@ -582,22 +588,26 @@ fn test_fs() {
 }
 
 fn test_truncate() {
+    use libmorpheus::fs;
     let path = "/tmp/e2etrunc.txt";
-    if let Ok(fd) =
-        libmorpheus::fs::open(path, libmorpheus::fs::O_WRITE | libmorpheus::fs::O_CREATE)
-    {
-        let _ = libmorpheus::fs::write(fd, b"Some test data for truncation");
-        let _ = libmorpheus::fs::close(fd);
+    if let Ok(fd) = fs::open(path, fs::O_WRITE | fs::O_CREATE) {
+        let _ = fs::write(fd, b"Some test data for truncation");
+        let _ = fs::close(fd);
     }
-    let ret = unsafe { syscall3(SYS_TRUNCATE, path.as_ptr() as u64, path.len() as u64, 0) };
+    // Shrink to a non-zero size; the old impl could only truncate to 0.
+    let ret = unsafe { syscall3(SYS_TRUNCATE, path.as_ptr() as u64, path.len() as u64, 4) };
     check_ok("SYS_TRUNCATE", ret);
-    let _ = libmorpheus::fs::unlink(path);
+    match fs::metadata(path) {
+        Ok(m) => check("SYS_TRUNCATE(size)", m.len() == 4, "new_size not honored"),
+        Err(_) => fail("SYS_TRUNCATE(size)", "stat after truncate failed"),
+    }
+    let _ = fs::unlink(path);
 }
 
 fn test_snapshot() {
     let name = "e2e_snap";
     let ret = unsafe { syscall2(SYS_SNAPSHOT, name.as_ptr() as u64, name.len() as u64) };
-    // Returns a TSC-based checkpoint ID (non-error, non-zero)
+    // Returns the real LSN of the logged snapshot marker (non-error).
     check(
         "SYS_SNAPSHOT",
         !libmorpheus::is_error(ret),
@@ -606,19 +616,22 @@ fn test_snapshot() {
 }
 
 fn test_versions() {
-    let path = "/tmp";
-    let mut buf = [0u8; 256];
-    let ret = unsafe {
-        syscall4(
-            SYS_VERSIONS,
-            path.as_ptr() as u64,
-            path.len() as u64,
-            buf.as_mut_ptr() as u64,
-            16,
-        )
-    };
-    // Currently returns 0 (no versions exposed)
-    check("SYS_VERSIONS", ret == 0, "expected 0 entries");
+    use libmorpheus::fs;
+    let path = "/tmp/e2ever.txt";
+    // Overwrite a couple of times to log multiple versions.
+    for _ in 0..2 {
+        if let Ok(fd) = fs::open(path, fs::O_WRITE | fs::O_CREATE | fs::O_TRUNC) {
+            let _ = fs::write(fd, b"v");
+            let _ = fs::close(fd);
+        }
+    }
+    // versions() walks the durable on-disk log; commit the writes first.
+    let _ = fs::sync();
+    match fs::versions(path) {
+        Ok(v) => check("SYS_VERSIONS", !v.is_empty(), "no versions returned"),
+        Err(_) => fail("SYS_VERSIONS", "versions() errored"),
+    }
+    let _ = fs::unlink(path);
 }
 
 fn test_clock() {
@@ -762,25 +775,333 @@ fn test_ioctl() {
     check_err("SYS_IOCTL(bad cmd)", ret);
 }
 
-fn test_mount() {
-    let src = "/dev/sda";
-    let dst = "/mnt";
-    let ret = unsafe {
-        syscall4(
-            SYS_MOUNT,
-            src.as_ptr() as u64,
-            src.len() as u64,
-            dst.as_ptr() as u64,
-            dst.len() as u64,
-        )
+/// EXDEV is not re-exported through `libmorpheus`; encode it directly
+/// (errno.rs: `EXDEV = u64::MAX - 18`), matching the literal-errno style used
+/// elsewhere in this suite (e.g. EAGAIN = `u64::MAX - 11`).
+const EXDEV: u64 = u64::MAX - 18;
+
+/// Storage subsystem (spec §10): volume enumeration, tmpfs mount round-trip,
+/// staged immutable image (disk pristine + writes EROFS), and the negative
+/// paths EBUSY / EXDEV / ENODEV / ENOMEM.
+fn test_storage() {
+    use libmorpheus::fs;
+
+    // SYS_VOLUMES: at minimum the boot root volume must be present, and the
+    // count-probe (max==0) must agree with the filled fetch.
+    let probe = unsafe { syscall2(SYS_VOLUMES, 0, 0) };
+    check(
+        "SYS_VOLUMES(probe)",
+        !libmorpheus::is_error(probe) && probe >= 1,
+        "no volumes (root missing?)",
+    );
+    let vols = match fs::volumes() {
+        Ok(v) => {
+            check("SYS_VOLUMES(fetch)", !v.is_empty(), "empty volume table");
+            v
+        },
+        Err(_) => {
+            fail("SYS_VOLUMES(fetch)", "volumes() errored");
+            Vec::new()
+        },
     };
-    check_ok("SYS_MOUNT (no-op)", ret);
+    // Root mount is itself a (staged) mount in this model → a volume backs it.
+    // Verify at least one volume carries a known fs_type, not garbage.
+    let any_fs = vols
+        .iter()
+        .any(|v| v.fs_type == fs::FS_HELIX || v.fs_type == fs::FS_FAT32);
+    check(
+        "SYS_VOLUMES(root present)",
+        vols.is_empty() || any_fs,
+        "no recognizable fs on any volume",
+    );
+
+    test_tmpfs_roundtrip();
+    test_staged_immutable(&vols);
+    test_umount_busy();
+    test_cross_mount_rename();
+    test_stale_volume();
+    test_oversized_stage();
 }
 
-fn test_umount() {
-    let path = "/mnt";
-    let ret = unsafe { syscall2(SYS_UMOUNT, path.as_ptr() as u64, path.len() as u64) };
-    check_ok("SYS_UMOUNT", ret);
+/// Mount a fresh RAM HelixFS (source = VOLUME_NONE), write+read a file through
+/// it, then umount. Exercises SYS_MOUNT(43) staged-from-nothing + SYS_UMOUNT(44).
+fn test_tmpfs_roundtrip() {
+    use libmorpheus::fs;
+
+    let mp = "/mnt/tmpfs";
+    let _ = fs::mkdir("/mnt");
+    let _ = fs::mkdir(mp);
+
+    // 4 MiB fresh RAM Helix volume. aux = size (required when source==VOLUME_NONE).
+    let mid = fs::mount(
+        fs::VOLUME_NONE,
+        mp,
+        fs::FS_HELIX,
+        fs::MNT_STAGED,
+        4 * 1024 * 1024,
+    );
+    let mid = match mid {
+        Ok(id) => {
+            ok("SYS_MOUNT(tmpfs)");
+            id
+        },
+        Err(_) => {
+            fail("SYS_MOUNT(tmpfs)", "mount(VOLUME_NONE) failed");
+            fail("tmpfs write/read", "skipped (mount failed)");
+            fail("SYS_UMOUNT(tmpfs)", "skipped (mount failed)");
+            return;
+        },
+    };
+    let _ = mid;
+
+    // The mount must now appear in SYS_MOUNTS.
+    match fs::mounts() {
+        Ok(ms) => check(
+            "SYS_MOUNTS(tmpfs visible)",
+            ms.iter().any(|m| {
+                let len = (m.mount_point_len as usize).min(m.mount_point.len());
+                &m.mount_point[..len] == mp.as_bytes()
+            }),
+            "mount not listed",
+        ),
+        Err(_) => fail("SYS_MOUNTS(tmpfs visible)", "mounts() errored"),
+    }
+
+    let path = "/mnt/tmpfs/file.txt";
+    let data = b"tmpfs payload";
+    let mut wrote = false;
+    if let Ok(fd) = fs::open(path, fs::O_WRITE | fs::O_CREATE) {
+        wrote = fs::write(fd, data) == Ok(data.len());
+        let _ = fs::close(fd);
+    }
+    let mut readback = [0u8; 32];
+    let mut read_ok = false;
+    if let Ok(fd) = fs::open(path, fs::O_READ) {
+        if let Ok(n) = fs::read(fd, &mut readback) {
+            read_ok = n == data.len() && &readback[..n] == data;
+        }
+        let _ = fs::close(fd);
+    }
+    check("tmpfs write/read", wrote && read_ok, "round-trip mismatch");
+
+    let u = fs::umount(mp, 0);
+    check("SYS_UMOUNT(tmpfs)", u.is_ok(), "umount failed");
+}
+
+/// Stage a real volume read-only into RAM (MNT_STAGED|MNT_RDONLY): writes must
+/// be rejected EROFS and the on-disk source must stay byte-identical. Requires a
+/// non-ephemeral volume that isn't already the root mount; skips with a note
+/// otherwise (per spec §10 "if a suitable volume exists else skip-with-note").
+fn test_staged_immutable(vols: &[libmorpheus::fs::VolumeInfo]) {
+    use libmorpheus::fs;
+
+    // Pick a real (non-RAM, non-ephemeral), unmounted volume to stage.
+    let cand = vols.iter().find(|v| {
+        v.device_kind != fs::DEV_RAM
+            && (v.flags & fs::VOL_EPHEMERAL) == 0
+            && (v.flags & fs::VOL_MOUNTED) == 0
+            && (v.fs_type == fs::FS_HELIX || v.fs_type == fs::FS_FAT32)
+    });
+    let vol = match cand {
+        Some(v) => v,
+        None => {
+            ok("staged-immutable (skipped — no suitable real volume)");
+            return;
+        },
+    };
+
+    let mp = "/mnt/img";
+    let _ = fs::mkdir("/mnt");
+    let _ = fs::mkdir(mp);
+
+    // FS_AUTO: detect; MNT_STAGED copies to RAM; MNT_RDONLY → writes EROFS.
+    let mid = fs::mount(
+        vol.volume_id,
+        mp,
+        fs::FS_AUTO,
+        fs::MNT_STAGED | fs::MNT_RDONLY,
+        0, // 0 = full source
+    );
+    if mid.is_err() {
+        fail(
+            "SYS_MOUNT(staged ro)",
+            "mount(real_vol, STAGED|RDONLY) failed",
+        );
+        fail("staged write rejected EROFS", "skipped (mount failed)");
+        fail("staged source pristine", "skipped (mount failed)");
+        return;
+    }
+    ok("SYS_MOUNT(staged ro)");
+
+    // A create/write into the read-only mount must be rejected (EROFS), either
+    // at open(O_WRITE) or at write — capabilities gate it up front.
+    let path = "/mnt/img/should_not_exist.txt";
+    let rejected = match fs::open(path, fs::O_WRITE | fs::O_CREATE) {
+        Ok(fd) => {
+            let w = fs::write(fd, b"x");
+            let _ = fs::close(fd);
+            w == Err(libmorpheus::EROFS)
+        },
+        Err(e) => e == libmorpheus::EROFS,
+    };
+    check("staged write rejected EROFS", rejected, "write not EROFS");
+
+    // The staged overlay is an independent ephemeral volume; the source disk
+    // volume must remain unmounted (VOL_MOUNTED clear) — pristine, untouched.
+    let still_pristine = match fs::volumes() {
+        Ok(after) => after
+            .iter()
+            .find(|v| v.volume_id == vol.volume_id)
+            .map(|v| (v.flags & fs::VOL_MOUNTED) == 0)
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    check(
+        "staged source pristine",
+        still_pristine,
+        "source volume got mounted/dirtied",
+    );
+
+    let _ = fs::umount(mp, 0);
+}
+
+/// umount of a mount with an open fd → EBUSY (unless MNT_FORCE).
+fn test_umount_busy() {
+    use libmorpheus::fs;
+
+    let mp = "/mnt/busy";
+    let _ = fs::mkdir("/mnt");
+    let _ = fs::mkdir(mp);
+    // 4 MiB: a HelixFS volume must exceed one 1 MiB log segment + superblocks.
+    if fs::mount(
+        fs::VOLUME_NONE,
+        mp,
+        fs::FS_HELIX,
+        fs::MNT_STAGED,
+        4 * 1024 * 1024,
+    )
+    .is_err()
+    {
+        fail("SYS_UMOUNT(busy EBUSY)", "setup mount failed");
+        return;
+    }
+
+    let path = "/mnt/busy/held.txt";
+    let held = fs::open(path, fs::O_WRITE | fs::O_CREATE);
+    match held {
+        Ok(fd) => {
+            let r = fs::umount(mp, 0);
+            check(
+                "SYS_UMOUNT(busy EBUSY)",
+                r == Err(libmorpheus::EBUSY),
+                "expected EBUSY with open fd",
+            );
+            let _ = fs::close(fd);
+            // After closing, the umount should succeed.
+            let _ = fs::umount(mp, 0);
+        },
+        Err(_) => {
+            fail(
+                "SYS_UMOUNT(busy EBUSY)",
+                "could not open file to hold mount",
+            );
+            let _ = fs::umount(mp, fs::MNT_FORCE);
+        },
+    }
+}
+
+/// rename across two distinct mounts → EXDEV (never an implicit copy+delete).
+fn test_cross_mount_rename() {
+    use libmorpheus::fs;
+
+    let mp_a = "/mnt/xa";
+    let mp_b = "/mnt/xb";
+    let _ = fs::mkdir("/mnt");
+    let _ = fs::mkdir(mp_a);
+    let _ = fs::mkdir(mp_b);
+
+    // 4 MiB each: below ~2 MiB a HelixFS format fails (log segment is 1 MiB).
+    let a = fs::mount(
+        fs::VOLUME_NONE,
+        mp_a,
+        fs::FS_HELIX,
+        fs::MNT_STAGED,
+        4 * 1024 * 1024,
+    );
+    let b = fs::mount(
+        fs::VOLUME_NONE,
+        mp_b,
+        fs::FS_HELIX,
+        fs::MNT_STAGED,
+        4 * 1024 * 1024,
+    );
+    if a.is_err() || b.is_err() {
+        fail("SYS_RENAME(cross-mount EXDEV)", "setup mounts failed");
+        if a.is_ok() {
+            let _ = fs::umount(mp_a, fs::MNT_FORCE);
+        }
+        if b.is_ok() {
+            let _ = fs::umount(mp_b, fs::MNT_FORCE);
+        }
+        return;
+    }
+
+    let src = "/mnt/xa/f.txt";
+    if let Ok(fd) = fs::open(src, fs::O_WRITE | fs::O_CREATE) {
+        let _ = fs::write(fd, b"data");
+        let _ = fs::close(fd);
+    }
+    let r = fs::rename(src, "/mnt/xb/f.txt");
+    check(
+        "SYS_RENAME(cross-mount EXDEV)",
+        r == Err(EXDEV),
+        "cross-mount rename not EXDEV",
+    );
+
+    let _ = fs::umount(mp_a, fs::MNT_FORCE);
+    let _ = fs::umount(mp_b, fs::MNT_FORCE);
+}
+
+/// Mount with a stale/garbage volume_id → ENODEV (generation-check use-after-free
+/// protection on fuzzed handles).
+fn test_stale_volume() {
+    use libmorpheus::fs;
+
+    let mp = "/mnt/stale";
+    let _ = fs::mkdir("/mnt");
+    let _ = fs::mkdir(mp);
+    // High generation + arbitrary index that cannot match a live slot.
+    let bogus: u64 = 0xDEAD_BEEF_0000_0007;
+    let r = fs::mount(bogus, mp, fs::FS_AUTO, 0, 0);
+    check(
+        "SYS_MOUNT(stale id ENODEV)",
+        r == Err(libmorpheus::ENODEV),
+        "stale volume_id not ENODEV",
+    );
+}
+
+/// Oversized staged-from-nothing request → ENOMEM (admission control rejects
+/// before allocating). Use a size no machine in test has free.
+fn test_oversized_stage() {
+    use libmorpheus::fs;
+
+    let mp = "/mnt/huge";
+    let _ = fs::mkdir("/mnt");
+    let _ = fs::mkdir(mp);
+    // 1 TiB — far past STAGE_SINGLE_MAX / physical RAM. Spec admission step 2/5
+    // yields EINVAL (over single-max) or ENOMEM (too little free); accept either
+    // rejection, but it must NOT succeed.
+    let huge: u64 = 1u64 << 40;
+    let r = fs::mount(fs::VOLUME_NONE, mp, fs::FS_HELIX, fs::MNT_STAGED, huge);
+    check(
+        "SYS_MOUNT(oversized ENOMEM)",
+        r == Err(libmorpheus::ENOMEM) || r == Err(libmorpheus::EINVAL),
+        "oversized stage not rejected",
+    );
+    // If it somehow succeeded, clean up so we don't leak.
+    if r.is_ok() {
+        let _ = fs::umount(mp, fs::MNT_FORCE);
+    }
 }
 
 fn test_poll() {

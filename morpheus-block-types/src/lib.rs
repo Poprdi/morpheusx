@@ -1,5 +1,51 @@
+//! Universal block-device handles: `RawBlockDevice` (fn-pointer bridge over any
+//! live driver or RAM region) and `MemBlockDevice` (RAM-backed). Moved here from
+//! HelixFS so the storage subsystem can back any FS with either, indistinguishably
+//! above the device layer (spec §3 layer 1). Lives in this leaf crate (not
+//! `morpheus-block`) so `morpheus-kernel` can use the types without pulling
+//! `morpheus-block`'s USB-MSD/xhci driver stack, which depends back on the kernel.
+#![no_std]
+
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::{BlockSize, Lba};
+
+use morpheus_foundation::storage::{DEV_AHCI, DEV_RAM, DEV_SDHCI, DEV_USBMSD, DEV_VIRTIO};
+
+/// Device provenance for `VolumeInfo::device_kind`. Maps 1:1 to the foundation
+/// `DEV_*` constants; live drivers and RAM look identical above this layer, so
+/// this only records where a device came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    Ram,
+    Virtio,
+    Ahci,
+    Sdhci,
+    UsbMsd,
+}
+
+impl DeviceKind {
+    /// Foundation `DEV_*` value for this kind.
+    pub const fn to_dev(self) -> u32 {
+        match self {
+            DeviceKind::Ram => DEV_RAM,
+            DeviceKind::Virtio => DEV_VIRTIO,
+            DeviceKind::Ahci => DEV_AHCI,
+            DeviceKind::Sdhci => DEV_SDHCI,
+            DeviceKind::UsbMsd => DEV_USBMSD,
+        }
+    }
+
+    /// Inverse of [`to_dev`](Self::to_dev); unknown values fall back to `Ram`.
+    pub const fn from_dev(dev: u32) -> Self {
+        match dev {
+            DEV_VIRTIO => DeviceKind::Virtio,
+            DEV_AHCI => DeviceKind::Ahci,
+            DEV_SDHCI => DeviceKind::Sdhci,
+            DEV_USBMSD => DeviceKind::UsbMsd,
+            _ => DeviceKind::Ram,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct MemIoError;
@@ -75,6 +121,8 @@ impl BlockIo for RawBlockDevice {
     }
 
     fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<(), Self::Error> {
+        // SAFETY: read_fn was supplied to `new` with the invariant that it is
+        // sound for this ctx + a dst buffer of dst.len() bytes; dst is a live slice.
         let ok = unsafe { (self.read_fn)(self.ctx, start_lba.0, dst.as_mut_ptr(), dst.len()) };
         if ok {
             Ok(())
@@ -84,6 +132,8 @@ impl BlockIo for RawBlockDevice {
     }
 
     fn write_blocks(&mut self, start_lba: Lba, src: &[u8]) -> Result<(), Self::Error> {
+        // SAFETY: write_fn was supplied to `new` with the invariant that it is
+        // sound for this ctx + a src buffer of src.len() bytes; src is a live slice.
         let ok = unsafe { (self.write_fn)(self.ctx, start_lba.0, src.as_ptr(), src.len()) };
         if ok {
             Ok(())
@@ -93,6 +143,8 @@ impl BlockIo for RawBlockDevice {
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
+        // SAFETY: flush_fn was supplied to `new` with the invariant that it is
+        // sound to call with this ctx.
         let ok = unsafe { (self.flush_fn)(self.ctx) };
         if ok {
             Ok(())
@@ -136,12 +188,16 @@ impl MemBlockDevice {
     /// (usually held in a `static`).
     pub fn into_raw(mem: &mut MemBlockDevice) -> RawBlockDevice {
         unsafe fn mem_read(ctx: *mut u8, lba: u64, dst: *mut u8, len: usize) -> bool {
+            // SAFETY: ctx is the MemBlockDevice pointer set below; base is live
+            // for at least `sectors*sector_size` bytes and the caller passes an
+            // in-range lba/len (callers read within total_bytes).
             let dev = &*(ctx as *const MemBlockDevice);
             let offset = lba * dev.sector_size as u64;
             core::ptr::copy_nonoverlapping(dev.base.add(offset as usize), dst, len);
             true
         }
         unsafe fn mem_write(ctx: *mut u8, lba: u64, src: *const u8, len: usize) -> bool {
+            // SAFETY: see mem_read; write stays within the backing region.
             let dev = &*(ctx as *const MemBlockDevice);
             let offset = lba * dev.sector_size as u64;
             core::ptr::copy_nonoverlapping(src, dev.base.add(offset as usize), len);
@@ -151,6 +207,8 @@ impl MemBlockDevice {
             true
         }
 
+        // SAFETY: ctx points at `mem`, which the caller guarantees outlives the
+        // returned device; the fn pointers are sound for that ctx per above.
         unsafe {
             RawBlockDevice::new(
                 mem as *mut MemBlockDevice as *mut u8,
@@ -177,6 +235,7 @@ impl BlockIo for MemBlockDevice {
 
     fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<(), Self::Error> {
         let offset = start_lba.0 * self.sector_size as u64;
+        // SAFETY: base is live for the backing region; callers read within it.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self.base.add(offset as usize),
@@ -189,6 +248,7 @@ impl BlockIo for MemBlockDevice {
 
     fn write_blocks(&mut self, start_lba: Lba, src: &[u8]) -> Result<(), Self::Error> {
         let offset = start_lba.0 * self.sector_size as u64;
+        // SAFETY: base is live for the backing region; callers write within it.
         unsafe {
             core::ptr::copy_nonoverlapping(src.as_ptr(), self.base.add(offset as usize), src.len());
         }

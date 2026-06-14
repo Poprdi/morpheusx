@@ -15,6 +15,15 @@ use crate::raw::*;
 pub use morpheus_foundation::flags::open_flags::{O_APPEND, O_CREATE, O_READ, O_TRUNC, O_WRITE};
 pub use morpheus_foundation::syscall_abi::{SEEK_CUR, SEEK_END, SEEK_SET};
 
+// Storage-subsystem ABI (volumes/mounts) — re-exported so `libmorpheus::fs::*`
+// paths stay stable and the kernel↔userland seam is single-sourced.
+pub use morpheus_foundation::storage::{
+    DEV_AHCI, DEV_RAM, DEV_SDHCI, DEV_USBMSD, DEV_VIRTIO, FS_AUTO, FS_FAT32, FS_HELIX, FS_NONE,
+    FS_UNKNOWN, MNT_FORCE, MNT_RDONLY, MNT_STAGED, VOLUME_NONE, VOL_EPHEMERAL, VOL_MOUNTED,
+    VOL_RDONLY, VOL_REMOVABLE,
+};
+pub use morpheus_foundation::types::{MountInfo, VolumeInfo};
+
 pub fn open(path: &str, flags: u32) -> Result<usize, u64> {
     let ret = unsafe {
         syscall3(
@@ -134,6 +143,152 @@ pub fn stat(path: &str, buf: &mut [u8]) -> Result<(), u64> {
 
 pub fn sync() -> Result<(), u64> {
     let ret = unsafe { syscall0(SYS_SYNC) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Resize `path` to `new_size`: shrinks truncate, grows zero-extend.
+pub fn truncate(path: &str, new_size: u64) -> Result<(), u64> {
+    let ret = unsafe {
+        syscall3(
+            SYS_TRUNCATE,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            new_size,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Record a named filesystem snapshot; returns its LSN (a point-in-time handle).
+pub fn snapshot(name: &str) -> Result<u64, u64> {
+    let ret = unsafe { syscall2(SYS_SNAPSHOT, name.as_ptr() as u64, name.len() as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
+}
+
+/// One logged version of a file. ABI struct: see `morpheus_foundation::types::FileVersion`.
+pub type FileVersion = morpheus_foundation::types::FileVersion;
+
+/// All logged versions of `path`, oldest-to-newest.
+pub fn versions(path: &str) -> Result<Vec<FileVersion>, u64> {
+    // First probe the count (max = 0), then fetch.
+    let count = unsafe { syscall4(SYS_VERSIONS, path.as_ptr() as u64, path.len() as u64, 0, 0) };
+    if is_error(count) {
+        return Err(count);
+    }
+    let count = count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<FileVersion> = vec![FileVersion::zeroed(); count];
+    let written = unsafe {
+        syscall4(
+            SYS_VERSIONS,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            out.as_mut_ptr() as u64,
+            count as u64,
+        )
+    };
+    if is_error(written) {
+        return Err(written);
+    }
+    out.truncate(written as usize);
+    Ok(out)
+}
+
+/// All storage volumes (lsblk-style). Probe count (`max == 0`), then fetch.
+pub fn volumes() -> Result<Vec<VolumeInfo>, u64> {
+    let count = unsafe { syscall2(SYS_VOLUMES, 0, 0) };
+    if is_error(count) {
+        return Err(count);
+    }
+    let count = count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<VolumeInfo> = vec![VolumeInfo::zeroed(); count];
+    let written = unsafe { syscall2(SYS_VOLUMES, out.as_mut_ptr() as u64, count as u64) };
+    if is_error(written) {
+        return Err(written);
+    }
+    out.truncate(written as usize);
+    Ok(out)
+}
+
+/// All active mounts. Probe count (`max == 0`), then fetch.
+pub fn mounts() -> Result<Vec<MountInfo>, u64> {
+    let count = unsafe { syscall2(SYS_MOUNTS, 0, 0) };
+    if is_error(count) {
+        return Err(count);
+    }
+    let count = count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<MountInfo> = vec![MountInfo::zeroed(); count];
+    let written = unsafe { syscall2(SYS_MOUNTS, out.as_mut_ptr() as u64, count as u64) };
+    if is_error(written) {
+        return Err(written);
+    }
+    out.truncate(written as usize);
+    Ok(out)
+}
+
+/// Mount `source_volume_id` (or `VOLUME_NONE` for a fresh RAM volume) at
+/// `mountpoint`. `fs_type` is `FS_AUTO|FS_HELIX|FS_FAT32`; `flags` is `MNT_*`;
+/// `aux` carries the size when staged-from-nothing (else a stage-size cap, 0 =
+/// full source). Returns the `mount_id`.
+pub fn mount(
+    source_volume_id: u64,
+    mountpoint: &str,
+    fs_type: u32,
+    flags: u32,
+    aux: u64,
+) -> Result<u64, u64> {
+    let ret = unsafe {
+        syscall6(
+            SYS_MOUNT,
+            source_volume_id,
+            mountpoint.as_ptr() as u64,
+            mountpoint.len() as u64,
+            fs_type as u64,
+            flags as u64,
+            aux,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
+}
+
+/// Unmount the filesystem at `mountpoint`. `flags` is `MNT_*` (`MNT_FORCE` to
+/// revoke open fds).
+pub fn umount(mountpoint: &str, flags: u32) -> Result<(), u64> {
+    let ret = unsafe {
+        syscall3(
+            SYS_UMOUNT,
+            mountpoint.as_ptr() as u64,
+            mountpoint.len() as u64,
+            flags as u64,
+        )
+    };
     if is_error(ret) {
         Err(ret)
     } else {

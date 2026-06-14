@@ -21,6 +21,34 @@ pub struct FileStat {
     pub flags: u32,
 }
 
+/// One entry from `versions(path, &mut buf, max)` — SYS_VERSIONS. One record per
+/// log entry that touched the path, oldest-to-newest. `op` mirrors the HelixFS
+/// `LogOp` discriminant (Write=1, Append=2, Delete=3, Rename=5, SetMeta=6,
+/// Truncate=0x0D, …); `lsn` is the version's log sequence number and can be
+/// passed to a time-travel open (`O_AT_LSN`).
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct FileVersion {
+    /// Log sequence number of this version.
+    pub lsn: u64,
+    /// TSC nanoseconds since boot when the record was written.
+    pub timestamp_ns: u64,
+    /// HelixFS `LogOp` discriminant.
+    pub op: u32,
+    pub _pad: u32,
+}
+
+impl FileVersion {
+    pub const fn zeroed() -> Self {
+        Self {
+            lsn: 0,
+            timestamp_ns: 0,
+            op: 0,
+            _pad: 0,
+        }
+    }
+}
+
 /// One entry from `readdir(fd, &mut buf, max_entries)`.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -283,4 +311,68 @@ pub struct UdpRecvDesc {
     pub src_ip: u32,
     pub src_port: u16,
     pub _pad: u16,
+}
+
+/// One row from `volumes(&mut buf, max)` — SYS_VOLUMES. lsblk-style projection of
+/// a `VolumeRegistry` entry. `device_kind` is `DEV_*`, `fs_type` is detected
+/// (`FS_NONE|FS_HELIX|FS_FAT32|FS_UNKNOWN`), `flags` is `VOL_*`. Both ids are
+/// generational handles (see `storage::pack`).
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct VolumeInfo {
+    pub volume_id: u64,
+    pub device_id: u64,
+    pub device_kind: u32,
+    pub fs_type: u32,
+    pub lba_start: u64,
+    pub lba_count: u64,
+    pub block_size: u32,
+    pub flags: u32,
+    pub partition_guid: [u8; 16],
+    pub label: [u8; 64],
+}
+
+impl VolumeInfo {
+    pub const fn zeroed() -> Self {
+        Self {
+            volume_id: 0,
+            device_id: 0,
+            device_kind: 0,
+            fs_type: 0,
+            lba_start: 0,
+            lba_count: 0,
+            block_size: 0,
+            flags: 0,
+            partition_guid: [0u8; 16],
+            label: [0u8; 64],
+        }
+    }
+}
+
+/// One row from `mounts(&mut buf, max)` — SYS_MOUNTS. `mount_point` is the
+/// absolute path, length in `mount_point_len`; `flags` is `MNT_*`.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MountInfo {
+    pub mount_id: u64,
+    pub volume_id: u64,
+    pub fs_type: u32,
+    pub flags: u32,
+    pub mount_point: [u8; 256],
+    pub mount_point_len: u16,
+    pub _pad: [u8; 6],
+}
+
+impl MountInfo {
+    pub const fn zeroed() -> Self {
+        Self {
+            mount_id: 0,
+            volume_id: 0,
+            fs_type: 0,
+            flags: 0,
+            mount_point: [0u8; 256],
+            mount_point_len: 0,
+            _pad: [0u8; 6],
+        }
+    }
 }

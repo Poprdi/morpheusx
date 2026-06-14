@@ -30,7 +30,9 @@ members = [
     "morpheus-xhci",
     "morpheus-storage-format",
     "morpheus-virtio",
+    "morpheus-block-types",
     "morpheus-block",
+    "morpheus-fat32",
     "morpheus-nic",
     "morpheus-net-stack",
     "morpheus-kernel",
@@ -62,7 +64,9 @@ morpheus-hal-x86_64 = { path = "morpheus-hal-x86_64" }
 morpheus-xhci = { path = "morpheus-xhci" }
 morpheus-storage-format = { path = "morpheus-storage-format" }
 morpheus-virtio = { path = "morpheus-virtio" }
+morpheus-block-types = { path = "morpheus-block-types" }
 morpheus-block = { path = "morpheus-block" }
+morpheus-fat32 = { path = "morpheus-fat32" }
 morpheus-nic = { path = "morpheus-nic" }
 morpheus-net-stack = { path = "morpheus-net-stack" }
 morpheus-kernel = { path = "morpheus-kernel" }

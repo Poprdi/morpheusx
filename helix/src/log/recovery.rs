@@ -102,7 +102,7 @@ fn decode_path_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
 
 /// Replay tail..=head, rebuilding the in-memory [`NamespaceIndex`]. v1 records
 /// without v2 path prefix are silently skipped. `log` + `index` must be from
-/// the same `HelixInstance`.
+/// the same `HelixFs`.
 pub fn replay_log<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,

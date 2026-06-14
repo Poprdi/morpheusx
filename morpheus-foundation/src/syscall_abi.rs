@@ -163,6 +163,14 @@ pub const SYS_GETRANDOM: u64 = 101;
 /// getrandom flag: do not block on entropy. Advisory on RDRAND-backed systems.
 pub const GRND_NONBLOCK: u64 = 0x0001;
 
+/// `volumes(buf_ptr, max) -> count`. Fills `VolumeInfo[min(count,max)]`; `max==0`
+/// is a count-probe (mirrors `SYS_VERSIONS`).
+pub const SYS_VOLUMES: u64 = 102;
+
+/// `mounts(buf_ptr, max) -> count`. Fills `MountInfo[min(count,max)]`; same
+/// probe convention as `SYS_VOLUMES`.
+pub const SYS_MOUNTS: u64 = 103;
+
 // Seek whence constants.
 pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;
@@ -175,7 +183,7 @@ pub const SEEK_END: u64 = 2;
 // module header for the (only) correct way to add a syscall.
 
 /// Number of defined syscalls. Bump by exactly one when appending.
-pub const SYSCALL_COUNT: usize = 102;
+pub const SYSCALL_COUNT: usize = 104;
 
 /// Every `SYS_*` number in ABI order. Length is pinned to `SYSCALL_COUNT`, so a
 /// missing/extra entry is itself a compile error.
@@ -282,6 +290,8 @@ pub const SYSCALL_TABLE: [u64; SYSCALL_COUNT] = [
     SYS_KEYBOARD_READ,
     SYS_SET_THREAD_POINTER,
     SYS_GETRANDOM,
+    SYS_VOLUMES,
+    SYS_MOUNTS,
 ];
 
 const _: () = {

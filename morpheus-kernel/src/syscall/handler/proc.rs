@@ -88,42 +88,26 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
         None => return EINVAL,
     };
 
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
-
-    let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = hal().timer().read_tsc();
 
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        fd_table,
-        path,
-        0x01, // O_READ
-        ts,
-    ) {
-        Ok(fd) => fd,
-        Err(_) => return ENOENT,
+    // Stat under the lock to size the load buffer.
+    let file_size = {
+        let guard = crate::storage::lock();
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => return ENOENT,
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(s) => s.size as usize,
+            Err(_) => return EIO,
+        }
     };
 
-    let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            return EIO;
-        },
-    };
-
-    let file_size = stat.size as usize;
     if file_size == 0 || file_size > 4 * 1024 * 1024 {
-        let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
         return EINVAL;
     }
 
-    // Drop registry before spawn_user_process — load_elf64 reacquires it.
     let pages_needed = file_size.div_ceil(PAGE_SIZE as usize) as u64;
     let buf_phys =
         match hal()
@@ -131,24 +115,48 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
             .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages_needed)
         {
             Ok(addr) => addr,
-            Err(_) => {
-                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-                return ENOMEM;
-            },
+            Err(_) => return ENOMEM,
         };
 
+    // Read the image under the lock with a transient FdState, then drop the
+    // guard before spawn_user_process — load_elf64 reacquires the registry.
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, file_size);
-    let bytes_read =
-        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
+    let bytes_read = {
+        let guard = crate::storage::lock();
+        let g = &mut *guard.g;
+        let (mount_id, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => {
+                let _ = hal().phys().free_pages(buf_phys, pages_needed);
+                return ENOENT;
+            },
+        };
+        let opened = match m.fs.open(dev, rel, 0x01, ts) {
+            Ok(o) => o,
+            Err(_) => {
+                let _ = hal().phys().free_pages(buf_phys, pages_needed);
+                return ENOENT;
+            },
+        };
+        let mut fdstate = crate::storage::fs_api::FdState::empty();
+        fdstate.mount_id = mount_id;
+        fdstate.cookie = opened.cookie;
+        // Backend reads key off the (mount-relative) path, not just the cookie.
+        let pb = rel.as_bytes();
+        let pn = pb.len().min(fdstate.path.len());
+        fdstate.path[..pn].copy_from_slice(&pb[..pn]);
+        fdstate.path_len = pn as u16;
+        let n = match m.fs.read(dev, &fdstate, buf) {
             Ok(n) => n,
             Err(_) => {
-                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                let _ = m.fs.close(dev, &fdstate);
                 let _ = hal().phys().free_pages(buf_phys, pages_needed);
                 return EIO;
             },
         };
-
-    let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+        let _ = m.fs.close(dev, &fdstate);
+        n
+    };
 
     let name = path.rsplit('/').next().unwrap_or(path);
 
