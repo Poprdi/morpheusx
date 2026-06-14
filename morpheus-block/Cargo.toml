@@ -13,6 +13,7 @@ fat32_manifest = []
 
 [dependencies]
 morpheus-foundation.workspace = true
+morpheus-block-types.workspace = true
 morpheus-hal-x86_64.workspace = true
 morpheus-xhci.workspace = true
 morpheus-virtio.workspace = true

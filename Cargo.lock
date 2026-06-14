@@ -219,11 +219,21 @@ version = "1.0.1"
 dependencies = [
  "gpt_disk_io",
  "gpt_disk_types",
+ "morpheus-block-types",
  "morpheus-foundation",
  "morpheus-hal-x86_64",
  "morpheus-storage-format",
  "morpheus-virtio",
  "morpheus-xhci",
+]
+
+[[package]]
+name = "morpheus-block-types"
+version = "1.0.1"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+ "morpheus-foundation",
 ]
 
 [[package]]
@@ -235,6 +245,7 @@ dependencies = [
  "linked_list_allocator",
  "morpheus-block",
  "morpheus-display",
+ "morpheus-foundation",
  "morpheus-hal-api",
  "morpheus-hal-x86_64",
  "morpheus-helix",
@@ -263,6 +274,15 @@ version = "1.0.1"
 [[package]]
 name = "morpheus-display"
 version = "1.0.1"
+
+[[package]]
+name = "morpheus-fat32"
+version = "1.0.1"
+dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+ "morpheus-foundation",
+]
 
 [[package]]
 name = "morpheus-foundation"
@@ -301,7 +321,11 @@ dependencies = [
 name = "morpheus-kernel"
 version = "1.0.1"
 dependencies = [
+ "gpt_disk_io",
+ "gpt_disk_types",
+ "morpheus-block-types",
  "morpheus-console",
+ "morpheus-fat32",
  "morpheus-foundation",
  "morpheus-hal-api",
  "morpheus-helix",

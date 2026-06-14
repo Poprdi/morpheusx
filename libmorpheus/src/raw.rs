@@ -154,3 +154,28 @@ pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> 
     );
     ret
 }
+
+/// # Safety
+/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a6` must be
+/// valid arguments for it: any pointer/length passed must reference memory that
+/// is valid for the duration and access pattern the syscall performs.
+#[inline(always)]
+pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
+    let ret: u64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") nr => ret,
+        in("rdi") a1,
+        in("rsi") a2,
+        in("rdx") a3,
+        in("r10") a4,
+        in("r8") a5,
+        in("r9") a6,
+        out("rcx") _,
+        out("r11") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
+        options(nostack),
+    );
+    ret
+}

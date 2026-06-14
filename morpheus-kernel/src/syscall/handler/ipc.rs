@@ -212,36 +212,33 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
 
     let fd_table = SCHEDULER.current_fd_table_mut();
 
+    // Pipe fds carry no mount; the pipe index lives in `mount_id` (see core.rs
+    // read/write dispatch: `pipe_idx = desc.mount_id as u8`).
     let read_fd = match fd_table.alloc() {
-        Ok(fd) => fd,
-        Err(_) => return ENOMEM,
+        Some(fd) => fd,
+        None => return ENOMEM,
     };
-    fd_table.fds[read_fd] = morpheus_helix::types::FileDescriptor {
-        key: 0,
-        path: [0u8; 256],
-        flags: O_PIPE_READ,
-        offset: 0,
-        mount_idx: pipe_idx,
-        _pad: [0; 3],
-        pinned_lsn: 0,
-    };
+    let mut read_state = crate::storage::fs_api::FdState::empty();
+    read_state.flags = O_PIPE_READ;
+    read_state.mount_id = pipe_idx as u64;
+    if !fd_table.set(read_fd, read_state) {
+        return ENOMEM;
+    }
 
     let write_fd = match fd_table.alloc() {
-        Ok(fd) => fd,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, read_fd);
+        Some(fd) => fd,
+        None => {
+            let _ = fd_table.free(read_fd);
             return ENOMEM;
         },
     };
-    fd_table.fds[write_fd] = morpheus_helix::types::FileDescriptor {
-        key: 0,
-        path: [0u8; 256],
-        flags: O_PIPE_WRITE,
-        offset: 0,
-        mount_idx: pipe_idx,
-        _pad: [0; 3],
-        pinned_lsn: 0,
-    };
+    let mut write_state = crate::storage::fs_api::FdState::empty();
+    write_state.flags = O_PIPE_WRITE;
+    write_state.mount_id = pipe_idx as u64;
+    if !fd_table.set(write_fd, write_state) {
+        let _ = fd_table.free(read_fd);
+        return ENOMEM;
+    }
 
     let out = result_ptr as *mut [u32; 2];
     (*out)[0] = read_fd as u32;
@@ -253,7 +250,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
 pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
     if old_fd == new_fd {
         let fd_table = SCHEDULER.current_fd_table_mut();
-        return if fd_table.get(old_fd as usize).is_ok() {
+        return if fd_table.get(old_fd as usize).is_some() {
             new_fd
         } else {
             EBADF
@@ -262,26 +259,29 @@ pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
 
     let fd_table = SCHEDULER.current_fd_table_mut();
     let src = match fd_table.get(old_fd as usize) {
-        Ok(d) => *d,
-        Err(_) => return EBADF,
+        Some(d) => *d,
+        None => return EBADF,
     };
 
-    if fd_table.get(new_fd as usize).is_ok() {
+    if fd_table.get(new_fd as usize).is_some() {
         sys_fs_close(new_fd);
     }
 
     let fd_table = SCHEDULER.current_fd_table_mut();
-    if new_fd as usize >= morpheus_helix::types::MAX_FDS {
+    if new_fd as usize >= crate::storage::fs_api::FD_TABLE_LEN {
         return EBADF;
     }
 
-    fd_table.fds[new_fd as usize] = src;
+    if !fd_table.set(new_fd as usize, src) {
+        return EBADF;
+    }
 
+    let pipe_idx = src.mount_id as u8;
     if src.flags & O_PIPE_READ != 0 {
-        pipe::pipe_add_reader(src.mount_idx);
+        pipe::pipe_add_reader(pipe_idx);
     }
     if src.flags & O_PIPE_WRITE != 0 {
-        pipe::pipe_add_writer(src.mount_idx);
+        pipe::pipe_add_writer(pipe_idx);
     }
 
     new_fd

@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# Shared kernel↔userland ABI: storage FS_*/MNT_*/VOLUME_NONE consts for the
+# boot registry population + privileged root mount (spec §7).
+morpheus-foundation = { workspace = true }
 morpheus-block = { workspace = true }
 morpheus-display = { workspace = true }
 morpheus-helix = { workspace = true }

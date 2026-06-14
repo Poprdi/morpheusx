@@ -149,6 +149,15 @@ unsafe fn reap_child(pid: u32) -> u64 {
 }
 
 unsafe fn free_process_resources(proc: &mut Process) {
+    // Storage reap (spec §7): close this pid's fds (decrement per-mount open_fds)
+    // and auto-umount the ephemeral (staged) mounts it owns, freeing their RAM and
+    // restoring its staging budget. Direct/global mounts survive. Done first so a
+    // dying process can never leak staged RAM; takes STORAGE_LOCK internally, and
+    // we hold PROCESS_TABLE_LOCK here — ordering is PROCESS_TABLE_LOCK→STORAGE_LOCK
+    // (no storage path takes PROCESS_TABLE_LOCK under STORAGE_LOCK).
+    crate::storage::reap_process(proc.pid, &mut proc.fd_table);
+    proc.fd_table = crate::storage::fs_api::FdTable::new();
+
     let phys = hal().phys();
     if proc.kernel_stack_base != 0 && phys.is_initialized() {
         let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);

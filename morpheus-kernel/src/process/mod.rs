@@ -159,7 +159,7 @@ pub struct Process {
     /// 0 = SIG_DFL, 1 = SIG_IGN, >1 = user fn.
     pub signal_handlers: [u64; 32],
 
-    pub fd_table: morpheus_helix::vfs::FdTable,
+    pub fd_table: crate::storage::fs_api::FdTable,
 
     /// Bump pointer for SYS_MMAP.
     pub mmap_brk: u64,
@@ -241,7 +241,7 @@ impl Process {
             effective_weight_cache: 0,
             pending_signals: signals::SignalSet::empty(),
             signal_handlers: [0u64; 32],
-            fd_table: morpheus_helix::vfs::FdTable::new(),
+            fd_table: crate::storage::fs_api::FdTable::new(),
             mmap_brk: 0,
             vma_table: VmaTable::new(),
             cwd,

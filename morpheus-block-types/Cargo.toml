@@ -1,0 +1,10 @@
+[package]
+name = "morpheus-block-types"
+version.workspace = true
+edition.workspace = true
+description = "Leaf device-handle types (RawBlockDevice, MemBlockDevice, DeviceKind) shared by morpheus-block and the kernel storage subsystem. Kept out of morpheus-block proper because that crate pulls the USB-MSD/xhci driver stack (xhci -> kernel), which would cycle the kernel's dep on these types."
+
+[dependencies]
+morpheus-foundation.workspace = true
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true

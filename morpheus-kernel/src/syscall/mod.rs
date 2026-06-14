@@ -28,6 +28,7 @@ use handler::fd::{sys_chdir, sys_dup, sys_getcwd, sys_syslog};
 use handler::fs::{
     sys_fs_close, sys_fs_mkdir, sys_fs_open, sys_fs_readdir, sys_fs_rename, sys_fs_seek,
     sys_fs_snapshot, sys_fs_stat, sys_fs_sync, sys_fs_truncate, sys_fs_unlink, sys_fs_versions,
+    sys_mount, sys_mounts, sys_umount, sys_volumes,
 };
 use handler::hw::{
     sys_cache_flush, sys_dma_alloc, sys_dma_free, sys_getrandom, sys_irq_ack, sys_irq_attach,
@@ -38,8 +39,8 @@ use handler::mem::{sys_mmap, sys_munmap};
 use handler::net::{sys_dns, sys_net, sys_net_cfg, sys_net_poll};
 use handler::nic_fb::fb_mark_dirty;
 use handler::nic_io::{
-    sys_ioctl, sys_mount, sys_nic_info, sys_nic_link, sys_nic_mac, sys_nic_refill, sys_nic_rx,
-    sys_nic_tx, sys_poll, sys_umount,
+    sys_ioctl, sys_nic_info, sys_nic_link, sys_nic_mac, sys_nic_refill, sys_nic_rx, sys_nic_tx,
+    sys_poll,
 };
 use handler::persist::{
     sys_pe_info, sys_persist_del, sys_persist_get, sys_persist_info, sys_persist_list,
@@ -71,6 +72,7 @@ pub unsafe extern "C" fn syscall_dispatch(
     a3: u64,
     a4: u64,
     _a5: u64,
+    a6: u64,
 ) -> u64 {
     match nr {
         SYS_EXIT => sys_exit(a1),
@@ -117,8 +119,8 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_NET_CFG => sys_net_cfg(a1, a2, a3, a4),
         SYS_NET_POLL => sys_net_poll(a1, a2),
         SYS_IOCTL => sys_ioctl(a1, a2, a3),
-        SYS_MOUNT => sys_mount(a1, a2, a3, a4),
-        SYS_UMOUNT => sys_umount(a1, a2),
+        SYS_MOUNT => sys_mount(a1, a2, a3, a4, _a5, a6),
+        SYS_UMOUNT => sys_umount(a1, a2, a3),
         SYS_POLL => sys_poll(a1, a2, a3),
         SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
         SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
@@ -183,6 +185,8 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_SYSTEM_CONTROL => sys_system_control(a1),
         SYS_SET_THREAD_POINTER => sys_set_thread_pointer(a1),
         SYS_GETRANDOM => sys_getrandom(a1, a2, a3),
+        SYS_VOLUMES => sys_volumes(a1, a2),
+        SYS_MOUNTS => sys_mounts(a1, a2),
         unknown => {
             crate::serial::log_warn("SYSCALL", 801, "unknown syscall number");
             let _ = unknown;

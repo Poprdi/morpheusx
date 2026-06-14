@@ -21,6 +21,7 @@ pub mod stdout;
 pub mod process;
 pub mod schedular;
 pub mod shutdown;
+pub mod storage;
 pub mod syscall;
 
 pub mod elf;

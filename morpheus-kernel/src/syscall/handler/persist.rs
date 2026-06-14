@@ -4,6 +4,7 @@
 use super::common::*;
 use crate::hal;
 use crate::schedular::SCHEDULER;
+use crate::storage::{self, vfs_err_to_errno};
 use morpheus_foundation::PAGE_SIZE;
 use morpheus_hal_api::{AllocKind, MemoryType};
 
@@ -23,11 +24,56 @@ unsafe fn persist_path<'a>(key: &str, buf: &'a mut [u8; 272]) -> Option<&'a str>
 
 /// Idempotent — swallows AlreadyExists.
 unsafe fn ensure_persist_dir() {
-    if let Some(mut _vfs_guard) = vfs_lock() {
-        let fs = &mut *_vfs_guard.fs;
-        let ts = hal().timer().read_tsc();
-        let _ = morpheus_helix::vfs::vfs_mkdir(&mut fs.mount_table, "/persist", ts);
+    let ts = hal().timer().read_tsc();
+    let _ = storage::mkdir_root("/persist", ts);
+}
+
+/// Open `path` through the resolved mount, registering the fd in the per-process
+/// table (bumps the mount refcount). Mirrors `sys_fs_open` for the persist layer.
+unsafe fn persist_open(path: &str, flags: u32, ts: u64) -> Result<usize, u64> {
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let fd = fd_table.alloc().ok_or(EMFILE)?;
+
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let (mount_id, m, dev, rel) = g.resolve_mut(path).ok_or(ENOENT)?;
+    let opened = m.fs.open(dev, rel, flags, ts).map_err(vfs_err_to_errno)?;
+
+    let mut state = storage::fs_api::FdState::empty();
+    state.mount_id = mount_id;
+    state.flags = flags;
+    let pb = rel.as_bytes();
+    let n = pb.len().min(state.path.len());
+    state.path[..n].copy_from_slice(&pb[..n]);
+    state.path_len = n as u16;
+    state.cookie = opened.cookie;
+    m.open_fds = m.open_fds.saturating_add(1);
+
+    if !fd_table.set(fd, state) {
+        if let Some((m, _)) = g.mount_dev_mut(mount_id) {
+            m.open_fds = m.open_fds.saturating_sub(1);
+        }
+        return Err(EMFILE);
     }
+    Ok(fd)
+}
+
+/// Close a persist fd: run the backend close, drop the mount refcount, free slot.
+unsafe fn persist_close(fd: usize) {
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let desc = match fd_table.get(fd) {
+        Some(d) => *d,
+        None => return,
+    };
+    {
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        if let Some((m, dev)) = g.mount_dev_mut(desc.mount_id) {
+            let _ = m.fs.close(dev, &desc);
+            m.open_fds = m.open_fds.saturating_sub(1);
+        }
+    }
+    let _ = fd_table.free(fd);
 }
 
 /// `SYS_PERSIST_PUT(key_ptr, key_len, data_ptr, data_len) → 0`
@@ -55,45 +101,46 @@ pub unsafe fn sys_persist_put(key_ptr: u64, key_len: u64, data_ptr: u64, data_le
 
     ensure_persist_dir();
 
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
-    let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = hal().timer().read_tsc();
 
     // O_WRITE | O_CREATE | O_TRUNC
     let flags: u32 = 0x02 | 0x04 | 0x10;
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        fd_table,
-        path,
-        flags,
-        ts,
-    ) {
+    let fd = match persist_open(path, flags, ts) {
         Ok(fd) => fd,
-        Err(e) => return helix_err_to_errno(e),
+        Err(e) => return e,
     };
 
     if data_len > 0 {
         let data = core::slice::from_raw_parts(data_ptr as *const u8, data_len as usize);
-        if let Err(e) = morpheus_helix::vfs::vfs_write(
-            &mut fs.device,
-            &mut fs.mount_table,
-            fd_table,
-            fd,
-            data,
-            ts,
-        ) {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            return helix_err_to_errno(e);
+        let fd_table = SCHEDULER.current_fd_table_mut();
+        let mut desc = match fd_table.get(fd) {
+            Some(d) => *d,
+            None => return EBADF,
+        };
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        let res = match g.mount_dev_mut(desc.mount_id) {
+            Some((m, dev)) => m.fs.write(dev, &mut desc, data, ts),
+            None => Err(storage::fs_api::VfsError::BadFd),
+        };
+        if let Some(d) = fd_table.get_mut(fd) {
+            d.offset = desc.offset;
+        }
+        drop(guard);
+        if let Err(e) = res {
+            persist_close(fd);
+            return vfs_err_to_errno(e);
         }
     }
 
-    let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-    let _ = morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table);
+    persist_close(fd);
+    {
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        if let Some((_, m, dev, _)) = g.resolve_mut(path) {
+            let _ = m.fs.sync(dev);
+        }
+    }
     0
 }
 
@@ -117,46 +164,56 @@ pub unsafe fn sys_persist_get(key_ptr: u64, key_len: u64, buf_ptr: u64, buf_len:
         None => return EINVAL,
     };
 
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
+    let ts = hal().timer().read_tsc();
 
     // buf_len == 0 → just return file size (stat only).
     if buf_len == 0 {
-        return match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => return ENOENT,
+        };
+        return match m.fs.stat(dev, rel) {
             Ok(stat) => stat.size,
-            Err(e) => helix_err_to_errno(e),
+            Err(e) => vfs_err_to_errno(e),
         };
     }
 
-    let fd_table = SCHEDULER.current_fd_table_mut();
-    let ts = hal().timer().read_tsc();
-
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        fd_table,
-        path,
-        0x01, // O_READ
-        ts,
-    ) {
+    let fd = match persist_open(path, 0x01 /* O_READ */, ts) {
         Ok(fd) => fd,
-        Err(e) => return helix_err_to_errno(e),
+        Err(e) => return e,
     };
 
     let buf = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize);
-    let bytes =
-        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
-            Ok(n) => n as u64,
-            Err(e) => {
-                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-                return helix_err_to_errno(e);
-            },
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let desc = match fd_table.get(fd) {
+        Some(d) => *d,
+        None => return EBADF,
+    };
+    let bytes = {
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        let res = match g.mount_dev_mut(desc.mount_id) {
+            Some((m, dev)) => m.fs.read(dev, &desc, buf),
+            None => Err(storage::fs_api::VfsError::BadFd),
         };
+        match res {
+            Ok(n) => {
+                if let Some(d) = fd_table.get_mut(fd) {
+                    d.offset = d.offset.saturating_add(n as u64);
+                }
+                n as u64
+            },
+            Err(e) => {
+                drop(guard);
+                persist_close(fd);
+                return vfs_err_to_errno(e);
+            },
+        }
+    };
 
-    let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+    persist_close(fd);
     bytes
 }
 
@@ -177,19 +234,19 @@ pub unsafe fn sys_persist_del(key_ptr: u64, key_len: u64) -> u64 {
         None => return EINVAL,
     };
 
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
     let ts = hal().timer().read_tsc();
-
-    match morpheus_helix::vfs::vfs_unlink(&mut fs.mount_table, path, ts) {
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let (_, m, dev, rel) = match g.resolve_mut(path) {
+        Some(t) => t,
+        None => return ENOENT,
+    };
+    match m.fs.unlink(dev, rel, ts) {
         Ok(()) => {
-            let _ = morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table);
+            let _ = m.fs.sync(dev);
             0
         },
-        Err(e) => helix_err_to_errno(e),
+        Err(e) => vfs_err_to_errno(e),
     }
 }
 
@@ -199,15 +256,16 @@ pub unsafe fn sys_persist_list(buf_ptr: u64, buf_len: u64, offset: u64) -> u64 {
         return EFAULT;
     }
 
-    let _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &*_vfs_guard.fs;
-
-    let entries = match morpheus_helix::vfs::vfs_readdir(&fs.mount_table, "/persist") {
-        Ok(e) => e,
-        Err(_) => return 0, // directory doesn't exist → 0 keys
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let entries = match g.resolve_mut("/persist") {
+        // rel == "/persist" while persist lives on the root mount; the persist
+        // layer is absolute-path-keyed on root by design.
+        Some((_, m, dev, rel)) => match m.fs.readdir(dev, rel) {
+            Ok(e) => e,
+            Err(_) => return 0, // directory doesn't exist → 0 keys
+        },
+        None => return 0,
     };
 
     let real_count = entries
@@ -256,32 +314,31 @@ pub unsafe fn sys_persist_info(info_ptr: u64) -> u64 {
         return EFAULT;
     }
 
-    let _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &*_vfs_guard.fs;
+    let guard = storage::lock();
+    let g = &mut *guard.g;
 
     let mut num_keys = 0u64;
     let mut used_bytes = 0u64;
 
-    if let Ok(entries) = morpheus_helix::vfs::vfs_readdir(&fs.mount_table, "/persist") {
-        for entry in entries.iter() {
-            let name_bytes = &entry.name[..entry.name_len as usize];
-            if name_bytes == b"." || name_bytes == b".." {
-                continue;
-            }
-            let mut path_buf = [0u8; 272];
-            let prefix = b"/persist/";
-            if name_bytes.len() > 255 {
-                continue;
-            }
-            path_buf[..prefix.len()].copy_from_slice(prefix);
-            path_buf[prefix.len()..prefix.len() + name_bytes.len()].copy_from_slice(name_bytes);
-            if let Ok(p) = core::str::from_utf8(&path_buf[..prefix.len() + name_bytes.len()]) {
-                if let Ok(stat) = morpheus_helix::vfs::vfs_stat(&fs.mount_table, p) {
-                    num_keys += 1;
-                    used_bytes += stat.size;
+    if let Some((_, m, dev, rel)) = g.resolve_mut("/persist") {
+        if let Ok(entries) = m.fs.readdir(dev, rel) {
+            for entry in entries.iter() {
+                let name_bytes = &entry.name[..entry.name_len as usize];
+                if name_bytes == b"." || name_bytes == b".." {
+                    continue;
+                }
+                let mut path_buf = [0u8; 272];
+                let prefix = b"/persist/";
+                if name_bytes.len() > 255 {
+                    continue;
+                }
+                path_buf[..prefix.len()].copy_from_slice(prefix);
+                path_buf[prefix.len()..prefix.len() + name_bytes.len()].copy_from_slice(name_bytes);
+                if let Ok(p) = core::str::from_utf8(&path_buf[..prefix.len() + name_bytes.len()]) {
+                    if let Ok(stat) = m.fs.stat(dev, p) {
+                        num_keys += 1;
+                        used_bytes += stat.size;
+                    }
                 }
             }
         }
@@ -310,15 +367,17 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
         None => return EINVAL,
     };
 
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
-
-    let file_size = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
-        Ok(s) => s.size as usize,
-        Err(e) => return helix_err_to_errno(e),
+    let file_size = {
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => return ENOENT,
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(s) => s.size as usize,
+            Err(e) => return vfs_err_to_errno(e),
+        }
     };
 
     if file_size < 64 {
@@ -337,35 +396,47 @@ pub unsafe fn sys_pe_info(path_ptr: u64, path_len: u64, info_ptr: u64) -> u64 {
             Err(_) => return ENOMEM,
         };
 
-    let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = hal().timer().read_tsc();
 
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        fd_table,
-        path,
-        0x01,
-        ts,
-    ) {
-        Ok(fd) => fd,
-        Err(e) => {
-            let _ = hal().phys().free_pages(buf_phys, pages_needed);
-            return helix_err_to_errno(e);
-        },
-    };
-
+    // Internal read: open the backend directly with a transient FdState (no
+    // process fd slot), read into the page buffer, close. One lock span.
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, read_size);
-    let bytes_read =
-        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+    let bytes_read = {
+        let guard = storage::lock();
+        let g = &mut *guard.g;
+        let (mount_id, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => {
                 let _ = hal().phys().free_pages(buf_phys, pages_needed);
-                return helix_err_to_errno(e);
+                return ENOENT;
             },
         };
-    let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+        let opened = match m.fs.open(dev, rel, 0x01, ts) {
+            Ok(o) => o,
+            Err(e) => {
+                let _ = hal().phys().free_pages(buf_phys, pages_needed);
+                return vfs_err_to_errno(e);
+            },
+        };
+        let mut fdstate = storage::fs_api::FdState::empty();
+        fdstate.mount_id = mount_id;
+        fdstate.cookie = opened.cookie;
+        // Backend reads key off the (mount-relative) path, not just the cookie.
+        let pb = rel.as_bytes();
+        let pn = pb.len().min(fdstate.path.len());
+        fdstate.path[..pn].copy_from_slice(&pb[..pn]);
+        fdstate.path_len = pn as u16;
+        let n = match m.fs.read(dev, &fdstate, buf) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = m.fs.close(dev, &fdstate);
+                let _ = hal().phys().free_pages(buf_phys, pages_needed);
+                return vfs_err_to_errno(e);
+            },
+        };
+        let _ = m.fs.close(dev, &fdstate);
+        n
+    };
 
     let data = core::slice::from_raw_parts(buf_phys as *const u8, bytes_read);
 

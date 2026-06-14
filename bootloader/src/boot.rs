@@ -1181,61 +1181,74 @@ fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
     use alloc::string::String;
 
     let path = String::from("/bin/init");
+    let ts = morpheus_hal_x86_64::cpu::tsc::read_tsc();
 
-    let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
-        Some(f) => f,
-        None => {
-            log_error("BOOT", 970, "no root filesystem");
-            return None;
-        },
+    // Size the load buffer (stat under the storage lock).
+    let size = {
+        let guard = unsafe { morpheus_kernel::storage::lock() };
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(&path) {
+            Some(t) => t,
+            None => {
+                log_error("BOOT", 970, "no root filesystem");
+                return None;
+            },
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(s) => s.size,
+            Err(_) => {
+                log_error("BOOT", 971, "stat /bin/init failed");
+                return None;
+            },
+        }
     };
-
-    let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
-        Ok(s) => s,
-        Err(_) => {
-            log_error("BOOT", 971, "stat /bin/init failed");
-            return None;
-        },
-    };
-    if stat.size == 0 {
+    if size == 0 {
         log_error("BOOT", 972, "/bin/init has zero size");
         return None;
     }
 
-    let mut fd_table = morpheus_helix::vfs::FdTable::new();
-    let ts = morpheus_hal_x86_64::cpu::tsc::read_tsc();
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        &mut fd_table,
-        &path,
-        morpheus_helix::types::open_flags::O_READ,
-        ts,
-    ) {
-        Ok(f) => f,
-        Err(_) => {
-            log_error("BOOT", 973, "open /bin/init failed");
-            return None;
-        },
-    };
-
-    let mut buf = alloc::vec![0u8; stat.size as usize];
-    let n = match morpheus_helix::vfs::vfs_read(
-        &mut fs.device,
-        &fs.mount_table,
-        &mut fd_table,
-        fd,
-        &mut buf,
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
-            log_error("BOOT", 974, "read /bin/init failed");
-            return None;
-        },
+    // Read via the backend with a transient FdState (no process fd slot).
+    let mut buf = alloc::vec![0u8; size as usize];
+    let n = {
+        let guard = unsafe { morpheus_kernel::storage::lock() };
+        let g = &mut *guard.g;
+        let (mount_id, m, dev, rel) = match g.resolve_mut(&path) {
+            Some(t) => t,
+            None => {
+                log_error("BOOT", 970, "no root filesystem");
+                return None;
+            },
+        };
+        let opened = match m
+            .fs
+            .open(dev, rel, morpheus_foundation::flags::open_flags::O_READ, ts)
+        {
+            Ok(o) => o,
+            Err(_) => {
+                log_error("BOOT", 973, "open /bin/init failed");
+                return None;
+            },
+        };
+        let mut fdstate = morpheus_kernel::storage::fs_api::FdState::empty();
+        fdstate.mount_id = mount_id;
+        fdstate.cookie = opened.cookie;
+        // Backend reads key off the (mount-relative) path, not just the cookie.
+        let pb = rel.as_bytes();
+        let pn = pb.len().min(fdstate.path.len());
+        fdstate.path[..pn].copy_from_slice(&pb[..pn]);
+        fdstate.path_len = pn as u16;
+        let n = match m.fs.read(dev, &fdstate, &mut buf) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let _ = m.fs.close(dev, &fdstate);
+                log_error("BOOT", 974, "read /bin/init failed");
+                return None;
+            },
+        };
+        let _ = m.fs.close(dev, &fdstate);
+        n
     };
     buf.truncate(n);
-    let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
     Some(buf)
 }
 

@@ -36,9 +36,9 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
     // Redirected fds (via dup2) take precedence over stdio defaults.
     {
         let fd_table = SCHEDULER.current_fd_table_mut();
-        if let Ok(desc) = fd_table.get(fd as usize) {
+        if let Some(desc) = fd_table.get(fd as usize).copied() {
             if desc.flags & O_PIPE_WRITE != 0 {
-                let pipe_idx = desc.mount_idx;
+                let pipe_idx = desc.mount_id as u8;
                 let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
                 if crate::pipe::pipe_readers(pipe_idx) == 0 {
                     return EPIPE;
@@ -47,25 +47,8 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 crate::schedular::wake_pipe_readers(pipe_idx);
                 return n as u64;
             }
-            let mut _vfs_guard = match vfs_lock() {
-                Some(g) => g,
-                None => return ENOSYS,
-            };
-            let fs = &mut *_vfs_guard.fs;
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-            let ts = hal().timer().read_tsc();
-            return match morpheus_helix::vfs::vfs_write(
-                &mut fs.device,
-                &mut fs.mount_table,
-                fd_table,
-                fd as usize,
-                data,
-                ts,
-            ) {
-                Ok(n) => n as u64,
-                Err(e) => helix_err_to_errno(e),
-            };
+            // File-backed redirect: dispatch through the storage subsystem.
+            return super::fs::sys_fs_write(fd, ptr, len);
         }
     }
 
@@ -99,29 +82,14 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
 
     {
         let fd_table = SCHEDULER.current_fd_table_mut();
-        if let Ok(desc) = fd_table.get(fd as usize) {
+        if let Some(desc) = fd_table.get(fd as usize).copied() {
             if desc.flags & O_PIPE_READ != 0 {
-                let pipe_idx = desc.mount_idx;
+                let pipe_idx = desc.mount_id as u8;
                 let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
                 return super::ipc::sys_pipe_read_blocking(pipe_idx, buf);
             }
-            let mut _vfs_guard = match vfs_lock() {
-                Some(g) => g,
-                None => return ENOSYS,
-            };
-            let fs = &mut *_vfs_guard.fs;
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-            return match morpheus_helix::vfs::vfs_read(
-                &mut fs.device,
-                &fs.mount_table,
-                fd_table,
-                fd as usize,
-                buf,
-            ) {
-                Ok(n) => n as u64,
-                Err(e) => helix_err_to_errno(e),
-            };
+            // File-backed redirect: dispatch through the storage subsystem.
+            return super::fs::sys_fs_read(fd, ptr, len);
         }
     }
 
