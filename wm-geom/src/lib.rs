@@ -4,8 +4,7 @@
 //! stub; xHCI init fails), so the pixel math must be pinned by host-runnable unit tests.
 #![cfg_attr(not(test), no_std)]
 
-/// A rectangle in framebuffer pixels. For a window this is the *content* rect — its top-left is the
-/// client area; the title bar and 1px border sit above and around it (see [`Chrome`]).
+/// Rectangle in framebuffer pixels. For a window: the *content* rect; title bar + border sit outside it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rect {
     pub x: i32,
@@ -46,7 +45,7 @@ pub enum Capture {
     Resize,
 }
 
-/// The cursor glyph compd draws. Reflects what a press would do, so window interaction reads clearly.
+/// Cursor glyph: reflects what a press at the current hover would do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CursorShape {
     Arrow,
@@ -54,10 +53,8 @@ pub enum CursorShape {
     Resize,
 }
 
-/// Classify a point against ONE window's chrome, or `None` if it misses the window's outer box.
-/// Behaviour-identical to compd's former inline hit-test: the outer box spans the border + title
-/// bar; the close button, then the grip, then the title bar, then the content are tested in turn,
-/// and a point inside the outer box but on bare border pixels classifies as `None`.
+/// Classify a point against a window's chrome; `None` if it misses the outer box or lands on bare border pixels.
+/// Test order: outer-box → title buttons → grip → title bar → content.
 pub fn classify(win: Rect, c: Chrome, mx: i32, my: i32) -> Option<Region> {
     let outer_x = win.x - c.border;
     let outer_y = win.y - c.title_h - c.border;
@@ -72,9 +69,6 @@ pub fn classify(win: Rect, c: Chrome, mx: i32, my: i32) -> Option<Region> {
     let tb_y = outer_y + c.border; // == win.y - title_h
     let tb_w = win.w;
 
-    // Title-bar window controls, right-aligned `[_] [□] [X]`. Close is the rightmost inset cell;
-    // maximize and minimize step left by `btn_pitch`. All share the title-bar y-band and the close
-    // width; the cells are disjoint, so the test order among them is cosmetic.
     if my >= tb_y && my < tb_y + c.title_h {
         let close_x = tb_x + tb_w - c.close_off;
         let max_x = close_x - c.btn_pitch;
@@ -110,8 +104,7 @@ pub fn classify(win: Rect, c: Chrome, mx: i32, my: i32) -> Option<Region> {
     None
 }
 
-/// The cursor shape: a live drag (`capture`) wins; otherwise the hovered region drives it. A title
-/// hover (or a move drag) → move; a grip hover (or a resize drag) → resize; everything else → arrow.
+/// Cursor shape: active drag wins over hover; title/move → Move; grip/resize → Resize; else Arrow.
 pub fn cursor_shape(capture: Option<Capture>, hover: Option<Region>) -> CursorShape {
     match capture {
         Some(Capture::Move) => CursorShape::Move,
@@ -124,26 +117,21 @@ pub fn cursor_shape(capture: Option<Capture>, hover: Option<Region>) -> CursorSh
     }
 }
 
-/// New window top-left when dragging the title bar: the desired position `(nx, ny)` (pointer minus
-/// the grab offset) clamped so the window stays reachable — `x ∈ [0, fb_w - w]` and `y ∈ [title_h,
-/// fb_h - h]`, with the title bar never allowed above `title_h` so it stays on-screen.
+/// Clamped top-left for a title-bar drag: `x ∈ [0, fb_w-w]`, `y ∈ [title_h, fb_h-h]`.
 pub fn clamp_move(w: i32, h: i32, fb_w: i32, fb_h: i32, title_h: i32, nx: i32, ny: i32) -> (i32, i32) {
     let max_x = (fb_w - w).max(0);
     let max_y = (fb_h - h).max(title_h);
     (nx.clamp(0, max_x), ny.clamp(title_h, max_y))
 }
 
-/// Round a pixel extent DOWN to a whole number of cells. A window's content is blitted 1:1, so its
-/// size must be a cell multiple or the client would leave a partial edge cell unpainted.
+/// Round pixel extent DOWN to whole cells; 1:1 blit leaves a stale strip on fractional edges.
 #[inline]
 pub fn snap_cells(px: i32, cell: i32) -> i32 {
     let cell = cell.max(1);
     (px.max(0) / cell) * cell
 }
 
-/// New `(w, h)` when dragging the corner grip: the start size plus the pointer delta `(dx, dy)`,
-/// clamped to `[min, fb - window-origin]` so the window stays within the framebuffer and above a
-/// usable minimum, then snapped DOWN to whole cells.
+/// New `(w, h)` from a grip drag: `start + delta`, clamped to `[min, fb - origin]`, snapped DOWN to cells.
 #[allow(clippy::too_many_arguments)]
 pub fn snap_resize(
     start_w: i32,
@@ -187,9 +175,7 @@ pub const SC_7: u8 = 0x08;
 pub const SC_8: u8 = 0x09;
 pub const SC_9: u8 = 0x0A;
 
-/// How far a single Move chord nudges the window, and how much a single Resize chord grows/shrinks
-/// it. 32px = 4 columns / 2 rows of the 8×16 cell grid — a brisk but controllable step. Resize
-/// deltas are cell-snapped by [`snap_resize`], so a window stays a whole number of cells.
+/// Move/resize step: 32px = 4×8px columns / 2×16px rows. Resize deltas are cell-snapped.
 pub const MOVE_STEP: i32 = 32;
 pub const RESIZE_STEP_W: i32 = 32;
 pub const RESIZE_STEP_H: i32 = 32;
@@ -203,11 +189,8 @@ pub enum Dir {
     Down,
 }
 
-/// A screen region the focused window can be SNAPPED (tiled) to fill. The nine zones map onto the
-/// number-row grid like a numpad: the four corners are quadrants, the edge centres are halves, and
-/// the centre maximizes (a toggle — compd restores the pre-maximize geometry on the next press).
-/// All zones fill the *work area* (the framebuffer minus the bottom taskbar), so a tiled window
-/// sits flush above the panel rather than sliding under it the way a free Move/Resize may.
+/// Tiling target for the focused window. Nine zones map like a numpad (corners=quadrants,
+/// edges=halves, centre=maximize toggle). All zones fill the work area above the panel.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SnapZone {
     Maximize,
@@ -221,9 +204,7 @@ pub enum SnapZone {
     BottomRight,
 }
 
-/// A keyboard window-management command on the focused window. Move nudges it; Resize grows the
-/// width (Left/Right) or height (Up/Down) edge; Snap tiles it to a work-area region; Close asks
-/// compd to terminate the client.
+/// Keyboard WM command: Move nudges, Resize grows an edge, Snap tiles to a work-area zone, Close terminates.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WmCommand {
     Move(Dir),
@@ -256,16 +237,14 @@ pub fn snap_zone_for(scancode: u8) -> Option<SnapZone> {
     })
 }
 
-/// Map a decoded key (scancode + effective modifiers) to a window-management command, or `None` if
-/// it isn't a WM chord (so compd forwards it to the client untouched). The namespace is Ctrl+Alt:
-/// the bare cluster moves, +Shift resizes, and Ctrl+Alt+C closes. AltGr (right Alt) is a separate
-/// modifier in the decoder, so character-composing chords never collide with these.
+/// Map scancode + modifiers to a WM command, or `None` to forward to the client. Namespace is
+/// Ctrl+Alt: bare HJKL moves, +Shift resizes, C closes. AltGr is tracked separately, so composing chords
+/// never collide.
 pub fn wm_command(scancode: u8, ctrl: bool, alt: bool, shift: bool) -> Option<WmCommand> {
     if !(ctrl && alt) {
         return None;
     }
-    // Tiling/snap on the number-row grid. Shift-independent (a client never binds Ctrl+Alt+digit,
-    // with or without Shift), and the digits are disjoint from the HJKL/C cluster below.
+    // Snap on number-row grid; Shift-independent (digits don't collide with HJKL/C).
     if let Some(zone) = snap_zone_for(scancode) {
         return Some(WmCommand::Snap(zone));
     }

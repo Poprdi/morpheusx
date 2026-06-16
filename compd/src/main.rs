@@ -62,16 +62,10 @@ fn main() -> i32 {
         islands::vsync::tick(&mut state);
         islands::input::poll(&mut state);
         islands::surface_mgr::update(&mut state);
-        // Service taskbar-chip activations (focus/raise · minimize · restore) from the shell, then
-        // any keyboard focus-cycle, then publish the resulting focus/minimized snapshot back to the
-        // shell so the taskbar chips reflect it.
         islands::focus::consume_focus_request(&mut state);
-        // Service a desktop-menu window command (Show all windows / Minimize all) from the shell.
         islands::desk::consume_desk_command(&mut state);
         islands::focus::process_msgs(&mut state);
         islands::focus::publish_window_state(&mut state);
-        // Pull the notification feed whisperd publishes, so the toast overlay reflects the current
-        // set (re-decoded only when the bytes change).
         islands::toasts::consume_feed(&mut state);
         islands::renderer::compose(&mut state);
 
