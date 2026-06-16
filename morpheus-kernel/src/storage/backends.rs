@@ -155,10 +155,6 @@ impl MountedFs {
     }
 }
 
-// HelixFS adapter: thin wrapper over the pure engine — forwards each op with the
-// borrowed device and maps HelixError → VfsError. The engine takes `&mut B` per
-// call, so the device stays registry-owned; nothing to bridge.
-
 /// Public so the mount path can map a HelixFS engine `mount`/`format` error
 /// (which happens outside the adapter) through the same table.
 pub fn helix_err_pub(e: morpheus_helix::HelixError) -> VfsError {
@@ -360,14 +356,11 @@ impl FsBackend for HelixFs {
     }
 }
 
-// FAT32 adapter (read-only). The pure fat32 engine *owns* its `B: BlockIo`
-// (unlike Helix's per-call `&mut B`), and its `dev` field is private. `DevPtr`
-// bridges this without touching the
-// engine crate: the engine owns a `DevPtr` whose only state is a pointer to a
-// shared `AtomicPtr` slot (`Box`ed, so its address is stable) held by the
-// adapter. Before each op the adapter stores the borrowed device into that slot;
-// the engine's I/O reads through it. The device thus never leaves the registry,
-// and the engine never sees the device outside a single op's borrow.
+// FAT32 adapter (read-only). fat32's engine owns its `B: BlockIo` with a private
+// field. `DevPtr` bridges registry ownership: the adapter holds a boxed
+// `AtomicPtr` slot (stable address); before each op it stores the borrowed device
+// into the slot; the engine's I/O reads through it. Device never leaves the
+// registry; engine never sees it outside one op's borrow.
 
 use core::sync::atomic::{AtomicPtr, Ordering};
 
@@ -436,8 +429,7 @@ pub struct Fat32Fs {
 }
 
 impl Fat32Fs {
-    /// Mount a FAT32 volume. Binds `dev` into the shared slot, parses the BPB,
-    /// then leaves the engine reading future ops through that slot.
+    /// Mount a FAT32 volume at `lba_start`, binding `dev` into the shared slot.
     pub fn mount(dev: &mut RawBlockDevice, lba_start: u64) -> Result<Self, VfsError> {
         let slot = alloc::boxed::Box::new(AtomicPtr::new(dev as *mut RawBlockDevice));
         let bridge = DevPtr {

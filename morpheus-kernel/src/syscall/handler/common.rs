@@ -1,8 +1,5 @@
-//! Shared helpers + errno constants for syscall handlers. The filesystem path
-//! now routes through `crate::storage` (spec §7); handlers acquire the subsystem
-//! via `storage::lock()` directly.
+//! Shared helpers and errno constants for syscall handlers (storage: spec §7).
 
-// Canonical errno values live in morpheus-foundation — single source of truth.
 pub(crate) use morpheus_foundation::errno::{
     EAGAIN, EBADF, EBUSY, EFAULT, EINVAL, EIO, EMFILE, ENODEV, ENOENT, ENOMEM, ENOSYS, ENOTDIR,
     EPERM, EPIPE, ESRCH,

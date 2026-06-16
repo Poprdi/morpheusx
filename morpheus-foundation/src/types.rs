@@ -91,11 +91,10 @@ impl Default for DirEntry {
     }
 }
 
-// ── Syscall boundary structs ────────────────────────────────────────────────
 // Every `#[repr(C)]` struct whose bytes cross a syscall lives here exactly once.
-// The kernel handler and libmorpheus both `use` these, so the two sides cannot
-// drift: there is only one definition. (Previously each was declared twice with
-// a "must match byte-for-byte" comment — comments don't compile-check.)
+// Kernel handler and libmorpheus both `use` these — there is only one definition,
+// so the two sides cannot drift. (Previously each was declared twice; comments
+// don't compile-check.)
 
 /// Per-CPU bound for `SysInfo::per_core_idle_tsc`.
 pub const SYSINFO_MAX_CPUS: usize = 16;

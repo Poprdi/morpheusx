@@ -71,7 +71,6 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     thread.cwd_len = parent_cwd_len;
     apply_default_scheduler_policy(thread, false);
 
-    // Inherit parent scheduling policy across the thread group.
     if let Some(Some(parent_ref)) = PROCESS_TABLE.get(parent_pid as usize) {
         thread.importance_16 = parent_ref.importance_16;
         thread.power_mode = parent_ref.power_mode;

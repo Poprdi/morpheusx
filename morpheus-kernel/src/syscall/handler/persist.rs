@@ -8,7 +8,6 @@ use crate::storage::{self, vfs_err_to_errno};
 use morpheus_foundation::PAGE_SIZE;
 use morpheus_hal_api::{AllocKind, MemoryType};
 
-// Canonical boundary structs live in morpheus-foundation — single source.
 pub use morpheus_foundation::types::{BinaryInfo, PersistInfo};
 
 /// Keys: 1-255 bytes, no `/` or NUL.

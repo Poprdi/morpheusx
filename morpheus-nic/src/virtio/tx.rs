@@ -5,7 +5,6 @@ use crate::traits::TxError;
 use morpheus_virtio::dma::BufferPool;
 use morpheus_virtio::types::VirtqueueState;
 
-/// Max frame size including the VirtIO header.
 pub const MAX_TX_FRAME_SIZE: usize = VirtioNetHdr::SIZE + 1514;
 
 /// Returns immediately; caller drains via `collect_completions` (Phase 5).

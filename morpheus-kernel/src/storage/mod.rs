@@ -30,8 +30,7 @@ use registry::{
 };
 use staging::{StageAccount, StagedRam};
 
-/// Replaces `FsGlobal`: the three registries + staging accounting, all under one
-/// lock (spec §3). A single static, mirroring the old `fs_global` pattern.
+/// The three registries + staging accounting, all under one lock (spec §3).
 pub struct StorageGlobal {
     pub devices: DeviceRegistry,
     pub volumes: VolumeRegistry,
@@ -51,17 +50,13 @@ impl StorageGlobal {
 }
 
 impl StorageGlobal {
-    /// Resolve `path` to its mount, returning that mount's backend and device as
-    /// disjoint borrows for one-shot op dispatch (spec §7 path-op flow). The two
-    /// borrows come from distinct registry fields, so they don't alias.
+    /// Resolve `path` to its mount; returns disjoint borrows of the mount and its device (spec §7).
     pub fn resolve_mut<'s, 'p>(
         &'s mut self,
         path: &'p str,
     ) -> Option<(u64, &'s mut MountEntry, &'s mut RawBlockDevice, &'p str)> {
         let mount_id = self.mounts.resolve(path)?;
-        // The backend's namespace is rooted at its mountpoint, so it must see a
-        // mount-relative path, not the absolute one (read mp_len, drop the borrow,
-        // then take the disjoint mut borrows below).
+        // Read mp_len, drop the shared borrow, then take the disjoint mut borrows below.
         let mp_len = self.mounts.get(mount_id)?.mount_point_len as usize;
         let rel = mount_relative(path, mp_len);
         let m = self.mounts.get_mut(mount_id)?;
@@ -70,8 +65,7 @@ impl StorageGlobal {
         Some((mount_id, m, &mut dev.device, rel))
     }
 
-    /// Like `resolve_mut`, but for a path op keyed off an already-open fd's
-    /// cached `mount_id` (read/write/close/seek). Returns `None` (→ EBADF) when
+    /// Resolve an open fd's cached `mount_id` to (mount, device). Returns `None` (→ EBADF) when
     /// the mount is gone — e.g. a `MNT_FORCE` umount bumped the slab generation.
     pub fn mount_dev_mut(
         &mut self,
@@ -90,11 +84,8 @@ impl Default for StorageGlobal {
     }
 }
 
-/// Strip a mount's prefix from an absolute path, yielding the backend-relative
-/// path. Root ("/") passes through unchanged; "/mnt" + "/mnt/a" → "/a"; an exact
-/// mountpoint hit → "/". `mp_len` is the mount point's byte length, which
-/// `resolve` already matched as a component-boundary prefix of `path`, so the
-/// slice is always on a char boundary (the `None` arm can't fire in practice).
+/// Strip mount prefix from an absolute path, yielding the backend-relative path.
+/// `/mnt/a` with mp_len 4 → `/a`; exact mountpoint hit → `/`.
 pub fn mount_relative(path: &str, mp_len: usize) -> &str {
     if mp_len <= 1 {
         return path;
@@ -122,11 +113,10 @@ impl Drop for StorageGuard {
     }
 }
 
-/// Acquire the subsystem lock and a `&mut StorageGlobal`. Drop the guard to
-/// release. Mirrors `vfs_lock`.
+/// Acquire `STORAGE_LOCK` and return a `&mut StorageGlobal`. Drop the guard to release.
 ///
 /// # Safety
-/// Caller must not hold `STORAGE_LOCK` already (it is not reentrant).
+/// Not reentrant; caller must not already hold `STORAGE_LOCK`.
 pub unsafe fn lock() -> StorageGuard {
     STORAGE_LOCK.lock();
     // SAFETY: the lock serializes all access to the static; the guard's lifetime
@@ -159,9 +149,7 @@ pub fn vfs_err_to_errno(e: VfsError) -> u64 {
     }
 }
 
-/// Sniff the filesystem at partition LBA `lba_start` (spec §3 layer 2): Helix
-/// superblock magic, else FAT32 boot-sector markers, else `FS_UNKNOWN`. Reads one
-/// sector; any I/O error → `FS_NONE`.
+/// Sniff FS at `lba_start` (spec §3 layer 2): Helix magic → `FS_HELIX`, FAT32 boot sig → `FS_FAT32`, else `FS_UNKNOWN`; I/O error → `FS_NONE`.
 pub fn detect_fs(dev: &mut RawBlockDevice, lba_start: u64) -> u32 {
     let bs = dev.block_size().to_u32() as usize;
     if bs == 0 {
@@ -185,7 +173,6 @@ pub fn detect_fs(dev: &mut RawBlockDevice, lba_start: u64) -> u32 {
     FS_UNKNOWN
 }
 
-/// Outcome of constructing a backend over a device.
 fn build_backend(
     fs_type: u32,
     dev: &mut RawBlockDevice,
@@ -215,8 +202,6 @@ fn build_backend(
     }
 }
 
-/// Format a fresh empty Helix FS over a RAM region then mount it (used for
-/// `VOLUME_NONE` / tmpfs and the staged-from-nothing root).
 fn build_fresh_helix(
     dev: &mut RawBlockDevice,
     lba_start: u64,
@@ -484,8 +469,7 @@ fn mount_staged(req: &MountReq, mp: &str, read_only: bool) -> Result<u64, u64> {
     }
 }
 
-/// Copy `[src_lba_start, ..)` from the source device into the staged RAM device,
-/// sector by sector, bounded by the staged byte count. Runs unlocked.
+/// Copy source LBA range into the staged RAM device, sector by sector. Runs unlocked.
 fn copy_source_into_ram(
     src_device_id: u64,
     src_lba_start: u64,
@@ -522,8 +506,6 @@ fn copy_source_into_ram(
     Ok(())
 }
 
-/// Unwind a staged region that was never registered: drop the box, free pages +
-/// budget. Needs the lock for budget accounting.
 fn unwind_ram(ram: &StagedRam, mem_box: alloc::boxed::Box<morpheus_block_types::MemBlockDevice>) {
     drop(mem_box);
     // SAFETY: brief critical section.
@@ -624,11 +606,8 @@ fn staging_page_size() -> u64 {
     }
 }
 
-/// Register a live (non-RAM) block device in the device registry, keeping its
-/// driver alive in the caller's address space (spec §7 boot population: drivers
-/// are KEPT, not dropped, so Direct mounts work at runtime). The caller owns the
-/// backing driver/ctx that `device` bridges; it must outlive the registration.
-/// Returns the generational `device_id`. Caller must NOT hold `STORAGE_LOCK`.
+/// Register a live block device (spec §7 boot population). The caller's driver/ctx must
+/// outlive the registration. Caller must NOT hold `STORAGE_LOCK`.
 pub fn register_boot_device(
     device: RawBlockDevice,
     kind: DeviceKind,
@@ -646,9 +625,8 @@ pub fn register_boot_device(
     })
 }
 
-/// Register a discovered volume (spec §3 layer 2) against an already-registered
-/// device. Returns the generational `volume_id`. Caller must NOT hold
-/// `STORAGE_LOCK`.
+/// Register a discovered volume against an already-registered device (spec §3 layer 2).
+/// Caller must NOT hold `STORAGE_LOCK`.
 #[allow(clippy::too_many_arguments)]
 pub fn register_volume(
     device_id: u64,

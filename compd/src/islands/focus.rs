@@ -16,24 +16,18 @@ pub fn process_msgs(state: &mut CompState) {
     }
 }
 
-/// A window slot is focusable when it is a visible (non-minimized) z1 app window — the z0 desktop is
-/// never focusable, and a minimized window is hidden so focus skips over it.
+/// Focusable: z1, mapped, not minimized. z0 desktop and minimized slots are excluded.
 #[inline]
 pub(crate) fn focusable(state: &CompState, i: usize) -> bool {
     matches!(state.windows[i], Some(ref w) if w.z_layer == 1 && !w.minimized)
 }
 
-/// The topmost (highest-slot) visible z1 app window, or `None` when none qualify — the fallback when
-/// the focused window closes or is minimized.
+/// Highest-index focusable slot; fallback when the focused window closes or is minimized.
 fn topmost_visible(state: &CompState) -> Option<usize> {
     (0..MAX_WINDOWS).rev().find(|&i| focusable(state, i))
 }
 
-/// Move focus to the next (or previous, when `reverse`) visible z1 app window, wrapping around the
-/// slot ring; the z0 desktop and minimized windows are never focusable. The ring-stepping order is
-/// the host-tested `wm_geom::next_focus`. Focus also *raises* the window — the renderer composites
-/// the focused window last (on top) — so Alt+Tab brings the next window to the front. A no-op when no
-/// visible z1 window is focusable (focus stays put).
+/// Step focus to the next (or previous) z1 window via `wm_geom::next_focus`; raises on focus.
 fn cycle_focus(state: &mut CompState, reverse: bool) {
     if let Some(next) = wm_geom::next_focus(state.focused, MAX_WINDOWS, reverse, |i| {
         focusable(state, i)
@@ -42,14 +36,8 @@ fn cycle_focus(state: &mut CompState, reverse: bool) {
     }
 }
 
-/// Service the desktop shell's taskbar-chip activation (`de.focus.req`): the shell leaves a
-/// monotonic-token request when the user clicks a chip; compd reads it each frame and applies the
-/// canonical taskbar policy (`wm_geom::chip_action`) from the target window's current state —
-/// restore a minimized window, minimize the active one, or focus + raise any other. The token is
-/// baselined at startup (see `main`), so a stale cross-boot value is ignored; only a strictly-new
-/// token acts, and a pid that has since exited is a harmless no-op.
-///
-/// Focus/visibility is compd's domain — the shell only *asks*; the decision and the edit live here.
+/// Service `de.focus.req` each frame: applies `wm_geom::chip_action` for the requesting pid.
+/// Token baselined at startup so stale cross-boot requests are ignored.
 pub fn consume_focus_request(state: &mut CompState) {
     let (token, pid) = read_focus_request();
     if token == state.focus_req_token {
@@ -97,10 +85,8 @@ pub fn consume_focus_request(state: &mut CompState) {
     }
 }
 
-/// Publish the current focus + minimized snapshot to the shell over the persist store
-/// (`de.win.state`) so the taskbar chips reflect it (active stands out, hidden dims). Read-only for
-/// the shell. Encodes `[focused_pid u32 LE][n_min u32 LE][min_pid u32 LE]…`; only writes (and incurs
-/// the persist fsync) when the snapshot actually changed since the last frame.
+/// Write `de.win.state` (`[focused_pid u32 LE][n_min u32 LE][min_pid…]`) only when the snapshot
+/// changed; avoids fsyncing every frame on an idle desktop.
 pub fn publish_window_state(state: &mut CompState) {
     let mut buf = [0u8; WIN_STATE_CAP];
 
@@ -132,9 +118,7 @@ pub fn publish_window_state(state: &mut CompState) {
     let _ = libmorpheus::persist::put("de.win.state", &buf[..len]);
 }
 
-/// Read the shell's focus request (`de.focus.req`) as `(token, pid)`; a missing/short value reads as
-/// `(0, 0)`. The blob is `[token u32 LE][pid u32 LE]` — the same contract `platform_morpheusx`
-/// writes; the two processes share the byte layout, not the code.
+/// Read `de.focus.req` as `(token, pid)`. Blob: `[token u32 LE][pid u32 LE]`.
 pub fn read_focus_request() -> (u32, u32) {
     let mut buf = [0u8; 8];
     match libmorpheus::persist::get("de.focus.req", &mut buf) {

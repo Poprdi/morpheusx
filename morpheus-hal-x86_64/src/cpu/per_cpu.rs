@@ -111,7 +111,6 @@ unsafe fn lapic_id_to_index(lapic_id: u32) -> Option<u32> {
     }
 
     // Fallback scan for sparse/high IDs; MAX_CPUS tiny.
-    // index `i` is also the returned CPU index, not just a slice cursor
     #[allow(clippy::needless_range_loop)]
     for i in 0..MAX_CPUS {
         let pcpu = &PER_CPU_ARRAY[i];

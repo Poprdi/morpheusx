@@ -1,9 +1,6 @@
-//! Boot-time storage bring-up: probe every block device, register them (drivers
-//! kept ALIVE in these bootloader statics — same address space, so Direct mounts
-//! work at runtime), enumerate volumes per device, and mount root through the
-//! kernel storage subsystem's privileged `storage::mount(.., MNT_STAGED)` path
-//! (spec §7 boot population). Replaces the old "probe one device, mount via
-//! helix::vfs, drop the rest" policy.
+//! Boot-time storage bring-up (spec §7). Probes block devices, registers drivers
+//! in permanent bootloader statics (same address space → Direct mounts valid at runtime),
+//! and mounts root via `storage::mount(.., MNT_STAGED)`.
 //!
 //! DMA layout within hwinit's 2 MB region:
 //!   0x00000  VirtIO desc/avail/used/headers/status  (≤ 0x01400)
@@ -52,10 +49,8 @@ const RAM_ROOT_BYTES: u64 = 16 * 1024 * 1024;
 /// handoff. A DoS bound, not a capacity claim; matches the probe's scan width.
 const MAX_LIVE_DEVICES: usize = 32;
 
-/// A probed driver kept alive for the whole runtime. The `RawBlockDevice` handed
-/// to the kernel registry bridges back here via `ctx == &LIVE[i]`; whole-disk
-/// addressing (no LBA base) so the storage subsystem's per-volume backend owns
-/// the partition offset. These statics live in the kernel address space forever.
+/// Probed driver kept alive for the runtime. `RawBlockDevice` ctx encodes the LIVE slot index.
+/// Whole-disk addressing — partition offset is the per-volume backend's responsibility.
 struct LiveDevice {
     /// `None` until a driver is parked here; never cleared (lives for the runtime).
     dev: Option<UnifiedBlockDevice>,
@@ -76,9 +71,8 @@ impl LiveDevice {
 static mut LIVE: [LiveDevice; MAX_LIVE_DEVICES] = [const { LiveDevice::empty() }; MAX_LIVE_DEVICES];
 static mut LIVE_COUNT: usize = 0;
 
-/// Geometry of a Helix-detected volume, kept so the root mount can size its RAM
-/// staging to the live FS footprint (superblock-driven) rather than the whole
-/// partition — preserving today's footprint-only staging on multi-GB disks.
+/// Helix volume candidate. Kept so root-mount staging is sized to the live FS
+/// footprint (superblock-driven), not the whole partition.
 #[derive(Clone, Copy)]
 struct HelixCandidate {
     volume_id: u64,
@@ -96,8 +90,7 @@ static mut STORAGE_DMA: Option<DmaRegion> = None;
 static mut STORAGE_TSC_FREQ: u64 = 0;
 static mut PERSISTENT_READY: bool = false;
 
-/// Backing for the pre-EBS staged Helix image, kept alive for the device it
-/// backs (the kernel registry holds a `RawBlockDevice` whose ctx points here).
+/// Pre-EBS staged image backing; kernel registry holds a `RawBlockDevice` ctx into this.
 static mut RAM_HELIX_DEVICE: Option<MemBlockDevice> = None;
 
 unsafe fn dump_pci_devices() {
@@ -141,7 +134,7 @@ unsafe fn dump_pci_devices() {
     puts("[PCI-DUMP] done\n");
 }
 
-/// Identity-map VirtIO BAR MMIO as UC. 16 KiB covers all VirtIO cap regions.
+/// Identity-map VirtIO BAR MMIO as UC (16 KiB covers all cap regions).
 ///
 /// # Safety
 /// Paging and MemoryRegistry must be initialized.
@@ -192,7 +185,7 @@ unsafe fn map_virtio_bars(bus: u8, dev: u8, func: u8) {
     }
 }
 
-/// Map device-kind for the volume layer + a registry label.
+/// Map detected device to `DeviceKind`.
 fn detected_kind(d: &DetectedBlockDevice) -> DeviceKind {
     match d {
         DetectedBlockDevice::VirtIO { .. } => DeviceKind::Virtio,
@@ -202,9 +195,7 @@ fn detected_kind(d: &DetectedBlockDevice) -> DeviceKind {
     }
 }
 
-/// Log a driver-init failure with its specific cause; returns true if the failure
-/// was a scaffold-only backend (used to surface a louder error when that backend
-/// would have been the only root candidate).
+/// Log a driver-init failure; returns true if the backend is scaffold-only.
 fn log_init_error(err: &UnifiedBlockError, is_ahci: bool) -> bool {
     let mut scaffold = false;
     match err {
@@ -369,7 +360,7 @@ fn spinner_done() {
 }
 
 /// # Safety
-/// `dma` must be the hwinit Phase 6 DMA region; `tsc_freq` calibrated; call once after hwinit.
+/// `dma` is the hwinit Phase 6 DMA region; `tsc_freq` calibrated; call once post-hwinit.
 pub unsafe fn init_persistent_storage(
     dma: &DmaRegion,
     tsc_freq: u64,
@@ -403,8 +394,7 @@ pub unsafe fn init_persistent_storage(
         return;
     }
 
-    // Last resort: a fresh empty RAM helix at / (generalizes the old RAM-disk
-    // root), allocated through the staging admission control as a privileged mount.
+    // Last resort: fresh empty RAM helix at / via staging admission (privileged mount).
     if mount_fresh_ram_root() {
         PERSISTENT_READY = true;
         log_warn("STORAGE", 836, "no data disk; mounted fresh RAM root");
@@ -413,8 +403,7 @@ pub unsafe fn init_persistent_storage(
     }
 }
 
-/// Register the pre-EBS RAM image and Direct-mount it at `/`. Returns true iff the
-/// mount succeeded and `/bin/init` is present.
+/// Register pre-EBS RAM image and Direct-mount at `/`. Returns true iff `/bin/init` present.
 unsafe fn try_mount_pre_ebs_root(img: crate::boot::PreEbsHelixImage) -> bool {
     RAM_HELIX_DEVICE = Some(MemBlockDevice::new(
         img.base as *mut u8,
@@ -472,9 +461,7 @@ unsafe fn try_mount_pre_ebs_root(img: crate::boot::PreEbsHelixImage) -> bool {
     }
 }
 
-/// Probe every block device, register each (driver kept alive) + its volumes, then
-/// mount the first Helix volume that yields `/bin/init` at `/` (staged). Returns
-/// true once a root carrying `/bin/init` is mounted.
+/// Probe, register, and staged-mount the first Helix volume with `/bin/init` at `/`.
 unsafe fn probe_and_register_devices(dma: &DmaRegion, tsc_freq: u64) -> bool {
     let base_cpu = dma.cpu_base();
     let base_bus = dma.bus_base();
@@ -576,8 +563,7 @@ unsafe fn probe_and_register_devices(dma: &DmaRegion, tsc_freq: u64) -> bool {
         let _ = register_device_and_volumes(slot, kind);
     }
 
-    // All devices + volumes are now registered. Mount the first Helix volume that
-    // yields /bin/init at / (spec §7 /bin/init selection policy).
+    // Mount first Helix volume with /bin/init at / (spec §7 selection policy).
     let root_mounted = mount_helix_root();
 
     if !root_mounted && saw_scaffold {
@@ -591,8 +577,7 @@ unsafe fn probe_and_register_devices(dma: &DmaRegion, tsc_freq: u64) -> bool {
     root_mounted
 }
 
-/// Move `device` into a permanent `LIVE` slot; returns its index or `None` if the
-/// table is full.
+/// Park `device` in a permanent LIVE slot; returns its index or `None` if full.
 unsafe fn park_live_device(device: UnifiedBlockDevice) -> Option<usize> {
     let count = LIVE_COUNT;
     if count >= MAX_LIVE_DEVICES {
@@ -607,9 +592,7 @@ unsafe fn park_live_device(device: UnifiedBlockDevice) -> Option<usize> {
     Some(count)
 }
 
-/// Register slot `i` as a whole-disk device in the kernel registry and enumerate
-/// its partitions into volumes (sniffing each volume's FS). Returns true on a
-/// successful device registration.
+/// Register whole-disk device and enumerate its partitions as volumes. Returns true on success.
 unsafe fn register_device_and_volumes(slot: usize, kind: DeviceKind) -> bool {
     let (sector_size, total_sectors) = {
         let s = &LIVE[slot];
@@ -667,9 +650,7 @@ unsafe fn register_partition_volume(
     );
 }
 
-/// Sniff the FS at `lba_start` and register the volume. `name` is the raw on-disk
-/// label (truncated to fit). Best-effort: a failed registration just drops the
-/// volume (the device stays registered).
+/// Sniff FS at `lba_start` and register the volume. Best-effort; failed registration drops the volume.
 unsafe fn register_one_volume(
     device_id: u64,
     slot: usize,
@@ -719,8 +700,7 @@ unsafe fn record_helix_candidate(c: HelixCandidate) {
     HELIX_CAND_COUNT = n + 1;
 }
 
-/// Mount the first Helix-detected volume at `/` (staged, footprint-capped) and
-/// commit it only if `/bin/init` is present. Returns true once root is committed.
+/// Staged-mount first Helix candidate at `/`; commits only if `/bin/init` present.
 unsafe fn mount_helix_root() -> bool {
     let count = HELIX_CAND_COUNT;
     for i in 0..count {
@@ -742,18 +722,14 @@ unsafe fn mount_helix_root() -> bool {
             log_root_program_checks();
             return true;
         }
-        // Wrong root: tear it down (boot-only, no fds open yet), free its staged
-        // RAM, and keep scanning. umount("/") is EBUSY by design, so use the
-        // privileged boot teardown.
+        // umount("/") is EBUSY by design; use privileged teardown to free staged RAM.
         morpheus_kernel::storage::unmount_root_privileged();
         log_warn("STORAGE", 851, "candidate root rejected: /bin/init missing");
     }
     false
 }
 
-/// Live Helix footprint in bytes (log tail + used data), capped to the partition,
-/// for use as the staged-mount `aux` size. Returns 0 (→ full source) if the
-/// superblock can't be read — the staging admission still bounds it.
+/// Live HelixFS footprint in bytes for staged-mount `aux`. Returns 0 (full source) on superblock error.
 unsafe fn helix_footprint_bytes(c: &HelixCandidate) -> u64 {
     let total = LIVE[c.slot].total_sectors;
     let mut probe = make_raw_block_device(c.slot, total, c.sector_size);
@@ -781,9 +757,7 @@ unsafe fn helix_footprint_bytes(c: &HelixCandidate) -> u64 {
     blocks.saturating_mul(sb.block_size as u64)
 }
 
-/// Build a privileged root `MountReq` for `volume_id` and mount it at `/`.
-/// `extra_flags` carries `MNT_STAGED` (real disks) or 0 (already-RAM devices);
-/// `aux` caps the staged copy (0 = full source).
+/// Mount `volume_id` at `/`. `extra_flags`: `MNT_STAGED` or 0; `aux` caps staged copy.
 unsafe fn mount_root_volume(volume_id: u64, extra_flags: u32, aux: u64) -> bool {
     let mut mp = [0u8; 256];
     mp[0] = b'/';
@@ -800,8 +774,7 @@ unsafe fn mount_root_volume(volume_id: u64, extra_flags: u32, aux: u64) -> bool 
     morpheus_kernel::storage::mount(&req).is_ok()
 }
 
-/// Fresh empty Helix at `/` via the `VOLUME_NONE` staged-from-nothing path
-/// (privileged). The RAM is allocated through the staging admission control.
+/// Mount a fresh empty Helix at `/` via the `VOLUME_NONE` staged-from-nothing path.
 unsafe fn mount_fresh_ram_root() -> bool {
     let mut mp = [0u8; 256];
     mp[0] = b'/';
@@ -831,8 +804,7 @@ pub fn is_persistent() -> bool {
     unsafe { PERSISTENT_READY }
 }
 
-/// Idempotent; call after the root FS is mounted. Routes through the kernel
-/// storage subsystem's privileged mkdir on the mounted root.
+/// Create standard root directories. Idempotent; call after root FS is mounted.
 pub fn create_init_directories() {
     use morpheus_hal_x86_64::cpu::tsc::read_tsc;
 
@@ -851,12 +823,10 @@ pub fn create_init_directories() {
     }
 }
 
-// RawBlockDevice fn-ptr vtable → UnifiedBlockIo. Whole-disk addressing; the
-// storage subsystem's per-volume backend applies the partition LBA offset. A
-// single shared DMA I/O buffer is fine: runtime FS ops are serialized by
-// STORAGE_LOCK, and boot probing is single-threaded.
+// fn-ptr vtable over UnifiedBlockIo. Shared DMA buffer is safe: runtime ops serialized
+// by STORAGE_LOCK; boot probing is single-threaded.
 
-/// Build a whole-disk `RawBlockDevice` whose ctx encodes the `LIVE` slot index.
+/// Build a whole-disk `RawBlockDevice` whose ctx encodes the LIVE slot index.
 fn make_raw_block_device(slot: usize, total_sectors: u64, sector_size: u32) -> RawBlockDevice {
     // SAFETY: ctx is just the slot index (not a dereferenced pointer); the
     // callbacks recover it and index `LIVE`, whose entries live for the runtime.
@@ -872,7 +842,7 @@ fn make_raw_block_device(slot: usize, total_sectors: u64, sector_size: u32) -> R
     }
 }
 
-/// Recover the live driver from a callback ctx, or `None` if out of range/unused.
+/// Recover live driver from callback ctx; `None` if out of range or unused.
 unsafe fn live_dev(ctx: *mut u8) -> Option<&'static mut UnifiedBlockDevice> {
     let idx = ctx as usize;
     if idx >= MAX_LIVE_DEVICES {

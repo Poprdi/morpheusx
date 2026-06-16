@@ -338,8 +338,6 @@ pub trait Cpu: Send + Sync {
     /// Exactly once per CPU, after IDT init. Subsequent calls are UB.
     unsafe fn install_syscall_msrs(&self);
 
-    // Per-task context construction; kernel never touches the opaque bytes directly.
-
     /// Build a kernel-mode context that begins at `entry()` on `stack_top`, CPL=0, IF=1.
     fn ctx_init_kernel(&self, ctx: &mut CpuContext, entry: u64, stack_top: u64);
 

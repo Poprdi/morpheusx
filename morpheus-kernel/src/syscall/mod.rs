@@ -1,11 +1,7 @@
 //! Syscall interface — dispatch table and MSR setup.
 //!
-//! # Syscall numbers
-//!
-//! Canonical SYS_* numbers live in `morpheus-foundation::syscall_abi` so the
-//! kernel-side dispatcher (here) and the userland-side libmorpheus consume
-//! the same source. The table is also re-exported from this module for
-//! source compatibility with the legacy `crate::syscall::SYS_*` callers.
+//! Canonical SYS_* numbers live in `morpheus-foundation::syscall_abi`; re-exported
+//! here for legacy `crate::syscall::SYS_*` callers.
 
 pub mod handler;
 
@@ -55,7 +51,6 @@ use handler::sysinfo::{
     sys_sigaction,
 };
 
-// Canonical SYS_* numbers re-exported for legacy callers (`crate::syscall::SYS_*`).
 pub use morpheus_foundation::syscall_abi::*;
 
 use morpheus_foundation::errno::ENOSYS;

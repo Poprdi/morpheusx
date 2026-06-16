@@ -3,8 +3,6 @@
 
 use crate::raw::*;
 
-// Port I/O.
-
 pub fn port_inb(port: u16) -> u8 {
     unsafe { syscall2(SYS_PORT_IN, port as u64, 1) as u8 }
 }
@@ -34,8 +32,6 @@ pub fn port_outl(port: u16, value: u32) {
         syscall3(SYS_PORT_OUT, port as u64, 4, value as u64);
     }
 }
-
-// PCI config space.
 
 #[inline]
 pub fn pci_bdf(bus: u8, device: u8, function: u8) -> u64 {

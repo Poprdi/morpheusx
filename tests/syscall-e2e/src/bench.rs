@@ -1,6 +1,5 @@
 //! Torture/soak bench spine: workload registry, shared `Stats`, seeded `Rng`,
-//! and the `threads` driver (Approach A). Modes share this spine; see
-//! docs/superpowers/specs/2026-06-08-syscall-torture-soak-design.md.
+//! and the `threads` and `swarm` drivers. Modes share this spine.
 
 extern crate alloc;
 
@@ -95,10 +94,7 @@ pub struct Op {
     pub run: fn(&mut Rng, &Stats),
 }
 
-// ── Starter registry ──────────────────────────────────────────────────────
-// Concurrency-safe, self-contained, self-releasing ops that hammer the contended
-// paths (page allocator, paging, scheduler). More categories (fs/ipc/sync/...)
-// land in later increments.
+// Starter registry: contention-heavy ops (page allocator, paging, scheduler).
 
 fn op_alloc_free(_rng: &mut Rng, stats: &Stats) {
     match mem::alloc_pages(1) {
@@ -188,16 +184,14 @@ static REGISTRY: &[Op] = &[
     },
 ];
 
-// ── threads driver (Approach A) ────────────────────────────────────────────
+// threads driver
 
-/// Run N worker threads hammering the registry for `secs` seconds, printing a
-/// heartbeat every ~2s and a final summary. (Increment 2: bounded by time;
-/// Ctrl-C/SIGINT stop lands in a later increment.)
+/// Run N worker threads hammering the registry for `secs` seconds.
+/// `secs == 0` runs until SIGINT.
 pub fn run_threads(n: usize, secs: u64, seed: u64) -> i32 {
     static STATS: Stats = Stats::new();
 
     let n = n.max(1);
-    // `secs == 0` means run until Ctrl-C (the user-invoked/user-closed model).
     let mut secsbuf = [0u8; 20];
     let secs_str = if secs == 0 {
         "until-ctrl-c"
@@ -216,7 +210,6 @@ pub fn run_threads(n: usize, secs: u64, seed: u64) -> i32 {
         emit_line(&["  op ", op.name, " [", CAT_NAMES[op.cat as usize], "]"]);
     }
 
-    // Take over Ctrl-C so the user can stop a soak cleanly and get a summary.
     STOP.store(false, Relaxed);
     process::set_foreground(process::getpid());
     let _ = process::sigaction(process::signal::SIGINT, on_sigint as *const () as u64);
@@ -240,7 +233,6 @@ pub fn run_threads(n: usize, secs: u64, seed: u64) -> i32 {
         }
     }
 
-    // Heartbeat on the main thread until the deadline or Ctrl-C.
     let mut last_ops = 0u64;
     loop {
         thread::sleep_ms(2000);
@@ -267,27 +259,22 @@ pub fn run_threads(n: usize, secs: u64, seed: u64) -> i32 {
     summary(&STATS, seed)
 }
 
-// ── swarm driver (Approach C) ──────────────────────────────────────────────
+// swarm driver
 
-/// Default deploy path of this binary (setup-dev.sh maps it here). The swarm
-/// re-execs this same binary as worker children; overridable via `--self`.
+/// Default deploy path (setup-dev.sh). Swarm re-execs this binary as worker children; overridable via `--self`.
 pub const SELF_PATH: &str = "/bin/syscall-e2e";
 
 const PROT_RW: u64 = 0x3; // READ | WRITE, for the granted stats page
 
-/// Run N child PROCESSES hammering the registry into one shared `Stats` page.
+/// Run N child processes hammering the registry into one shared `Stats` page.
 ///
-/// Bootstrap per child: create an inherited pipe → `spawn` self as `_worker` →
-/// `shm_grant` the stats page (kernel maps it at the child's mmap_brk, which we
-/// can't predict because crt0 already mmap'd TLS) → hand the child the grant's
-/// returned address over the pipe. The child's blocking pipe read is the
-/// go-gate: it can't touch the page until the address (and thus the mapping)
-/// arrives.
+/// Bootstrap: pipe → spawn self as `_worker` → `shm_grant` the stats page →
+/// send the child's mapped address over the pipe (the go-gate: child blocks on
+/// the read until the grant and address are ready).
 pub fn run_swarm(n: usize, secs: u64, seed: u64, self_path: &str) -> i32 {
     let n = n.max(1);
 
-    // A freshly mmap'd page is zeroed, and an all-zero `Stats` is a valid initial
-    // state (every atomic == 0), so we can treat the page as `&Stats` directly.
+    // Zeroed mmap → valid initial `Stats` (all atomics == 0).
     let page = match mem::mmap(1) {
         Ok(v) => v,
         Err(_) => {
@@ -360,7 +347,6 @@ pub fn run_swarm(n: usize, secs: u64, seed: u64, self_path: &str) -> i32 {
         pids.push(pid);
     }
 
-    // Heartbeat off the shared page until Ctrl-C or all children exit.
     let mut last_ops = 0u64;
     loop {
         thread::sleep_ms(2000);
@@ -388,8 +374,7 @@ pub fn run_swarm(n: usize, secs: u64, seed: u64, self_path: &str) -> i32 {
         }
     }
 
-    // Stop and reap every child. A child that exited abnormally (faulted) is a
-    // failure of the OS under load — count it.
+    // Abnormal child exit (fault/signal) counts as an OS-under-load failure.
     let mut abnormal = 0u64;
     for &pid in &pids {
         let _ = process::kill(pid, process::signal::SIGKILL);
@@ -411,11 +396,10 @@ pub fn run_swarm(n: usize, secs: u64, seed: u64, self_path: &str) -> i32 {
     summary(stats, seed)
 }
 
-/// Hidden swarm child sub-mode: receive the shared `Stats` address over the
-/// inherited pipe `rfd`, then hammer the registry into it until `secs` elapses
-/// (or the parent kills us). Not user-facing.
+/// Swarm child sub-mode: read the shared `Stats` address from `rfd`, then
+/// hammer the registry until `secs` elapses or the parent kills us.
 pub fn run_worker(seed: u64, secs: u64, rfd: u32) -> i32 {
-    // Blocking read of the 8-byte shared-page address = our go-gate.
+    // go-gate: block until the 8-byte shared-page address arrives.
     let mut buf = [0u8; 8];
     let mut got = 0usize;
     while got < 8 {
@@ -479,9 +463,8 @@ fn summary(stats: &Stats, seed: u64) -> i32 {
     fails.min(255) as i32
 }
 
-// ── small no_std formatters (single-write friendly) ─────────────────────────
+// no_std formatters (single-write friendly)
 
-/// Decimal-format `v` into `buf`, returning the populated slice as `&str`.
 pub fn fmt_u64(v: u64, buf: &mut [u8; 20]) -> &str {
     if v == 0 {
         buf[0] = b'0';

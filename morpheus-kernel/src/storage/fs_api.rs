@@ -1,8 +1,4 @@
-//! The filesystem-backend seam (spec §4). `FsBackend` is the single trait every
-//! FS adapter implements; the kernel dispatches to it by `match` on `MountedFs`
-//! (no `dyn`, no vtable in the I/O path). `VfsError` is the one canonical error
-//! all backends map to; `FdState`/`FdTable` hold all per-fd state so reaping a
-//! process is just dropping its table.
+//! The filesystem-backend seam (spec §4): `FsBackend` trait, `VfsError`, and per-fd state.
 
 use alloc::vec::Vec;
 use morpheus_block_types::RawBlockDevice;
@@ -44,10 +40,7 @@ pub struct FsCapabilities {
     pub versions: bool,
 }
 
-/// Per-fd state, owned by the per-process `FdTable`. `cookie` is backend-private
-/// (Helix index key; FAT32 start+current cluster; future ext4 inode#+cursor);
-/// the VFS never interprets it. All fd state lives here, so process reap = drop
-/// the table with zero backend-side per-fd cleanup (spec §4).
+/// Per-fd state owned by `FdTable`. `cookie` is backend-private; reap = drop table (spec §4).
 #[derive(Clone, Copy)]
 pub struct FdState {
     pub mount_id: u64,
@@ -172,11 +165,7 @@ pub struct OpenFile {
     pub is_dir: bool,
 }
 
-/// The single FS-backend contract (spec §4). Implemented by each adapter
-/// (`HelixFs`/`Fat32Fs`); dispatched via `match MountedFs`. Capability-gated
-/// methods default to `Unsupported` so a read-only backend physically cannot
-/// claim to mutate. All I/O borrows the whole-device `RawBlockDevice` — the
-/// backend translates partition-relative → absolute via its own LBA base.
+/// FS-backend contract (spec §4). Capability-gated methods default to `Unsupported`.
 pub trait FsBackend {
     fn capabilities(&self) -> FsCapabilities;
 

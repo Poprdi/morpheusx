@@ -6,7 +6,6 @@ use crate::process::signals::Signal;
 use crate::process::ProcessState;
 use crate::schedular::SCHEDULER;
 
-// Canonical boundary structs live in morpheus-foundation — single source.
 pub use morpheus_foundation::types::{CpuidResult, MemmapEntry, PsEntry, TscResult};
 
 pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
@@ -97,8 +96,6 @@ pub unsafe fn sys_getpriority(pid: u64) -> u64 {
     }
 }
 
-// CpuidResult: canonical in morpheus_foundation::types (re-exported above).
-
 /// LD25: on non-x86 HALs `Cpu::cpuid` returns `[0; 4]`, which we surface as
 /// ENOSYS so userspace doesn't get phantom-zero feature bits.
 pub unsafe fn sys_cpuid(leaf: u64, subleaf: u64, result_ptr: u64) -> u64 {
@@ -125,8 +122,6 @@ pub unsafe fn sys_cpuid(leaf: u64, subleaf: u64, result_ptr: u64) -> u64 {
     );
     0
 }
-
-// TscResult: canonical in morpheus_foundation::types (re-exported above).
 
 /// Writes `TscResult` if `result_ptr` is set; returns the TSC.
 pub unsafe fn sys_rdtsc(result_ptr: u64) -> u64 {
@@ -166,13 +161,10 @@ pub unsafe fn sys_boot_log(buf_ptr: u64, buf_len: u64) -> u64 {
     copy_len as u64
 }
 
-// MemmapEntry: canonical in morpheus_foundation::types (re-exported above).
-
 /// `buf_ptr == 0` returns total entry count.
 pub unsafe fn sys_memmap(buf_ptr: u64, max_entries: u64) -> u64 {
     let phys = hal().phys();
 
-    // Count first.
     let mut total = 0usize;
     phys.for_each_descriptor(&mut |_| total += 1);
 

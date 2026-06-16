@@ -697,7 +697,6 @@ impl BusEnumerator for HalImpl {
                 f(BusAddr::new(bus, device, 0));
                 let header = crate::pci::config::pci_cfg_read8(addr, 0x0E);
                 if header & 0x80 != 0 {
-                    // Multi-function device.
                     for function in 1..8u8 {
                         let fa = crate::pci::config::PciAddr::new(bus, device, function);
                         let v = crate::pci::config::pci_cfg_read16(fa, 0x00);
@@ -765,9 +764,6 @@ impl Smp for HalImpl {
     }
     fn start_aps(&self) -> u32 {
         // CPUID brute-force path (used when MADT discovery yields no APs).
-        // Detect topology via CPUID and publish it so `ap_boot::start_aps`
-        // (which reads `cpu_count()`) sees the real core count instead of the
-        // default 1 — otherwise it short-circuits as "single-core".
         unsafe {
             let n = crate::cpu::apic::detect_cpu_count().max(1);
             crate::cpu::per_cpu::set_cpu_count(n);

@@ -42,8 +42,7 @@ unsafe fn ap_quiesce_hlt_loop(core_idx: u32) -> ! {
 unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
     let ctx = &mut AP_IDLE_CTX[core_idx as usize];
     let boot_rsp = hal().smp().pcpu_boot_kernel_rsp();
-    // CpuContext is opaque (morpheus-hal-api); reset the slot then init via
-    // the HAL — KERNEL_CS / KERNEL_DS selectors live inside the HAL impl.
+    // CpuContext is opaque (morpheus-hal-api); KERNEL_CS/DS live inside the HAL impl.
     *ctx = CpuContext::zeroed();
     hal()
         .cpu()

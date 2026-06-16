@@ -192,10 +192,7 @@ mod tests {
 
     const SECTOR: usize = 512;
 
-    /// Crafts a disk image in a heap buffer and hands out a `MemBlockDevice`
-    /// over it. The `Vec` must outlive every device wrapping it, so callers keep
-    /// the returned `Img` alive for the test's duration (matches the
-    /// `MemBlockDevice::new` lifetime contract).
+    /// In-memory disk image; caller must keep alive for the device's lifetime.
     struct Img {
         buf: alloc::vec::Vec<u8>,
     }
@@ -226,8 +223,6 @@ mod tests {
         b[off..off + 8].copy_from_slice(&v.to_le_bytes());
     }
 
-    /// Lay a GPT header at LBA 1 pointing at an entry array, plus N entries.
-    /// `entries` is (first_lba, last_lba, type_guid[0], name_ascii).
     fn build_gpt(sectors: usize, entries_lba: u64, entries: &[(u64, u64, u8, &str)]) -> Img {
         let entry_size = 128usize;
         let num_entries = 128u32;

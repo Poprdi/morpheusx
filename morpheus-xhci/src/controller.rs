@@ -81,7 +81,6 @@ impl XhciController {
             return Err(XhciError::ProbeFailed);
         }
 
-        // probe controller
         let probe = asm::asm_usb_host_probe(mmio_base);
         if probe == 0 {
             return Err(XhciError::ProbeFailed);
@@ -112,7 +111,6 @@ impl XhciController {
         let _ = asm::asm_xhci_bios_handoff(mmio_base, hccparams1 as u64, tsc_freq);
         Self::tsc_delay(tsc_freq, 10);
 
-        // Check if firmware left any port with link state
         let mut linked = 0u32;
         for p in 0..max_ports {
             let ps = mmio::read32(op_base + PORT_REG_BASE + (p as u64) * PORT_REG_STRIDE);
@@ -122,7 +120,6 @@ impl XhciController {
             }
         }
 
-        // Soft restart if all ports are dead
         if linked == 0 {
             let rc = asm::asm_xhci_controller_soft_restart(op_base, tsc_freq);
             if rc != 0 {
@@ -158,7 +155,6 @@ impl XhciController {
             }
         }
 
-        // scratchpad buffers
         if n_scratch > dma::MAX_SCRATCH {
             return Err(XhciError::ScratchpadUnsupported);
         }
@@ -184,17 +180,14 @@ impl XhciController {
             mmio::write32(op_base + OP_CONFIG, (cur & !0xFF) | enabled);
         }
 
-        // DCBAAP
         let dcbaa = dma_base + dma::OFF_DCBAA as u64;
         mmio::write32(op_base + OP_DCBAAP, dcbaa as u32);
         mmio::write32(op_base + OP_DCBAAP + 4, (dcbaa >> 32) as u32);
 
-        // command ring
         let cr = dma_base + dma::OFF_CMD_RING as u64;
         mmio::write32(op_base + OP_CRCR, (cr as u32 & !0x3F) | 1);
         mmio::write32(op_base + OP_CRCR + 4, (cr >> 32) as u32);
 
-        // event ring
         let er = dma_base + dma::OFF_EVT_RING as u64;
         let erst = dma_base + dma::OFF_ERST as u64;
         vw32(erst, er as u32);
@@ -208,14 +201,11 @@ impl XhciController {
         mmio::write32(rt_base + RT_IR0_ERSTBA, erst as u32);
         mmio::write32(rt_base + RT_IR0_ERSTBA + 4, (erst >> 32) as u32);
 
-        // IMAN.IE
         let iman = mmio::read32(rt_base + RT_IR0_IMAN);
         mmio::write32(rt_base + RT_IR0_IMAN, iman | 0x02);
 
-        // start controller
         mmio::write32(op_base + OP_USBCMD, CMD_RS | CMD_INTE);
 
-        // wait HCH to clear
         let start = tsc::read_tsc();
         let timeout = tsc_freq;
         loop {
@@ -229,7 +219,6 @@ impl XhciController {
             core::hint::spin_loop();
         }
 
-        // clear stale change bits on all ports
         for p in 0..max_ports {
             let addr = op_base + PORT_REG_BASE + (p as u64) * PORT_REG_STRIDE;
             let ps = mmio::read32(addr);
@@ -342,8 +331,7 @@ impl XhciController {
         let cs_bit: u64 = 1 << 1; // CRCR.CS (Command Stop)
         let crr_bit: u64 = 1 << 3; // CRCR.CRR (Command Ring Running)
 
-        // ── 1. Stop the command ring ──
-        // CRCR is 64-bit register; only the low dword carries CS/CRR.
+        // 1. Stop the command ring — CRCR is 64-bit; only the low dword carries CS/CRR.
         let cur_lo = mmio::read32(self.op_base + OP_CRCR);
         mmio::write32(self.op_base + OP_CRCR, cur_lo | cs_bit as u32);
         let start = tsc::read_tsc();
@@ -358,9 +346,7 @@ impl XhciController {
             core::hint::spin_loop();
         }
 
-        // ── 2. Drain the event ring + ack interrupter ──
-        // Walk every queued event so the controller doesn't consider the
-        // ring full on the next bring-up.
+        // 2. Drain the event ring + ack interrupter so the ring isn't full on next bring-up.
         while self.evt_ring.peek().is_some() {
             self.evt_ring.advance();
         }
@@ -369,7 +355,7 @@ impl XhciController {
         let iman = mmio::read32(self.rt_base + RT_IR0_IMAN);
         mmio::write32(self.rt_base + RT_IR0_IMAN, iman | 0x01);
 
-        // ── 3. Halt the controller ──
+        // 3. Halt the controller.
         let cmd = mmio::read32(self.op_base + OP_USBCMD);
         mmio::write32(self.op_base + OP_USBCMD, cmd & !CMD_RS);
         let start = tsc::read_tsc();
@@ -397,11 +383,8 @@ impl XhciController {
         }
     }
 
-    /// Instance wrapper around `tsc_delay` for callers that already hold a
-    /// controller reference (mostly the hub class code in `hub.rs`).
-    ///
     /// # Safety
-    /// `self.tsc_freq` must reflect the calibrated TSC frequency; reads the TSC.
+    /// `self.tsc_freq` must be the calibrated TSC frequency.
     #[inline(always)]
     pub unsafe fn delay_ms(&self, ms: u64) {
         Self::tsc_delay(self.tsc_freq, ms);
@@ -581,30 +564,25 @@ impl XhciController {
     pub unsafe fn port_reset(&self, port: u8) -> Result<u8, XhciError> {
         let addr = self.portsc(port);
 
-        // ensure port power
         let ps = mmio::read32(addr);
         if ps & PORTSC_PP == 0 {
             Self::portsc_write(addr, ps, PORTSC_PP, 0);
             Self::tsc_delay(self.tsc_freq, 10);
         }
 
-        // check for any link indicators
         let pre = mmio::read32(addr);
         let pre_speed = ((pre >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
         if (pre & PORTSC_CCS) == 0 && (pre & PORTSC_PED) == 0 && pre_speed == 0 {
             return Err(XhciError::PortResetNoLink);
         }
 
-        // warm reset for stuck SS links
         let pls = pre & PORTSC_PLS_MASK;
         if pre_speed >= 4 && (pls == PLS_U3 || pls == PLS_RECOVERY || pls == PLS_RESUME) {
             Self::portsc_write(addr, pre, PORTSC_LWS | PLS_U0, PORTSC_PLS_MASK);
         }
 
-        // assert PR
         Self::portsc_write(addr, mmio::read32(addr), PORTSC_PR, 0);
 
-        // wait for reset to complete
         let start = tsc::read_tsc();
         let timeout = self.tsc_freq / 5;
         loop {
@@ -622,7 +600,6 @@ impl XhciController {
             core::hint::spin_loop();
         }
 
-        // settle: wait for PED or CCS+speed
         let start2 = tsc::read_tsc();
         loop {
             let psn = mmio::read32(addr);
@@ -632,8 +609,8 @@ impl XhciController {
             }
             let speed = ((psn >> PORTSC_SPEED_SHIFT) & 0xF) as u8;
             if psn & PORTSC_PED != 0 || ((psn & PORTSC_CCS) != 0 && speed != 0) {
-                // 10 ms delay is should be sufficient for the device to recover from reset and be ready for the next command, 
-                // Dont remove it or you will debug the same issue as i did for hours :) 
+                // 10 ms TRSTRCY settle — device is not ready for SET_ADDRESS until
+                // this elapses. Removing it causes intermittent address failures on real hardware.
                 Self::tsc_delay(self.tsc_freq, 10);
                 return Ok(speed);
             }

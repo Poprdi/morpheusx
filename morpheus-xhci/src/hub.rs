@@ -74,8 +74,6 @@ impl XhciController {
         })
     }
 
-    /// SET_FEATURE(PORT_POWER) on a downstream hub port.
-    ///
     /// # Safety
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
@@ -137,8 +135,6 @@ impl XhciController {
         Ok(vr32(buf))
     }
 
-    /// CLEAR_FEATURE(C_PORT_CONNECTION) on a downstream hub port.
-    ///
     /// # Safety
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.

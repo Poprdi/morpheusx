@@ -270,7 +270,6 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
     fs.write(&mut dev, dest, &elf_bytes, 0)
         .map_err(|e| format!("write {}: {:?}", dest, e))?;
 
-    // Flush log + update superblock.
     fs.sync(&mut dev).map_err(|e| format!("sync: {:?}", e))?;
 
     let written = elf_bytes.len();

@@ -1,10 +1,6 @@
 //! Networking: raw NIC frames, hardware knobs, smoltcp TCP/IP.
-//!
-//! Two layers: raw `tcp_socket`/`tcp_connect`/... and RAII [`TcpStream`] /
-//! [`TcpListener`] / [`UdpSocket`] (auto-close on drop).
-//!
-//! Stack is explicitly polled — call [`net_poll_drive`] periodically.
-//! RAII types poll internally on calls, but event loops should drive too.
+//! Stack is explicitly polled — call [`net_poll_drive`] periodically; RAII types
+//! poll internally but event loops must drive it too.
 
 use crate::error::{self, Error, ErrorKind};
 use crate::io;
@@ -85,8 +81,6 @@ pub use morpheus_foundation::net::{
     NIC_CTRL_RX_RING_SIZE, NIC_CTRL_STATS, NIC_CTRL_STATS_RESET, NIC_CTRL_TSO, NIC_CTRL_TX_CSUM,
     NIC_CTRL_TX_RING_SIZE, NIC_CTRL_VLAN,
 };
-
-// NicHwStats: canonical in morpheus_foundation::types (re-exported above).
 
 /// Generic entry. Prefer the typed wrappers below.
 pub fn nic_ctrl(cmd: u32, arg: u64) -> Result<u64, u64> {
@@ -400,8 +394,6 @@ const CFG_STATIC: u64 = 2;
 const CFG_HOSTNAME: u64 = 3;
 const CFG_ACTIVATE: u64 = 4;
 
-// NetConfigInfo: canonical in morpheus_foundation::types (re-exported above).
-
 pub use morpheus_foundation::net::{
     NET_FLAG_DHCP, NET_FLAG_HAS_DNS, NET_FLAG_HAS_GATEWAY, NET_STATE_DHCP_DISCOVERING,
     NET_STATE_ERROR, NET_STATE_READY, NET_STATE_UNCONFIGURED,
@@ -468,8 +460,6 @@ pub fn net_activate() -> Result<u64, u64> {
 
 const POLL_DRIVE: u64 = 0;
 const POLL_STATS: u64 = 1;
-
-// NetStats: canonical in morpheus_foundation::types (re-exported above).
 
 /// Drives DHCP/ARP/TCP timers. Call periodically; returns true on activity.
 pub fn net_poll_drive(timestamp_ms: u64) -> bool {
@@ -635,8 +625,6 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
-    /// Initiates the handshake asynchronously; the kernel buffers data during it.
-    /// Poll [`state()`](Self::state) or just start reading/writing.
     pub fn connect(ip: Ipv4Addr, port: u16) -> error::Result<Self> {
         let handle = tcp_socket().map_err(Error::from_raw)?;
         tcp_connect(handle, ip.to_nbo(), port).map_err(|e| {
@@ -646,7 +634,6 @@ impl TcpStream {
         Ok(Self { handle })
     }
 
-    /// DNS resolve + TCP connect.
     pub fn connect_host(hostname: &str, port: u16) -> error::Result<Self> {
         let ip_nbo = dns_resolve(hostname).map_err(Error::from_raw)?;
         let handle = tcp_socket().map_err(Error::from_raw)?;

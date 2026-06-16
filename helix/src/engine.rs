@@ -101,10 +101,8 @@ impl HelixFs {
         }
     }
 
-    /// Resolve `path` to its index key, creating an empty file if `O_CREATE` and
-    /// absent, truncating if `O_TRUNC`. Returns the key the caller stores in its
-    /// per-fd cookie. Read-only / permission policy is the caller's (it knows the
-    /// mount's residency); the engine only enforces existence + create/trunc.
+    /// Resolve `path`: create if `O_CREATE`+absent, truncate if `O_TRUNC`. Returns the index key.
+    /// Permission policy is the caller's; the engine enforces only existence and create/trunc.
     pub fn open<B: BlockIo>(
         &mut self,
         block_io: &mut B,
@@ -233,10 +231,8 @@ impl HelixFs {
         Ok(())
     }
 
-    /// Resize `path`: shrink truncates, grow zero-extends. Read-modify-write that
-    /// appends a new version, so old bytes stay recoverable via time-travel reads.
-    /// Grows are capped (`MAX_TRUNCATE_GROW`) since the whole file is staged in
-    /// the heap; an unbounded hostile grow would OOM the small kernel heap.
+    /// Resize `path` via log-structured RMW. Grows capped at `MAX_TRUNCATE_GROW`
+    /// to prevent OOM on the small kernel heap.
     pub fn truncate<B: BlockIo>(
         &mut self,
         block_io: &mut B,
@@ -289,7 +285,7 @@ impl HelixFs {
         self.write(block_io, path, &new_data, timestamp_ns)
     }
 
-    /// Every logged version of `path`, oldest-to-newest: (lsn, timestamp_ns, op).
+    /// All logged versions of `path`, oldest-to-newest.
     pub fn versions<B: BlockIo>(
         &self,
         block_io: &mut B,
@@ -298,8 +294,7 @@ impl HelixFs {
         ops::read::list_versions(block_io, &self.log, path)
     }
 
-    /// Record a named snapshot marker; the returned LSN is a point-in-time handle
-    /// a later `O_AT_LSN` open can read the filesystem as of.
+    /// Append a snapshot marker; returned LSN is the point-in-time handle for `O_AT_LSN`.
     pub fn snapshot<B: BlockIo>(
         &mut self,
         block_io: &mut B,
@@ -321,7 +316,7 @@ impl HelixFs {
         Ok(lsn)
     }
 
-    /// Flush log; update both superblock slots; flush the device.
+    /// Flush log, write both superblock slots, flush device.
     pub fn sync<B: BlockIo>(&mut self, block_io: &mut B) -> Result<(), HelixError> {
         let committed_lsn = self.log.flush(block_io)?;
 

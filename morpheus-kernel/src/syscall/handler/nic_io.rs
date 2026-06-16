@@ -141,8 +141,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             avail as u64
         },
         (0, IOCTL_FIONBIO) => {
-            // arg -> *const i32: nonzero enables non-blocking stdin for this
-            // process. Reads of fd 0 then return EAGAIN instead of blocking.
+            // Nonzero arg enables non-blocking stdin; reads return EAGAIN instead of blocking.
             let enable = if arg != 0 && validate_user_buf(arg, 4) {
                 core::ptr::read(arg as *const u32) != 0
             } else {

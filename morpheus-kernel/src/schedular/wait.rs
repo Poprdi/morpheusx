@@ -191,15 +191,10 @@ unsafe fn free_process_resources(proc: &mut Process) {
     }
 }
 
-/// Walk a user PML4 and free every page-table page reachable from the
-/// user-half (lower 256 entries). Free the PML4 itself last.
+/// Walk a user PML4 and free every page-table page in the lower 256 entries; free PML4 last.
 ///
-/// # Portability hole
-/// This walks raw u64 PTEs using x86_64-shaped bit constants (PRESENT @ 0,
-/// USER @ 2, HUGE @ 7) and 4-level structure (PML4 → PDPT → PD → PT). A
-/// proper HAL method (`pml4_free_user_pages` taking a closure) should
-/// eventually replace this — tracked as a follow-up after K8/K9 land.
-/// Marked here so the audit grep can find it.
+/// ARCH-PORTABILITY-HOLE: walks raw PTEs with x86_64 bit constants (PRESENT/USER/HUGE)
+/// and 4-level structure. Replace with a HAL `pml4_free_user_pages` closure.
 unsafe fn free_user_page_tables(pml4_phys: u64) {
     let phys = hal().phys();
     if !phys.is_initialized() {

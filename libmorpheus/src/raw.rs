@@ -34,9 +34,7 @@ pub unsafe fn syscall0(nr: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1` must be a
-/// valid argument for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall1(nr: u64, a1: u64) -> u64 {
     let ret: u64;
@@ -57,9 +55,7 @@ pub unsafe fn syscall1(nr: u64, a1: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`/`a2` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64 {
     let ret: u64;
@@ -81,9 +77,7 @@ pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a3` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
     let ret: u64;
@@ -106,9 +100,7 @@ pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a4` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     let ret: u64;
@@ -131,9 +123,7 @@ pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a5` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let ret: u64;
@@ -156,9 +146,7 @@ pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> 
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a6` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
     let ret: u64;

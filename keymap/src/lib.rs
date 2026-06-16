@@ -180,9 +180,6 @@ impl Keymap {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Scancode batch decoder — resilient to a make-corrupting keyboard path.
-// ---------------------------------------------------------------------------
 
 // PS/2 Set-1 make codes for the modifiers the batch decoder tracks.
 const SC_LSHIFT: u8 = 0x2a;

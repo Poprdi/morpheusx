@@ -86,7 +86,6 @@ fn check(name: &'static str, cond: bool, detail: &str) {
     }
 }
 
-/// Asserts `ret` is NOT an error code.
 fn check_ok(name: &'static str, ret: u64) {
     if libmorpheus::is_error(ret) {
         fail(name, "returned error");
@@ -95,7 +94,6 @@ fn check_ok(name: &'static str, ret: u64) {
     }
 }
 
-/// Asserts `ret` IS an error (stubs / bad args).
 fn check_err(name: &'static str, ret: u64) {
     if libmorpheus::is_error(ret) {
         ok(name);
@@ -116,27 +114,21 @@ fn print_hex(val: u64) {
     print(s);
 }
 
-/// Entry point: dispatch on `argv[1]` to the selected bench mode. Defaults to
-/// `smoke` (the one-shot correctness gate) when no mode is given — preserving
-/// the historical behavior of a bare launch. Modes `threads`/`swarm` are the
-/// torture/soak vehicles (see docs/superpowers/specs/2026-06-08-syscall-torture-soak-design.md).
+/// Dispatch on argv[0] to the selected bench mode.
+/// Defaults to `smoke` (one-shot correctness gate) when no mode is given.
 fn main() -> i32 {
     let mut argbuf = [0u8; 256];
     let n = libmorpheus::process::getargs(&mut argbuf);
-    // The shell strips argv[0] (the command name) before spawn, so the blob holds
-    // only the real arguments: arg 0 is the mode, arg 1 is N, etc. No args (a bare
-    // launch, e.g. the boot path) → default to `smoke`.
+    // Shell strips argv[0] before spawn; arg 0 in blob is the mode.
     let mode = nth_arg(&argbuf[..n], 0).unwrap_or("smoke");
 
     match mode {
         "smoke" => run_smoke(),
         "threads" => {
-            // threads [N] [secs] [--seed HEX]   (note: `n` is the arg-blob byte length)
+            // threads [N] [secs] [--seed HEX]
             let blob = &argbuf[..n];
             let nthreads = nth_arg(blob, 1).and_then(parse_u64).unwrap_or(4) as usize;
-            // secs omitted (or 0) → run until Ctrl-C.
             let secs = nth_arg(blob, 2).and_then(parse_u64).unwrap_or(0);
-            // --seed for replay; otherwise derive from the monotonic clock (printed).
             let seed = flag_value(blob, "--seed")
                 .and_then(parse_hex)
                 .unwrap_or_else(|| libmorpheus::time::clock_gettime() | 1);
@@ -169,7 +161,6 @@ fn main() -> i32 {
     }
 }
 
-/// Parse a decimal `u64` from `s`; `None` on any non-digit.
 fn parse_u64(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
@@ -404,7 +395,6 @@ fn run_smoke() -> i32 {
     f as i32 // exit code = number of failures
 }
 
-/// Format `v` into `buf` and return it as a `&str` (decimal, no leading zeros).
 fn u32_str(v: u32, buf: &mut [u8; 10]) -> &str {
     if v == 0 {
         buf[0] = b'0';
@@ -1840,9 +1830,7 @@ fn test_async_chained_await() {
     );
 }
 
-// ── TLS / RNG (100-101) ──────────────────────────────────────────────
-// Plumbing-level: verifies the SYS_SET_THREAD_POINTER / SYS_GETRANDOM ABI.
-// Full variant-II `#[thread_local]` coverage lands with the crt0 TLS setup.
+// TLS / RNG (100-101): SYS_SET_THREAD_POINTER + SYS_GETRANDOM ABI.
 
 fn test_set_thread_pointer() {
     // Save the real TLS base crt0 installed. We temporarily reprogram FS base

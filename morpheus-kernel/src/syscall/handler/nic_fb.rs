@@ -13,7 +13,6 @@ pub struct NicOps {
     pub ctrl: Option<unsafe fn(cmd: u32, arg: u64) -> i64>,
 }
 
-// Canonical NIC ctrl codes live in morpheus_foundation::net; re-exported here.
 pub use morpheus_foundation::net::{
     NIC_CTRL_CAPS, NIC_CTRL_IRQ_COALESCE, NIC_CTRL_MAC_SET, NIC_CTRL_MTU, NIC_CTRL_MULTICAST,
     NIC_CTRL_PROMISC, NIC_CTRL_RX_CSUM, NIC_CTRL_RX_RING_SIZE, NIC_CTRL_STATS,
@@ -21,7 +20,6 @@ pub use morpheus_foundation::net::{
 };
 
 /// Hardware NIC statistics (returned by NIC_CTRL_STATS).
-// Canonical boundary structs live in morpheus-foundation — single source.
 pub use morpheus_foundation::types::{FbInfo, NicHwStats, NicInfo};
 
 /// NIC capability bits (returned by NIC_CTRL_CAPS).
@@ -44,14 +42,12 @@ pub unsafe fn register_nic(ops: NicOps) {
     NIC_OPS = ops;
 }
 
-// NicInfo / FbInfo: canonical in morpheus_foundation::types (re-exported above).
-
 // Write-once, read-many across cores; atomic ready-flag gates the static mut.
 use core::sync::atomic::{AtomicBool, Ordering as FbOrd};
 static mut FB_REGISTERED_STORAGE: Option<FbInfo> = None;
 static FB_REGISTERED_READY: AtomicBool = AtomicBool::new(false);
 
-/// Read the registered framebuffer info. Returns None before register_framebuffer.
+/// Returns None before `register_framebuffer` is called.
 #[inline]
 pub unsafe fn fb_registered() -> Option<FbInfo> {
     if FB_REGISTERED_READY.load(FbOrd::Acquire) {
@@ -61,13 +57,11 @@ pub unsafe fn fb_registered() -> Option<FbInfo> {
     }
 }
 
-/// Called by bootloader before entering the desktop.
+/// Called by bootloader after GOP framebuffer is set up.
 pub unsafe fn register_framebuffer(info: FbInfo) {
     FB_REGISTERED_STORAGE = Some(info);
     FB_REGISTERED_READY.store(true, FbOrd::Release);
 }
-
-// Kernel-owned back buffer + shadow for delta presentation.
 
 /// Zero = unallocated.
 pub(crate) static FB_BACK_PHYS: core::sync::atomic::AtomicU64 =

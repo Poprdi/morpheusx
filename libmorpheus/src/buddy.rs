@@ -162,7 +162,6 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
     let found_order = match found {
         Some(k) => k,
         None => {
-            // Out of blocks: request another arena from the kernel.
             let va = crate::raw::syscall1(crate::raw::SYS_MMAP, ARENA_PAGES);
             if crate::is_error(va) {
                 return None;
@@ -185,7 +184,6 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
 
     while cur_order > order {
         cur_order -= 1;
-        // Upper half goes back on the free list at `cur_order`.
         let buddy_addr = block as u64 + ((MIN_ALLOC as u64) << cur_order);
         let buddy = buddy_addr as *mut FreeNode;
         (*buddy).next = ptr::null_mut();

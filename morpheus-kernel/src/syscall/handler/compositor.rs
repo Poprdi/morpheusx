@@ -7,8 +7,7 @@ use super::nic_fb::fb_registered;
 use crate::process::ProcessState;
 use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER};
 
-/// Surface entry returned by SYS_WIN_SURFACE_LIST — canonical in
-/// morpheus-foundation (single source of truth).
+/// Surface entry returned by SYS_WIN_SURFACE_LIST.
 pub use morpheus_foundation::types::SurfaceEntry;
 
 /// `SYS_COMPOSITOR_SET() → 0` — register the calling process as the WM.

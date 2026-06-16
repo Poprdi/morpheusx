@@ -53,11 +53,8 @@ pub fn compose(state: &mut CompState) {
         );
     }
 
-    // z1: unfocused first, focused last. Minimized windows are hidden — skipped entirely here (they
-    // keep their slot + geometry, just aren't composited). While the overview (Exposé) is open the
-    // full-size windows are NOT composited at all: the overview replaces them with the dimmed
-    // wallpaper + the thumbnail grid, so the scene reads unmistakably as an overview (compositing the
-    // big windows behind near-full-size thumbnails made it look like the ordinary cascade).
+    // z1: unfocused first, focused last; minimized skipped. Overview suppresses all z1 compositing
+    // (compositing full windows behind thumbnails made it indistinguishable from normal mode).
     if !state.overview {
         let mut order = [0u16; MAX_WINDOWS];
         let mut n = 0usize;
@@ -109,21 +106,17 @@ pub fn compose(state: &mut CompState) {
         }
     }
 
-    // Overview (Exposé) overlay: dim the work area and lay every window out as a scaled live
-    // thumbnail. Drawn over the composed scene + panel but under the cursor, so the pointer stays
-    // on top while picking a thumbnail.
+    // Overview: drawn over everything but under the cursor.
     if state.overview {
         draw_overview(state, fb_ptr);
     }
 
-    // Window context menu: a popup of the right-clicked window's operations, over everything but the
-    // cursor (so the pointer stays on top while picking a row).
+    // Context menu: over everything but the cursor.
     if state.menu.is_some() {
         draw_menu(state, fb_ptr);
     }
 
-    // Notification toasts: the stack whisperd published, top-right above everything (but under the
-    // cursor), so a notification floats over windows and both context menus alike.
+    // Toasts: top-right, above everything but the cursor.
     if !state.toasts.is_empty() {
         draw_toasts(state, fb_ptr);
     }
@@ -240,17 +233,12 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         (tb_r, tb_g, tb_b),
     );
 
-    // Window controls — `[_] [□] [X]`, right-aligned, the standard three. The cells must line up
-    // with `wm_geom::classify` exactly (close inset 34, then maximize/minimize one `btn_pitch=32`
-    // apart, each `close_w=30` wide), so the same offsets that the hit-test uses are repeated here.
-    // The maximize button shows a restore mark while the window is maximized (`saved_rect` set).
+    // Controls must match wm_geom::classify exactly (close inset 34, pitch 32, width 30).
     let is_max = state.windows[idx]
         .as_ref()
         .map(|w| w.saved_rect.is_some())
         .unwrap_or(false);
-    // Which of this window's controls (if any) the pointer is over, so it lights up — affordance the
-    // hardware cursor alone can't give. `hit_test` respects z-order, so an occluded titlebar's
-    // buttons never falsely highlight.
+    // `hit_test` respects z-order so an occluded title bar's buttons never falsely highlight.
     let hov_ctl = match crate::islands::input::hit_test(state, state.mouse_x, state.mouse_y) {
         Some((hi, region)) if hi == idx => Some(region),
         _ => None,
@@ -304,10 +292,7 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         );
     }
 
-    // Resize handle (GRIP×GRIP bottom-right, matching the hit-test). Drawn AFTER the content blit —
-    // the grip sits inside the window rect, so painting it earlier let the 1:1 client blit clobber
-    // it (a latent bug: the handle was invisible). A few diagonal hatch lines in the title-text tint
-    // read as a gripper, so the corner reads as draggable, not decorative.
+    // Grip drawn AFTER the content blit: painting it before let the 1:1 blit clobber it (was invisible).
     let grip_x = win_x + win_w as i32 - GRIP as i32;
     let grip_y = win_y + win_h as i32 - GRIP as i32;
     clip_fill(state, fb_ptr, grip_x, grip_y, GRIP, GRIP, br, bg, bb);
@@ -329,10 +314,7 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
     }
 }
 
-/// Copy the source surface's top-left `dst_w × dst_h` region 1:1 into the window rect (no scaling),
-/// clipped to both the framebuffer and the mapped source. Windows are sized to whole cells and
-/// their clients render at the compd-assigned size (see `surface_mgr::notify_window_size`), so this
-/// is pixel-exact — crisp text instead of the soft bilinear upscale a full-fb surface would give.
+/// 1:1 copy of the source's top-left `dst_w×dst_h` into the window rect, clipped to fb and source.
 #[allow(clippy::too_many_arguments)]
 fn blit_1to1(
     state: &CompState,
@@ -386,8 +368,7 @@ fn blit_1to1(
     }
 }
 
-/// Bilinear scale source surface into dest rect; clipped to fb bounds. Used for the z0 desktop
-/// (full-fb → full-fb, an exact 1:1 in practice).
+/// Bilinear-scale source into dest rect, clipped to fb.
 #[allow(clippy::too_many_arguments)]
 fn blit_surface(
     state: &CompState,
@@ -572,10 +553,8 @@ enum CtlKind {
     Close,
 }
 
-/// Draw one window-control mark centred in its title-bar cell. The marks are drawn from small filled
-/// rectangles (and short diagonals for the close X) rather than font glyphs, so they stay crisp at
-/// the title-bar size and need nothing beyond the 8×16 ASCII font. `bg` is the cell's current
-/// background — used to punch the front square of the restore mark so it reads as overlapping.
+/// Draw one window-control mark centered in its cell using filled rects, not font glyphs.
+/// `bg` punches the front square of the restore mark to create the overlapping appearance.
 #[allow(clippy::too_many_arguments)]
 fn draw_ctl_mark(
     state: &CompState,
@@ -593,25 +572,22 @@ fn draw_ctl_mark(
     let cy = cell_y + cell_h / 2;
     match kind {
         CtlKind::Minimize => {
-            // A short bar on the cell's centre line — the universal "drop to the taskbar" mark,
-            // sharing the maximize square's / close X's vertical centre so the trio reads as a set.
             clip_fill(state, fb_ptr, cx - 5, cy - 1, 10, 2, r, g, b);
         },
         CtlKind::Maximize => {
-            // A 10×10 hollow square, 2px stroke.
+            // 10×10 hollow square, 2px stroke.
             clip_fill(state, fb_ptr, cx - 5, cy - 5, 10, 2, r, g, b); // top
             clip_fill(state, fb_ptr, cx - 5, cy + 3, 10, 2, r, g, b); // bottom
             clip_fill(state, fb_ptr, cx - 5, cy - 5, 2, 10, r, g, b); // left
             clip_fill(state, fb_ptr, cx + 3, cy - 5, 2, 10, r, g, b); // right
         },
         CtlKind::Restore => {
-            // Two overlapping 8×8 squares: a back one up-right, a front one down-left over it.
+            // Two overlapping 8×8 squares: back up-right, front down-left.
             let (bx, by) = (cx - 1, cy - 5);
             clip_fill(state, fb_ptr, bx, by, 8, 2, r, g, b);
             clip_fill(state, fb_ptr, bx, by + 6, 8, 2, r, g, b);
             clip_fill(state, fb_ptr, bx, by, 2, 8, r, g, b);
             clip_fill(state, fb_ptr, bx + 6, by, 2, 8, r, g, b);
-            // Front square: clear its footprint to the cell bg, then outline — so it sits in front.
             let (fx, fy) = (cx - 5, cy - 1);
             clip_fill(state, fb_ptr, fx, fy, 8, 8, bg.0, bg.1, bg.2);
             clip_fill(state, fb_ptr, fx, fy, 8, 2, r, g, b);
@@ -620,7 +596,6 @@ fn draw_ctl_mark(
             clip_fill(state, fb_ptr, fx + 6, fy, 2, 8, r, g, b);
         },
         CtlKind::Close => {
-            // An X: two 2px diagonals across a 10×10 box.
             for i in 0..9 {
                 clip_fill(state, fb_ptr, cx - 4 + i, cy - 4 + i, 2, 2, r, g, b);
                 clip_fill(state, fb_ptr, cx - 4 + i, cy + 4 - i, 2, 2, r, g, b);
@@ -661,10 +636,7 @@ fn draw_text(
     }
 }
 
-/// Highlight the pending Aero-snap zone while a title bar is dragged over a screen edge: a
-/// translucent accent wash over the work-area region the window will tile to, framed by a solid 2px
-/// accent border so the target reads clearly before the user releases. The zone (and thus the rect)
-/// come from the host-tested `wm_geom`, so the preview always matches where `apply_snap` will land.
+/// Translucent accent wash + 2px border over the pending Aero-snap zone during a title drag.
 fn draw_snap_preview(state: &CompState, fb_ptr: *mut u32) {
     let Some(zone) = state.snap_preview else {
         return;
@@ -705,20 +677,13 @@ fn draw_snap_preview(state: &CompState, fb_ptr: *mut u32) {
     );
 }
 
-/// Draw the overview (Exposé) grid: dim the work area, then lay every open window out as a scaled
-/// live thumbnail in the host-tested `wm_geom::overview_*` grid, each with a 1px frame and a caption
-/// plate; the selected thumbnail gets a bright accent frame + plate so the keyboard/pointer focus
-/// reads clearly. The window list + grid geometry come from `islands::overview` and `wm_geom`, so the
-/// drawn cells line up exactly with the cells the input hit-test clicks.
+/// Draw the overview grid: dim the work area, then render each window as a scaled thumbnail with
+/// a 1px frame and caption plate; selected thumbnail gets accent frame/plate.
 fn draw_overview(state: &CompState, fb_ptr: *mut u32) {
     use crate::islands::overview;
     let area = overview::area(state);
 
-    // Dim the work area hard toward black (~81%), leaving the panel below untouched so the taskbar
-    // stays legible. The full-size windows aren't composited in overview mode (see `compose`), so the
-    // backdrop is just the wallpaper; a heavy scrim sinks it well behind the bright thumbnails for a
-    // clean Exposé look. (The z0 desktop no longer carries an always-open launcher card to bleed
-    // through — the launcher is now a transient taskbar Start menu, closed during overview.)
+    // 81% dim: wallpaper only (no z1 compositing in overview mode), scrim sinks it behind thumbnails.
     blend_fill(
         state, fb_ptr, area.x, area.y, area.w as u32, area.h as u32, 0, 0, 0, 13, 16,
     );
@@ -747,16 +712,9 @@ fn draw_overview(state: &CompState, fb_ptr: *mut u32) {
         );
         let selected = state.overview_sel == gi as u32;
 
-        // Live thumbnail: the window's surface bilinear-scaled into the thumb rect (the same
-        // primitive that scales the z0 wallpaper). Minimized windows still hold a live surface.
-        //
-        // Scale the CONTENT rect, not the whole surface. A client's surface is fb-sized, but its
-        // content is rendered 1:1 into only the top-left `win.w × win.h` of it (the `blit_1to1`
-        // contract — see surface_mgr::map_global_to_local_spawn); the rest is unused black. Feeding
-        // `src_w/src_h` (the full surface) downscaled that mostly-black expanse, squishing the
-        // content into the thumbnail's top-left corner. Source `win.w × win.h` instead (clamped to
-        // the mapped surface), keeping `src_stride` for row addressing, so the thumbnail shows the
-        // window's actual content edge-to-edge.
+        // Scale only the content rect (win.w × win.h), not the full fb-sized surface.
+        // The surface is rendered 1:1 into its top-left; the rest is unused black — scaling the full
+        // src_w/src_h squished content into the thumbnail corner.
         if win.mapped && !win.surface_ptr.is_null() {
             let content_w = win.w.min(win.src_w);
             let content_h = win.h.min(win.src_h);
@@ -784,10 +742,7 @@ fn draw_overview(state: &CompState, fb_ptr: *mut u32) {
         let thick = if selected { 2 } else { 1 };
         draw_frame(state, fb_ptr, thumb.x, thumb.y, thumb.w, thumb.h, thick, fr, fg2, fb2);
 
-        // Caption plate directly under the thumbnail (NOT spanning the whole cell — a cell-wide plate
-        // overhangs a narrower aspect-fitted thumbnail and reads as misaligned; a FEEL nit). It is the
-        // thumbnail's width, hugging its bottom edge, with the title centred. Selected → the focus
-        // title colour so it stands out like an active taskbar chip.
+        // Caption plate matches thumbnail width (not cell width — cell-wide overhangs a narrow thumbnail).
         let plate_rgb = if selected {
             state.title_focused_rgb
         } else {
@@ -808,11 +763,9 @@ fn draw_overview(state: &CompState, fb_ptr: *mut u32) {
             plate_rgb.2,
         );
 
-        // Title, truncated to the plate width and centred in it.
         let title = core::str::from_utf8(&win.title[..win.title_len]).unwrap_or("?");
         let max_chars = ((plate_w - 8) / 8).max(0) as usize;
         let shown: &str = if title.chars().count() > max_chars {
-            // Take whole chars up to the budget (titles are ASCII in practice; stay UTF-8 safe).
             let mut end = 0;
             for (k, (bi, _)) in title.char_indices().enumerate() {
                 if k >= max_chars {
@@ -839,23 +792,15 @@ fn draw_overview(state: &CompState, fb_ptr: *mut u32) {
     }
 }
 
-/// Draw the open window context menu: a soft drop shadow, a dark panel with a 1px border, then each
-/// row — items left-aligned at the metric padding, the highlighted row washed in the focus accent
-/// (a danger red for Close), separators as a thin inset divider. The box/rows come from the
-/// host-tested `wm_geom` (via `islands::menu`), so the drawn rows line up exactly with the rows the
-/// input hit-test clicks.
+/// Draw the context menu: drop shadow, dark panel with 1px border, items with hover wash, separators.
 fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
     use crate::islands::menu;
     let Some(m) = state.menu.as_ref() else {
         return;
     };
 
-    // Drop shadow: a translucent dark offset down-right, so the panel lifts off the scene.
-    blend_fill(
-        state, fb_ptr, m.ox + 4, m.oy + 4, m.w as u32, m.h as u32, 0, 0, 0, 7, 16,
-    );
+    blend_fill(state, fb_ptr, m.ox + 4, m.oy + 4, m.w as u32, m.h as u32, 0, 0, 0, 7, 16);
 
-    // Panel body + a 1px raised border.
     const PANEL: (u8, u8, u8) = (30, 30, 38);
     clip_fill(state, fb_ptr, m.ox, m.oy, m.w as u32, m.h as u32, PANEL.0, PANEL.1, PANEL.2);
     draw_frame(state, fb_ptr, m.ox, m.oy, m.w, m.h, 1, 72, 72, 86);
@@ -864,7 +809,6 @@ fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
     for (i, row) in m.rows.iter().enumerate() {
         match row {
             wm_geom::MenuRow::Separator => {
-                // A thin divider centred in the separator band, inset from the panel edges.
                 let ly = y + menu::METRICS.sep_h / 2;
                 clip_fill(state, fb_ptr, m.ox + 6, ly, (m.w - 12).max(0) as u32, 1, 60, 60, 72);
                 y += menu::METRICS.sep_h;
@@ -873,8 +817,7 @@ fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
                 let rh = menu::METRICS.row_h;
                 let selected = m.sel == i;
                 let is_close = matches!(action, wm_geom::MenuAction::Close);
-                // The highlighted row is washed solid: the focus accent for a normal row, a danger
-                // red for Close so the destructive item reads as such even before it is picked.
+                // Danger red for Close so the destructive item reads as such even before it's picked.
                 let row_bg = if selected {
                     if is_close {
                         (150, 44, 44)
@@ -897,8 +840,7 @@ fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
                         row_bg.2,
                     );
                 }
-                // Label colour: white on the highlight; a muted red for an idle Close (so it carries
-                // its danger tint at rest too); light grey for the rest.
+                // Close label stays muted-red at rest; white when highlighted.
                 let fg = if selected {
                     (255, 255, 255)
                 } else if is_close {
@@ -915,17 +857,10 @@ fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
     }
 }
 
-/// Draw the notification toast stack: each toast a soft drop shadow, a dark panel with a left accent
-/// stripe (its urgency colour), a 1px border, the app name (in the accent), the summary, and the
-/// wrapped body; a small `×` in the top-right corner is the dismiss affordance (though a click
-/// anywhere on the toast dismisses). The hovered toast lifts a touch and brightens its `×`. The boxes
-/// and the line count come from the host-tested `phosphor_notify::layout` (via `islands::toasts`), so
-/// the drawn toasts line up exactly with the rects the click hit-test dismisses.
+/// Draw the toast stack: shadow, dark panel with urgency-coloured left stripe, app name, summary, body.
 fn draw_toasts(state: &CompState, fb_ptr: *mut u32) {
     use crate::islands::toasts;
     let (idxs, rects) = toasts::visible(state);
-    // Which toast (if any) the pointer is over, so it can lift/brighten — the same hit-test the
-    // dismiss click uses, so the highlight and the target agree.
     let hovered = phosphor_notify::layout::toast_hit(&rects, state.mouse_x, state.mouse_y);
 
     const PANEL: (u8, u8, u8) = (28, 28, 36);
@@ -940,10 +875,8 @@ fn draw_toasts(state: &CompState, fb_ptr: *mut u32) {
         let panel = if is_hovered { PANEL_HOVER } else { PANEL };
         let accent = toasts::accent_rgb(state, n.urgency);
 
-        // Drop shadow: a translucent dark offset down-right, lifting the toast off the scene.
         blend_fill(state, fb_ptr, r.x + 4, r.y + 4, r.w as u32, r.h as u32, 0, 0, 0, 6, 16);
 
-        // Panel + left accent stripe + 1px border.
         clip_fill(state, fb_ptr, r.x, r.y, r.w as u32, r.h as u32, panel.0, panel.1, panel.2);
         clip_fill(state, fb_ptr, r.x, r.y, toasts::ACCENT_W as u32, r.h as u32, accent.0, accent.1, accent.2);
         draw_frame(state, fb_ptr, r.x, r.y, r.w, r.h, 1, 70, 70, 84);

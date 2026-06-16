@@ -552,7 +552,6 @@ pub fn chip_action(is_minimized: bool, is_focused: bool) -> ChipAction {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Overview (Exposé) — the "show all windows" grid.
 //
 // When the user toggles the overview, compd scales every open window down into a
@@ -563,7 +562,6 @@ pub fn chip_action(is_minimized: bool, is_focused: bool) -> ChipAction {
 // pointer to drive an overview click on a boot. compd owns the mode, the surface
 // scaling, the dim, and the focus edit; this crate owns only where each thumbnail
 // sits and which one a point falls on.
-// ---------------------------------------------------------------------------
 
 /// One thumbnail's placement in the overview grid: the full grid `cell` (the whole
 /// clickable tile, also where the title label is drawn) and the `thumb` rect inside
@@ -706,7 +704,6 @@ pub fn overview_nav(sel: u32, n: u32, dir: Dir) -> u32 {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Window context menu — the right-click menu on a window's chrome.
 //
 // Right-clicking a window's title bar opens a small popup of that window's
@@ -717,7 +714,6 @@ pub fn overview_nav(sel: u32, n: u32, dir: Dir) -> u32 {
 // rows) and which row a point falls on, pinned by host tests for the same reason
 // every other WM-interaction measurement lives here: the headless QEMU can't aim a
 // real pointer onto a row at test time.
-// ---------------------------------------------------------------------------
 
 /// What a window-menu row does when chosen. Each maps onto an edit compd already has:
 /// `MaximizeRestore`/`Snap*` → `apply_snap`, `Minimize` → the taskbar-chip minimize,

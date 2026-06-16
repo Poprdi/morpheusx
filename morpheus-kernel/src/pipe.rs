@@ -59,7 +59,6 @@ impl Pipe {
         written
     }
 
-    /// Returns bytes read.
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
         while count < buf.len() {

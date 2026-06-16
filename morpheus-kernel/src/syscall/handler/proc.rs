@@ -35,16 +35,12 @@ pub unsafe fn sys_set_thread_pointer(tp: u64) -> u64 {
     0
 }
 
-// `SysInfo` is the canonical `morpheus_foundation::types::SysInfo` (imported above).
-
 pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
     let size = core::mem::size_of::<SysInfo>() as u64;
     if !validate_user_buf(buf_ptr, size) {
         return EFAULT;
     }
 
-    // Heap stats lives in the HAL today (host crate hands its allocator's
-    // metrics back through `phys()` totals).
     let phys = hal().phys();
     let total_mem = phys.total_memory();
     let free_mem = phys.free_memory();
@@ -90,7 +86,6 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
 
     let ts = hal().timer().read_tsc();
 
-    // Stat under the lock to size the load buffer.
     let file_size = {
         let guard = crate::storage::lock();
         let g = &mut *guard.g;
@@ -160,7 +155,6 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
 
     let name = path.rsplit('/').next().unwrap_or(path);
 
-    // Pack argv into a NUL-separated blob.
     let mut arg_blob = [0u8; 256];
     let mut blob_len: usize = 0;
     let mut arg_count: u8 = 0;

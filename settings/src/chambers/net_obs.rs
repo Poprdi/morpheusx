@@ -352,7 +352,6 @@ pub fn apply(app: &mut SettingsApp) -> bool {
         }
         app.log_change(Route::NetObservatory, "mode", "Switched to DHCP", false);
     } else {
-        // Static path.
         let ip_len = app.net_obs.edit_ip_len;
         let gw_len = app.net_obs.edit_gw_len;
         let mut prefix = app.net_obs.edit_prefix;
@@ -522,7 +521,6 @@ pub fn render(app: &SettingsApp) {
     layout::draw_kv(app, px, cy, "State:", state_str, state_color);
     cy += r8;
 
-    // Always-visible activation control.
     layout::draw_button_row(
         app,
         px,
@@ -611,7 +609,6 @@ pub fn render(app: &SettingsApp) {
         );
         cy += r8;
     } else {
-        // Read-only display of DHCP-assigned values.
         let mut ip_buf = [0u8; 16];
         let ip_len = widgets::format_ip(net.ip, &mut ip_buf);
         let ip_str = core::str::from_utf8(&ip_buf[..ip_len]).unwrap_or("0.0.0.0");

@@ -176,11 +176,9 @@ pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;
 pub const SEEK_END: u64 = 2;
 
-// ── ABI LOCK ─────────────────────────────────────────────────────────────────
 // Append-only manifest of every syscall number, in ABI order. The const check
-// below enforces that the Nth entry has value N, which makes a renumber, reorder,
-// insertion, gap, duplicate, or table/count mismatch a COMPILE error. See the
-// module header for the (only) correct way to add a syscall.
+// below enforces that the Nth entry has value N, making any renumber, reorder,
+// insertion, gap, duplicate, or table/count mismatch a compile error.
 
 /// Number of defined syscalls. Bump by exactly one when appending.
 pub const SYSCALL_COUNT: usize = 104;

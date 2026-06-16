@@ -35,8 +35,7 @@ const DOUBLE_CLICK_MS: u64 = 400;
 const SNAP_EDGE: i32 = 16;
 const SNAP_CORNER: i32 = 160;
 
-/// A keyboard edit to the overview grid, captured inside the decode closure and applied after the
-/// batch (the closure can't touch `state` directly — `kbd`/`keymap` are split-borrowed from it).
+/// Deferred overview action (closure can't borrow `state` directly — split borrow with `kbd`/`keymap`).
 #[derive(Clone, Copy)]
 enum OverviewKey {
     Toggle,
@@ -45,8 +44,7 @@ enum OverviewKey {
     Activate,
 }
 
-/// A keyboard edit to an open window context menu, captured in the decode closure (which can't touch
-/// `state` directly) and applied after the batch.
+/// Deferred menu action (same split-borrow reason as `OverviewKey`).
 #[derive(Clone, Copy)]
 enum MenuKey {
     Dismiss,
@@ -67,11 +65,8 @@ fn poll_keyboard(state: &mut CompState) {
         return;
     }
 
-    // Coalesce the rest of this key burst before decoding. The kernel polls PS/2 into the ring
-    // on its ~100 Hz timer, so a press's make and the matching break (and the make,make,break,
-    // break of a chord) can land in two reads ~10 ms apart. The decoder's modifier look-ahead
-    // needs the whole burst in one batch, so accumulate for up to ~2 idle ticks. This only
-    // pauses compositing *while keys are arriving* — an idle ring returns above immediately.
+    // Coalesce the burst: PS/2 at ~100 Hz may split a chord's make+break across reads.
+    // The decoder's modifier look-ahead needs them in one batch; accumulate ≤2 idle ticks.
     let mut idle = 0;
     while total < scan.len() && idle < 2 {
         process::sleep(8);
@@ -84,28 +79,22 @@ fn poll_keyboard(state: &mut CompState) {
         }
     }
 
-    // Decoded output can be multi-byte (UTF-8) or escape sequences, so size for the worst case.
-    let mut fwd = [0u8; 128];
+    let mut fwd = [0u8; 128]; // worst-case multi-byte UTF-8 or escape sequences.
     let mut fi = 0usize;
     let mut spawn_shell = false;
-    let mut show_launcher = false; // Ctrl+Alt+D → defocus so the desktop launcher gets the keyboard.
+    let mut show_launcher = false; // Ctrl+Alt+D: drop focus so the desktop launcher gets the keyboard.
     let mut cycle_focus: Option<bool> = None; // Some(reverse) when a focus-cycle chord fired.
     let mut wm_cmd: Option<wm_geom::WmCommand> = None;
     let mut overview_act: Option<OverviewKey> = None;
     let mut menu_act: Option<MenuKey> = None;
 
-    // Snapshot the overview flag before the split borrow: while the grid is open it captures the
-    // navigation/confirm/cancel keys (and swallows everything else, so no stray bytes reach a client
-    // behind the dim).
+    // Snapshot before the split borrow of kbd/keymap.
     let overview_active = state.overview;
-    // Likewise the context menu owns the keyboard while it is open (Esc/Enter/arrows drive it,
-    // everything else is swallowed).
     let menu_active = state.menu.is_some();
 
     let CompState { kbd, keymap, .. } = state;
     kbd.feed_batch(keymap, &scan[..total], |key| {
-        // The context menu, when open, owns the keyboard before any global hotkey: Esc dismisses,
-        // Enter runs the highlighted row, Up/Down move the highlight; any other key is consumed.
+        // Menu owns the keyboard while open; anything other than Esc/Enter/arrows is consumed.
         if menu_active {
             menu_act = Some(match key.scancode {
                 SC_ESC => MenuKey::Dismiss,
@@ -116,14 +105,12 @@ fn poll_keyboard(state: &mut CompState) {
             });
             return;
         }
-        // Ctrl+Alt+E toggles the window overview — works to open it AND to dismiss it, so it is
-        // checked before the overview's own capture below.
+        // Ctrl+Alt+E: check before the overview capture so it also dismisses an open grid.
         if key.scancode == SC_E && key.ctrl && key.alt {
             overview_act = Some(OverviewKey::Toggle);
             return;
         }
-        // While the overview is open it owns the keyboard: Esc / Enter / arrows drive the grid, and
-        // every other key is consumed (never forwarded to a window hidden behind the grid).
+        // Overview owns the keyboard: Esc/Enter/arrows navigate; everything else is swallowed.
         if overview_active {
             overview_act = Some(match key.scancode {
                 SC_ESC => OverviewKey::Exit,
@@ -136,19 +123,15 @@ fn poll_keyboard(state: &mut CompState) {
             });
             return;
         }
-        // Global window-management hotkeys consume their key (never forwarded to the client).
         if key.scancode == SC_X && key.ctrl && key.alt {
             spawn_shell = true;
             return;
         }
-        // Ctrl+Alt+D drops window focus back to the z0 desktop — the keyboard then reaches the
-        // launcher, so another app can be opened while windows are already up (without it, every
-        // launch focuses its window and the launcher becomes unreachable → only one window ever).
+        // Ctrl+Alt+D: without this, the launcher is unreachable once any window holds focus.
         if key.scancode == SC_D && key.ctrl && key.alt {
             show_launcher = true;
             return;
         }
-        // Alt+Tab cycles focus forward, Shift+Alt+Tab reverse — the canonical window switcher.
         if key.scancode == SC_TAB && key.alt {
             cycle_focus = Some(key.shift);
             return;
@@ -157,7 +140,6 @@ fn poll_keyboard(state: &mut CompState) {
             cycle_focus = Some(false);
             return;
         }
-        // Keyboard-first window management (Ctrl+Alt cluster): move/resize/close the focused window.
         if let Some(cmd) = wm_geom::wm_command(key.scancode, key.ctrl, key.alt, key.shift) {
             wm_cmd = Some(cmd);
             return;
@@ -189,7 +171,6 @@ fn poll_keyboard(state: &mut CompState) {
         let _ = process::spawn("/bin/msh");
     }
     if show_launcher {
-        // Hand the keyboard to the z0 desktop launcher; the open windows stay where they are.
         state.focused = None;
     }
     if let Some(reverse) = cycle_focus {
@@ -205,9 +186,7 @@ fn poll_keyboard(state: &mut CompState) {
         apply_wm_command(state, cmd);
     }
     if fi > 0 {
-        // Keyboard goes to the focused window; with no window focused it falls through to the
-        // z0 desktop shell, so the desktop is interactive on its own (the desktop is never
-        // "focused" — focus cycles z1 app windows only — yet it must still receive keys).
+        // Route to focused window, or the z0 desktop if nothing is focused.
         let target = state.focused.or(state.desktop_idx);
         if let Some(idx) = target {
             if let Some(ref win) = state.windows[idx] {
@@ -217,11 +196,7 @@ fn poll_keyboard(state: &mut CompState) {
     }
 }
 
-/// Apply a keyboard window-management command to the focused window. Move/Resize reuse the exact
-/// `wm_geom` clamp/snap math the mouse drag uses, so a window ends in an identical valid state
-/// however it was driven; Resize then re-notifies the client of its new cell size (as the mouse
-/// resize does) so the DE reflows. Close terminates the client — the surface reaper handles cleanup
-/// and refocus. A no-op when nothing is focused or the focused surface is the z0 desktop.
+/// Apply a keyboard WM command to the focused z1 window; no-op if nothing is focused or z0.
 fn apply_wm_command(state: &mut CompState, cmd: wm_geom::WmCommand) {
     let Some(idx) = state.focused else {
         return;
@@ -273,12 +248,8 @@ fn apply_wm_command(state: &mut CompState, cmd: wm_geom::WmCommand) {
     }
 }
 
-/// Tile the focused window to a snap zone (Ctrl+Alt + number-row grid). The geometry comes from the
-/// host-tested `wm_geom::snap_rect` (work-area aware — it reserves the taskbar), so a keyboard snap
-/// lands a window in a rect the mouse/keyboard movers also accept. Maximize (the centre key) is a
-/// toggle: it stashes the floating geometry in `saved_rect` and restores it on the next press; any
-/// half/quadrant snap is a direct placement and clears that stash. The client is re-notified of its
-/// new cell size in every case so the DE reflows to the tiled geometry.
+/// Tile window `idx` to `zone`. Maximize is a `saved_rect` toggle; other zones clear the stash.
+/// Notifies the client of its new cell size in all cases.
 pub(crate) fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZone) {
     let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
     let rect_for = |zone| {
@@ -299,13 +270,11 @@ pub(crate) fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZ
     if matches!(zone, wm_geom::SnapZone::Maximize) {
         if let Some(ref mut win) = state.windows[idx] {
             if let Some((x, y, w, h)) = win.saved_rect.take() {
-                // Already maximized → restore the stashed floating geometry.
                 win.x = x;
                 win.y = y;
                 win.w = w;
                 win.h = h;
             } else {
-                // Stash the current rect, then fill the work area.
                 win.saved_rect = Some((win.x, win.y, win.w, win.h));
                 let r = rect_for(zone);
                 win.x = r.x;
@@ -321,7 +290,7 @@ pub(crate) fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZ
 
     let r = rect_for(zone);
     if let Some(ref mut win) = state.windows[idx] {
-        win.saved_rect = None; // a direct tile is not a maximize-restore state.
+        win.saved_rect = None; // non-maximize snaps clear the restore stash.
         win.x = r.x;
         win.y = r.y;
         win.w = r.w as u32;
@@ -331,10 +300,7 @@ pub(crate) fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZ
     crate::islands::surface_mgr::notify_window_size(state, idx);
 }
 
-/// Minimize window `idx`: hide it and hand focus to the next visible window (or none). The same edit
-/// the titlebar `[_]` button, the taskbar chip, and the context menu all perform, so they agree on
-/// what "minimize" does. The per-frame `publish_window_state` relays it to the shell (which dims the
-/// chip); activating the chip restores it.
+/// Hide window `idx` and move focus to the next visible slot (or none).
 pub(crate) fn minimize_window(state: &mut CompState, idx: usize) {
     let pid = state.windows[idx].as_ref().map(|w| w.pid).unwrap_or(0);
     if let Some(w) = state.windows[idx].as_mut() {
@@ -346,9 +312,7 @@ pub(crate) fn minimize_window(state: &mut CompState, idx: usize) {
     libmorpheus::debug!("minimize win {}", pid);
 }
 
-/// Close window `idx`: ask its client to terminate (SIGTERM). The surface reaper handles the cleanup
-/// and refocus once the process exits. Shared by the titlebar `[X]`, the Ctrl+Alt+C chord, and the
-/// context menu, so "close" means one thing across all three.
+/// SIGTERM the client; the surface reaper handles cleanup and refocus.
 pub(crate) fn close_window(state: &mut CompState, idx: usize) {
     if let Some(ref win) = state.windows[idx] {
         let _ = process::kill(win.pid, process::signal::SIGTERM);
@@ -394,40 +358,30 @@ fn poll_mouse(state: &mut CompState) {
 }
 
 fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
-    // The overview grid suspends all normal window routing/dragging: hover moves the selection, a
-    // left press on a thumbnail focuses+raises it and exits (compd draws the cursor itself from
-    // mouse_x/y, so no Desktop forward is needed to keep it tracking).
+    // Overview suspends normal routing; compd draws its own cursor, no desktop forward needed.
     if state.overview {
         crate::islands::overview::on_mouse(state, &msg);
         state.last_buttons = msg.buttons;
         return;
     }
 
-    // An open context menu owns the pointer: hover highlights a row, a left click runs it, a click
-    // outside dismisses. Normal window routing/dragging is suspended while it is up.
+    // Menu suspends normal routing while open.
     if state.menu.is_some() {
         crate::islands::menu::on_mouse(state, &msg);
         state.last_buttons = msg.buttons;
         return;
     }
 
-    // A left click on a toast dismisses it and is consumed (it does not also fall through to the
-    // window beneath). Toasts are NON-modal — this is a hit-test, not a capture: a click that misses
-    // every toast returns false and routes on normally. compd draws its own cursor from mouse_x/y,
-    // so no Desktop forward is needed to keep the pointer tracking (as in the overview path).
+    // Toast click is consumed (non-modal hit-test); a miss falls through to normal routing.
     if msg.left_pressed && crate::islands::toasts::dismiss_at(state, msg.mx, msg.my) {
         state.last_buttons = msg.buttons;
         return;
     }
 
-    // Keep desktop cursor in sync with absolute position every sample.
-    enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 });
+    enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 }); // sync desktop cursor every sample.
 
     if msg.left_released {
-        // A title drag that ended over an edge-snap trigger TILES to that zone instead of dropping
-        // the window free where it was dragged (Aero Snap). `apply_snap` reuses the same host-tested
-        // `wm_geom::snap_rect` geometry the keyboard tiling uses, so a mouse snap and a Ctrl+Alt snap
-        // leave a window in an identical state.
+        // A title drag over an edge trigger tiles to that zone (Aero Snap) on release.
         if let (Some(MouseCapture::Move { idx, .. }), Some(zone)) =
             (state.capture, state.snap_preview)
         {
@@ -443,9 +397,6 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                 );
             }
         } else if let Some(cap) = state.capture {
-            // Log the settled geometry when a free drag ends, so a window's move/resize is observable
-            // on the serial console (the compositor has no other window-management readout). Paired
-            // with the grab lines below, one line per discrete user action — not per frame.
             let (MouseCapture::Move { idx, .. } | MouseCapture::Resize { idx, .. }) = cap;
             if let Some(ref win) = state.windows[idx] {
                 libmorpheus::debug!(
@@ -462,7 +413,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
         state.snap_preview = None;
     }
 
-    // Panel is z3 overlay — input there goes to shelld, not the window beneath.
+    // Panel (z3): route to shelld, not the window beneath.
     if msg.in_panel {
         enqueue_mouse_route(
             state,
@@ -474,10 +425,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
         return;
     }
 
-    // Right-press on a window's title bar opens that window's context menu (anchored at the pointer,
-    // clamped on screen). The title-band regions all qualify — a right-click over the [_]/[□]/[X]
-    // buttons opens the menu rather than firing the button (those are left-click affordances). The
-    // menu then owns the pointer (handled by the early return above) until a pick or a dismiss.
+    // Right-click on any title-band region opens the context menu (left-click affordances are unaffected).
     if msg.right_pressed {
         if let Some((idx, region)) = hit_test(state, msg.mx, msg.my) {
             if matches!(
@@ -490,17 +438,8 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                 return;
             }
         } else {
-            // Right-press over the bare desktop (no window under the pointer) → forward to the z0
-            // shell WITH the button bits so it opens its own desktop (root) context menu at the
-            // cursor. Mirrors the LEFT empty-desktop forward below; without this the press would fall
-            // through to `route_to_child` and be delivered to whatever window holds focus instead of
-            // the desktop. The shell owns the wallpaper, so its menu is the shell's, not compd's.
-            //
-            // Clicking the bare desktop also DROPS window focus (standard DE semantics: a click on the
-            // root deselects the active window). Critically this is what lets the shell's desktop menu
-            // receive the keyboard: keys route to `state.focused.or(desktop_idx)`, so while a window is
-            // focused the z0 shell never sees them and the menu's Up/Down/Enter/Esc nav is dead. With
-            // focus dropped, the keyboard reaches the shell and drives the menu it just opened.
+            // Right on bare desktop: drop focus so the shell's menu can receive the keyboard
+            // (keys route to focused.or(desktop_idx); a focused window swallows them).
             state.focused = None;
             enqueue_mouse_route(
                 state,
@@ -525,16 +464,11 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                     route_to_child = false;
                 },
                 HitRegion::Minimize => {
-                    // Hide the window and hand the keyboard/focus to the next visible one (or none) —
-                    // the same edit the taskbar chip and the context menu take, so they all agree.
                     minimize_window(state, idx);
                     state.capture = None;
                     route_to_child = false;
                 },
                 HitRegion::Maximize => {
-                    // Toggle maximize/restore — the same `saved_rect` toggle the title double-click,
-                    // the top-edge Aero snap, and Ctrl+Alt+5 all share, so a window has one restore
-                    // path however it was maximized.
                     apply_snap(state, idx, wm_geom::SnapZone::Maximize);
                     if let Some(ref win) = state.windows[idx] {
                         libmorpheus::debug!(
@@ -550,15 +484,10 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                     route_to_child = false;
                 },
                 HitRegion::Title => {
-                    // Double-click the title bar → maximize/restore: a second press on the SAME
-                    // window within DOUBLE_CLICK_MS toggles the maximize via `apply_snap`, the same
-                    // saved_rect toggle Ctrl+Alt+5 and the top-edge Aero snap use (so however a window
-                    // is maximized, one restore path returns it). `is_double_click` is host-tested in
-                    // wm_geom. Otherwise begin a normal title-drag Move and record this press as the
-                    // potential first click of a pair.
+                    // Double-click (same window within DOUBLE_CLICK_MS) toggles maximize/restore.
                     let now = libmorpheus::time::uptime_ms();
                     if wm_geom::is_double_click(state.last_title_press, idx, now, DOUBLE_CLICK_MS) {
-                        state.last_title_press = None; // consume — a third quick press starts fresh.
+                        state.last_title_press = None; // consume; a third quick press starts a fresh pair.
                         apply_snap(state, idx, wm_geom::SnapZone::Maximize);
                         if let Some(ref win) = state.windows[idx] {
                             libmorpheus::debug!(
@@ -621,7 +550,6 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                 MouseCapture::Move { idx, off_x, off_y } => {
                     let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
                     if let Some(ref mut win) = state.windows[idx] {
-                        // Pointer minus the grab offset, clamped to keep the window reachable.
                         let (x, y) = wm_geom::clamp_move(
                             win.w as i32,
                             win.h as i32,
@@ -635,8 +563,6 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         win.y = y;
                         win.mouse_local_valid = false;
                     }
-                    // Aero-snap preview: the edge zone (if any) the live pointer is over. The renderer
-                    // highlights it; releasing here tiles the window to it (see the left_released path).
                     state.snap_preview = wm_geom::edge_snap_zone(
                         msg.mx,
                         msg.my,
@@ -657,8 +583,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                 } => {
                     let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
                     if let Some(ref mut win) = state.windows[idx] {
-                        // Start size + pointer delta, clamped to the fb and snapped to whole cells
-                        // (the content is blitted 1:1, so a fractional cell leaves a stale strip).
+                        // Snap to whole cells: 1:1 blit leaves a stale strip on a fractional edge.
                         let (w, h) = wm_geom::snap_resize(
                             start_w as i32,
                             start_h as i32,
@@ -677,7 +602,6 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                         win.h = h as u32;
                         win.mouse_local_valid = false;
                     }
-                    // Tell the client its new cell size so it reflows to the dragged geometry.
                     crate::islands::surface_mgr::notify_window_size(state, idx);
                     route_to_child = false;
                 },
@@ -736,15 +660,8 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
     }
 }
 
-/// Forward mouse to the z0 desktop surface, mapped from the absolute global cursor.
-///
-/// The desktop is full-fb, so its window-local coordinate IS the absolute fb pixel. Unlike a z1
-/// window — whose app treats the forwarded motion as relative and keeps no absolute cursor — the
-/// desktop shell integrates these deltas into an absolute pointer to hit-test its launcher and
-/// taskbar. So the FIRST forward seeds that pointer with the full absolute position (a delta from
-/// the shell's origin of 0,0), not the usual (0,0) baseline: that lands the shell's cursor exactly
-/// where this compositor draws the hardware cursor from the very first sample, instead of leaving a
-/// fixed offset until the pointer happens to hit a screen edge and both clamp into agreement.
+/// Forward mouse to the z0 desktop. On the first sample, seeds the shell's pointer with the full
+/// absolute position so it tracks the compositor cursor from frame one (not from the next screen-edge clamp).
 fn forward_to_desktop(state: &mut CompState, buttons: u8) {
     if let Some(di) = state.desktop_idx {
         if let Some(ref mut dw) = state.windows[di] {
@@ -769,8 +686,7 @@ fn map_global_to_local(mx: i32, my: i32, win: &crate::islands::ChildWindow) -> (
     let sw = win.src_w.max(1) as i32;
     let sh = win.src_h.max(1) as i32;
 
-    // z0 desktop maps in full-fb desktop-space. z1 windows are blitted 1:1 from the source's
-    // top-left, so a window-local coordinate IS the source-local coordinate — no scaling.
+    // z0: full-fb coordinate space; z1: 1:1 blit so window-local == source-local.
     if win.z_layer == 0 {
         (mx.clamp(0, sw - 1), my.clamp(0, sh - 1))
     } else {
@@ -782,8 +698,7 @@ fn map_global_to_local(mx: i32, my: i32, win: &crate::islands::ChildWindow) -> (
     }
 }
 
-/// The window region the cursor is hovering (no capture/focus side effects) — drives the cursor
-/// shape so the pointer reflects what a click would do (move on the title, resize on the grip).
+/// Hovered region for cursor-shape decisions; no capture or focus side effects.
 pub fn hover_region(state: &CompState, mx: i32, my: i32) -> Option<HitRegion> {
     hit_test(state, mx, my).map(|(_, region)| region)
 }
@@ -792,8 +707,7 @@ pub(crate) fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, Hi
     let mut candidates: [Option<usize>; MAX_WINDOWS] = [None; MAX_WINDOWS];
     let mut cn = 0usize;
 
-    // Focused first, then topmost unfocused (highest index) downward. Minimized windows are hidden,
-    // so they are never hit-tested — a click falls through to whatever is visible beneath them.
+    // Test focused first, then topmost unfocused descending; minimized slots are skipped.
     if let Some(fi) = state.focused {
         candidates[cn] = Some(fi);
         cn += 1;
@@ -814,8 +728,6 @@ pub(crate) fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, Hi
                 if win.z_layer != 1 || win.minimized {
                     continue;
                 }
-                // The per-window point classification lives in the host-tested `wm_geom` crate so
-                // the move/resize/hit math is verifiable off-hardware (no working pointer in QEMU).
                 let rect = wm_geom::Rect {
                     x: win.x,
                     y: win.y,
@@ -832,8 +744,7 @@ pub(crate) fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, Hi
     None
 }
 
-/// compd's window-chrome metrics as a `wm_geom::Chrome`. The close button is a 30px cell inset 34px
-/// from the title bar's right edge (the `[X]`); the rest mirror the module-level chrome constants.
+/// compd's chrome metrics: close inset 34px from the right edge, 30px wide; 32px button pitch.
 #[inline]
 pub(crate) fn chrome() -> wm_geom::Chrome {
     wm_geom::Chrome {

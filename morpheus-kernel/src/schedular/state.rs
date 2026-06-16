@@ -6,9 +6,7 @@ use crate::process::{
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
-/// Maximum logical CPUs the scheduler tracks. Mirrors
-/// `morpheus_foundation::MAX_CPUS` but typed as `usize` for const array
-/// sizing in this module's `[T; MAX_CPUS]` slots.
+/// `usize`-typed alias of `morpheus_foundation::MAX_CPUS` for `[T; MAX_CPUS]` array sizing.
 pub const MAX_CPUS: usize = morpheus_foundation::MAX_CPUS as usize;
 
 #[repr(u8)]
@@ -540,15 +538,12 @@ pub(super) unsafe fn set_this_core_pid(pid: u32) {
     }
 }
 
-/// IDT fault-path hook: pid of the thread currently running on this core.
-/// Installed via `idt::set_current_pid_hook` so user-fault dumps attribute to
-/// the real faulting thread instead of defaulting to 0.
+/// IDT fault-path hook: pid of the faulting thread on this core.
 pub unsafe fn idt_current_pid() -> u32 {
     SCHEDULER.current_pid()
 }
 
-/// IDT fault-path hook: copy `pid`'s process name into `out`. Returns false if
-/// there is no such live process. Installed via `idt::set_process_lookup_hook`.
+/// IDT fault-path hook: copy `pid`'s name into `out`; returns false if no live process.
 pub unsafe fn idt_lookup_name(pid: u32, out: &mut [u8; 32]) -> bool {
     match SCHEDULER.process_by_pid(pid) {
         Some(p) => {

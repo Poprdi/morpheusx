@@ -41,22 +41,18 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
 
     let caller_pid = SCHEDULER.current_pid();
 
-    // Cannot grant to self (use mmap), cannot grant to kernel.
     if target_pid == 0 || target_pid == caller_pid as u64 {
         return EINVAL;
     }
     if caller_pid == 0 {
         return EPERM;
     }
-    // Range-check the user-supplied target before it indexes the lock array.
     if target_pid >= crate::process::MAX_PROCESSES as u64 {
         return ESRCH;
     }
 
-    // The grant mutates the TARGET's address space while reading the CALLER's,
-    // so hold both per-address-space locks. Acquire in leader-pid order so a
-    // concurrent reverse grant can't deadlock; equal leaders (a sibling-thread
-    // target) collapse to a single lock.
+    // Acquire both address-space locks in leader-pid order to prevent deadlock on
+    // concurrent reverse grants; equal leaders collapse to one lock.
     let caller_leader = SCHEDULER.current_memory_leader_pid();
     let target_leader = SCHEDULER.memory_leader_pid_of(target_pid as u32);
     let lo = caller_leader.min(target_leader);
@@ -108,7 +104,7 @@ unsafe fn shm_grant_locked(target_pid: u64, src_vaddr: u64, pages: u64, flags: u
         return ESRCH;
     }
     if target_ref.cr3 == 0 {
-        return ESRCH; // kernel thread without user page table
+        return ESRCH; // kernel thread; no user page table
     }
 
     if target_ref.mmap_brk == 0 {
@@ -212,8 +208,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
 
     let fd_table = SCHEDULER.current_fd_table_mut();
 
-    // Pipe fds carry no mount; the pipe index lives in `mount_id` (see core.rs
-    // read/write dispatch: `pipe_idx = desc.mount_id as u8`).
+    // Pipe fds: no mount; pipe index lives in `mount_id` field.
     let read_fd = match fd_table.alloc() {
         Some(fd) => fd,
         None => return ENOMEM,
@@ -293,13 +288,8 @@ pub unsafe fn sys_set_fg(pid: u64) -> u64 {
     0
 }
 
-/// Copies the NUL-separated argv blob into `buf`. Two forms:
-///   - query (`buf_ptr == 0` or `buf_len == 0`): returns `argc`.
-///   - fill (buffer given): returns the number of BYTES written.
-///
-/// The fill form must return bytes, not argc: callers (`getargs()`,
-/// `env::args()`) slice `buf[..ret]`, so returning argc truncated the blob to
-/// argc bytes (1 arg → "s", 2 args → "be").
+/// `buf == 0` returns argc; otherwise copies the NUL-separated argv blob and returns bytes written.
+/// Must return bytes, not argc: callers slice `buf[..ret]`.
 pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     let proc = SCHEDULER.current_process_mut();
     let argc = proc.argc;
@@ -318,9 +308,7 @@ pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     copy_len as u64
 }
 
-// Helper — blocking pipe read
-
-/// Blocks until data, or returns 0 once all writers have closed.
+/// Returns 0 when all writers have closed.
 pub(super) unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
     loop {
         let n = pipe::pipe_read(pipe_idx, buf);

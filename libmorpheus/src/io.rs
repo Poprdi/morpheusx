@@ -26,12 +26,10 @@ pub fn println(s: &str) {
     let _ = w.write_str("\n");
 }
 
-/// Stack-buffered writer that coalesces a whole formatted message into a single
-/// `SYS_WRITE`. `format_args!` calls `write_str` once per literal/argument, so
-/// without this a `println!("[{}] {}", a, b)` becomes several syscalls — each
-/// its own atomic line on the serial console — and interleaves with other
-/// cores. Buffering makes one call = one line. Lines longer than the buffer
-/// flush in chunks (still far fewer writes than per fragment). Flushes on drop.
+/// Coalesces `format_args!` fragments into a single `SYS_WRITE` per line.
+/// `format_args!` calls `write_str` once per literal/arg; without buffering
+/// each fragment becomes a separate syscall — interleaved on the serial console
+/// across cores. Flushes on drop.
 pub(crate) struct FdWriter {
     fd: u32,
     len: usize,

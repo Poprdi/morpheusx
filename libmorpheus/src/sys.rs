@@ -70,7 +70,7 @@ pub fn shutdown_panic() -> Result<(), u64> {
 
 /// Fill `buf` with hardware random bytes. Returns the number written (may be
 /// short on transient entropy starvation). `Err(ENOSYS)` if the platform has
-/// no RNG. Linux-`getrandom`-shaped; the seed source for std's HashMap etc.
+/// no RNG. Linux-`getrandom`-shaped.
 pub fn getrandom(buf: &mut [u8]) -> Result<usize, u64> {
     getrandom_flags(buf, 0)
 }

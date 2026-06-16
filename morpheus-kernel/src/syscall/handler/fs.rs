@@ -1,7 +1,5 @@
-// VFS syscalls: open/close/seek/stat/readdir/mkdir/unlink/rename/truncate/sync/
-// snapshot/versions, plus volumes/mounts/mount/umount. All route through
-// `crate::storage` (spec §5/§7): validate → STORAGE_LOCK → resolve → split-borrow
-// device → match-dispatch the mount's backend → VfsError→errno.
+// VFS syscalls. All route through `crate::storage` (spec §5/§7):
+// validate → STORAGE_LOCK → resolve → backend dispatch → VfsError→errno.
 
 use super::common::*;
 use crate::hal;
@@ -21,7 +19,7 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
     let ts = hal().timer().read_tsc();
     let fd_table = SCHEDULER.current_fd_table_mut();
 
-    // Allocate the fd slot first so a full table fails before touching the FS.
+    // Fail fast on full fd table before touching the FS.
     let fd = match fd_table.alloc() {
         Some(fd) => fd,
         None => return EMFILE,
@@ -42,15 +40,12 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
     let mut state = crate::storage::fs_api::FdState::empty();
     state.mount_id = mount_id;
     state.flags = flags;
-    // Store the mount-relative path: every later fd op re-derives by path and the
-    // backend's namespace is mount-rooted.
     let pb = rel.as_bytes();
     let n = pb.len().min(state.path.len());
     state.path[..n].copy_from_slice(&pb[..n]);
     state.path_len = n as u16;
     state.cookie = opened.cookie;
-    // O_APPEND positions at EOF; resolved lazily on first write via stat would
-    // need the engine, so seed from the backend stat here.
+    // O_APPEND: seed offset from backend stat now (lazy stat would need the engine).
     if flags & O_APPEND != 0 {
         if let Ok(st) = m.fs.stat(dev, rel) {
             state.offset = st.size;
@@ -75,7 +70,6 @@ pub unsafe fn sys_fs_close(fd: u64) -> u64 {
         None => return EBADF,
     };
 
-    // Pipes carry no mount; their teardown stays with the pipe layer.
     if desc.flags & (O_PIPE_READ | O_PIPE_WRITE) != 0 {
         return match fd_table.free(fd as usize) {
             Some(_) => 0,
@@ -154,7 +148,6 @@ pub unsafe fn sys_fs_write(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     };
     match m.fs.write(dev, &mut desc, buf, ts) {
         Ok(n) => {
-            // The backend advanced `desc.offset`; persist it back to the table.
             if let Some(d) = fd_table.get_mut(fd as usize) {
                 d.offset = desc.offset;
             }
@@ -171,7 +164,6 @@ pub unsafe fn sys_fs_seek(fd: u64, offset: u64, whence: u64) -> u64 {
         None => return EBADF,
     };
 
-    // SEEK_END needs the current file size from the backend.
     let base = match whence {
         SEEK_SET => 0i64,
         SEEK_CUR => desc.offset as i64,
@@ -322,7 +314,6 @@ pub unsafe fn sys_fs_rename(old_ptr: u64, old_len: u64, new_ptr: u64, new_len: u
     if src_mount != dst_mount {
         return EXDEV;
     }
-    // Strip the shared mount prefix from both paths before the backend sees them.
     let mp_len = match g.mounts.get(src_mount) {
         Some(m) => m.mount_point_len as usize,
         None => return ENOENT,
@@ -339,8 +330,7 @@ pub unsafe fn sys_fs_rename(old_ptr: u64, old_len: u64, new_ptr: u64, new_len: u
     }
 }
 
-/// Resize `path` to `new_size`: shrink truncates, grow zero-extends. A backend
-/// that rejects an oversized grow surfaces its own error.
+/// Shrink or zero-extend `path` to `new_size`.
 pub unsafe fn sys_fs_truncate(path_ptr: u64, path_len: u64, new_size: u64) -> u64 {
     let path = match user_path(path_ptr, path_len) {
         Some(p) => p,
@@ -359,7 +349,6 @@ pub unsafe fn sys_fs_truncate(path_ptr: u64, path_len: u64, new_size: u64) -> u6
     }
 }
 
-/// Sync every mounted backend against its device.
 pub unsafe fn sys_fs_sync() -> u64 {
     let guard = storage::lock();
     let g = &mut *guard.g;
@@ -372,9 +361,7 @@ pub unsafe fn sys_fs_sync() -> u64 {
     0
 }
 
-/// Records a named snapshot marker on the mount holding `name`'s path-root and
-/// returns the backend handle (Helix LSN). An empty name is an anonymous
-/// checkpoint of the root mount.
+/// Named snapshot on the root mount; returns Helix LSN. Empty name = anonymous checkpoint.
 pub unsafe fn sys_fs_snapshot(name_ptr: u64, name_len: u64) -> u64 {
     let name = if name_ptr == 0 || name_len == 0 {
         ""
@@ -384,7 +371,6 @@ pub unsafe fn sys_fs_snapshot(name_ptr: u64, name_len: u64) -> u64 {
             None => return EINVAL,
         }
     };
-    // Snapshot targets the root mount (the snapshot name is a marker, not a path).
     let ts = hal().timer().read_tsc();
     let guard = storage::lock();
     let g = &mut *guard.g;
@@ -398,9 +384,7 @@ pub unsafe fn sys_fs_snapshot(name_ptr: u64, name_len: u64) -> u64 {
     }
 }
 
-/// Fills `buf` with up to `max` `FileVersion` records for `path` (oldest first)
-/// and returns the number written. A null/zero buffer with `max == 0` returns
-/// the available version count without writing (probe convention).
+/// Fills `buf` with up to `max` `FileVersion` records (oldest first); `max == 0` probes count.
 pub unsafe fn sys_fs_versions(path_ptr: u64, path_len: u64, buf_ptr: u64, max: u64) -> u64 {
     use morpheus_foundation::types::FileVersion;
 
@@ -444,9 +428,7 @@ pub unsafe fn sys_fs_versions(path_ptr: u64, path_len: u64, buf_ptr: u64, max: u
     n as u64
 }
 
-/// `volumes(buf_ptr, max) -> count` (SYS_VOLUMES). Probe-then-fill: `max == 0`
-/// returns the count without writing; otherwise fills `min(count, max)`
-/// `VolumeInfo` records. Mirrors the `SYS_VERSIONS` convention.
+/// `SYS_VOLUMES`: fills `min(count, max)` `VolumeInfo` records; `max == 0` probes count.
 pub unsafe fn sys_volumes(buf_ptr: u64, max: u64) -> u64 {
     use morpheus_block_types::DeviceKind;
     use morpheus_foundation::types::VolumeInfo;
@@ -504,8 +486,7 @@ pub unsafe fn sys_volumes(buf_ptr: u64, max: u64) -> u64 {
     count as u64
 }
 
-/// `mounts(buf_ptr, max) -> count` (SYS_MOUNTS). Same probe-then-fill convention
-/// as `sys_volumes`.
+/// `SYS_MOUNTS`: fills `min(count, max)` `MountInfo` records; `max == 0` probes count.
 pub unsafe fn sys_mounts(buf_ptr: u64, max: u64) -> u64 {
     use morpheus_foundation::types::MountInfo;
 
@@ -541,10 +522,8 @@ pub unsafe fn sys_mounts(buf_ptr: u64, max: u64) -> u64 {
     count as u64
 }
 
-/// `mount(source_volume_id, mp_ptr, mp_len, fs_type, flags, aux)` (SYS_MOUNT,
-/// spec §5). `source_volume_id == VOLUME_NONE` mounts a fresh RAM (tmpfs);
-/// `MNT_STAGED` copies a real volume into RAM. Returns `mount_id` or errno.
-/// `aux` = required size when source is VOLUME_NONE, else optional stage cap.
+/// `SYS_MOUNT` (spec §5). `VOLUME_NONE` → fresh RAM; `MNT_STAGED` → copy-to-RAM.
+/// `aux`: required size for RAM mounts, optional cap for staged. Returns `mount_id` or errno.
 pub unsafe fn sys_mount(
     source_volume_id: u64,
     mp_ptr: u64,
@@ -562,8 +541,7 @@ pub unsafe fn sys_mount(
     let n = pb.len().min(256);
     mount_point[..n].copy_from_slice(&pb[..n]);
 
-    // Userland-driven mounts are charged against the calling pid's RAM budget and
-    // never run privileged (spec §6).
+    // Userland mounts are unprivileged and charged to the caller's RAM budget (spec §6).
     let pid = SCHEDULER.current_process_mut().pid;
 
     let req = storage::MountReq {
@@ -582,8 +560,7 @@ pub unsafe fn sys_mount(
     }
 }
 
-/// `umount(mp_ptr, mp_len, flags)` (SYS_UMOUNT, spec §5). Exact mountpoint only;
-/// `MNT_FORCE` revokes open fds. Returns 0 or errno.
+/// `SYS_UMOUNT` (spec §5). Exact mountpoint match; `MNT_FORCE` revokes open fds.
 pub unsafe fn sys_umount(mp_ptr: u64, mp_len: u64, flags: u64) -> u64 {
     let mp = match user_path(mp_ptr, mp_len) {
         Some(p) => p,

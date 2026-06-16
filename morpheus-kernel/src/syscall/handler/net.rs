@@ -17,7 +17,6 @@ pub use morpheus_foundation::net::{
     NET_UDP_RECV_FROM, NET_UDP_SEND_TO, NET_UDP_SOCKET,
 };
 
-// Canonical boundary structs live in morpheus-foundation — single source.
 pub use morpheus_foundation::types::{NetConfigInfo, NetStats};
 
 type UdpSendFn =

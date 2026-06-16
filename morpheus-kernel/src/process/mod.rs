@@ -200,9 +200,7 @@ pub struct Process {
 
     pub running_on: u32,
 
-    /// User TLS base (x86 FS base), set via SYS_SET_THREAD_POINTER and restored
-    /// on every switch-to-user. Rust-only field (no asm reads it), so appending
-    /// it is layout-safe — unlike fields the fixed-offset asm consumes.
+    /// x86 FS base; restored on every switch-to-user. Layout-safe: no fixed-offset asm reads it.
     pub tls_base: u64,
 }
 
@@ -262,7 +260,6 @@ impl Process {
             input_buf: [0u8; 256],
             input_head: 0,
             input_tail: 0,
-            // Not on any core.
             running_on: u32::MAX,
             tls_base: 0,
         }

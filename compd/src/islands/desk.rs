@@ -14,9 +14,7 @@ use crate::islands::{CompState, MAX_WINDOWS};
 const CMD_SHOW_ALL_WINDOWS: u32 = 1;
 const CMD_MINIMIZE_ALL: u32 = 2;
 
-/// Read the shell's desktop-command request (`de.desk.cmd`) as `(token, cmd)`; a missing/short value
-/// reads as `(0, 0)`. Blob layout `[token u32 LE][cmd u32 LE]` — the same contract
-/// `platform_morpheusx` writes; the two processes share the byte layout, not the code.
+/// Read `de.desk.cmd` as `(token, cmd)`. Blob: `[token u32 LE][cmd u32 LE]`.
 pub fn read_desk_command() -> (u32, u32) {
     let mut buf = [0u8; 8];
     match libmorpheus::persist::get("de.desk.cmd", &mut buf) {
@@ -29,10 +27,7 @@ pub fn read_desk_command() -> (u32, u32) {
     }
 }
 
-/// Service a pending desktop-command request from the shell (called each frame). Acts only on a
-/// strictly-new token (the startup baseline covers a stale cross-boot value); an unknown command id
-/// is ignored. The two commands reuse the exact edits the keyboard/chip equivalents already perform,
-/// so the menu can issue nothing the desktop can't already do.
+/// Service `de.desk.cmd` each frame; acts only on a strictly-new token; ignores unknown ids.
 pub fn consume_desk_command(state: &mut CompState) {
     let (token, cmd) = read_desk_command();
     if token == state.desk_cmd_token {
@@ -42,17 +37,13 @@ pub fn consume_desk_command(state: &mut CompState) {
 
     match cmd {
         CMD_SHOW_ALL_WINDOWS => {
-            // Open the Exposé overview the compositor already owns (Ctrl+Alt+E). Guarded so a repeated
-            // pick re-opens rather than toggling a just-opened grid back off.
+            // Guarded so a repeated pick re-opens rather than toggling a just-opened grid back off.
             if !state.overview {
                 crate::islands::overview::toggle(state);
             }
             libmorpheus::debug!("desk cmd: show all windows");
         },
         CMD_MINIMIZE_ALL => {
-            // "Show desktop": hide every visible app window via the same `minimize_window` edit the
-            // titlebar `[_]`, the taskbar chip, and the window menu take — so the taskbar chips dim and
-            // focus falls away exactly as a one-at-a-time minimize would.
             for i in 0..MAX_WINDOWS {
                 if crate::islands::focus::focusable(state, i) {
                     crate::islands::input::minimize_window(state, i);
