@@ -89,6 +89,7 @@ fn usage() {
     eprintln!("  morpheus-cli inject <disk-image> <binary> [--dest /bin/name]");
     eprintln!("  morpheus-cli pack   <disk-image> <output-image> [--max-mb N]");
     eprintln!("  morpheus-cli ls     <disk-image> [path]");
+    eprintln!("  morpheus-cli rm     <disk-image> <path>   (recursive)");
     eprintln!("  morpheus-cli mkbin  <disk-image>");
     eprintln!();
     eprintln!("EXAMPLES:");
@@ -300,6 +301,43 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Recursively delete `path` (a file, or a directory and everything under it).
+/// `HelixFs::unlink` only removes a file or an *empty* directory, so directories
+/// are emptied depth-first first. Used to clear a stale repo before re-injecting a
+/// fresh one — inject overwrites by path but never deletes, so without this a
+/// re-injected tree inherits the previous tree's orphaned files.
+fn rm_recursive(fs: &mut HelixFs, path: &str) -> Result<(), String> {
+    let is_dir = match fs.stat(path) {
+        Ok(st) => st.is_dir,
+        Err(HelixError::NotFound) => return Ok(()), // already gone — idempotent
+        Err(e) => return Err(format!("stat {}: {:?}", path, e)),
+    };
+    if is_dir {
+        let base = path.trim_end_matches('/');
+        let children = fs
+            .readdir(path)
+            .map_err(|e| format!("readdir {}: {:?}", path, e))?;
+        for e in &children {
+            let name = std::str::from_utf8(&e.name[..e.name_len as usize])
+                .map_err(|_| format!("non-utf8 name under {}", path))?;
+            rm_recursive(fs, &format!("{}/{}", base, name))?;
+        }
+    }
+    fs.unlink(path, 0)
+        .map_err(|e| format!("unlink {}: {:?}", path, e))
+}
+
+fn cmd_rm(disk: &str, path: &str) -> Result<(), String> {
+    if path == "/" {
+        return Err("refusing to rm the root '/'".to_string());
+    }
+    let (mut dev, mut fs) = mount(disk)?;
+    rm_recursive(&mut fs, path)?;
+    fs.sync(&mut dev).map_err(|e| format!("sync: {:?}", e))?;
+    println!("[rm] removed {}", path);
+    Ok(())
+}
+
 fn cmd_format(disk: &str) -> Result<(), String> {
     let mut dev =
         FileBlockDevice::open(disk).map_err(|e| format!("cannot open '{}': {}", disk, e))?;
@@ -388,6 +426,13 @@ fn main() {
                 std::process::exit(1);
             }
             cmd_format(&args[2])
+        },
+        "rm" => {
+            if args.len() < 4 {
+                eprintln!("Usage: morpheus-cli rm <disk-image> <path>");
+                std::process::exit(1);
+            }
+            cmd_rm(&args[2], &args[3])
         },
         _ => {
             usage();

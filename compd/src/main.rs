@@ -36,6 +36,11 @@ fn main() -> i32 {
         state.keymap = km;
     }
 
+    // Baseline the taskbar focus-request token so a stale request left in the (cross-boot) persist
+    // store can't activate a window before the desktop is even up — only a strictly-new token from
+    // this session's shell is serviced (mirrors hypnos baselining the launch request).
+    state.focus_req_token = islands::focus::read_focus_request().0;
+
     let mut last_appearance_poll_ms = 0u64;
     let mut last_keymap_poll_ms = 0u64;
 
@@ -58,7 +63,12 @@ fn main() -> i32 {
         islands::vsync::tick(&mut state);
         islands::input::poll(&mut state);
         islands::surface_mgr::update(&mut state);
+        // Service taskbar-chip activations (focus/raise · minimize · restore) from the shell, then
+        // any keyboard focus-cycle, then publish the resulting focus/minimized snapshot back to the
+        // shell so the taskbar chips reflect it.
+        islands::focus::consume_focus_request(&mut state);
         islands::focus::process_msgs(&mut state);
+        islands::focus::publish_window_state(&mut state);
         islands::renderer::compose(&mut state);
 
         process::yield_cpu();

@@ -1,30 +1,28 @@
 extern crate alloc;
 
-use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, MAX_WINDOWS, TITLE_H};
+use crate::islands::{CompState, HitRegion, MouseCapture, BORDER, GRIP, MAX_WINDOWS, TITLE_H};
 use crate::messages::{InputMsg, MouseSpatialMsg, MouseZRouteMsg};
 use libmorpheus::{compositor as compsys, hw, io, process};
 
-// Raw PS/2 Set 1 scancodes arrive via SYS_KEYBOARD_READ (no longer stdin).
-// `handle_scancode` runs the modifier state machine, consumes global hotkeys,
-// and decodes the rest to UTF-8 bytes via the active layout (`state.keymap`),
-// which compd forwards to the focused window.
-const EXTENDED_PREFIX: u8 = 0xE0;
-const BREAK_FLAG: u8 = 0x80;
-const SC_LCTRL: u8 = 0x1D;
-const SC_LSHIFT: u8 = 0x2A;
-const SC_RSHIFT: u8 = 0x36;
-const SC_LALT: u8 = 0x38; // right Alt (= AltGr) when 0xE0-prefixed
-const SC_CAPS: u8 = 0x3A;
+// Raw PS/2 Set 1 scancodes arrive via SYS_KEYBOARD_READ. The decode + modifier state machine
+// (resilient to this kernel's make-code corruption — see keymap::ScanDecoder) lives in the
+// shared `keymap` crate; compd coalesces each key burst, intercepts its own window-management
+// hotkeys, and forwards the decoded bytes to the focused window.
 const SC_X: u8 = 0x2D; // Ctrl+Alt+X → spawn /bin/msh.
 const SC_RBRACKET: u8 = 0x1B; // Ctrl+(physical ]) → cycle focus.
+const SC_TAB: u8 = 0x0F; // Alt+Tab → cycle focus (Shift+Alt+Tab reverses).
+const SC_D: u8 = 0x20; // Ctrl+Alt+D → drop focus, hand the keyboard back to the z0 desktop launcher.
 
-enum KeyAction {
-    None,
-    SpawnShell,
-    CycleFocus,
-    /// `n` decoded UTF-8 bytes were written into the caller's emit buffer.
-    Emit(usize),
-}
+/// A second title-bar press within this many ms of the first, on the same window, is a double-click
+/// → maximize/restore (the saved_rect toggle the Ctrl+Alt+5 / top-edge snap also uses). 400 ms is
+/// the conventional desktop double-click window. The predicate is host-tested in `wm_geom`.
+const DOUBLE_CLICK_MS: u64 = 400;
+
+/// Aero-snap trigger geometry. A window title dragged within `SNAP_EDGE` px of a screen edge tiles
+/// to that edge's zone on release (left/right → halves, top → maximize); the `SNAP_CORNER` band at
+/// the work-area top/bottom of a side edge makes it that corner's quadrant instead of a half.
+const SNAP_EDGE: i32 = 16;
+const SNAP_CORNER: i32 = 160;
 
 pub fn poll(state: &mut CompState) {
     poll_keyboard(state);
@@ -32,124 +30,219 @@ pub fn poll(state: &mut CompState) {
 }
 
 fn poll_keyboard(state: &mut CompState) {
-    let mut kb = [0u8; 32];
-    let n = io::read_keyboard(&mut kb);
-    if n == 0 {
+    let mut scan = [0u8; 64];
+    let mut total = io::read_keyboard(&mut scan);
+    if total == 0 {
         return;
     }
 
-    // Decoded output can be multi-byte (UTF-8), so size for the worst case.
-    let mut fwd = [0u8; 128];
-    let mut fi = 0usize;
-
-    for &byte in kb.iter().take(n) {
-        let mut emit = [0u8; 4];
-        match handle_scancode(state, byte, &mut emit) {
-            KeyAction::SpawnShell => {
-                let _ = process::spawn("/bin/msh");
-            },
-            KeyAction::CycleFocus => {
-                if state
-                    .ch_input_to_focus
-                    .send(InputMsg::FocusCycleRequest)
-                    .is_err()
-                {
-                    // Drop on full channel; user will press again.
-                }
-            },
-            KeyAction::Emit(len) => {
-                for b in emit.iter().take(len) {
-                    if fi < fwd.len() {
-                        fwd[fi] = *b;
-                        fi += 1;
-                    }
-                }
-            },
-            KeyAction::None => {},
+    // Coalesce the rest of this key burst before decoding. The kernel polls PS/2 into the ring
+    // on its ~100 Hz timer, so a press's make and the matching break (and the make,make,break,
+    // break of a chord) can land in two reads ~10 ms apart. The decoder's modifier look-ahead
+    // needs the whole burst in one batch, so accumulate for up to ~2 idle ticks. This only
+    // pauses compositing *while keys are arriving* — an idle ring returns above immediately.
+    let mut idle = 0;
+    while total < scan.len() && idle < 2 {
+        process::sleep(8);
+        let m = io::read_keyboard(&mut scan[total..]);
+        if m == 0 {
+            idle += 1;
+        } else {
+            total += m;
+            idle = 0;
         }
     }
 
+    // Decoded output can be multi-byte (UTF-8) or escape sequences, so size for the worst case.
+    let mut fwd = [0u8; 128];
+    let mut fi = 0usize;
+    let mut spawn_shell = false;
+    let mut show_launcher = false; // Ctrl+Alt+D → defocus so the desktop launcher gets the keyboard.
+    let mut cycle_focus: Option<bool> = None; // Some(reverse) when a focus-cycle chord fired.
+    let mut wm_cmd: Option<wm_geom::WmCommand> = None;
+
+    let CompState { kbd, keymap, .. } = state;
+    kbd.feed_batch(keymap, &scan[..total], |key| {
+        // Global window-management hotkeys consume their key (never forwarded to the client).
+        if key.scancode == SC_X && key.ctrl && key.alt {
+            spawn_shell = true;
+            return;
+        }
+        // Ctrl+Alt+D drops window focus back to the z0 desktop — the keyboard then reaches the
+        // launcher, so another app can be opened while windows are already up (without it, every
+        // launch focuses its window and the launcher becomes unreachable → only one window ever).
+        if key.scancode == SC_D && key.ctrl && key.alt {
+            show_launcher = true;
+            return;
+        }
+        // Alt+Tab cycles focus forward, Shift+Alt+Tab reverse — the canonical window switcher.
+        if key.scancode == SC_TAB && key.alt {
+            cycle_focus = Some(key.shift);
+            return;
+        }
+        if key.scancode == SC_RBRACKET && key.ctrl {
+            cycle_focus = Some(false);
+            return;
+        }
+        // Keyboard-first window management (Ctrl+Alt cluster): move/resize/close the focused window.
+        if let Some(cmd) = wm_geom::wm_command(key.scancode, key.ctrl, key.alt, key.shift) {
+            wm_cmd = Some(cmd);
+            return;
+        }
+        for &b in key.bytes {
+            if fi < fwd.len() {
+                fwd[fi] = b;
+                fi += 1;
+            }
+        }
+    });
+
+    if spawn_shell {
+        let _ = process::spawn("/bin/msh");
+    }
+    if show_launcher {
+        // Hand the keyboard to the z0 desktop launcher; the open windows stay where they are.
+        state.focused = None;
+    }
+    if let Some(reverse) = cycle_focus {
+        if state
+            .ch_input_to_focus
+            .send(InputMsg::FocusCycleRequest { reverse })
+            .is_err()
+        {
+            // Drop on full channel; user will press again.
+        }
+    }
+    if let Some(cmd) = wm_cmd {
+        apply_wm_command(state, cmd);
+    }
     if fi > 0 {
-        if let Some(focused_idx) = state.focused {
-            if let Some(ref win) = state.windows[focused_idx] {
+        // Keyboard goes to the focused window; with no window focused it falls through to the
+        // z0 desktop shell, so the desktop is interactive on its own (the desktop is never
+        // "focused" — focus cycles z1 app windows only — yet it must still receive keys).
+        let target = state.focused.or(state.desktop_idx);
+        if let Some(idx) = target {
+            if let Some(ref win) = state.windows[idx] {
                 let _ = compsys::forward_input(win.pid, &fwd[..fi]);
             }
         }
     }
 }
 
-/// Feed one raw PS/2 Set 1 byte into compd's modifier state machine. Updates
-/// modifier/lock state, consumes global hotkeys on their press edge, and
-/// otherwise decodes the key to UTF-8 bytes (written into `emit`) via the
-/// active layout. Returns the action for `poll_keyboard` to apply.
-fn handle_scancode(state: &mut CompState, byte: u8, emit: &mut [u8; 4]) -> KeyAction {
-    if byte == EXTENDED_PREFIX {
-        state.kbd_extended = true;
-        return KeyAction::None;
-    }
-    let is_break = (byte & BREAK_FLAG) != 0;
-    let make = byte & !BREAK_FLAG;
-    let was_extended = state.kbd_extended;
-    state.kbd_extended = false;
-
-    if was_extended {
-        // 0xE0-prefixed: right Ctrl, right Alt (= AltGr), and nav keys.
-        match make {
-            SC_LCTRL => state.kbd_ctrl = !is_break,
-            SC_LALT => state.kbd_altgr = !is_break,
-            _ => {}, // arrows / nav cluster — no character yet
-        }
-        return KeyAction::None;
-    }
-
-    // Modifiers / locks never produce output.
-    match make {
-        SC_LCTRL => {
-            state.kbd_ctrl = !is_break;
-            return KeyAction::None;
-        },
-        SC_LSHIFT | SC_RSHIFT => {
-            state.kbd_shift = !is_break;
-            return KeyAction::None;
-        },
-        SC_LALT => {
-            state.kbd_alt = !is_break;
-            return KeyAction::None;
-        },
-        SC_CAPS => {
-            if !is_break {
-                state.kbd_caps = !state.kbd_caps; // toggle on press
-            }
-            return KeyAction::None;
-        },
-        _ => {},
-    }
-
-    if is_break {
-        return KeyAction::None; // characters and hotkeys fire on the press edge only
-    }
-
-    // Global hotkeys consume their trigger key (not forwarded / not decoded).
-    if make == SC_X && state.kbd_ctrl && state.kbd_alt {
-        return KeyAction::SpawnShell;
-    }
-    if make == SC_RBRACKET && state.kbd_ctrl {
-        return KeyAction::CycleFocus;
-    }
-
-    // Decode to characters via the active layout.
-    let mods = keymap::Mods {
-        shift: state.kbd_shift,
-        altgr: state.kbd_altgr,
-        ctrl: state.kbd_ctrl,
-        caps: state.kbd_caps,
+/// Apply a keyboard window-management command to the focused window. Move/Resize reuse the exact
+/// `wm_geom` clamp/snap math the mouse drag uses, so a window ends in an identical valid state
+/// however it was driven; Resize then re-notifies the client of its new cell size (as the mouse
+/// resize does) so the DE reflows. Close terminates the client — the surface reaper handles cleanup
+/// and refocus. A no-op when nothing is focused or the focused surface is the z0 desktop.
+fn apply_wm_command(state: &mut CompState, cmd: wm_geom::WmCommand) {
+    let Some(idx) = state.focused else {
+        return;
     };
-    let len = state.keymap.decode(make, &mods, emit);
-    if len > 0 {
-        KeyAction::Emit(len)
-    } else {
-        KeyAction::None
+    // Only z1 app windows are managed (the z0 desktop is never focused, but guard regardless).
+    if !matches!(state.windows[idx], Some(ref w) if w.z_layer == 1) {
+        return;
     }
+
+    if matches!(cmd, wm_geom::WmCommand::Close) {
+        if let Some(ref win) = state.windows[idx] {
+            let _ = process::kill(win.pid, process::signal::SIGTERM);
+        }
+        state.capture = None;
+        return;
+    }
+
+    if let wm_geom::WmCommand::Snap(zone) = cmd {
+        apply_snap(state, idx, zone);
+        return;
+    }
+
+    let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
+    let is_resize = matches!(cmd, wm_geom::WmCommand::Resize(_));
+    if let Some(ref mut win) = state.windows[idx] {
+        let rect = wm_geom::Rect {
+            x: win.x,
+            y: win.y,
+            w: win.w as i32,
+            h: win.h as i32,
+        };
+        let r = wm_geom::apply_command(
+            rect,
+            cmd,
+            fb_w,
+            fb_h,
+            TITLE_H as i32,
+            crate::islands::CELL_W as i32,
+            crate::islands::CELL_H as i32,
+            160,
+            120,
+        );
+        win.x = r.x;
+        win.y = r.y;
+        win.w = r.w as u32;
+        win.h = r.h as u32;
+        win.mouse_local_valid = false;
+    }
+    if is_resize {
+        crate::islands::surface_mgr::notify_window_size(state, idx);
+    }
+}
+
+/// Tile the focused window to a snap zone (Ctrl+Alt + number-row grid). The geometry comes from the
+/// host-tested `wm_geom::snap_rect` (work-area aware — it reserves the taskbar), so a keyboard snap
+/// lands a window in a rect the mouse/keyboard movers also accept. Maximize (the centre key) is a
+/// toggle: it stashes the floating geometry in `saved_rect` and restores it on the next press; any
+/// half/quadrant snap is a direct placement and clears that stash. The client is re-notified of its
+/// new cell size in every case so the DE reflows to the tiled geometry.
+fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZone) {
+    let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
+    let rect_for = |zone| {
+        wm_geom::snap_rect(
+            zone,
+            fb_w,
+            fb_h,
+            crate::islands::PANEL_H as i32,
+            TITLE_H as i32,
+            BORDER as i32,
+            crate::islands::CELL_W as i32,
+            crate::islands::CELL_H as i32,
+            160,
+            120,
+        )
+    };
+
+    if matches!(zone, wm_geom::SnapZone::Maximize) {
+        if let Some(ref mut win) = state.windows[idx] {
+            if let Some((x, y, w, h)) = win.saved_rect.take() {
+                // Already maximized → restore the stashed floating geometry.
+                win.x = x;
+                win.y = y;
+                win.w = w;
+                win.h = h;
+            } else {
+                // Stash the current rect, then fill the work area.
+                win.saved_rect = Some((win.x, win.y, win.w, win.h));
+                let r = rect_for(zone);
+                win.x = r.x;
+                win.y = r.y;
+                win.w = r.w as u32;
+                win.h = r.h as u32;
+            }
+            win.mouse_local_valid = false;
+        }
+        crate::islands::surface_mgr::notify_window_size(state, idx);
+        return;
+    }
+
+    let r = rect_for(zone);
+    if let Some(ref mut win) = state.windows[idx] {
+        win.saved_rect = None; // a direct tile is not a maximize-restore state.
+        win.x = r.x;
+        win.y = r.y;
+        win.w = r.w as u32;
+        win.h = r.h as u32;
+        win.mouse_local_valid = false;
+    }
+    crate::islands::surface_mgr::notify_window_size(state, idx);
 }
 
 fn poll_mouse(state: &mut CompState) {
@@ -192,7 +285,42 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
     enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 });
 
     if msg.left_released {
+        // A title drag that ended over an edge-snap trigger TILES to that zone instead of dropping
+        // the window free where it was dragged (Aero Snap). `apply_snap` reuses the same host-tested
+        // `wm_geom::snap_rect` geometry the keyboard tiling uses, so a mouse snap and a Ctrl+Alt snap
+        // leave a window in an identical state.
+        if let (Some(MouseCapture::Move { idx, .. }), Some(zone)) =
+            (state.capture, state.snap_preview)
+        {
+            apply_snap(state, idx, zone);
+            if let Some(ref win) = state.windows[idx] {
+                libmorpheus::debug!(
+                    "snap win {}: {}x{} @ {},{}",
+                    win.pid,
+                    win.w,
+                    win.h,
+                    win.x,
+                    win.y
+                );
+            }
+        } else if let Some(cap) = state.capture {
+            // Log the settled geometry when a free drag ends, so a window's move/resize is observable
+            // on the serial console (the compositor has no other window-management readout). Paired
+            // with the grab lines below, one line per discrete user action — not per frame.
+            let (MouseCapture::Move { idx, .. } | MouseCapture::Resize { idx, .. }) = cap;
+            if let Some(ref win) = state.windows[idx] {
+                libmorpheus::debug!(
+                    "drop win {}: {}x{} @ {},{}",
+                    win.pid,
+                    win.w,
+                    win.h,
+                    win.x,
+                    win.y
+                );
+            }
+        }
         state.capture = None;
+        state.snap_preview = None;
     }
 
     // Panel is z3 overlay — input there goes to shelld, not the window beneath.
@@ -221,12 +349,41 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                     route_to_child = false;
                 },
                 HitRegion::Title => {
-                    if let Some(ref win) = state.windows[idx] {
-                        state.capture = Some(MouseCapture::Move {
-                            idx,
-                            off_x: msg.mx - win.x,
-                            off_y: msg.my - win.y,
-                        });
+                    // Double-click the title bar → maximize/restore: a second press on the SAME
+                    // window within DOUBLE_CLICK_MS toggles the maximize via `apply_snap`, the same
+                    // saved_rect toggle Ctrl+Alt+5 and the top-edge Aero snap use (so however a window
+                    // is maximized, one restore path returns it). `is_double_click` is host-tested in
+                    // wm_geom. Otherwise begin a normal title-drag Move and record this press as the
+                    // potential first click of a pair.
+                    let now = libmorpheus::time::uptime_ms();
+                    if wm_geom::is_double_click(state.last_title_press, idx, now, DOUBLE_CLICK_MS) {
+                        state.last_title_press = None; // consume — a third quick press starts fresh.
+                        apply_snap(state, idx, wm_geom::SnapZone::Maximize);
+                        if let Some(ref win) = state.windows[idx] {
+                            libmorpheus::debug!(
+                                "dblclick win {}: {}x{} @ {},{}",
+                                win.pid,
+                                win.w,
+                                win.h,
+                                win.x,
+                                win.y
+                            );
+                        }
+                    } else {
+                        state.last_title_press = Some((now, idx));
+                        if let Some(ref win) = state.windows[idx] {
+                            state.capture = Some(MouseCapture::Move {
+                                idx,
+                                off_x: msg.mx - win.x,
+                                off_y: msg.my - win.y,
+                            });
+                            libmorpheus::debug!(
+                                "grab title: win {} @ {},{}",
+                                win.pid,
+                                win.x,
+                                win.y
+                            );
+                        }
                     }
                     route_to_child = false;
                 },
@@ -239,6 +396,7 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                             start_w: win.w,
                             start_h: win.h,
                         });
+                        libmorpheus::debug!("grab grip: win {} {}x{}", win.pid, win.w, win.h);
                     }
                     route_to_child = false;
                 },
@@ -260,15 +418,33 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
         if let Some(capture) = state.capture {
             match capture {
                 MouseCapture::Move { idx, off_x, off_y } => {
+                    let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
                     if let Some(ref mut win) = state.windows[idx] {
-                        let nx = msg.mx - off_x;
-                        let ny = msg.my - off_y;
-                        let max_x = (state.fb_w as i32 - win.w as i32).max(0);
-                        let max_y = (state.fb_h as i32 - win.h as i32).max(TITLE_H as i32);
-                        win.x = nx.clamp(0, max_x);
-                        win.y = ny.clamp(TITLE_H as i32, max_y);
+                        // Pointer minus the grab offset, clamped to keep the window reachable.
+                        let (x, y) = wm_geom::clamp_move(
+                            win.w as i32,
+                            win.h as i32,
+                            fb_w,
+                            fb_h,
+                            TITLE_H as i32,
+                            msg.mx - off_x,
+                            msg.my - off_y,
+                        );
+                        win.x = x;
+                        win.y = y;
                         win.mouse_local_valid = false;
                     }
+                    // Aero-snap preview: the edge zone (if any) the live pointer is over. The renderer
+                    // highlights it; releasing here tiles the window to it (see the left_released path).
+                    state.snap_preview = wm_geom::edge_snap_zone(
+                        msg.mx,
+                        msg.my,
+                        fb_w,
+                        fb_h,
+                        crate::islands::PANEL_H as i32,
+                        SNAP_EDGE,
+                        SNAP_CORNER,
+                    );
                     route_to_child = false;
                 },
                 MouseCapture::Resize {
@@ -278,17 +454,30 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
                     start_w,
                     start_h,
                 } => {
+                    let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
                     if let Some(ref mut win) = state.windows[idx] {
-                        let dx = msg.mx - start_mx;
-                        let dy = msg.my - start_my;
-                        let max_w = state.fb_w.saturating_sub(win.x.max(0) as u32).max(160);
-                        let max_h = state.fb_h.saturating_sub(win.y.max(0) as u32).max(120);
-                        let nw = (start_w as i32 + dx).clamp(160, max_w as i32);
-                        let nh = (start_h as i32 + dy).clamp(120, max_h as i32);
-                        win.w = nw as u32;
-                        win.h = nh as u32;
+                        // Start size + pointer delta, clamped to the fb and snapped to whole cells
+                        // (the content is blitted 1:1, so a fractional cell leaves a stale strip).
+                        let (w, h) = wm_geom::snap_resize(
+                            start_w as i32,
+                            start_h as i32,
+                            msg.mx - start_mx,
+                            msg.my - start_my,
+                            win.x,
+                            win.y,
+                            fb_w,
+                            fb_h,
+                            crate::islands::CELL_W as i32,
+                            crate::islands::CELL_H as i32,
+                            160,
+                            120,
+                        );
+                        win.w = w as u32;
+                        win.h = h as u32;
                         win.mouse_local_valid = false;
                     }
+                    // Tell the client its new cell size so it reflows to the dragged geometry.
+                    crate::islands::surface_mgr::notify_window_size(state, idx);
                     route_to_child = false;
                 },
             }
@@ -346,7 +535,15 @@ fn dispatch_mouse_route(state: &mut CompState, msg: MouseZRouteMsg) {
     }
 }
 
-/// Forward mouse to shelld's desktop surface, mapped from absolute global cursor.
+/// Forward mouse to the z0 desktop surface, mapped from the absolute global cursor.
+///
+/// The desktop is full-fb, so its window-local coordinate IS the absolute fb pixel. Unlike a z1
+/// window — whose app treats the forwarded motion as relative and keeps no absolute cursor — the
+/// desktop shell integrates these deltas into an absolute pointer to hit-test its launcher and
+/// taskbar. So the FIRST forward seeds that pointer with the full absolute position (a delta from
+/// the shell's origin of 0,0), not the usual (0,0) baseline: that lands the shell's cursor exactly
+/// where this compositor draws the hardware cursor from the very first sample, instead of leaving a
+/// fixed offset until the pointer happens to hit a screen edge and both clamp into agreement.
 fn forward_to_desktop(state: &mut CompState, buttons: u8) {
     if let Some(di) = state.desktop_idx {
         if let Some(ref mut dw) = state.windows[di] {
@@ -355,7 +552,7 @@ fn forward_to_desktop(state: &mut CompState, buttons: u8) {
                 (local_x - dw.mouse_local_x, local_y - dw.mouse_local_y)
             } else {
                 dw.mouse_local_valid = true;
-                (0, 0)
+                (local_x, local_y)
             };
             dw.mouse_local_x = local_x;
             dw.mouse_local_y = local_y;
@@ -371,41 +568,31 @@ fn map_global_to_local(mx: i32, my: i32, win: &crate::islands::ChildWindow) -> (
     let sw = win.src_w.max(1) as i32;
     let sh = win.src_h.max(1) as i32;
 
-    // z0 maps in desktop-space; z1 maps relative to window origin.
-    let (rel_x, rel_y, ww, wh) = if win.z_layer == 0 {
-        let ww = sw.max(1);
-        let wh = sh.max(1);
-        (mx.clamp(0, ww - 1), my.clamp(0, wh - 1), ww, wh)
+    // z0 desktop maps in full-fb desktop-space. z1 windows are blitted 1:1 from the source's
+    // top-left, so a window-local coordinate IS the source-local coordinate — no scaling.
+    if win.z_layer == 0 {
+        (mx.clamp(0, sw - 1), my.clamp(0, sh - 1))
     } else {
         let ww = win.w.max(1) as i32;
         let wh = win.h.max(1) as i32;
-        (
-            (mx - win.x).clamp(0, ww - 1),
-            (my - win.y).clamp(0, wh - 1),
-            ww,
-            wh,
-        )
-    };
+        let rel_x = (mx - win.x).clamp(0, ww - 1).min(sw - 1);
+        let rel_y = (my - win.y).clamp(0, wh - 1).min(sh - 1);
+        (rel_x, rel_y)
+    }
+}
 
-    let local_x = if ww <= 1 || sw <= 1 {
-        0
-    } else {
-        (rel_x as i64 * (sw - 1) as i64 / (ww - 1) as i64) as i32
-    };
-    let local_y = if wh <= 1 || sh <= 1 {
-        0
-    } else {
-        (rel_y as i64 * (sh - 1) as i64 / (wh - 1) as i64) as i32
-    };
-
-    (local_x, local_y)
+/// The window region the cursor is hovering (no capture/focus side effects) — drives the cursor
+/// shape so the pointer reflects what a click would do (move on the title, resize on the grip).
+pub fn hover_region(state: &CompState, mx: i32, my: i32) -> Option<HitRegion> {
+    hit_test(state, mx, my).map(|(_, region)| region)
 }
 
 fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
     let mut candidates: [Option<usize>; MAX_WINDOWS] = [None; MAX_WINDOWS];
     let mut cn = 0usize;
 
-    // Focused first, then topmost unfocused (highest index) downward.
+    // Focused first, then topmost unfocused (highest index) downward. Minimized windows are hidden,
+    // so they are never hit-tested — a click falls through to whatever is visible beneath them.
     if let Some(fi) = state.focused {
         candidates[cn] = Some(fi);
         cn += 1;
@@ -413,7 +600,7 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
     for (i, w) in state.windows.iter().enumerate().rev() {
         if let Some(ref win) = w {
             // z0 desktop is not hit-testable.
-            if win.z_layer == 1 && state.focused != Some(i) {
+            if win.z_layer == 1 && !win.minimized && state.focused != Some(i) {
                 candidates[cn] = Some(i);
                 cn += 1;
             }
@@ -423,57 +610,36 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
     for &c in &candidates[..cn] {
         if let Some(idx) = c {
             if let Some(ref win) = state.windows[idx] {
-                if win.z_layer != 1 {
+                if win.z_layer != 1 || win.minimized {
                     continue;
                 }
-
-                let outer_x = win.x - BORDER as i32;
-                let outer_y = win.y - TITLE_H as i32 - BORDER as i32;
-                let outer_w = win.w as i32 + BORDER as i32 * 2;
-                let outer_h = win.h as i32 + TITLE_H as i32 + BORDER as i32 * 2;
-
-                if mx < outer_x
-                    || mx >= outer_x + outer_w
-                    || my < outer_y
-                    || my >= outer_y + outer_h
-                {
-                    continue;
-                }
-
-                let tb_x = outer_x + BORDER as i32;
-                let tb_y = outer_y + BORDER as i32;
-                let tb_w = win.w as i32;
-                let close_x = tb_x + tb_w - 34;
-                let close_w = 30;
-                if my >= tb_y
-                    && my < tb_y + TITLE_H as i32
-                    && mx >= close_x
-                    && mx < close_x + close_w
-                {
-                    return Some((idx, HitRegion::Close));
-                }
-
-                // 14x14 bottom-right resize grip.
-                let resize_x = win.x + win.w as i32 - 14;
-                let resize_y = win.y + win.h as i32 - 14;
-                if mx >= resize_x && my >= resize_y {
-                    return Some((idx, HitRegion::Resize));
-                }
-
-                if my >= tb_y && my < tb_y + TITLE_H as i32 {
-                    return Some((idx, HitRegion::Title));
-                }
-
-                if mx >= win.x
-                    && mx < win.x + win.w as i32
-                    && my >= win.y
-                    && my < win.y + win.h as i32
-                {
-                    return Some((idx, HitRegion::Content));
+                // The per-window point classification lives in the host-tested `wm_geom` crate so
+                // the move/resize/hit math is verifiable off-hardware (no working pointer in QEMU).
+                let rect = wm_geom::Rect {
+                    x: win.x,
+                    y: win.y,
+                    w: win.w as i32,
+                    h: win.h as i32,
+                };
+                if let Some(region) = wm_geom::classify(rect, chrome(), mx, my) {
+                    return Some((idx, region.into()));
                 }
             }
         }
     }
 
     None
+}
+
+/// compd's window-chrome metrics as a `wm_geom::Chrome`. The close button is a 30px cell inset 34px
+/// from the title bar's right edge (the `[X]`); the rest mirror the module-level chrome constants.
+#[inline]
+fn chrome() -> wm_geom::Chrome {
+    wm_geom::Chrome {
+        title_h: TITLE_H as i32,
+        border: BORDER as i32,
+        grip: GRIP as i32,
+        close_off: 34,
+        close_w: 30,
+    }
 }

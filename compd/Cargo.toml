@@ -11,3 +11,4 @@ path = "src/main.rs"
 libmorpheus = { path = "../libmorpheus" }
 channel = { path = "../channel" }
 keymap = { path = "../keymap" }
+wm-geom = { path = "../wm-geom" }

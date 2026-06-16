@@ -1,5 +1,6 @@
 //! Userspace CRT0: `_start`, per-thread TLS setup, and the panic handler.
 
+#[cfg(all(not(test), feature = "panic-handler"))]
 use crate::process;
 
 // Bounds of the thread-local template, defined by libmorpheus/linker.ld. The
@@ -65,7 +66,7 @@ macro_rules! entry {
     };
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "panic-handler"))]
 #[panic_handler]
 fn _panic(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;

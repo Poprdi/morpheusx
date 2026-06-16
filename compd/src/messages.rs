@@ -41,12 +41,11 @@ pub enum SurfaceMsg {
 
 #[derive(Clone, Copy)]
 pub enum InputMsg {
-    FocusCycleRequest,
+    /// Move focus to the next z1 window — `reverse` walks the ring backward (Shift+Alt+Tab) vs the
+    /// forward Alt+Tab / Ctrl+] default.
+    FocusCycleRequest { reverse: bool },
     #[allow(dead_code)] // protocol variant, not yet emitted by the live pipeline.
-    WindowClosed {
-        idx: u8,
-        pid: u32,
-    },
+    WindowClosed { idx: u8, pid: u32 },
 }
 
 #[allow(dead_code)] // protocol message type, not yet wired into the live pipeline.

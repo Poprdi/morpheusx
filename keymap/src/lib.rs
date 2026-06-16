@@ -17,7 +17,7 @@
 //!                                UTF-32 codepoints; 0 = no output
 //! ```
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 pub const KMAP_MAGIC: [u8; 4] = *b"KMAP";
 pub const KMAP_VERSION: u16 = 1;
@@ -180,6 +180,201 @@ impl Keymap {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scancode batch decoder — resilient to a make-corrupting keyboard path.
+// ---------------------------------------------------------------------------
+
+// PS/2 Set-1 make codes for the modifiers the batch decoder tracks.
+const SC_LSHIFT: u8 = 0x2a;
+const SC_RSHIFT: u8 = 0x36;
+const SC_CTRL: u8 = 0x1d; // left Ctrl; right Ctrl arrives 0xE0-prefixed with the same code
+const SC_ALT: u8 = 0x38; // left Alt; right Alt (AltGr) arrives 0xE0-prefixed
+const SC_CAPS: u8 = 0x3a;
+
+/// One resolved keystroke, handed to [`ScanDecoder::feed_batch`]'s callback on a key's
+/// **release** edge. `bytes` is what the active layout produced (a UTF-8 character, a C0
+/// control, or a `CSI` sequence for the navigation cluster) — empty for an unmapped key.
+/// `scancode` and the modifier flags let the caller intercept its own chord hotkeys before
+/// forwarding `bytes`.
+pub struct Key<'a> {
+    pub scancode: u8,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub bytes: &'a [u8],
+}
+
+/// Stateful PS/2 Set-1 scancode → terminal-bytes decoder.
+///
+/// It acts on the **release** edge, not the press edge — deliberately. On a real QEMU+OVMF
+/// MorpheusX boot the kernel's PS/2 path delivers *break* (release) codes intact but corrupts
+/// *make* (press) codes (e.g. `a`'s make `0x1E` arrives as `0x03`, and a corrupted make
+/// sometimes lands on a modifier scancode — `t` → `1d` looks like Ctrl). A break is exactly
+/// `make | 0x80` and arrives clean, so recovering the true key from `byte & 0x7F` on release
+/// sidesteps the corruption entirely; it is equally correct on clean-make hardware (emitting on
+/// release is simply consistent). Modifiers are taken from persistent state OR a same-batch
+/// look-ahead to the modifier's clean break, and a bare modifier *make* only sets persistent
+/// state when the batch releases no real key (otherwise it is a corrupted key-make in disguise).
+///
+/// Feed it whole `SYS_KEYBOARD_READ` bursts: the look-ahead needs the `make,make,break,break`
+/// of a chord (`:`, `?`, Ctrl-C) in one batch, so coalesce a key burst before calling.
+#[derive(Default)]
+pub struct ScanDecoder {
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    altgr: bool,
+    caps: bool,
+    extended: bool,
+}
+
+impl ScanDecoder {
+    pub const fn new() -> Self {
+        ScanDecoder {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            altgr: false,
+            caps: false,
+            extended: false,
+        }
+    }
+
+    /// Decode one coalesced scancode batch against `km`, invoking `on_key` once per resolved
+    /// key release with the decoded bytes and effective modifier state.
+    pub fn feed_batch(&mut self, km: &Keymap, scan: &[u8], mut on_key: impl FnMut(Key<'_>)) {
+        let has_key_release = batch_has_key_release(scan);
+        for i in 0..scan.len() {
+            let byte = scan[i];
+            if byte == 0xe0 {
+                self.extended = true;
+                continue;
+            }
+            let is_break = byte & 0x80 != 0;
+            let make = byte & 0x7f;
+            let ext = self.extended;
+            self.extended = false;
+
+            if ext {
+                // 0xE0-prefixed: right-hand Ctrl / AltGr, and the navigation cluster.
+                match make {
+                    SC_CTRL => set_mod(&mut self.ctrl, is_break, has_key_release),
+                    SC_ALT => set_mod(&mut self.altgr, is_break, has_key_release),
+                    _ => {
+                        if is_break {
+                            if let Some(seq) = ext_nav_seq(make) {
+                                on_key(Key {
+                                    scancode: make,
+                                    ctrl: self.ctrl,
+                                    alt: self.alt,
+                                    shift: self.shift,
+                                    bytes: seq,
+                                });
+                            }
+                        }
+                    },
+                }
+                continue;
+            }
+
+            // Modifiers / locks: a clean break always releases; a make sets persistent state
+            // only when it cannot be a corrupted key-make (no real key released this batch).
+            match make {
+                SC_LSHIFT | SC_RSHIFT => {
+                    set_mod(&mut self.shift, is_break, has_key_release);
+                    continue;
+                },
+                SC_CTRL => {
+                    set_mod(&mut self.ctrl, is_break, has_key_release);
+                    continue;
+                },
+                SC_ALT => {
+                    set_mod(&mut self.alt, is_break, has_key_release);
+                    continue;
+                },
+                SC_CAPS => {
+                    if !is_break && !has_key_release {
+                        self.caps = !self.caps;
+                    }
+                    continue;
+                },
+                _ => {},
+            }
+
+            // Non-modifier presses carry the corrupted scancode — ignore; act on the break.
+            if !is_break {
+                continue;
+            }
+
+            // A key release: `make` is the true scancode. Effective modifiers = persistent
+            // state OR this modifier's clean break appearing later in the batch (covers the
+            // corrupted-make chord where the modifier's own press was never recognized).
+            let shift = self.shift || break_ahead(scan, i, &[SC_LSHIFT, SC_RSHIFT]);
+            let ctrl = self.ctrl || break_ahead(scan, i, &[SC_CTRL]);
+            let alt = self.alt || break_ahead(scan, i, &[SC_ALT]);
+            let mods = Mods {
+                shift,
+                altgr: self.altgr,
+                ctrl,
+                caps: self.caps,
+            };
+            let mut out = [0u8; 4];
+            let n = km.decode(make, &mods, &mut out);
+            on_key(Key {
+                scancode: make,
+                ctrl,
+                alt,
+                shift,
+                bytes: &out[..n],
+            });
+        }
+    }
+}
+
+/// Apply a modifier scancode edge: a clean break clears; a make sets only when the batch
+/// released no real key (else the make is a corrupted key-make masquerading as this modifier).
+#[inline]
+fn set_mod(flag: &mut bool, is_break: bool, has_key_release: bool) {
+    if is_break {
+        *flag = false;
+    } else if !has_key_release {
+        *flag = true;
+    }
+}
+
+/// Does a clean break of any scancode in `mods` appear in `scan[i+1..]`?
+fn break_ahead(scan: &[u8], i: usize, mods: &[u8]) -> bool {
+    scan[i + 1..]
+        .iter()
+        .any(|&b| b & 0x80 != 0 && mods.contains(&(b & 0x7f)))
+}
+
+/// True if this batch releases at least one *non-modifier* key. Such a break means a real key
+/// was pressed in the batch, so a bare modifier *make* riding alongside it is a corrupted
+/// key-make, not a held modifier. The `0xE0` prefix is skipped so an arrow's `e0 d0` still
+/// counts as a (non-modifier) release.
+fn batch_has_key_release(scan: &[u8]) -> bool {
+    let mods = [SC_LSHIFT, SC_RSHIFT, SC_CTRL, SC_ALT];
+    scan.iter()
+        .any(|&b| b != 0xe0 && b & 0x80 != 0 && !mods.contains(&(b & 0x7f)))
+}
+
+/// Terminal escape sequence for a 0xE0-prefixed navigation key (by its make code), or `None`.
+fn ext_nav_seq(make: u8) -> Option<&'static [u8]> {
+    Some(match make {
+        0x48 => b"\x1b[A",  // Up
+        0x50 => b"\x1b[B",  // Down
+        0x4d => b"\x1b[C",  // Right
+        0x4b => b"\x1b[D",  // Left
+        0x47 => b"\x1b[H",  // Home
+        0x4f => b"\x1b[F",  // End
+        0x49 => b"\x1b[5~", // PageUp
+        0x51 => b"\x1b[6~", // PageDown
+        0x53 => b"\x1b[3~", // Delete
+        _ => return None,
+    })
+}
+
 #[inline]
 fn is_ascii_letter(cp: u32) -> bool {
     (b'a' as u32..=b'z' as u32).contains(&cp) || (b'A' as u32..=b'Z' as u32).contains(&cp)
@@ -281,6 +476,106 @@ pub fn german_default() -> Keymap {
     Keymap {
         flags: KMAP_FLAG_CAPS_LETTERS,
         entries: e,
+    }
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+
+    /// Run a US-layout batch and collect the forwarded bytes (hotkey chords pass through too).
+    fn run(dec: &mut ScanDecoder, scan: &[u8]) -> Vec<u8> {
+        let km = us_default();
+        let mut acc = Vec::new();
+        dec.feed_batch(&km, scan, |k| acc.extend_from_slice(k.bytes));
+        acc
+    }
+
+    #[test]
+    fn decodes_on_release_not_press() {
+        let mut d = ScanDecoder::new();
+        assert_eq!(run(&mut d, &[0x1e]), b""); // 'a' press: nothing yet
+        assert_eq!(run(&mut d, &[0x9e]), b"a"); // 'a' release: emit
+    }
+
+    #[test]
+    fn corrupted_make_ignored_break_is_truth() {
+        let mut d = ScanDecoder::new();
+        // Captured QEMU traces: 'a' = corrupted make 0x03 + clean break 0x9e; Enter (→ '\n').
+        assert_eq!(run(&mut d, &[0x03, 0x9e]), b"a");
+        assert_eq!(run(&mut d, &[0x1e, 0x9c]), b"\n");
+    }
+
+    #[test]
+    fn shift_chord_via_break_lookahead() {
+        let mut d = ScanDecoder::new();
+        // ':' = Shift+';'. Burst with corrupted makes + clean breaks of ';' (0xa7) and Shift
+        // (0xaa); the layout maps shifted 0x27 → ':'.
+        assert_eq!(run(&mut d, &[0x2f, 0x5c, 0xa7, 0xaa]), b":");
+        // '?' = Shift+'/' (US 0x35). ';'/'/' breaks 0xb5, Shift break 0xaa.
+        assert_eq!(run(&mut d, &[0x2f, 0x15, 0xb5, 0xaa]), b"?");
+    }
+
+    #[test]
+    fn slash_unshifted() {
+        let mut d = ScanDecoder::new();
+        assert_eq!(run(&mut d, &[0xb5]), b"/"); // '/' release (US 0x35), no shift
+    }
+
+    #[test]
+    fn corrupted_make_on_modifier_is_not_phantom_modifier() {
+        // The real defect: a key's corrupted make lands on a modifier scancode (`t` → `1d`
+        // = Ctrl, `e` → `2a` = LShift). The clean break is truth; the modifier make is ignored
+        // because the batch releases a real key.
+        let mut d = ScanDecoder::new();
+        assert_eq!(run(&mut d, &[0x1d, 0x94]), b"t"); // NOT Ctrl-T
+        assert_eq!(run(&mut d, &[0x2a, 0x92]), b"e"); // NOT 'E', no sticky shift…
+        assert_eq!(run(&mut d, &[0x9e]), b"a"); // …next plain key stays lowercase
+    }
+
+    #[test]
+    fn ctrl_c_via_break_lookahead() {
+        let mut d = ScanDecoder::new();
+        // Captured Ctrl-C burst 11 06 ae 9d → C0 0x03 via the layout's ctrl_transform.
+        assert_eq!(run(&mut d, &[0x11, 0x06, 0xae, 0x9d]), &[0x03]);
+    }
+
+    #[test]
+    fn held_modifier_clean_make_real_hardware() {
+        let mut d = ScanDecoder::new();
+        // Clean-make path: a lone Shift make in its own batch sets persistent state.
+        assert_eq!(run(&mut d, &[SC_LSHIFT]), b""); // shift down
+        assert_eq!(run(&mut d, &[0x27, 0xa7]), b":"); // ';' shifted → ':'
+        assert_eq!(run(&mut d, &[0xaa]), b""); // shift up
+        assert_eq!(run(&mut d, &[0x27, 0xa7]), b";"); // now unshifted
+    }
+
+    #[test]
+    fn extended_arrows_on_release() {
+        let mut d = ScanDecoder::new();
+        assert_eq!(run(&mut d, &[0xe0, 0x48, 0xe0, 0xc8]), b"\x1b[A"); // Up
+        assert_eq!(run(&mut d, &[0xe0, 0x50, 0xe0, 0xd0]), b"\x1b[B"); // Down
+        assert_eq!(run(&mut d, &[0xe0, 0xcb]), b"\x1b[D"); // Left (break only)
+    }
+
+    #[test]
+    fn caps_only_affects_letters() {
+        let mut d = ScanDecoder::new();
+        run(&mut d, &[0x3a]); // caps make (own batch → toggles)
+        assert_eq!(run(&mut d, &[0x9e]), b"A"); // letter uppercased
+        assert_eq!(run(&mut d, &[0x82]), b"1"); // digit unaffected
+    }
+
+    #[test]
+    fn hotkey_chord_reports_scancode_and_mods() {
+        // Ctrl+] : the callback sees scancode 0x1b with ctrl set so the caller can consume it.
+        let mut d = ScanDecoder::new();
+        let km = us_default();
+        let mut seen = None;
+        d.feed_batch(&km, &[0x1d, 0x5c, 0x9b, 0x9d], |k| {
+            seen = Some((k.scancode, k.ctrl));
+        });
+        assert_eq!(seen, Some((0x1b, true)));
     }
 }
 

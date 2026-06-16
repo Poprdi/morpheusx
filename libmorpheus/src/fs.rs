@@ -324,14 +324,25 @@ pub fn chdir(path: &str) -> Result<(), u64> {
     }
 }
 
-/// Returns the number of entries written into `buf`.
-pub fn readdir(path: &str, buf: &mut [u8]) -> Result<usize, u64> {
+/// Enumerate a directory's immediate children into `buf`, writing at most `max_entries`
+/// of them, and return the directory's **true** child count (which may exceed `max_entries`
+/// — the kernel reports the full count so the caller can re-size and retry).
+///
+/// `max_entries` is the capacity bound the kernel honours when filling `buf`: it never writes
+/// more than `max_entries` `DirEntry` records, so passing the buffer's real capacity makes the
+/// write memory-safe even when the directory has more children than fit. (Earlier this wrapper
+/// was on the 3-arg pre-capacity ABI and left the capacity register undefined — a latent heap
+/// overflow on a kernel that bounds its write by this argument, since the kernel would write its
+/// full child count regardless of the buffer size.) A `max_entries` of `0` is the count-only
+/// probe: the kernel writes nothing and returns the child count.
+pub fn readdir(path: &str, buf: &mut [u8], max_entries: usize) -> Result<usize, u64> {
     let ret = unsafe {
-        syscall3(
+        syscall4(
             SYS_READDIR,
             path.as_ptr() as u64,
             path.len() as u64,
             buf.as_mut_ptr() as u64,
+            max_entries as u64,
         )
     };
     if is_error(ret) {
@@ -625,7 +636,10 @@ pub fn read_dir(path: &str) -> error::Result<ReadDir> {
     let max_entries = 256;
     let mut buf = vec![0u8; entry_size * max_entries];
 
-    let count = readdir(path, &mut buf).map_err(Error::from_raw)?;
+    // Pass the buffer's capacity so the kernel bounds its write (the true child count it
+    // returns may exceed `max_entries`; we only ever read what was written).
+    let total = readdir(path, &mut buf, max_entries).map_err(Error::from_raw)?;
+    let count = total.min(max_entries);
 
     let mut entries = Vec::with_capacity(count);
     for i in 0..count {

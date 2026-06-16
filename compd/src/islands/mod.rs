@@ -9,9 +9,22 @@ use channel::Channel;
 use libmorpheus::compositor as compsys;
 
 pub const MAX_WINDOWS: usize = 16;
+/// Max bytes of the `de.win.state` blob compd publishes: `[focused_pid][n_min][min_pid…]` =
+/// 8 + `MAX_WINDOWS` × 4. Sized so every window can be minimized at once.
+pub const WIN_STATE_CAP: usize = 8 + MAX_WINDOWS * 4;
 pub const TITLE_H: u32 = 22;
 pub const BORDER: u32 = 1;
 pub const CASCADE_STEP: i32 = 28;
+/// Side of the square bottom-right resize grip. The hit-test region and the drawn handle share
+/// this so the clickable area exactly matches the pixels (they drifted: 14 hit vs 12 drawn).
+pub const GRIP: u32 = 14;
+
+/// Text-cell geometry of a windowed client. Clients render an 8×16 bitmap-font cell grid
+/// (the DE's `phosphor` font); windows are sized in whole cells and their content is blitted
+/// 1:1, so a window's pixel size is always a multiple of these. compd reports a window's size
+/// to its client in cells via the `CSI 8 ; rows ; cols t` resize report.
+pub const CELL_W: u32 = 8;
+pub const CELL_H: u32 = 16;
 
 pub const TITLE_UNFOCUSED_RGB: (u8, u8, u8) = (40, 40, 40);
 pub const TITLE_TEXT_RGB: (u8, u8, u8) = (255, 255, 255);
@@ -40,6 +53,17 @@ pub struct ChildWindow {
     pub title: [u8; 64],
     pub title_len: usize,
     pub z_layer: u8, // 0=bg, 1=window, 3=overlay
+    // Last content size (cols, rows) reported to the client via `CSI 8;rows;cols t`. 0 = never
+    // sent; the client is notified once on map and again whenever a resize changes the cell count.
+    pub sent_cols: u16,
+    pub sent_rows: u16,
+    // Floating geometry stashed when the window was maximized (Ctrl+Alt+5), so the next press
+    // restores it. `Some` ⇒ the window is currently maximized; any other snap (or none) clears it.
+    pub saved_rect: Option<(i32, i32, u32, u32)>,
+    // Minimized (hidden): the window keeps its slot + geometry but is skipped by the renderer and
+    // the hit-test, and is never focusable. Toggled by activating its taskbar chip (the shell's
+    // focus request → `focus::consume_focus_request`). The z0 desktop is never minimized.
+    pub minimized: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +90,17 @@ pub enum HitRegion {
     Resize,
 }
 
+impl From<wm_geom::Region> for HitRegion {
+    fn from(r: wm_geom::Region) -> Self {
+        match r {
+            wm_geom::Region::Title => HitRegion::Title,
+            wm_geom::Region::Close => HitRegion::Close,
+            wm_geom::Region::Resize => HitRegion::Resize,
+            wm_geom::Region::Content => HitRegion::Content,
+        }
+    }
+}
+
 pub struct CompState {
     // renderer
     pub fb_ptr: *mut u32,
@@ -82,20 +117,31 @@ pub struct CompState {
 
     // focus
     pub focused: Option<usize>,
+    // Last `de.focus.req` token serviced (baselined at startup so a stale cross-boot request can't
+    // activate a window before the desktop is up). compd acts only on a strictly-different token.
+    pub focus_req_token: u32,
+    // Last window-state blob (`de.win.state`) published to the shell, cached so the per-frame
+    // publish only writes (and fsyncs) the persist key when the focus/minimized snapshot changes.
+    pub win_state_buf: [u8; WIN_STATE_CAP],
+    pub win_state_len: usize,
 
     // input
     pub mouse_x: i32,
     pub mouse_y: i32,
     pub last_buttons: u8,
     pub capture: Option<MouseCapture>,
+    // While a title-bar drag is over a screen-edge snap trigger, the zone the window will tile to on
+    // release (Aero Snap). The renderer highlights it as a translucent preview; `route_mouse_spatial`
+    // applies it on release. `None` whenever the pointer is away from any edge or no Move drag is live.
+    pub snap_preview: Option<wm_geom::SnapZone>,
+    // Last title-bar press as `(uptime_ms, window_idx)`, for double-click detection: a second press
+    // on the same window within DOUBLE_CLICK_MS maximizes/restores it. Consumed (→ `None`) on a
+    // double so a rapid third press starts a fresh pair; otherwise overwritten by each new press.
+    pub last_title_press: Option<(u64, usize)>,
 
-    // keyboard modifier state machine (PS/2 Set 1 scancodes via SYS_KEYBOARD_READ)
-    pub kbd_ctrl: bool,
-    pub kbd_alt: bool,   // left Alt — hotkey modifier (Ctrl+Alt+X)
-    pub kbd_altgr: bool, // right Alt — selects the AltGr layout column
-    pub kbd_shift: bool,
-    pub kbd_caps: bool,
-    pub kbd_extended: bool,
+    // Keyboard decoder: PS/2 Set 1 scancodes → terminal bytes, carrying the modifier state
+    // machine across reads (release-edge decode, resilient to this kernel's make corruption).
+    pub kbd: keymap::ScanDecoder,
     // active keyboard layout (hot-swappable from /system/keymap.kmap).
     pub keymap: keymap::Keymap,
 
@@ -123,16 +169,16 @@ impl CompState {
             surface_buf: [zeroed_surface_entry(); MAX_WINDOWS],
             desktop_idx: None,
             focused: None,
+            focus_req_token: 0,
+            win_state_buf: [0u8; WIN_STATE_CAP],
+            win_state_len: 0,
             mouse_x: (fb_w / 2) as i32,
             mouse_y: (fb_h / 2) as i32,
             last_buttons: 0,
             capture: None,
-            kbd_ctrl: false,
-            kbd_alt: false,
-            kbd_altgr: false,
-            kbd_shift: false,
-            kbd_caps: false,
-            kbd_extended: false,
+            snap_preview: None,
+            last_title_press: None,
+            kbd: keymap::ScanDecoder::new(),
             keymap: keymap::german_default(),
             desktop_rgb: (26, 26, 46),
             title_focused_rgb: (0, 85, 0),

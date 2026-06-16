@@ -53,12 +53,13 @@ pub fn compose(state: &mut CompState) {
         );
     }
 
-    // z1: unfocused first, focused last.
+    // z1: unfocused first, focused last. Minimized windows are hidden — skipped entirely here (they
+    // keep their slot + geometry, just aren't composited).
     let mut order = [0u16; MAX_WINDOWS];
     let mut n = 0usize;
     for (i, w) in state.windows.iter().enumerate() {
         if let Some(ref win) = w {
-            if win.z_layer == 1 && state.focused != Some(i) {
+            if win.z_layer == 1 && !win.minimized && state.focused != Some(i) {
                 order[n] = i as u16;
                 n += 1;
             }
@@ -66,7 +67,7 @@ pub fn compose(state: &mut CompState) {
     }
     if let Some(fi) = state.focused {
         if let Some(ref win) = state.windows[fi] {
-            if win.z_layer == 1 {
+            if win.z_layer == 1 && !win.minimized {
                 order[n] = fi as u16;
                 n += 1;
             }
@@ -78,6 +79,10 @@ pub fn compose(state: &mut CompState) {
         let is_focused = state.focused == Some(idx);
         draw_window(state, idx, is_focused);
     }
+
+    // Aero-snap preview: a translucent tint over the zone a title drag will tile to on release.
+    // Drawn above the windows but only over the work area, so the z3 panel below stays clear.
+    draw_snap_preview(state, fb_ptr);
 
     // z3: panel overlay — bottom PANEL_H from desktop, on top of windows.
     if let Some(di) = state.desktop_idx {
@@ -222,21 +227,8 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         (tb_r, tb_g, tb_b),
     );
 
-    // Resize handle (12x12 bottom-right).
-    clip_fill(
-        state,
-        fb_ptr,
-        win_x + win_w as i32 - 12,
-        win_y + win_h as i32 - 12,
-        12,
-        12,
-        br,
-        bg,
-        bb,
-    );
-
     if win_mapped && !win_surface_ptr.is_null() {
-        blit_surface(
+        blit_1to1(
             state,
             fb_ptr,
             win_x,
@@ -250,9 +242,91 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
             state.windows[idx].as_ref().unwrap().surface_pages,
         );
     }
+
+    // Resize handle (GRIP×GRIP bottom-right, matching the hit-test). Drawn AFTER the content blit —
+    // the grip sits inside the window rect, so painting it earlier let the 1:1 client blit clobber
+    // it (a latent bug: the handle was invisible). A few diagonal hatch lines in the title-text tint
+    // read as a gripper, so the corner reads as draggable, not decorative.
+    let grip_x = win_x + win_w as i32 - GRIP as i32;
+    let grip_y = win_y + win_h as i32 - GRIP as i32;
+    clip_fill(state, fb_ptr, grip_x, grip_y, GRIP, GRIP, br, bg, bb);
+    let hatch = state.pack(TITLE_TEXT_RGB.0, TITLE_TEXT_RGB.1, TITLE_TEXT_RGB.2);
+    for diag in [4i32, 8, 12] {
+        for t in 0..diag.min(GRIP as i32 - 2) {
+            let px = grip_x + (GRIP as i32 - 2 - t);
+            let py = grip_y + (GRIP as i32 - 2 - (diag - 1 - t));
+            raw_put(
+                fb_ptr,
+                state.fb_stride,
+                state.fb_w,
+                state.fb_h,
+                px,
+                py,
+                hatch,
+            );
+        }
+    }
 }
 
-/// Bilinear scale source surface into dest rect; clipped to fb bounds.
+/// Copy the source surface's top-left `dst_w × dst_h` region 1:1 into the window rect (no scaling),
+/// clipped to both the framebuffer and the mapped source. Windows are sized to whole cells and
+/// their clients render at the compd-assigned size (see `surface_mgr::notify_window_size`), so this
+/// is pixel-exact — crisp text instead of the soft bilinear upscale a full-fb surface would give.
+#[allow(clippy::too_many_arguments)]
+fn blit_1to1(
+    state: &CompState,
+    fb_ptr: *mut u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_w: u32,
+    dst_h: u32,
+    src_w: u32,
+    src_h: u32,
+    src_stride: u32,
+    surface_ptr: *const u32,
+    surface_pages: u64,
+) {
+    let copy_w = dst_w.min(src_w);
+    let copy_h = dst_h.min(src_h);
+    let src_stride = src_stride.max(src_w).max(1);
+    let fb_stride = state.fb_stride;
+    let mapped_pixels = (surface_pages as usize).saturating_mul(4096 / 4);
+
+    // SAFETY: every dst write is bounds-checked against fb_w/fb_h and fb_stride; every src read is
+    // bounds-checked against mapped_pixels (the surface's mapped extent in u32 pixels).
+    unsafe {
+        for ly in 0..copy_h {
+            let dy = dst_y + ly as i32;
+            if dy < 0 {
+                continue;
+            }
+            let dy = dy as u32;
+            if dy >= state.fb_h {
+                break;
+            }
+            let src_row = (ly * src_stride) as usize;
+            let dst_row = (dy * fb_stride) as usize;
+            for lx in 0..copy_w {
+                let dx = dst_x + lx as i32;
+                if dx < 0 {
+                    continue;
+                }
+                let dx = dx as u32;
+                if dx >= state.fb_w {
+                    break;
+                }
+                let src_off = src_row + lx as usize;
+                if src_off >= mapped_pixels {
+                    break;
+                }
+                *fb_ptr.add(dst_row + dx as usize) = *surface_ptr.add(src_off);
+            }
+        }
+    }
+}
+
+/// Bilinear scale source surface into dest rect; clipped to fb bounds. Used for the z0 desktop
+/// (full-fb → full-fb, an exact 1:1 in practice).
 #[allow(clippy::too_many_arguments)]
 fn blit_surface(
     state: &CompState,
@@ -460,53 +534,257 @@ fn draw_text(
     }
 }
 
-fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
-    let cx = state.mouse_x;
-    let cy = state.mouse_y;
-    let px = state.pack(CURSOR_RGB.0, CURSOR_RGB.1, CURSOR_RGB.2);
+/// Highlight the pending Aero-snap zone while a title bar is dragged over a screen edge: a
+/// translucent accent wash over the work-area region the window will tile to, framed by a solid 2px
+/// accent border so the target reads clearly before the user releases. The zone (and thus the rect)
+/// come from the host-tested `wm_geom`, so the preview always matches where `apply_snap` will land.
+fn draw_snap_preview(state: &CompState, fb_ptr: *mut u32) {
+    let Some(zone) = state.snap_preview else {
+        return;
+    };
+    let r = wm_geom::snap_zone_outer(zone, state.fb_w as i32, state.fb_h as i32, PANEL_H as i32);
+    let (ar, ag, ab) = state.border_focused_rgb;
 
-    // 9px crosshair, black tip outline.
-    for d in -4i32..=4 {
-        raw_put(
-            fb_ptr,
-            state.fb_stride,
-            state.fb_w,
-            state.fb_h,
-            cx + d,
-            cy,
-            px,
-        );
-        raw_put(
-            fb_ptr,
-            state.fb_stride,
-            state.fb_w,
-            state.fb_h,
-            cx,
-            cy + d,
-            px,
-        );
+    // Translucent fill (~5/16 ≈ 31% accent over the existing scene).
+    blend_fill(
+        state, fb_ptr, r.x, r.y, r.w as u32, r.h as u32, ar, ag, ab, 5, 16,
+    );
+
+    // Solid 2px accent frame.
+    const FRAME: u32 = 2;
+    clip_fill(state, fb_ptr, r.x, r.y, r.w as u32, FRAME, ar, ag, ab);
+    clip_fill(
+        state,
+        fb_ptr,
+        r.x,
+        r.y + r.h - FRAME as i32,
+        r.w as u32,
+        FRAME,
+        ar,
+        ag,
+        ab,
+    );
+    clip_fill(state, fb_ptr, r.x, r.y, FRAME, r.h as u32, ar, ag, ab);
+    clip_fill(
+        state,
+        fb_ptr,
+        r.x + r.w - FRAME as i32,
+        r.y,
+        FRAME,
+        r.h as u32,
+        ar,
+        ag,
+        ab,
+    );
+}
+
+/// Alpha-blend a solid colour over the framebuffer rect: each destination pixel moves `num/den` of
+/// the way toward `(r,g,b)`. Blends each byte independently, so it is correct for both BGRX and RGBX
+/// (the tint is packed in the same order as the destination). Clipped to the framebuffer.
+#[allow(clippy::too_many_arguments)]
+fn blend_fill(
+    state: &CompState,
+    fb_ptr: *mut u32,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+    num: u32,
+    den: u32,
+) {
+    let x0 = x.max(0) as u32;
+    let y0 = y.max(0) as u32;
+    let x1 = ((x as i64 + w as i64).min(state.fb_w as i64)).max(0) as u32;
+    let y1 = ((y as i64 + h as i64).min(state.fb_h as i64)).max(0) as u32;
+    if x0 >= x1 || y0 >= y1 || den == 0 {
+        return;
     }
+    let tint = state.pack(r, g, b);
+    let stride = state.fb_stride;
+    let inv = den - num;
+    // SAFETY: x0..x1 / y0..y1 are clipped to fb bounds, so every offset is inside fb_stride * fb_h.
+    unsafe {
+        for row in y0..y1 {
+            let base = (row * stride) as usize;
+            for col in x0..x1 {
+                let p = fb_ptr.add(base + col as usize);
+                let e = *p;
+                let cb = (((e & 0xFF) * inv) + ((tint & 0xFF) * num)) / den;
+                let cg = ((((e >> 8) & 0xFF) * inv) + (((tint >> 8) & 0xFF) * num)) / den;
+                let cr = ((((e >> 16) & 0xFF) * inv) + (((tint >> 16) & 0xFF) * num)) / den;
+                *p = cb | (cg << 8) | (cr << 16);
+            }
+        }
+    }
+}
 
+/// Decide the cursor shape (arrow over content/desktop, 4-way move over the title bar or while
+/// dragging, diagonal resize over the grip or while resizing) from the live capture and the hovered
+/// region. The decision itself is the host-tested `wm_geom::cursor_shape`; here we only translate
+/// compd's capture/hit types into its inputs.
+fn cursor_mode(state: &CompState) -> wm_geom::CursorShape {
+    let capture = state.capture.map(|c| match c {
+        MouseCapture::Move { .. } => wm_geom::Capture::Move,
+        MouseCapture::Resize { .. } => wm_geom::Capture::Resize,
+    });
+    let hover =
+        crate::islands::input::hover_region(state, state.mouse_x, state.mouse_y).map(|r| match r {
+            HitRegion::Title => wm_geom::Region::Title,
+            HitRegion::Close => wm_geom::Region::Close,
+            HitRegion::Resize => wm_geom::Region::Resize,
+            HitRegion::Content => wm_geom::Region::Content,
+        });
+    wm_geom::cursor_shape(capture, hover)
+}
+
+// Cursor fill masks (`X` = filled pixel). A 1px black outline is generated automatically around the
+// union of filled pixels, so only the white interior is hand-drawn. The hotspot — the pixel that
+// tracks the true pointer position — differs per shape (top-left tip for the arrow, centre for the
+// symmetric move/resize cursors).
+const ARROW_MASK: &[&str] = &[
+    "X               ",
+    "XX              ",
+    "XXX             ",
+    "XXXX            ",
+    "XXXXX           ",
+    "XXXXXX          ",
+    "XXXXXXX         ",
+    "XXXXXXXX        ",
+    "XXXXXXXXX       ",
+    "XXXXXXXXXX      ",
+    "XXXXXXX         ",
+    "XXX XXX         ",
+    "XX   XXX        ",
+    "X     XXX       ",
+    "       XXX      ",
+    "        XX      ",
+];
+
+const MOVE_MASK: &[&str] = &[
+    "      X      ",
+    "     XXX     ",
+    "    XXXXX    ",
+    "      X      ",
+    "X     X     X",
+    "XX    X    XX",
+    "XXXXXXXXXXXXX",
+    "XX    X    XX",
+    "X     X     X",
+    "      X      ",
+    "    XXXXX    ",
+    "     XXX     ",
+    "      X      ",
+];
+
+fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
+    let mode = cursor_mode(state);
+    // A small boolean grid the cursor shape is stamped into; outline + fill are then painted from
+    // it in two passes (outline = black ring around the union, fill = white on top).
+    const GW: usize = 16;
+    const GH: usize = 18;
+    let mut grid = [[false; GW]; GH];
+    let hotspot: (i32, i32) = match mode {
+        wm_geom::CursorShape::Arrow => {
+            stamp_mask(&mut grid, ARROW_MASK);
+            (0, 0)
+        },
+        wm_geom::CursorShape::Move => {
+            stamp_mask(&mut grid, MOVE_MASK);
+            (6, 6)
+        },
+        wm_geom::CursorShape::Resize => {
+            stamp_resize(&mut grid);
+            (7, 7)
+        },
+    };
+
+    let ox = state.mouse_x - hotspot.0;
+    let oy = state.mouse_y - hotspot.1;
+    let fill = state.pack(CURSOR_RGB.0, CURSOR_RGB.1, CURSOR_RGB.2);
     let outline = state.pack(0, 0, 0);
-    for d in [-5i32, 5] {
-        raw_put(
-            fb_ptr,
-            state.fb_stride,
-            state.fb_w,
-            state.fb_h,
-            cx + d,
-            cy,
-            outline,
-        );
-        raw_put(
-            fb_ptr,
-            state.fb_stride,
-            state.fb_w,
-            state.fb_h,
-            cx,
-            cy + d,
-            outline,
-        );
+
+    // Pass 1: outline — black at the 8-neighbourhood of every filled pixel (overdrawn by fill where
+    // the neighbour is itself filled, leaving a clean 1px ring).
+    for (gy, row) in grid.iter().enumerate() {
+        for (gx, &on) in row.iter().enumerate() {
+            if !on {
+                continue;
+            }
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    raw_put(
+                        fb_ptr,
+                        state.fb_stride,
+                        state.fb_w,
+                        state.fb_h,
+                        ox + gx as i32 + dx,
+                        oy + gy as i32 + dy,
+                        outline,
+                    );
+                }
+            }
+        }
+    }
+    // Pass 2: white fill.
+    for (gy, row) in grid.iter().enumerate() {
+        for (gx, &on) in row.iter().enumerate() {
+            if on {
+                raw_put(
+                    fb_ptr,
+                    state.fb_stride,
+                    state.fb_w,
+                    state.fb_h,
+                    ox + gx as i32,
+                    oy + gy as i32,
+                    fill,
+                );
+            }
+        }
+    }
+}
+
+/// Stamp an `X`/space mask into the cursor grid (top-left aligned).
+fn stamp_mask(grid: &mut [[bool; 16]; 18], mask: &[&str]) {
+    for (gy, line) in mask.iter().enumerate() {
+        if gy >= grid.len() {
+            break;
+        }
+        for (gx, ch) in line.bytes().enumerate() {
+            if gx >= grid[gy].len() {
+                break;
+            }
+            if ch == b'X' {
+                grid[gy][gx] = true;
+            }
+        }
+    }
+}
+
+/// Procedurally stamp a diagonal (NW↔SE) double-headed resize cursor into the grid: a 2px-thick
+/// diagonal spine with an L-shaped arrowhead at each end.
+fn stamp_resize(grid: &mut [[bool; 16]; 18]) {
+    let mut set = |x: i32, y: i32| {
+        if (0..16).contains(&x) && (0..18).contains(&y) {
+            grid[y as usize][x as usize] = true;
+        }
+    };
+    // Spine from (2,2) to (12,12), 2px thick.
+    for t in 2..=12 {
+        set(t, t);
+        set(t + 1, t);
+    }
+    // NW arrowhead (L corner at top-left).
+    for k in 0..5 {
+        set(2 + k, 2);
+        set(2, 2 + k);
+    }
+    // SE arrowhead (L corner at bottom-right).
+    for k in 0..5 {
+        set(13 - k, 13);
+        set(13, 13 - k);
     }
 }
 

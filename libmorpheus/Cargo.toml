@@ -6,6 +6,16 @@ authors.workspace = true
 license.workspace = true
 description = "Userspace library for MorpheusX — syscall wrappers, I/O, FS API"
 
+[features]
+# `panic-handler` (default) emits the library's own `#[panic_handler]` (see
+# `entry::_panic`). It is default-on so libmorpheus's own binaries keep it. A
+# consumer that already supplies a `#[panic_handler]` of its own (e.g. the
+# devcockpit DE, which wants per-process tagged panic diagnostics) depends with
+# `default-features = false` to take the buddy allocator + syscall wrappers
+# without the conflicting panic handler.
+default = ["panic-handler"]
+panic-handler = []
+
 [dependencies]
 # Pure inline asm + thin wrappers. Foundation gives us SYS_* numbers shared
 # with the kernel so the two cannot drift.

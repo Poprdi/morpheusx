@@ -1,0 +1,7 @@
+[package]
+name = "wm-geom"
+version.workspace = true
+edition.workspace = true
+description = "Window-management geometry: pure hit-test / move / resize / cursor-shape math shared by compd (no_std) with host-runnable tests. No syscalls, no alloc."
+
+[dependencies]

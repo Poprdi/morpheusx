@@ -1,7 +1,7 @@
 //! `#[repr(C)]` types forming the stable ABI between the helix surface and libmorpheus.
 
 /// `stat(path, &mut buf)` writes this into `buf`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct FileStat {
     /// Full-path hash (helix key).
@@ -63,6 +63,34 @@ pub struct DirEntry {
     pub version_count: u32,
 }
 
+impl DirEntry {
+    pub const fn zeroed() -> Self {
+        Self {
+            name: [0u8; 256],
+            name_len: 0,
+            is_dir: false,
+            size: 0,
+            modified_ns: 0,
+            version_count: 0,
+        }
+    }
+
+    /// The filename as a `&str`, bounded by `name_len` (clamped to the buffer); lossy-empty on
+    /// bad UTF-8.
+    pub fn name_str(&self) -> &str {
+        let len = (self.name_len as usize).min(self.name.len());
+        core::str::from_utf8(&self.name[..len]).unwrap_or("")
+    }
+}
+
+// `[u8; 256]` is past the array-`Default` bound, so derive can't reach it — the zeroed value
+// is the honest empty entry.
+impl Default for DirEntry {
+    fn default() -> Self {
+        Self::zeroed()
+    }
+}
+
 // ── Syscall boundary structs ────────────────────────────────────────────────
 // Every `#[repr(C)]` struct whose bytes cross a syscall lives here exactly once.
 // The kernel handler and libmorpheus both `use` these, so the two sides cannot
@@ -73,7 +101,7 @@ pub struct DirEntry {
 pub const SYSINFO_MAX_CPUS: usize = 16;
 
 /// `sysinfo(&mut buf)` — SYS_SYSINFO.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct SysInfo {
     pub total_mem: u64,
@@ -114,11 +142,19 @@ impl SysInfo {
         }
         (self.uptime_ticks as u128 * 1000 / self.tsc_freq as u128) as u64
     }
+
+    /// Uptime in whole seconds, from the raw TSC and its frequency (0 if uncalibrated).
+    pub fn uptime_s(&self) -> u64 {
+        if self.tsc_freq == 0 {
+            return 0;
+        }
+        (self.uptime_ticks as u128 / self.tsc_freq as u128) as u64
+    }
 }
 
 /// One row from `ps(&mut buf, max)` — SYS_PS. `state`: 0=Ready 1=Running
 /// 2=Blocked 3=Zombie 4=Terminated. `name` is NUL-terminated.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct PsEntry {
     pub pid: u32,
@@ -231,7 +267,7 @@ pub struct NicInfo {
 }
 
 /// `fb_info(&mut buf)` — SYS_FB_INFO. `format`: 0=RGBX 1=BGRX.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct FbInfo {
     pub base: u64,
@@ -273,6 +309,34 @@ pub struct NetConfigInfo {
     pub _pad1: [u8; 2],
     pub mtu: u32,
     pub hostname: [u8; 64],
+}
+
+impl NetConfigInfo {
+    pub const fn zeroed() -> Self {
+        Self {
+            state: 0,
+            flags: 0,
+            ipv4_addr: 0,
+            prefix_len: 0,
+            _pad0: [0; 3],
+            gateway: 0,
+            dns_primary: 0,
+            dns_secondary: 0,
+            mac: [0; 6],
+            _pad1: [0; 2],
+            mtu: 0,
+            hostname: [0; 64],
+        }
+    }
+}
+
+// All-zero is the honest "unconfigured / no NIC" state the kernel itself writes when no net
+// stack is registered, so a zeroed buffer is a valid `NetConfigInfo`. `[u8; 64]` is past the
+// array-`Default` bound, so derive can't reach it.
+impl Default for NetConfigInfo {
+    fn default() -> Self {
+        Self::zeroed()
+    }
 }
 
 /// Network stack stats (SYS_NET_POLL / NET_POLL_STATS).
@@ -347,6 +411,24 @@ impl VolumeInfo {
             label: [0u8; 64],
         }
     }
+
+    /// The NUL-terminated `label` as a `&str` (lossy-empty on bad UTF-8 / no label).
+    pub fn label_str(&self) -> &str {
+        let end = self.label.iter().position(|&b| b == 0).unwrap_or(self.label.len());
+        core::str::from_utf8(&self.label[..end]).unwrap_or("")
+    }
+
+    /// Raw capacity in bytes from geometry (`lba_count * block_size`), overflow-saturating.
+    pub fn size_bytes(&self) -> u64 {
+        self.lba_count.saturating_mul(self.block_size as u64)
+    }
+}
+
+// `[u8; 64]` is past the array-`Default` bound, so derive can't reach it.
+impl Default for VolumeInfo {
+    fn default() -> Self {
+        Self::zeroed()
+    }
 }
 
 /// One row from `mounts(&mut buf, max)` — SYS_MOUNTS. `mount_point` is the
@@ -374,5 +456,21 @@ impl MountInfo {
             mount_point_len: 0,
             _pad: [0u8; 6],
         }
+    }
+
+    /// The mount point as a `&str`, bounded by `mount_point_len` (clamped to the buffer) and
+    /// stopping at any embedded NUL (lossy-empty on bad UTF-8).
+    pub fn mount_point_str(&self) -> &str {
+        let n = (self.mount_point_len as usize).min(self.mount_point.len());
+        let bytes = &self.mount_point[..n];
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(n);
+        core::str::from_utf8(&bytes[..end]).unwrap_or("")
+    }
+}
+
+// `[u8; 256]` is past the array-`Default` bound, so derive can't reach it.
+impl Default for MountInfo {
+    fn default() -> Self {
+        Self::zeroed()
     }
 }

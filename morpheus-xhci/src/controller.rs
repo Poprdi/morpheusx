@@ -178,9 +178,9 @@ impl XhciController {
         // across firmwares and reboots. Bits [7:0] = MaxSlotsEn; preserve the
         // upper bits (U3E, CIE, etc.) in case firmware set them.
         // `slot_out_ctx_offset(20)` would silently index past the array.
+        let enabled = (max_slots as u32).min(dma::MAX_OUT_CTX_SLOTS as u32);
         {
             let cur = mmio::read32(op_base + OP_CONFIG);
-            let enabled = (max_slots as u32).min(dma::MAX_OUT_CTX_SLOTS as u32);
             mmio::write32(op_base + OP_CONFIG, (cur & !0xFF) | enabled);
         }
 
@@ -241,7 +241,7 @@ impl XhciController {
 
         Self::tsc_delay(tsc_freq, 200);
 
-        Ok(Self {
+        let mut this = Self {
             mmio_base,
             op_base,
             rt_base,
@@ -260,7 +260,46 @@ impl XhciController {
             bin: XferRing::new(dma_base + dma::OFF_XFER_BIN as u64, XFER_RING_LEN),
             mouse_ring: XferRing::new(dma_base + dma::OFF_XFER_MOUSE as u64, XFER_RING_LEN),
             last_cc: 0,
-        })
+        };
+
+        // Release any slots a prior controller owner left bound to a port.
+        // Because bring-up deliberately skips HCRST (above), the xHC retains
+        // the slot→port bindings UEFI established while enumerating USB input
+        // before ExitBootServices. With those intact, the kernel's fresh
+        // enumeration lands on a NEW slot id and tries to address a port that
+        // a stale firmware slot still owns — which the controller rejects
+        // (CC_TRB_ERROR on QEMU's xHC; a stale-context hazard on real silicon).
+        // Disabling them frees the ports without touching PORTSC, so connected
+        // link state survives for the later storage probe.
+        this.disable_inherited_slots(enabled as u8);
+
+        Ok(this)
+    }
+
+    /// Disable every device slot the Config register enables, releasing any
+    /// slot→port bindings inherited from a prior controller owner (UEFI
+    /// firmware, or an earlier kernel controller instance that did not assert
+    /// HCRST on handoff). xHCI permits at most one Device Slot per root-hub
+    /// port, so a leftover firmware slot must be freed before the kernel can
+    /// address the same device on a fresh slot.
+    ///
+    /// Best-effort: a DISABLE_SLOT for a slot that was never allocated returns
+    /// CC_SLOT_NOT_ENABLED, which is expected and ignored. The command never
+    /// reads or writes PORTSC, so port power and link state are preserved.
+    ///
+    /// # Safety
+    /// The command/event rings must be live (controller started) and the caller
+    /// must hold exclusive access.
+    unsafe fn disable_inherited_slots(&mut self, max_slot: u8) {
+        for slot in 1..=max_slot {
+            self.cmd_ring
+                .enqueue(0, 0, TRB_DISABLE_SLOT | ((slot as u32) << 24));
+            self.ring_cmd_doorbell();
+            // Each DISABLE_SLOT posts a completion event promptly (success or
+            // CC_SLOT_NOT_ENABLED); a 500 ms cap guards against a wedged ring
+            // without stalling boot across the (≤16) slots.
+            let _ = self.wait_cmd(500);
+        }
     }
 
     #[inline(always)]

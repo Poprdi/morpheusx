@@ -242,6 +242,11 @@ pub fn layout_to_order(layout: Layout) -> usize {
 
 pub struct BuddyHeap;
 
+// Registered as the global allocator only on the bare target (`target_os = "none"`, the
+// MorpheusX userland). A buddy heap over `SYS_MMAP` is meaningless on a host build — there the
+// `syscall` instruction would hit the host kernel's ABI — so on host (e.g. `cargo test`) we
+// leave std's allocator in place instead of aborting the test harness.
+#[cfg(target_os = "none")]
 #[global_allocator]
 pub static GLOBAL_HEAP: BuddyHeap = BuddyHeap;
 
