@@ -1,10 +1,5 @@
 //! Keyboard layout (`.kmap`) format, decode engine, and built-in tables.
-//!
-//! Shared single source of truth for:
-//!   * `compd` — loads the active layout and decodes scancodes → UTF-8 bytes,
-//!   * `keymap-gen` (host tool) — serializes the built-in tables to `.kmap`
-//!     files that get provisioned into the HelixFS image,
-//!   * a future graphical layout editor — reads/writes the same format.
+//! Shared by `compd` (runtime decode), `keymap-gen` (host serializer), and any layout editor.
 //!
 //! ## `.kmap` binary format (little-endian, fixed 2080 bytes)
 //! ```text
@@ -128,8 +123,7 @@ impl Keymap {
         }
     }
 
-    /// Decode a make scancode (`0x00..0x7F`) + modifiers into the UTF-8 bytes
-    /// to forward, written into `out`. Returns the byte count (0 = no output).
+    /// Decode make scancode + modifiers into UTF-8 bytes in `out`; returns byte count (0 = no output).
     pub fn decode(&self, scancode: u8, mods: &Mods, out: &mut [u8; 4]) -> usize {
         let idx = scancode as usize;
         if idx >= NUM_SCANCODES {
@@ -168,7 +162,6 @@ impl Keymap {
             return 0;
         }
 
-        // Ctrl collapses letters / @[\]^_ to control codes (Ctrl+C → 0x03 etc.).
         if mods.ctrl {
             if let Some(ctrl_byte) = ctrl_transform(cp) {
                 out[0] = ctrl_byte;
@@ -201,20 +194,18 @@ pub struct Key<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Stateful PS/2 Set-1 scancode → terminal-bytes decoder.
+/// Stateful PS/2 Set-1 scancode → terminal-bytes decoder; acts on the release edge.
 ///
-/// It acts on the **release** edge, not the press edge — deliberately. On a real QEMU+OVMF
-/// MorpheusX boot the kernel's PS/2 path delivers *break* (release) codes intact but corrupts
-/// *make* (press) codes (e.g. `a`'s make `0x1E` arrives as `0x03`, and a corrupted make
-/// sometimes lands on a modifier scancode — `t` → `1d` looks like Ctrl). A break is exactly
-/// `make | 0x80` and arrives clean, so recovering the true key from `byte & 0x7F` on release
-/// sidesteps the corruption entirely; it is equally correct on clean-make hardware (emitting on
-/// release is simply consistent). Modifiers are taken from persistent state OR a same-batch
-/// look-ahead to the modifier's clean break, and a bare modifier *make* only sets persistent
-/// state when the batch releases no real key (otherwise it is a corrupted key-make in disguise).
+/// On QEMU+OVMF the kernel PS/2 path delivers break codes intact but corrupts make codes
+/// (`a` make `0x1E` → `0x03`; a corrupted make can land on a modifier scancode, e.g. `t` →
+/// `0x1d` = Ctrl). Break is exactly `make | 0x80` and arrives clean, so `byte & 0x7F` on
+/// release recovers the true key without relying on the corrupted make. Release-edge decode
+/// is also correct on clean hardware. Modifiers come from persistent state OR a same-batch
+/// look-ahead to the modifier's own clean break; a bare modifier make sets state only when no
+/// real key is released in the batch (otherwise it is a corrupted key-make in disguise).
 ///
-/// Feed it whole `SYS_KEYBOARD_READ` bursts: the look-ahead needs the `make,make,break,break`
-/// of a chord (`:`, `?`, Ctrl-C) in one batch, so coalesce a key burst before calling.
+/// Feed whole `SYS_KEYBOARD_READ` bursts: the look-ahead needs `make,make,break,break` of a
+/// chord (`:`, `?`, Ctrl-C) in one call, so coalesce a burst before calling.
 #[derive(Default)]
 pub struct ScanDecoder {
     shift: bool,
@@ -274,8 +265,6 @@ impl ScanDecoder {
                 continue;
             }
 
-            // Modifiers / locks: a clean break always releases; a make sets persistent state
-            // only when it cannot be a corrupted key-make (no real key released this batch).
             match make {
                 SC_LSHIFT | SC_RSHIFT => {
                     set_mod(&mut self.shift, is_break, has_key_release);
@@ -303,9 +292,8 @@ impl ScanDecoder {
                 continue;
             }
 
-            // A key release: `make` is the true scancode. Effective modifiers = persistent
-            // state OR this modifier's clean break appearing later in the batch (covers the
-            // corrupted-make chord where the modifier's own press was never recognized).
+            // Effective modifiers = persistent state OR this modifier's own clean break later in
+            // the batch (covers the corrupted-make chord where the press was never recognized).
             let shift = self.shift || break_ahead(scan, i, &[SC_LSHIFT, SC_RSHIFT]);
             let ctrl = self.ctrl || break_ahead(scan, i, &[SC_CTRL]);
             let alt = self.alt || break_ahead(scan, i, &[SC_ALT]);
@@ -328,8 +316,7 @@ impl ScanDecoder {
     }
 }
 
-/// Apply a modifier scancode edge: a clean break clears; a make sets only when the batch
-/// released no real key (else the make is a corrupted key-make masquerading as this modifier).
+/// Break clears modifier; make sets it only when no real key is released this batch (else it is a corrupted make).
 #[inline]
 fn set_mod(flag: &mut bool, is_break: bool, has_key_release: bool) {
     if is_break {
@@ -346,10 +333,8 @@ fn break_ahead(scan: &[u8], i: usize, mods: &[u8]) -> bool {
         .any(|&b| b & 0x80 != 0 && mods.contains(&(b & 0x7f)))
 }
 
-/// True if this batch releases at least one *non-modifier* key. Such a break means a real key
-/// was pressed in the batch, so a bare modifier *make* riding alongside it is a corrupted
-/// key-make, not a held modifier. The `0xE0` prefix is skipped so an arrow's `e0 d0` still
-/// counts as a (non-modifier) release.
+/// True if this batch contains a break of any non-modifier key. The `0xE0` prefix is skipped
+/// so an arrow `e0 d0` counts as a non-modifier release.
 fn batch_has_key_release(scan: &[u8]) -> bool {
     let mods = [SC_LSHIFT, SC_RSHIFT, SC_CTRL, SC_ALT];
     scan.iter()

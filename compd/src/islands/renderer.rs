@@ -881,12 +881,10 @@ fn draw_toasts(state: &CompState, fb_ptr: *mut u32) {
         clip_fill(state, fb_ptr, r.x, r.y, toasts::ACCENT_W as u32, r.h as u32, accent.0, accent.1, accent.2);
         draw_frame(state, fb_ptr, r.x, r.y, r.w, r.h, 1, 70, 70, 84);
 
-        // Dismiss `×` in the top-right corner — muted at rest, bright when the toast is hovered.
         let c = phosphor_notify::layout::close_rect(r, toasts::METRICS);
         let x_rgb = if is_hovered { (236, 236, 242) } else { (150, 150, 162) };
         draw_ctl_mark(state, fb_ptr, c.x, c.y, c.w, c.h, CtlKind::Close, x_rgb, panel);
 
-        // Text column: inside the padding, clear of the accent stripe; stop short of the `×`.
         let tx = (r.x + toasts::ACCENT_W + toasts::METRICS.pad).max(0) as u32;
         let mut ty = r.y + toasts::METRICS.pad;
         let line_h = toasts::METRICS.line_h;
@@ -927,9 +925,7 @@ fn draw_frame(
     clip_fill(state, fb_ptr, x + w - thick as i32, y, thick, h as u32, r, g, b);
 }
 
-/// Alpha-blend a solid colour over the framebuffer rect: each destination pixel moves `num/den` of
-/// the way toward `(r,g,b)`. Blends each byte independently, so it is correct for both BGRX and RGBX
-/// (the tint is packed in the same order as the destination). Clipped to the framebuffer.
+/// Blend each fb pixel `num/den` toward `(r,g,b)`; per-byte so it is correct for BGRX and RGBX.
 #[allow(clippy::too_many_arguments)]
 fn blend_fill(
     state: &CompState,
@@ -970,18 +966,12 @@ fn blend_fill(
     }
 }
 
-/// Decide the cursor shape (arrow over content/desktop, 4-way move over the title bar or while
-/// dragging, diagonal resize over the grip or while resizing) from the live capture and the hovered
-/// region. The decision itself is the host-tested `wm_geom::cursor_shape`; here we only translate
-/// compd's capture/hit types into its inputs.
+/// Cursor shape from live capture + hovered region via `wm_geom::cursor_shape`.
 fn cursor_mode(state: &CompState) -> wm_geom::CursorShape {
-    // Over an open context menu the pointer is just a chooser — keep it an arrow rather than letting
-    // the window beneath it (whose chrome the menu may overlap) drive a move/resize cursor.
+    // Keep arrow over a menu or toast — don't let a window's chrome underneath drive move/resize.
     if state.menu.is_some() {
         return wm_geom::CursorShape::Arrow;
     }
-    // Likewise over a toast: it is a click-to-dismiss target floating above the windows, so an arrow
-    // (not a move/resize shape from a window beneath it) is what reads right.
     if !state.toasts.is_empty()
         && crate::islands::toasts::hovering(state, state.mouse_x, state.mouse_y)
     {
@@ -1003,10 +993,7 @@ fn cursor_mode(state: &CompState) -> wm_geom::CursorShape {
     wm_geom::cursor_shape(capture, hover)
 }
 
-// Cursor fill masks (`X` = filled pixel). A 1px black outline is generated automatically around the
-// union of filled pixels, so only the white interior is hand-drawn. The hotspot — the pixel that
-// tracks the true pointer position — differs per shape (top-left tip for the arrow, centre for the
-// symmetric move/resize cursors).
+// `X` = filled pixel; black outline generated automatically. Hotspot: top-left for arrow, centre for move/resize.
 const ARROW_MASK: &[&str] = &[
     "X               ",
     "XX              ",
@@ -1044,8 +1031,6 @@ const MOVE_MASK: &[&str] = &[
 
 fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
     let mode = cursor_mode(state);
-    // A small boolean grid the cursor shape is stamped into; outline + fill are then painted from
-    // it in two passes (outline = black ring around the union, fill = white on top).
     const GW: usize = 16;
     const GH: usize = 18;
     let mut grid = [[false; GW]; GH];
@@ -1069,8 +1054,7 @@ fn draw_cursor(state: &CompState, fb_ptr: *mut u32) {
     let fill = state.pack(CURSOR_RGB.0, CURSOR_RGB.1, CURSOR_RGB.2);
     let outline = state.pack(0, 0, 0);
 
-    // Pass 1: outline — black at the 8-neighbourhood of every filled pixel (overdrawn by fill where
-    // the neighbour is itself filled, leaving a clean 1px ring).
+    // Pass 1: black outline at the 8-neighbourhood of every filled pixel.
     for (gy, row) in grid.iter().enumerate() {
         for (gx, &on) in row.iter().enumerate() {
             if !on {

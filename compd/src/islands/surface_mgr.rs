@@ -36,8 +36,7 @@ pub fn update(state: &mut CompState) {
             }
             state.windows[i] = None;
             if state.focused == Some(i) {
-                // Refocus the topmost remaining *visible* app window (a minimized one is hidden, so
-                // it never silently grabs focus when its sibling closes).
+                // Minimized windows are hidden and must never silently grab focus.
                 state.focused = state
                     .windows
                     .iter()
@@ -126,10 +125,8 @@ pub fn update(state: &mut CompState) {
                 state.desktop_idx = Some(idx);
             } else {
                 let step = CASCADE_STEP * (state.cascade_n % 5);
-                // The kernel reports every surface as full-fb-sized, so we can't read a desired
-                // window size from `entry`. Pick a real, smaller default window — about 5/8 of the
-                // work area — and SNAP it to whole 8×16 cells so the client's grid lands 1:1 with
-                // no partial edge cell. Clamped to the work area so the chrome stays reachable.
+                // Kernel reports every surface as full-fb-sized; default to ~5/8 of the work area,
+                // snapped to whole 8×16 cells (1:1 blit leaves stale strips on fractional edges).
                 let max_w = state.fb_w.saturating_sub(40).max(CELL_W * 24);
                 let max_h = state
                     .fb_h
@@ -145,9 +142,7 @@ pub fn update(state: &mut CompState) {
                 );
                 state.cascade_n += 1;
 
-                // The client published its window name into the persist store before it mapped this
-                // surface (see `platform_morpheusx::run_window`); read it now to label the title bar.
-                // The app owns its identity; we own the chrome. Absent ⇒ a blank bar (graceful).
+                // Client writes `de.win.title.<pid>` before mapping; absent ⇒ blank title bar.
                 let (title, title_len) = read_window_title(pid);
 
                 state.windows[idx] = Some(ChildWindow {
@@ -175,7 +170,6 @@ pub fn update(state: &mut CompState) {
                     minimized: false,
                 });
 
-                // Seed app-local cursor so the first click lands at the right local pos.
                 if let Some(ref mut win) = state.windows[idx] {
                     let (local_x, local_y) =
                         map_global_to_local_spawn(state.mouse_x, state.mouse_y, win);
@@ -188,24 +182,20 @@ pub fn update(state: &mut CompState) {
                 }
 
                 state.focused = Some(idx);
-                // Tell the new window its content size in cells so it renders crisply at this
-                // geometry (not a full-fb surface scaled down). Bytes queue in its fd-0 ring and
-                // are consumed on its first input poll → an `Event::Resize` reflows the DE.
+                // Send initial CSI 8 resize so the client reflows to this geometry, not full-fb.
                 notify_window_size(state, idx);
             }
         }
     }
 }
 
-/// Round a pixel extent DOWN to a whole number of cells. A window's content is blitted 1:1, so
-/// its size must be a cell multiple or the client would leave a partial edge cell unpainted.
+/// Round pixel extent DOWN to whole cells; fractional edge leaves a stale strip in 1:1 blit.
 #[inline(always)]
 pub fn snap_cells(px: u32, cell: u32) -> u32 {
     (px / cell.max(1)) * cell.max(1)
 }
 
-/// Forward `CSI 8 ; rows ; cols t` to the window's client when its cell size has changed, so the
-/// client renders its grid at exactly this geometry. Idempotent: a no-op when the size is unchanged.
+/// Send `CSI 8;rows;cols t` when the window's cell size changes; idempotent.
 pub fn notify_window_size(state: &mut CompState, idx: usize) {
     let (pid, cols, rows) = {
         let Some(ref win) = state.windows[idx] else {
@@ -261,14 +251,9 @@ fn push_u16(buf: &mut [u8], at: &mut usize, mut v: u16) {
     }
 }
 
-/// The persist-store key prefix carrying a window's title-bar name (`de.win.title.<pid>`). The
-/// client writes its name there before it maps its surface; we read it here. `de.` is the desktop
-/// environment's wire prefix (shared with the launch/desktop-ready gates).
-const TITLE_KEY_PREFIX: &[u8] = b"de.win.title.";
+const TITLE_KEY_PREFIX: &[u8] = b"de.win.title."; // client writes before mapping; we read on spawn.
 
-/// Read a window's title-bar name from the persist store (`de.win.title.<pid>`). Returns the bytes
-/// plus length; a missing key reads as length 0 (graceful — an unlabelled window shows a blank bar).
-/// Alloc-free: the key is formatted into a stack buffer, since this runs in the per-frame map walk.
+/// Read `de.win.title.<pid>`; missing key returns length 0. Stack-allocated — runs in the frame loop.
 fn read_window_title(pid: u32) -> ([u8; 64], usize) {
     let mut title = [0u8; 64];
     let mut key = [0u8; 32];
@@ -282,8 +267,7 @@ fn read_window_title(pid: u32) -> ([u8; 64], usize) {
     }
 }
 
-/// Format `de.win.title.<pid>` (decimal pid) into `buf`, returning the byte length. The 13-byte
-/// prefix plus ≤10 digits fits in 32. Alloc-free.
+/// Format `de.win.title.<pid>` into `buf`; prefix (13 bytes) + ≤10 decimal digits fits in 32.
 fn fmt_title_key(buf: &mut [u8; 32], pid: u32) -> usize {
     let mut n = 0;
     for &b in TITLE_KEY_PREFIX {
@@ -309,8 +293,7 @@ fn fmt_title_key(buf: &mut [u8; 32], pid: u32) -> usize {
     n
 }
 
-/// Window content is blitted 1:1 from the source's top-left, so a window-local coordinate equals
-/// the source-local coordinate (no scaling). Used to seed the client's cursor on spawn.
+/// Global→local for spawn: 1:1 blit so window-local == source-local; used to seed the client cursor.
 #[inline(always)]
 fn map_global_to_local_spawn(mx: i32, my: i32, win: &ChildWindow) -> (i32, i32) {
     let sw = win.src_w.max(1) as i32;

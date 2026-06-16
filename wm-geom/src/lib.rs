@@ -1,14 +1,7 @@
-//! Window-management geometry — the pure spatial math compd uses to hit-test a pointer, move and
-//! resize the focused window, and pick a cursor shape. Extracted from compd into its own crate so
-//! the WM-interaction domain has a single home with host-runnable tests.
-//!
-//! Why tests live here and not on a boot: the headless QEMU this kernel is exercised in has no
-//! working pointer device — the PS/2 mouse driver is a kernel stub (`bootloader desktop owns PS/2
-//! mouse I/O`) and the emulated xHCI controller fails to initialise — so the move/resize/hit-test
-//! path cannot be driven by a real mouse on a boot. This crate is `no_std` for the compd build and
-//! links `std` only under `cfg(test)` (mirroring the `keymap` crate), so the exact pixel math is
-//! pinned by deterministic unit tests. compd owns the window list, z-order, focus and IPC; this
-//! crate owns only the per-window geometry.
+//! Window-management geometry — hit-test, move/resize/snap math, and cursor shape for compd.
+//! Pure spatial logic only; `no_std` for compd, links `std` for `cfg(test)`.
+//! Tests live here because headless QEMU has no working pointer device (PS/2 mouse is a kernel
+//! stub; xHCI init fails), so the pixel math must be pinned by host-runnable unit tests.
 #![cfg_attr(not(test), no_std)]
 
 /// A rectangle in framebuffer pixels. For a window this is the *content* rect — its top-left is the
@@ -21,12 +14,8 @@ pub struct Rect {
     pub h: i32,
 }
 
-/// Chrome metrics in pixels. The title bar carries the standard three window controls, right-
-/// aligned in the order `[_] [□] [X]` (minimize, maximize/restore, close). `close_off`/`close_w`
-/// describe the rightmost button (close) as an inset from the title bar's right edge — its hit cell
-/// is `[right - close_off, right - close_off + close_w)`; the maximize and minimize cells step left
-/// from it by `btn_pitch` each (same width), so maximize is `[close_x - btn_pitch, …)` and minimize
-/// `[close_x - 2*btn_pitch, …)`.
+/// Chrome metrics. Close cell: `[right - close_off, right - close_off + close_w)`.
+/// Maximize/minimize step left by `btn_pitch` each, same width.
 #[derive(Clone, Copy)]
 pub struct Chrome {
     pub title_h: i32,
@@ -38,9 +27,8 @@ pub struct Chrome {
     pub btn_pitch: i32,
 }
 
-/// The part of a window a point falls on. Priority when overlapping: Close > Maximize > Minimize >
-/// Resize > Title > Content (a click on the grip resizes even though it sits over the content's
-/// bottom-right; the title-bar buttons are disjoint cells, but they are tested before the bare title).
+/// Hit region. Test priority: Close > Maximize > Minimize > Resize > Title > Content.
+/// Grip overlaps the content corner but classifies as Resize.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Region {
     Title,
@@ -51,8 +39,7 @@ pub enum Region {
     Content,
 }
 
-/// An in-progress drag captured on press, so the interaction (and the cursor) stays stable for the
-/// whole drag even if the pointer briefly leaves the handle.
+/// In-progress drag kind; holds cursor shape stable for the whole drag even if the pointer leaves the handle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Capture {
     Move,
@@ -180,15 +167,9 @@ pub fn snap_resize(
 }
 
 // ── Keyboard-first window management ───────────────────────────────────────────────────────────
-//
-// The DE is keyboard-driven, so the focused window must be move/resize/closeable without a pointer
-// (which this kernel lacks headless anyway). compd intercepts a chord in the established Ctrl+Alt
-// window-management namespace (already home to Ctrl+Alt+X = spawn shell) and asks this crate to map
-// it to a command, then to apply the geometry. Keeping the chord table AND the step math here means
-// the whole keyboard-WM behaviour is host-tested — the same code the boot runs.
-//
-// PS/2 Set-1 scancodes for the vim direction cluster + the close key. compd hands us the true
-// scancode its decoder recovered on the key's release edge.
+// Ctrl+Alt chord table + geometry step math. Both live here so keyboard-WM behaviour is
+// host-tested: chord table → command, command → clamp/snap math, all without a boot pointer.
+// PS/2 Set-1 scancodes for the vim direction cluster + close. compd passes the release-edge make.
 pub const SC_H: u8 = 0x23;
 pub const SC_J: u8 = 0x24;
 pub const SC_K: u8 = 0x25;
@@ -306,9 +287,7 @@ pub fn wm_command(scancode: u8, ctrl: bool, alt: bool, shift: bool) -> Option<Wm
     }
 }
 
-/// Apply a Move/Resize command to the focused window's content rect, reusing the same clamp/snap
-/// math the mouse drag uses (so keyboard and pointer leave a window in identical, valid states).
-/// Close returns the rect unchanged (compd terminates the client; there is no geometry change).
+/// Apply Move/Resize to the content rect using the same clamp/snap as mouse drag; Close is a no-op.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_command(
     win: Rect,
@@ -323,9 +302,7 @@ pub fn apply_command(
 ) -> Rect {
     match cmd {
         WmCommand::Close => win,
-        // Snap is resolved by the caller via [`snap_rect`] — it needs the panel height, border and
-        // the maximize/restore saved-rect state, none of which this stateless mover has. Returning
-        // the rect unchanged keeps the match exhaustive without a spurious geometry change.
+        // Snap needs panel_h, border, and saved-rect state; caller resolves via snap_rect.
         WmCommand::Snap(_) => win,
         WmCommand::Move(dir) => {
             let (dx, dy) = match dir {
@@ -352,12 +329,8 @@ pub fn apply_command(
     }
 }
 
-/// Compute the CONTENT rect a window takes when snapped to `zone`. The zones tile the *work area*
-/// — the framebuffer minus the bottom taskbar (`panel_h`) — so a snapped window sits flush above
-/// the panel. Each zone's outer box (border + title bar + content) is fitted inside the work area,
-/// then the content rect is derived by insetting the chrome: the title bar (`title_h` + `border`)
-/// sits above the content, a `border` frames the other three sides. The content's width/height are
-/// snapped DOWN to whole cells (the client blits 1:1) and floored at `min_w`/`min_h`.
+/// Content rect for a window snapped to `zone`, inset from the zone's outer box by chrome
+/// (title bar + border). Width/height snapped DOWN to whole cells; floored at `min_w`/`min_h`.
 #[allow(clippy::too_many_arguments)]
 pub fn snap_rect(
     zone: SnapZone,
@@ -372,11 +345,9 @@ pub fn snap_rect(
     min_h: i32,
 ) -> Rect {
     let wa_w = fb_w.max(1);
-    // Reserve the panel, but never let the work area collapse below a single chrome+cell box.
+    // Never let the work area collapse below one chrome+cell box.
     let wa_h = (fb_h - panel_h).max(title_h + border * 2 + cell_h);
 
-    // Outer box (ox, oy, ow, oh) of the zone within the work area (top-left origin = fb top-left,
-    // since the panel only reserves the bottom).
     let (ox, oy, ow, oh) = zone_outer_box(zone, wa_w, wa_h);
 
     let x = ox + border;
@@ -386,10 +357,8 @@ pub fn snap_rect(
     Rect { x, y, w, h }
 }
 
-/// The zone's outer box `(ox, oy, ow, oh)` within a `wa_w × wa_h` work area — the raw region a
-/// snapped window's chrome+content fills, before any chrome inset. Shared by [`snap_rect`] (which
-/// then insets the chrome) and [`snap_zone_outer`] (which highlights this box as the drag preview),
-/// so the two can never describe different regions for the same zone.
+/// Chrome+content outer box for `zone` in a `wa_w×wa_h` work area, before chrome inset.
+/// Shared by [`snap_rect`] and [`snap_zone_outer`] so both describe the same region.
 fn zone_outer_box(zone: SnapZone, wa_w: i32, wa_h: i32) -> (i32, i32, i32, i32) {
     let mid_x = wa_w / 2;
     let mid_y = wa_h / 2;
@@ -406,11 +375,8 @@ fn zone_outer_box(zone: SnapZone, wa_w: i32, wa_h: i32) -> (i32, i32, i32, i32) 
     }
 }
 
-/// The outer-box [`Rect`] a `zone` fills within the work area (the framebuffer minus the bottom
-/// `panel_h` taskbar) — what a drag-to-snap *preview* highlights so the user sees where the window
-/// will land before releasing. This is the full chrome+content region (the same box [`snap_rect`]
-/// insets the window chrome into), not the inset content rect, because the preview stands in for the
-/// whole window. Returned in framebuffer pixels with a top-left origin.
+/// Full chrome+content outer box for `zone` in framebuffer pixels — what the drag-to-snap preview
+/// highlights. Same box [`snap_rect`] insets; the preview must not use the content rect.
 pub fn snap_zone_outer(zone: SnapZone, fb_w: i32, fb_h: i32, panel_h: i32) -> Rect {
     let wa_w = fb_w.max(1);
     let wa_h = (fb_h - panel_h).max(1);
@@ -472,11 +438,8 @@ pub fn edge_snap_zone(
 
 // ── Focus cycling + double-click (C2) ────────────────────────────────────────────────────────────
 
-/// Whether a fresh title-bar press is the SECOND click of a double-click: the previous press
-/// (`last` = `(timestamp_ms, window_idx)`) was on the SAME window and within `threshold_ms`. A
-/// `None` history — no prior press, or one already consumed — is never a double. Time runs through
-/// `saturating_sub`, so a non-monotonic clock can only ever shrink the gap (defensive, never panics).
-/// Pure so the timing predicate is host-tested rather than only exercised on a boot with a pointer.
+/// True if `last` press was on the same window and within `threshold_ms`. `None` history is never
+/// a double. `saturating_sub` guards against a non-monotonic clock.
 pub fn is_double_click(
     last: Option<(u64, usize)>,
     idx: usize,
@@ -489,12 +452,8 @@ pub fn is_double_click(
     }
 }
 
-/// The next window slot to focus when cycling (Alt+Tab forward, Shift+Alt+Tab reverse, Ctrl+]
-/// forward). Steps around a ring of `n` slots from `current` — `+1` forward, `-1` when `reverse` —
-/// and returns the first slot for which `focusable(idx)` holds. The scan covers all `n` slots and
-/// wraps, so it lands back on `current` only when nothing else qualifies, and returns `None` only
-/// when no slot is focusable at all. With no current focus the forward scan begins at slot 0 and the
-/// reverse scan at slot `n-1`. Pure, so the wrap-around order is pinned by host tests, not a boot.
+/// Next focusable slot in a ring of `n` from `current`, stepping `+1` (forward) or `-1` (reverse).
+/// Returns `None` only if nothing is focusable. No-focus forward → starts at 0; reverse → `n-1`.
 pub fn next_focus(
     current: Option<usize>,
     n: usize,
@@ -504,8 +463,6 @@ pub fn next_focus(
     if n == 0 {
         return None;
     }
-    // Anchor the scan just off `current`: the first candidate is anchor±1. With no current focus,
-    // anchor n-1 (forward) / 0 (reverse) makes that first candidate land on slot 0 / n-1.
     let anchor = match (current, reverse) {
         (Some(c), _) => c % n,
         (None, false) => n - 1,
@@ -524,11 +481,8 @@ pub fn next_focus(
     None
 }
 
-/// What activating a window from its taskbar chip should do, given the window's current state. This
-/// is the canonical taskbar policy a real desktop follows: a *minimized* window restores (and takes
-/// focus); clicking the chip of the window that is *already focused* and visible minimizes it (the
-/// active button toggles the window away); any *other* visible window is simply focused + raised.
-/// Pure, so the toggle policy is host-tested rather than only exercised on a boot with a pointer.
+/// What activating a taskbar chip does: minimized → restore; focused-and-visible → minimize (toggle);
+/// otherwise → focus+raise. Canonical desktop policy; pure so the toggle is host-tested.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChipAction {
     /// Un-minimize the window and give it focus (it was hidden).
@@ -539,9 +493,7 @@ pub enum ChipAction {
     Focus,
 }
 
-/// Decide what a taskbar-chip activation does from the target window's `(is_minimized, is_focused)`
-/// state. See [`ChipAction`] for the policy. The compositor owns the actual focus/visibility edit;
-/// this only names the intent so the decision is unit-tested off-hardware.
+/// Map `(is_minimized, is_focused)` to the taskbar-chip action per [`ChipAction`] policy.
 pub fn chip_action(is_minimized: bool, is_focused: bool) -> ChipAction {
     if is_minimized {
         ChipAction::Restore
@@ -552,35 +504,22 @@ pub fn chip_action(is_minimized: bool, is_focused: bool) -> ChipAction {
     }
 }
 
-// Overview (Exposé) — the "show all windows" grid.
-//
-// When the user toggles the overview, compd scales every open window down into a
-// near-square grid of live thumbnails over the dimmed desktop; the pointer (or the
-// arrow keys) picks one, and activating it focuses+raises that window and exits.
-// The geometry is pure so the grid layout + hit-test are pinned by host tests, the
-// same reason the move/resize/snap math lives here — the headless QEMU has no
-// pointer to drive an overview click on a boot. compd owns the mode, the surface
-// scaling, the dim, and the focus edit; this crate owns only where each thumbnail
-// sits and which one a point falls on.
+// Overview (Exposé) — thumbnail grid layout and hit-test.
+// compd owns mode, surface scaling, and focus edit; this crate owns only the geometry.
 
-/// One thumbnail's placement in the overview grid: the full grid `cell` (the whole
-/// clickable tile, also where the title label is drawn) and the `thumb` rect inside
-/// it where the window's scaled surface is blitted (aspect-fitted, centered, with the
-/// label strip reserved at the bottom).
+/// Thumbnail placement: `cell` is the full clickable tile; `thumb` is the aspect-fitted blit rect inside it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct OverviewSlot {
     pub cell: Rect,
     pub thumb: Rect,
 }
 
-/// Grid dimensions `(cols, rows)` for `n` thumbnails — the canonical near-square
-/// Exposé grid: `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)`. `n == 0 → (0, 0)`.
-/// Integer-only (no `f32` — this is `no_std` on the compd target).
+/// Grid dimensions `(cols, rows)` for `n` thumbnails: `cols = ⌈√n⌉`, `rows = ⌈n/cols⌉`. Integer-only (`no_std`).
 pub fn overview_dims(n: u32) -> (u32, u32) {
     if n == 0 {
         return (0, 0);
     }
-    // cols = ceil(sqrt(n)) without floats: the smallest c with c*c >= n.
+    // Smallest c with c*c >= n.
     let mut cols = 1u32;
     while cols * cols < n {
         cols += 1;
@@ -595,10 +534,8 @@ fn overview_cell_rc(i: u32, cols: u32) -> (u32, u32) {
     (i % cols, i / cols)
 }
 
-/// The full grid-cell rect for thumbnail `i` of `n`, laid inside `area` with `margin`
-/// px around the whole grid and `gap` px between cells. Cells are equal-sized and
-/// row-major; a partial last row keeps the same cell size (left-aligned). Returns a
-/// zeroed rect for an out-of-range `i` or empty grid.
+/// Full grid-cell rect for thumbnail `i` of `n`, equal-sized row-major, `margin`+`gap` layout.
+/// Zeroed rect for out-of-range `i`.
 pub fn overview_cell(i: u32, n: u32, area: Rect, margin: i32, gap: i32) -> Rect {
     let (cols, rows) = overview_dims(n);
     if i >= n || cols == 0 || rows == 0 {
@@ -617,12 +554,7 @@ pub fn overview_cell(i: u32, n: u32, area: Rect, margin: i32, gap: i32) -> Rect 
     }
 }
 
-/// The thumbnail rect inside `cell`: the window's `(win_w × win_h)` aspect-fitted into
-/// the cell minus `pad` on every side and `label_h` reserved at the bottom for the
-/// title, then centered in the remaining box. A degenerate window (either dim ≤ 0)
-/// falls back to filling the available box. Never larger than the available box (a
-/// small window is shown at native scale, not upscaled past 1:1 — overview shrinks,
-/// it doesn't magnify).
+/// `win_w×win_h` aspect-fitted into `cell` minus `pad`+`label_h`, centered. Never upscaled past 1:1.
 pub fn overview_thumb(cell: Rect, win_w: i32, win_h: i32, pad: i32, label_h: i32) -> Rect {
     let box_x = cell.x + pad;
     let box_y = cell.y + pad;
@@ -631,8 +563,7 @@ pub fn overview_thumb(cell: Rect, win_w: i32, win_h: i32, pad: i32, label_h: i32
     if win_w <= 0 || win_h <= 0 {
         return Rect { x: box_x, y: box_y, w: box_w, h: box_h };
     }
-    // Fit win_w×win_h into box_w×box_h preserving aspect, never upscaling past native.
-    // scale = min(box_w/win_w, box_h/win_h, 1), computed in fixed-point (×65536).
+    // scale = min(box_w/win_w, box_h/win_h, 1) in fixed-point (×65536).
     let sx = ((box_w as i64) << 16) / win_w as i64;
     let sy = ((box_h as i64) << 16) / win_h as i64;
     let scale = sx.min(sy).min(1 << 16);
@@ -646,10 +577,8 @@ pub fn overview_thumb(cell: Rect, win_w: i32, win_h: i32, pad: i32, label_h: i32
     }
 }
 
-/// Hit-test a pointer against the overview grid → the thumbnail index its CELL contains
-/// (the whole tile is clickable, not just the scaled thumbnail — a real Exposé lets you
-/// click the gap around a small thumbnail), or `None` if the point misses every cell or
-/// lands in a margin/gap. Uses the same `margin`/`gap` as [`overview_cell`].
+/// Hit-test a pointer against the overview grid; whole cell is clickable, not just the thumbnail.
+/// Returns index or `None` if the point misses all cells.
 pub fn overview_hit(n: u32, area: Rect, margin: i32, gap: i32, mx: i32, my: i32) -> Option<u32> {
     for i in 0..n {
         let cell = overview_cell(i, n, area, margin, gap);
@@ -660,10 +589,7 @@ pub fn overview_hit(n: u32, area: Rect, margin: i32, gap: i32, mx: i32, my: i32)
     None
 }
 
-/// Move the keyboard selection within the grid in `dir`, row-major, clamped to `[0, n)`.
-/// Left/Right step within a row (clamped at the row ends — they do not wrap); Up/Down
-/// step a whole row, clamped so a Down off the last (possibly partial) row stays on the
-/// last valid index. Returns `sel` unchanged when `n == 0`.
+/// Step overview selection in `dir`, row-major. Left/Right clamp at row ends; Up/Down step a row.
 pub fn overview_nav(sel: u32, n: u32, dir: Dir) -> u32 {
     if n == 0 {
         return sel;
@@ -704,20 +630,10 @@ pub fn overview_nav(sel: u32, n: u32, dir: Dir) -> u32 {
     }
 }
 
-// Window context menu — the right-click menu on a window's chrome.
-//
-// Right-clicking a window's title bar opens a small popup of that window's
-// operations (maximize/restore, minimize, the snap halves, close). compd owns the
-// menu's lifetime, draws it, and maps each row to the SAME edit its keyboard /
-// title-button equivalent already performs — the menu adds a discoverable surface,
-// not new behaviour. This crate owns only the popup's layout (its box, its stacked
-// rows) and which row a point falls on, pinned by host tests for the same reason
-// every other WM-interaction measurement lives here: the headless QEMU can't aim a
-// real pointer onto a row at test time.
+// Window context menu — popup layout, row hit-test, and menu→snap mapping.
+// compd owns lifetime and drawing; each row maps to an edit the keyboard/buttons already have.
 
-/// What a window-menu row does when chosen. Each maps onto an edit compd already has:
-/// `MaximizeRestore`/`Snap*` → `apply_snap`, `Minimize` → the taskbar-chip minimize,
-/// `Close` → the window's SIGTERM (see [`menu_action_zone`] for the snap mapping).
+/// Action a window-menu row performs; see [`menu_action_zone`] for snap mapping.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuAction {
     MaximizeRestore,
@@ -729,18 +645,14 @@ pub enum MenuAction {
     Close,
 }
 
-/// One row of the window menu: a chooseable item (label + action) or a thin divider
-/// between logical groups. Separators are inert (never selected or hit) and have their
-/// own, shorter height.
+/// One row of the window menu: a chooseable item or an inert separator.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuRow {
     Item { action: MenuAction, label: &'static str },
     Separator,
 }
 
-/// Pixel metrics for the popup: the height of an item row and of a separator, the
-/// horizontal text padding, the font cell width used to size the box to its widest
-/// label, and a floor on the box width so a short menu still reads as a panel.
+/// Popup pixel metrics: row/separator heights, text padding, font cell width, minimum box width.
 #[derive(Clone, Copy)]
 pub struct MenuMetrics {
     pub row_h: i32,
@@ -750,13 +662,10 @@ pub struct MenuMetrics {
     pub min_w: i32,
 }
 
-/// Number of rows in the window menu (see [`window_menu`]) — fixed so compd can hold it
-/// in an array without alloc.
+/// Fixed row count of [`window_menu`]; lets compd hold the array without alloc.
 pub const WINDOW_MENU_ROWS: usize = 9;
 
-/// The window menu's rows, in display order. The first row reads `Restore` when the
-/// window is maximized and `Maximize` otherwise — the same toggle the `[□]/[❐]` title
-/// button and a title double-click drive. Two separators group it: ops · snaps · close.
+/// Window menu rows in display order. First row toggles Maximize/Restore; two separators group ops · snaps · close.
 pub fn window_menu(maximized: bool) -> [MenuRow; WINDOW_MENU_ROWS] {
     [
         MenuRow::Item {
@@ -774,8 +683,7 @@ pub fn window_menu(maximized: bool) -> [MenuRow; WINDOW_MENU_ROWS] {
     ]
 }
 
-/// The popup's pixel size for `rows` under `m`: width = widest item label (in `char_w`
-/// cells) + `2*pad_x`, floored at `min_w`; height = the sum of every row's height.
+/// Popup size: width = widest label × `char_w` + `2*pad_x` (floored at `min_w`); height = sum of row heights.
 pub fn menu_size(rows: &[MenuRow], m: MenuMetrics) -> (i32, i32) {
     let mut max_chars = 0i32;
     let mut h = 0i32;
@@ -792,11 +700,7 @@ pub fn menu_size(rows: &[MenuRow], m: MenuMetrics) -> (i32, i32) {
     (w, h)
 }
 
-/// Top-left at which to place a `w×h` menu opened at pointer `(ax, ay)`, clamped so the
-/// whole box stays inside the work area (the framebuffer minus the bottom `panel_h`
-/// taskbar). It drops down-right of the cursor like every desktop menu; if that would
-/// overflow the right or bottom, the box is pulled back so its far edge sits flush
-/// against the work-area edge, never off-screen.
+/// Top-left for a `w×h` menu at pointer `(ax, ay)`, clamped so the box stays inside the work area.
 pub fn menu_origin(
     ax: i32,
     ay: i32,
@@ -812,9 +716,7 @@ pub fn menu_origin(
     (x, y)
 }
 
-/// The full-width clickable band of row `i`, given the menu's top-left `(ox, oy)`, box
-/// width `w`, and metrics. Rows stack top-down (a separator takes `sep_h`, an item
-/// `row_h`). Returns a zero rect for an out-of-range `i`.
+/// Full-width rect of row `i` in a menu at `(ox, oy)` with width `w`. Zero rect for out-of-range `i`.
 pub fn menu_row_rect(rows: &[MenuRow], m: MenuMetrics, ox: i32, oy: i32, w: i32, i: usize) -> Rect {
     let mut y = oy;
     for (j, row) in rows.iter().enumerate() {
@@ -830,8 +732,7 @@ pub fn menu_row_rect(rows: &[MenuRow], m: MenuMetrics, ox: i32, oy: i32, w: i32,
     Rect { x: 0, y: 0, w: 0, h: 0 }
 }
 
-/// Hit-test a pointer against an open menu → the index of the *item* row it lands on
-/// (separators are inert and never returned), or `None` if the point misses the box.
+/// Hit-test pointer against menu → item row index, or `None` if it misses or hits a separator.
 pub fn menu_hit(
     rows: &[MenuRow],
     m: MenuMetrics,
@@ -861,9 +762,7 @@ pub fn menu_hit(
     None
 }
 
-/// The next selectable item row when navigating with the arrows: from `sel`, step `+1`
-/// (down) or `-1` (up), skipping separators and wrapping at the ends like a real menu.
-/// Lands on an item whenever the menu has one; returns `sel` only for an item-less menu.
+/// Next selectable row from `sel` stepping up/down, skipping separators, wrapping at ends.
 pub fn menu_nav(sel: usize, rows: &[MenuRow], down: bool) -> usize {
     let n = rows.len();
     if n == 0 {
@@ -889,9 +788,7 @@ pub fn menu_nav(sel: usize, rows: &[MenuRow], down: bool) -> usize {
     sel
 }
 
-/// The snap zone a menu action tiles the window to, or `None` for the non-snap actions
-/// (`Minimize`, `Close`) compd handles directly. Keeps the menu→[`snap_rect`] mapping in
-/// one host-tested place so a menu snap lands exactly where the keyboard/edge snap does.
+/// Snap zone for a menu action, or `None` for `Minimize`/`Close` (handled directly by compd).
 pub fn menu_action_zone(a: MenuAction) -> Option<SnapZone> {
     Some(match a {
         MenuAction::MaximizeRestore => SnapZone::Maximize,

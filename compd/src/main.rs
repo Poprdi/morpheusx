@@ -36,12 +36,8 @@ fn main() -> i32 {
         state.keymap = km;
     }
 
-    // Baseline the taskbar focus-request token so a stale request left in the (cross-boot) persist
-    // store can't activate a window before the desktop is even up — only a strictly-new token from
-    // this session's shell is serviced (mirrors hypnos baselining the launch request).
+    // Baseline tokens so stale cross-boot requests can't fire before the desktop is up.
     state.focus_req_token = islands::focus::read_focus_request().0;
-    // Same baseline for the desktop-menu command request (Show all / Minimize all) — a stale
-    // cross-boot value must not fire before the desktop is up.
     state.desk_cmd_token = islands::desk::read_desk_command().0;
 
     let mut last_appearance_poll_ms = 0u64;
