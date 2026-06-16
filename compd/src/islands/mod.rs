@@ -5,13 +5,19 @@ pub mod menu;
 pub mod overview;
 pub mod renderer;
 pub mod surface_mgr;
+pub mod toasts;
 pub mod vsync;
 
 use crate::messages::*;
+use alloc::vec::Vec;
 use channel::Channel;
 use libmorpheus::compositor as compsys;
+use phosphor_notify::Notification;
 
 pub const MAX_WINDOWS: usize = 16;
+/// How many recently click-dismissed notification ids compd remembers to suppress locally while
+/// whisperd catches up. Larger than the feed's visible cap, so every on-screen toast can be in flight.
+pub const TOAST_DISMISS_RING: usize = 8;
 /// Max bytes of the `de.win.state` blob compd publishes: `[focused_pid][n_min][min_pid…]` =
 /// 8 + `MAX_WINDOWS` × 4. Sized so every window can be minimized at once.
 pub const WIN_STATE_CAP: usize = 8 + MAX_WINDOWS * 4;
@@ -163,6 +169,23 @@ pub struct CompState {
     // and each row reuses the edit its keyboard/title-button equivalent already performs.
     pub menu: Option<menu::WindowMenu>,
 
+    // Notifications (toasts): the visible set published by `whisperd` over the `whisperd.feed`
+    // persist key, decoded each frame into `toasts` (re-decoded only when the raw bytes change, so a
+    // quiet feed costs nothing). compd owns *only* the rendering + the click→dismiss; whisperd owns
+    // the queue/lifetime. `toast_feed_raw` caches the last raw bytes to skip re-decoding.
+    pub toasts: Vec<Notification>,
+    pub toast_feed_raw: Vec<u8>,
+    // A small ring of recently click-dismissed ids. A click writes the dismiss to whisperd (which
+    // republishes the feed without it ~a tick later) AND records the id here, so the toast vanishes
+    // on the very next frame instead of lingering for the round-trip. Entries are pruned when the id
+    // leaves the feed (so a reused id after a whisperd restart is never wrongly suppressed); `0` is an
+    // empty slot (whisperd ids start at 1).
+    pub toast_dismissed: [u32; TOAST_DISMISS_RING],
+    pub toast_dismiss_w: usize,
+    // Strictly-increasing token minted for each dismiss request (from the monotonic clock, so it
+    // climbs even across a compd restart) — whisperd services each request once and ignores stale.
+    pub toast_dismiss_token: u64,
+
     // Keyboard decoder: PS/2 Set 1 scancodes → terminal bytes, carrying the modifier state
     // machine across reads (release-edge decode, resilient to this kernel's make corruption).
     pub kbd: keymap::ScanDecoder,
@@ -206,6 +229,11 @@ impl CompState {
             overview: false,
             overview_sel: 0,
             menu: None,
+            toasts: Vec::new(),
+            toast_feed_raw: Vec::new(),
+            toast_dismissed: [0; TOAST_DISMISS_RING],
+            toast_dismiss_w: 0,
+            toast_dismiss_token: 0,
             kbd: keymap::ScanDecoder::new(),
             keymap: keymap::german_default(),
             desktop_rgb: (26, 26, 46),

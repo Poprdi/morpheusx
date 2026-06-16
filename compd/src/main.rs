@@ -74,6 +74,9 @@ fn main() -> i32 {
         islands::desk::consume_desk_command(&mut state);
         islands::focus::process_msgs(&mut state);
         islands::focus::publish_window_state(&mut state);
+        // Pull the notification feed whisperd publishes, so the toast overlay reflects the current
+        // set (re-decoded only when the bytes change).
+        islands::toasts::consume_feed(&mut state);
         islands::renderer::compose(&mut state);
 
         process::yield_cpu();

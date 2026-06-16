@@ -411,6 +411,15 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
         return;
     }
 
+    // A left click on a toast dismisses it and is consumed (it does not also fall through to the
+    // window beneath). Toasts are NON-modal — this is a hit-test, not a capture: a click that misses
+    // every toast returns false and routes on normally. compd draws its own cursor from mouse_x/y,
+    // so no Desktop forward is needed to keep the pointer tracking (as in the overview path).
+    if msg.left_pressed && crate::islands::toasts::dismiss_at(state, msg.mx, msg.my) {
+        state.last_buttons = msg.buttons;
+        return;
+    }
+
     // Keep desktop cursor in sync with absolute position every sample.
     enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 });
 

@@ -122,6 +122,12 @@ pub fn compose(state: &mut CompState) {
         draw_menu(state, fb_ptr);
     }
 
+    // Notification toasts: the stack whisperd published, top-right above everything (but under the
+    // cursor), so a notification floats over windows and both context menus alike.
+    if !state.toasts.is_empty() {
+        draw_toasts(state, fb_ptr);
+    }
+
     draw_cursor(state, fb_ptr);
 
     let _ = libmorpheus::hw::fb_present();
@@ -909,6 +915,62 @@ fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
     }
 }
 
+/// Draw the notification toast stack: each toast a soft drop shadow, a dark panel with a left accent
+/// stripe (its urgency colour), a 1px border, the app name (in the accent), the summary, and the
+/// wrapped body; a small `×` in the top-right corner is the dismiss affordance (though a click
+/// anywhere on the toast dismisses). The hovered toast lifts a touch and brightens its `×`. The boxes
+/// and the line count come from the host-tested `phosphor_notify::layout` (via `islands::toasts`), so
+/// the drawn toasts line up exactly with the rects the click hit-test dismisses.
+fn draw_toasts(state: &CompState, fb_ptr: *mut u32) {
+    use crate::islands::toasts;
+    let (idxs, rects) = toasts::visible(state);
+    // Which toast (if any) the pointer is over, so it can lift/brighten — the same hit-test the
+    // dismiss click uses, so the highlight and the target agree.
+    let hovered = phosphor_notify::layout::toast_hit(&rects, state.mouse_x, state.mouse_y);
+
+    const PANEL: (u8, u8, u8) = (28, 28, 36);
+    const PANEL_HOVER: (u8, u8, u8) = (40, 40, 50);
+    const SUMMARY_RGB: (u8, u8, u8) = (236, 236, 242);
+    const BODY_RGB: (u8, u8, u8) = (176, 176, 188);
+
+    for (k, &i) in idxs.iter().enumerate() {
+        let n = &state.toasts[i];
+        let r = rects[k];
+        let is_hovered = hovered == Some(k);
+        let panel = if is_hovered { PANEL_HOVER } else { PANEL };
+        let accent = toasts::accent_rgb(state, n.urgency);
+
+        // Drop shadow: a translucent dark offset down-right, lifting the toast off the scene.
+        blend_fill(state, fb_ptr, r.x + 4, r.y + 4, r.w as u32, r.h as u32, 0, 0, 0, 6, 16);
+
+        // Panel + left accent stripe + 1px border.
+        clip_fill(state, fb_ptr, r.x, r.y, r.w as u32, r.h as u32, panel.0, panel.1, panel.2);
+        clip_fill(state, fb_ptr, r.x, r.y, toasts::ACCENT_W as u32, r.h as u32, accent.0, accent.1, accent.2);
+        draw_frame(state, fb_ptr, r.x, r.y, r.w, r.h, 1, 70, 70, 84);
+
+        // Dismiss `×` in the top-right corner — muted at rest, bright when the toast is hovered.
+        let c = phosphor_notify::layout::close_rect(r, toasts::METRICS);
+        let x_rgb = if is_hovered { (236, 236, 242) } else { (150, 150, 162) };
+        draw_ctl_mark(state, fb_ptr, c.x, c.y, c.w, c.h, CtlKind::Close, x_rgb, panel);
+
+        // Text column: inside the padding, clear of the accent stripe; stop short of the `×`.
+        let tx = (r.x + toasts::ACCENT_W + toasts::METRICS.pad).max(0) as u32;
+        let mut ty = r.y + toasts::METRICS.pad;
+        let line_h = toasts::METRICS.line_h;
+
+        if !n.app.is_empty() {
+            draw_text(state, fb_ptr, tx, ty.max(0) as u32, &n.app, accent, panel);
+            ty += line_h;
+        }
+        draw_text(state, fb_ptr, tx, ty.max(0) as u32, &n.summary, SUMMARY_RGB, panel);
+        ty += line_h;
+        for line in toasts::body_lines(n) {
+            draw_text(state, fb_ptr, tx, ty.max(0) as u32, &line, BODY_RGB, panel);
+            ty += line_h;
+        }
+    }
+}
+
 /// A `thick`-pixel rectangular frame (top/bottom/left/right) in `(r,g,b)`, clipped to the fb.
 #[allow(clippy::too_many_arguments)]
 fn draw_frame(
@@ -983,6 +1045,13 @@ fn cursor_mode(state: &CompState) -> wm_geom::CursorShape {
     // Over an open context menu the pointer is just a chooser — keep it an arrow rather than letting
     // the window beneath it (whose chrome the menu may overlap) drive a move/resize cursor.
     if state.menu.is_some() {
+        return wm_geom::CursorShape::Arrow;
+    }
+    // Likewise over a toast: it is a click-to-dismiss target floating above the windows, so an arrow
+    // (not a move/resize shape from a window beneath it) is what reads right.
+    if !state.toasts.is_empty()
+        && crate::islands::toasts::hovering(state, state.mouse_x, state.mouse_y)
+    {
         return wm_geom::CursorShape::Arrow;
     }
     let capture = state.capture.map(|c| match c {

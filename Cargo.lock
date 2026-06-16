@@ -57,6 +57,7 @@ dependencies = [
  "channel",
  "keymap",
  "libmorpheus",
+ "phosphor-notify",
  "wm-geom",
 ]
 
@@ -415,6 +416,10 @@ version = "0.1.0"
 dependencies = [
  "libmorpheus",
 ]
+
+[[package]]
+name = "phosphor-notify"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro-error-attr2"
