@@ -21,8 +21,12 @@ pub struct Rect {
     pub h: i32,
 }
 
-/// Chrome metrics in pixels. `close_off`/`close_w` describe the `[X]` button as an inset from the
-/// title bar's right edge: the hit cell is `[right - close_off, right - close_off + close_w)`.
+/// Chrome metrics in pixels. The title bar carries the standard three window controls, right-
+/// aligned in the order `[_] [□] [X]` (minimize, maximize/restore, close). `close_off`/`close_w`
+/// describe the rightmost button (close) as an inset from the title bar's right edge — its hit cell
+/// is `[right - close_off, right - close_off + close_w)`; the maximize and minimize cells step left
+/// from it by `btn_pitch` each (same width), so maximize is `[close_x - btn_pitch, …)` and minimize
+/// `[close_x - 2*btn_pitch, …)`.
 #[derive(Clone, Copy)]
 pub struct Chrome {
     pub title_h: i32,
@@ -30,14 +34,19 @@ pub struct Chrome {
     pub grip: i32,
     pub close_off: i32,
     pub close_w: i32,
+    /// Leftward step from one title-bar button's left edge to the next (close → maximize → minimize).
+    pub btn_pitch: i32,
 }
 
-/// The part of a window a point falls on. Priority when overlapping: Close > Resize > Title >
-/// Content (a click on the grip resizes even though it sits over the content's bottom-right).
+/// The part of a window a point falls on. Priority when overlapping: Close > Maximize > Minimize >
+/// Resize > Title > Content (a click on the grip resizes even though it sits over the content's
+/// bottom-right; the title-bar buttons are disjoint cells, but they are tested before the bare title).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Region {
     Title,
     Close,
+    Minimize,
+    Maximize,
     Resize,
     Content,
 }
@@ -76,10 +85,22 @@ pub fn classify(win: Rect, c: Chrome, mx: i32, my: i32) -> Option<Region> {
     let tb_y = outer_y + c.border; // == win.y - title_h
     let tb_w = win.w;
 
-    // Close button: an inset cell at the right of the title bar.
-    let close_x = tb_x + tb_w - c.close_off;
-    if my >= tb_y && my < tb_y + c.title_h && mx >= close_x && mx < close_x + c.close_w {
-        return Some(Region::Close);
+    // Title-bar window controls, right-aligned `[_] [□] [X]`. Close is the rightmost inset cell;
+    // maximize and minimize step left by `btn_pitch`. All share the title-bar y-band and the close
+    // width; the cells are disjoint, so the test order among them is cosmetic.
+    if my >= tb_y && my < tb_y + c.title_h {
+        let close_x = tb_x + tb_w - c.close_off;
+        let max_x = close_x - c.btn_pitch;
+        let min_x = close_x - 2 * c.btn_pitch;
+        if mx >= close_x && mx < close_x + c.close_w {
+            return Some(Region::Close);
+        }
+        if mx >= max_x && mx < max_x + c.close_w {
+            return Some(Region::Maximize);
+        }
+        if mx >= min_x && mx < min_x + c.close_w {
+            return Some(Region::Minimize);
+        }
     }
 
     // Bottom-right resize grip (square, side = grip).
@@ -531,6 +552,361 @@ pub fn chip_action(is_minimized: bool, is_focused: bool) -> ChipAction {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Overview (Exposé) — the "show all windows" grid.
+//
+// When the user toggles the overview, compd scales every open window down into a
+// near-square grid of live thumbnails over the dimmed desktop; the pointer (or the
+// arrow keys) picks one, and activating it focuses+raises that window and exits.
+// The geometry is pure so the grid layout + hit-test are pinned by host tests, the
+// same reason the move/resize/snap math lives here — the headless QEMU has no
+// pointer to drive an overview click on a boot. compd owns the mode, the surface
+// scaling, the dim, and the focus edit; this crate owns only where each thumbnail
+// sits and which one a point falls on.
+// ---------------------------------------------------------------------------
+
+/// One thumbnail's placement in the overview grid: the full grid `cell` (the whole
+/// clickable tile, also where the title label is drawn) and the `thumb` rect inside
+/// it where the window's scaled surface is blitted (aspect-fitted, centered, with the
+/// label strip reserved at the bottom).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OverviewSlot {
+    pub cell: Rect,
+    pub thumb: Rect,
+}
+
+/// Grid dimensions `(cols, rows)` for `n` thumbnails — the canonical near-square
+/// Exposé grid: `cols = ceil(sqrt(n))`, `rows = ceil(n / cols)`. `n == 0 → (0, 0)`.
+/// Integer-only (no `f32` — this is `no_std` on the compd target).
+pub fn overview_dims(n: u32) -> (u32, u32) {
+    if n == 0 {
+        return (0, 0);
+    }
+    // cols = ceil(sqrt(n)) without floats: the smallest c with c*c >= n.
+    let mut cols = 1u32;
+    while cols * cols < n {
+        cols += 1;
+    }
+    let rows = n.div_ceil(cols);
+    (cols, rows)
+}
+
+/// The `(col, row)` of thumbnail `i` in a row-major grid of `cols` columns.
+fn overview_cell_rc(i: u32, cols: u32) -> (u32, u32) {
+    let cols = cols.max(1);
+    (i % cols, i / cols)
+}
+
+/// The full grid-cell rect for thumbnail `i` of `n`, laid inside `area` with `margin`
+/// px around the whole grid and `gap` px between cells. Cells are equal-sized and
+/// row-major; a partial last row keeps the same cell size (left-aligned). Returns a
+/// zeroed rect for an out-of-range `i` or empty grid.
+pub fn overview_cell(i: u32, n: u32, area: Rect, margin: i32, gap: i32) -> Rect {
+    let (cols, rows) = overview_dims(n);
+    if i >= n || cols == 0 || rows == 0 {
+        return Rect { x: 0, y: 0, w: 0, h: 0 };
+    }
+    let inner_w = (area.w - 2 * margin - gap * (cols as i32 - 1)).max(1);
+    let inner_h = (area.h - 2 * margin - gap * (rows as i32 - 1)).max(1);
+    let cw = (inner_w / cols as i32).max(1);
+    let ch = (inner_h / rows as i32).max(1);
+    let (c, r) = overview_cell_rc(i, cols);
+    Rect {
+        x: area.x + margin + c as i32 * (cw + gap),
+        y: area.y + margin + r as i32 * (ch + gap),
+        w: cw,
+        h: ch,
+    }
+}
+
+/// The thumbnail rect inside `cell`: the window's `(win_w × win_h)` aspect-fitted into
+/// the cell minus `pad` on every side and `label_h` reserved at the bottom for the
+/// title, then centered in the remaining box. A degenerate window (either dim ≤ 0)
+/// falls back to filling the available box. Never larger than the available box (a
+/// small window is shown at native scale, not upscaled past 1:1 — overview shrinks,
+/// it doesn't magnify).
+pub fn overview_thumb(cell: Rect, win_w: i32, win_h: i32, pad: i32, label_h: i32) -> Rect {
+    let box_x = cell.x + pad;
+    let box_y = cell.y + pad;
+    let box_w = (cell.w - 2 * pad).max(1);
+    let box_h = (cell.h - 2 * pad - label_h).max(1);
+    if win_w <= 0 || win_h <= 0 {
+        return Rect { x: box_x, y: box_y, w: box_w, h: box_h };
+    }
+    // Fit win_w×win_h into box_w×box_h preserving aspect, never upscaling past native.
+    // scale = min(box_w/win_w, box_h/win_h, 1), computed in fixed-point (×65536).
+    let sx = ((box_w as i64) << 16) / win_w as i64;
+    let sy = ((box_h as i64) << 16) / win_h as i64;
+    let scale = sx.min(sy).min(1 << 16);
+    let tw = (((win_w as i64) * scale) >> 16).clamp(1, box_w as i64) as i32;
+    let th = (((win_h as i64) * scale) >> 16).clamp(1, box_h as i64) as i32;
+    Rect {
+        x: box_x + (box_w - tw) / 2,
+        y: box_y + (box_h - th) / 2,
+        w: tw,
+        h: th,
+    }
+}
+
+/// Hit-test a pointer against the overview grid → the thumbnail index its CELL contains
+/// (the whole tile is clickable, not just the scaled thumbnail — a real Exposé lets you
+/// click the gap around a small thumbnail), or `None` if the point misses every cell or
+/// lands in a margin/gap. Uses the same `margin`/`gap` as [`overview_cell`].
+pub fn overview_hit(n: u32, area: Rect, margin: i32, gap: i32, mx: i32, my: i32) -> Option<u32> {
+    for i in 0..n {
+        let cell = overview_cell(i, n, area, margin, gap);
+        if mx >= cell.x && mx < cell.x + cell.w && my >= cell.y && my < cell.y + cell.h {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Move the keyboard selection within the grid in `dir`, row-major, clamped to `[0, n)`.
+/// Left/Right step within a row (clamped at the row ends — they do not wrap); Up/Down
+/// step a whole row, clamped so a Down off the last (possibly partial) row stays on the
+/// last valid index. Returns `sel` unchanged when `n == 0`.
+pub fn overview_nav(sel: u32, n: u32, dir: Dir) -> u32 {
+    if n == 0 {
+        return sel;
+    }
+    let (cols, _rows) = overview_dims(n);
+    let cols = cols.max(1);
+    let sel = sel.min(n - 1);
+    match dir {
+        Dir::Left => {
+            if sel % cols == 0 {
+                sel
+            } else {
+                sel - 1
+            }
+        },
+        Dir::Right => {
+            if sel % cols == cols - 1 || sel + 1 >= n {
+                sel
+            } else {
+                sel + 1
+            }
+        },
+        Dir::Up => {
+            if sel < cols {
+                sel
+            } else {
+                sel - cols
+            }
+        },
+        Dir::Down => {
+            let down = sel + cols;
+            if down < n {
+                down
+            } else {
+                sel
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Window context menu — the right-click menu on a window's chrome.
+//
+// Right-clicking a window's title bar opens a small popup of that window's
+// operations (maximize/restore, minimize, the snap halves, close). compd owns the
+// menu's lifetime, draws it, and maps each row to the SAME edit its keyboard /
+// title-button equivalent already performs — the menu adds a discoverable surface,
+// not new behaviour. This crate owns only the popup's layout (its box, its stacked
+// rows) and which row a point falls on, pinned by host tests for the same reason
+// every other WM-interaction measurement lives here: the headless QEMU can't aim a
+// real pointer onto a row at test time.
+// ---------------------------------------------------------------------------
+
+/// What a window-menu row does when chosen. Each maps onto an edit compd already has:
+/// `MaximizeRestore`/`Snap*` → `apply_snap`, `Minimize` → the taskbar-chip minimize,
+/// `Close` → the window's SIGTERM (see [`menu_action_zone`] for the snap mapping).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MenuAction {
+    MaximizeRestore,
+    Minimize,
+    SnapLeft,
+    SnapRight,
+    SnapTop,
+    SnapBottom,
+    Close,
+}
+
+/// One row of the window menu: a chooseable item (label + action) or a thin divider
+/// between logical groups. Separators are inert (never selected or hit) and have their
+/// own, shorter height.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MenuRow {
+    Item { action: MenuAction, label: &'static str },
+    Separator,
+}
+
+/// Pixel metrics for the popup: the height of an item row and of a separator, the
+/// horizontal text padding, the font cell width used to size the box to its widest
+/// label, and a floor on the box width so a short menu still reads as a panel.
+#[derive(Clone, Copy)]
+pub struct MenuMetrics {
+    pub row_h: i32,
+    pub sep_h: i32,
+    pub pad_x: i32,
+    pub char_w: i32,
+    pub min_w: i32,
+}
+
+/// Number of rows in the window menu (see [`window_menu`]) — fixed so compd can hold it
+/// in an array without alloc.
+pub const WINDOW_MENU_ROWS: usize = 9;
+
+/// The window menu's rows, in display order. The first row reads `Restore` when the
+/// window is maximized and `Maximize` otherwise — the same toggle the `[□]/[❐]` title
+/// button and a title double-click drive. Two separators group it: ops · snaps · close.
+pub fn window_menu(maximized: bool) -> [MenuRow; WINDOW_MENU_ROWS] {
+    [
+        MenuRow::Item {
+            action: MenuAction::MaximizeRestore,
+            label: if maximized { "Restore" } else { "Maximize" },
+        },
+        MenuRow::Item { action: MenuAction::Minimize, label: "Minimize" },
+        MenuRow::Separator,
+        MenuRow::Item { action: MenuAction::SnapLeft, label: "Snap left" },
+        MenuRow::Item { action: MenuAction::SnapRight, label: "Snap right" },
+        MenuRow::Item { action: MenuAction::SnapTop, label: "Snap top" },
+        MenuRow::Item { action: MenuAction::SnapBottom, label: "Snap bottom" },
+        MenuRow::Separator,
+        MenuRow::Item { action: MenuAction::Close, label: "Close" },
+    ]
+}
+
+/// The popup's pixel size for `rows` under `m`: width = widest item label (in `char_w`
+/// cells) + `2*pad_x`, floored at `min_w`; height = the sum of every row's height.
+pub fn menu_size(rows: &[MenuRow], m: MenuMetrics) -> (i32, i32) {
+    let mut max_chars = 0i32;
+    let mut h = 0i32;
+    for row in rows {
+        match row {
+            MenuRow::Item { label, .. } => {
+                max_chars = max_chars.max(label.chars().count() as i32);
+                h += m.row_h;
+            },
+            MenuRow::Separator => h += m.sep_h,
+        }
+    }
+    let w = (max_chars * m.char_w + 2 * m.pad_x).max(m.min_w);
+    (w, h)
+}
+
+/// Top-left at which to place a `w×h` menu opened at pointer `(ax, ay)`, clamped so the
+/// whole box stays inside the work area (the framebuffer minus the bottom `panel_h`
+/// taskbar). It drops down-right of the cursor like every desktop menu; if that would
+/// overflow the right or bottom, the box is pulled back so its far edge sits flush
+/// against the work-area edge, never off-screen.
+pub fn menu_origin(
+    ax: i32,
+    ay: i32,
+    w: i32,
+    h: i32,
+    fb_w: i32,
+    fb_h: i32,
+    panel_h: i32,
+) -> (i32, i32) {
+    let work_h = (fb_h - panel_h).max(1);
+    let x = ax.min((fb_w - w).max(0)).max(0);
+    let y = ay.min((work_h - h).max(0)).max(0);
+    (x, y)
+}
+
+/// The full-width clickable band of row `i`, given the menu's top-left `(ox, oy)`, box
+/// width `w`, and metrics. Rows stack top-down (a separator takes `sep_h`, an item
+/// `row_h`). Returns a zero rect for an out-of-range `i`.
+pub fn menu_row_rect(rows: &[MenuRow], m: MenuMetrics, ox: i32, oy: i32, w: i32, i: usize) -> Rect {
+    let mut y = oy;
+    for (j, row) in rows.iter().enumerate() {
+        let rh = match row {
+            MenuRow::Separator => m.sep_h,
+            _ => m.row_h,
+        };
+        if j == i {
+            return Rect { x: ox, y, w, h: rh };
+        }
+        y += rh;
+    }
+    Rect { x: 0, y: 0, w: 0, h: 0 }
+}
+
+/// Hit-test a pointer against an open menu → the index of the *item* row it lands on
+/// (separators are inert and never returned), or `None` if the point misses the box.
+pub fn menu_hit(
+    rows: &[MenuRow],
+    m: MenuMetrics,
+    ox: i32,
+    oy: i32,
+    w: i32,
+    mx: i32,
+    my: i32,
+) -> Option<usize> {
+    if mx < ox || mx >= ox + w {
+        return None;
+    }
+    let mut y = oy;
+    for (i, row) in rows.iter().enumerate() {
+        let rh = match row {
+            MenuRow::Separator => m.sep_h,
+            _ => m.row_h,
+        };
+        if my >= y && my < y + rh {
+            return match row {
+                MenuRow::Item { .. } => Some(i),
+                MenuRow::Separator => None,
+            };
+        }
+        y += rh;
+    }
+    None
+}
+
+/// The next selectable item row when navigating with the arrows: from `sel`, step `+1`
+/// (down) or `-1` (up), skipping separators and wrapping at the ends like a real menu.
+/// Lands on an item whenever the menu has one; returns `sel` only for an item-less menu.
+pub fn menu_nav(sel: usize, rows: &[MenuRow], down: bool) -> usize {
+    let n = rows.len();
+    if n == 0 {
+        return sel;
+    }
+    let mut i = sel.min(n - 1);
+    for _ in 0..n {
+        i = if down {
+            if i + 1 >= n {
+                0
+            } else {
+                i + 1
+            }
+        } else if i == 0 {
+            n - 1
+        } else {
+            i - 1
+        };
+        if matches!(rows[i], MenuRow::Item { .. }) {
+            return i;
+        }
+    }
+    sel
+}
+
+/// The snap zone a menu action tiles the window to, or `None` for the non-snap actions
+/// (`Minimize`, `Close`) compd handles directly. Keeps the menu→[`snap_rect`] mapping in
+/// one host-tested place so a menu snap lands exactly where the keyboard/edge snap does.
+pub fn menu_action_zone(a: MenuAction) -> Option<SnapZone> {
+    Some(match a {
+        MenuAction::MaximizeRestore => SnapZone::Maximize,
+        MenuAction::SnapLeft => SnapZone::LeftHalf,
+        MenuAction::SnapRight => SnapZone::RightHalf,
+        MenuAction::SnapTop => SnapZone::TopHalf,
+        MenuAction::SnapBottom => SnapZone::BottomHalf,
+        MenuAction::Minimize | MenuAction::Close => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +919,7 @@ mod tests {
         grip: 14,
         close_off: 34,
         close_w: 30,
+        btn_pitch: 32,
     };
     const WIN: Rect = Rect {
         x: 20,
@@ -576,6 +953,46 @@ mod tests {
             classify(WIN, C, right - C.close_off - 1, cy),
             Some(Region::Title)
         );
+    }
+
+    #[test]
+    fn maximize_and_minimize_buttons_classify_left_of_close() {
+        let right = WIN.x + WIN.w;
+        let cy = WIN.y - C.title_h / 2;
+        let close_x = right - C.close_off;
+        // Centre of the maximize cell (one pitch left of close).
+        let max_cx = close_x - C.btn_pitch + C.close_w / 2;
+        assert_eq!(classify(WIN, C, max_cx, cy), Some(Region::Maximize));
+        // Centre of the minimize cell (two pitches left of close).
+        let min_cx = close_x - 2 * C.btn_pitch + C.close_w / 2;
+        assert_eq!(classify(WIN, C, min_cx, cy), Some(Region::Minimize));
+        // The three button cells are distinct and ordered min < max < close.
+        assert!(min_cx < max_cx && max_cx < close_x + C.close_w / 2);
+        // Just left of the minimize cell is plain title bar (the buttons don't bleed into the title).
+        assert_eq!(
+            classify(WIN, C, close_x - 2 * C.btn_pitch - 1, cy),
+            Some(Region::Title)
+        );
+        // The 2px gap between maximize's right edge and close's left edge is title, not a button.
+        assert_eq!(classify(WIN, C, close_x - 1, cy), Some(Region::Title));
+    }
+
+    #[test]
+    fn title_buttons_only_within_the_title_band() {
+        // A column that would be a button, but a row inside the content area, is content — the
+        // buttons are clamped to the title-bar y-band.
+        let right = WIN.x + WIN.w;
+        let max_cx = right - C.close_off - C.btn_pitch + C.close_w / 2;
+        assert_eq!(classify(WIN, C, max_cx, WIN.y + 10), Some(Region::Content));
+    }
+
+    #[test]
+    fn buttons_keep_the_arrow_cursor() {
+        // A press on a control button is a click, not a drag — the pointer stays an arrow over them
+        // (only the title→move and grip→resize affordances change the cursor).
+        assert_eq!(cursor_shape(None, Some(Region::Minimize)), CursorShape::Arrow);
+        assert_eq!(cursor_shape(None, Some(Region::Maximize)), CursorShape::Arrow);
+        assert_eq!(cursor_shape(None, Some(Region::Close)), CursorShape::Arrow);
     }
 
     #[test]
@@ -963,5 +1380,206 @@ mod tests {
         assert_eq!(chip_action(false, true), ChipAction::Minimize);
         // Visible + unfocused → focus + raise.
         assert_eq!(chip_action(false, false), ChipAction::Focus);
+    }
+
+    // ---- overview (Exposé) grid ------------------------------------------------
+
+    #[test]
+    fn overview_dims_is_near_square_ceil_sqrt() {
+        assert_eq!(overview_dims(0), (0, 0));
+        assert_eq!(overview_dims(1), (1, 1));
+        assert_eq!(overview_dims(2), (2, 1)); // ceil(sqrt 2)=2 cols, 1 row
+        assert_eq!(overview_dims(3), (2, 2));
+        assert_eq!(overview_dims(4), (2, 2));
+        assert_eq!(overview_dims(5), (3, 2));
+        assert_eq!(overview_dims(9), (3, 3));
+        assert_eq!(overview_dims(10), (4, 3));
+        assert_eq!(overview_dims(16), (4, 4));
+    }
+
+    #[test]
+    fn overview_cells_tile_the_area_left_to_right_top_to_bottom() {
+        let area = Rect { x: 0, y: 0, w: 1280, h: 770 };
+        // 4 windows → 2×2. Equal cells, margin 20, gap 16.
+        let (m, g) = (20, 16);
+        let c0 = overview_cell(0, 4, area, m, g);
+        let c1 = overview_cell(1, 4, area, m, g);
+        let c2 = overview_cell(2, 4, area, m, g);
+        let c3 = overview_cell(3, 4, area, m, g);
+        // top-left starts at the margin.
+        assert_eq!((c0.x, c0.y), (20, 20));
+        // identical cell sizes.
+        assert_eq!((c0.w, c0.h), (c1.w, c1.h));
+        assert_eq!((c0.w, c0.h), (c3.w, c3.h));
+        // col 1 is one (cell+gap) to the right of col 0; row 1 one down.
+        assert_eq!(c1.x, c0.x + c0.w + g);
+        assert_eq!(c1.y, c0.y);
+        assert_eq!(c2.x, c0.x);
+        assert_eq!(c2.y, c0.y + c0.h + g);
+        // the grid fits inside the area.
+        assert!(c3.x + c3.w <= area.w - m + 1);
+        assert!(c3.y + c3.h <= area.h - m + 1);
+        // out-of-range is a zero rect.
+        assert_eq!(overview_cell(4, 4, area, m, g), Rect { x: 0, y: 0, w: 0, h: 0 });
+    }
+
+    #[test]
+    fn overview_thumb_preserves_aspect_and_never_upscales() {
+        let cell = Rect { x: 100, y: 100, w: 400, h: 300 };
+        // A wide 1280×800 window into the cell (pad 8, label 18): width-bound, aspect held.
+        let t = overview_thumb(cell, 1280, 800, 8, 18);
+        // aspect ~1.6 preserved within rounding.
+        let ar_win = 1280f64 / 800f64;
+        let ar_thumb = t.w as f64 / t.h as f64;
+        assert!((ar_win - ar_thumb).abs() < 0.05, "aspect drift: {ar_thumb}");
+        // fits inside the padded box.
+        assert!(t.x >= cell.x + 8 && t.y >= cell.y + 8);
+        assert!(t.x + t.w <= cell.x + cell.w - 8);
+        assert!(t.y + t.h <= cell.y + cell.h - 8 - 18);
+        // centered horizontally (width-bound case fills width; centering shows on the y axis).
+        // A tiny window is shown at native size, not magnified.
+        let small = overview_thumb(cell, 40, 30, 8, 18);
+        assert_eq!((small.w, small.h), (40, 30));
+        // degenerate dims fall back to filling the box.
+        let deg = overview_thumb(cell, 0, 0, 8, 18);
+        assert_eq!((deg.w, deg.h), (400 - 16, 300 - 16 - 18));
+    }
+
+    #[test]
+    fn overview_hit_maps_points_to_their_cell() {
+        let area = Rect { x: 0, y: 0, w: 1280, h: 770 };
+        let (m, g) = (20, 16);
+        // center of each cell hits its index.
+        for i in 0..4u32 {
+            let c = overview_cell(i, 4, area, m, g);
+            assert_eq!(overview_hit(4, area, m, g, c.x + c.w / 2, c.y + c.h / 2), Some(i));
+        }
+        // a point in the outer margin misses.
+        assert_eq!(overview_hit(4, area, m, g, 2, 2), None);
+        // a point in the inter-cell gap misses.
+        let c0 = overview_cell(0, 4, area, m, g);
+        assert_eq!(overview_hit(4, area, m, g, c0.x + c0.w + g / 2, c0.y + 5), None);
+    }
+
+    #[test]
+    fn overview_nav_steps_the_grid_and_clamps() {
+        // 5 windows → 3 cols × 2 rows; indices 0..4 (last row partial: 3,4 only).
+        let n = 5;
+        // right within a row, clamp at the row end.
+        assert_eq!(overview_nav(0, n, Dir::Right), 1);
+        assert_eq!(overview_nav(2, n, Dir::Right), 2); // end of row 0, no wrap
+        // left clamps at col 0.
+        assert_eq!(overview_nav(0, n, Dir::Left), 0);
+        assert_eq!(overview_nav(1, n, Dir::Left), 0);
+        // down a row.
+        assert_eq!(overview_nav(0, n, Dir::Down), 3);
+        // down off the partial last row stays put (index 2 has no cell below: 2+3=5 ≥ n).
+        assert_eq!(overview_nav(2, n, Dir::Down), 2);
+        // up a row.
+        assert_eq!(overview_nav(3, n, Dir::Up), 0);
+        assert_eq!(overview_nav(0, n, Dir::Up), 0);
+        // empty grid: unchanged.
+        assert_eq!(overview_nav(0, 0, Dir::Right), 0);
+    }
+
+    // ── Window context menu ──────────────────────────────────────────────────────────────────
+
+    const MM: MenuMetrics = MenuMetrics {
+        row_h: 20,
+        sep_h: 7,
+        pad_x: 12,
+        char_w: 8,
+        min_w: 120,
+    };
+
+    #[test]
+    fn window_menu_toggles_first_label_and_has_two_separators() {
+        let m = window_menu(false);
+        assert_eq!(m.len(), WINDOW_MENU_ROWS);
+        assert_eq!(
+            m[0],
+            MenuRow::Item { action: MenuAction::MaximizeRestore, label: "Maximize" }
+        );
+        // Maximized → the first row offers Restore instead.
+        assert_eq!(
+            window_menu(true)[0],
+            MenuRow::Item { action: MenuAction::MaximizeRestore, label: "Restore" }
+        );
+        let seps = m.iter().filter(|r| matches!(r, MenuRow::Separator)).count();
+        assert_eq!(seps, 2);
+        assert_eq!(m[WINDOW_MENU_ROWS - 1], MenuRow::Item { action: MenuAction::Close, label: "Close" });
+    }
+
+    #[test]
+    fn menu_size_fits_widest_label_and_sums_row_heights() {
+        let rows = window_menu(false);
+        let (_w, h) = menu_size(&rows, MM);
+        // 7 item rows + 2 separators.
+        assert_eq!(h, 7 * MM.row_h + 2 * MM.sep_h);
+        // Widest-label path: a low floor lets the widest label ("Snap bottom", 11 chars) size the box.
+        let wide = MenuMetrics { min_w: 0, ..MM };
+        assert_eq!(menu_size(&rows, wide).0, 11 * MM.char_w + 2 * MM.pad_x);
+        // Floor path: a sliver of a menu is held at min_w.
+        let tiny = [MenuRow::Item { action: MenuAction::Close, label: "X" }];
+        assert_eq!(menu_size(&tiny, MM).0, MM.min_w);
+    }
+
+    #[test]
+    fn menu_origin_prefers_anchor_then_clamps_into_the_work_area() {
+        let (fb_w, fb_h, panel) = (1280, 800, 30);
+        let (w, h) = (160, 220);
+        // Comfortably inside → dropped exactly at the cursor.
+        assert_eq!(menu_origin(400, 300, w, h, fb_w, fb_h, panel), (400, 300));
+        // Near the right edge → pulled left so the far edge is flush at fb_w.
+        assert_eq!(menu_origin(1200, 300, w, h, fb_w, fb_h, panel).0, fb_w - w);
+        // Near the bottom → pulled up so the box clears the panel (work area = fb_h - panel).
+        assert_eq!(menu_origin(400, 790, w, h, fb_w, fb_h, panel).1, (fb_h - panel) - h);
+        // A negative/odd anchor never escapes the top-left.
+        assert_eq!(menu_origin(-50, -50, w, h, fb_w, fb_h, panel), (0, 0));
+    }
+
+    #[test]
+    fn menu_hit_finds_items_and_ignores_separators_and_the_outside() {
+        let rows = window_menu(false);
+        let (w, _h) = menu_size(&rows, MM);
+        let (ox, oy) = (100, 100);
+        // Row 0 (Maximize): its band is [oy, oy+row_h).
+        let r0 = menu_row_rect(&rows, MM, ox, oy, w, 0);
+        assert_eq!(r0, Rect { x: ox, y: oy, w, h: MM.row_h });
+        assert_eq!(menu_hit(&rows, MM, ox, oy, w, ox + 5, oy + 3), Some(0));
+        // Row 1 (Minimize).
+        assert_eq!(menu_hit(&rows, MM, ox, oy, w, ox + 5, oy + MM.row_h + 3), Some(1));
+        // Row 2 is a separator → inert.
+        let sep_y = oy + 2 * MM.row_h + MM.sep_h / 2;
+        assert_eq!(menu_hit(&rows, MM, ox, oy, w, ox + 5, sep_y), None);
+        // Just left of the box → miss.
+        assert_eq!(menu_hit(&rows, MM, ox, oy, w, ox - 1, oy + 3), None);
+        // Below the box → miss.
+        let (_w, h) = menu_size(&rows, MM);
+        assert_eq!(menu_hit(&rows, MM, ox, oy, w, ox + 5, oy + h), None);
+    }
+
+    #[test]
+    fn menu_nav_skips_separators_and_wraps() {
+        let rows = window_menu(false);
+        // Down from Minimize (idx 1) skips the separator at 2 → Snap left (idx 3).
+        assert_eq!(menu_nav(1, &rows, true), 3);
+        // Down from the last item (Close, idx 8) wraps to the first item (idx 0).
+        assert_eq!(menu_nav(8, &rows, true), 0);
+        // Up from the first item wraps to the last item.
+        assert_eq!(menu_nav(0, &rows, false), 8);
+        // Up from Snap left (idx 3) skips the separator → Minimize (idx 1).
+        assert_eq!(menu_nav(3, &rows, false), 1);
+    }
+
+    #[test]
+    fn menu_action_zone_maps_snaps_and_leaves_min_close_alone() {
+        assert_eq!(menu_action_zone(MenuAction::MaximizeRestore), Some(SnapZone::Maximize));
+        assert_eq!(menu_action_zone(MenuAction::SnapLeft), Some(SnapZone::LeftHalf));
+        assert_eq!(menu_action_zone(MenuAction::SnapRight), Some(SnapZone::RightHalf));
+        assert_eq!(menu_action_zone(MenuAction::SnapTop), Some(SnapZone::TopHalf));
+        assert_eq!(menu_action_zone(MenuAction::SnapBottom), Some(SnapZone::BottomHalf));
+        assert_eq!(menu_action_zone(MenuAction::Minimize), None);
+        assert_eq!(menu_action_zone(MenuAction::Close), None);
     }
 }

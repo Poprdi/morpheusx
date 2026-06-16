@@ -40,6 +40,9 @@ fn main() -> i32 {
     // store can't activate a window before the desktop is even up — only a strictly-new token from
     // this session's shell is serviced (mirrors hypnos baselining the launch request).
     state.focus_req_token = islands::focus::read_focus_request().0;
+    // Same baseline for the desktop-menu command request (Show all / Minimize all) — a stale
+    // cross-boot value must not fire before the desktop is up.
+    state.desk_cmd_token = islands::desk::read_desk_command().0;
 
     let mut last_appearance_poll_ms = 0u64;
     let mut last_keymap_poll_ms = 0u64;
@@ -67,6 +70,8 @@ fn main() -> i32 {
         // any keyboard focus-cycle, then publish the resulting focus/minimized snapshot back to the
         // shell so the taskbar chips reflect it.
         islands::focus::consume_focus_request(&mut state);
+        // Service a desktop-menu window command (Show all windows / Minimize all) from the shell.
+        islands::desk::consume_desk_command(&mut state);
         islands::focus::process_msgs(&mut state);
         islands::focus::publish_window_state(&mut state);
         islands::renderer::compose(&mut state);

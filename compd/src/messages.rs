@@ -62,6 +62,7 @@ pub struct MouseSpatialMsg {
     pub buttons: u8,
     pub left_pressed: bool,
     pub left_released: bool,
+    pub right_pressed: bool,
     pub in_panel: bool,
 }
 

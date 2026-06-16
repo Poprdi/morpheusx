@@ -19,7 +19,7 @@ pub fn process_msgs(state: &mut CompState) {
 /// A window slot is focusable when it is a visible (non-minimized) z1 app window — the z0 desktop is
 /// never focusable, and a minimized window is hidden so focus skips over it.
 #[inline]
-fn focusable(state: &CompState, i: usize) -> bool {
+pub(crate) fn focusable(state: &CompState, i: usize) -> bool {
     matches!(state.windows[i], Some(ref w) if w.z_layer == 1 && !w.minimized)
 }
 

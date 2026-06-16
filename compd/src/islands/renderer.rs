@@ -54,35 +54,40 @@ pub fn compose(state: &mut CompState) {
     }
 
     // z1: unfocused first, focused last. Minimized windows are hidden — skipped entirely here (they
-    // keep their slot + geometry, just aren't composited).
-    let mut order = [0u16; MAX_WINDOWS];
-    let mut n = 0usize;
-    for (i, w) in state.windows.iter().enumerate() {
-        if let Some(ref win) = w {
-            if win.z_layer == 1 && !win.minimized && state.focused != Some(i) {
-                order[n] = i as u16;
-                n += 1;
+    // keep their slot + geometry, just aren't composited). While the overview (Exposé) is open the
+    // full-size windows are NOT composited at all: the overview replaces them with the dimmed
+    // wallpaper + the thumbnail grid, so the scene reads unmistakably as an overview (compositing the
+    // big windows behind near-full-size thumbnails made it look like the ordinary cascade).
+    if !state.overview {
+        let mut order = [0u16; MAX_WINDOWS];
+        let mut n = 0usize;
+        for (i, w) in state.windows.iter().enumerate() {
+            if let Some(ref win) = w {
+                if win.z_layer == 1 && !win.minimized && state.focused != Some(i) {
+                    order[n] = i as u16;
+                    n += 1;
+                }
             }
         }
-    }
-    if let Some(fi) = state.focused {
-        if let Some(ref win) = state.windows[fi] {
-            if win.z_layer == 1 && !win.minimized {
-                order[n] = fi as u16;
-                n += 1;
+        if let Some(fi) = state.focused {
+            if let Some(ref win) = state.windows[fi] {
+                if win.z_layer == 1 && !win.minimized {
+                    order[n] = fi as u16;
+                    n += 1;
+                }
             }
         }
-    }
 
-    for &idx in &order[..n] {
-        let idx = idx as usize;
-        let is_focused = state.focused == Some(idx);
-        draw_window(state, idx, is_focused);
-    }
+        for &idx in &order[..n] {
+            let idx = idx as usize;
+            let is_focused = state.focused == Some(idx);
+            draw_window(state, idx, is_focused);
+        }
 
-    // Aero-snap preview: a translucent tint over the zone a title drag will tile to on release.
-    // Drawn above the windows but only over the work area, so the z3 panel below stays clear.
-    draw_snap_preview(state, fb_ptr);
+        // Aero-snap preview: a translucent tint over the zone a title drag will tile to on release.
+        // Drawn above the windows but only over the work area, so the z3 panel below stays clear.
+        draw_snap_preview(state, fb_ptr);
+    }
 
     // z3: panel overlay — bottom PANEL_H from desktop, on top of windows.
     if let Some(di) = state.desktop_idx {
@@ -102,6 +107,19 @@ pub fn compose(state: &mut CompState) {
                 );
             }
         }
+    }
+
+    // Overview (Exposé) overlay: dim the work area and lay every window out as a scaled live
+    // thumbnail. Drawn over the composed scene + panel but under the cursor, so the pointer stays
+    // on top while picking a thumbnail.
+    if state.overview {
+        draw_overview(state, fb_ptr);
+    }
+
+    // Window context menu: a popup of the right-clicked window's operations, over everything but the
+    // cursor (so the pointer stays on top while picking a row).
+    if state.menu.is_some() {
+        draw_menu(state, fb_ptr);
     }
 
     draw_cursor(state, fb_ptr);
@@ -216,16 +234,53 @@ fn draw_window(state: &mut CompState, idx: usize, focused: bool) {
         (tb_r, tb_g, tb_b),
     );
 
-    let close_x = (tb_x + tb_w as i32 - 32).max(0);
-    draw_text(
-        state,
-        fb_ptr,
-        close_x as u32,
-        text_y as u32,
-        "[X]",
-        TITLE_TEXT_RGB,
-        (tb_r, tb_g, tb_b),
-    );
+    // Window controls — `[_] [□] [X]`, right-aligned, the standard three. The cells must line up
+    // with `wm_geom::classify` exactly (close inset 34, then maximize/minimize one `btn_pitch=32`
+    // apart, each `close_w=30` wide), so the same offsets that the hit-test uses are repeated here.
+    // The maximize button shows a restore mark while the window is maximized (`saved_rect` set).
+    let is_max = state.windows[idx]
+        .as_ref()
+        .map(|w| w.saved_rect.is_some())
+        .unwrap_or(false);
+    // Which of this window's controls (if any) the pointer is over, so it lights up — affordance the
+    // hardware cursor alone can't give. `hit_test` respects z-order, so an occluded titlebar's
+    // buttons never falsely highlight.
+    let hov_ctl = match crate::islands::input::hit_test(state, state.mouse_x, state.mouse_y) {
+        Some((hi, region)) if hi == idx => Some(region),
+        _ => None,
+    };
+    let close_cell_x = tb_x + tb_w as i32 - 34;
+    let buttons = [
+        (close_cell_x - 64, HitRegion::Minimize, CtlKind::Minimize),
+        (
+            close_cell_x - 32,
+            HitRegion::Maximize,
+            if is_max { CtlKind::Restore } else { CtlKind::Maximize },
+        ),
+        (close_cell_x, HitRegion::Close, CtlKind::Close),
+    ];
+    for (cell_x, region, kind) in buttons {
+        let hovered = hov_ctl == Some(region);
+        // Hover wash: close goes the iconic red; the others lighten the title bar a touch.
+        if hovered {
+            let (hr, hg, hb) = if matches!(region, HitRegion::Close) {
+                (200, 70, 70)
+            } else {
+                (
+                    tb_r.saturating_add(38),
+                    tb_g.saturating_add(38),
+                    tb_b.saturating_add(38),
+                )
+            };
+            clip_fill(state, fb_ptr, cell_x, tb_y, 30, TITLE_H, hr, hg, hb);
+        }
+        let cell_bg = if hovered && matches!(region, HitRegion::Close) {
+            (200, 70, 70)
+        } else {
+            (tb_r, tb_g, tb_b)
+        };
+        draw_ctl_mark(state, fb_ptr, cell_x, tb_y, 30, TITLE_H as i32, kind, TITLE_TEXT_RGB, cell_bg);
+    }
 
     if win_mapped && !win_surface_ptr.is_null() {
         blit_1to1(
@@ -502,6 +557,72 @@ fn clip_fill(
     raw_fill(fb_ptr, state.fb_stride, x0, y0, x1 - x0, y1 - y0, px);
 }
 
+/// The four title-bar control marks. `Maximize`/`Restore` are the two faces of the one button.
+#[derive(Clone, Copy)]
+enum CtlKind {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// Draw one window-control mark centred in its title-bar cell. The marks are drawn from small filled
+/// rectangles (and short diagonals for the close X) rather than font glyphs, so they stay crisp at
+/// the title-bar size and need nothing beyond the 8×16 ASCII font. `bg` is the cell's current
+/// background — used to punch the front square of the restore mark so it reads as overlapping.
+#[allow(clippy::too_many_arguments)]
+fn draw_ctl_mark(
+    state: &CompState,
+    fb_ptr: *mut u32,
+    cell_x: i32,
+    cell_y: i32,
+    cell_w: i32,
+    cell_h: i32,
+    kind: CtlKind,
+    rgb: (u8, u8, u8),
+    bg: (u8, u8, u8),
+) {
+    let (r, g, b) = rgb;
+    let cx = cell_x + cell_w / 2;
+    let cy = cell_y + cell_h / 2;
+    match kind {
+        CtlKind::Minimize => {
+            // A short bar on the cell's centre line — the universal "drop to the taskbar" mark,
+            // sharing the maximize square's / close X's vertical centre so the trio reads as a set.
+            clip_fill(state, fb_ptr, cx - 5, cy - 1, 10, 2, r, g, b);
+        },
+        CtlKind::Maximize => {
+            // A 10×10 hollow square, 2px stroke.
+            clip_fill(state, fb_ptr, cx - 5, cy - 5, 10, 2, r, g, b); // top
+            clip_fill(state, fb_ptr, cx - 5, cy + 3, 10, 2, r, g, b); // bottom
+            clip_fill(state, fb_ptr, cx - 5, cy - 5, 2, 10, r, g, b); // left
+            clip_fill(state, fb_ptr, cx + 3, cy - 5, 2, 10, r, g, b); // right
+        },
+        CtlKind::Restore => {
+            // Two overlapping 8×8 squares: a back one up-right, a front one down-left over it.
+            let (bx, by) = (cx - 1, cy - 5);
+            clip_fill(state, fb_ptr, bx, by, 8, 2, r, g, b);
+            clip_fill(state, fb_ptr, bx, by + 6, 8, 2, r, g, b);
+            clip_fill(state, fb_ptr, bx, by, 2, 8, r, g, b);
+            clip_fill(state, fb_ptr, bx + 6, by, 2, 8, r, g, b);
+            // Front square: clear its footprint to the cell bg, then outline — so it sits in front.
+            let (fx, fy) = (cx - 5, cy - 1);
+            clip_fill(state, fb_ptr, fx, fy, 8, 8, bg.0, bg.1, bg.2);
+            clip_fill(state, fb_ptr, fx, fy, 8, 2, r, g, b);
+            clip_fill(state, fb_ptr, fx, fy + 6, 8, 2, r, g, b);
+            clip_fill(state, fb_ptr, fx, fy, 2, 8, r, g, b);
+            clip_fill(state, fb_ptr, fx + 6, fy, 2, 8, r, g, b);
+        },
+        CtlKind::Close => {
+            // An X: two 2px diagonals across a 10×10 box.
+            for i in 0..9 {
+                clip_fill(state, fb_ptr, cx - 4 + i, cy - 4 + i, 2, 2, r, g, b);
+                clip_fill(state, fb_ptr, cx - 4 + i, cy + 4 - i, 2, 2, r, g, b);
+            }
+        },
+    }
+}
+
 fn draw_text(
     state: &CompState,
     fb_ptr: *mut u32,
@@ -578,6 +699,239 @@ fn draw_snap_preview(state: &CompState, fb_ptr: *mut u32) {
     );
 }
 
+/// Draw the overview (Exposé) grid: dim the work area, then lay every open window out as a scaled
+/// live thumbnail in the host-tested `wm_geom::overview_*` grid, each with a 1px frame and a caption
+/// plate; the selected thumbnail gets a bright accent frame + plate so the keyboard/pointer focus
+/// reads clearly. The window list + grid geometry come from `islands::overview` and `wm_geom`, so the
+/// drawn cells line up exactly with the cells the input hit-test clicks.
+fn draw_overview(state: &CompState, fb_ptr: *mut u32) {
+    use crate::islands::overview;
+    let area = overview::area(state);
+
+    // Dim the work area hard toward black (~81%), leaving the panel below untouched so the taskbar
+    // stays legible. The full-size windows aren't composited in overview mode (see `compose`), so the
+    // backdrop is just the wallpaper; a heavy scrim sinks it well behind the bright thumbnails for a
+    // clean Exposé look. (The z0 desktop no longer carries an always-open launcher card to bleed
+    // through — the launcher is now a transient taskbar Start menu, closed during overview.)
+    blend_fill(
+        state, fb_ptr, area.x, area.y, area.w as u32, area.h as u32, 0, 0, 0, 13, 16,
+    );
+
+    let (slots, n) = overview::slots(state);
+    if n == 0 {
+        // Honest empty state: no windows to lay out. A centred note instead of a blank dim.
+        let note = "no open windows";
+        let tx = (area.w - note.len() as i32 * 8) / 2;
+        let ty = area.y + area.h / 2 - 8;
+        draw_text(state, fb_ptr, tx.max(0) as u32, ty.max(0) as u32, note, (170, 170, 180), (10, 10, 16));
+        return;
+    }
+
+    for (gi, &idx) in slots.iter().enumerate().take(n) {
+        let Some(win) = state.windows[idx].as_ref() else {
+            continue;
+        };
+        let cell = wm_geom::overview_cell(gi as u32, n as u32, area, overview::MARGIN, overview::GAP);
+        let thumb = wm_geom::overview_thumb(
+            cell,
+            win.w as i32,
+            win.h as i32,
+            overview::PAD,
+            overview::LABEL_H,
+        );
+        let selected = state.overview_sel == gi as u32;
+
+        // Live thumbnail: the window's surface bilinear-scaled into the thumb rect (the same
+        // primitive that scales the z0 wallpaper). Minimized windows still hold a live surface.
+        //
+        // Scale the CONTENT rect, not the whole surface. A client's surface is fb-sized, but its
+        // content is rendered 1:1 into only the top-left `win.w × win.h` of it (the `blit_1to1`
+        // contract — see surface_mgr::map_global_to_local_spawn); the rest is unused black. Feeding
+        // `src_w/src_h` (the full surface) downscaled that mostly-black expanse, squishing the
+        // content into the thumbnail's top-left corner. Source `win.w × win.h` instead (clamped to
+        // the mapped surface), keeping `src_stride` for row addressing, so the thumbnail shows the
+        // window's actual content edge-to-edge.
+        if win.mapped && !win.surface_ptr.is_null() {
+            let content_w = win.w.min(win.src_w);
+            let content_h = win.h.min(win.src_h);
+            blit_surface(
+                state,
+                fb_ptr,
+                thumb.x,
+                thumb.y,
+                thumb.w as u32,
+                thumb.h as u32,
+                content_w,
+                content_h,
+                win.src_stride,
+                win.surface_ptr,
+                win.surface_pages,
+            );
+        }
+
+        // Frame the thumbnail: a bright accent for the selection, a subtle grey otherwise.
+        let (fr, fg2, fb2) = if selected {
+            state.border_focused_rgb
+        } else {
+            BORDER_UNFOCUSED_RGB
+        };
+        let thick = if selected { 2 } else { 1 };
+        draw_frame(state, fb_ptr, thumb.x, thumb.y, thumb.w, thumb.h, thick, fr, fg2, fb2);
+
+        // Caption plate directly under the thumbnail (NOT spanning the whole cell — a cell-wide plate
+        // overhangs a narrower aspect-fitted thumbnail and reads as misaligned; a FEEL nit). It is the
+        // thumbnail's width, hugging its bottom edge, with the title centred. Selected → the focus
+        // title colour so it stands out like an active taskbar chip.
+        let plate_rgb = if selected {
+            state.title_focused_rgb
+        } else {
+            (30, 30, 38)
+        };
+        let plate_x = thumb.x;
+        let plate_w = thumb.w.max(1);
+        let plate_y = thumb.y + thumb.h + 2;
+        clip_fill(
+            state,
+            fb_ptr,
+            plate_x,
+            plate_y,
+            plate_w as u32,
+            overview::LABEL_H as u32,
+            plate_rgb.0,
+            plate_rgb.1,
+            plate_rgb.2,
+        );
+
+        // Title, truncated to the plate width and centred in it.
+        let title = core::str::from_utf8(&win.title[..win.title_len]).unwrap_or("?");
+        let max_chars = ((plate_w - 8) / 8).max(0) as usize;
+        let shown: &str = if title.chars().count() > max_chars {
+            // Take whole chars up to the budget (titles are ASCII in practice; stay UTF-8 safe).
+            let mut end = 0;
+            for (k, (bi, _)) in title.char_indices().enumerate() {
+                if k >= max_chars {
+                    break;
+                }
+                end = bi + title[bi..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            }
+            &title[..end]
+        } else {
+            title
+        };
+        let text_w = shown.chars().count() as i32 * 8;
+        let text_x = plate_x + (plate_w - text_w) / 2;
+        let text_y = plate_y + (overview::LABEL_H - 16) / 2;
+        draw_text(
+            state,
+            fb_ptr,
+            text_x.max(cell.x) as u32,
+            text_y.max(0) as u32,
+            shown,
+            TITLE_TEXT_RGB,
+            plate_rgb,
+        );
+    }
+}
+
+/// Draw the open window context menu: a soft drop shadow, a dark panel with a 1px border, then each
+/// row — items left-aligned at the metric padding, the highlighted row washed in the focus accent
+/// (a danger red for Close), separators as a thin inset divider. The box/rows come from the
+/// host-tested `wm_geom` (via `islands::menu`), so the drawn rows line up exactly with the rows the
+/// input hit-test clicks.
+fn draw_menu(state: &CompState, fb_ptr: *mut u32) {
+    use crate::islands::menu;
+    let Some(m) = state.menu.as_ref() else {
+        return;
+    };
+
+    // Drop shadow: a translucent dark offset down-right, so the panel lifts off the scene.
+    blend_fill(
+        state, fb_ptr, m.ox + 4, m.oy + 4, m.w as u32, m.h as u32, 0, 0, 0, 7, 16,
+    );
+
+    // Panel body + a 1px raised border.
+    const PANEL: (u8, u8, u8) = (30, 30, 38);
+    clip_fill(state, fb_ptr, m.ox, m.oy, m.w as u32, m.h as u32, PANEL.0, PANEL.1, PANEL.2);
+    draw_frame(state, fb_ptr, m.ox, m.oy, m.w, m.h, 1, 72, 72, 86);
+
+    let mut y = m.oy;
+    for (i, row) in m.rows.iter().enumerate() {
+        match row {
+            wm_geom::MenuRow::Separator => {
+                // A thin divider centred in the separator band, inset from the panel edges.
+                let ly = y + menu::METRICS.sep_h / 2;
+                clip_fill(state, fb_ptr, m.ox + 6, ly, (m.w - 12).max(0) as u32, 1, 60, 60, 72);
+                y += menu::METRICS.sep_h;
+            },
+            wm_geom::MenuRow::Item { action, label } => {
+                let rh = menu::METRICS.row_h;
+                let selected = m.sel == i;
+                let is_close = matches!(action, wm_geom::MenuAction::Close);
+                // The highlighted row is washed solid: the focus accent for a normal row, a danger
+                // red for Close so the destructive item reads as such even before it is picked.
+                let row_bg = if selected {
+                    if is_close {
+                        (150, 44, 44)
+                    } else {
+                        state.title_focused_rgb
+                    }
+                } else {
+                    PANEL
+                };
+                if selected {
+                    clip_fill(
+                        state,
+                        fb_ptr,
+                        m.ox + 1,
+                        y,
+                        (m.w - 2).max(0) as u32,
+                        rh as u32,
+                        row_bg.0,
+                        row_bg.1,
+                        row_bg.2,
+                    );
+                }
+                // Label colour: white on the highlight; a muted red for an idle Close (so it carries
+                // its danger tint at rest too); light grey for the rest.
+                let fg = if selected {
+                    (255, 255, 255)
+                } else if is_close {
+                    (222, 104, 104)
+                } else {
+                    (220, 220, 228)
+                };
+                let tx = (m.ox + menu::METRICS.pad_x).max(0) as u32;
+                let ty = (y + (rh - 16) / 2).max(0) as u32;
+                draw_text(state, fb_ptr, tx, ty, label, fg, row_bg);
+                y += rh;
+            },
+        }
+    }
+}
+
+/// A `thick`-pixel rectangular frame (top/bottom/left/right) in `(r,g,b)`, clipped to the fb.
+#[allow(clippy::too_many_arguments)]
+fn draw_frame(
+    state: &CompState,
+    fb_ptr: *mut u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    thick: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    clip_fill(state, fb_ptr, x, y, w as u32, thick, r, g, b);
+    clip_fill(state, fb_ptr, x, y + h - thick as i32, w as u32, thick, r, g, b);
+    clip_fill(state, fb_ptr, x, y, thick, h as u32, r, g, b);
+    clip_fill(state, fb_ptr, x + w - thick as i32, y, thick, h as u32, r, g, b);
+}
+
 /// Alpha-blend a solid colour over the framebuffer rect: each destination pixel moves `num/den` of
 /// the way toward `(r,g,b)`. Blends each byte independently, so it is correct for both BGRX and RGBX
 /// (the tint is packed in the same order as the destination). Clipped to the framebuffer.
@@ -626,6 +980,11 @@ fn blend_fill(
 /// region. The decision itself is the host-tested `wm_geom::cursor_shape`; here we only translate
 /// compd's capture/hit types into its inputs.
 fn cursor_mode(state: &CompState) -> wm_geom::CursorShape {
+    // Over an open context menu the pointer is just a chooser — keep it an arrow rather than letting
+    // the window beneath it (whose chrome the menu may overlap) drive a move/resize cursor.
+    if state.menu.is_some() {
+        return wm_geom::CursorShape::Arrow;
+    }
     let capture = state.capture.map(|c| match c {
         MouseCapture::Move { .. } => wm_geom::Capture::Move,
         MouseCapture::Resize { .. } => wm_geom::Capture::Resize,
@@ -634,6 +993,8 @@ fn cursor_mode(state: &CompState) -> wm_geom::CursorShape {
         crate::islands::input::hover_region(state, state.mouse_x, state.mouse_y).map(|r| match r {
             HitRegion::Title => wm_geom::Region::Title,
             HitRegion::Close => wm_geom::Region::Close,
+            HitRegion::Minimize => wm_geom::Region::Minimize,
+            HitRegion::Maximize => wm_geom::Region::Maximize,
             HitRegion::Resize => wm_geom::Region::Resize,
             HitRegion::Content => wm_geom::Region::Content,
         });

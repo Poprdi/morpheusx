@@ -1,5 +1,8 @@
+pub mod desk;
 pub mod focus;
 pub mod input;
+pub mod menu;
+pub mod overview;
 pub mod renderer;
 pub mod surface_mgr;
 pub mod vsync;
@@ -87,6 +90,8 @@ pub enum HitRegion {
     Content,
     Title,
     Close,
+    Minimize,
+    Maximize,
     Resize,
 }
 
@@ -95,6 +100,8 @@ impl From<wm_geom::Region> for HitRegion {
         match r {
             wm_geom::Region::Title => HitRegion::Title,
             wm_geom::Region::Close => HitRegion::Close,
+            wm_geom::Region::Minimize => HitRegion::Minimize,
+            wm_geom::Region::Maximize => HitRegion::Maximize,
             wm_geom::Region::Resize => HitRegion::Resize,
             wm_geom::Region::Content => HitRegion::Content,
         }
@@ -120,6 +127,10 @@ pub struct CompState {
     // Last `de.focus.req` token serviced (baselined at startup so a stale cross-boot request can't
     // activate a window before the desktop is up). compd acts only on a strictly-different token.
     pub focus_req_token: u32,
+    // Last `de.desk.cmd` token serviced — the desktop (root) context menu's window commands (Show all
+    // windows / Minimize all). Baselined at startup like `focus_req_token`; only a strictly-new token
+    // acts (see `desk::consume_desk_command`).
+    pub desk_cmd_token: u32,
     // Last window-state blob (`de.win.state`) published to the shell, cached so the per-frame
     // publish only writes (and fsyncs) the persist key when the focus/minimized snapshot changes.
     pub win_state_buf: [u8; WIN_STATE_CAP],
@@ -138,6 +149,19 @@ pub struct CompState {
     // on the same window within DOUBLE_CLICK_MS maximizes/restores it. Consumed (→ `None`) on a
     // double so a rapid third press starts a fresh pair; otherwise overwritten by each new press.
     pub last_title_press: Option<(u64, usize)>,
+
+    // Overview (Exposé) mode: when set, every open window is shown as a scaled live thumbnail in a
+    // near-square grid over the dimmed work area; `overview_sel` is the geometry index of the
+    // highlighted thumbnail (keyboard arrows / pointer hover move it, Enter / a click activate it).
+    // Toggled by Ctrl+Alt+E; the grid geometry/hit-test/nav are the host-tested `wm_geom::overview_*`.
+    pub overview: bool,
+    pub overview_sel: u32,
+
+    // Window context menu: when set, a right-click popup of the target window's operations
+    // (maximize/restore · minimize · snap halves · close) is open at `menu.ox/oy`. compd owns its
+    // lifetime/dispatch; the box/rows/hit-test/nav are the host-tested `wm_geom::menu_*` geometry,
+    // and each row reuses the edit its keyboard/title-button equivalent already performs.
+    pub menu: Option<menu::WindowMenu>,
 
     // Keyboard decoder: PS/2 Set 1 scancodes → terminal bytes, carrying the modifier state
     // machine across reads (release-edge decode, resilient to this kernel's make corruption).
@@ -170,6 +194,7 @@ impl CompState {
             desktop_idx: None,
             focused: None,
             focus_req_token: 0,
+            desk_cmd_token: 0,
             win_state_buf: [0u8; WIN_STATE_CAP],
             win_state_len: 0,
             mouse_x: (fb_w / 2) as i32,
@@ -178,6 +203,9 @@ impl CompState {
             capture: None,
             snap_preview: None,
             last_title_press: None,
+            overview: false,
+            overview_sel: 0,
+            menu: None,
             kbd: keymap::ScanDecoder::new(),
             keymap: keymap::german_default(),
             desktop_rgb: (26, 26, 46),

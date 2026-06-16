@@ -12,6 +12,17 @@ const SC_X: u8 = 0x2D; // Ctrl+Alt+X → spawn /bin/msh.
 const SC_RBRACKET: u8 = 0x1B; // Ctrl+(physical ]) → cycle focus.
 const SC_TAB: u8 = 0x0F; // Alt+Tab → cycle focus (Shift+Alt+Tab reverses).
 const SC_D: u8 = 0x20; // Ctrl+Alt+D → drop focus, hand the keyboard back to the z0 desktop launcher.
+const SC_E: u8 = 0x12; // Ctrl+Alt+E → toggle the window overview (Exposé).
+
+// Keys the overview grid captures while it is open. Esc / Ctrl+Alt+E dismiss it; Enter activates the
+// selected thumbnail; the arrow cluster (0xE0-prefixed, reported by the decoder on the release edge)
+// moves the selection. All are PS/2 Set-1 make codes.
+const SC_ESC: u8 = 0x01;
+const SC_ENTER: u8 = 0x1C;
+const SC_UP: u8 = 0x48;
+const SC_DOWN: u8 = 0x50;
+const SC_LEFT: u8 = 0x4B;
+const SC_RIGHT: u8 = 0x4D;
 
 /// A second title-bar press within this many ms of the first, on the same window, is a double-click
 /// → maximize/restore (the saved_rect toggle the Ctrl+Alt+5 / top-edge snap also uses). 400 ms is
@@ -24,7 +35,27 @@ const DOUBLE_CLICK_MS: u64 = 400;
 const SNAP_EDGE: i32 = 16;
 const SNAP_CORNER: i32 = 160;
 
+/// A keyboard edit to the overview grid, captured inside the decode closure and applied after the
+/// batch (the closure can't touch `state` directly — `kbd`/`keymap` are split-borrowed from it).
+#[derive(Clone, Copy)]
+enum OverviewKey {
+    Toggle,
+    Exit,
+    Nav(wm_geom::Dir),
+    Activate,
+}
+
+/// A keyboard edit to an open window context menu, captured in the decode closure (which can't touch
+/// `state` directly) and applied after the batch.
+#[derive(Clone, Copy)]
+enum MenuKey {
+    Dismiss,
+    Activate,
+    Nav(bool), // true = down, false = up.
+}
+
 pub fn poll(state: &mut CompState) {
+    crate::islands::menu::prune(state);
     poll_keyboard(state);
     poll_mouse(state);
 }
@@ -60,9 +91,51 @@ fn poll_keyboard(state: &mut CompState) {
     let mut show_launcher = false; // Ctrl+Alt+D → defocus so the desktop launcher gets the keyboard.
     let mut cycle_focus: Option<bool> = None; // Some(reverse) when a focus-cycle chord fired.
     let mut wm_cmd: Option<wm_geom::WmCommand> = None;
+    let mut overview_act: Option<OverviewKey> = None;
+    let mut menu_act: Option<MenuKey> = None;
+
+    // Snapshot the overview flag before the split borrow: while the grid is open it captures the
+    // navigation/confirm/cancel keys (and swallows everything else, so no stray bytes reach a client
+    // behind the dim).
+    let overview_active = state.overview;
+    // Likewise the context menu owns the keyboard while it is open (Esc/Enter/arrows drive it,
+    // everything else is swallowed).
+    let menu_active = state.menu.is_some();
 
     let CompState { kbd, keymap, .. } = state;
     kbd.feed_batch(keymap, &scan[..total], |key| {
+        // The context menu, when open, owns the keyboard before any global hotkey: Esc dismisses,
+        // Enter runs the highlighted row, Up/Down move the highlight; any other key is consumed.
+        if menu_active {
+            menu_act = Some(match key.scancode {
+                SC_ESC => MenuKey::Dismiss,
+                SC_ENTER => MenuKey::Activate,
+                SC_UP => MenuKey::Nav(false),
+                SC_DOWN => MenuKey::Nav(true),
+                _ => return,
+            });
+            return;
+        }
+        // Ctrl+Alt+E toggles the window overview — works to open it AND to dismiss it, so it is
+        // checked before the overview's own capture below.
+        if key.scancode == SC_E && key.ctrl && key.alt {
+            overview_act = Some(OverviewKey::Toggle);
+            return;
+        }
+        // While the overview is open it owns the keyboard: Esc / Enter / arrows drive the grid, and
+        // every other key is consumed (never forwarded to a window hidden behind the grid).
+        if overview_active {
+            overview_act = Some(match key.scancode {
+                SC_ESC => OverviewKey::Exit,
+                SC_ENTER => OverviewKey::Activate,
+                SC_UP => OverviewKey::Nav(wm_geom::Dir::Up),
+                SC_DOWN => OverviewKey::Nav(wm_geom::Dir::Down),
+                SC_LEFT => OverviewKey::Nav(wm_geom::Dir::Left),
+                SC_RIGHT => OverviewKey::Nav(wm_geom::Dir::Right),
+                _ => return, // swallow any other key while the overview is up.
+            });
+            return;
+        }
         // Global window-management hotkeys consume their key (never forwarded to the client).
         if key.scancode == SC_X && key.ctrl && key.alt {
             spawn_shell = true;
@@ -97,6 +170,21 @@ fn poll_keyboard(state: &mut CompState) {
         }
     });
 
+    if let Some(act) = menu_act {
+        match act {
+            MenuKey::Dismiss => crate::islands::menu::dismiss(state),
+            MenuKey::Activate => crate::islands::menu::dispatch_selected(state),
+            MenuKey::Nav(down) => crate::islands::menu::nav(state, down),
+        }
+    }
+    if let Some(act) = overview_act {
+        match act {
+            OverviewKey::Toggle => crate::islands::overview::toggle(state),
+            OverviewKey::Exit => state.overview = false,
+            OverviewKey::Nav(dir) => crate::islands::overview::nav(state, dir),
+            OverviewKey::Activate => crate::islands::overview::activate_selected(state),
+        }
+    }
     if spawn_shell {
         let _ = process::spawn("/bin/msh");
     }
@@ -144,9 +232,7 @@ fn apply_wm_command(state: &mut CompState, cmd: wm_geom::WmCommand) {
     }
 
     if matches!(cmd, wm_geom::WmCommand::Close) {
-        if let Some(ref win) = state.windows[idx] {
-            let _ = process::kill(win.pid, process::signal::SIGTERM);
-        }
+        close_window(state, idx);
         state.capture = None;
         return;
     }
@@ -193,7 +279,7 @@ fn apply_wm_command(state: &mut CompState, cmd: wm_geom::WmCommand) {
 /// toggle: it stashes the floating geometry in `saved_rect` and restores it on the next press; any
 /// half/quadrant snap is a direct placement and clears that stash. The client is re-notified of its
 /// new cell size in every case so the DE reflows to the tiled geometry.
-fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZone) {
+pub(crate) fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZone) {
     let (fb_w, fb_h) = (state.fb_w as i32, state.fb_h as i32);
     let rect_for = |zone| {
         wm_geom::snap_rect(
@@ -245,6 +331,30 @@ fn apply_snap(state: &mut CompState, idx: usize, zone: wm_geom::SnapZone) {
     crate::islands::surface_mgr::notify_window_size(state, idx);
 }
 
+/// Minimize window `idx`: hide it and hand focus to the next visible window (or none). The same edit
+/// the titlebar `[_]` button, the taskbar chip, and the context menu all perform, so they agree on
+/// what "minimize" does. The per-frame `publish_window_state` relays it to the shell (which dims the
+/// chip); activating the chip restores it.
+pub(crate) fn minimize_window(state: &mut CompState, idx: usize) {
+    let pid = state.windows[idx].as_ref().map(|w| w.pid).unwrap_or(0);
+    if let Some(w) = state.windows[idx].as_mut() {
+        w.minimized = true;
+    }
+    state.focused = wm_geom::next_focus(Some(idx), MAX_WINDOWS, false, |i| {
+        crate::islands::focus::focusable(state, i)
+    });
+    libmorpheus::debug!("minimize win {}", pid);
+}
+
+/// Close window `idx`: ask its client to terminate (SIGTERM). The surface reaper handles the cleanup
+/// and refocus once the process exits. Shared by the titlebar `[X]`, the Ctrl+Alt+C chord, and the
+/// context menu, so "close" means one thing across all three.
+pub(crate) fn close_window(state: &mut CompState, idx: usize) {
+    if let Some(ref win) = state.windows[idx] {
+        let _ = process::kill(win.pid, process::signal::SIGTERM);
+    }
+}
+
 fn poll_mouse(state: &mut CompState) {
     let ms = hw::mouse_read();
     if ms.dx == 0 && ms.dy == 0 && ms.buttons == state.last_buttons {
@@ -258,12 +368,15 @@ fn poll_mouse(state: &mut CompState) {
 
     let left = (ms.buttons & 1) != 0;
     let left_was = (state.last_buttons & 1) != 0;
+    let right = (ms.buttons & 2) != 0;
+    let right_was = (state.last_buttons & 2) != 0;
     let sample = MouseSpatialMsg {
         mx: state.mouse_x,
         my: state.mouse_y,
         buttons: ms.buttons,
         left_pressed: left && !left_was,
         left_released: !left && left_was,
+        right_pressed: right && !right_was,
         in_panel: state.mouse_y >= (state.fb_h as i32 - crate::islands::PANEL_H as i32),
     };
 
@@ -281,6 +394,23 @@ fn poll_mouse(state: &mut CompState) {
 }
 
 fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
+    // The overview grid suspends all normal window routing/dragging: hover moves the selection, a
+    // left press on a thumbnail focuses+raises it and exits (compd draws the cursor itself from
+    // mouse_x/y, so no Desktop forward is needed to keep it tracking).
+    if state.overview {
+        crate::islands::overview::on_mouse(state, &msg);
+        state.last_buttons = msg.buttons;
+        return;
+    }
+
+    // An open context menu owns the pointer: hover highlights a row, a left click runs it, a click
+    // outside dismisses. Normal window routing/dragging is suspended while it is up.
+    if state.menu.is_some() {
+        crate::islands::menu::on_mouse(state, &msg);
+        state.last_buttons = msg.buttons;
+        return;
+    }
+
     // Keep desktop cursor in sync with absolute position every sample.
     enqueue_mouse_route(state, MouseZRouteMsg::Desktop { buttons: 0 });
 
@@ -335,6 +465,45 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
         return;
     }
 
+    // Right-press on a window's title bar opens that window's context menu (anchored at the pointer,
+    // clamped on screen). The title-band regions all qualify — a right-click over the [_]/[□]/[X]
+    // buttons opens the menu rather than firing the button (those are left-click affordances). The
+    // menu then owns the pointer (handled by the early return above) until a pick or a dismiss.
+    if msg.right_pressed {
+        if let Some((idx, region)) = hit_test(state, msg.mx, msg.my) {
+            if matches!(
+                region,
+                HitRegion::Title | HitRegion::Close | HitRegion::Minimize | HitRegion::Maximize
+            ) {
+                state.focused = Some(idx);
+                crate::islands::menu::open(state, idx, msg.mx, msg.my);
+                state.last_buttons = msg.buttons;
+                return;
+            }
+        } else {
+            // Right-press over the bare desktop (no window under the pointer) → forward to the z0
+            // shell WITH the button bits so it opens its own desktop (root) context menu at the
+            // cursor. Mirrors the LEFT empty-desktop forward below; without this the press would fall
+            // through to `route_to_child` and be delivered to whatever window holds focus instead of
+            // the desktop. The shell owns the wallpaper, so its menu is the shell's, not compd's.
+            //
+            // Clicking the bare desktop also DROPS window focus (standard DE semantics: a click on the
+            // root deselects the active window). Critically this is what lets the shell's desktop menu
+            // receive the keyboard: keys route to `state.focused.or(desktop_idx)`, so while a window is
+            // focused the z0 shell never sees them and the menu's Up/Down/Enter/Esc nav is dead. With
+            // focus dropped, the keyboard reaches the shell and drives the menu it just opened.
+            state.focused = None;
+            enqueue_mouse_route(
+                state,
+                MouseZRouteMsg::Desktop {
+                    buttons: msg.buttons,
+                },
+            );
+            state.last_buttons = msg.buttons;
+            return;
+        }
+    }
+
     let mut route_to_child = true;
 
     if msg.left_pressed {
@@ -342,8 +511,31 @@ fn route_mouse_spatial(state: &mut CompState, msg: MouseSpatialMsg) {
             state.focused = Some(idx);
             match region {
                 HitRegion::Close => {
+                    close_window(state, idx);
+                    state.capture = None;
+                    route_to_child = false;
+                },
+                HitRegion::Minimize => {
+                    // Hide the window and hand the keyboard/focus to the next visible one (or none) —
+                    // the same edit the taskbar chip and the context menu take, so they all agree.
+                    minimize_window(state, idx);
+                    state.capture = None;
+                    route_to_child = false;
+                },
+                HitRegion::Maximize => {
+                    // Toggle maximize/restore — the same `saved_rect` toggle the title double-click,
+                    // the top-edge Aero snap, and Ctrl+Alt+5 all share, so a window has one restore
+                    // path however it was maximized.
+                    apply_snap(state, idx, wm_geom::SnapZone::Maximize);
                     if let Some(ref win) = state.windows[idx] {
-                        let _ = process::kill(win.pid, process::signal::SIGTERM);
+                        libmorpheus::debug!(
+                            "maximize win {}: {}x{} @ {},{}",
+                            win.pid,
+                            win.w,
+                            win.h,
+                            win.x,
+                            win.y
+                        );
                     }
                     state.capture = None;
                     route_to_child = false;
@@ -587,7 +779,7 @@ pub fn hover_region(state: &CompState, mx: i32, my: i32) -> Option<HitRegion> {
     hit_test(state, mx, my).map(|(_, region)| region)
 }
 
-fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
+pub(crate) fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
     let mut candidates: [Option<usize>; MAX_WINDOWS] = [None; MAX_WINDOWS];
     let mut cn = 0usize;
 
@@ -634,12 +826,13 @@ fn hit_test(state: &CompState, mx: i32, my: i32) -> Option<(usize, HitRegion)> {
 /// compd's window-chrome metrics as a `wm_geom::Chrome`. The close button is a 30px cell inset 34px
 /// from the title bar's right edge (the `[X]`); the rest mirror the module-level chrome constants.
 #[inline]
-fn chrome() -> wm_geom::Chrome {
+pub(crate) fn chrome() -> wm_geom::Chrome {
     wm_geom::Chrome {
         title_h: TITLE_H as i32,
         border: BORDER as i32,
         grip: GRIP as i32,
         close_off: 34,
         close_w: 30,
+        btn_pitch: 32,
     }
 }
