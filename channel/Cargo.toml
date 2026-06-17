@@ -1,7 +1,0 @@
-[package]
-name    = "channel"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-# intentionally empty — pure no_std, no alloc

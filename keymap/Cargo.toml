@@ -1,7 +1,0 @@
-[package]
-name = "keymap"
-version.workspace = true
-edition.workspace = true
-description = "Keyboard layout (.kmap) format, decode engine, and built-in DE/US tables. Shared by compd (no_std) and the host keymap-gen tool."
-
-[dependencies]
