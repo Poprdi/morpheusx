@@ -17,6 +17,4 @@ default = ["panic-handler"]
 panic-handler = []
 
 [dependencies]
-# Pure inline asm + thin wrappers. Foundation gives us SYS_* numbers shared
-# with the kernel so the two cannot drift.
-morpheus-foundation.workspace = true
+morpheus-foundation = { path = "../morpheus-foundation" }

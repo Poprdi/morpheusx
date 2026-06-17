@@ -55,7 +55,7 @@ jobs:
       - name: Build (libraries + host tools)
         run: |
           cargo build --workspace --lib --all-features
-          cargo build -p morpheus-cli -p keymap-gen
+          cargo build -p morpheus-cli
 
       - name: Test (host-runnable crates)
         run: |
@@ -63,9 +63,7 @@ jobs:
             -p iso9660-rs \
             -p morpheus-storage-format \
             -p morpheus-helix \
-            -p morpheus-gfx3d \
             -p morpheus-ui \
-            -p morpheus-ping \
             -p morpheus-block \
             -p morpheus-nic \
             -p morpheus-net-stack

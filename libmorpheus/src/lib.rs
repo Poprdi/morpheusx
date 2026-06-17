@@ -8,6 +8,7 @@
 
 extern crate alloc; // buddy.rs registers the global allocator
 
+pub mod abi;
 pub mod buddy;
 pub mod compositor;
 pub mod desktop;
