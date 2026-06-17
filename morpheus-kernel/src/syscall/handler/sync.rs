@@ -9,8 +9,7 @@ use crate::process::{BlockReason, ProcessState};
 use crate::schedular::SCHEDULER;
 use morpheus_hal_api::Pml4Handle;
 
-const FUTEX_WAIT: u64 = 0;
-const FUTEX_WAKE: u64 = 1;
+use morpheus_foundation::flags::{FUTEX_WAIT, FUTEX_WAKE};
 
 /// op=WAIT: block if `*addr == val` (EAGAIN otherwise); timeout=0 means forever.
 /// op=WAKE: wake up to `val` waiters; `val=0` → 1.
@@ -28,7 +27,7 @@ pub unsafe fn sys_futex(addr: u64, op: u64, val: u64, timeout_ms: u64) -> u64 {
             let current = core::ptr::read_volatile(word_ptr);
 
             if current != val as u32 {
-                return u64::MAX - 11; // EAGAIN
+                return EAGAIN;
             }
 
             {

@@ -1,11 +1,7 @@
 //! Syscall interface — dispatch table and MSR setup.
 //!
-//! # Syscall numbers
-//!
-//! Canonical SYS_* numbers live in `morpheus-foundation::syscall_abi` so the
-//! kernel-side dispatcher (here) and the userland-side libmorpheus consume
-//! the same source. The table is also re-exported from this module for
-//! source compatibility with the legacy `crate::syscall::SYS_*` callers.
+//! Canonical SYS_* numbers live in `morpheus-foundation::syscall_abi`; re-exported
+//! here for legacy `crate::syscall::SYS_*` callers.
 
 pub mod handler;
 
@@ -28,24 +24,25 @@ use handler::fd::{sys_chdir, sys_dup, sys_getcwd, sys_syslog};
 use handler::fs::{
     sys_fs_close, sys_fs_mkdir, sys_fs_open, sys_fs_readdir, sys_fs_rename, sys_fs_seek,
     sys_fs_snapshot, sys_fs_stat, sys_fs_sync, sys_fs_truncate, sys_fs_unlink, sys_fs_versions,
+    sys_mount, sys_mounts, sys_umount, sys_volumes,
 };
 use handler::hw::{
-    sys_cache_flush, sys_dma_alloc, sys_dma_free, sys_irq_ack, sys_irq_attach, sys_map_phys,
-    sys_pci_cfg_read, sys_pci_cfg_write, sys_port_in, sys_port_out, sys_virt_to_phys,
+    sys_cache_flush, sys_dma_alloc, sys_dma_free, sys_getrandom, sys_irq_ack, sys_irq_attach,
+    sys_map_phys, sys_pci_cfg_read, sys_pci_cfg_write, sys_port_in, sys_port_out, sys_virt_to_phys,
 };
 use handler::ipc::{sys_dup2, sys_getargs, sys_mprotect, sys_pipe, sys_set_fg, sys_shm_grant};
 use handler::mem::{sys_mmap, sys_munmap};
 use handler::net::{sys_dns, sys_net, sys_net_cfg, sys_net_poll};
 use handler::nic_fb::fb_mark_dirty;
 use handler::nic_io::{
-    sys_ioctl, sys_mount, sys_nic_info, sys_nic_link, sys_nic_mac, sys_nic_refill, sys_nic_rx,
-    sys_nic_tx, sys_poll, sys_umount,
+    sys_ioctl, sys_nic_info, sys_nic_link, sys_nic_mac, sys_nic_refill, sys_nic_rx, sys_nic_tx,
+    sys_poll,
 };
 use handler::persist::{
     sys_pe_info, sys_persist_del, sys_persist_get, sys_persist_info, sys_persist_list,
     sys_persist_put,
 };
-use handler::proc::{sys_clock, sys_getppid, sys_spawn, sys_sysinfo};
+use handler::proc::{sys_clock, sys_getppid, sys_set_thread_pointer, sys_spawn, sys_sysinfo};
 use handler::sync::{
     sys_futex, sys_mouse_read, sys_sigreturn, sys_thread_create, sys_thread_exit, sys_thread_join,
 };
@@ -54,10 +51,9 @@ use handler::sysinfo::{
     sys_sigaction,
 };
 
-// Canonical SYS_* numbers re-exported for legacy callers (`crate::syscall::SYS_*`).
 pub use morpheus_foundation::syscall_abi::*;
 
-const ENOSYS_RET: u64 = u64::MAX - 37;
+use morpheus_foundation::errno::ENOSYS;
 
 /// Dispatched from `syscall_entry` (MS x64 ABI). All args are user-controlled.
 ///
@@ -71,6 +67,7 @@ pub unsafe extern "C" fn syscall_dispatch(
     a3: u64,
     a4: u64,
     _a5: u64,
+    a6: u64,
 ) -> u64 {
     match nr {
         SYS_EXIT => sys_exit(a1),
@@ -88,7 +85,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_CLOSE => sys_fs_close(a1),
         SYS_SEEK => sys_fs_seek(a1, a2, a3),
         SYS_STAT => sys_fs_stat(a1, a2, a3),
-        SYS_READDIR => sys_fs_readdir(a1, a2, a3),
+        SYS_READDIR => sys_fs_readdir(a1, a2, a3, a4),
         SYS_MKDIR => sys_fs_mkdir(a1, a2),
         SYS_UNLINK => sys_fs_unlink(a1, a2),
         SYS_RENAME => sys_fs_rename(a1, a2, a3, a4),
@@ -117,8 +114,8 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_NET_CFG => sys_net_cfg(a1, a2, a3, a4),
         SYS_NET_POLL => sys_net_poll(a1, a2),
         SYS_IOCTL => sys_ioctl(a1, a2, a3),
-        SYS_MOUNT => sys_mount(a1, a2, a3, a4),
-        SYS_UMOUNT => sys_umount(a1, a2),
+        SYS_MOUNT => sys_mount(a1, a2, a3, a4, _a5, a6),
+        SYS_UMOUNT => sys_umount(a1, a2, a3),
         SYS_POLL => sys_poll(a1, a2, a3),
         SYS_PERSIST_PUT => sys_persist_put(a1, a2, a3, a4),
         SYS_PERSIST_GET => sys_persist_get(a1, a2, a3, a4),
@@ -181,11 +178,15 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_TRY_WAIT => sys_try_wait(a1),
         SYS_FORWARD_INPUT => sys_forward_input(a1, a2, a3),
         SYS_SYSTEM_CONTROL => sys_system_control(a1),
+        SYS_SET_THREAD_POINTER => sys_set_thread_pointer(a1),
+        SYS_GETRANDOM => sys_getrandom(a1, a2, a3),
+        SYS_VOLUMES => sys_volumes(a1, a2),
+        SYS_MOUNTS => sys_mounts(a1, a2),
         unknown => {
             crate::serial::log_warn("SYSCALL", 801, "unknown syscall number");
             let _ = unknown;
             let _ = ProcessState::Ready;
-            ENOSYS_RET
+            ENOSYS
         },
     }
 }

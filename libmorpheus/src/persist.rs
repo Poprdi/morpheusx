@@ -3,33 +3,8 @@
 use crate::raw::*;
 use crate::{is_error, EINVAL};
 
-// FFI structs — must match the kernel handler layout exactly.
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct PersistInfo {
-    /// Bit 0 = HelixFS backend active.
-    pub backend_flags: u32,
-    pub _pad0: u32,
-    pub num_keys: u64,
-    pub used_bytes: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct BinaryInfo {
-    /// 0 = unknown, 1 = ELF64, 2 = PE32+.
-    pub format: u32,
-    /// 0 = unknown, 1 = x86_64, 2 = aarch64, 3 = arm.
-    pub arch: u32,
-    /// RVA for PE, virtual address for ELF.
-    pub entry_point: u64,
-    /// PE `ImageBase` (0 for ELF).
-    pub image_base: u64,
-    pub image_size: u64,
-    pub num_sections: u32,
-    pub _pad0: u32,
-}
+// FFI structs are canonical in morpheus-foundation — single source of truth.
+pub use morpheus_foundation::types::{BinaryInfo, PersistInfo};
 
 #[inline]
 fn to_result(ret: u64) -> Result<u64, u64> {

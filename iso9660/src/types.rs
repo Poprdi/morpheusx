@@ -6,7 +6,6 @@ pub const SECTOR_SIZE: usize = 2048;
 /// Volume descriptor set begins at sector 16 (ISO 9660 §6.2.1).
 pub const VOLUME_DESCRIPTOR_START: u64 = 16;
 
-/// Maximum supported path length, in bytes.
 pub const MAX_PATH_LENGTH: usize = 255;
 
 /// Maximum supported directory nesting depth (ISO 9660 §6.8.2.1).

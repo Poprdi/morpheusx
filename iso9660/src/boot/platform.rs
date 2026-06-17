@@ -5,7 +5,6 @@ use crate::types::BootPlatform;
 impl BootPlatform {
     /// 80x86.
     pub const X86: u8 = 0x00;
-    /// PowerPC platform ID.
     pub const POWER_PC: u8 = 0x01;
     /// Macintosh platform ID.
     pub const MAC: u8 = 0x02;

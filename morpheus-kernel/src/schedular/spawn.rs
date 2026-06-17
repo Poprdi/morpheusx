@@ -71,7 +71,6 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     thread.cwd_len = parent_cwd_len;
     apply_default_scheduler_policy(thread, false);
 
-    // Inherit parent scheduling policy across the thread group.
     if let Some(Some(parent_ref)) = PROCESS_TABLE.get(parent_pid as usize) {
         thread.importance_16 = parent_ref.importance_16;
         thread.power_mode = parent_ref.power_mode;
@@ -157,24 +156,21 @@ pub unsafe fn spawn_user_process(
     if inherit_fds {
         let parent_pid = proc.parent_pid as usize;
         if let Some(Some(parent)) = PROCESS_TABLE.get(parent_pid) {
-            proc.fd_table = parent.fd_table;
-            use morpheus_helix::types::open_flags;
+            proc.fd_table.clone_from(&parent.fd_table);
+            use morpheus_foundation::flags::open_flags;
+            // Pipe fds carry their pipe index in `mount_id` (see ipc::sys_pipe).
             let mut seen_readers: [bool; 256] = [false; 256];
             let mut seen_writers: [bool; 256] = [false; 256];
-            for fd_desc in proc.fd_table.fds.iter() {
-                if fd_desc.is_open() {
-                    let fl = fd_desc.flags;
-                    let idx = fd_desc.mount_idx as usize;
-                    if idx < 256 {
-                        if fl & open_flags::O_PIPE_READ != 0 && !seen_readers[idx] {
-                            crate::pipe::pipe_add_reader(fd_desc.mount_idx);
-                            seen_readers[idx] = true;
-                        }
-                        if fl & open_flags::O_PIPE_WRITE != 0 && !seen_writers[idx] {
-                            crate::pipe::pipe_add_writer(fd_desc.mount_idx);
-                            seen_writers[idx] = true;
-                        }
-                    }
+            for (_, fd_desc) in proc.fd_table.iter() {
+                let fl = fd_desc.flags;
+                let idx = fd_desc.mount_id as u8 as usize;
+                if fl & open_flags::O_PIPE_READ != 0 && !seen_readers[idx] {
+                    crate::pipe::pipe_add_reader(idx as u8);
+                    seen_readers[idx] = true;
+                }
+                if fl & open_flags::O_PIPE_WRITE != 0 && !seen_writers[idx] {
+                    crate::pipe::pipe_add_writer(idx as u8);
+                    seen_writers[idx] = true;
                 }
             }
         }

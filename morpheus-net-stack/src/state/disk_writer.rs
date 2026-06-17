@@ -7,7 +7,6 @@ use morpheus_block::block_traits::{BlockCompletion, BlockDriver, BlockError};
 
 const MAX_PENDING_WRITES: usize = 16;
 
-/// 128 sectors = 64 KB at 512 B/sector.
 pub const SECTORS_PER_CHUNK: u32 = 128;
 
 pub const CHUNK_SIZE: usize = 65536;

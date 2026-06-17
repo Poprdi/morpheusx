@@ -17,11 +17,13 @@ extern crate alloc;
 
 pub mod bitmap;
 pub mod crc;
-pub mod device;
+pub mod engine;
 pub mod error;
 pub mod format;
 pub mod index;
 pub mod log;
 pub mod ops;
 pub mod types;
-pub mod vfs;
+
+pub use engine::{HelixFs, MAX_TRUNCATE_GROW};
+pub use error::HelixError;

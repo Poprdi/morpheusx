@@ -8,16 +8,18 @@ pub unsafe fn sys_dup(old_fd: u64) -> u64 {
     let fd_table = SCHEDULER.current_fd_table_mut();
 
     let src = match fd_table.get(old_fd as usize) {
-        Ok(desc) => *desc,
-        Err(_) => return EBADF,
+        Some(desc) => *desc,
+        None => return EBADF,
     };
 
     let new_fd = match fd_table.alloc() {
-        Ok(fd) => fd,
-        Err(_) => return ENOMEM,
+        Some(fd) => fd,
+        None => return ENOMEM,
     };
 
-    fd_table.fds[new_fd] = src;
+    if !fd_table.set(new_fd, src) {
+        return ENOMEM;
+    }
     new_fd as u64
 }
 
@@ -68,20 +70,22 @@ pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
         return 0;
     }
 
-    let _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
+    let is_dir = {
+        let guard = crate::storage::lock();
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => return ENOENT,
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(stat) => stat.is_dir,
+            Err(_) => return ENOENT,
+        }
     };
-    let fs = &*_vfs_guard.fs;
-    match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
-        Ok(stat) => {
-            if !stat.is_dir {
-                return ENOTDIR;
-            }
-            let proc = SCHEDULER.current_process_mut();
-            proc.set_cwd(path);
-            0
-        },
-        Err(_) => ENOENT,
+    if !is_dir {
+        return ENOTDIR;
     }
+    let proc = SCHEDULER.current_process_mut();
+    proc.set_cwd(path);
+    0
 }

@@ -53,6 +53,32 @@ pub unsafe fn sys_port_out(port: u64, width: u64, value: u64) -> u64 {
     0
 }
 
+/// Fills buf from RDRAND. `flags` bit0 = GRND_NONBLOCK (advisory; RDRAND never truly blocks).
+/// Short read on transient starvation; ENOSYS if platform has no RNG.
+pub unsafe fn sys_getrandom(buf: u64, len: u64, _flags: u64) -> u64 {
+    if len == 0 {
+        return 0;
+    }
+    if !validate_user_buf(buf, len) {
+        return EFAULT;
+    }
+    let total = len as usize;
+    let dst = buf as *mut u8;
+    let mut written = 0usize;
+    while written < total {
+        let word = match hal().cpu().hw_random() {
+            Some(w) => w,
+            None if written == 0 => return ENOSYS,
+            None => break, // transient starvation: short read
+        };
+        let bytes = word.to_ne_bytes();
+        let take = core::cmp::min(8, total - written);
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.add(written), take);
+        written += take;
+    }
+    written as u64
+}
+
 /// bdf = (bus << 16) | (dev << 8) | func.
 pub unsafe fn sys_pci_cfg_read(bdf: u64, offset: u64, width: u64) -> u64 {
     let bus = ((bdf >> 16) & 0xFF) as u8;
@@ -105,8 +131,7 @@ pub unsafe fn sys_dma_alloc(pages: u64) -> u64 {
     if !hal().phys().is_initialized() {
         return ENOMEM;
     }
-    // Use AllocKind::MaxAddress(4GiB) — DMA needs sub-4GiB physical addresses.
-    let max_addr: u64 = 1 << 32;
+    let max_addr: u64 = 1 << 32; // DMA requires sub-4 GiB physical address
     match hal().phys().allocate_pages(
         AllocKind::MaxAddress(max_addr),
         MemoryType::AllocatedDma,
@@ -146,19 +171,26 @@ pub unsafe fn sys_map_phys(phys: u64, pages: u64, flags: u64) -> u64 {
         return EINVAL;
     }
 
-    // Kernel (PID 0) is already identity-mapped — no work to do.
     if SCHEDULER.current_pid() == 0 {
-        return ENOSYS;
+        return ENOSYS; // kernel is identity-mapped
     }
 
+    // Same per-address-space lock as mmap; also backs fb mappers.
+    let lock = SCHEDULER.current_address_space_lock();
+    lock.lock();
+    let ret = map_phys_locked(phys, pages, flags);
+    lock.unlock();
+    ret
+}
+
+unsafe fn map_phys_locked(phys: u64, pages: u64, flags: u64) -> u64 {
     let proc = SCHEDULER.current_memory_leader_mut();
     if proc.mmap_brk == 0 {
         proc.mmap_brk = USER_MMAP_BASE;
     }
     let vaddr = proc.mmap_brk;
 
-    // flags: bit0 = W, bit1 = UC. UC takes precedence — MMIO mapping is the
-    // intended use; we never request write-without-UC for device BARs.
+    // flags: bit0 W, bit1 UC. UC takes precedence (MMIO; BAR writes are always UC).
     let preset = if flags & 2 != 0 {
         PageFlags::USER_MMIO_UC
     } else if flags & 1 != 0 {
@@ -219,9 +251,7 @@ pub unsafe fn sys_irq_ack(irq_num: u64) -> u64 {
     0
 }
 
-/// No-op on x86_64 (cache-coherent WB memory); only validates args. Caps at
-/// 64 MiB. ARM CMO routes through the HAL's region-keyed sync_for_device/cpu,
-/// which this addr/len-keyed call can't express.
+/// No-op on x86_64 (WB cache-coherent). Caps at 64 MiB. ARM CMO not expressible here.
 pub unsafe fn sys_cache_flush(addr: u64, len: u64) -> u64 {
     if addr == 0 || len == 0 {
         return EINVAL;

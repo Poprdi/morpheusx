@@ -159,7 +159,7 @@ pub struct Process {
     /// 0 = SIG_DFL, 1 = SIG_IGN, >1 = user fn.
     pub signal_handlers: [u64; 32],
 
-    pub fd_table: morpheus_helix::vfs::FdTable,
+    pub fd_table: crate::storage::fs_api::FdTable,
 
     /// Bump pointer for SYS_MMAP.
     pub mmap_brk: u64,
@@ -199,6 +199,9 @@ pub struct Process {
     pub input_tail: u8,
 
     pub running_on: u32,
+
+    /// x86 FS base; restored on every switch-to-user. Layout-safe: no fixed-offset asm reads it.
+    pub tls_base: u64,
 }
 
 impl Process {
@@ -236,7 +239,7 @@ impl Process {
             effective_weight_cache: 0,
             pending_signals: signals::SignalSet::empty(),
             signal_handlers: [0u64; 32],
-            fd_table: morpheus_helix::vfs::FdTable::new(),
+            fd_table: crate::storage::fs_api::FdTable::new(),
             mmap_brk: 0,
             vma_table: VmaTable::new(),
             cwd,
@@ -257,8 +260,8 @@ impl Process {
             input_buf: [0u8; 256],
             input_head: 0,
             input_tail: 0,
-            // Not on any core.
             running_on: u32::MAX,
+            tls_base: 0,
         }
     }
 

@@ -1,35 +1,5 @@
-//! MorpheusX Master Boot — single authoritative source of the boot chain.
-//!
-//! This file owns every transition from UEFI entry to the first userspace
-//! process. Nothing else in the bootloader orchestrates boot order. Helper
-//! modules (storage probing, BSoD rendering, UEFI allocator, PS/2 drivers,
-//! network registration) are pure utilities invoked here in a fixed sequence.
-//!
-//! ## Design contract
-//!
-//! - One file, one sequence. If a boot step exists, it is invoked from
-//!   `run()` below, in the order listed. No hidden boot work happens in
-//!   driver or subsystem modules.
-//! - No implicit cross-stage state. Every stage receives `&mut BootContext`
-//!   and writes its outputs into it. Globals exist only for things that
-//!   *must* survive exception context (the framebuffer snapshot read by the
-//!   BSoD hook) — that one piece is documented and gated.
-//! - No retries, no fallbacks invented at the orchestration layer. A stage
-//!   either returns `Ok` and produces its declared output, or aborts via
-//!   `boot_panic`. Subsystem-internal fallbacks (e.g. RAM-disk if no
-//!   persistent storage) are still allowed inside their helper modules.
-//! - Pre/post invariants for every stage are stated as code comments above
-//!   the stage function.
-//!
-//! ## Ownership boundaries
-//!
-//! ```text
-//!   firmware → BootContext (pre-EBS)
-//!     → BootContext + memory map (EBS)
-//!       → BootContext + platform handle (hwinit done)
-//!         → BootContext + rootfs + display + APs (runtime ready)
-//!           → userspace (never returns)
-//! ```
+//! Single authoritative boot sequence: UEFI entry → first userspace process.
+//! Every stage is invoked from `run()` in order; no hidden boot work in helper modules.
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -46,10 +16,7 @@ use crate::tui::input::Keyboard;
 use crate::tui::mouse::Mouse;
 use crate::{baremetal_ops, bsod, storage, tui, uefi_allocator};
 
-/// Raw framebuffer info from GOP.
-///
-/// `stride` is `pixels_per_scan_line` from GOP — **not** bytes. Conversions
-/// to byte-stride happen at the consumer (display crate).
+/// Raw framebuffer info from GOP. `stride` is `pixels_per_scan_line` (not bytes).
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct FramebufferInfo {
@@ -79,11 +46,8 @@ impl FramebufferInfo {
     }
 }
 
-/// Pre-EBS staged Helix image: an in-memory copy of `/morpheus/helix.img`
-/// that was readable from the EFI System Partition before `ExitBootServices`.
-///
-/// Storage init consumes this if present, otherwise it falls back to
-/// probing block devices on the PCI bus.
+/// In-memory copy of `/morpheus/helix.img` staged before `ExitBootServices`.
+/// Storage init (D2) uses this in preference to block-device probing.
 #[derive(Clone, Copy)]
 pub struct PreEbsHelixImage {
     pub base: u64,
@@ -91,11 +55,7 @@ pub struct PreEbsHelixImage {
     pub sector_size: u32,
 }
 
-/// Everything boot needs to know, accumulated stage by stage.
-///
-/// This struct replaces the soup of `static mut` globals that used to glue
-/// boot stages together. Stages mutate fields explicitly; nothing outside
-/// `boot.rs` may construct or own this type.
+/// Per-stage boot outputs accumulated across the UEFI→runtime transition.
 pub struct BootContext {
     // ── Phase A: pre-EBS (UEFI alive) ────────────────────────────────
     image_handle: *mut (),
@@ -156,14 +116,8 @@ impl BootContext {
     }
 }
 
-//
-// The BSoD/panic screen runs from exception context where touching the
-// heap or a SpinLock is forbidden. We publish a single framebuffer
-// snapshot here, written exactly once during stage B, and read lock-free
-// by the crash hook and the panic handler.
-//
-// This is the ONLY mutable global boot state. Everything else lives on
-// the BootContext on the boot stack.
+// Framebuffer snapshot for crash context (no heap, no locks). Written once in
+// stage B; read lock-free by BSoD hook and panic handler. Only mutable globals.
 
 static FB_PUBLISHED: AtomicBool = AtomicBool::new(false);
 static FB_BASE: AtomicU64 = AtomicU64::new(0);
@@ -183,10 +137,7 @@ fn publish_framebuffer(fb: &FramebufferInfo) {
     FB_PUBLISHED.store(true, Ordering::Release);
 }
 
-/// Crash-context-safe framebuffer accessor.
-///
-/// Returns `None` before stage B has run, otherwise the framebuffer info
-/// snapshot. No locks, no heap, no alloc — safe from exception context.
+/// Lock-free framebuffer accessor; returns `None` before stage B.
 pub fn published_framebuffer() -> Option<FramebufferInfo> {
     if !FB_PUBLISHED.load(Ordering::Acquire) {
         return None;
@@ -201,14 +152,10 @@ pub fn published_framebuffer() -> Option<FramebufferInfo> {
     })
 }
 
-//
-// Owned by the live console stage. The hwinit serial layer holds a raw
-// `unsafe fn(u8)` pointer to this function while the live console is
-// active. The hook is dropped before userspace owns the framebuffer.
-
+// Serial puts() mirror hook; held as raw fn ptr by the serial layer. Dropped before userspace.
 static mut LIVE_CONSOLE: Option<TextConsole> = None;
 
-/// `puts()` mirror hook installed in stage B. Must not touch heap or locks.
+/// Stage B puts() hook. Must not touch heap or locks.
 unsafe fn live_console_putc(b: u8) {
     if let Some(ref mut con) = LIVE_CONSOLE {
         con.write_char(b as char);
@@ -387,21 +334,16 @@ struct Gop {
     mode: *mut GopMode,
 }
 
-/// EFI entry point. UEFI invokes this; we never return except via reset.
-///
-/// All the actual work is in `run()`. This wrapper exists solely to honor
-/// the `efiapi` calling convention at the firmware boundary.
+/// EFI entry point; wrapper for `efiapi` calling convention.
 #[no_mangle]
 pub extern "efiapi" fn efi_main(image_handle: *mut (), system_table: *const ()) -> usize {
     unsafe { run(image_handle, system_table) }
 }
 
-/// The canonical boot sequence. Every stage is invoked here in order.
+/// Canonical boot sequence — every stage in order.
 ///
 /// # Safety
-/// Called exactly once by UEFI with valid handle/table pointers. Returns
-/// `!` from the perspective of the caller — but Rust types it as `usize`
-/// to match the `efiapi` signature.
+/// Called once by UEFI with valid handle/table pointers.
 unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     let mut ctx = BootContext::new();
     ctx.image_handle = image_handle;
@@ -454,11 +396,7 @@ unsafe fn run(image_handle: *mut (), system_table: *const ()) -> ! {
     stage_e2_enter_userspace(&ctx);
 }
 
-/// A1. Hand the global allocator the UEFI BootServices pointer so that
-/// pre-EBS allocations go through `allocate_pool`.
-///
-/// Post: hybrid allocator is in pre-EBS mode. Allocations are valid until
-/// B3 runs.
+/// A1. Arm UEFI allocator; pre-EBS allocs route through `allocate_pool`.
 unsafe fn stage_a1_arm_uefi_allocator(ctx: &BootContext) {
     let st = &*(ctx.system_table as *const EfiSystemTable);
     // `set_boot_services` accepts the bootloader's own `BootServices` type;
@@ -467,10 +405,7 @@ unsafe fn stage_a1_arm_uefi_allocator(ctx: &BootContext) {
     uefi_allocator::set_boot_services(st.boot_services as *const _ as *const crate::BootServices);
 }
 
-/// A2. Locate GOP and capture the framebuffer descriptor.
-///
-/// Post: `ctx.framebuffer` is populated. A zero base is tolerated (the BSoD
-/// will not render, but boot continues with serial-only logging).
+/// A2. Locate GOP and capture the framebuffer descriptor. Zero base → headless.
 unsafe fn stage_a2_query_gop(ctx: &mut BootContext) {
     let st = &*(ctx.system_table as *const EfiSystemTable);
     let bs = &*st.boot_services;
@@ -498,11 +433,7 @@ unsafe fn stage_a2_query_gop(ctx: &mut BootContext) {
     }
 }
 
-/// A3. Walk the UEFI configuration table looking for an ACPI RSDP.
-///
-/// Pre: system table valid.
-/// Post: `ctx.acpi_rsdp_phys` is the physical address of the RSDP, or 0
-/// if neither ACPI 2.0 nor ACPI 1.0 is published.
+/// A3. Walk UEFI config table for ACPI RSDP (2.0 first); sets `ctx.acpi_rsdp_phys`.
 unsafe fn stage_a3_collect_acpi_rsdp(ctx: &mut BootContext) {
     let st = &*(ctx.system_table as *const EfiSystemTable);
     if st.configuration_table.is_null() || st.number_of_table_entries == 0 {
@@ -528,8 +459,7 @@ unsafe fn stage_a3_collect_acpi_rsdp(ctx: &mut BootContext) {
     log_warn("ACPI", 904, "no RSDP in UEFI configuration table");
 }
 
-/// A4. Capture our own PE image bounds. The buddy allocator excludes this
-/// range so it never hands out the kernel's .text/.data/.bss as free RAM.
+/// A4. Capture PE image bounds so the buddy never reclaims kernel .text/.data/.bss.
 unsafe fn stage_a4_record_pe_image_bounds(ctx: &mut BootContext) {
     extern "C" {
         static __ImageBase: u8;
@@ -544,11 +474,7 @@ unsafe fn stage_a4_record_pe_image_bounds(ctx: &mut BootContext) {
     ctx.image_pages = size_of_image.div_ceil(4096);
 }
 
-/// A5. Allocate a kernel stack from UEFI LoaderData. Survives EBS.
-///
-/// Pre: UEFI alive, allocator pre-EBS.
-/// Post: `ctx.stack_base/pages/top` populated. Stack memory is in LoaderData
-/// so it remains owned across `ExitBootServices`.
+/// A5. Allocate kernel stack (EfiLoaderData — survives EBS).
 unsafe fn stage_a5_allocate_kernel_stack(ctx: &mut BootContext) {
     let st = &*(ctx.system_table as *const EfiSystemTable);
     let bs = &*st.boot_services;
@@ -565,12 +491,7 @@ unsafe fn stage_a5_allocate_kernel_stack(ctx: &mut BootContext) {
     ctx.stack_top = base + KERNEL_STACK_SIZE as u64;
 }
 
-/// A6. Best-effort load of `/morpheus/helix.img` from the ESP into RAM
-/// while UEFI's filesystem service is still alive.
-///
-/// Post: `ctx.pre_ebs_helix` is `Some` if the image was loaded and
-/// sector-aligned, otherwise `None`. Storage init in stage D2 will use this
-/// in preference to probing block devices.
+/// A6. Best-effort load of `/morpheus/helix.img` from the ESP into EfiLoaderData RAM.
 unsafe fn stage_a6_stage_helix_image(ctx: &mut BootContext) {
     let st = &*(ctx.system_table as *const EfiSystemTable);
     let bs = &*st.boot_services;
@@ -696,11 +617,7 @@ unsafe fn stage_a6_stage_helix_image(ctx: &mut BootContext) {
     });
 }
 
-/// A7. Capture the UEFI memory map immediately before EBS.
-///
-/// Pre: all earlier UEFI work done (no further allocate_pages may run).
-/// Post: `ctx.mmap_*` reference a stable snapshot whose `map_key` is the
-/// one we'll pass to `ExitBootServices`.
+/// A7. Snapshot UEFI memory map. No further allocate_pages after this.
 unsafe fn stage_a7_fetch_memory_map(ctx: &mut BootContext) {
     // Buffer lives in .bss (static), valid across EBS since it's our memory.
     static mut MMAP_BUF: [u8; 65536] = [0u8; 65536];
@@ -729,18 +646,13 @@ unsafe fn stage_a7_fetch_memory_map(ctx: &mut BootContext) {
     ctx.desc_size = desc_size;
     ctx.desc_ver = desc_ver;
 
-    // Stash the map_key for the EBS call. We use a static so the EBS stage
-    // (which intentionally takes only `&ctx`) can read it without making
-    // BootContext store firmware-internal handles.
+    // Static so stage_b1 (takes only &ctx) can read the key without it living in BootContext.
     EBS_MAP_KEY.store(map_key, Ordering::Relaxed);
 }
 
 static EBS_MAP_KEY: AtomicUsize = AtomicUsize::new(0);
 
-/// B1. Call `ExitBootServices`. After this point UEFI services are dead.
-///
-/// Failure here is unrecoverable: the IDT still points into BootServicesCode
-/// which is about to be reclaimed, so we can't even safely return.
+/// B1. ExitBootServices. Failure unrecoverable — IDT still in BootServicesCode.
 unsafe fn stage_b1_exit_boot_services(ctx: &BootContext) {
     let st = &*(ctx.system_table as *const EfiSystemTable);
     let bs = &*st.boot_services;
@@ -756,31 +668,24 @@ unsafe fn stage_b1_exit_boot_services(ctx: &BootContext) {
     }
 }
 
-/// B2. Belt-and-suspenders `cli`. UEFI's PIC/APIC timer may still be armed
-/// and its IDT just got freed. A single tick into the 0xAF scrub poisons
-/// the buddy allocator's FreeNode pointers and corrupts memory.
+/// B2. `cli` — UEFI's timer may still be armed; one tick into the OVMF 0xAF
+/// scrub poisons buddy FreeNode pointers.
 unsafe fn stage_b2_disable_interrupts() {
     core::arch::asm!("cli", options(nomem, nostack));
 }
 
-/// B3. Switch the global allocator from UEFI pool to our static heap.
+/// B3. Switch allocator from UEFI pool to static heap.
 unsafe fn stage_b3_switch_allocator() {
     uefi_allocator::switch_to_post_ebs();
 }
 
-/// B4. Pivot RSP to the kernel stack we allocated in A5.
-///
-/// After this, all locals on the old UEFI stack are gone. Do not reference
-/// anything that lived on it.
+/// B4. Pivot RSP to the kernel stack (A5). Old UEFI stack is gone after this.
 unsafe fn stage_b4_switch_stack(ctx: &BootContext) {
     let stack_top = ctx.stack_top;
     core::arch::asm!("mov rsp, {0}", in(reg) stack_top, options(nostack));
 }
 
-/// B5. Start mirroring all subsequent `puts()` to the framebuffer console.
-///
-/// Pre: framebuffer (if any) is valid; allocator is post-EBS.
-/// Post: serial output appears on screen until the hook is cleared in E2.
+/// B5. Mirror serial puts() to the framebuffer console until E2 clears the hook.
 unsafe fn stage_b5_start_live_console(ctx: &BootContext) {
     if !ctx.framebuffer.is_valid() {
         return;
@@ -804,17 +709,13 @@ unsafe fn stage_b5_start_live_console(ctx: &BootContext) {
     morpheus_hal_x86_64::serial::set_live_console_hook(live_console_putc);
 }
 
-/// B6. Publish framebuffer info for crash-context consumers.
+/// B6. Publish framebuffer for crash-context consumers.
 fn stage_b6_publish_framebuffer(ctx: &BootContext) {
     publish_framebuffer(&ctx.framebuffer);
 }
 
-/// C1. Hand the memory map + boot stack + image bounds + ACPI RSDP to
-/// hal-x86_64. After this returns, machine bring-up phases 1-9 are complete
-/// (GDT/IDT/PIC/Heap/TSC/DMA/PCI/paging/USB-input) and the HAL singleton is
-/// installed on the kernel. Kernel late-init (scheduler/syscalls/FS) happens
-/// in `stage_c1b_kernel_late_init`; BootServices reclaim + SMP bring-up
-/// happen there too, AFTER the scheduler is up.
+/// C1. Hand memory map/stack/image/RSDP to hal-x86_64 (phases 1–9).
+/// Late-init (scheduler/syscalls/FS) and SMP in C1b.
 unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
     // Wire the 4 fn-pointer hooks hal-x86_64 phase 9 needs (kernel-side TSC
     // publish + HID ringbuf init + xHCI MSI-X wiring + xHCI runtime install).
@@ -881,27 +782,20 @@ unsafe fn stage_c1_platform_init(ctx: &BootContext) -> PlatformInit {
     }
 }
 
-/// xHCI MSI-X wiring shim. hal-x86_64 emits the hook with a
-/// `morpheus_hal_x86_64::pci::PciAddr`; morpheus-xhci accepts a
-/// `morpheus_hal_api::BusAddr`. Convert at the boundary.
+/// Convert `PciAddr` → `BusAddr` at the hal/xhci boundary before wiring MSI-X.
 unsafe fn xhci_msix_shim(pci_addr: morpheus_hal_x86_64::pci::PciAddr, rt_base: u64) {
     let bus_addr = morpheus_hal_api::BusAddr::new(pci_addr.bus, pci_addr.device, pci_addr.function);
     // SAFETY: IDT + LAPIC + BAR all live by hal-x86_64 phase 9 entry.
     unsafe { morpheus_xhci::usb::msi::wire_msix(bus_addr, rt_base) };
 }
 
-/// Tiny coercion shim from the hal's `unsafe fn()` hook type to the kernel's
-/// safe `fn input::init()`. Required because Rust does not auto-coerce a
-/// safe-fn pointer to an unsafe-fn pointer through a generic register call.
+/// Coerce safe `fn input::init()` to `unsafe fn()` — Rust won't auto-coerce through a generic register call.
 unsafe fn kernel_input_init_shim() {
     morpheus_kernel::input::init();
 }
 
-/// C1b. Mask the legacy 8259, run kernel late-init (scheduler / syscalls /
-/// FS), then reclaim BootServices RAM. Splits from C1 because the scheduler
-/// must be up before AP bring-up (LD16) and the reclaim must run with
-/// interrupts already live (post-LAPIC-takeover) so we know no UEFI-stage
-/// reference is in flight.
+/// C1b. Disable legacy 8259, late-init (scheduler/syscalls/FS), reclaim BootServices RAM, SMP bring-up.
+/// Split from C1: scheduler must precede APs (LD16); reclaim must be post-LAPIC-takeover.
 unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
     let hal = morpheus_kernel::hal();
 
@@ -979,9 +873,7 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
     }
 }
 
-/// Format `smp (N cpu online)` into `buf`, returning the rendered slice. No
-/// alloc — used for the SMP checklist row where the CPU count is only known
-/// at runtime.
+/// Format `smp (N cpu online)` into `buf`. No alloc.
 fn fmt_smp_label(buf: &mut [u8], cpus: u32) -> &str {
     const PREFIX: &[u8] = b"smp (";
     const SUFFIX: &[u8] = b" cpu online)";
@@ -1015,15 +907,20 @@ fn fmt_smp_label(buf: &mut [u8], cpus: u32) -> &str {
     core::str::from_utf8(&buf[..i]).unwrap_or("smp")
 }
 
-/// C2. Wire the BSoD as the crash hook. Safe to do now because the
-/// framebuffer snapshot was published in B6, so the hook can render even
-/// from exception context.
+/// C2. Wire BSoD crash hook (framebuffer was published in B6; safe from exception context).
 unsafe fn stage_c2_register_crash_hook() {
-    morpheus_hal_x86_64::cpu::idt::set_crash_hook(bsod::show_crash_screen);
+    use morpheus_hal_x86_64::cpu::idt;
+    idt::set_crash_hook(bsod::show_crash_screen);
+    // Without these, every USER fault fell through to the BSoD + SYSTEM HALTED
+    // (the exit hook was never installed) and crash dumps misattributed to PID 0
+    // / [kernel]. Wire them so a faulting user thread is terminated and the box
+    // keeps scheduling, with the real pid/name in the dump.
+    idt::set_process_exit_hook(morpheus_kernel::schedular::exit_process);
+    idt::set_current_pid_hook(morpheus_kernel::schedular::state::idt_current_pid);
+    idt::set_process_lookup_hook(morpheus_kernel::schedular::state::idt_lookup_name);
 }
 
-/// C3. Record platform outputs (DMA region + TSC freq) into BootContext so
-/// later stages don't need to re-borrow the `PlatformInit`.
+/// C3. Copy DMA region + TSC freq out of `PlatformInit` into `BootContext`.
 fn stage_c3_record_platform_outputs(ctx: &mut BootContext, platform: &PlatformInit) {
     let dma = platform.dma();
     ctx.platform_dma_cpu = dma.cpu_base() as u64;
@@ -1032,9 +929,7 @@ fn stage_c3_record_platform_outputs(ctx: &mut BootContext, platform: &PlatformIn
     ctx.tsc_freq = platform.tsc_freq();
 }
 
-/// D1. Register the userspace-triggered network activation callback. The
-/// network stack stays offline until userspace explicitly opts in via
-/// `SYS_NET_CFG(NET_CFG_ACTIVATE)`.
+/// D1. Register network activation callback (userspace opt-in via SYS_NET_CFG).
 unsafe fn stage_d1_register_network_activation(_ctx: &BootContext, platform: &PlatformInit) {
     baremetal_ops::network::init_userspace_network_activation(
         morpheus_virtio::dma::DmaRegion::new(
@@ -1046,23 +941,17 @@ unsafe fn stage_d1_register_network_activation(_ctx: &BootContext, platform: &Pl
     );
 }
 
-/// D2. Bring up the root filesystem.
-///
-/// Order of preference inside storage:
-///   1. Pre-EBS staged `/morpheus/helix.img` (if A6 produced one)
-///   2. Persistent block device with valid HelixFS superblock
-///   3. RAM HelixFS already mounted by hwinit phase 11
+/// D2. Root FS bring-up: pre-EBS image → persistent block device → RAM HelixFS.
 unsafe fn stage_d2_storage_init(ctx: &BootContext, platform: &PlatformInit) {
     storage::init_persistent_storage(platform.dma(), ctx.tsc_freq, ctx.pre_ebs_helix);
 }
 
-/// D3. Ensure `/bin /etc /tmp /home /var /dev` exist. Idempotent.
+/// D3. Create standard root directories. Idempotent.
 fn stage_d3_initfs_bootstrap() {
     storage::create_init_directories();
 }
 
-/// D4. Hand the framebuffer descriptor to the syscall layer so that
-/// `SYS_FB_INFO` / `SYS_FB_MAP` work for userspace.
+/// D4. Register framebuffer with the syscall layer (SYS_FB_INFO / SYS_FB_MAP).
 unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
     if !ctx.framebuffer.is_valid() {
         log_warn("DISPLAY", 940, "no framebuffer to register");
@@ -1081,16 +970,12 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
     );
 }
 
-/// E1. Release the parked APs. From this point on, the system is fully SMP.
-///
-/// Pre: every preceding stage has completed. Any boot work that is not
-/// SMP-safe must already have run.
+/// E1. Release parked APs. All preceding stages must be SMP-safe before this.
 unsafe fn stage_e1_release_aps() {
     morpheus_hal_x86_64::cpu::ap_boot::release_parked_aps();
 }
 
-/// E2. Final stage. Load `/bin/init`, spawn it, and become the kernel
-/// PS/2 input-forwarding loop until reset.
+/// E2. Load and spawn `/bin/init`; become the kernel input-forwarding loop.
 unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     // Pick input init based on what Phase 9 actually detected. If a USB
     // keyboard was enumerated we don't need (and don't want) to probe PS/2 —
@@ -1132,10 +1017,7 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     input_forwarding_loop(&mut keyboard, &mut mouse);
 }
 
-/// Wait for any keypress before tearing down the live console.
-///
-/// Primary path is USB HID; PS/2 is only polled as a fallback when no USB
-/// keyboard was detected during Phase 9 enumeration.
+/// Spin until keypress. USB HID primary; PS/2 fallback when no USB keyboard detected.
 fn boot_log_gate(keyboard: &mut Keyboard) {
     puts("\nPress any key to start userspace...");
     let usb_active = morpheus_xhci::usb::runtime::keyboard_present()
@@ -1168,82 +1050,87 @@ fn boot_log_gate(keyboard: &mut Keyboard) {
     puts("\n");
 }
 
-/// Load `/bin/init` from the mounted root filesystem.
+/// Read `/bin/init` bytes from the root filesystem.
 fn load_init_elf() -> Option<alloc::vec::Vec<u8>> {
     use alloc::string::String;
 
     let path = String::from("/bin/init");
+    let ts = morpheus_hal_x86_64::cpu::tsc::read_tsc();
 
-    let fs = match unsafe { morpheus_helix::vfs::global::fs_global_mut() } {
-        Some(f) => f,
-        None => {
-            log_error("BOOT", 970, "no root filesystem");
-            return None;
-        },
+    // Size the load buffer (stat under the storage lock).
+    let size = {
+        let guard = unsafe { morpheus_kernel::storage::lock() };
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(&path) {
+            Some(t) => t,
+            None => {
+                log_error("BOOT", 970, "no root filesystem");
+                return None;
+            },
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(s) => s.size,
+            Err(_) => {
+                log_error("BOOT", 971, "stat /bin/init failed");
+                return None;
+            },
+        }
     };
-
-    let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, &path) {
-        Ok(s) => s,
-        Err(_) => {
-            log_error("BOOT", 971, "stat /bin/init failed");
-            return None;
-        },
-    };
-    if stat.size == 0 {
+    if size == 0 {
         log_error("BOOT", 972, "/bin/init has zero size");
         return None;
     }
 
-    let mut fd_table = morpheus_helix::vfs::FdTable::new();
-    let ts = morpheus_hal_x86_64::cpu::tsc::read_tsc();
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        &mut fd_table,
-        &path,
-        morpheus_helix::types::open_flags::O_READ,
-        ts,
-    ) {
-        Ok(f) => f,
-        Err(_) => {
-            log_error("BOOT", 973, "open /bin/init failed");
-            return None;
-        },
-    };
-
-    let mut buf = alloc::vec![0u8; stat.size as usize];
-    let n = match morpheus_helix::vfs::vfs_read(
-        &mut fs.device,
-        &fs.mount_table,
-        &mut fd_table,
-        fd,
-        &mut buf,
-    ) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
-            log_error("BOOT", 974, "read /bin/init failed");
-            return None;
-        },
+    // Read via the backend with a transient FdState (no process fd slot).
+    let mut buf = alloc::vec![0u8; size as usize];
+    let n = {
+        let guard = unsafe { morpheus_kernel::storage::lock() };
+        let g = &mut *guard.g;
+        let (mount_id, m, dev, rel) = match g.resolve_mut(&path) {
+            Some(t) => t,
+            None => {
+                log_error("BOOT", 970, "no root filesystem");
+                return None;
+            },
+        };
+        let opened = match m
+            .fs
+            .open(dev, rel, morpheus_foundation::flags::open_flags::O_READ, ts)
+        {
+            Ok(o) => o,
+            Err(_) => {
+                log_error("BOOT", 973, "open /bin/init failed");
+                return None;
+            },
+        };
+        let mut fdstate = morpheus_kernel::storage::fs_api::FdState::empty();
+        fdstate.mount_id = mount_id;
+        fdstate.cookie = opened.cookie;
+        // Backend reads key off the (mount-relative) path, not just the cookie.
+        let pb = rel.as_bytes();
+        let pn = pb.len().min(fdstate.path.len());
+        fdstate.path[..pn].copy_from_slice(&pb[..pn]);
+        fdstate.path_len = pn as u16;
+        let n = match m.fs.read(dev, &fdstate, &mut buf) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let _ = m.fs.close(dev, &fdstate);
+                log_error("BOOT", 974, "read /bin/init failed");
+                return None;
+            },
+        };
+        let _ = m.fs.close(dev, &fdstate);
+        n
     };
     buf.truncate(n);
-    let _ = morpheus_helix::vfs::vfs_close(&mut fd_table, fd);
     Some(buf)
 }
 
-/// Kernel main loop: poll PS/2 keyboard + mouse, feed kernel stdin and the
-/// mouse accumulator. HLTs between batches to keep idle power low.
+/// Kernel main loop: pump USB HID or PS/2 into the kernel event ring; HLT between batches.
 ///
-/// **Keyboard pipeline policy**: the bootloader does NOT decode scancodes to
-/// characters. It pushes the raw PS/2 Set 1 byte stream (including 0xE0
-/// extended prefixes and 0x80 break bits) straight into the kernel stdin
-/// queue. Userland (init) is responsible for tracking modifier state,
-/// recognizing hotkeys, applying the keyboard layout, and producing the
-/// final character stream for downstream processes. This makes layout
-/// configurable at runtime without rebooting and decouples Ctrl+X-style
-/// system hotkeys from US-vs-DE-vs-anything keymap concerns.
-///
-/// Mouse remains decoded at this layer — there's no mouse-layout concept.
+/// Keyboard policy: raw PS/2 Set 1 bytes (including 0xE0 prefix and 0x80 break bit)
+/// pushed directly into the kernel ring — userland owns scancode→character decoding
+/// so layout is runtime-configurable without reboot.
 fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
     // Pin the primary-source decision once at entry. USB present in Phase 9
     // means USB is authoritative for the rest of uptime; PS/2 only polls if
@@ -1253,6 +1140,22 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
 
     loop {
         let mut had_work = false;
+
+        // Serial console RX → stdin byte ring. A host terminal on COM1 is already a
+        // decoded byte stream (ANSI/UTF-8 — arrows are `ESC [ A`, etc.), so we feed it
+        // straight to `fd 0` with no keymap. This is the sole producer of the stdin ring
+        // (PS/2/USB keyboards use the separate event ring via SYS_KEYBOARD_READ), which
+        // keeps the SPSC single-producer invariant. Bounded per iteration so a flood
+        // can't starve the loop; leftover bytes drain next tick.
+        for _ in 0..256 {
+            match morpheus_hal_x86_64::serial::serial_try_getc() {
+                Some(b) => {
+                    morpheus_kernel::stdin::push(b);
+                    had_work = true;
+                },
+                None => break,
+            }
+        }
 
         if usb_active {
             // Pump the USB HID controller; parsed key events land in the kernel
@@ -1306,9 +1209,7 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
     }
 }
 
-/// Unrecoverable boot error. Logs and halts the BSP. APs are either still
-/// parked (pre-E1) or will quiesce on their next tick; either way the
-/// machine is dead from the user's perspective.
+/// Log and halt. APs either still parked or quiesce on next tick.
 fn boot_panic(component: &'static str, msg: &'static str) -> ! {
     boot_step_fail(msg);
     log_error(component, 999, msg);
@@ -1322,13 +1223,5 @@ fn halt_forever() -> ! {
         }
     }
 }
-
-//
-// Old code (`bsod.rs`) used `crate::baremetal::get_framebuffer_info()` to
-// read the published framebuffer. The new authoritative accessor is
-// `boot::published_framebuffer()`. The shim below provides backwards
-// compatibility *only* for the panic handler call sites that we don't
-// want to touch in this refactor pass; new code must call
-// `published_framebuffer()` directly.
 
 extern crate alloc;

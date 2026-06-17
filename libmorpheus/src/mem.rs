@@ -40,9 +40,8 @@ pub fn munmap(vaddr: u64, pages: u64) -> Result<(), u64> {
     }
 }
 
-pub const PROT_READ: u64 = 0; // always implied on x86-64
-pub const PROT_WRITE: u64 = 1;
-pub const PROT_EXEC: u64 = 2; // clears NX
+// PROT_* are canonical in morpheus-foundation — single source of truth.
+pub use morpheus_foundation::flags::{PROT_EXEC, PROT_READ, PROT_WRITE};
 
 /// Share physical pages with `target_pid`; we retain ownership.
 pub fn shm_grant(target_pid: u32, src_vaddr: u64, pages: u64, flags: u64) -> Result<u64, u64> {

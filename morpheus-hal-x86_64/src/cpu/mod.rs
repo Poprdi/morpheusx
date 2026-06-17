@@ -9,5 +9,6 @@ pub mod idt;
 pub mod per_cpu;
 pub mod pic;
 pub mod reset;
+pub mod rng;
 pub mod sse;
 pub mod tsc;

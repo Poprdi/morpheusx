@@ -338,8 +338,6 @@ pub trait Cpu: Send + Sync {
     /// Exactly once per CPU, after IDT init. Subsequent calls are UB.
     unsafe fn install_syscall_msrs(&self);
 
-    // Per-task context construction; kernel never touches the opaque bytes directly.
-
     /// Build a kernel-mode context that begins at `entry()` on `stack_top`, CPL=0, IF=1.
     fn ctx_init_kernel(&self, ctx: &mut CpuContext, entry: u64, stack_top: u64);
 
@@ -385,6 +383,19 @@ pub trait Cpu: Send + Sync {
 
     /// Arm/disarm the "BSoD then hard reset" IDT path used by `SYS_SYSTEM_CONTROL(SHUTDOWN_PANIC)`.
     fn set_reset_on_crash(&self, enable: bool);
+
+    /// Set the user thread pointer (TLS base) for the next user thread to run.
+    /// x86_64: writes IA32_FS_BASE. Userland owns the variant-II TCB layout;
+    /// the kernel only stores/restores this opaque value per thread.
+    ///
+    /// Caller guarantees `tp` is a canonical address — a non-canonical value
+    /// `#GP`s in `wrmsr` (validated at the syscall boundary). `tp == 0` is fine.
+    fn set_user_tls_base(&self, tp: u64);
+
+    /// One word of hardware entropy, or `None` if unavailable/exhausted.
+    /// x86_64: RDRAND (CF=0 ⇒ no entropy this attempt; absent ⇒ `None`). Non-x86
+    /// without an RNG returns `None`, so the kernel surfaces ENOSYS (cf. `cpuid`).
+    fn hw_random(&self) -> Option<u64>;
 }
 
 /// Lock-free, panic-safe UART output.

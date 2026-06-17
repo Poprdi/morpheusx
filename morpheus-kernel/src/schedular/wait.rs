@@ -4,6 +4,7 @@ use super::state::{
 use crate::hal;
 use crate::process::{BlockReason, Process, ProcessState, PROCESS_KERNEL_STACK_SIZE};
 use core::sync::atomic::Ordering;
+use morpheus_foundation::errno::{EAGAIN, ECHILD, ESRCH};
 
 const PAGE_SIZE: u64 = 4096;
 
@@ -52,25 +53,25 @@ pub unsafe fn wait_for_child(child_pid: u32) -> u64 {
             Some(p) => (p.parent_pid, p.state),
             None => {
                 PROCESS_TABLE_LOCK.unlock();
-                return u64::MAX - 3;
+                return ESRCH;
             },
         };
 
         if child_parent != current {
             PROCESS_TABLE_LOCK.unlock();
-            return u64::MAX - 3;
+            return ESRCH;
         }
 
         if matches!(child_state, ProcessState::Terminated) {
             PROCESS_TABLE_LOCK.unlock();
-            return u64::MAX - 10;
+            return ECHILD;
         }
 
         if child_state == ProcessState::Zombie {
             let result = reap_child(child_pid);
             PROCESS_TABLE_LOCK.unlock();
             // Reap deferred — child is Zombie but still on another core's CPU.
-            if result == u64::MAX - 11 {
+            if result == EAGAIN {
                 hal().cpu().halt_wait_irq();
                 continue;
             }
@@ -100,18 +101,18 @@ pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
         Some(p) => (p.parent_pid, p.state),
         None => {
             PROCESS_TABLE_LOCK.unlock();
-            return u64::MAX - 3;
+            return ESRCH;
         },
     };
 
     if child_parent != current {
         PROCESS_TABLE_LOCK.unlock();
-        return u64::MAX - 3;
+        return ESRCH;
     }
 
     if matches!(child_state, ProcessState::Terminated) {
         PROCESS_TABLE_LOCK.unlock();
-        return u64::MAX - 10;
+        return ECHILD;
     }
 
     if child_state == ProcessState::Zombie {
@@ -121,14 +122,14 @@ pub unsafe fn try_wait_child(child_pid: u32) -> u64 {
     }
 
     PROCESS_TABLE_LOCK.unlock();
-    u64::MAX - 11
+    EAGAIN
 }
 
 unsafe fn reap_child(pid: u32) -> u64 {
     if let Some(Some(child)) = PROCESS_TABLE.get_mut(pid as usize) {
         // Don't free page tables while another core's CR3 still points at them.
         if child.running_on != u32::MAX {
-            return u64::MAX - 11;
+            return EAGAIN;
         }
 
         let code = child.exit_code.unwrap_or(-1);
@@ -143,11 +144,20 @@ unsafe fn reap_child(pid: u32) -> u64 {
 
         code as u64
     } else {
-        u64::MAX - 10
+        ECHILD
     }
 }
 
 unsafe fn free_process_resources(proc: &mut Process) {
+    // Storage reap (spec §7): close this pid's fds (decrement per-mount open_fds)
+    // and auto-umount the ephemeral (staged) mounts it owns, freeing their RAM and
+    // restoring its staging budget. Direct/global mounts survive. Done first so a
+    // dying process can never leak staged RAM; takes STORAGE_LOCK internally, and
+    // we hold PROCESS_TABLE_LOCK here — ordering is PROCESS_TABLE_LOCK→STORAGE_LOCK
+    // (no storage path takes PROCESS_TABLE_LOCK under STORAGE_LOCK).
+    crate::storage::reap_process(proc.pid, &mut proc.fd_table);
+    proc.fd_table = crate::storage::fs_api::FdTable::new();
+
     let phys = hal().phys();
     if proc.kernel_stack_base != 0 && phys.is_initialized() {
         let pages = (PROCESS_KERNEL_STACK_SIZE as u64).div_ceil(PAGE_SIZE);
@@ -181,15 +191,10 @@ unsafe fn free_process_resources(proc: &mut Process) {
     }
 }
 
-/// Walk a user PML4 and free every page-table page reachable from the
-/// user-half (lower 256 entries). Free the PML4 itself last.
+/// Walk a user PML4 and free every page-table page in the lower 256 entries; free PML4 last.
 ///
-/// # Portability hole
-/// This walks raw u64 PTEs using x86_64-shaped bit constants (PRESENT @ 0,
-/// USER @ 2, HUGE @ 7) and 4-level structure (PML4 → PDPT → PD → PT). A
-/// proper HAL method (`pml4_free_user_pages` taking a closure) should
-/// eventually replace this — tracked as a follow-up after K8/K9 land.
-/// Marked here so the audit grep can find it.
+/// ARCH-PORTABILITY-HOLE: walks raw PTEs with x86_64 bit constants (PRESENT/USER/HUGE)
+/// and 4-level structure. Replace with a HAL `pml4_free_user_pages` closure.
 unsafe fn free_user_page_tables(pml4_phys: u64) {
     let phys = hal().phys();
     if !phys.is_initialized() {

@@ -9,7 +9,6 @@ use super::{DEFAULT_CHUNK_SIZE, FAT32_MAX_FILE_SIZE};
 
 pub const MAX_ISOS: usize = 8;
 
-/// Manifest directory on ESP.
 pub const MANIFEST_DIR: &str = "/.iso";
 
 /// ISO metadata, no chunk data.

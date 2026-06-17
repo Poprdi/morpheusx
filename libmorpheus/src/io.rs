@@ -26,12 +26,10 @@ pub fn println(s: &str) {
     let _ = w.write_str("\n");
 }
 
-/// Stack-buffered writer that coalesces a whole formatted message into a single
-/// `SYS_WRITE`. `format_args!` calls `write_str` once per literal/argument, so
-/// without this a `println!("[{}] {}", a, b)` becomes several syscalls — each
-/// its own atomic line on the serial console — and interleaves with other
-/// cores. Buffering makes one call = one line. Lines longer than the buffer
-/// flush in chunks (still far fewer writes than per fragment). Flushes on drop.
+/// Coalesces `format_args!` fragments into a single `SYS_WRITE` per line.
+/// `format_args!` calls `write_str` once per literal/arg; without buffering
+/// each fragment becomes a separate syscall — interleaved on the serial console
+/// across cores. Flushes on drop.
 pub(crate) struct FdWriter {
     fd: u32,
     len: usize,
@@ -594,9 +592,7 @@ pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write) -> error::Result<u64>
     }
 }
 
-const IOCTL_FIONREAD: u64 = 0x541B;
-const IOCTL_FIONBIO: u64 = 0x5421;
-const IOCTL_TIOCGWINSZ: u64 = 0x5413;
+use morpheus_foundation::flags::{IOCTL_FIONBIO, IOCTL_FIONREAD, IOCTL_TIOCGWINSZ};
 
 pub fn ioctl(fd: u32, cmd: u64, arg: u64) -> Result<u64, u64> {
     let ret = unsafe { syscall3(SYS_IOCTL, fd as u64, cmd, arg) };

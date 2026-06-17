@@ -6,7 +6,7 @@ use crate::schedular::SCHEDULER;
 use morpheus_foundation::PAGE_SIZE;
 use morpheus_hal_api::{AllocKind, MemoryType};
 
-const SYSINFO_MAX_CPUS: usize = 16;
+use morpheus_foundation::types::{SysInfo, SYSINFO_MAX_CPUS};
 
 /// Monotonic ns from TSC. 0 if TSC isn't calibrated.
 pub unsafe fn sys_clock() -> u64 {
@@ -20,24 +20,19 @@ pub unsafe fn sys_clock() -> u64 {
     nanos_wide as u64
 }
 
-/// Must match `libmorpheus::sys::SysInfo` byte-for-byte.
-#[repr(C)]
-pub struct SysInfo {
-    pub total_mem: u64,
-    pub free_mem: u64,
-    pub num_procs: u32,
-    pub cpu_count: u32,
-    pub uptime_ticks: u64,
-    pub tsc_freq: u64,
-    pub heap_total: u64,
-    pub heap_used: u64,
-    pub heap_free: u64,
-    pub sched_ticks: u64,
-    /// Total HLT TSC across all cores. Pair with `uptime_ticks` delta for
-    /// idle_pct = idle_tsc_delta / uptime_ticks_delta.
-    pub idle_tsc: u64,
-    /// HLT TSC per core; valid for indices `0..cpu_count`.
-    pub per_core_idle_tsc: [u64; SYSINFO_MAX_CPUS],
+/// SYS_SET_THREAD_POINTER: set the calling thread's TLS base (x86 FS base).
+/// Validates the canonical-user range (which also makes the `wrmsr` safe),
+/// records it on the Process for per-switch restore, and applies it live for
+/// the current thread. `tp == 0` clears TLS.
+pub unsafe fn sys_set_thread_pointer(tp: u64) -> u64 {
+    // Canonical lower-half: both the user/kernel boundary and wrmsr-#GP safety
+    // (AMD64 Vol 2 §5.3). 0 is allowed and falls inside the range.
+    if tp >= USER_ADDR_LIMIT {
+        return EINVAL;
+    }
+    SCHEDULER.current_process_mut().tls_base = tp;
+    hal().cpu().set_user_tls_base(tp);
+    0
 }
 
 pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
@@ -46,8 +41,6 @@ pub unsafe fn sys_sysinfo(buf_ptr: u64) -> u64 {
         return EFAULT;
     }
 
-    // Heap stats lives in the HAL today (host crate hands its allocator's
-    // metrics back through `phys()` totals).
     let phys = hal().phys();
     let total_mem = phys.total_memory();
     let free_mem = phys.free_memory();
@@ -91,42 +84,25 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
         None => return EINVAL,
     };
 
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
-
-    let fd_table = SCHEDULER.current_fd_table_mut();
     let ts = hal().timer().read_tsc();
 
-    let fd = match morpheus_helix::vfs::vfs_open(
-        &mut fs.device,
-        &mut fs.mount_table,
-        fd_table,
-        path,
-        0x01, // O_READ
-        ts,
-    ) {
-        Ok(fd) => fd,
-        Err(_) => return ENOENT,
+    let file_size = {
+        let guard = crate::storage::lock();
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => return ENOENT,
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(s) => s.size as usize,
+            Err(_) => return EIO,
+        }
     };
 
-    let stat = match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-            return EIO;
-        },
-    };
-
-    let file_size = stat.size as usize;
     if file_size == 0 || file_size > 4 * 1024 * 1024 {
-        let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
         return EINVAL;
     }
 
-    // Drop registry before spawn_user_process — load_elf64 reacquires it.
     let pages_needed = file_size.div_ceil(PAGE_SIZE as usize) as u64;
     let buf_phys =
         match hal()
@@ -134,28 +110,51 @@ pub unsafe fn sys_spawn(path_ptr: u64, path_len: u64, argv_ptr: u64, argc: u64) 
             .allocate_pages(AllocKind::AnyPages, MemoryType::Allocated, pages_needed)
         {
             Ok(addr) => addr,
-            Err(_) => {
-                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
-                return ENOMEM;
-            },
+            Err(_) => return ENOMEM,
         };
 
+    // Read the image under the lock with a transient FdState, then drop the
+    // guard before spawn_user_process — load_elf64 reacquires the registry.
     let buf = core::slice::from_raw_parts_mut(buf_phys as *mut u8, file_size);
-    let bytes_read =
-        match morpheus_helix::vfs::vfs_read(&mut fs.device, &fs.mount_table, fd_table, fd, buf) {
+    let bytes_read = {
+        let guard = crate::storage::lock();
+        let g = &mut *guard.g;
+        let (mount_id, m, dev, rel) = match g.resolve_mut(path) {
+            Some(t) => t,
+            None => {
+                let _ = hal().phys().free_pages(buf_phys, pages_needed);
+                return ENOENT;
+            },
+        };
+        let opened = match m.fs.open(dev, rel, 0x01, ts) {
+            Ok(o) => o,
+            Err(_) => {
+                let _ = hal().phys().free_pages(buf_phys, pages_needed);
+                return ENOENT;
+            },
+        };
+        let mut fdstate = crate::storage::fs_api::FdState::empty();
+        fdstate.mount_id = mount_id;
+        fdstate.cookie = opened.cookie;
+        // Backend reads key off the (mount-relative) path, not just the cookie.
+        let pb = rel.as_bytes();
+        let pn = pb.len().min(fdstate.path.len());
+        fdstate.path[..pn].copy_from_slice(&pb[..pn]);
+        fdstate.path_len = pn as u16;
+        let n = match m.fs.read(dev, &fdstate, buf) {
             Ok(n) => n,
             Err(_) => {
-                let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+                let _ = m.fs.close(dev, &fdstate);
                 let _ = hal().phys().free_pages(buf_phys, pages_needed);
                 return EIO;
             },
         };
-
-    let _ = morpheus_helix::vfs::vfs_close(fd_table, fd);
+        let _ = m.fs.close(dev, &fdstate);
+        n
+    };
 
     let name = path.rsplit('/').next().unwrap_or(path);
 
-    // Pack argv into a NUL-separated blob.
     let mut arg_blob = [0u8; 256];
     let mut blob_len: usize = 0;
     let mut arg_count: u8 = 0;

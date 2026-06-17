@@ -74,8 +74,6 @@ impl XhciController {
         })
     }
 
-    /// SET_FEATURE(PORT_POWER) on a downstream hub port.
-    ///
     /// # Safety
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.
@@ -105,6 +103,11 @@ impl XhciController {
                 } else {
                     1 // FS
                 };
+                // USB 2.0 §7.1.7.5 TRSTRCY: give the downstream device its
+                // reset-recovery interval (>=10 ms) before it's addressed,
+                // mirroring root-port `port_reset`. Slow/old devices NAK the
+                // Address Device SET_ADDRESS otherwise.
+                self.delay_ms(10);
                 return Ok(speed);
             }
             if morpheus_x86_asm::tsc::read_tsc().wrapping_sub(start) > timeout {
@@ -132,8 +135,6 @@ impl XhciController {
         Ok(vr32(buf))
     }
 
-    /// CLEAR_FEATURE(C_PORT_CONNECTION) on a downstream hub port.
-    ///
     /// # Safety
     /// The controller must be initialized with valid MMIO and DMA mappings and
     /// the caller must hold exclusive access; `self.slot_id` must be an addressed hub.

@@ -6,9 +6,7 @@ use crate::process::{
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
-/// Maximum logical CPUs the scheduler tracks. Mirrors
-/// `morpheus_foundation::MAX_CPUS` but typed as `usize` for const array
-/// sizing in this module's `[T; MAX_CPUS]` slots.
+/// `usize`-typed alias of `morpheus_foundation::MAX_CPUS` for `[T; MAX_CPUS]` array sizing.
 pub const MAX_CPUS: usize = morpheus_foundation::MAX_CPUS as usize;
 
 #[repr(u8)]
@@ -47,6 +45,14 @@ pub static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = [const { None }
 
 pub static PROCESS_TABLE_LOCK: crate::sync::IsrSafeRawSpinLock =
     crate::sync::IsrSafeRawSpinLock::new();
+
+/// Per-address-space serialization for address-space mutations (mmap/munmap,
+/// and later shm_grant/map_phys/fb). Indexed by the thread-group *leader* pid:
+/// every thread sharing a CR3 resolves to the same lock, so concurrent
+/// mmap_brk/vma_table/page-table edits from sibling threads can't race. IRQ-safe
+/// (held with interrupts off), so it also blocks same-core preemption while held.
+pub static ADDRESS_SPACE_LOCKS: [crate::sync::IsrSafeRawSpinLock; MAX_PROCESSES] =
+    [const { crate::sync::IsrSafeRawSpinLock::new() }; MAX_PROCESSES];
 
 static CURRENT_PID: AtomicU32 = AtomicU32::new(0);
 pub(super) static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -532,6 +538,22 @@ pub(super) unsafe fn set_this_core_pid(pid: u32) {
     }
 }
 
+/// IDT fault-path hook: pid of the faulting thread on this core.
+pub unsafe fn idt_current_pid() -> u32 {
+    SCHEDULER.current_pid()
+}
+
+/// IDT fault-path hook: copy `pid`'s name into `out`; returns false if no live process.
+pub unsafe fn idt_lookup_name(pid: u32, out: &mut [u8; 32]) -> bool {
+    match SCHEDULER.process_by_pid(pid) {
+        Some(p) => {
+            out.copy_from_slice(&p.name);
+            true
+        },
+        None => false,
+    }
+}
+
 #[inline(always)]
 pub(super) unsafe fn this_core_index() -> u32 {
     if hal().smp().percpu_ready() {
@@ -710,7 +732,7 @@ impl Scheduler {
         out
     }
 
-    pub unsafe fn current_fd_table_mut(&self) -> &'static mut morpheus_helix::vfs::FdTable {
+    pub unsafe fn current_fd_table_mut(&self) -> &'static mut crate::storage::fs_api::FdTable {
         let pid = this_core_pid() as usize;
         &mut PROCESS_TABLE[pid].as_mut().unwrap().fd_table
     }
@@ -729,6 +751,49 @@ impl Scheduler {
             }
         }
         PROCESS_TABLE[leader_pid].as_mut().unwrap()
+    }
+
+    /// Thread-group leader pid for the current thread (the address-space owner).
+    pub unsafe fn current_memory_leader_pid(&self) -> u32 {
+        let pid = this_core_pid() as usize;
+        if let Some(p) = PROCESS_TABLE[pid].as_ref() {
+            if p.thread_group_leader != 0 {
+                return p.thread_group_leader;
+            }
+        }
+        pid as u32
+    }
+
+    /// The per-address-space lock for the current thread's leader. Acquire it
+    /// around any mutation of the shared address space (mmap_brk / vma_table /
+    /// user page tables) to serialize sibling threads.
+    pub unsafe fn current_address_space_lock(&self) -> &'static crate::sync::IsrSafeRawSpinLock {
+        &ADDRESS_SPACE_LOCKS[self.current_memory_leader_pid() as usize]
+    }
+
+    /// Thread-group leader pid for an arbitrary pid (its address-space owner).
+    /// Returns `pid` unchanged if it has no live entry (caller still range-checks).
+    pub unsafe fn memory_leader_pid_of(&self, pid: u32) -> u32 {
+        PROCESS_TABLE
+            .get(pid as usize)
+            .and_then(|s| s.as_ref())
+            .map(|p| {
+                if p.thread_group_leader != 0 {
+                    p.thread_group_leader
+                } else {
+                    pid
+                }
+            })
+            .unwrap_or(pid)
+    }
+
+    /// The per-address-space lock for `leader_pid`. Caller guarantees
+    /// `leader_pid < MAX_PROCESSES`.
+    pub unsafe fn address_space_lock(
+        &self,
+        leader_pid: u32,
+    ) -> &'static crate::sync::IsrSafeRawSpinLock {
+        &ADDRESS_SPACE_LOCKS[leader_pid as usize]
     }
 
     pub unsafe fn memory_leader_mut_by_pid(&self, pid: u32) -> Option<&'static mut Process> {

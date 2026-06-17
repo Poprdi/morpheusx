@@ -114,17 +114,15 @@ pub unsafe fn sys_nic_ctrl(cmd: u64, arg: u64) -> u64 {
     }
 }
 
-const IOCTL_FIONREAD: u64 = 0x541B;
-const IOCTL_FIONBIO: u64 = 0x5421;
-const IOCTL_TIOCGWINSZ: u64 = 0x5413;
+use morpheus_foundation::flags::{IOCTL_FIONBIO, IOCTL_FIONREAD, IOCTL_TIOCGWINSZ};
 
 pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     match (fd, cmd) {
         (0, IOCTL_FIONREAD) => {
             let fd_table = SCHEDULER.current_fd_table_mut();
-            let avail = if let Ok(desc) = fd_table.get(0) {
+            let avail = if let Some(desc) = fd_table.get(0) {
                 if desc.flags & O_PIPE_READ != 0 {
-                    pipe::pipe_available(desc.mount_idx)
+                    pipe::pipe_available(desc.mount_id as u8)
                 } else if is_composited_client() {
                     let proc = SCHEDULER.current_process_mut();
                     proc.input_head.wrapping_sub(proc.input_tail) as usize
@@ -143,8 +141,7 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
             avail as u64
         },
         (0, IOCTL_FIONBIO) => {
-            // arg -> *const i32: nonzero enables non-blocking stdin for this
-            // process. Reads of fd 0 then return EAGAIN instead of blocking.
+            // Nonzero arg enables non-blocking stdin; reads return EAGAIN instead of blocking.
             let enable = if arg != 0 && validate_user_buf(arg, 4) {
                 core::ptr::read(arg as *const u32) != 0
             } else {
@@ -176,33 +173,8 @@ pub unsafe fn sys_ioctl(fd: u64, cmd: u64, arg: u64) -> u64 {
     }
 }
 
-/// No-op success; HelixFS auto-mounts at `/`.
-pub unsafe fn sys_mount(src_ptr: u64, src_len: u64, dst_ptr: u64, dst_len: u64) -> u64 {
-    let _src = match user_path(src_ptr, src_len) {
-        Some(p) => p,
-        None => return EINVAL,
-    };
-    let _dst = match user_path(dst_ptr, dst_len) {
-        Some(p) => p,
-        None => return EINVAL,
-    };
-    0
-}
-
-/// Syncs dirty data; root can't actually unmount.
-pub unsafe fn sys_umount(path_ptr: u64, path_len: u64) -> u64 {
-    let _path = match user_path(path_ptr, path_len) {
-        Some(p) => p,
-        None => return EINVAL,
-    };
-    let mut _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
-    };
-    let fs = &mut *_vfs_guard.fs;
-    let _ = morpheus_helix::vfs::vfs_sync(&mut fs.device, &mut fs.mount_table);
-    0
-}
+// sys_mount/sys_umount moved to handler/fs.rs (spec §5: they are storage ops,
+// not NIC/ioctl ones, and need the full mount-table dispatch that lives there).
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -212,9 +184,7 @@ struct PollFd {
     revents: i16,
 }
 
-const POLLIN: i16 = 0x0001;
-const POLLOUT: i16 = 0x0004;
-const POLLERR: i16 = 0x0008;
+use morpheus_foundation::flags::{POLLERR, POLLIN, POLLOUT};
 
 /// fd 0: POLLIN iff stdin has data. fd 1/2: POLLOUT always. fd≥3 (VFS): both.
 pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
@@ -237,9 +207,10 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
         match pfd.fd {
             0 => {
                 let fd_table = SCHEDULER.current_fd_table_mut();
-                if let Ok(desc) = fd_table.get(0) {
+                if let Some(desc) = fd_table.get(0) {
                     if desc.flags & O_PIPE_READ != 0 {
-                        if pfd.events & POLLIN != 0 && pipe::pipe_available(desc.mount_idx) > 0 {
+                        if pfd.events & POLLIN != 0 && pipe::pipe_available(desc.mount_id as u8) > 0
+                        {
                             pfd.revents |= POLLIN;
                             ready += 1;
                         }
@@ -286,9 +257,9 @@ pub unsafe fn sys_poll(fds_ptr: u64, nfds: u64, timeout_ms: u64) -> u64 {
                 if pfd.fd == 0 && pfd.events & POLLIN != 0 {
                     let has_data = {
                         let fd_table = SCHEDULER.current_fd_table_mut();
-                        if let Ok(desc) = fd_table.get(0) {
+                        if let Some(desc) = fd_table.get(0) {
                             if desc.flags & O_PIPE_READ != 0 {
-                                pipe::pipe_available(desc.mount_idx) > 0
+                                pipe::pipe_available(desc.mount_id as u8) > 0
                             } else {
                                 crate::stdin::available() > 0
                             }

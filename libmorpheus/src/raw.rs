@@ -6,19 +6,11 @@
 // cannot drift.
 pub use morpheus_foundation::syscall_abi::*;
 
-// libmorpheus-private constants kept here for now: futex ops + sysctl modes
-// are userland-internal flag spaces that don't cross the syscall number ABI.
-// (They will move to foundation later if the kernel ever needs to discriminate
-// them by name, but for today they're values the kernel reads as opaque u64.)
-pub const FUTEX_WAIT: u64 = 0;
-pub const FUTEX_WAKE: u64 = 1;
-
-// SYS_SYSTEM_CONTROL modes
-pub const SYSCTL_REBOOT_GRACEFUL: u64 = 0;
-pub const SYSCTL_REBOOT_FORCE: u64 = 1;
-pub const SYSCTL_SHUTDOWN_GRACEFUL: u64 = 2;
-pub const SYSCTL_SHUTDOWN_FORCE: u64 = 3;
-pub const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
+// futex ops + sysctl modes are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::flags::{
+    FUTEX_WAIT, FUTEX_WAKE, SYSCTL_REBOOT_FORCE, SYSCTL_REBOOT_GRACEFUL, SYSCTL_SHUTDOWN_FORCE,
+    SYSCTL_SHUTDOWN_GRACEFUL, SYSCTL_SHUTDOWN_PANIC,
+};
 
 /// # Safety
 /// `nr` must be a valid syscall number for the kernel ABI. The caller is
@@ -42,9 +34,7 @@ pub unsafe fn syscall0(nr: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1` must be a
-/// valid argument for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall1(nr: u64, a1: u64) -> u64 {
     let ret: u64;
@@ -65,9 +55,7 @@ pub unsafe fn syscall1(nr: u64, a1: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`/`a2` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64 {
     let ret: u64;
@@ -89,9 +77,7 @@ pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a3` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
     let ret: u64;
@@ -114,9 +100,7 @@ pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a4` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     let ret: u64;
@@ -139,9 +123,7 @@ pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
 }
 
 /// # Safety
-/// `nr` must be a valid syscall number for the kernel ABI and `a1`..`a5` must be
-/// valid arguments for it: any pointer/length passed must reference memory that
-/// is valid for the duration and access pattern the syscall performs.
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
 #[inline(always)]
 pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     let ret: u64;
@@ -156,6 +138,29 @@ pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> 
         out("rcx") _,
         out("r11") _,
         out("r9") _,
+        out("xmm0") _, out("xmm1") _, out("xmm2") _,
+        out("xmm3") _, out("xmm4") _, out("xmm5") _,
+        options(nostack),
+    );
+    ret
+}
+
+/// # Safety
+/// Caller upholds the ABI contract for `nr`; any pointer args must be valid for the syscall's access pattern.
+#[inline(always)]
+pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> u64 {
+    let ret: u64;
+    core::arch::asm!(
+        "syscall",
+        inlateout("rax") nr => ret,
+        in("rdi") a1,
+        in("rsi") a2,
+        in("rdx") a3,
+        in("r10") a4,
+        in("r8") a5,
+        in("r9") a6,
+        out("rcx") _,
+        out("r11") _,
         out("xmm0") _, out("xmm1") _, out("xmm2") _,
         out("xmm3") _, out("xmm4") _, out("xmm5") _,
         options(nostack),

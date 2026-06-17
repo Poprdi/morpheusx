@@ -9,6 +9,7 @@ use super::mem::USER_MMAP_BASE;
 use crate::hal;
 use crate::pipe;
 use crate::schedular::SCHEDULER;
+pub use morpheus_foundation::flags::{PROT_EXEC, PROT_READ, PROT_WRITE};
 use morpheus_hal_api::{PageFlags, Pml4Handle};
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
@@ -25,10 +26,6 @@ fn prot_to_user_preset(prot: u64) -> PageFlags {
     }
 }
 
-pub const PROT_READ: u64 = 0;
-pub const PROT_WRITE: u64 = 1;
-pub const PROT_EXEC: u64 = 2;
-
 pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
     let _ = sys_yield; // silence unused warning if reflow is needed.
 
@@ -44,14 +41,42 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
 
     let caller_pid = SCHEDULER.current_pid();
 
-    // Cannot grant to self (use mmap), cannot grant to kernel.
     if target_pid == 0 || target_pid == caller_pid as u64 {
         return EINVAL;
     }
     if caller_pid == 0 {
         return EPERM;
     }
+    if target_pid >= crate::process::MAX_PROCESSES as u64 {
+        return ESRCH;
+    }
 
+    // Acquire both address-space locks in leader-pid order to prevent deadlock on
+    // concurrent reverse grants; equal leaders collapse to one lock.
+    let caller_leader = SCHEDULER.current_memory_leader_pid();
+    let target_leader = SCHEDULER.memory_leader_pid_of(target_pid as u32);
+    let lo = caller_leader.min(target_leader);
+    let hi = caller_leader.max(target_leader);
+    let lock_lo = SCHEDULER.address_space_lock(lo);
+    lock_lo.lock();
+    let lock_hi = if hi != lo {
+        let l = SCHEDULER.address_space_lock(hi);
+        l.lock();
+        Some(l)
+    } else {
+        None
+    };
+
+    let ret = shm_grant_locked(target_pid, src_vaddr, pages, flags);
+
+    if let Some(l) = lock_hi {
+        l.unlock();
+    }
+    lock_lo.unlock();
+    ret
+}
+
+unsafe fn shm_grant_locked(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
     let phys = {
         let caller_proc = SCHEDULER.current_memory_leader_mut();
         let (_, src_vma) = match caller_proc.vma_table.find_exact(src_vaddr) {
@@ -79,7 +104,7 @@ pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: 
         return ESRCH;
     }
     if target_ref.cr3 == 0 {
-        return ESRCH; // kernel thread without user page table
+        return ESRCH; // kernel thread; no user page table
     }
 
     if target_ref.mmap_brk == 0 {
@@ -183,36 +208,32 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
 
     let fd_table = SCHEDULER.current_fd_table_mut();
 
+    // Pipe fds: no mount; pipe index lives in `mount_id` field.
     let read_fd = match fd_table.alloc() {
-        Ok(fd) => fd,
-        Err(_) => return ENOMEM,
+        Some(fd) => fd,
+        None => return ENOMEM,
     };
-    fd_table.fds[read_fd] = morpheus_helix::types::FileDescriptor {
-        key: 0,
-        path: [0u8; 256],
-        flags: O_PIPE_READ,
-        offset: 0,
-        mount_idx: pipe_idx,
-        _pad: [0; 3],
-        pinned_lsn: 0,
-    };
+    let mut read_state = crate::storage::fs_api::FdState::empty();
+    read_state.flags = O_PIPE_READ;
+    read_state.mount_id = pipe_idx as u64;
+    if !fd_table.set(read_fd, read_state) {
+        return ENOMEM;
+    }
 
     let write_fd = match fd_table.alloc() {
-        Ok(fd) => fd,
-        Err(_) => {
-            let _ = morpheus_helix::vfs::vfs_close(fd_table, read_fd);
+        Some(fd) => fd,
+        None => {
+            let _ = fd_table.free(read_fd);
             return ENOMEM;
         },
     };
-    fd_table.fds[write_fd] = morpheus_helix::types::FileDescriptor {
-        key: 0,
-        path: [0u8; 256],
-        flags: O_PIPE_WRITE,
-        offset: 0,
-        mount_idx: pipe_idx,
-        _pad: [0; 3],
-        pinned_lsn: 0,
-    };
+    let mut write_state = crate::storage::fs_api::FdState::empty();
+    write_state.flags = O_PIPE_WRITE;
+    write_state.mount_id = pipe_idx as u64;
+    if !fd_table.set(write_fd, write_state) {
+        let _ = fd_table.free(read_fd);
+        return ENOMEM;
+    }
 
     let out = result_ptr as *mut [u32; 2];
     (*out)[0] = read_fd as u32;
@@ -224,7 +245,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
 pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
     if old_fd == new_fd {
         let fd_table = SCHEDULER.current_fd_table_mut();
-        return if fd_table.get(old_fd as usize).is_ok() {
+        return if fd_table.get(old_fd as usize).is_some() {
             new_fd
         } else {
             EBADF
@@ -233,26 +254,29 @@ pub unsafe fn sys_dup2(old_fd: u64, new_fd: u64) -> u64 {
 
     let fd_table = SCHEDULER.current_fd_table_mut();
     let src = match fd_table.get(old_fd as usize) {
-        Ok(d) => *d,
-        Err(_) => return EBADF,
+        Some(d) => *d,
+        None => return EBADF,
     };
 
-    if fd_table.get(new_fd as usize).is_ok() {
+    if fd_table.get(new_fd as usize).is_some() {
         sys_fs_close(new_fd);
     }
 
     let fd_table = SCHEDULER.current_fd_table_mut();
-    if new_fd as usize >= morpheus_helix::types::MAX_FDS {
+    if new_fd as usize >= crate::storage::fs_api::FD_TABLE_LEN {
         return EBADF;
     }
 
-    fd_table.fds[new_fd as usize] = src;
+    if !fd_table.set(new_fd as usize, src) {
+        return EBADF;
+    }
 
+    let pipe_idx = src.mount_id as u8;
     if src.flags & O_PIPE_READ != 0 {
-        pipe::pipe_add_reader(src.mount_idx);
+        pipe::pipe_add_reader(pipe_idx);
     }
     if src.flags & O_PIPE_WRITE != 0 {
-        pipe::pipe_add_writer(src.mount_idx);
+        pipe::pipe_add_writer(pipe_idx);
     }
 
     new_fd
@@ -264,26 +288,27 @@ pub unsafe fn sys_set_fg(pid: u64) -> u64 {
     0
 }
 
-/// Copies NUL-separated argv blob; returns argc.
+/// `buf == 0` returns argc; otherwise copies the NUL-separated argv blob and returns bytes written.
+/// Must return bytes, not argc: callers slice `buf[..ret]`.
 pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     let proc = SCHEDULER.current_process_mut();
     let argc = proc.argc;
     let args_len = proc.args_len as usize;
 
-    if buf_ptr != 0 && buf_len > 0 {
-        let copy_len = core::cmp::min(args_len, buf_len as usize);
-        if validate_user_buf(buf_ptr, copy_len as u64) {
-            let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
-            dst.copy_from_slice(&proc.args[..copy_len]);
-        }
+    if buf_ptr == 0 || buf_len == 0 {
+        return argc as u64;
     }
 
-    argc as u64
+    let copy_len = core::cmp::min(args_len, buf_len as usize);
+    if copy_len == 0 || !validate_user_buf(buf_ptr, copy_len as u64) {
+        return 0;
+    }
+    let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
+    dst.copy_from_slice(&proc.args[..copy_len]);
+    copy_len as u64
 }
 
-// Helper — blocking pipe read
-
-/// Blocks until data, or returns 0 once all writers have closed.
+/// Returns 0 when all writers have closed.
 pub(super) unsafe fn sys_pipe_read_blocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
     loop {
         let n = pipe::pipe_read(pipe_idx, buf);

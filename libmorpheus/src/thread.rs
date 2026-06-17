@@ -11,6 +11,39 @@ use crate::raw::*;
 const DEFAULT_STACK_PAGES: u64 = 16;
 const DEFAULT_STACK_SIZE: u64 = DEFAULT_STACK_PAGES * 4096;
 
+/// Set this thread's TLS base (x86 FS base) — the `arch_prctl(ARCH_SET_FS)`
+/// primitive. `tp` must point at the thread's variant-II TCB (FS-relative TLS
+/// data sits below it). Low-level; crt0/std own the TCB layout. Must be a
+/// canonical user address (`< 0x0000_8000_0000_0000`) or the kernel returns
+/// EINVAL. `tp == 0` clears TLS.
+///
+/// # Safety
+/// `tp` must reference a valid, correctly laid-out TCB that outlives the thread,
+/// or any subsequent `#[thread_local]` access is UB.
+pub unsafe fn set_thread_pointer(tp: u64) -> Result<(), u64> {
+    let ret = syscall1(SYS_SET_THREAD_POINTER, tp);
+    if crate::is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Read this thread's TLS base (x86 FS base) via the variant-II self-pointer at
+/// `%fs:0` (`install_thread_tls` stores `*(tp) = tp`). Pure userspace — no
+/// syscall. Useful to save/restore the thread pointer around code that
+/// temporarily reprograms it.
+///
+/// # Safety
+/// TLS must already be installed for this thread (crt0 or `thread_trampoline`);
+/// with `fs:base == 0` this dereferences address 0 and faults.
+#[inline]
+pub unsafe fn get_thread_pointer() -> u64 {
+    let tp: u64;
+    core::arch::asm!("mov {}, fs:0", out(reg) tp, options(nostack, readonly, preserves_flags));
+    tp
+}
+
 /// Must be joined; otherwise the thread is detached on drop.
 pub struct JoinHandle<T> {
     tid: u32,
@@ -37,6 +70,9 @@ impl<T> JoinHandle<T> {
 /// Kernel jumps here with `rdi=arg`. `arg` is `Box<Box<dyn FnOnce()>>`.
 /// extern "C" for stable ABI with the kernel's thread setup.
 unsafe extern "C" fn thread_trampoline(arg: u64) -> ! {
+    // Threads don't run crt0; each sets up its own variant-II TLS block before
+    // touching any `#[thread_local]`.
+    crate::entry::install_thread_tls();
     let closure: Box<Box<dyn FnOnce()>> = Box::from_raw(arg as *mut Box<dyn FnOnce()>);
     (*closure)();
 
