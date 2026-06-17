@@ -624,20 +624,25 @@ impl Iterator for ReadDir {
 
 pub fn read_dir(path: &str) -> error::Result<ReadDir> {
     let entry_size = core::mem::size_of::<DirEntry>();
-    let max_entries = 256;
-    let mut buf = vec![0u8; entry_size * max_entries];
-
-    let total = readdir(path, &mut buf, max_entries).map_err(Error::from_raw)?;
-    let count = total.min(max_entries);
-
-    let mut entries = Vec::with_capacity(count);
-    for i in 0..count {
-        let offset = i * entry_size;
-        let ptr = buf[offset..].as_ptr() as *const DirEntry;
-        entries.push(unsafe { core::ptr::read_unaligned(ptr) });
+    // Start with a reasonable capacity; grow and retry if the directory holds more
+    // children than we allocated for. `readdir` caps the kernel's write at our buffer
+    // size and returns the true count, so `total > cap` means "truncated, retry larger".
+    let mut cap = 256usize;
+    loop {
+        let mut buf = vec![0u8; entry_size * cap];
+        let total = readdir(path, &mut buf, cap).map_err(Error::from_raw)?;
+        if total > cap {
+            cap = total;
+            continue;
+        }
+        let mut entries = Vec::with_capacity(total);
+        for i in 0..total {
+            let offset = i * entry_size;
+            let ptr = buf[offset..].as_ptr() as *const DirEntry;
+            entries.push(unsafe { core::ptr::read_unaligned(ptr) });
+        }
+        return Ok(ReadDir { entries, pos: 0 });
     }
-
-    Ok(ReadDir { entries, pos: 0 })
 }
 
 pub fn read_to_vec(path: &str) -> error::Result<Vec<u8>> {

@@ -221,7 +221,20 @@ pub unsafe fn sys_fs_stat(path_ptr: u64, path_len: u64, stat_buf: u64) -> u64 {
     }
 }
 
-pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64) -> u64 {
+/// `readdir(path_ptr, path_len, buf_ptr, max_entries) → total_child_count`.
+///
+/// Writes `min(total, max_entries)` [`DirEntry`]s into `buf_ptr` and returns the
+/// directory's *true* child count. `max_entries` is the caller-declared capacity of
+/// `buf_ptr` in entries; the kernel never writes beyond it, so a too-small buffer is
+/// truncated (and the `> max_entries` return signals the caller to retry larger) rather
+/// than overrun. A null `buf_ptr` (or `max_entries == 0`) is a probe: nothing is written
+/// and only the count is returned.
+///
+/// Without `max_entries` the kernel wrote its current child count regardless of the
+/// caller's buffer size — a heap overflow whenever a directory held more children than
+/// the caller allocated for. The capacity bound closes that at the syscall boundary;
+/// userland keeps a grow-and-retry loop for directories larger than its initial guess.
+pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64, max_entries: u64) -> u64 {
     let path = match user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
@@ -234,20 +247,32 @@ pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64) -> u64 
     };
     match m.fs.readdir(dev, rel) {
         Ok(entries) => {
-            let count = entries.len();
-            if buf_ptr != 0 && count > 0 {
+            let total = entries.len();
+            // Cap the write at the caller's declared capacity so the kernel can never
+            // overrun the user buffer, however many children the directory holds.
+            // `buf_ptr == 0` (or `max_entries == 0`) is a probe — write nothing.
+            let writeable = if buf_ptr == 0 {
+                0
+            } else {
+                core::cmp::min(total, max_entries as usize)
+            };
+            if writeable > 0 {
                 let entry_size =
                     core::mem::size_of::<morpheus_foundation::types::DirEntry>() as u64;
-                let total = (count as u64).saturating_mul(entry_size);
-                if !validate_user_buf(buf_ptr, total) {
+                let span = (writeable as u64).saturating_mul(entry_size);
+                // Validate only the span we actually write — a too-small buffer truncates,
+                // it does not EFAULT.
+                if !validate_user_buf(buf_ptr, span) {
                     return EFAULT;
                 }
                 let dst = buf_ptr as *mut morpheus_foundation::types::DirEntry;
-                for (i, entry) in entries.iter().enumerate() {
+                for (i, entry) in entries.iter().take(writeable).enumerate() {
                     *dst.add(i) = *entry;
                 }
             }
-            count as u64
+            // Always return the TRUE total so a caller whose buffer was too small can
+            // detect truncation (`total > max_entries`) and retry with a larger buffer.
+            total as u64
         },
         Err(e) => vfs_err_to_errno(e),
     }

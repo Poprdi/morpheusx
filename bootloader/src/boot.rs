@@ -1141,6 +1141,22 @@ fn input_forwarding_loop(_keyboard: &mut Keyboard, mouse: &mut Mouse) -> ! {
     loop {
         let mut had_work = false;
 
+        // Serial console RX → stdin byte ring. A host terminal on COM1 is already a
+        // decoded byte stream (ANSI/UTF-8 — arrows are `ESC [ A`, etc.), so we feed it
+        // straight to `fd 0` with no keymap. This is the sole producer of the stdin ring
+        // (PS/2/USB keyboards use the separate event ring via SYS_KEYBOARD_READ), which
+        // keeps the SPSC single-producer invariant. Bounded per iteration so a flood
+        // can't starve the loop; leftover bytes drain next tick.
+        for _ in 0..256 {
+            match morpheus_hal_x86_64::serial::serial_try_getc() {
+                Some(b) => {
+                    morpheus_kernel::stdin::push(b);
+                    had_work = true;
+                },
+                None => break,
+            }
+        }
+
         if usb_active {
             // Pump the USB HID controller; parsed key events land in the kernel
             // keyboard event ring via the HID sink. The compositor drains that

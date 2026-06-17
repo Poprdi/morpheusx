@@ -30,6 +30,7 @@ const COM1_LCR: u16 = COM1 + 3;
 const COM1_MCR: u16 = COM1 + 4;
 const COM1_LSR: u16 = COM1 + 5;
 const LSR_TX_EMPTY: u8 = 0x20;
+const LSR_RX_READY: u8 = 0x01;
 
 static SERIAL_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
@@ -73,6 +74,40 @@ fn raw_byte_out(b: u8) {
             }
             core::hint::spin_loop();
         }
+    }
+}
+
+/// Non-blocking read of one byte from the COM1 receive register, or `None` if the RX
+/// FIFO is empty.
+///
+/// We deliberately poll rather than enable the RX-available IRQ (IER stays 0): the
+/// bootloader's input-forwarding loop already runs every tick and drains this beside
+/// the PS/2 queue, so a serial terminal on COM1 becomes a byte source for `fd 0` with no
+/// IDT/PIC plumbing. Mirrors `raw_byte_out`'s port discipline. Added for the devcockpit
+/// DE serial console (a host terminal is already a decoded ANSI/UTF-8 byte stream, which
+/// is exactly what `SYS_READ(fd=0)` consumers want).
+pub fn serial_try_getc() -> Option<u8> {
+    // SAFETY: reads LSR, then conditionally RBR, on COM1. Port IN has no memory effects;
+    // reading RBR pops one byte from the 16550 RX FIFO.
+    unsafe {
+        let status: u8;
+        core::arch::asm!(
+            "in al, dx",
+            in("dx") COM1_LSR,
+            out("al") status,
+            options(nostack, preserves_flags)
+        );
+        if status & LSR_RX_READY == 0 {
+            return None;
+        }
+        let byte: u8;
+        core::arch::asm!(
+            "in al, dx",
+            in("dx") COM1,
+            out("al") byte,
+            options(nostack, preserves_flags)
+        );
+        Some(byte)
     }
 }
 

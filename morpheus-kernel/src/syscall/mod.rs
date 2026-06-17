@@ -85,7 +85,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_CLOSE => sys_fs_close(a1),
         SYS_SEEK => sys_fs_seek(a1, a2, a3),
         SYS_STAT => sys_fs_stat(a1, a2, a3),
-        SYS_READDIR => sys_fs_readdir(a1, a2, a3),
+        SYS_READDIR => sys_fs_readdir(a1, a2, a3, a4),
         SYS_MKDIR => sys_fs_mkdir(a1, a2),
         SYS_UNLINK => sys_fs_unlink(a1, a2),
         SYS_RENAME => sys_fs_rename(a1, a2, a3, a4),
