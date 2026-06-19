@@ -1,0 +1,58 @@
+name: Release
+
+# Publish a GitHub Release whenever a version tag (v*) is pushed: build the kernel's
+# UEFI image (2-pass reloc build) and attach it as BOOTX64.EFI. The devcockpit-rs userland
+# consumes this artifact by release version to assemble a bootable image — the kernel binary
+# is distributed here, NOT on crates.io (the SDK crates are the only crates.io surface).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # required for the default GITHUB_TOKEN to create the release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  release:
+    name: build kernel .efi · publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml already pins 1.92.0 + the x86_64-unknown-uefi target; install it
+      # explicitly too so the step is self-describing and doesn't rely on lazy rustup install.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          targets: x86_64-unknown-uefi
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+
+      # build.rs in several crates assembles x86_64 `.s` files with NASM.
+      - name: Install NASM
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nasm
+
+      # 2-pass UEFI build (pass 1 → extract .reloc → embed → pass 2). Produces
+      # target/x86_64-unknown-uefi/release/morpheus-bootloader.efi.
+      - name: Build kernel (2-pass UEFI)
+        run: |
+          chmod +x scripts/ci-build-uefi.sh tools/extract-reloc-data.sh
+          ./scripts/ci-build-uefi.sh --release
+
+      - name: Stage artifact as BOOTX64.EFI
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-uefi/release/morpheus-bootloader.efi dist/BOOTX64.EFI
+          ls -la dist/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/BOOTX64.EFI
+          generate_release_notes: true
+          fail_on_unmatched_files: true
