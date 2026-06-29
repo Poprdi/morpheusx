@@ -294,7 +294,7 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
     println!("{}/  ({} entries)", path, entries.len());
     for e in &entries {
         let name = std::str::from_utf8(&e.name[..e.name_len as usize]).unwrap_or("?");
-        let kind = if e.is_dir { "DIR " } else { "FILE" };
+        let kind = if e.is_dir() { "DIR " } else { "FILE" };
         println!("  {} {:>10} B   {}", kind, e.size, name);
     }
     Ok(())
@@ -307,7 +307,7 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
 /// re-injected tree inherits the previous tree's orphaned files.
 fn rm_recursive(fs: &mut HelixFs, path: &str) -> Result<(), String> {
     let is_dir = match fs.stat(path) {
-        Ok(st) => st.is_dir,
+        Ok(st) => st.is_dir(),
         Err(HelixError::NotFound) => return Ok(()), // already gone — idempotent
         Err(e) => return Err(format!("stat {}: {:?}", path, e)),
     };

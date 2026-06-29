@@ -1,17 +1,25 @@
-//! Per-process VMA table for SYS_MMAP / SYS_MAP_PHYS bookkeeping.
+//! Per-process VMA table for SYS_MMAP / SYS_MPROTECT / SYS_MAP_PHYS bookkeeping.
 //! Fixed inline array, no heap. All addresses 4 KiB-aligned; entries do not
 //! overlap; `owns_phys` decides whether MUNMAP frees the backing pages.
 
-pub const MAX_VMAS: usize = 64;
+use morpheus_foundation::flags::PROT_WRITE;
+use morpheus_foundation::PAGE_SIZE;
+
+/// 128 (was 64): SYS_MPROTECT splits one VMA into up to three, so std setting a
+/// guard page inside every thread-stack reservation triples the entry pressure.
+pub const MAX_VMAS: usize = 128;
 
 #[derive(Clone, Copy)]
 pub struct Vma {
     pub vaddr: u64,
-    /// For MAP_PHYS: the caller-supplied phys.
+    /// For MAP_PHYS: the caller-supplied phys. For anonymous mmap: the contiguous
+    /// backing block; a split sub-VMA points into it at `phys + (vaddr - base)`.
     pub phys: u64,
     pub pages: u64,
     /// False for MAP_PHYS / FB_MAP — only PTEs are unmapped.
     pub owns_phys: bool,
+    /// Current protection (PROT_* bitmap) so a split can preserve the flanks.
+    pub prot: u64,
 }
 
 impl Vma {
@@ -21,6 +29,7 @@ impl Vma {
             phys: 0,
             pages: 0,
             owns_phys: false,
+            prot: 0,
         }
     }
 
@@ -31,12 +40,18 @@ impl Vma {
 
     #[inline]
     pub const fn size_bytes(&self) -> u64 {
-        self.pages * morpheus_foundation::PAGE_SIZE
+        self.pages * PAGE_SIZE
     }
 
     #[inline]
     pub const fn vaddr_end(&self) -> u64 {
-        self.vaddr + self.pages * morpheus_foundation::PAGE_SIZE
+        self.vaddr + self.pages * PAGE_SIZE
+    }
+
+    /// Does this VMA overlap `[start, start + len_bytes)`?
+    #[inline]
+    pub fn overlaps(&self, start: u64, len_bytes: u64) -> bool {
+        !self.is_free() && start < self.vaddr_end() && self.vaddr < start + len_bytes
     }
 }
 
@@ -58,13 +73,20 @@ impl VmaTable {
         }
     }
 
+    /// Insert defaulting `prot` to RW — the only protection non-mmap callers
+    /// (MAP_PHYS, spawn image) expose.
+    pub fn insert(&mut self, vaddr: u64, phys: u64, pages: u64, owns_phys: bool) -> Result<usize, ()> {
+        self.insert_full(vaddr, phys, pages, owns_phys, PROT_WRITE)
+    }
+
     /// `Err(())` if the table is full.
-    pub fn insert(
+    pub fn insert_full(
         &mut self,
         vaddr: u64,
         phys: u64,
         pages: u64,
         owns_phys: bool,
+        prot: u64,
     ) -> Result<usize, ()> {
         for (i, entry) in self.entries.iter_mut().enumerate() {
             if entry.is_free() {
@@ -73,6 +95,7 @@ impl VmaTable {
                     phys,
                     pages,
                     owns_phys,
+                    prot,
                 };
                 return Ok(i);
             }
@@ -96,6 +119,62 @@ impl VmaTable {
             }
         }
         None
+    }
+
+    /// Index of the single VMA that fully contains `[vaddr, vaddr + pages)`.
+    /// `None` if the range straddles a hole or VMA boundary (POSIX mprotect on a
+    /// partially-unmapped range is an error).
+    pub fn find_containing_range(&self, vaddr: u64, pages: u64) -> Option<usize> {
+        let end = vaddr + pages * PAGE_SIZE;
+        for (i, entry) in self.entries.iter().enumerate() {
+            if !entry.is_free() && vaddr >= entry.vaddr && end <= entry.vaddr_end() {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Any VMA overlapping `[start, start + pages)`?
+    pub fn overlaps_any(&self, start: u64, pages: u64) -> bool {
+        let len = pages * PAGE_SIZE;
+        self.entries.iter().any(|e| e.overlaps(start, len))
+    }
+
+    /// First-fit free VA hole of `pages` in `[base, limit)`. Walks occupied
+    /// regions, jumping the candidate past each overlap — so freed VMAs leave
+    /// reusable gaps (no monotonic-bump VA leak). Bounded by MAX_VMAS+1 probes.
+    pub fn find_free_va(&self, base: u64, limit: u64, pages: u64) -> Option<u64> {
+        let len = pages * PAGE_SIZE;
+        let mut candidate = base;
+        for _ in 0..=MAX_VMAS {
+            if candidate.checked_add(len)? > limit {
+                return None;
+            }
+            match self
+                .entries
+                .iter()
+                .filter(|e| e.overlaps(candidate, len))
+                .map(|e| e.vaddr_end())
+                .max()
+            {
+                Some(next) => candidate = next,
+                None => return Some(candidate),
+            }
+        }
+        None
+    }
+
+    pub fn get(&self, index: usize) -> Vma {
+        self.entries[index]
+    }
+
+    pub fn set_at(&mut self, index: usize, vma: Vma) {
+        self.entries[index] = vma;
+    }
+
+    /// Free slots currently available.
+    pub fn free_slots(&self) -> usize {
+        self.entries.iter().filter(|e| e.is_free()).count()
     }
 
     /// Caller is responsible for freeing physical pages.

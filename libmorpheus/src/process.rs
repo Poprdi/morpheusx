@@ -47,13 +47,36 @@ pub fn sleep(millis: u64) {
     }
 }
 
-/// Block until child exits; returns its exit code.
+/// Block until child exits; returns its exit code (or `128 + signal` if killed).
 pub fn wait(pid: u32) -> Result<i32, u64> {
-    let ret = unsafe { syscall1(SYS_WAIT, pid as u64) };
+    use morpheus_foundation::flags::P_PID;
+    use morpheus_foundation::types::WaitStatus;
+    let mut ws = WaitStatus::default();
+    let ret = unsafe {
+        syscall4(
+            SYS_WAIT,
+            P_PID,
+            pid as u64,
+            &mut ws as *mut WaitStatus as u64,
+            0,
+        )
+    };
     if is_error(ret) {
-        Err(ret)
+        return Err(ret);
+    }
+    Ok(decode_wstatus(ws.wstatus))
+}
+
+/// Collapse a Linux wstatus word into the single exit code the legacy callers
+/// expect: the exit status for a normal exit, else `128 + signal`.
+fn decode_wstatus(s: i32) -> i32 {
+    use morpheus_foundation::types::WaitStatus;
+    if WaitStatus::exited(s) {
+        WaitStatus::exit_status(s)
+    } else if WaitStatus::signaled(s) {
+        128 + WaitStatus::term_sig(s)
     } else {
-        Ok(ret as i32)
+        0
     }
 }
 
@@ -69,9 +92,31 @@ pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
     }
 }
 
+/// Build a versioned `SpawnArgs` for SYS_SPAWN; the child inherits our fds
+/// (minus O_CLOEXEC) with no file_actions.
+fn make_spawn_args(path: &str, descs: &[[u64; 2]]) -> morpheus_foundation::types::SpawnArgs {
+    use morpheus_foundation::types::{SpawnArgs, SpawnFileAction};
+    SpawnArgs {
+        version: 1,
+        struct_size: core::mem::size_of::<SpawnArgs>() as u16,
+        path_ptr: path.as_ptr() as u64,
+        path_len: path.len() as u64,
+        argv_ptr: if descs.is_empty() { 0 } else { descs.as_ptr() as u64 },
+        argc: descs.len() as u64,
+        fa_stride: core::mem::size_of::<SpawnFileAction>() as u32,
+        ..SpawnArgs::default()
+    }
+}
+
 /// Spawn ELF at `path`; returns child PID.
 pub fn spawn(path: &str) -> Result<u32, u64> {
-    let ret = unsafe { syscall4(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64, 0, 0) };
+    let sa = make_spawn_args(path, &[]);
+    let ret = unsafe {
+        syscall1(
+            SYS_SPAWN,
+            &sa as *const morpheus_foundation::types::SpawnArgs as u64,
+        )
+    };
     if is_error(ret) {
         Err(ret)
     } else {
@@ -88,13 +133,11 @@ pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
         descs[i][0] = args[i].as_ptr() as u64;
         descs[i][1] = args[i].len() as u64;
     }
+    let sa = make_spawn_args(path, &descs[..count]);
     let ret = unsafe {
-        syscall4(
+        syscall1(
             SYS_SPAWN,
-            path.as_ptr() as u64,
-            path.len() as u64,
-            descs.as_ptr() as u64,
-            count as u64,
+            &sa as *const morpheus_foundation::types::SpawnArgs as u64,
         )
     };
     if is_error(ret) {

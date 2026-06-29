@@ -34,7 +34,9 @@ impl HeapState {
     }
 }
 
-// SAFETY: single-threaded userspace; no SMP, no preemption.
+// SAFETY: threads share one address space (single cr3), so STATE is shared mutable;
+// soundness rests on every access going through the `HEAP` SpinLock. No lock-free
+// fast path: an unsynchronized push/pop race corrupts the intrusive free list.
 unsafe impl Send for HeapState {}
 unsafe impl Sync for HeapState {}
 
@@ -162,7 +164,7 @@ unsafe fn buddy_alloc(state: &mut HeapState, order: usize) -> Option<*mut u8> {
     let found_order = match found {
         Some(k) => k,
         None => {
-            let va = crate::raw::syscall1(crate::raw::SYS_MMAP, ARENA_PAGES);
+            let va = crate::mem::mmap_raw(ARENA_PAGES);
             if crate::is_error(va) {
                 return None;
             }
@@ -252,6 +254,12 @@ unsafe impl GlobalAlloc for BuddyHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if layout.size() == 0 {
             return NonNull::<u8>::dangling().as_ptr();
+        }
+
+        // layout_to_order saturates at MAX_ORDER, so an over-arena request would
+        // be handed an ARENA_SIZE block and overflow into the neighbouring arena.
+        if layout.size().max(layout.align()) > ARENA_SIZE {
+            return ptr::null_mut();
         }
 
         let order = layout_to_order(layout);

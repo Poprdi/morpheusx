@@ -389,6 +389,9 @@ fn map_page_flags(flags: PageFlags) -> crate::paging::PageFlags {
             .with(Pf::CACHE_DISABLE)
             .with(Pf::NO_EXECUTE),
         PageFlags::MMIO_UC => Pf(Pf::KERNEL_RW.0 | Pf::CACHE_DISABLE.0),
+        // Guard: present (so remap_4k_flags can flip it back) + supervisor (no
+        // USER bit) + NX → ring-3 read/write/exec all #PF.
+        PageFlags::USER_NONE => Pf::PRESENT.with(Pf::NO_EXECUTE),
         _ => Pf::KERNEL_RO,
     }
 }

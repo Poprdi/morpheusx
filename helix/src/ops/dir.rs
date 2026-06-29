@@ -96,13 +96,17 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
             continue;
         }
 
+        let is_dir = child.flags & entry_flags::IS_DIR != 0;
         let mut dir_entry = DirEntry {
-            name: [0u8; 256],
-            name_len: 0,
             size: child.size,
-            is_dir: child.flags & entry_flags::IS_DIR != 0,
+            d_type: if is_dir {
+                morpheus_foundation::flags::dirent_type::DT_DIR
+            } else {
+                morpheus_foundation::flags::dirent_type::DT_REG
+            },
             modified_ns: child.modified_ns,
             version_count: child.version_count,
+            ..DirEntry::zeroed()
         };
 
         let name_bytes = filename.as_bytes();

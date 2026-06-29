@@ -10,21 +10,11 @@ use crate::hal;
 use crate::pipe;
 use crate::schedular::SCHEDULER;
 pub use morpheus_foundation::flags::{PROT_EXEC, PROT_READ, PROT_WRITE};
-use morpheus_hal_api::{PageFlags, Pml4Handle};
+use morpheus_hal_api::Pml4Handle;
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
-/// Translate a PROT_{READ,WRITE,EXEC} bitmap into a `PageFlags` preset. Bit
-/// values come from the IPC/mprotect syscall ABI (READ implicit on x86).
-fn prot_to_user_preset(prot: u64) -> PageFlags {
-    let w = prot & PROT_WRITE != 0;
-    let x = prot & PROT_EXEC != 0;
-    match (w, x) {
-        (false, false) => PageFlags::USER_RO,
-        (true, false) => PageFlags::USER_RW,
-        (false, true) => PageFlags::USER_RX,
-        (true, true) => PageFlags::USER_RWX,
-    }
-}
+// PROT_* preset lives with the VM syscalls; shm_grant reuses it.
+use super::mem::prot_to_user_preset;
 
 pub unsafe fn sys_shm_grant(target_pid: u64, src_vaddr: u64, pages: u64, flags: u64) -> u64 {
     let _ = sys_yield; // silence unused warning if reflow is needed.
@@ -149,53 +139,6 @@ unsafe fn shm_grant_locked(target_pid: u64, src_vaddr: u64, pages: u64, flags: u
     target_vaddr
 }
 
-/// Flip PTE flags on an existing VMA (exact match, no splits).
-/// prot: bit0 PROT_WRITE, bit1 PROT_EXEC. Read is implicit on x86-64.
-pub unsafe fn sys_mprotect(vaddr: u64, pages: u64, prot: u64) -> u64 {
-    if pages == 0 || pages > 1024 {
-        return EINVAL;
-    }
-    if vaddr == 0 || vaddr & 0xFFF != 0 {
-        return EINVAL;
-    }
-    if vaddr >= USER_ADDR_LIMIT {
-        return EINVAL;
-    }
-    if prot & !3 != 0 {
-        return EINVAL;
-    }
-
-    if SCHEDULER.current_pid() == 0 {
-        return EPERM;
-    }
-
-    let proc = SCHEDULER.current_memory_leader_mut();
-
-    let (_, vma) = match proc.vma_table.find_exact(vaddr) {
-        Some(pair) => pair,
-        None => return EINVAL,
-    };
-
-    if vma.pages != pages {
-        return EINVAL;
-    }
-
-    let preset = prot_to_user_preset(prot);
-
-    for i in 0..pages {
-        let page_virt = vaddr + i * 4096;
-        if hal()
-            .paging()
-            .pml4_remap_flags(proc.cr3, page_virt, preset)
-            .is_err()
-        {
-            return EFAULT;
-        }
-    }
-
-    0
-}
-
 /// Writes `[read_fd, write_fd]` (two u64) at `result_ptr`.
 pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
     if !validate_user_buf(result_ptr, 8) {
@@ -306,6 +249,29 @@ pub unsafe fn sys_getargs(buf_ptr: u64, buf_len: u64) -> u64 {
     let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
     dst.copy_from_slice(&proc.args[..copy_len]);
     copy_len as u64
+}
+
+/// SYS_GETENV: `buf_ptr,buf_len -> total_block_bytes | -errno`. NUL-separated
+/// `KEY=VALUE` records like SYS_GETARGS. `buf == 0` probes the total size; a short
+/// buffer copies a prefix but still returns the full size. Env lives on the
+/// thread-group leader so threads share the process environ.
+pub unsafe fn sys_getenv(buf_ptr: u64, buf_len: u64) -> u64 {
+    let leader = SCHEDULER.current_memory_leader_mut();
+    let total = leader.env_block.len();
+
+    if buf_ptr == 0 || buf_len == 0 {
+        return total as u64;
+    }
+
+    let copy_len = core::cmp::min(total, buf_len as usize);
+    if copy_len > 0 {
+        if !validate_user_buf(buf_ptr, copy_len as u64) {
+            return EFAULT;
+        }
+        let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, copy_len);
+        dst.copy_from_slice(&leader.env_block[..copy_len]);
+    }
+    total as u64
 }
 
 /// Returns 0 when all writers have closed.

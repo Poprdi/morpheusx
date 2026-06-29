@@ -5,6 +5,7 @@
 
 use super::common::*;
 use super::nic_io::sys_nic_ctrl;
+use crate::hal;
 use morpheus_foundation::types::{UdpRecvDesc, UdpSendDesc};
 
 // Canonical net subcommand codes live in morpheus_foundation::net; re-exported
@@ -493,15 +494,162 @@ pub unsafe fn sys_net_cfg(subcmd: u64, a2: u64, a3: u64, _a4: u64) -> u64 {
     }
 }
 
+// Typed bridge for the BSD-socket fd layer (`handler::socket`): it must NOT poke
+// `NET_STACK_OPS` directly. A negative return is the stack's own error code;
+// `BRIDGE_ABSENT` means the op pointer was never installed.
+
+/// Sentinel: the requested op was not registered in `NetStackOps`.
+pub(crate) const BRIDGE_ABSENT: i64 = i64::MIN;
+
+pub(crate) fn net_present() -> bool {
+    net_stack_present()
+}
+
+/// Monotonic uptime (ms) from the TSC — the single time source fed to every stack
+/// poll so its timers advance against real progress.
+pub(crate) fn monotonic_ms() -> u64 {
+    let hz = hal().timer().tsc_frequency();
+    if hz == 0 {
+        return 0;
+    }
+    let per_ms = (hz / 1000).max(1);
+    hal().timer().read_tsc() / per_ms
+}
+
+/// Drive the stack once. Blocking socket ops call this between readiness re-checks
+/// so retransmits/ACKs make progress.
+pub(crate) unsafe fn net_drive() {
+    if let Some(f) = NET_STACK_OPS.poll_drive {
+        let _ = f(monotonic_ms());
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_socket() -> i64 {
+    match NET_STACK_OPS.tcp_socket {
+        Some(f) => f(),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_connect(handle: i64, ip_nbo: u32, port_host: u16) -> i64 {
+    match NET_STACK_OPS.tcp_connect {
+        Some(f) => f(handle, ip_nbo, port_host),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_send(handle: i64, buf: *const u8, len: usize) -> i64 {
+    match NET_STACK_OPS.tcp_send {
+        Some(f) => f(handle, buf, len),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_recv(handle: i64, buf: *mut u8, len: usize) -> i64 {
+    match NET_STACK_OPS.tcp_recv {
+        Some(f) => f(handle, buf, len),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_close(handle: i64) {
+    if let Some(f) = NET_STACK_OPS.tcp_close {
+        f(handle);
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_state(handle: i64) -> i64 {
+    match NET_STACK_OPS.tcp_state {
+        Some(f) => f(handle),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_listen(handle: i64, port_host: u16) -> i64 {
+    match NET_STACK_OPS.tcp_listen {
+        Some(f) => f(handle, port_host),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_accept(handle: i64) -> i64 {
+    match NET_STACK_OPS.tcp_accept {
+        Some(f) => f(handle),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_shutdown(handle: i64) -> i64 {
+    match NET_STACK_OPS.tcp_shutdown {
+        Some(f) => f(handle),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_nodelay(handle: i64, on: bool) -> i64 {
+    match NET_STACK_OPS.tcp_nodelay {
+        Some(f) => f(handle, on as i64),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_keepalive(handle: i64, ms: u64) -> i64 {
+    match NET_STACK_OPS.tcp_keepalive {
+        Some(f) => f(handle, ms),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_udp_socket() -> i64 {
+    match NET_STACK_OPS.udp_socket {
+        Some(f) => f(),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_udp_send_to(
+    handle: i64,
+    ip_nbo: u32,
+    port_host: u16,
+    buf: *const u8,
+    len: usize,
+) -> i64 {
+    match NET_STACK_OPS.udp_send_to {
+        Some(f) => f(handle, ip_nbo, port_host, buf, len),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_udp_recv_from(
+    handle: i64,
+    buf: *mut u8,
+    len: usize,
+    src_out: *mut u8,
+) -> i64 {
+    match NET_STACK_OPS.udp_recv_from {
+        Some(f) => f(handle, buf, len, src_out),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_udp_close(handle: i64) {
+    if let Some(f) = NET_STACK_OPS.udp_close {
+        f(handle);
+    }
+}
+
 pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
     if !net_stack_present() {
         return ENODEV;
     }
 
     match subcmd {
+        // `a2` (userspace timestamp) is ignored: the kernel is the sole authority on
+        // monotonic time. Feeding the real clock (not `Instant(0)`) is what makes
+        // smoltcp's retransmit / TIME_WAIT / keepalive / DHCP timers advance.
         NET_POLL_DRIVE => match NET_STACK_OPS.poll_drive {
             Some(f) => {
-                let rc = f(a2);
+                let rc = f(monotonic_ms());
                 if rc < 0 {
                     EIO
                 } else {

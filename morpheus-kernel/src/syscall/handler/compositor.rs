@@ -30,7 +30,7 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
     use core::sync::atomic::Ordering::Relaxed;
     let cpid = COMPOSITOR_PID.load(Relaxed);
     if cpid == 0 {
-        return u64::MAX;
+        return EINVAL;
     }
 
     let pid = SCHEDULER.current_pid();

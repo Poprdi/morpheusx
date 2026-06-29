@@ -2,21 +2,24 @@
 // validate → STORAGE_LOCK → resolve → backend dispatch → VfsError→errno.
 
 use super::common::*;
-use crate::hal;
 use crate::schedular::SCHEDULER;
+use crate::storage::fs_api::FdKind;
 use crate::storage::{self, vfs_err_to_errno};
 use morpheus_foundation::errno::EXDEV;
-use morpheus_foundation::flags::open_flags::{O_APPEND, O_PIPE_READ, O_PIPE_WRITE, O_WRITE};
+use morpheus_foundation::flags::mode;
+use morpheus_foundation::flags::open_flags::{
+    O_APPEND, O_CLOEXEC, O_CREATE, O_EXCL, O_PIPE_READ, O_PIPE_WRITE, O_WRITE,
+};
 use morpheus_foundation::storage::{MNT_RDONLY, MNT_STAGED};
 use morpheus_foundation::syscall_abi::{SEEK_CUR, SEEK_END, SEEK_SET};
 
 pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
     let flags = flags as u32;
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let fd_table = SCHEDULER.current_fd_table_mut();
 
     // Fail fast on full fd table before touching the FS.
@@ -27,10 +30,16 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
 
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (mount_id, m, dev, rel) = match g.resolve_mut(path) {
+    let (mount_id, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
+
+    // O_EXCL (create_new): a real exists-check, not TOCTOU — we hold STORAGE_LOCK
+    // across the probe and the create, so nothing can wedge the file in between.
+    if flags & O_CREATE != 0 && flags & O_EXCL != 0 && m.fs.stat(dev, rel).is_ok() {
+        return EEXIST;
+    }
 
     let opened = match m.fs.open(dev, rel, flags, ts) {
         Ok(o) => o,
@@ -40,6 +49,8 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
     let mut state = crate::storage::fs_api::FdState::empty();
     state.mount_id = mount_id;
     state.flags = flags;
+    state.kind = FdKind::Regular;
+    state.cloexec = flags & O_CLOEXEC != 0;
     let pb = rel.as_bytes();
     let n = pb.len().min(state.path.len());
     state.path[..n].copy_from_slice(&pb[..n]);
@@ -70,7 +81,35 @@ pub unsafe fn sys_fs_close(fd: u64) -> u64 {
         None => return EBADF,
     };
 
+    // Socket fds carry a smoltcp backend handle + readiness slot to release.
+    if desc.is_socket() {
+        super::socket::socket_close_backend(&desc);
+        return match fd_table.free(fd as usize) {
+            Some(_) => 0,
+            None => EBADF,
+        };
+    }
+
     if desc.flags & (O_PIPE_READ | O_PIPE_WRITE) != 0 {
+        let idx = desc.mount_id as u8;
+        if fd_table.free(fd as usize).is_none() {
+            return EBADF;
+        }
+        // Drop the endpoint refcount so a peer sees EOF/EPIPE; closing the last
+        // writer must wake any reader blocked for bytes that will never arrive.
+        if desc.flags & O_PIPE_READ != 0 {
+            crate::pipe::pipe_close_reader(idx);
+        }
+        if desc.flags & O_PIPE_WRITE != 0 {
+            crate::pipe::pipe_close_writer(idx);
+            crate::schedular::wake_pipe_readers(idx);
+        }
+        return 0;
+    }
+
+    // epoll fds have no mount/backend; closing one reclaims its watch set.
+    if desc.kind == FdKind::Epoll {
+        super::epoll::destroy_for(&desc);
         return match fd_table.free(fd as usize) {
             Some(_) => 0,
             None => EBADF,
@@ -96,13 +135,19 @@ pub unsafe fn sys_fs_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         return EFAULT;
     }
     let fd_table = SCHEDULER.current_fd_table_mut();
-    let desc = match fd_table.get(fd as usize) {
+    let mut desc = match fd_table.get(fd as usize) {
         Some(d) => *d,
         None => return EBADF,
     };
     if desc.revoked {
         return EBADF;
     }
+    if desc.is_socket() {
+        return super::socket::socket_read(fd, buf_ptr, len);
+    }
+    // The authoritative cursor lives in the shared OFD for dup'd fds; seed the
+    // copy the backend reads from it so aliased fds share one offset.
+    desc.offset = fd_table.offset(fd as usize).unwrap_or(desc.offset);
 
     let buf = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len as usize);
     let guard = storage::lock();
@@ -113,9 +158,7 @@ pub unsafe fn sys_fs_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     };
     match m.fs.read(dev, &desc, buf) {
         Ok(n) => {
-            if let Some(d) = fd_table.get_mut(fd as usize) {
-                d.offset = d.offset.saturating_add(n as u64);
-            }
+            fd_table.add_offset(fd as usize, n as u64);
             n as u64
         },
         Err(e) => vfs_err_to_errno(e),
@@ -134,23 +177,33 @@ pub unsafe fn sys_fs_write(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     if desc.revoked {
         return EBADF;
     }
-    if desc.flags & O_WRITE == 0 {
+    if desc.is_socket() {
+        return super::socket::socket_write(fd, buf_ptr, len);
+    }
+    let status = fd_table.status_flags(fd as usize).unwrap_or(desc.flags);
+    if status & O_WRITE == 0 {
         return EBADF;
     }
+    desc.offset = fd_table.offset(fd as usize).unwrap_or(desc.offset);
 
     let buf = core::slice::from_raw_parts(buf_ptr as *const u8, len as usize);
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let guard = storage::lock();
     let g = &mut *guard.g;
     let (m, dev) = match g.mount_dev_mut(desc.mount_id) {
         Some(t) => t,
         None => return EBADF,
     };
+    // O_APPEND atomically retargets the cursor to EOF before each write (POSIX);
+    // the backend is whole-file under STORAGE_LOCK, so this is race-free.
+    if status & O_APPEND != 0 {
+        if let Ok(st) = m.fs.stat(dev, desc.path_str()) {
+            desc.offset = st.size;
+        }
+    }
     match m.fs.write(dev, &mut desc, buf, ts) {
         Ok(n) => {
-            if let Some(d) = fd_table.get_mut(fd as usize) {
-                d.offset = desc.offset;
-            }
+            fd_table.set_offset(fd as usize, desc.offset);
             n as u64
         },
         Err(e) => vfs_err_to_errno(e),
@@ -166,7 +219,7 @@ pub unsafe fn sys_fs_seek(fd: u64, offset: u64, whence: u64) -> u64 {
 
     let base = match whence {
         SEEK_SET => 0i64,
-        SEEK_CUR => desc.offset as i64,
+        SEEK_CUR => fd_table.offset(fd as usize).unwrap_or(desc.offset) as i64,
         SEEK_END => {
             let guard = storage::lock();
             let g = &mut *guard.g;
@@ -186,33 +239,32 @@ pub unsafe fn sys_fs_seek(fd: u64, offset: u64, whence: u64) -> u64 {
     if new_off < 0 {
         return EINVAL;
     }
-    match fd_table.get_mut(fd as usize) {
-        Some(d) => {
-            d.offset = new_off as u64;
-            new_off as u64
-        },
-        None => EBADF,
+    if fd_table.set_offset(fd as usize, new_off as u64) {
+        new_off as u64
+    } else {
+        EBADF
     }
 }
 
 pub unsafe fn sys_fs_stat(path_ptr: u64, path_len: u64, stat_buf: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (_, m, dev, rel) = match g.resolve_mut(path) {
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
     match m.fs.stat(dev, rel) {
-        Ok(stat) => {
+        Ok(mut stat) => {
             if stat_buf != 0 {
                 let size = core::mem::size_of::<morpheus_foundation::types::FileStat>() as u64;
                 if !validate_user_buf(stat_buf, size) {
                     return EFAULT;
                 }
+                fill_stat_metadata(&mut stat);
                 *(stat_buf as *mut morpheus_foundation::types::FileStat) = stat;
             }
             0
@@ -235,13 +287,13 @@ pub unsafe fn sys_fs_stat(path_ptr: u64, path_len: u64, stat_buf: u64) -> u64 {
 /// the caller allocated for. The capacity bound closes that at the syscall boundary;
 /// userland keeps a grow-and-retry loop for directories larger than its initial guess.
 pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64, max_entries: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (_, m, dev, rel) = match g.resolve_mut(path) {
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
@@ -279,14 +331,14 @@ pub unsafe fn sys_fs_readdir(path_ptr: u64, path_len: u64, buf_ptr: u64, max_ent
 }
 
 pub unsafe fn sys_fs_mkdir(path_ptr: u64, path_len: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (_, m, dev, rel) = match g.resolve_mut(path) {
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
@@ -296,18 +348,26 @@ pub unsafe fn sys_fs_mkdir(path_ptr: u64, path_len: u64) -> u64 {
     }
 }
 
+/// `SYS_UNLINK`: files only. A directory target → `EISDIR` (use `SYS_RMDIR`),
+/// so `remove_file`/`remove_dir` stay type-correct. The type check and the
+/// unlink share one `STORAGE_LOCK` critical section (no TOCTOU).
 pub unsafe fn sys_fs_unlink(path_ptr: u64, path_len: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (_, m, dev, rel) = match g.resolve_mut(path) {
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
+    match m.fs.stat(dev, rel) {
+        Ok(st) if st.mode & mode::S_IFMT == mode::S_IFDIR => return EISDIR,
+        Ok(_) => {},
+        Err(e) => return vfs_err_to_errno(e),
+    }
     match m.fs.unlink(dev, rel, ts) {
         Ok(()) => 0,
         Err(e) => vfs_err_to_errno(e),
@@ -315,24 +375,24 @@ pub unsafe fn sys_fs_unlink(path_ptr: u64, path_len: u64) -> u64 {
 }
 
 pub unsafe fn sys_fs_rename(old_ptr: u64, old_len: u64, new_ptr: u64, new_len: u64) -> u64 {
-    let old = match user_path(old_ptr, old_len) {
+    let old = match resolve_user_path(old_ptr, old_len) {
         Some(p) => p,
         None => return EINVAL,
     };
-    let new = match user_path(new_ptr, new_len) {
+    let new = match resolve_user_path(new_ptr, new_len) {
         Some(p) => p,
         None => return EINVAL,
     };
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let guard = storage::lock();
     let g = &mut *guard.g;
 
     // rename across mounts is EXDEV, never an implicit copy+delete (spec §4).
-    let src_mount = match g.mounts.resolve(old) {
+    let src_mount = match g.mounts.resolve(&old) {
         Some(id) => id,
         None => return ENOENT,
     };
-    let dst_mount = match g.mounts.resolve(new) {
+    let dst_mount = match g.mounts.resolve(&new) {
         Some(id) => id,
         None => return ENOENT,
     };
@@ -343,8 +403,8 @@ pub unsafe fn sys_fs_rename(old_ptr: u64, old_len: u64, new_ptr: u64, new_len: u
         Some(m) => m.mount_point_len as usize,
         None => return ENOENT,
     };
-    let rel_old = storage::mount_relative(old, mp_len);
-    let rel_new = storage::mount_relative(new, mp_len);
+    let rel_old = storage::mount_relative(&old, mp_len);
+    let rel_new = storage::mount_relative(&new, mp_len);
     let (m, dev) = match g.mount_dev_mut(src_mount) {
         Some(t) => t,
         None => return ENOENT,
@@ -357,14 +417,14 @@ pub unsafe fn sys_fs_rename(old_ptr: u64, old_len: u64, new_ptr: u64, new_len: u
 
 /// Shrink or zero-extend `path` to `new_size`.
 pub unsafe fn sys_fs_truncate(path_ptr: u64, path_len: u64, new_size: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (_, m, dev, rel) = match g.resolve_mut(path) {
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
@@ -396,7 +456,7 @@ pub unsafe fn sys_fs_snapshot(name_ptr: u64, name_len: u64) -> u64 {
             None => return EINVAL,
         }
     };
-    let ts = hal().timer().read_tsc();
+    let ts = fs_now_ns();
     let guard = storage::lock();
     let g = &mut *guard.g;
     let (_, m, dev, _rel) = match g.resolve_mut("/") {
@@ -413,14 +473,14 @@ pub unsafe fn sys_fs_snapshot(name_ptr: u64, name_len: u64) -> u64 {
 pub unsafe fn sys_fs_versions(path_ptr: u64, path_len: u64, buf_ptr: u64, max: u64) -> u64 {
     use morpheus_foundation::types::FileVersion;
 
-    let path = match user_path(path_ptr, path_len) {
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
 
     let guard = storage::lock();
     let g = &mut *guard.g;
-    let (_, m, dev, rel) = match g.resolve_mut(path) {
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
         Some(t) => t,
         None => return ENOENT,
     };
@@ -506,6 +566,7 @@ pub unsafe fn sys_volumes(buf_ptr: u64, max: u64) -> u64 {
             flags,
             partition_guid: v.partition_guid,
             label: v.label,
+            ..VolumeInfo::zeroed()
         };
     }
     count as u64
@@ -541,7 +602,7 @@ pub unsafe fn sys_mounts(buf_ptr: u64, max: u64) -> u64 {
             flags: m.flags,
             mount_point: m.mount_point,
             mount_point_len: m.mount_point_len,
-            _pad: [0u8; 6],
+            ..MountInfo::zeroed()
         };
     }
     count as u64
@@ -594,5 +655,138 @@ pub unsafe fn sys_umount(mp_ptr: u64, mp_len: u64, flags: u64) -> u64 {
     match storage::umount(mp, flags as u32) {
         Ok(()) => 0,
         Err(e) => e,
+    }
+}
+
+/// SYS_FSTAT: `fd,*mut FileStat -> 0 | -errno`. A non-regular fd (socket/pipe/
+/// epoll) has no FS object, so its type/perm bits are synthesized (size 0) to keep
+/// `fstat` well-defined on any fd.
+pub unsafe fn sys_fs_fstat(fd: u64, statbuf: u64) -> u64 {
+    use morpheus_foundation::types::FileStat;
+
+    let size = core::mem::size_of::<FileStat>() as u64;
+    if !validate_user_buf(statbuf, size) {
+        return EFAULT;
+    }
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let desc = match fd_table.get(fd as usize) {
+        Some(d) => *d,
+        None => return EBADF,
+    };
+    if desc.revoked {
+        return EBADF;
+    }
+
+    if desc.kind != FdKind::Regular {
+        let mut stat = FileStat::default();
+        stat.mode = match desc.kind {
+            FdKind::Socket => mode::S_IFSOCK,
+            FdKind::Pipe => mode::S_IFIFO,
+            FdKind::Epoll => mode::S_IFCHR,
+            FdKind::Regular => mode::S_IFREG,
+        };
+        fill_stat_metadata(&mut stat);
+        *(statbuf as *mut FileStat) = stat;
+        return 0;
+    }
+
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let (m, dev) = match g.mount_dev_mut(desc.mount_id) {
+        Some(t) => t,
+        None => return EBADF,
+    };
+    match m.fs.stat(dev, desc.path_str()) {
+        Ok(mut stat) => {
+            fill_stat_metadata(&mut stat);
+            *(statbuf as *mut FileStat) = stat;
+            0
+        },
+        Err(e) => vfs_err_to_errno(e),
+    }
+}
+
+/// SYS_FSYNC: `fd,flags -> 0 | -errno`. Backends expose only whole-volume `sync`,
+/// so fdatasync (`FSYNC_DATAONLY`) and full fsync share one durability point.
+/// Non-regular fds have no durable backing, so succeed trivially.
+pub unsafe fn sys_fs_fsync(fd: u64, _flags: u64) -> u64 {
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let desc = match fd_table.get(fd as usize) {
+        Some(d) => *d,
+        None => return EBADF,
+    };
+    if desc.revoked {
+        return EBADF;
+    }
+    if desc.kind != FdKind::Regular {
+        return 0;
+    }
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let (m, dev) = match g.mount_dev_mut(desc.mount_id) {
+        Some(t) => t,
+        None => return EBADF,
+    };
+    match m.fs.sync(dev) {
+        Ok(()) => 0,
+        Err(e) => vfs_err_to_errno(e),
+    }
+}
+
+/// SYS_FTRUNCATE: `fd,new_len -> 0 | -errno`. Fd-based set-len (SYS_TRUNCATE(18)
+/// is path-based). The fd must be writable (EINVAL otherwise, per Linux).
+pub unsafe fn sys_fs_ftruncate(fd: u64, new_len: u64) -> u64 {
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let desc = match fd_table.get(fd as usize) {
+        Some(d) => *d,
+        None => return EBADF,
+    };
+    if desc.revoked {
+        return EBADF;
+    }
+    if desc.kind != FdKind::Regular {
+        return EINVAL;
+    }
+    let status = fd_table.status_flags(fd as usize).unwrap_or(desc.flags);
+    if status & O_WRITE == 0 {
+        return EINVAL;
+    }
+    let ts = fs_now_ns();
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let (m, dev) = match g.mount_dev_mut(desc.mount_id) {
+        Some(t) => t,
+        None => return EBADF,
+    };
+    match m.fs.truncate(dev, desc.path_str(), new_len, ts) {
+        Ok(()) => 0,
+        Err(e) => vfs_err_to_errno(e),
+    }
+}
+
+/// SYS_RMDIR: `path_ptr,path_len -> 0 | -errno`. Directories only; a non-directory
+/// target → `ENOTDIR` and a non-empty one → `ENOTEMPTY` (the backend reports the
+/// latter). `SYS_UNLINK(16)` stays files-only, so `remove_dir`/`remove_file` map
+/// cleanly. Type check + remove share one `STORAGE_LOCK` section (no TOCTOU).
+pub unsafe fn sys_fs_rmdir(path_ptr: u64, path_len: u64) -> u64 {
+    let path = match resolve_user_path(path_ptr, path_len) {
+        Some(p) => p,
+        None => return EINVAL,
+    };
+    let ts = fs_now_ns();
+    let guard = storage::lock();
+    let g = &mut *guard.g;
+    let (_, m, dev, rel) = match g.resolve_mut(&path) {
+        Some(t) => t,
+        None => return ENOENT,
+    };
+    match m.fs.stat(dev, rel) {
+        Ok(st) if st.mode & mode::S_IFMT == mode::S_IFDIR => {},
+        Ok(_) => return ENOTDIR,
+        Err(e) => return vfs_err_to_errno(e),
+    }
+    match m.fs.unlink(dev, rel, ts) {
+        Ok(()) => 0,
+        Err(e) => vfs_err_to_errno(e),
     }
 }

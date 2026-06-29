@@ -632,6 +632,10 @@ impl MemoryRegistry {
     }
 
     pub fn find_largest_free_below_4gb(&self) -> Option<(u64, u64)> {
+        // Read walk needs the kernel-CR3 window the mutators take: a user CR3 can
+        // remap the identity-mapped phys where FreeNodes live, so `(*cur).next`
+        // would walk the wrong tables (0xFFFF garbage). No-op pre-hook-install.
+        let _guard = unsafe { KernelCr3Guard::enter() };
         for order in (0..=MAX_ORDER).rev() {
             let block_bytes = (1u64 << order) * PAGE_SIZE;
             let mut cur = self.free_lists[order];
@@ -1050,6 +1054,9 @@ impl MemoryRegistry {
     /// `import_uefi_map` and first alloc to catch scrub-poison / IRQ-race
     /// corruption early. Returns count of corrupted pointers.
     pub fn validate_free_lists(&self) -> usize {
+        // Same kernel-CR3 window the mutators need: a user CR3 remaps the
+        // identity-mapped FreeNode phys → PF / 0xFFFF `next` (seen on real HW post-reclaim).
+        let _guard = unsafe { KernelCr3Guard::enter() };
         let mut corrupt = 0usize;
         for order in 0..=MAX_ORDER {
             let mut cur = self.free_lists[order];

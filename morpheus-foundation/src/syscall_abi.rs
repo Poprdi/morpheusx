@@ -22,6 +22,9 @@ pub const SYS_ALLOC: u64 = 4;
 pub const SYS_FREE: u64 = 5;
 pub const SYS_GETPID: u64 = 6;
 pub const SYS_KILL: u64 = 7;
+/// `wait(idtype, id, *mut WaitStatus, options(WNOHANG)) -> reaped pid | 0 | -errno`.
+/// Status lands in `WaitStatus`, pid on the value channel — kills the old
+/// exit-code/signal/errno collision where one return tried to carry all three.
 pub const SYS_WAIT: u64 = 8;
 pub const SYS_SLEEP: u64 = 9;
 
@@ -43,6 +46,8 @@ pub const SYS_VERSIONS: u64 = 21;
 pub const SYS_CLOCK: u64 = 22;
 pub const SYS_SYSINFO: u64 = 23;
 pub const SYS_GETPPID: u64 = 24;
+/// `posix_spawn(*const SpawnArgs) -> pid | -errno`. Versioned `SpawnArgs` carries
+/// path/argv/envp/cwd/file_actions[] so creation needs no follow-up syscalls.
 pub const SYS_SPAWN: u64 = 25;
 pub const SYS_MMAP: u64 = 26;
 pub const SYS_MUNMAP: u64 = 27;
@@ -120,6 +125,9 @@ pub const SYS_GETARGS: u64 = 78;
 pub const SYS_FUTEX: u64 = 79;
 
 // Threads (80-82)
+/// `thread_create(entry, stack_top, arg, tls_base, ctid_ptr, flags(THREAD_DETACHED))
+/// -> tid | -errno`. Shares the parent address space; TLS set at creation and
+/// `ctid_ptr` registered as a CLONE_CHILD_CLEARTID-style clear-tid futex.
 pub const SYS_THREAD_CREATE: u64 = 80;
 pub const SYS_THREAD_EXIT: u64 = 81;
 pub const SYS_THREAD_JOIN: u64 = 82;
@@ -171,6 +179,62 @@ pub const SYS_VOLUMES: u64 = 102;
 /// probe convention as `SYS_VOLUMES`.
 pub const SYS_MOUNTS: u64 = 103;
 
+// std PAL freeze additions (104-128). Append-only. SYS_SPAWN(25)/SYS_WAIT(8)/
+// SYS_THREAD_CREATE(80) were reshaped IN PLACE (no parallel _2 numbers), so std
+// targets the same numbers forever; the entries below are the genuinely new ones.
+
+/// `clock_gettime(clock_id, *mut Timespec) -> 0 | -errno`.
+pub const SYS_CLOCK_GETTIME: u64 = 104;
+/// `nanosleep(*const Timespec req, *mut Timespec rem) -> 0 | -errno`.
+pub const SYS_NANOSLEEP: u64 = 105;
+/// `fstat(fd, *mut FileStat) -> 0 | -errno`. Path-less stat by open fd.
+pub const SYS_FSTAT: u64 = 106;
+/// `thread_detach(tid) -> 0 | -errno`. Marks a sibling auto-reaping.
+pub const SYS_THREAD_DETACH: u64 = 107;
+/// `gettid() -> tid`. Per-thread id from the one pid/tid allocator.
+pub const SYS_GETTID: u64 = 108;
+/// `socket(domain, type, protocol) -> fd | -errno`. Socket is a unified `O_SOCKET` fd.
+pub const SYS_SOCKET: u64 = 109;
+/// `bind(fd, *const SockAddrStorage, addrlen) -> 0 | -errno`.
+pub const SYS_BIND: u64 = 110;
+/// `listen(fd, backlog) -> 0 | -errno`.
+pub const SYS_LISTEN: u64 = 111;
+/// `accept(fd, *mut SockAddrStorage, *mut u32 addrlen, flags) -> newfd | -errno`.
+pub const SYS_ACCEPT: u64 = 112;
+/// `connect(fd, *const SockAddrStorage, addrlen) -> 0 | -errno`.
+pub const SYS_CONNECT: u64 = 113;
+/// `sendto(fd, buf, len, flags, *const SockAddrStorage, addrlen) -> n | -errno`.
+pub const SYS_SENDTO: u64 = 114;
+/// `recvfrom(fd, buf, len, flags, *mut SockAddrStorage, *mut u32 addrlen) -> n | -errno`.
+pub const SYS_RECVFROM: u64 = 115;
+/// `getsockname(fd, *mut SockAddrStorage, *mut u32 addrlen) -> 0 | -errno`.
+pub const SYS_GETSOCKNAME: u64 = 116;
+/// `getpeername(fd, *mut SockAddrStorage, *mut u32 addrlen) -> 0 | -errno`.
+pub const SYS_GETPEERNAME: u64 = 117;
+/// `setsockopt(fd, level, optname, *const optval, optlen) -> 0 | -errno`.
+pub const SYS_SETSOCKOPT: u64 = 118;
+/// `getsockopt(fd, level, optname, *mut optval, *mut u32 optlen) -> 0 | -errno`.
+pub const SYS_GETSOCKOPT: u64 = 119;
+/// `shutdown(fd, how) -> 0 | -errno`.
+pub const SYS_SHUTDOWN: u64 = 120;
+/// `epoll_create(flags) -> epfd | -errno`. The readiness instance is itself a fd.
+pub const SYS_EPOLL_CREATE: u64 = 121;
+/// `epoll_ctl(epfd, op, fd, *const EpollEvent) -> 0 | -errno`.
+pub const SYS_EPOLL_CTL: u64 = 122;
+/// `epoll_wait(epfd, *mut EpollEvent, maxevents, timeout_ms) -> nready | -errno`.
+pub const SYS_EPOLL_WAIT: u64 = 123;
+/// `getenv(buf_ptr, buf_len) -> total_block_bytes | -errno`. NUL-separated
+/// `KEY=VALUE\0` records (same shape as `SYS_GETARGS`); `buf_len==0` probes.
+pub const SYS_GETENV: u64 = 124;
+/// `fsync(fd, flags) -> 0 | -errno`. `FSYNC_DATAONLY` skips metadata (fdatasync).
+pub const SYS_FSYNC: u64 = 125;
+/// `ftruncate(fd, new_len) -> 0 | -errno`. fd-based set-len (`SYS_TRUNCATE(18)` is path-based).
+pub const SYS_FTRUNCATE: u64 = 126;
+/// `fcntl(fd, cmd, arg) -> ret | -errno`. Runtime FD_CLOEXEC/O_NONBLOCK + CLOEXEC-dup.
+pub const SYS_FCNTL: u64 = 127;
+/// `rmdir(path_ptr, path_len) -> 0 | -errno`. Dirs only (`SYS_UNLINK(16)` is files-only).
+pub const SYS_RMDIR: u64 = 128;
+
 // Seek whence constants.
 pub const SEEK_SET: u64 = 0;
 pub const SEEK_CUR: u64 = 1;
@@ -181,7 +245,7 @@ pub const SEEK_END: u64 = 2;
 // insertion, gap, duplicate, or table/count mismatch a compile error.
 
 /// Number of defined syscalls. Bump by exactly one when appending.
-pub const SYSCALL_COUNT: usize = 104;
+pub const SYSCALL_COUNT: usize = 129;
 
 /// Every `SYS_*` number in ABI order. Length is pinned to `SYSCALL_COUNT`, so a
 /// missing/extra entry is itself a compile error.
@@ -290,6 +354,31 @@ pub const SYSCALL_TABLE: [u64; SYSCALL_COUNT] = [
     SYS_GETRANDOM,
     SYS_VOLUMES,
     SYS_MOUNTS,
+    SYS_CLOCK_GETTIME,
+    SYS_NANOSLEEP,
+    SYS_FSTAT,
+    SYS_THREAD_DETACH,
+    SYS_GETTID,
+    SYS_SOCKET,
+    SYS_BIND,
+    SYS_LISTEN,
+    SYS_ACCEPT,
+    SYS_CONNECT,
+    SYS_SENDTO,
+    SYS_RECVFROM,
+    SYS_GETSOCKNAME,
+    SYS_GETPEERNAME,
+    SYS_SETSOCKOPT,
+    SYS_GETSOCKOPT,
+    SYS_SHUTDOWN,
+    SYS_EPOLL_CREATE,
+    SYS_EPOLL_CTL,
+    SYS_EPOLL_WAIT,
+    SYS_GETENV,
+    SYS_FSYNC,
+    SYS_FTRUNCATE,
+    SYS_FCNTL,
+    SYS_RMDIR,
 ];
 
 const _: () = {

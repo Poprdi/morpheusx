@@ -1,5 +1,6 @@
 // Core syscalls: write/read/yield/exit/getpid/kill/wait/sleep/system_control.
-// All syscalls: u64 args, u64 return. High bits = errno (u64::MAX - n).
+// All syscalls: u64 args, u64 return. Errors are Linux-numeric `-errno` in the
+// top window [-4095,-1]; see morpheus_foundation::errno.
 
 use super::common::*;
 use super::fb::is_composited_client;
@@ -178,8 +179,10 @@ pub unsafe fn sys_yield() -> u64 {
     0
 }
 
+/// Linux `getpid`: the thread-group/address-space owner (group leader for a
+/// thread), not the per-thread slot id that `gettid` returns.
 pub unsafe fn sys_getpid() -> u64 {
-    SCHEDULER.current_pid() as u64
+    SCHEDULER.current_memory_leader_pid() as u64
 }
 
 pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
@@ -193,8 +196,24 @@ pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
     }
 }
 
-pub unsafe fn sys_wait(pid: u64) -> u64 {
-    crate::schedular::wait_for_child(pid as u32)
+/// SYS_WAIT(idtype, id, *mut WaitStatus, options). The value channel carries ONLY
+/// the reaped pid (0 for WNOHANG-with-no-ready-child); the encoded status word
+/// goes into `*wstatus`, killing the old exit/signal/errno blended-return
+/// collision. `P_PID` with a tid reaps a sibling thread via the same path.
+pub unsafe fn sys_wait(idtype: u64, id: u64, wstatus_ptr: u64, options: u64) -> u64 {
+    use morpheus_foundation::types::WaitStatus;
+    if wstatus_ptr != 0
+        && (wstatus_ptr & 7 != 0
+            || !validate_user_buf(wstatus_ptr, core::mem::size_of::<WaitStatus>() as u64))
+    {
+        return EFAULT;
+    }
+
+    let (ret, wstatus) = crate::schedular::do_wait(idtype, id as u32, options);
+    if !morpheus_foundation::errno::is_error(ret) && ret != 0 {
+        crate::schedular::write_wait_status(wstatus_ptr, ret as u32, wstatus);
+    }
+    ret
 }
 
 pub unsafe fn sys_sleep(millis: u64) -> u64 {

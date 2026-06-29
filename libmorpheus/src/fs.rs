@@ -512,11 +512,11 @@ impl Metadata {
     }
 
     pub fn is_dir(&self) -> bool {
-        self.0.is_dir
+        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT) == morpheus_foundation::flags::mode::S_IFDIR
     }
 
     pub fn is_file(&self) -> bool {
-        !self.0.is_dir
+        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT) == morpheus_foundation::flags::mode::S_IFREG
     }
 
     pub fn key(&self) -> u64 {
@@ -535,8 +535,8 @@ impl Metadata {
         self.0.version_count
     }
 
-    pub fn flags(&self) -> u32 {
-        self.0.flags
+    pub fn mode(&self) -> u32 {
+        self.0.mode
     }
 
     pub fn created_ns(&self) -> u64 {
@@ -568,11 +568,11 @@ impl DirEntry {
     }
 
     pub fn is_dir(&self) -> bool {
-        self.0.is_dir
+        self.0.d_type == morpheus_foundation::flags::dirent_type::DT_DIR
     }
 
     pub fn is_file(&self) -> bool {
-        !self.0.is_dir
+        self.0.d_type == morpheus_foundation::flags::dirent_type::DT_REG
     }
 
     pub fn size(&self) -> u64 {
@@ -592,7 +592,7 @@ impl core::fmt::Debug for DirEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DirEntry")
             .field("name", &self.name())
-            .field("is_dir", &self.0.is_dir)
+            .field("is_dir", &self.is_dir())
             .field("size", &self.0.size)
             .finish()
     }

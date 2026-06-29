@@ -143,6 +143,8 @@ impl PageFlags {
     pub const USER_RWX: Self = Self(7);
     /// User-accessible strongly-uncached MMIO (for `mmap_io` exposing BARs to ring 3).
     pub const USER_MMIO_UC: Self = Self(8);
+    /// Guard page: present but supervisor-only so any ring-3 access faults; backs `PROT_NONE`.
+    pub const USER_NONE: Self = Self(9);
     /// Kernel-side strongly-uncached MMIO.
     pub const MMIO_UC: Self = Self(6);
 }

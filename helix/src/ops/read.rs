@@ -226,16 +226,22 @@ pub fn stat_file(index: &NamespaceIndex, path: &str) -> Result<FileStat, HelixEr
         return Err(HelixError::NotFound);
     }
 
+    let mode = if entry.flags & entry_flags::IS_DIR != 0 {
+        morpheus_foundation::flags::mode::S_IFDIR
+    } else {
+        morpheus_foundation::flags::mode::S_IFREG
+    };
     Ok(FileStat {
         key: entry.key,
         size: entry.size,
-        is_dir: entry.flags & entry_flags::IS_DIR != 0,
+        mode,
         created_ns: entry.created_ns,
         modified_ns: entry.modified_ns,
+        accessed_ns: entry.modified_ns,
         version_count: entry.version_count,
         lsn: entry.lsn,
         first_lsn: entry.first_lsn,
-        flags: entry.flags,
+        ..FileStat::default()
     })
 }
 

@@ -189,14 +189,7 @@ pub fn rdtsc_raw() -> u64 {
 }
 
 pub fn fb_info() -> Result<FbInfo, u64> {
-    let mut info = FbInfo {
-        base: 0,
-        size: 0,
-        width: 0,
-        height: 0,
-        stride: 0,
-        format: 0,
-    };
+    let mut info = FbInfo::default();
     let ret = unsafe { syscall1(SYS_FB_INFO, &mut info as *mut FbInfo as u64) };
     if crate::is_error(ret) {
         Err(ret)

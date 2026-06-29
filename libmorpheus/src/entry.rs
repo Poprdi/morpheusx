@@ -38,7 +38,7 @@ pub unsafe fn install_thread_tls() {
         return; // binary has no thread-locals
     }
     let pages = (block + TCB_SIZE).div_ceil(4096) as u64;
-    let base = crate::raw::syscall1(crate::raw::SYS_MMAP, pages);
+    let base = crate::mem::mmap_raw(pages);
     if crate::is_error(base) {
         return; // OOM; a subsequent #[thread_local] access would fault
     }

@@ -10,37 +10,110 @@ pub use signals::{Signal, SignalAction, SignalSet};
 pub use vma::{Vma, VmaTable};
 
 use crate::hal;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use morpheus_hal_api::{AllocKind, MemoryType};
 
-/// Includes PID 0 (kernel).
-pub const MAX_PROCESSES: usize = 64;
+/// Total task slots: processes + threads share one id-indexed table (slot = pid/tid).
+/// Raised from 64 so threads draw from a budget separate from the independent-process
+/// cap (`MAX_USER_PROCESSES`) and can't starve `fork`/`spawn` of a slot.
+pub const MAX_PROCESSES: usize = 256;
 
-/// FIONBIO state, one bit per PID (fits `MAX_PROCESSES` in a u64). Kept out of
-/// `Process` so the struct's ABI layout stays byte-identical — `Process` feeds
-/// fixed-offset asm (context_switch.s / syscall.s) and array-strided FXSAVE
-/// areas, so growing it is a real-hardware footgun. fd 0 has no descriptor to
-/// hang a flag on, hence a side table. Bit set ⇒ `SYS_READ(0)` returns EAGAIN
-/// instead of blocking on an empty stdin.
-static STDIN_NONBLOCK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Cap on live independent processes (thread-group leaders); threads aren't counted.
+pub const MAX_USER_PROCESSES: usize = 64;
+
+/// 64-bit words needed to hold one bit per task slot.
+pub const PIDSET_WORDS: usize = MAX_PROCESSES.div_ceil(64);
+
+/// Lock-free set of task slots, one bit per pid; scales waiter tracking past 64 slots.
+pub struct PidBitset {
+    words: [AtomicU64; PIDSET_WORDS],
+}
+
+impl PidBitset {
+    pub const fn new() -> Self {
+        Self {
+            words: [const { AtomicU64::new(0) }; PIDSET_WORDS],
+        }
+    }
+
+    #[inline(always)]
+    fn locate(pid: u32) -> (usize, u64) {
+        let p = pid as usize;
+        (p / 64, 1u64 << (p % 64))
+    }
+
+    #[inline]
+    pub fn set(&self, pid: u32) {
+        if (pid as usize) >= MAX_PROCESSES {
+            return;
+        }
+        let (w, b) = Self::locate(pid);
+        self.words[w].fetch_or(b, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn clear(&self, pid: u32) {
+        if (pid as usize) >= MAX_PROCESSES {
+            return;
+        }
+        let (w, b) = Self::locate(pid);
+        self.words[w].fetch_and(!b, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn contains(&self, pid: u32) -> bool {
+        if (pid as usize) >= MAX_PROCESSES {
+            return false;
+        }
+        let (w, b) = Self::locate(pid);
+        self.words[w].load(Ordering::Relaxed) & b != 0
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.words.iter().all(|w| w.load(Ordering::Relaxed) == 0)
+    }
+
+    /// Invoke `f` for every set pid. Per-word snapshot; sets racing the load show up next call.
+    #[inline]
+    pub fn for_each(&self, mut f: impl FnMut(u32)) {
+        for (wi, word) in self.words.iter().enumerate() {
+            let mut m = word.load(Ordering::Relaxed);
+            while m != 0 {
+                let b = m.trailing_zeros();
+                m &= m - 1;
+                f((wi as u32) * 64 + b);
+            }
+        }
+    }
+}
+
+impl Default for PidBitset {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// FIONBIO state, one bit per PID. Kept out of `Process` so the struct's ABI
+/// layout stays byte-identical — `Process` feeds fixed-offset asm
+/// (context_switch.s / syscall.s) and array-strided FXSAVE areas, so growing the
+/// HOT prefix is a real-hardware footgun. fd 0 has no descriptor to hang a flag
+/// on, hence a side table. Bit set ⇒ `SYS_READ(0)` returns EAGAIN instead of
+/// blocking on an empty stdin.
+static STDIN_NONBLOCK: PidBitset = PidBitset::new();
 
 /// True if `pid` requested non-blocking stdin. Out-of-range PIDs read false.
 pub fn stdin_nonblock(pid: u32) -> bool {
-    if pid as usize >= MAX_PROCESSES {
-        return false;
-    }
-    STDIN_NONBLOCK.load(core::sync::atomic::Ordering::Relaxed) & (1 << pid) != 0
+    STDIN_NONBLOCK.contains(pid)
 }
 
 /// Set/clear `pid`'s non-blocking stdin bit. No-op for out-of-range PIDs.
 pub fn set_stdin_nonblock(pid: u32, enable: bool) {
-    if pid as usize >= MAX_PROCESSES {
-        return;
-    }
-    let bit = 1u64 << pid;
     if enable {
-        STDIN_NONBLOCK.fetch_or(bit, core::sync::atomic::Ordering::Relaxed);
+        STDIN_NONBLOCK.set(pid);
     } else {
-        STDIN_NONBLOCK.fetch_and(!bit, core::sync::atomic::Ordering::Relaxed);
+        STDIN_NONBLOCK.clear(pid);
     }
 }
 
@@ -85,6 +158,9 @@ pub enum BlockReason {
     InputRead,
     /// Futex word at this user VA.
     FutexWait(u64),
+    /// Parked on an I/O readiness token (socket/pipe/epoll); `futex_deadline` is
+    /// reused to arm an optional timeout.
+    IoReady(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,6 +278,20 @@ pub struct Process {
 
     /// x86 FS base; restored on every switch-to-user. Layout-safe: no fixed-offset asm reads it.
     pub tls_base: u64,
+
+    /// CLONE_CHILD_CLEARTID address: on this thread's exit the kernel writes 0
+    /// here and FUTEX_WAKEs it, so a join from ANY sibling is race-free. 0 = none.
+    pub ctid_ptr: u64,
+    /// Thread auto-reaps on exit (no zombie); set via THREAD_DETACHED or SYS_THREAD_DETACH.
+    pub detached: bool,
+    /// Signal that terminated this task (0 = normal exit); drives WIFSIGNALED.
+    pub term_signal: u8,
+    /// Set by the tick when a `FUTEX_WAIT` deadline expires, so the resuming
+    /// `sys_futex` returns `-ETIMEDOUT` rather than 0. Read-and-cleared there.
+    pub futex_timed_out: bool,
+    /// Initial environment block: NUL-separated `KEY=VALUE` records backing
+    /// SYS_GETENV / std::env. Heap-backed so it is not part of the hot asm prefix.
+    pub env_block: Vec<u8>,
 }
 
 impl Process {
@@ -262,7 +352,17 @@ impl Process {
             input_tail: 0,
             running_on: u32::MAX,
             tls_base: 0,
+            ctid_ptr: 0,
+            detached: false,
+            term_signal: 0,
+            futex_timed_out: false,
+            env_block: Vec::new(),
         }
+    }
+
+    /// True iff this slot is a thread (shares a leader's CR3), not an independent process.
+    pub fn is_thread(&self) -> bool {
+        self.thread_group_leader != 0
     }
 
     pub fn set_name(&mut self, s: &str) {

@@ -40,7 +40,7 @@ pub unsafe fn sys_ps(buf_ptr: u64, max_count: u64) -> u64 {
             cpu_ticks: pi.cpu_ticks,
             cpu_tsc: pi.cpu_tsc,
             pages_alloc: pi.pages_alloc,
-            name: [0u8; 32],
+            ..PsEntry::zeroed()
         };
         let name_bytes = pi.name_bytes();
         let copy_len = name_bytes.len().min(31);

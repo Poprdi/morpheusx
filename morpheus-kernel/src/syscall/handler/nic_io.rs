@@ -14,16 +14,19 @@ pub unsafe fn sys_nic_info(buf_ptr: u64) -> u64 {
         return EFAULT;
     }
     let mut info = NicInfo {
-        mac: [0u8; 8],
+        version: 0,
+        struct_size: core::mem::size_of::<NicInfo>() as u16,
         link_up: 0,
         present: 0,
+        mac: [0u8; 8],
+        reserved: [0u8; 8],
     };
 
     if let Some(mac_fn) = NIC_OPS.mac {
         info.present = 1;
         mac_fn(info.mac.as_mut_ptr());
         if let Some(link_fn) = NIC_OPS.link_up {
-            info.link_up = link_fn() as u32;
+            info.link_up = link_fn() as u16;
         }
     }
 

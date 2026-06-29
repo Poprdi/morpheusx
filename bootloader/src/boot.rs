@@ -815,6 +815,12 @@ unsafe fn stage_c1b_kernel_late_init(platform: &PlatformInit) {
         },
     );
 
+    // Anchor wall time once off the CMOS RTC; CLOCK_REALTIME then extrapolates
+    // off the TSC. Absent/garbage RTC leaves it unanchored (1970+uptime).
+    if let Some(secs) = morpheus_hal_x86_64::rtc::read_unix_secs() {
+        morpheus_kernel::clock::anchor_realtime_unix_secs(secs);
+    }
+
     // Wire KernelCr3Guard's kernel-CR3 lookup. The kernel can't call the arch
     // HAL directly (portability gate), so the bootloader installs the hook now
     // that init_scheduler has set the kernel CR3. Without this the guard is a
@@ -960,12 +966,16 @@ unsafe fn stage_d4_register_framebuffer(ctx: &BootContext) {
     let stride_bytes = ctx.framebuffer.stride * 4;
     morpheus_kernel::syscall::handler::register_framebuffer(
         morpheus_kernel::syscall::handler::FbInfo {
+            version: 0,
+            struct_size: core::mem::size_of::<morpheus_kernel::syscall::handler::FbInfo>() as u16,
             base: ctx.framebuffer.base,
             size: ctx.framebuffer.size as u64,
             width: ctx.framebuffer.width,
             height: ctx.framebuffer.height,
             stride: stride_bytes,
             format: ctx.framebuffer.format,
+            _pad0: 0,
+            reserved: [0; 2],
         },
     );
 }
@@ -1005,7 +1015,9 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
     };
 
     let init_pid =
-        match morpheus_kernel::schedular::spawn_user_process("init", &elf_data, &[], 0, false) {
+        match morpheus_kernel::schedular::spawn_user_process(
+            "init", &elf_data, &[], 0, &[], None, false, false,
+        ) {
             Ok(pid) => pid,
             Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
         };

@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::{BlockSize, Lba};
 use morpheus_block_types::{RawBlockDevice, RawIoError};
-use morpheus_foundation::flags::open_flags;
+use morpheus_foundation::flags::{dirent_type, mode, open_flags};
 use morpheus_foundation::storage::FD_COOKIE_LEN;
 use morpheus_foundation::types::{DirEntry, FileStat};
 
@@ -221,7 +221,11 @@ impl FsBackend for HelixFs {
             return Err(VfsError::ReadOnly);
         }
         let key = self.engine.open(dev, path, flags, ts).map_err(helix_err)?;
-        let is_dir = self.engine.stat(path).map(|st| st.is_dir).unwrap_or(false);
+        let is_dir = self
+            .engine
+            .stat(path)
+            .map(|st| st.mode & mode::S_IFMT == mode::S_IFDIR)
+            .unwrap_or(false);
         Ok(OpenFile {
             cookie: helix_cookie_set(key),
             is_dir,
@@ -529,16 +533,13 @@ impl FsBackend for Fat32Fs {
 }
 
 fn fat_stat_to_abi(st: &morpheus_fat32::types::FileStat) -> FileStat {
+    let is_dir = matches!(st.file_type, morpheus_fat32::types::FileType::Directory);
     FileStat {
         key: st.start_cluster as u64,
         size: st.size,
-        is_dir: matches!(st.file_type, morpheus_fat32::types::FileType::Directory),
-        created_ns: 0,
-        modified_ns: 0,
+        mode: if is_dir { mode::S_IFDIR } else { mode::S_IFREG },
         version_count: 1,
-        lsn: 0,
-        first_lsn: 0,
-        flags: 0,
+        ..FileStat::default()
     }
 }
 
@@ -547,12 +548,13 @@ fn fat_dirent_to_abi(e: &morpheus_fat32::types::DirEntry) -> DirEntry {
     let bytes = e.name.as_bytes();
     let n = bytes.len().min(256);
     name[..n].copy_from_slice(&bytes[..n]);
+    let is_dir = matches!(e.file_type, morpheus_fat32::types::FileType::Directory);
     DirEntry {
         name,
         name_len: n as u16,
-        is_dir: matches!(e.file_type, morpheus_fat32::types::FileType::Directory),
+        d_type: if is_dir { dirent_type::DT_DIR } else { dirent_type::DT_REG },
         size: e.size,
-        modified_ns: 0,
         version_count: 1,
+        ..DirEntry::zeroed()
     }
 }

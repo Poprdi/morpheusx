@@ -70,6 +70,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     if core_idx == 0 && tick % STALE_WAITER_CLEANUP_INTERVAL == 0 {
         cleanup_stale_waiters();
+        super::wait::reap_detached_zombies();
     }
 
     let cur_pid = this_core_pid() as usize;
@@ -318,6 +319,19 @@ pub(super) unsafe fn wake_expired_sleepers() {
                     }
                     proc.state = ProcessState::Ready;
                     proc.futex_deadline = 0;
+                    proc.futex_timed_out = true;
+                    super::state::TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
+                } else if proc.futex_deadline != 0 {
+                    new_earliest = new_earliest.min(proc.futex_deadline);
+                    found_any = true;
+                }
+            },
+            // epoll_wait/blocking-socket timeout: same deadline machinery as futex.
+            ProcessState::Blocked(BlockReason::IoReady(_)) => {
+                if proc.futex_deadline != 0 && now >= proc.futex_deadline {
+                    proc.state = ProcessState::Ready;
+                    proc.futex_deadline = 0;
+                    proc.futex_timed_out = true;
                     super::state::TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
                 } else if proc.futex_deadline != 0 {
                     new_earliest = new_earliest.min(proc.futex_deadline);
@@ -696,7 +710,7 @@ pub(super) unsafe fn deliver_pending_signals(pid: u32) {
                 puts("[SCHED] signal -> PID ");
                 put_hex32(pid);
                 puts(" terminated\n");
-                terminate_process_inner(proc, -(sig as u8 as i32));
+                terminate_process_inner(proc, 0, sig as u8);
                 return;
             },
             SignalAction::Stop => {

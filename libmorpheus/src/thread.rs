@@ -51,9 +51,12 @@ pub struct JoinHandle<T> {
 }
 
 impl<T> JoinHandle<T> {
-    /// Block until the thread exits; returns exit code.
+    /// Block until the thread exits; returns exit code. Consumes the handle so the
+    /// detach-on-drop below does not also fire (join already reaps the tid).
     pub fn join(self) -> Result<u64, u64> {
-        let ret = unsafe { syscall1(SYS_THREAD_JOIN, self.tid as u64) };
+        let tid = self.tid;
+        core::mem::forget(self);
+        let ret = unsafe { syscall1(SYS_THREAD_JOIN, tid as u64) };
         if crate::is_error(ret) {
             Err(ret)
         } else {
@@ -64,6 +67,17 @@ impl<T> JoinHandle<T> {
     /// Same as PID in the kernel process table.
     pub fn tid(&self) -> u32 {
         self.tid
+    }
+}
+
+/// A handle dropped without `join` detaches the thread so the kernel auto-reaps it
+/// on exit — a dropped handle never leaks a table slot. Idempotent vs a finished
+/// thread (returns ESRCH, ignored).
+impl<T> Drop for JoinHandle<T> {
+    fn drop(&mut self) {
+        unsafe {
+            syscall1(SYS_THREAD_DETACH, self.tid as u64);
+        }
     }
 }
 
@@ -84,7 +98,7 @@ pub fn spawn<F>(f: F) -> Result<JoinHandle<()>, u64>
 where
     F: FnOnce() + Send + 'static,
 {
-    let stack_base = unsafe { syscall1(SYS_MMAP, DEFAULT_STACK_PAGES) };
+    let stack_base = crate::mem::mmap_raw(DEFAULT_STACK_PAGES);
     if crate::is_error(stack_base) {
         return Err(stack_base);
     }
@@ -97,7 +111,10 @@ where
     let arg = Box::into_raw(closure) as u64;
 
     let entry = thread_trampoline as *const () as u64;
-    let ret = unsafe { syscall3(SYS_THREAD_CREATE, entry, stack_top, arg) };
+    // tls_base=0: the trampoline installs its own variant-II TLS. ctid_ptr=0:
+    // this handle joins via SYS_THREAD_JOIN (the ctid futex slot is for std).
+    // flags=0: not detached at creation (drop-detach handles leak-free drop).
+    let ret = unsafe { syscall6(SYS_THREAD_CREATE, entry, stack_top, arg, 0, 0, 0) };
 
     if crate::is_error(ret) {
         unsafe {
@@ -153,7 +170,7 @@ where
 {
     let stack_size = stack_pages * 4096;
 
-    let stack_base = unsafe { syscall1(SYS_MMAP, stack_pages) };
+    let stack_base = crate::mem::mmap_raw(stack_pages);
     if crate::is_error(stack_base) {
         return Err(stack_base);
     }
@@ -164,7 +181,7 @@ where
     let arg = Box::into_raw(closure) as u64;
 
     let entry = thread_trampoline as *const () as u64;
-    let ret = unsafe { syscall3(SYS_THREAD_CREATE, entry, stack_top, arg) };
+    let ret = unsafe { syscall6(SYS_THREAD_CREATE, entry, stack_top, arg, 0, 0, 0) };
 
     if crate::is_error(ret) {
         unsafe {
