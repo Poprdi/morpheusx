@@ -315,3 +315,25 @@ pub fn parent_path(path: &str) -> &str {
         None => "/",
     }
 }
+
+/// Reject paths that would create incoherent, lookup-invisible entries: must be
+/// absolute, no `//`, no `.`/`..` components, within the length bound. A single
+/// trailing `/` is allowed (directory form); callers needing a file path reject
+/// it themselves.
+pub fn validate_path(path: &str) -> Result<(), HelixError> {
+    if path.is_empty() || !path.starts_with('/') {
+        return Err(HelixError::PathInvalid);
+    }
+    if path.len() > MAX_PATH_LEN {
+        return Err(HelixError::PathTooLong);
+    }
+    if path.contains("//") {
+        return Err(HelixError::PathInvalid);
+    }
+    for comp in path.split('/') {
+        if comp == "." || comp == ".." {
+            return Err(HelixError::PathInvalid);
+        }
+    }
+    Ok(())
+}

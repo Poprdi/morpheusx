@@ -16,9 +16,11 @@
 extern crate alloc;
 
 pub mod bitmap;
+pub mod checkpoint;
 pub mod crc;
 pub mod engine;
 pub mod error;
+pub mod extent;
 pub mod format;
 pub mod index;
 pub mod log;

@@ -23,6 +23,9 @@ pub struct HelixFs {
     pub bitmap: BlockBitmap,
     pub partition_lba_start: u64,
     pub device_block_size: u32,
+    /// LSNs of live snapshots, ascending; an overwritten version is retained
+    /// while a snapshot in `[old_lsn, new_lsn)` still references it.
+    pub snapshot_lsns: Vec<Lsn>,
 }
 
 impl HelixFs {
@@ -43,6 +46,7 @@ impl HelixFs {
             bitmap,
             partition_lba_start,
             device_block_size,
+            snapshot_lsns: Vec::new(),
         }
     }
 
@@ -72,32 +76,84 @@ impl HelixFs {
         let mut fs = Self::from_superblock(sb, lba_start, block_size);
         // Reload head so flush() doesn't clobber existing records.
         fs.log.reload_head_segment(block_io)?;
-        replay_log(block_io, &fs.log, &mut fs.index)?;
-        fs.rebuild_bitmap_from_index();
+        // A checkpoint captures the namespace as of checkpoint_lsn; load it, then
+        // replay only the records logged after it.
+        if fs.sb.index_root_block != BLOCK_NULL {
+            crate::checkpoint::load_index_region(
+                block_io,
+                fs.partition_lba_start,
+                fs.sb.data_start_block,
+                fs.device_block_size,
+                fs.sb.index_root_block,
+                fs.sb.index_depth as u64,
+                fs.sb.index_entry_count as u64,
+                &mut fs.index,
+            )?;
+        }
+        let mut snapshots = Vec::new();
+        replay_log(
+            block_io,
+            &fs.log,
+            &mut fs.index,
+            &mut snapshots,
+            fs.sb.checkpoint_lsn,
+        )?;
+        fs.snapshot_lsns = snapshots;
+        fs.rebuild_bitmap_from_index(block_io);
         Ok(fs)
     }
 
     /// After replay the bitmap is zero; mark every extent-backed live file's
-    /// blocks used or new allocations will overlap existing data.
-    fn rebuild_bitmap_from_index(&mut self) {
-        for entry in self.index.all_entries() {
-            if entry.flags & entry_flags::IS_DELETED != 0 {
-                continue;
+    /// blocks (and its extent-node block) used or new allocations would overlap
+    /// existing data.
+    fn rebuild_bitmap_from_index<B: BlockIo>(&mut self, block_io: &mut B) {
+        // Snapshot the targets first so the index borrow doesn't overlap the
+        // bitmap/device access below.
+        let targets: Vec<(BlockAddr, u64, bool)> = self
+            .index
+            .all_entries()
+            .iter()
+            .filter(|e| {
+                e.flags
+                    & (entry_flags::IS_DELETED | entry_flags::IS_DIR | entry_flags::IS_INLINE)
+                    == 0
+                    && e.extent_root != BLOCK_NULL
+            })
+            .map(|e| {
+                (
+                    e.extent_root,
+                    e.size,
+                    e.flags & entry_flags::IS_EXTENT_NODE != 0,
+                )
+            })
+            .collect();
+
+        for (extent_root, size, is_node) in targets {
+            if is_node {
+                self.bitmap.mark_block_used(extent_root);
+                if let Ok(extents) = crate::extent::read_extent_node(
+                    block_io,
+                    self.partition_lba_start,
+                    self.sb.data_start_block,
+                    self.device_block_size,
+                    extent_root,
+                ) {
+                    for (_, physical, count) in extents {
+                        self.bitmap.mark_range_used(physical, count as u64);
+                    }
+                }
+            } else {
+                let blocks_needed = size.div_ceil(BLOCK_SIZE as u64);
+                if blocks_needed > 0 {
+                    self.bitmap.mark_range_used(extent_root, blocks_needed);
+                }
             }
-            if entry.flags & entry_flags::IS_DIR != 0 {
-                continue;
-            }
-            if entry.flags & entry_flags::IS_INLINE != 0 {
-                continue;
-            }
-            if entry.extent_root == BLOCK_NULL {
-                continue;
-            }
-            let blocks_needed = entry.size.div_ceil(BLOCK_SIZE as u64);
-            if blocks_needed > 0 {
-                self.bitmap
-                    .mark_range_used(entry.extent_root, blocks_needed);
-            }
+        }
+
+        // The on-disk index checkpoint region is also live storage.
+        if self.sb.index_root_block != BLOCK_NULL {
+            self.bitmap
+                .mark_range_used(self.sb.index_root_block, self.sb.index_depth as u64);
         }
     }
 
@@ -132,19 +188,8 @@ impl HelixFs {
         path: &str,
         timestamp_ns: u64,
     ) -> Result<(), HelixError> {
-        ops::write::write_file(
-            block_io,
-            &mut self.log,
-            &mut self.index,
-            &mut self.bitmap,
-            self.partition_lba_start,
-            self.device_block_size,
-            self.sb.data_start_block,
-            path,
-            &[],
-            timestamp_ns,
-        )?;
-        Ok(())
+        // Route through write() so O_TRUNC over an existing file reclaims it.
+        self.write(block_io, path, &[], timestamp_ns)
     }
 
     /// Full file contents. The caller applies its own fd offset/slicing.
@@ -175,6 +220,55 @@ impl HelixFs {
         data: &[u8],
         timestamp_ns: u64,
     ) -> Result<(), HelixError> {
+        // Capture the prior version's blocks before write_file replaces the entry.
+        let old = self.index.lookup(path).and_then(|e| {
+            let extent_backed = e.flags
+                & (entry_flags::IS_INLINE | entry_flags::IS_DIR | entry_flags::IS_DELETED)
+                == 0
+                && e.extent_root != BLOCK_NULL;
+            extent_backed.then_some((
+                e.extent_root,
+                e.size,
+                e.lsn,
+                e.flags & entry_flags::IS_EXTENT_NODE != 0,
+            ))
+        });
+
+        let new_lsn = self.write_file_checkpointing(block_io, path, data, timestamp_ns)?;
+
+        // Reclaim the superseded version unless a snapshot still references it.
+        if let Some((extent_root, size, old_lsn, is_node)) = old {
+            if !self.snapshot_pins(old_lsn, new_lsn) {
+                crate::extent::free_file_blocks(
+                    block_io,
+                    &mut self.bitmap,
+                    self.partition_lba_start,
+                    self.sb.data_start_block,
+                    self.device_block_size,
+                    extent_root,
+                    size,
+                    is_node,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// A prior version is pinned if a snapshot was taken while it was current —
+    /// a snapshot LSN in `[old_lsn, new_lsn)`.
+    fn snapshot_pins(&self, old_lsn: Lsn, new_lsn: Lsn) -> bool {
+        self.snapshot_lsns
+            .iter()
+            .any(|&s| s >= old_lsn && s < new_lsn)
+    }
+
+    fn write_file_inner<B: BlockIo>(
+        &mut self,
+        block_io: &mut B,
+        path: &str,
+        data: &[u8],
+        timestamp_ns: u64,
+    ) -> Result<Lsn, HelixError> {
         ops::write::write_file(
             block_io,
             &mut self.log,
@@ -186,7 +280,104 @@ impl HelixFs {
             path,
             data,
             timestamp_ns,
+        )
+    }
+
+    /// `write_file`, but a full log triggers a checkpoint (which recycles the
+    /// ring) and one retry instead of bricking.
+    fn write_file_checkpointing<B: BlockIo>(
+        &mut self,
+        block_io: &mut B,
+        path: &str,
+        data: &[u8],
+        timestamp_ns: u64,
+    ) -> Result<Lsn, HelixError> {
+        match self.write_file_inner(block_io, path, data, timestamp_ns) {
+            Err(HelixError::LogFull) => {
+                self.checkpoint(block_io)?;
+                self.write_file_inner(block_io, path, data, timestamp_ns)
+            },
+            other => other,
+        }
+    }
+
+    /// Run a mutation; on a full log, checkpoint to recycle the ring and retry
+    /// once. Mutations roll back cleanly on `LogFull` (append is their first
+    /// fallible step), so the retry is safe.
+    fn with_checkpoint_retry<B, F, T>(&mut self, block_io: &mut B, mut op: F) -> Result<T, HelixError>
+    where
+        B: BlockIo,
+        F: FnMut(&mut Self, &mut B) -> Result<T, HelixError>,
+    {
+        match op(self, block_io) {
+            Err(HelixError::LogFull) => {
+                self.checkpoint(block_io)?;
+                op(self, block_io)
+            },
+            other => other,
+        }
+    }
+
+    /// Persist the live namespace to the on-disk index region and recycle the
+    /// log ring. Crash-safe: the new region is durable before the superblock
+    /// that points at it, and the old region is freed only afterward.
+    pub fn checkpoint<B: BlockIo>(&mut self, block_io: &mut B) -> Result<(), HelixError> {
+        let live: Vec<IndexEntry> = self
+            .index
+            .all_entries()
+            .iter()
+            .filter(|e| e.flags & entry_flags::IS_DELETED == 0)
+            .copied()
+            .collect();
+        let blocks_needed = crate::checkpoint::region_blocks(live.len());
+
+        let region_start = self.bitmap.alloc_contiguous(blocks_needed)?;
+        if let Err(e) = crate::checkpoint::write_index_region(
+            block_io,
+            self.partition_lba_start,
+            self.sb.data_start_block,
+            self.device_block_size,
+            region_start,
+            &live,
+        ) {
+            let _ = self.bitmap.free_range(region_start, blocks_needed);
+            return Err(e);
+        }
+
+        let old_root = self.sb.index_root_block;
+        let old_blocks = self.sb.index_depth as u64;
+
+        let checkpoint_lsn = self.log.next_lsn().saturating_sub(1);
+        self.log.reset_ring();
+
+        self.sb.index_root_block = region_start;
+        self.sb.index_depth = blocks_needed as u32;
+        self.sb.index_entry_count = live.len() as u32;
+        self.sb.checkpoint_lsn = checkpoint_lsn;
+        self.sb.committed_lsn = self.log.flush(block_io)?;
+        self.sb.log_head_segment = self.log.head_segment();
+        self.sb.log_head_offset = self.log.head_offset();
+        self.sb.log_tail_segment = self.log.tail_segment();
+
+        write_superblock(
+            block_io,
+            self.partition_lba_start,
+            self.device_block_size,
+            &mut self.sb,
+            0,
         )?;
+        write_superblock(
+            block_io,
+            self.partition_lba_start,
+            self.device_block_size,
+            &mut self.sb,
+            1,
+        )?;
+        block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
+
+        if old_root != BLOCK_NULL {
+            let _ = self.bitmap.free_range(old_root, old_blocks);
+        }
         Ok(())
     }
 
@@ -198,37 +389,62 @@ impl HelixFs {
         ops::dir::readdir(&self.index, path)
     }
 
-    pub fn mkdir(&mut self, path: &str, timestamp_ns: u64) -> Result<(), HelixError> {
-        ops::dir::mkdir(&mut self.log, &mut self.index, path, timestamp_ns)?;
-        Ok(())
+    pub fn mkdir<B: BlockIo>(
+        &mut self,
+        block_io: &mut B,
+        path: &str,
+        timestamp_ns: u64,
+    ) -> Result<(), HelixError> {
+        self.with_checkpoint_retry(block_io, |s, dev| {
+            ops::dir::mkdir(dev, &mut s.log, &mut s.index, path, timestamp_ns).map(|_| ())
+        })
     }
 
     /// File or empty directory.
-    pub fn unlink(&mut self, path: &str, timestamp_ns: u64) -> Result<(), HelixError> {
-        ops::dir::unlink(
-            &mut self.log,
-            &mut self.index,
-            &mut self.bitmap,
-            path,
-            timestamp_ns,
-        )?;
-        Ok(())
+    pub fn unlink<B: BlockIo>(
+        &mut self,
+        block_io: &mut B,
+        path: &str,
+        timestamp_ns: u64,
+    ) -> Result<(), HelixError> {
+        self.with_checkpoint_retry(block_io, |s, dev| {
+            ops::dir::unlink(
+                dev,
+                &mut s.log,
+                &mut s.index,
+                &mut s.bitmap,
+                s.partition_lba_start,
+                s.sb.data_start_block,
+                s.device_block_size,
+                path,
+                timestamp_ns,
+            )
+            .map(|_| ())
+        })
     }
 
-    pub fn rename(
+    pub fn rename<B: BlockIo>(
         &mut self,
+        block_io: &mut B,
         old_path: &str,
         new_path: &str,
         timestamp_ns: u64,
     ) -> Result<(), HelixError> {
-        ops::write::rename(
-            &mut self.log,
-            &mut self.index,
-            old_path,
-            new_path,
-            timestamp_ns,
-        )?;
-        Ok(())
+        self.with_checkpoint_retry(block_io, |s, dev| {
+            ops::write::rename(
+                dev,
+                &mut s.log,
+                &mut s.index,
+                &mut s.bitmap,
+                s.partition_lba_start,
+                s.sb.data_start_block,
+                s.device_block_size,
+                old_path,
+                new_path,
+                timestamp_ns,
+            )
+            .map(|_| ())
+        })
     }
 
     /// Resize `path` via log-structured RMW. Grows capped at `MAX_TRUNCATE_GROW`
@@ -310,9 +526,11 @@ impl HelixFs {
 
         let lsn = self
             .log
-            .append(LogOp::Snapshot, name_hash, &payload, timestamp_ns)?;
-        // Persist so the marker survives a crash and the on-disk LSN is real.
-        self.log.flush(block_io)?;
+            .append(block_io, LogOp::Snapshot, name_hash, &payload, timestamp_ns)?;
+        self.snapshot_lsns.push(lsn);
+        // Persist the log AND the superblock; flushing the log alone leaves the
+        // replay boundary behind the marker, so a crash would drop it.
+        self.sync(block_io)?;
         Ok(lsn)
     }
 

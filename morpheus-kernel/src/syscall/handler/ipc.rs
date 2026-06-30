@@ -157,6 +157,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
         None => return ENOMEM,
     };
     let mut read_state = crate::storage::fs_api::FdState::empty();
+    read_state.kind = crate::storage::fs_api::FdKind::Pipe;
     read_state.flags = O_PIPE_READ;
     read_state.mount_id = pipe_idx as u64;
     if !fd_table.set(read_fd, read_state) {
@@ -171,6 +172,7 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
         },
     };
     let mut write_state = crate::storage::fs_api::FdState::empty();
+    write_state.kind = crate::storage::fs_api::FdKind::Pipe;
     write_state.flags = O_PIPE_WRITE;
     write_state.mount_id = pipe_idx as u64;
     if !fd_table.set(write_fd, write_state) {

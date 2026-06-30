@@ -6,10 +6,23 @@ use crate::error::HelixError;
 use crate::index::btree::NamespaceIndex;
 use crate::log::LogEngine;
 use crate::types::*;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
+
+/// Extent Write payload: `[path_len: u16][path][kind: u8][file_size: u64][extent_root: u64]`.
+fn build_extent_payload(path: &str, kind: u8, file_size: u64, extent_root: u64) -> Vec<u8> {
+    let path_b = path.as_bytes();
+    let mut p = Vec::with_capacity(2 + path_b.len() + 17);
+    p.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
+    p.extend_from_slice(path_b);
+    p.push(kind);
+    p.extend_from_slice(&file_size.to_le_bytes());
+    p.extend_from_slice(&extent_root.to_le_bytes());
+    p
+}
 
 /// Inline if `data.len() <= INLINE_DATA_SIZE` (96 B); else allocate extent(s).
 /// Auto-creates parent directories.
@@ -26,11 +39,18 @@ pub fn write_file<B: BlockIo>(
     data: &[u8],
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    if path.is_empty() || !path.starts_with('/') || path.len() > MAX_PATH_LEN {
+    crate::index::btree::validate_path(path)?;
+    if path.len() > 1 && path.ends_with('/') {
         return Err(HelixError::PathInvalid);
     }
+    // A file write must never shadow or clobber an existing directory.
+    if let Some(existing) = index.lookup_flex(path) {
+        if existing.flags & entry_flags::IS_DIR != 0 {
+            return Err(HelixError::IsADirectory);
+        }
+    }
 
-    ensure_parent_dirs(log, index, path, timestamp_ns)?;
+    ensure_parent_dirs(block_io, log, index, path, timestamp_ns)?;
 
     let path_hash = fnv1a_64(path.as_bytes());
     let content_crc = if data.is_empty() { 0 } else { crc64(data) };
@@ -42,7 +62,7 @@ pub fn write_file<B: BlockIo>(
         payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
         payload.extend_from_slice(path_b);
         payload.extend_from_slice(data);
-        let lsn = log.append(LogOp::Write, path_hash, &payload, timestamp_ns)?;
+        let lsn = log.append(block_io, LogOp::Write, path_hash, &payload, timestamp_ns)?;
 
         let is_update = index.lookup(path).is_some();
         let mut entry = NamespaceIndex::make_file_entry(
@@ -113,23 +133,18 @@ pub fn write_file<B: BlockIo>(
         return Err(HelixError::IoWriteFailed);
     }
 
-    // Extent: [logical: u64][physical: u64][count: u32][pad: u32].
-    let mut extent_payload = vec![0u8; 24];
-    extent_payload[0..8].copy_from_slice(&0u64.to_le_bytes());
-    extent_payload[8..16].copy_from_slice(&data_start_relative.to_le_bytes());
-    extent_payload[16..20].copy_from_slice(&(blocks_needed as u32).to_le_bytes());
-
-    // v3 extent: [path_len: u16][path][0xFF][file_size: u64 LE][extent...].
-    // 0xFF marker distinguishes extent records from inline during replay.
-    let path_b = path.as_bytes();
-    let file_size_bytes = (data.len() as u64).to_le_bytes();
-    let mut full_payload = Vec::with_capacity(2 + path_b.len() + 1 + 8 + extent_payload.len());
-    full_payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
-    full_payload.extend_from_slice(path_b);
-    full_payload.push(0xFF);
-    full_payload.extend_from_slice(&file_size_bytes);
-    full_payload.extend_from_slice(&extent_payload);
-    let lsn = match log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns) {
+    let full_payload =
+        build_extent_payload(path, extent_kind::CONTIGUOUS, data.len() as u64, data_start_relative);
+    let lsn = match log.append_full(
+        block_io,
+        LogOp::Write,
+        rec_flags::IS_EXTENT,
+        path_hash,
+        0,
+        0,
+        &full_payload,
+        timestamp_ns,
+    ) {
         Ok(l) => l,
         Err(e) => {
             let _ = bitmap.free_range(data_start_relative, blocks_needed);
@@ -220,34 +235,53 @@ fn write_file_fragmented<B: BlockIo>(
         return Err(HelixError::IoWriteFailed);
     }
 
-    let mut extent_payload = Vec::with_capacity(extents.len() * 24);
-    for (logical, physical, count) in &extents {
-        extent_payload.extend_from_slice(&logical.to_le_bytes());
-        extent_payload.extend_from_slice(&physical.to_le_bytes());
-        extent_payload.extend_from_slice(&count.to_le_bytes());
-        extent_payload.extend_from_slice(&0u32.to_le_bytes());
-    }
+    let free_extents = |bitmap: &mut BlockBitmap| {
+        for (_, physical, count) in &extents {
+            let _ = bitmap.free_range(*physical, *count as u64);
+        }
+    };
 
-    // v3 extent: [path_len: u16][path][0xFF][file_size: u64 LE][extents...].
-    let path_b = path.as_bytes();
-    let file_size_bytes = (data.len() as u64).to_le_bytes();
-    let mut full_payload = Vec::with_capacity(2 + path_b.len() + 1 + 8 + extent_payload.len());
-    full_payload.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
-    full_payload.extend_from_slice(path_b);
-    full_payload.push(0xFF);
-    full_payload.extend_from_slice(&file_size_bytes);
-    full_payload.extend_from_slice(&extent_payload);
-    let lsn = match log.append(LogOp::Write, path_hash, &full_payload, timestamp_ns) {
-        Ok(l) => l,
+    // Persist the run list to a node block so reads, unlink, and bitmap rebuild
+    // recover every (non-contiguous) block; one leaf caps the extent count.
+    let node_block = match bitmap.alloc_block() {
+        Ok(b) => b,
         Err(e) => {
-            for (_, physical, count) in &extents {
-                let _ = bitmap.free_range(*physical, *count as u64);
-            }
+            free_extents(bitmap);
             return Err(e);
         },
     };
+    if let Err(e) = crate::extent::write_extent_node(
+        block_io,
+        partition_lba_start,
+        data_start_block,
+        device_block_size,
+        node_block,
+        &extents,
+    ) {
+        let _ = bitmap.free_block(node_block);
+        free_extents(bitmap);
+        return Err(e);
+    }
 
-    let first_block = extents.first().map(|e| e.1).unwrap_or(BLOCK_NULL);
+    let full_payload =
+        build_extent_payload(path, extent_kind::NODE, data.len() as u64, node_block);
+    let lsn = match log.append_full(
+        block_io,
+        LogOp::Write,
+        rec_flags::IS_EXTENT,
+        path_hash,
+        0,
+        0,
+        &full_payload,
+        timestamp_ns,
+    ) {
+        Ok(l) => l,
+        Err(e) => {
+            let _ = bitmap.free_block(node_block);
+            free_extents(bitmap);
+            return Err(e);
+        },
+    };
 
     let is_update = index.lookup(path).is_some();
     let mut entry = NamespaceIndex::make_file_entry(
@@ -256,9 +290,10 @@ fn write_file_fragmented<B: BlockIo>(
         data.len() as u64,
         timestamp_ns,
         None,
-        first_block,
+        node_block,
         content_crc,
     );
+    entry.flags |= entry_flags::IS_EXTENT_NODE;
 
     if is_update {
         if let Some(existing) = index.lookup(path) {
@@ -272,7 +307,8 @@ fn write_file_fragmented<B: BlockIo>(
     Ok(lsn)
 }
 
-fn ensure_parent_dirs(
+fn ensure_parent_dirs<B: BlockIo>(
+    block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
     path: &str,
@@ -294,7 +330,7 @@ fn ensure_parent_dirs(
             let mut dir_payload = Vec::with_capacity(2 + dir_bytes.len());
             dir_payload.extend_from_slice(&(dir_bytes.len() as u16).to_le_bytes());
             dir_payload.extend_from_slice(dir_bytes);
-            let lsn = log.append(LogOp::MkDir, hash, &dir_payload, timestamp_ns)?;
+            let lsn = log.append(block_io, LogOp::MkDir, hash, &dir_payload, timestamp_ns)?;
             let entry = NamespaceIndex::make_dir_entry(&current, lsn, timestamp_ns);
             index.upsert(entry);
         }
@@ -303,53 +339,125 @@ fn ensure_parent_dirs(
     Ok(())
 }
 
-pub fn delete_file(
+#[allow(clippy::too_many_arguments)]
+pub fn rename<B: BlockIo>(
+    block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
-    path: &str,
-    timestamp_ns: u64,
-) -> Result<Lsn, HelixError> {
-    let _entry = index.lookup(path).ok_or(HelixError::NotFound)?;
-
-    let path_hash = fnv1a_64(path.as_bytes());
-    let del_bytes = path.as_bytes();
-    let mut del_payload = Vec::with_capacity(2 + del_bytes.len());
-    del_payload.extend_from_slice(&(del_bytes.len() as u16).to_le_bytes());
-    del_payload.extend_from_slice(del_bytes);
-    let lsn = log.append(LogOp::Delete, path_hash, &del_payload, timestamp_ns)?;
-
-    index.mark_deleted(path)?;
-    Ok(lsn)
-}
-
-pub fn rename(
-    log: &mut LogEngine,
-    index: &mut NamespaceIndex,
+    bitmap: &mut BlockBitmap,
+    partition_lba_start: u64,
+    data_start_block: u64,
+    device_block_size: u32,
     old_path: &str,
     new_path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    let entry = index.lookup(old_path).ok_or(HelixError::NotFound)?;
-    let mut new_entry = *entry;
+    crate::index::btree::validate_path(new_path)?;
 
-    let new_key = fnv1a_64(new_path.as_bytes());
+    let src = *index.lookup_flex(old_path).ok_or(HelixError::NotFound)?;
+
+    if src.flags & entry_flags::IS_DIR != 0 {
+        let old_prefix = dir_prefix(old_path);
+        let new_prefix = dir_prefix(new_path);
+        if new_prefix.len() > MAX_PATH_LEN {
+            return Err(HelixError::PathTooLong);
+        }
+        // Renaming a directory into its own subtree would loop forever.
+        if new_prefix.starts_with(old_prefix.as_str()) {
+            return Err(HelixError::PathInvalid);
+        }
+        if index.lookup(&new_prefix).is_some() {
+            return Err(HelixError::AlreadyExists);
+        }
+
+        let mut moves: Vec<(String, String)> = Vec::new();
+        for entry in index.all_entries() {
+            if entry.flags & entry_flags::IS_DELETED != 0 {
+                continue;
+            }
+            let p = crate::index::btree::path_str(&entry.path);
+            if p.starts_with(old_prefix.as_str()) {
+                let mut to = new_prefix.clone();
+                to.push_str(&p[old_prefix.len()..]);
+                if to.len() > MAX_PATH_LEN {
+                    return Err(HelixError::PathTooLong);
+                }
+                moves.push((String::from(p), to));
+            }
+        }
+
+        let mut last = 0;
+        for (from, to) in &moves {
+            last = log_rename_one(block_io, log, index, from, to, timestamp_ns)?;
+        }
+        return Ok(last);
+    }
+
+    // File rename: clobbering a file frees its blocks; a directory target is refused.
+    if let Some(dest) = index.lookup_flex(new_path) {
+        if dest.flags & entry_flags::IS_DIR != 0 {
+            return Err(HelixError::IsADirectory);
+        }
+        let (extent_root, size, is_node, is_inline) = (
+            dest.extent_root,
+            dest.size,
+            dest.flags & entry_flags::IS_EXTENT_NODE != 0,
+            dest.flags & entry_flags::IS_INLINE != 0,
+        );
+        if !is_inline {
+            crate::extent::free_file_blocks(
+                block_io,
+                bitmap,
+                partition_lba_start,
+                data_start_block,
+                device_block_size,
+                extent_root,
+                size,
+                is_node,
+            );
+        }
+        index.mark_deleted(new_path)?;
+    }
+
+    log_rename_one(block_io, log, index, old_path, new_path, timestamp_ns)
+}
+
+fn dir_prefix(path: &str) -> String {
+    let mut s = String::from(path);
+    if !s.ends_with('/') {
+        s.push('/');
+    }
+    s
+}
+
+fn log_rename_one<B: BlockIo>(
+    block_io: &mut B,
+    log: &mut LogEngine,
+    index: &mut NamespaceIndex,
+    old_full: &str,
+    new_full: &str,
+    timestamp_ns: u64,
+) -> Result<Lsn, HelixError> {
+    let mut new_entry = *index.lookup(old_full).ok_or(HelixError::NotFound)?;
+    let new_key = fnv1a_64(new_full.as_bytes());
     new_entry.key = new_key;
-    let path_bytes = new_path.as_bytes();
-    let len = path_bytes.len().min(MAX_PATH_LEN);
     new_entry.path = [0u8; 256];
-    new_entry.path[..len].copy_from_slice(&path_bytes[..len]);
+    let nb = new_full.as_bytes();
+    let len = nb.len().min(MAX_PATH_LEN);
+    new_entry.path[..len].copy_from_slice(&nb[..len]);
     new_entry.modified_ns = timestamp_ns;
 
-    let old_hash = fnv1a_64(old_path.as_bytes());
-    let old_bytes = old_path.as_bytes();
-    let new_bytes = new_path.as_bytes();
-    let mut ren_payload = Vec::with_capacity(2 + old_bytes.len() + 2 + new_bytes.len());
+    let old_hash = fnv1a_64(old_full.as_bytes());
+    let old_bytes = old_full.as_bytes();
+    let mut ren_payload = Vec::with_capacity(2 + old_bytes.len() + 2 + nb.len());
     ren_payload.extend_from_slice(&(old_bytes.len() as u16).to_le_bytes());
     ren_payload.extend_from_slice(old_bytes);
-    ren_payload.extend_from_slice(&(new_bytes.len() as u16).to_le_bytes());
-    ren_payload.extend_from_slice(new_bytes);
+    ren_payload.extend_from_slice(&(nb.len() as u16).to_le_bytes());
+    ren_payload.extend_from_slice(nb);
     let lsn = log.append_full(
+        block_io,
         LogOp::Rename,
+        0,
         old_hash,
         new_key,
         0,
@@ -358,9 +466,7 @@ pub fn rename(
     )?;
 
     new_entry.lsn = lsn;
-
-    index.mark_deleted(old_path)?;
+    index.mark_deleted(old_full)?;
     index.upsert(new_entry);
-
     Ok(lsn)
 }

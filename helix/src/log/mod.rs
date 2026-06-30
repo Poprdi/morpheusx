@@ -72,6 +72,12 @@ impl LogEngine {
         self.tail_segment
     }
 
+    /// Recycle the ring once a checkpoint has captured all live state: the
+    /// current head becomes the tail, freeing every superseded segment.
+    pub fn reset_ring(&mut self) {
+        self.tail_segment = self.head_segment;
+    }
+
     /// Live segments (tail..=head) / total, percent. 100 = log full; warn near 80 for GC.
     pub fn log_utilization_pct(&self) -> u32 {
         let n = self.segment_count.max(1);
@@ -102,20 +108,25 @@ impl LogEngine {
     }
 
     /// Append to write buffer; returns assigned LSN. Call `flush` to persist.
-    pub fn append(
+    /// `block_io` is needed only to persist a filled segment when one fills.
+    pub fn append<B: BlockIo>(
         &mut self,
+        block_io: &mut B,
         op: LogOp,
         path_hash: u64,
         payload: &[u8],
         timestamp_ns: u64,
     ) -> Result<Lsn, HelixError> {
-        self.append_full(op, path_hash, 0, 0, payload, timestamp_ns)
+        self.append_full(block_io, op, 0, path_hash, 0, 0, payload, timestamp_ns)
     }
 
-    /// Append with secondary_hash + tx_begin_lsn fields (rename, tx ops).
-    pub fn append_full(
+    /// Append with header `flags` + secondary_hash + tx_begin_lsn (extent, rename, tx ops).
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_full<B: BlockIo>(
         &mut self,
+        block_io: &mut B,
         op: LogOp,
+        flags: u8,
         path_hash: u64,
         secondary_hash: u64,
         tx_begin_lsn: Lsn,
@@ -134,7 +145,7 @@ impl LogEngine {
             lsn,
             timestamp_ns,
             op: op as u8,
-            flags: 0,
+            flags,
             _pad: [0; 2],
             payload_len: payload.len() as u32,
             path_hash,
@@ -153,6 +164,10 @@ impl LogEngine {
             if next_seg == self.tail_segment {
                 return Err(HelixError::LogFull);
             }
+            // The one-segment write buffer is about to be reused; persist the
+            // filled segment first or its records are lost (the next flush only
+            // writes the new head segment).
+            self.flush(block_io)?;
             self.head_segment = next_seg;
             self.head_offset = core::mem::size_of::<LogSegmentHeader>() as u32;
             self.record_count = 0;
@@ -210,16 +225,14 @@ impl LogEngine {
     pub fn flush<B: BlockIo>(&mut self, block_io: &mut B) -> Result<Lsn, HelixError> {
         let seg_hdr_size = core::mem::size_of::<LogSegmentHeader>();
         if self.head_offset > seg_hdr_size as u32 {
-            // Patch LogSegmentHeader: record_count @20, bytes_used @24, crc32c @40.
-            let count_off = 20;
-            let bytes_off = 24;
-            self.write_buf[count_off..count_off + 4]
-                .copy_from_slice(&self.record_count.to_le_bytes());
+            // LogSegmentHeader field offsets: record_count @24, bytes_used @28,
+            // crc32c @40. CRC covers [0..40) (the canonical verify range).
+            self.write_buf[24..28].copy_from_slice(&self.record_count.to_le_bytes());
             let used = self.head_offset - seg_hdr_size as u32;
-            self.write_buf[bytes_off..bytes_off + 4].copy_from_slice(&used.to_le_bytes());
+            self.write_buf[28..32].copy_from_slice(&used.to_le_bytes());
 
             self.write_buf[40..44].copy_from_slice(&[0; 4]);
-            let header_crc = crc32c(&self.write_buf[..56]);
+            let header_crc = crc32c(&self.write_buf[..40]);
             self.write_buf[40..44].copy_from_slice(&header_crc.to_le_bytes());
         }
 
@@ -280,7 +293,14 @@ impl LogEngine {
             return Err(HelixError::LogCrcMismatch);
         }
 
+        // payload_len is attacker/corruption-controlled; a record cannot extend
+        // past its segment, so reject before allocating anything.
         let payload_len = header.payload_len as usize;
+        let max_payload =
+            (LOG_SEGMENT_BYTES as usize).saturating_sub(byte_offset as usize + hdr_size);
+        if payload_len > max_payload {
+            return Err(HelixError::LogCrcMismatch);
+        }
         let mut payload = vec![0u8; payload_len];
         if payload_len > 0 {
             let payload_start = byte_offset as usize + hdr_size;

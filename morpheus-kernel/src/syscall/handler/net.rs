@@ -32,6 +32,9 @@ pub struct NetStackOps {
     pub tcp_recv: Option<unsafe fn(handle: i64, buf: *mut u8, len: usize) -> i64>,
     pub tcp_close: Option<unsafe fn(handle: i64)>,
     pub tcp_state: Option<unsafe fn(handle: i64) -> i64>,
+    /// Non-consuming readiness probes (1/0/-1) for the epoll/net-poll readiness scan.
+    pub tcp_can_recv: Option<unsafe fn(handle: i64) -> i64>,
+    pub tcp_can_send: Option<unsafe fn(handle: i64) -> i64>,
     pub tcp_listen: Option<unsafe fn(handle: i64, port: u16) -> i64>,
     pub tcp_accept: Option<unsafe fn(listen_handle: i64) -> i64>,
     pub tcp_shutdown: Option<unsafe fn(handle: i64) -> i64>,
@@ -63,6 +66,8 @@ static mut NET_STACK_OPS: NetStackOps = NetStackOps {
     tcp_recv: None,
     tcp_close: None,
     tcp_state: None,
+    tcp_can_recv: None,
+    tcp_can_send: None,
     tcp_listen: None,
     tcp_accept: None,
     tcp_shutdown: None,
@@ -521,6 +526,10 @@ pub(crate) fn monotonic_ms() -> u64 {
 pub(crate) unsafe fn net_drive() {
     if let Some(f) = NET_STACK_OPS.poll_drive {
         let _ = f(monotonic_ms());
+        // Packet arrival never touches io::readiness on its own; recompute every
+        // socket's level mask post-poll so epoll_wait is event-driven (a SYN on a
+        // listener, RX data, connect-complete and FIN all surface here).
+        super::socket::refresh_socket_readiness();
     }
 }
 
@@ -560,6 +569,20 @@ pub(crate) unsafe fn bridge_tcp_close(handle: i64) {
 
 pub(crate) unsafe fn bridge_tcp_state(handle: i64) -> i64 {
     match NET_STACK_OPS.tcp_state {
+        Some(f) => f(handle),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_can_recv(handle: i64) -> i64 {
+    match NET_STACK_OPS.tcp_can_recv {
+        Some(f) => f(handle),
+        None => BRIDGE_ABSENT,
+    }
+}
+
+pub(crate) unsafe fn bridge_tcp_can_send(handle: i64) -> i64 {
+    match NET_STACK_OPS.tcp_can_send {
         Some(f) => f(handle),
         None => BRIDGE_ABSENT,
     }
@@ -650,6 +673,11 @@ pub unsafe fn sys_net_poll(subcmd: u64, a2: u64) -> u64 {
         NET_POLL_DRIVE => match NET_STACK_OPS.poll_drive {
             Some(f) => {
                 let rc = f(monotonic_ms());
+                // Recompute every socket's level mask post-poll: packet arrival never
+                // touches io::readiness on its own, so a userspace poller (mio/tokio)
+                // driving the stack via SYS_NET_POLL needs this to make epoll_wait
+                // event-driven (a SYN on a listener, RX data, connect-complete, FIN).
+                super::socket::refresh_socket_readiness();
                 if rc < 0 {
                     EIO
                 } else {

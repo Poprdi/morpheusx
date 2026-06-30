@@ -4,8 +4,10 @@ use core::fmt;
 
 pub const HELIX_MAGIC: [u8; 8] = *b"HELIXFS1";
 
-/// Layout version. v1 stored only `path_hash` (no replay); v2 carries full path.
-pub const HELIX_VERSION: u32 = 2;
+/// Layout version. v1: path_hash only. v2: full path in payload. v3: extent
+/// Write records are flagged out-of-band (`rec_flags::IS_EXTENT`) instead of by
+/// an in-band marker byte that could collide with inline user data.
+pub const HELIX_VERSION: u32 = 3;
 
 pub const BLOCK_SIZE: u32 = 4096;
 pub const BLOCK_SHIFT: u32 = 12;
@@ -85,10 +87,14 @@ pub struct HelixSuperblock {
     pub last_mount_ns: u64,
     pub mount_count: u64,
 
-    /// CRC32C of bytes [0..280) with this field zeroed during computation.
+    /// CRC32C of the whole 4 KiB block with this field zeroed.
     pub crc32c: u32,
 
-    pub _reserved: [u8; 3812],
+    /// Live entries serialized to the on-disk index checkpoint region
+    /// (`index_root_block` for `index_depth` blocks).
+    pub index_entry_count: u32,
+
+    pub _reserved: [u8; 3808],
 }
 
 const _ASSERT_SB_SIZE: () = assert!(core::mem::size_of::<HelixSuperblock>() == 4096);
@@ -108,14 +114,17 @@ impl HelixSuperblock {
 
     pub fn update_crc(&mut self) {
         self.crc32c = 0;
-        let bytes = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, 288) };
+        let bytes =
+            unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, BLOCK_SIZE as usize) };
         self.crc32c = crate::crc::crc32c(bytes);
     }
 
     pub fn verify_crc(&self) -> bool {
         let mut copy = *self;
         copy.crc32c = 0;
-        let bytes = unsafe { core::slice::from_raw_parts(&copy as *const _ as *const u8, 288) };
+        let bytes = unsafe {
+            core::slice::from_raw_parts(&copy as *const _ as *const u8, BLOCK_SIZE as usize)
+        };
         crate::crc::crc32c(bytes) == self.crc32c
     }
 }
@@ -243,6 +252,13 @@ impl LogRecordHeader {
     }
 }
 
+/// `LogRecordHeader.flags` bits.
+pub mod rec_flags {
+    /// Write payload is an extent descriptor, not inline data. Authoritative —
+    /// classification must never inspect payload bytes.
+    pub const IS_EXTENT: u8 = 1 << 0;
+}
+
 pub mod entry_flags {
     pub const IS_DIR: u32 = 1 << 0;
     pub const IS_DELETED: u32 = 1 << 1;
@@ -250,6 +266,17 @@ pub mod entry_flags {
     /// Synthetic VFS node (e.g. /sys).
     pub const IS_SYS: u32 = 1 << 3;
     pub const IS_DEDUP: u32 = 1 << 4;
+    /// `extent_root` addresses an extent-node block, not a contiguous run.
+    pub const IS_EXTENT_NODE: u32 = 1 << 5;
+}
+
+/// Discriminates an extent Write payload's residency. Stored as the first byte
+/// of the extent descriptor `[kind: u8][file_size: u64][extent_root: u64]`.
+pub mod extent_kind {
+    /// `extent_root` is the first of `ceil(size/BLOCK)` physically contiguous blocks.
+    pub const CONTIGUOUS: u8 = 1;
+    /// `extent_root` is an extent-node block listing every run.
+    pub const NODE: u8 = 2;
 }
 
 /// 512-byte B-tree leaf entry; 8 entries per 4 KiB block.

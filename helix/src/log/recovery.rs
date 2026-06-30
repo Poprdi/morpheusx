@@ -11,6 +11,7 @@ use crate::index::btree::NamespaceIndex;
 use crate::log::LogEngine;
 use crate::types::*;
 use alloc::vec;
+use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
@@ -107,9 +108,9 @@ pub fn replay_log<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,
     index: &mut NamespaceIndex,
+    snapshots: &mut Vec<Lsn>,
+    checkpoint_lsn: Lsn,
 ) -> Result<Lsn, HelixError> {
-    index.clear();
-
     let start_offset = core::mem::size_of::<LogSegmentHeader>() as u32;
 
     let highest_lsn = log.scan_forward(
@@ -117,6 +118,10 @@ pub fn replay_log<B: BlockIo>(
         log.tail_segment(),
         start_offset,
         |hdr, payload| {
+            // Records at or below the checkpoint are already in the loaded index.
+            if hdr.lsn <= checkpoint_lsn {
+                return Ok(());
+            }
             let op = match LogOp::from_u8(hdr.op) {
                 Some(o) => o,
                 None => return Ok(()),
@@ -132,32 +137,37 @@ pub fn replay_log<B: BlockIo>(
 
                 LogOp::Write => {
                     if let Some((path, data)) = decode_path_payload(payload) {
-                        // v3 extent: [0xFF][file_size: u64][logical: u64][physical: u64][count: u32][pad: u32].
-                        // Inline: raw data, no 0xFF prefix, len <= INLINE_DATA_SIZE.
-                        if !data.is_empty() && data[0] == 0xFF && data.len() >= 1 + 8 + 24 {
+                        // Extent payload: [0xFF][file_size: u64][logical: u64][physical: u64][count: u32][pad: u32].
+                        // Inline payload: raw data. The IS_EXTENT header flag — not
+                        // any payload byte — decides which, so inline data may begin
+                        // with 0xFF without being mistaken for an extent.
+                        let is_extent = hdr.flags & rec_flags::IS_EXTENT != 0;
+                        let new_entry = if is_extent && data.len() >= 17 {
+                            let kind = data[0];
                             let file_size =
                                 u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
-                            let phys = u64::from_le_bytes(
-                                data[9 + 8..9 + 16].try_into().unwrap_or([0u8; 8]),
-                            );
-                            let crc = crate::crc::crc64(&data[1..]);
-                            let entry = NamespaceIndex::make_file_entry(
+                            let extent_root =
+                                u64::from_le_bytes(data[9..17].try_into().unwrap_or([0u8; 8]));
+                            let mut e = NamespaceIndex::make_file_entry(
                                 path,
                                 hdr.lsn,
                                 file_size,
                                 hdr.timestamp_ns,
                                 None,
-                                phys,
-                                crc,
+                                extent_root,
+                                0,
                             );
-                            index.upsert(entry);
-                        } else if data.len() <= INLINE_DATA_SIZE {
+                            if kind == extent_kind::NODE {
+                                e.flags |= entry_flags::IS_EXTENT_NODE;
+                            }
+                            Some(e)
+                        } else if !is_extent && data.len() <= INLINE_DATA_SIZE {
                             let crc = if data.is_empty() {
                                 0
                             } else {
                                 crate::crc::crc64(data)
                             };
-                            let entry = NamespaceIndex::make_file_entry(
+                            Some(NamespaceIndex::make_file_entry(
                                 path,
                                 hdr.lsn,
                                 data.len() as u64,
@@ -165,7 +175,22 @@ pub fn replay_log<B: BlockIo>(
                                 Some(data),
                                 BLOCK_NULL,
                                 crc,
-                            );
+                            ))
+                        } else {
+                            None
+                        };
+
+                        if let Some(mut entry) = new_entry {
+                            // A rewrite must keep the file's birth metadata and
+                            // grow its version count — same as the live write
+                            // path — so stat() is identical before and after a
+                            // remount. A fresh entry after an intervening Delete
+                            // (lookup returns None) is correctly treated as new.
+                            if let Some(existing) = index.lookup(path) {
+                                entry.created_ns = existing.created_ns;
+                                entry.first_lsn = existing.first_lsn;
+                                entry.version_count = existing.version_count + 1;
+                            }
                             index.upsert(entry);
                         }
                     }
@@ -202,13 +227,14 @@ pub fn replay_log<B: BlockIo>(
                     }
                 },
 
+                LogOp::Snapshot => snapshots.push(hdr.lsn),
+
                 // Skipped during replay.
                 LogOp::SetMeta
                 | LogOp::DedupRef
                 | LogOp::TxBegin
                 | LogOp::TxCommit
                 | LogOp::TxAbort
-                | LogOp::Snapshot
                 | LogOp::Checkpoint
                 | LogOp::Truncate => {},
 

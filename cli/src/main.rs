@@ -259,7 +259,7 @@ fn cmd_inject(disk: &str, binary: &str, dest: &str) -> Result<(), String> {
         for comp in comps.iter().take(comps.len().saturating_sub(1)) {
             path.push('/');
             path.push_str(comp);
-            match fs.mkdir(&path, 0) {
+            match fs.mkdir(&mut dev, &path, 0) {
                 Ok(()) => println!("[inject] created {}", path),
                 Err(HelixError::AlreadyExists) => {},
                 Err(e) => return Err(format!("mkdir {}: {:?}", path, e)),
@@ -305,7 +305,7 @@ fn cmd_ls(disk: &str, path: &str) -> Result<(), String> {
 /// are emptied depth-first first. Used to clear a stale repo before re-injecting a
 /// fresh one — inject overwrites by path but never deletes, so without this a
 /// re-injected tree inherits the previous tree's orphaned files.
-fn rm_recursive(fs: &mut HelixFs, path: &str) -> Result<(), String> {
+fn rm_recursive(dev: &mut FileBlockDevice, fs: &mut HelixFs, path: &str) -> Result<(), String> {
     let is_dir = match fs.stat(path) {
         Ok(st) => st.is_dir(),
         Err(HelixError::NotFound) => return Ok(()), // already gone — idempotent
@@ -319,10 +319,10 @@ fn rm_recursive(fs: &mut HelixFs, path: &str) -> Result<(), String> {
         for e in &children {
             let name = std::str::from_utf8(&e.name[..e.name_len as usize])
                 .map_err(|_| format!("non-utf8 name under {}", path))?;
-            rm_recursive(fs, &format!("{}/{}", base, name))?;
+            rm_recursive(dev, fs, &format!("{}/{}", base, name))?;
         }
     }
-    fs.unlink(path, 0)
+    fs.unlink(dev, path, 0)
         .map_err(|e| format!("unlink {}: {:?}", path, e))
 }
 
@@ -331,7 +331,7 @@ fn cmd_rm(disk: &str, path: &str) -> Result<(), String> {
         return Err("refusing to rm the root '/'".to_string());
     }
     let (mut dev, mut fs) = mount(disk)?;
-    rm_recursive(&mut fs, path)?;
+    rm_recursive(&mut dev, &mut fs, path)?;
     fs.sync(&mut dev).map_err(|e| format!("sync: {:?}", e))?;
     println!("[rm] removed {}", path);
     Ok(())
@@ -348,7 +348,7 @@ fn cmd_format(disk: &str) -> Result<(), String> {
 
 fn cmd_mkbin(disk: &str) -> Result<(), String> {
     let (mut dev, mut fs) = mount(disk)?;
-    match fs.mkdir("/bin", 0) {
+    match fs.mkdir(&mut dev, "/bin", 0) {
         Ok(()) | Err(HelixError::AlreadyExists) => {},
         Err(e) => return Err(format!("mkdir: {:?}", e)),
     }

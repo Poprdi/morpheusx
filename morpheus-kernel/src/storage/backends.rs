@@ -293,23 +293,23 @@ impl FsBackend for HelixFs {
         Ok(buf.len())
     }
 
-    fn mkdir(&mut self, _dev: &mut RawBlockDevice, path: &str, ts: u64) -> Result<(), VfsError> {
+    fn mkdir(&mut self, dev: &mut RawBlockDevice, path: &str, ts: u64) -> Result<(), VfsError> {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
-        self.engine.mkdir(path, ts).map_err(helix_err)
+        self.engine.mkdir(dev, path, ts).map_err(helix_err)
     }
 
-    fn unlink(&mut self, _dev: &mut RawBlockDevice, path: &str, ts: u64) -> Result<(), VfsError> {
+    fn unlink(&mut self, dev: &mut RawBlockDevice, path: &str, ts: u64) -> Result<(), VfsError> {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
-        self.engine.unlink(path, ts).map_err(helix_err)
+        self.engine.unlink(dev, path, ts).map_err(helix_err)
     }
 
     fn rename(
         &mut self,
-        _dev: &mut RawBlockDevice,
+        dev: &mut RawBlockDevice,
         old: &str,
         new: &str,
         ts: u64,
@@ -317,7 +317,7 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
-        self.engine.rename(old, new, ts).map_err(helix_err)
+        self.engine.rename(dev, old, new, ts).map_err(helix_err)
     }
 
     fn truncate(

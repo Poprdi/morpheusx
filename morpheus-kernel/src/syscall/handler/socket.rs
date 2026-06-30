@@ -12,10 +12,11 @@
 
 use super::common::*;
 use super::net::{
-    bridge_tcp_accept, bridge_tcp_close, bridge_tcp_connect, bridge_tcp_keepalive,
-    bridge_tcp_listen, bridge_tcp_nodelay, bridge_tcp_recv, bridge_tcp_send, bridge_tcp_shutdown,
-    bridge_tcp_state, bridge_udp_close, bridge_udp_recv_from, bridge_udp_send_to,
-    bridge_udp_socket, bridge_tcp_socket, monotonic_ms, net_drive, net_present, BRIDGE_ABSENT,
+    bridge_tcp_accept, bridge_tcp_can_recv, bridge_tcp_can_send, bridge_tcp_close,
+    bridge_tcp_connect, bridge_tcp_keepalive, bridge_tcp_listen, bridge_tcp_nodelay,
+    bridge_tcp_recv, bridge_tcp_send, bridge_tcp_shutdown, bridge_tcp_state, bridge_udp_close,
+    bridge_udp_recv_from, bridge_udp_send_to, bridge_udp_socket, bridge_tcp_socket, monotonic_ms,
+    net_drive, net_present, BRIDGE_ABSENT,
 };
 use crate::hal;
 use crate::io::readiness;
@@ -967,6 +968,79 @@ pub unsafe fn socket_close_backend(state: &crate::storage::fs_api::FdState) {
         bridge_udp_close(m.handle);
     }
     readiness::unregister(token);
+}
+
+/// Recompute every stream socket's level-triggered readiness from the live stack
+/// state. Driven by `net_drive` after each poll so `epoll_wait` reflects packet
+/// arrival without a prior recv/accept syscall (the smoltcp glue never touches
+/// readiness on its own). Only stream sockets are scanned — the TCP/UDP handle
+/// spaces overlap, and UDP keeps its existing syscall-side readiness. Only newly
+/// set bits wake parked waiters; EPOLLERR/EPOLLHUP are sticky and never cleared
+/// here so a recorded connect error / hangup survives the rescan.
+pub(crate) unsafe fn refresh_socket_readiness() {
+    use crate::storage::fs_api::FD_TABLE_LEN;
+
+    // Snapshot (handle, listening) first so no fd-table borrow is held across the
+    // bridge probes and readiness mutations below.
+    let mut probes: [(i64, bool); FD_TABLE_LEN] = [(0, false); FD_TABLE_LEN];
+    let mut n = 0usize;
+    {
+        let t = SCHEDULER.current_fd_table_mut();
+        for fd in 0..FD_TABLE_LEN {
+            if let Some(d) = t.get(fd) {
+                if d.is_socket() {
+                    let mut c = [0u8; 32];
+                    c.copy_from_slice(&d.cookie[..32]);
+                    let m = SockMeta::from_cookie(&c);
+                    if m.is_stream() {
+                        probes[n] = (m.handle, m.sflags & SF_LISTENING != 0);
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Level bits this scan owns and may clear; ERR/HUP are additive only.
+    const MANAGED: u32 = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+
+    for &(handle, listening) in probes.iter().take(n) {
+        let token = readiness::socket_token(handle as u64);
+        let state = bridge_tcp_state(handle);
+        let mut desired: u32 = 0;
+        if listening {
+            // The accept bridge mints a connection once the listen socket reaches
+            // ESTABLISHED/CLOSE_WAIT — i.e. exactly when `accept()` would succeed.
+            if state == ST_ESTABLISHED || state == ST_CLOSE_WAIT {
+                desired |= EPOLLIN;
+            }
+        } else {
+            if bridge_tcp_can_recv(handle) == 1 {
+                desired |= EPOLLIN;
+            }
+            if bridge_tcp_can_send(handle) == 1 {
+                desired |= EPOLLOUT;
+            }
+            // Peer FIN: deliver EOF-readable + read-closed.
+            if state == ST_CLOSE_WAIT {
+                desired |= EPOLLIN | EPOLLRDHUP;
+            }
+            // Fully torn down / reset.
+            if state == ST_CLOSED {
+                desired |= EPOLLHUP;
+            }
+        }
+
+        let current = readiness::ready_mask(token);
+        let newly = desired & !current;
+        if newly != 0 {
+            readiness::set_ready(token, newly);
+        }
+        let to_clear = current & MANAGED & !desired;
+        if to_clear != 0 {
+            readiness::clear_ready(token, to_clear);
+        }
+    }
 }
 
 /// True if `start_ms + timeo_ms` has elapsed (timeo==0 means no timeout).

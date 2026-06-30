@@ -93,6 +93,29 @@ pub(super) unsafe fn net_tcp_state_impl(handle: i64) -> i64 {
     stack.tcp_state_code(socket) as i64
 }
 
+/// Readiness probes for the kernel's epoll/net-poll path: report whether a recv
+/// or send would make progress right now, without consuming anything. Returns
+/// 1/0, or -1 if the stack/handle is gone.
+pub(super) unsafe fn net_tcp_can_recv_impl(handle: i64) -> i64 {
+    let Some(stack) = state::user_net_stack_mut() else {
+        return -1;
+    };
+    let Some(socket) = state::get_tcp_slot(handle) else {
+        return -1;
+    };
+    stack.tcp_can_recv(socket) as i64
+}
+
+pub(super) unsafe fn net_tcp_can_send_impl(handle: i64) -> i64 {
+    let Some(stack) = state::user_net_stack_mut() else {
+        return -1;
+    };
+    let Some(socket) = state::get_tcp_slot(handle) else {
+        return -1;
+    };
+    stack.tcp_can_send(socket) as i64
+}
+
 pub(super) unsafe fn net_tcp_listen_impl(handle: i64, port: u16) -> i64 {
     let Some(stack) = state::user_net_stack_mut() else {
         return -1;
