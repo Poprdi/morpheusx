@@ -689,9 +689,19 @@ impl Scheduler {
         out
     }
 
+    /// fds are a thread-group resource (POSIX CLONE_FILES): sibling threads
+    /// share CR3 *and* one descriptor table. Resolve to the group leader's slot
+    /// so an fd opened on any thread is visible on all of them — without this a
+    /// tokio worker can't epoll/read a socket the main thread created (EBADF).
+    /// Reap/exit operate on each thread's own `fd_table` field directly, which
+    /// stays empty for non-leaders, so only the leader's shared table is closed.
     pub unsafe fn current_fd_table_mut(&self) -> &'static mut crate::storage::fs_api::FdTable {
         let pid = this_core_pid() as usize;
-        &mut PROCESS_TABLE[pid].as_mut().unwrap().fd_table
+        let leader = match PROCESS_TABLE[pid].as_ref() {
+            Some(p) if p.thread_group_leader != 0 => p.thread_group_leader as usize,
+            _ => pid,
+        };
+        &mut PROCESS_TABLE[leader].as_mut().unwrap().fd_table
     }
 
     pub unsafe fn current_process_mut(&self) -> &'static mut Process {
