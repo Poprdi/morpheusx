@@ -5,7 +5,7 @@ extern crate alloc;
 use super::common::*;
 use crate::hal;
 use crate::process::ProcessState;
-use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, {PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER}};
+use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, {SCHEDULER}};
 use alloc::vec::Vec;
 use morpheus_foundation::errno::E2BIG;
 use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};

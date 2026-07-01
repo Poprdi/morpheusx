@@ -234,7 +234,7 @@ pub const SYS_FTRUNCATE: u64 = 126;
 pub const SYS_FCNTL: u64 = 127;
 /// `rmdir(path_ptr, path_len) -> 0 | -errno`. Dirs only (`SYS_UNLINK(16)` is files-only).
 pub const SYS_RMDIR: u64 = 128;
-pub const SYS_REPARENT: u64 = 104;
+pub const SYS_REPARENT: u64 = 129;
 
 // Seek whence constants.
 pub const SEEK_SET: u64 = 0;
@@ -246,7 +246,7 @@ pub const SEEK_END: u64 = 2;
 // insertion, gap, duplicate, or table/count mismatch a compile error.
 
 /// Number of defined syscalls. Bump by exactly one when appending.
-pub const SYSCALL_COUNT: usize = 129;
+pub const SYSCALL_COUNT: usize = 130;
 
 /// Every `SYS_*` number in ABI order. Length is pinned to `SYSCALL_COUNT`, so a
 /// missing/extra entry is itself a compile error.
