@@ -17,6 +17,8 @@ const MAX_DNS_QUERIES: usize = 64;
 static mut USER_TCP_HANDLES: [Option<SocketHandle>; MAX_TCP_HANDLES] = [None; MAX_TCP_HANDLES];
 static mut USER_UDP_HANDLES: [Option<SocketHandle>; MAX_UDP_HANDLES] = [None; MAX_UDP_HANDLES];
 static mut USER_DNS_QUERIES: [Option<DnsQueryHandle>; MAX_DNS_QUERIES] = [None; MAX_DNS_QUERIES];
+static mut USER_DNS_QUERY_STARTS: [u64; MAX_DNS_QUERIES] = [0; MAX_DNS_QUERIES];
+const DNS_QUERY_TTL_MS: u64 = 60_000;
 
 #[inline(always)]
 pub(super) fn ip_from_nbo(ip: u32) -> Ipv4Addr {
@@ -140,12 +142,13 @@ pub(super) unsafe fn take_udp_slot(handle: i64) -> Option<SocketHandle> {
     USER_UDP_HANDLES[idx].take()
 }
 
-pub(super) unsafe fn alloc_dns_query_slot(handle: DnsQueryHandle) -> Option<i64> {
+pub(super) unsafe fn alloc_dns_query_slot(handle: DnsQueryHandle, now_ms: u64) -> Option<i64> {
     // Index-based access avoids taking a `&mut` to the mutable static (static_mut_refs).
     #[allow(clippy::needless_range_loop)]
     for idx in 0..MAX_DNS_QUERIES {
         if USER_DNS_QUERIES[idx].is_none() {
             USER_DNS_QUERIES[idx] = Some(handle);
+            USER_DNS_QUERY_STARTS[idx] = now_ms;
             return Some(slot_to_user_handle(idx));
         }
     }
@@ -160,6 +163,29 @@ pub(super) unsafe fn get_dns_query_slot(handle: i64) -> Option<DnsQueryHandle> {
 pub(super) unsafe fn clear_dns_query_slot(handle: i64) {
     if let Some(idx) = user_handle_to_slot(handle, MAX_DNS_QUERIES) {
         USER_DNS_QUERIES[idx] = None;
+    }
+}
+
+pub(super) unsafe fn take_dns_query_slot(handle: i64) -> Option<DnsQueryHandle> {
+    let idx = user_handle_to_slot(handle, MAX_DNS_QUERIES)?;
+    USER_DNS_QUERIES[idx].take()
+}
+
+/// Reap pending DNS slots older than `DNS_QUERY_TTL_MS`, cancelling the smoltcp
+/// query so a lost DNS_CANCEL can't wedge the (single) DNS query slot forever.
+pub(super) unsafe fn reap_expired_dns_queries(
+    stack: &mut NetInterface<UnifiedNetDevice>,
+    now_ms: u64,
+) {
+    #[allow(clippy::needless_range_loop)]
+    for idx in 0..MAX_DNS_QUERIES {
+        if let Some(handle) = USER_DNS_QUERIES[idx] {
+            if now_ms.saturating_sub(USER_DNS_QUERY_STARTS[idx]) >= DNS_QUERY_TTL_MS {
+                // Slot is live (see net-stack invariant), so cancel is panic-safe.
+                stack.cancel_dns_query(handle);
+                USER_DNS_QUERIES[idx] = None;
+            }
+        }
     }
 }
 

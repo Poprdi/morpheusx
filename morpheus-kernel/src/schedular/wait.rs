@@ -1,5 +1,6 @@
 use super::state::{
-    this_core_pid, EARLIEST_DEADLINE, PROCESS_TABLE, PROCESS_TABLE_LOCK, TIMED_BLOCK_COUNT,
+    this_core_pid, ADDRESS_SPACE_LOCKS, EARLIEST_DEADLINE, PROCESS_TABLE, PROCESS_TABLE_LOCK,
+    TIMED_BLOCK_COUNT,
 };
 use crate::hal;
 use crate::process::{
@@ -94,15 +95,64 @@ unsafe fn reap_zombie(pid: u32) -> Option<(i32, i32)> {
     }
     let code = child.exit_code.unwrap_or(-1);
     let wstatus = encode_wstatus(child);
+    // Nonzero ⇒ this is a thread; its private stack/TLS maps live in the leader's
+    // shared table, not `child.vma_table`. Captured before the borrow ends.
+    let leader_pid = child.thread_group_leader;
 
     free_process_resources(child);
     child.state = ProcessState::Terminated;
+
+    // Reclaim the thread's own VMAs from the leader (a full-process teardown, i.e.
+    // `leader_pid == 0`, already frees every VMA in `free_process_resources`).
+    if leader_pid != 0 {
+        reclaim_thread_vmas(leader_pid, pid);
+    }
 
     crate::serial::puts("[SCHED] reaped PID ");
     crate::serial::put_hex32(pid);
     crate::serial::puts("\n");
 
     Some((code, wstatus))
+}
+
+unsafe fn reclaim_thread_vmas(leader_pid: u32, tid: u32) {
+    let lock = &ADDRESS_SPACE_LOCKS[leader_pid as usize];
+    lock.lock();
+
+    let leader = match PROCESS_TABLE
+        .get_mut(leader_pid as usize)
+        .and_then(|s| s.as_mut())
+    {
+        Some(p) => p,
+        None => {
+            lock.unlock();
+            return;
+        },
+    };
+
+    let cr3 = leader.cr3;
+    let phys = hal().phys();
+    let phys_ready = phys.is_initialized();
+    let mut freed_pages: u64 = 0;
+
+    leader.vma_table.drain_owner(tid, |vma| {
+        for i in 0..vma.pages {
+            let _ = hal().paging().pml4_unmap_4k(cr3, vma.vaddr + i * PAGE_SIZE);
+        }
+        if vma.owns_phys && phys_ready {
+            let _ = phys.free_pages(vma.phys, vma.pages);
+        }
+        freed_pages += vma.pages;
+    });
+
+    if leader.pages_allocated >= freed_pages {
+        leader.pages_allocated -= freed_pages;
+    }
+    if freed_pages != 0 {
+        hal().paging().flush_tlb_all();
+    }
+
+    lock.unlock();
 }
 
 /// Auto-reap detached zombie threads whose kernel stack is free, so a dropped

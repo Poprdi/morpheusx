@@ -156,7 +156,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_MEMMAP => sys_memmap(a1, a2),
         SYS_SHM_GRANT => sys_shm_grant(a1, a2, a3, a4),
         SYS_MPROTECT => sys_mprotect(a1, a2, a3),
-        SYS_PIPE => sys_pipe(a1),
+        SYS_PIPE => sys_pipe(a1, a2),
         SYS_DUP2 => sys_dup2(a1, a2),
         SYS_SET_FG => sys_set_fg(a1),
         SYS_GETARGS => sys_getargs(a1, a2),

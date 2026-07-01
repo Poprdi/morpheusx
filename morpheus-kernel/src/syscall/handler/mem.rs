@@ -126,9 +126,13 @@ unsafe fn mmap_locked(pages: u64, prot: u64, fixed: bool, addr: u64) -> u64 {
     // map, independent of the user PTE protection (works for guard pages too).
     core::ptr::write_bytes(phys as *mut u8, 0, (pages * 4096) as usize);
 
+    // Tag with the creating thread's tid (its own slot id) so reap can reclaim a
+    // detached thread's stack/TLS from the leader's shared table. `current_pid`
+    // reads the per-core slot, not PROCESS_TABLE, so it can't alias `proc`.
+    let owner_tid = SCHEDULER.current_pid();
     if proc
         .vma_table
-        .insert_full(vaddr, phys, pages, true, eff_prot)
+        .insert_full(vaddr, phys, pages, true, eff_prot, owner_tid)
         .is_err()
     {
         for i in 0..pages {
@@ -267,20 +271,28 @@ unsafe fn mprotect_locked(vaddr: u64, pages: u64, prot: u64) -> u64 {
         }
     }
 
-    // Sub-VMAs index into the original contiguous block at their page offset.
+    // Sub-VMAs index into the original contiguous block at their page offset and
+    // inherit the owner tid, so a guard-page split of a thread stack still frees
+    // as one owner group at reap.
     let mid = Vma {
         vaddr,
         phys: vma.phys + left_pages * 4096,
         pages,
         owns_phys: vma.owns_phys,
         prot,
+        owner_tid: vma.owner_tid,
     };
     proc.vma_table.set_at(idx, mid);
 
     if left_pages > 0 {
-        let _ =
-            proc.vma_table
-                .insert_full(vma.vaddr, vma.phys, left_pages, vma.owns_phys, vma.prot);
+        let _ = proc.vma_table.insert_full(
+            vma.vaddr,
+            vma.phys,
+            left_pages,
+            vma.owns_phys,
+            vma.prot,
+            vma.owner_tid,
+        );
     }
     if right_pages > 0 {
         let _ = proc.vma_table.insert_full(
@@ -289,6 +301,7 @@ unsafe fn mprotect_locked(vaddr: u64, pages: u64, prot: u64) -> u64 {
             right_pages,
             vma.owns_phys,
             vma.prot,
+            vma.owner_tid,
         );
     }
 

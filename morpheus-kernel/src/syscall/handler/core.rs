@@ -9,7 +9,7 @@ use crate::process::signals::Signal;
 use crate::process::{BlockReason, ProcessState};
 use crate::schedular::{exit_process, SCHEDULER};
 use crate::serial::puts;
-use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
+use morpheus_helix::types::open_flags::{O_NONBLOCK, O_PIPE_READ, O_PIPE_WRITE};
 
 use morpheus_foundation::flags::{
     SYSCTL_REBOOT_FORCE, SYSCTL_REBOOT_GRACEFUL, SYSCTL_SHUTDOWN_FORCE, SYSCTL_SHUTDOWN_GRACEFUL,
@@ -85,6 +85,9 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
             if desc.flags & O_PIPE_READ != 0 {
                 let pipe_idx = desc.mount_id as u8;
                 let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
+                if desc.flags & O_NONBLOCK != 0 {
+                    return super::ipc::sys_pipe_read_nonblocking(pipe_idx, buf);
+                }
                 return super::ipc::sys_pipe_read_blocking(pipe_idx, buf);
             }
             // File-backed redirect: dispatch through the storage subsystem.

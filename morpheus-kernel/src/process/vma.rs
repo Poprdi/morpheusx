@@ -20,6 +20,11 @@ pub struct Vma {
     pub owns_phys: bool,
     /// Current protection (PROT_* bitmap) so a split can preserve the flanks.
     pub prot: u64,
+    /// Task slot (tid) that created this mapping; `0` = leader/shared. Nonzero
+    /// marks a thread-private map (stack/TLS) so `drain_owner` can reclaim it when
+    /// that thread is reaped — otherwise a detached thread leaks it until process
+    /// teardown. All threads' maps live in the leader's table (shared CR3).
+    pub owner_tid: u32,
 }
 
 impl Vma {
@@ -30,6 +35,7 @@ impl Vma {
             pages: 0,
             owns_phys: false,
             prot: 0,
+            owner_tid: 0,
         }
     }
 
@@ -73,8 +79,8 @@ impl VmaTable {
         }
     }
 
-    /// Insert defaulting `prot` to RW — the only protection non-mmap callers
-    /// (MAP_PHYS, spawn image) expose.
+    /// Insert defaulting `prot` to RW and `owner_tid` to 0 (leader/shared) — the
+    /// contract non-mmap callers (MAP_PHYS, spawn image, fb) expose.
     pub fn insert(
         &mut self,
         vaddr: u64,
@@ -82,7 +88,7 @@ impl VmaTable {
         pages: u64,
         owns_phys: bool,
     ) -> Result<usize, ()> {
-        self.insert_full(vaddr, phys, pages, owns_phys, PROT_WRITE)
+        self.insert_full(vaddr, phys, pages, owns_phys, PROT_WRITE, 0)
     }
 
     /// `Err(())` if the table is full.
@@ -93,6 +99,7 @@ impl VmaTable {
         pages: u64,
         owns_phys: bool,
         prot: u64,
+        owner_tid: u32,
     ) -> Result<usize, ()> {
         for (i, entry) in self.entries.iter_mut().enumerate() {
             if entry.is_free() {
@@ -102,11 +109,24 @@ impl VmaTable {
                     pages,
                     owns_phys,
                     prot,
+                    owner_tid,
                 };
                 return Ok(i);
             }
         }
         Err(())
+    }
+
+    pub fn drain_owner(&mut self, owner_tid: u32, mut f: impl FnMut(&Vma)) {
+        if owner_tid == 0 {
+            return;
+        }
+        for entry in self.entries.iter_mut() {
+            if !entry.is_free() && entry.owner_tid == owner_tid {
+                f(entry);
+                *entry = Vma::empty();
+            }
+        }
     }
 
     pub fn find_exact(&self, vaddr: u64) -> Option<(usize, &Vma)> {

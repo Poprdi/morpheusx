@@ -249,6 +249,15 @@ impl<D: NetworkDevice> NetInterface<D> {
             })
     }
 
+    pub fn cancel_dns_query(&mut self, handle: smoltcp::socket::dns::QueryHandle) {
+        let dns_socket = self.sockets.get_mut::<DnsSocket>(self.dns_handle);
+        dns_socket.cancel_query(handle);
+    }
+
+    pub fn last_poll_ms(&self) -> u64 {
+        self.last_poll_ms
+    }
+
     pub fn set_dns_servers(&mut self, servers: &[Ipv4Addr]) -> Result<()> {
         if servers.is_empty() {
             return Err(NetworkError::DnsResolutionFailed);
@@ -292,6 +301,17 @@ impl<D: NetworkDevice> NetInterface<D> {
 
     pub fn mac_address(&self) -> [u8; 6] {
         self.device.inner.mac_address()
+    }
+
+    /// Milliseconds until smoltcp next needs servicing (retransmit, delayed ACK,
+    /// TIME_WAIT, keepalive, DHCP renew), or `None` when no stack timer is pending
+    /// and the caller may block until external I/O. Lets `epoll_wait` arm its park
+    /// deadline to the stack's own next event instead of a fixed re-poll tick.
+    pub fn poll_delay_ms(&mut self, timestamp_ms: u64) -> Option<u64> {
+        let timestamp = Instant::from_millis(timestamp_ms as i64);
+        self.iface
+            .poll_delay(timestamp, &self.sockets)
+            .map(|d| d.total_millis())
     }
 
     /// Poll the stack; returns true if any socket saw activity.
@@ -439,6 +459,19 @@ impl<D: NetworkDevice> NetInterface<D> {
     pub fn tcp_local_port(&self, handle: SocketHandle) -> Option<u16> {
         let socket = self.sockets.get::<TcpSocket>(handle);
         socket.local_endpoint().map(|ep| ep.port)
+    }
+
+    /// Peer (remote) endpoint of a connected TCP socket, if any — used by
+    /// `accept()` to report the connecting client. IPv4-only stack.
+    pub fn tcp_remote_endpoint(&self, handle: SocketHandle) -> Option<(Ipv4Addr, u16)> {
+        let socket = self.sockets.get::<TcpSocket>(handle);
+        let ep = socket.remote_endpoint()?;
+        let IpAddress::Ipv4(v4) = ep.addr;
+        let octets = v4.as_bytes();
+        Some((
+            Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]),
+            ep.port,
+        ))
     }
 
     /// Half-close TCP (write side).

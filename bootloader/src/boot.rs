@@ -1023,6 +1023,7 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
         None,
         false,
         false,
+        false,
     ) {
         Ok(pid) => pid,
         Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),

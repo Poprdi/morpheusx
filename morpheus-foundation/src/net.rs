@@ -24,6 +24,7 @@ pub const NET_UDP_CLOSE: u64 = 14;
 pub const DNS_START: u64 = 0;
 pub const DNS_RESULT: u64 = 1;
 pub const DNS_SET_SERVERS: u64 = 2;
+pub const DNS_CANCEL: u64 = 3;
 
 // SYS_NET_CFG subcommands
 pub const NET_CFG_GET: u64 = 0;

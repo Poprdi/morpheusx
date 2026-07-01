@@ -8,9 +8,11 @@
 // callbacks; EPOLLET is layered on by diffing each watch's live vs last mask.
 
 use super::common::*;
+use super::net;
 use crate::hal;
 use crate::io::readiness::{
-    epoll_token, pipe_token, ready_mask, register, socket_token, unregister, wait_ready,
+    epoll_token, net_wake_reset, pipe_token, ready_mask, register, socket_token,
+    token_needs_repoll, unregister, wait_net_wake,
 };
 use crate::schedular::{tsc_frequency, SCHEDULER};
 use crate::storage::fs_api::{FdKind, FdState};
@@ -29,6 +31,11 @@ const MAX_EPOLL_WATCHES: usize = 64;
 /// Upper bound on `maxevents` to keep the user-buffer size check from overflowing
 /// and to cap a single wait's copy-out work.
 const MAX_WAIT_EVENTS: u64 = 1024;
+
+/// RX-safety backstop for a net epoll set when the stack has no nearer `poll_at`
+/// (ms). Matches the socket layer's `POLL_SLICE_MS`. Needed only until the NIC RX
+/// IRQ is wired 
+const NET_REPOLL_SLICE_MS: u64 = 2;
 
 /// EPOLL* bits that name readiness (vs. the EPOLLET/EPOLLONESHOT control bits).
 /// ERR/HUP are reported unconditionally per Linux, so they are folded into every
@@ -103,14 +110,15 @@ fn instance_id(desc: &FdState) -> u64 {
     u64::from_ne_bytes(b)
 }
 
-/// Readiness token for a pollable fd, or `None` for a non-pollable (regular) fd.
+/// Readiness token for a pollable fd, or `None` for a non-pollable fd (regular
+/// file, or /dev/null which is always "ready" and must never park a reactor).
 fn fd_token(desc: &FdState) -> Option<u64> {
     match desc.kind {
         FdKind::Socket => Some(socket_token(desc.socket_cookie())),
         // Pipe ends stash their pipe index in `mount_id` (see ipc::sys_pipe).
         FdKind::Pipe => Some(pipe_token(desc.mount_id as u8)),
         FdKind::Epoll => Some(epoll_token(instance_id(desc))),
-        FdKind::Regular => None,
+        FdKind::Regular | FdKind::Null => None,
     }
 }
 
@@ -303,11 +311,32 @@ unsafe fn scan(slot: usize, out: *mut EpollEvent, maxevents: usize) -> usize {
     count
 }
 
-/// Park the caller until the instance's aggregate token is signalled or `deadline`
-/// passes. The token's mask is never set by member backends, so this is a bounded
-/// sleep used to pace member re-scans (no busy spin: the CPU halts in wait_ready).
-unsafe fn wait_for_ready(id: u64, deadline: u64) {
-    let _ = wait_ready(epoll_token(id), u32::MAX, deadline);
+unsafe fn park_deadline(now: u64, overall: u64, repoll: bool, freq: u64) -> u64 {
+    if !repoll || freq == 0 {
+        return overall;
+    }
+    // At least 1ms (never a zero/busy deadline), at most the RX-safety backstop.
+    let ms = net::net_next_poll_delay_ms()
+        .unwrap_or(NET_REPOLL_SLICE_MS)
+        .clamp(1, NET_REPOLL_SLICE_MS);
+    let net_deadline = now.saturating_add(ms.saturating_mul(freq) / 1000);
+    if overall == 0 {
+        net_deadline
+    } else {
+        overall.min(net_deadline)
+    }
+}
+
+/// True if any watch names a socket / nested-epoll source, whose readiness only
+/// surfaces via a stack pump or re-scan — so the set must pump + bounded-repoll.
+unsafe fn instance_needs_repoll(slot: usize) -> bool {
+    let t = EPOLL_TABLE.lock();
+    let inst = &t[slot];
+    inst.in_use
+        && inst
+            .watches
+            .iter()
+            .any(|w| w.in_use && token_needs_repoll(w.token))
 }
 
 /// SYS_EPOLL_WAIT: `epfd,*mut EpollEvent,maxevents,timeout_ms -> nready | -errno`.
@@ -346,11 +375,23 @@ pub unsafe fn sys_epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout_ms:
     } else {
         now.saturating_add((timeout as u64).saturating_mul(freq) / 1000)
     };
-    // Re-scan cadence while parked: member readiness wakes the source token, not
-    // the epoll token, so we pace re-scans rather than relying on a callback.
-    let slice = (freq / 500).max(1);
 
     loop {
+        // LOST-WAKEUP ORDERING (load-bearing): consume any pending net-wake edge
+        // BEFORE pump + scan + park. A wake (RX IRQ / stack timer / member set_ready
+        // / pipe write) landing after this clear re-sets NET_WAKE_BIT, which
+        // wait_net_wake re-reads UNDER PROCESS_TABLE_LOCK before sleeping — so it
+        // breaks the park instead of being lost. Clearing AFTER the scan would drop
+        // an event racing between scan and park and hang an idle reactor forever.
+        net_wake_reset();
+
+        // Advance smoltcp + refresh member masks for a set with socket/nested-epoll
+        // members (socket RX only surfaces via a pump); a pipe-only set skips it.
+        let repoll = net::net_present() && instance_needs_repoll(slot);
+        if repoll {
+            net::net_pump();
+        }
+
         let n = scan(slot, out, max);
         if n > 0 {
             return n as u64;
@@ -362,10 +403,9 @@ pub unsafe fn sys_epoll_wait(epfd: u64, events: u64, maxevents: u64, timeout_ms:
         if overall != 0 && now >= overall {
             return 0;
         }
-        let mut deadline = now.saturating_add(slice);
-        if overall != 0 && overall < deadline {
-            deadline = overall;
-        }
-        wait_for_ready(id, deadline);
+        let deadline = park_deadline(now, overall, repoll, freq);
+        // Park on the global net-wake token; the edge armed above (or the deadline,
+        // honored by the timer tick's IoReady sweep) wakes us to re-pump + re-scan.
+        let _ = wait_net_wake(deadline);
     }
 }

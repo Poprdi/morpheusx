@@ -100,7 +100,27 @@ pub(super) unsafe fn net_dns_start_impl(name: *const u8, len: usize) -> i64 {
         return -1;
     };
 
-    state::alloc_dns_query_slot(query).unwrap_or(-1)
+    // Tag the slot with the current monotonic time so the TTL reap can reclaim it
+    // if the query is later abandoned.
+    let now_ms = stack.last_poll_ms();
+    match state::alloc_dns_query_slot(query, now_ms) {
+        Some(handle) => handle,
+        None => {
+            // Table full: cancel rather than leak the smoltcp query slot.
+            stack.cancel_dns_query(query);
+            -1
+        },
+    }
+}
+
+pub(super) unsafe fn net_dns_cancel_impl(query: i64) -> i64 {
+    let Some(stack) = state::user_net_stack_mut() else {
+        return -1;
+    };
+    if let Some(query_handle) = state::take_dns_query_slot(query) {
+        stack.cancel_dns_query(query_handle);
+    }
+    0
 }
 
 pub(super) unsafe fn net_dns_result_impl(query: i64, out: *mut u8) -> i64 {

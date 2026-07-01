@@ -10,7 +10,7 @@ pub use lifecycle::{
     mark_kernel_hlt, sample_per_core_idle_tsc, set_tsc_frequency, spawn_kernel_thread,
     tsc_frequency,
 };
-pub use spawn::{spawn_user_process, spawn_user_thread};
+pub use spawn::{destroy_deferred_child, mark_ready, spawn_user_process, spawn_user_thread};
 pub use state::{
     get_earliest_deadline, get_kernel_cr3, try_set_earliest_deadline, ProcessInfo, Scheduler,
     SchedulerCoreState, SchedulerDebugInfo, SchedulerSystemState, SCHEDULER,

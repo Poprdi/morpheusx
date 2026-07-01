@@ -48,11 +48,14 @@ pub enum FdKind {
     Socket,
     Pipe,
     Epoll,
+    /// `/dev/null`: read→EOF, write→discard. Owns no mount/pipe/backend resource;
+    /// read/write/fstat short-circuit in the fs handlers and it is not pollable.
+    Null,
 }
 
 impl FdKind {
     pub fn is_pollable(self) -> bool {
-        !matches!(self, FdKind::Regular)
+        matches!(self, FdKind::Socket | FdKind::Pipe | FdKind::Epoll)
     }
 }
 
@@ -415,6 +418,14 @@ impl FdTable {
         match self.get_mut(fd) {
             Some(s) => {
                 s.cloexec = on;
+                // Keep the `flags` O_CLOEXEC bit mirrored so no other reader of
+                // `flags` ever diverges from the canonical `cloexec` bool; F_SETFD(0)
+                // must clear it too (K5).
+                if on {
+                    s.flags |= morpheus_foundation::flags::open_flags::O_CLOEXEC;
+                } else {
+                    s.flags &= !morpheus_foundation::flags::open_flags::O_CLOEXEC;
+                }
                 true
             },
             None => false,

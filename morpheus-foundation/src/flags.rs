@@ -69,6 +69,9 @@ pub const SPAWN_FA_OPEN: u32 = 0;
 pub const SPAWN_FA_DUP2: u32 = 1;
 pub const SPAWN_FA_CLOSE: u32 = 2;
 pub const SPAWN_FA_CHDIR: u32 = 3;
+/// Install `/dev/null` (`FdKind::Null`: read→EOF, write→discard) at `fd`. Backs
+/// `Stdio::null()` without a real `/dev` filesystem. Append-only new opcode.
+pub const SPAWN_FA_NULL: u32 = 4;
 /// `SpawnArgs.flags` bit0: start from an empty fd table instead of the inherited one.
 pub const SPAWN_CLEAR_FDS: u32 = 1 << 0;
 

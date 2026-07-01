@@ -11,8 +11,8 @@ use morpheus_foundation::types::{UdpRecvDesc, UdpSendDesc};
 // Canonical net subcommand codes live in morpheus_foundation::net; re-exported
 // here so kernel code referencing handler::net::NET_* still resolves.
 pub use morpheus_foundation::net::{
-    DNS_RESULT, DNS_SET_SERVERS, DNS_START, NET_CFG_ACTIVATE, NET_CFG_DHCP, NET_CFG_GET,
-    NET_CFG_HOSTNAME, NET_CFG_STATIC, NET_POLL_DRIVE, NET_POLL_STATS, NET_TCP_ACCEPT,
+    DNS_CANCEL, DNS_RESULT, DNS_SET_SERVERS, DNS_START, NET_CFG_ACTIVATE, NET_CFG_DHCP,
+    NET_CFG_GET, NET_CFG_HOSTNAME, NET_CFG_STATIC, NET_POLL_DRIVE, NET_POLL_STATS, NET_TCP_ACCEPT,
     NET_TCP_CLOSE, NET_TCP_CONNECT, NET_TCP_KEEPALIVE, NET_TCP_LISTEN, NET_TCP_NODELAY,
     NET_TCP_RECV, NET_TCP_SEND, NET_TCP_SHUTDOWN, NET_TCP_SOCKET, NET_TCP_STATE, NET_UDP_CLOSE,
     NET_UDP_RECV_FROM, NET_UDP_SEND_TO, NET_UDP_SOCKET,
@@ -36,7 +36,8 @@ pub struct NetStackOps {
     pub tcp_can_recv: Option<unsafe fn(handle: i64) -> i64>,
     pub tcp_can_send: Option<unsafe fn(handle: i64) -> i64>,
     pub tcp_listen: Option<unsafe fn(handle: i64, port: u16) -> i64>,
-    pub tcp_accept: Option<unsafe fn(listen_handle: i64) -> i64>,
+    pub tcp_accept:
+        Option<unsafe fn(listen_handle: i64, out_ip_nbo: *mut u32, out_port_host: *mut u16) -> i64>,
     pub tcp_shutdown: Option<unsafe fn(handle: i64) -> i64>,
     pub tcp_nodelay: Option<unsafe fn(handle: i64, on: i64) -> i64>,
     pub tcp_keepalive: Option<unsafe fn(handle: i64, ms: u64) -> i64>,
@@ -49,6 +50,7 @@ pub struct NetStackOps {
     pub dns_start: Option<unsafe fn(name: *const u8, len: usize) -> i64>,
     pub dns_result: Option<unsafe fn(query: i64, out: *mut u8) -> i64>,
     pub dns_set_servers: Option<unsafe fn(servers: *const u32, count: usize) -> i64>,
+    pub dns_cancel: Option<unsafe fn(query: i64) -> i64>,
 
     pub cfg_get: Option<unsafe fn(buf: *mut u8) -> i64>,
     pub cfg_dhcp: Option<unsafe fn() -> i64>,
@@ -56,6 +58,7 @@ pub struct NetStackOps {
     pub cfg_hostname: Option<unsafe fn(name: *const u8, len: usize) -> i64>,
 
     pub poll_drive: Option<unsafe fn(timestamp_ms: u64) -> i64>,
+    pub poll_at: Option<unsafe fn(timestamp_ms: u64) -> i64>,
     pub poll_stats: Option<unsafe fn(buf: *mut u8) -> i64>,
 }
 
@@ -80,11 +83,13 @@ static mut NET_STACK_OPS: NetStackOps = NetStackOps {
     dns_start: None,
     dns_result: None,
     dns_set_servers: None,
+    dns_cancel: None,
     cfg_get: None,
     cfg_dhcp: None,
     cfg_static_ip: None,
     cfg_hostname: None,
     poll_drive: None,
+    poll_at: None,
     poll_stats: None,
 };
 
@@ -213,7 +218,10 @@ pub unsafe fn sys_net(subcmd: u64, a2: u64, a3: u64, a4: u64) -> u64 {
             let handle = a2 as i64;
             match NET_STACK_OPS.tcp_accept {
                 Some(f) => {
-                    let h = f(handle);
+                    // Raw convenience path: no user sockaddr, so discard the peer.
+                    let mut ip_nbo: u32 = 0;
+                    let mut port_host: u16 = 0;
+                    let h = f(handle, &mut ip_nbo, &mut port_host);
                     if h < 0 {
                         EIO
                     } else {
@@ -404,6 +412,22 @@ pub unsafe fn sys_dns(subcmd: u64, a2: u64, a3: u64) -> u64 {
                 None => ENOSYS,
             }
         },
+        DNS_CANCEL => {
+            let query = a2 as i64;
+            match NET_STACK_OPS.dns_cancel {
+                Some(f) => {
+                    // Idempotent net-stack free: a lost cancel / already-terminal
+                    // handle is a safe no-op, never a crash.
+                    let rc = f(query);
+                    if rc < 0 {
+                        EINVAL
+                    } else {
+                        0
+                    }
+                },
+                None => ENOSYS,
+            }
+        },
         _ => EINVAL,
     }
 }
@@ -533,6 +557,32 @@ pub(crate) unsafe fn net_drive() {
     }
 }
 
+/// Kernel-internal smoltcp pump for `epoll_wait`'s park loop: advance the stack and
+/// refresh member readiness with no `SYS_NET_POLL` syscall round-trip. Same body as
+/// the blocking socket ops' `net_drive`; runs in syscall (never IRQ) context, so it
+/// does not add a new class of `USER_NET_STACK` aliasing beyond the existing
+/// socket-thread callers.
+pub(crate) unsafe fn net_pump() {
+    net_drive();
+}
+
+/// Milliseconds until the stack next needs servicing, or `None` when no timer is
+/// pending (safe to block until external I/O / a readiness wake). Drives the
+/// `epoll_wait` park deadline; purely a probe (no stack mutation).
+pub(crate) unsafe fn net_next_poll_delay_ms() -> Option<u64> {
+    match NET_STACK_OPS.poll_at {
+        Some(f) => {
+            let d = f(monotonic_ms());
+            if d < 0 {
+                None
+            } else {
+                Some(d as u64)
+            }
+        },
+        None => None,
+    }
+}
+
 pub(crate) unsafe fn bridge_tcp_socket() -> i64 {
     match NET_STACK_OPS.tcp_socket {
         Some(f) => f(),
@@ -595,9 +645,15 @@ pub(crate) unsafe fn bridge_tcp_listen(handle: i64, port_host: u16) -> i64 {
     }
 }
 
-pub(crate) unsafe fn bridge_tcp_accept(handle: i64) -> i64 {
+/// Accept the next pending connection on `handle`, surfacing the peer endpoint
+/// via `out_ip_nbo` (IPv4, network byte order) + `out_port_host` (host order).
+pub(crate) unsafe fn bridge_tcp_accept(
+    handle: i64,
+    out_ip_nbo: *mut u32,
+    out_port_host: *mut u16,
+) -> i64 {
     match NET_STACK_OPS.tcp_accept {
-        Some(f) => f(handle),
+        Some(f) => f(handle, out_ip_nbo, out_port_host),
         None => BRIDGE_ABSENT,
     }
 }

@@ -131,7 +131,11 @@ pub(super) unsafe fn net_tcp_listen_impl(handle: i64, port: u16) -> i64 {
     }
 }
 
-pub(super) unsafe fn net_tcp_accept_impl(listen_handle: i64) -> i64 {
+pub(super) unsafe fn net_tcp_accept_impl(
+    listen_handle: i64,
+    out_ip_nbo: *mut u32,
+    out_port_host: *mut u16,
+) -> i64 {
     let Some(stack) = state::user_net_stack_mut() else {
         return -1;
     };
@@ -142,6 +146,18 @@ pub(super) unsafe fn net_tcp_accept_impl(listen_handle: i64) -> i64 {
     let state_code = stack.tcp_state_code(listen_socket);
     if state_code != 4 && state_code != 7 {
         return -1;
+    }
+
+    // `listen_socket` is the socket that received the connection (it becomes the
+    // accepted stream below); its remote endpoint is the connecting peer. Report
+    // it as network-byte-order ip + host-order port. Out-ptrs may be null.
+    if let Some((peer_ip, peer_port)) = stack.tcp_remote_endpoint(listen_socket) {
+        if !out_ip_nbo.is_null() {
+            *out_ip_nbo = state::ip_to_nbo(peer_ip);
+        }
+        if !out_port_host.is_null() {
+            *out_port_host = peer_port;
+        }
     }
 
     let Some(local_port) = stack.tcp_local_port(listen_socket) else {

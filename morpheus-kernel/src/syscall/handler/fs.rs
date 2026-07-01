@@ -116,6 +116,14 @@ pub unsafe fn sys_fs_close(fd: u64) -> u64 {
         };
     }
 
+    // Null (/dev/null) fds own no mount/pipe/backend: just free the slot (K3).
+    if desc.kind == FdKind::Null {
+        return match fd_table.free(fd as usize) {
+            Some(_) => 0,
+            None => EBADF,
+        };
+    }
+
     {
         let guard = storage::lock();
         let g = &mut *guard.g;
@@ -141,6 +149,10 @@ pub unsafe fn sys_fs_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     };
     if desc.revoked {
         return EBADF;
+    }
+    // /dev/null: read is always immediate EOF (K3).
+    if desc.kind == FdKind::Null {
+        return 0;
     }
     if desc.is_socket() {
         return super::socket::socket_read(fd, buf_ptr, len);
@@ -176,6 +188,10 @@ pub unsafe fn sys_fs_write(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     };
     if desc.revoked {
         return EBADF;
+    }
+    // /dev/null: discard every byte, report the full length written (K3).
+    if desc.kind == FdKind::Null {
+        return len;
     }
     if desc.is_socket() {
         return super::socket::socket_write(fd, buf_ptr, len);
@@ -682,7 +698,8 @@ pub unsafe fn sys_fs_fstat(fd: u64, statbuf: u64) -> u64 {
         stat.mode = match desc.kind {
             FdKind::Socket => mode::S_IFSOCK,
             FdKind::Pipe => mode::S_IFIFO,
-            FdKind::Epoll => mode::S_IFCHR,
+            // epoll and /dev/null both report as char devices.
+            FdKind::Epoll | FdKind::Null => mode::S_IFCHR,
             FdKind::Regular => mode::S_IFREG,
         };
         fill_stat_metadata(&mut stat);

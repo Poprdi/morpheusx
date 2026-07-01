@@ -97,11 +97,13 @@ unsafe fn activate_network_from_userspace() -> i64 {
             dns_start: Some(udp_dns::net_dns_start_impl),
             dns_result: Some(udp_dns::net_dns_result_impl),
             dns_set_servers: Some(udp_dns::net_dns_set_servers_impl),
+            dns_cancel: Some(udp_dns::net_dns_cancel_impl),
             cfg_get: Some(config::net_cfg_get),
             cfg_dhcp: Some(config::net_cfg_dhcp),
             cfg_static_ip: Some(config::net_cfg_static_ip),
             cfg_hostname: Some(config::net_cfg_hostname),
             poll_drive: Some(config::net_poll_drive),
+            poll_at: Some(config::net_poll_at),
             poll_stats: Some(config::net_poll_stats),
         },
     );

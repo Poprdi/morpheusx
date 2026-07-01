@@ -1,7 +1,9 @@
 use super::lifecycle::apply_default_scheduler_policy;
 use super::state::{this_core_pid, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY};
 use crate::hal;
-use crate::process::{CpuContext, Process, ProcessState, MAX_PROCESSES, MAX_USER_PROCESSES};
+use crate::process::{
+    BlockReason, CpuContext, Process, ProcessState, MAX_PROCESSES, MAX_USER_PROCESSES,
+};
 use core::sync::atomic::Ordering;
 use morpheus_foundation::flags::open_flags;
 use morpheus_foundation::flags::THREAD_DETACHED;
@@ -148,7 +150,10 @@ unsafe fn inherit_fds_minus_cloexec(child: &mut Process, parent: &Process) {
     let mut seen_readers: [bool; 256] = [false; 256];
     let mut seen_writers: [bool; 256] = [false; 256];
     for (fd, desc) in parent.fd_table.iter() {
-        if desc.flags & open_flags::O_CLOEXEC != 0 {
+        // `cloexec` is the single source of truth: `open`/`socket` set it at
+        // creation AND `fcntl(F_SETFD, FD_CLOEXEC)` sets it at runtime, whereas
+        // `flags & O_CLOEXEC` alone misses the runtime fcntl path (K5).
+        if desc.cloexec {
             continue;
         }
         if !child.fd_table.set(fd, *desc) {
@@ -178,6 +183,7 @@ pub unsafe fn spawn_user_process(
     cwd: Option<&str>,
     inherit_fds: bool,
     clear_fds: bool,
+    defer_ready: bool,
 ) -> Result<u32, &'static str> {
     if !SCHEDULER_READY {
         return Err("scheduler not initialized");
@@ -209,7 +215,15 @@ pub unsafe fn spawn_user_process(
     proc.set_name(name);
     proc.parent_pid = this_core_pid();
     proc.priority = 128;
-    proc.state = ProcessState::Ready;
+    // `defer_ready` parks the child off-scheduler so `sys_spawn` can replay
+    // file_actions[] before it can run. SMP-safe: `pick_next` only selects
+    // `Ready`, and nothing wakes `Blocked(Io)` except a SIGCONT that no one can
+    // target yet (the pid isn't exposed until `mark_ready`).
+    proc.state = if defer_ready {
+        ProcessState::Blocked(BlockReason::Io)
+    } else {
+        ProcessState::Ready
+    };
     proc.cr3 = image.pml4_phys;
     apply_default_scheduler_policy(&mut proc, false);
 
@@ -278,4 +292,33 @@ pub unsafe fn spawn_user_process(
 
     PROCESS_TABLE_LOCK.unlock();
     Ok(pid)
+}
+
+/// Make a `defer_ready` child (parked in `Blocked(Io)`) schedulable once
+/// `sys_spawn` has replayed its file_actions[]. No-op on a freed slot.
+pub unsafe fn mark_ready(pid: u32) {
+    PROCESS_TABLE_LOCK.lock();
+    if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
+        if !proc.is_free() {
+            proc.state = ProcessState::Ready;
+        }
+    }
+    PROCESS_TABLE_LOCK.unlock();
+}
+
+/// Tear a never-scheduled `defer_ready` child down through the normal
+/// child-destroy path when file_actions[] replay fails. `terminate_process_inner`
+/// releases its inherited pipe endpoints and zombifies it (balancing the
+/// spawn-time `LIVE_COUNT` bump); the detached-zombie reap then frees the fds
+/// (per-mount `open_fds`), kernel stack, image pages, and page tables, and frees
+/// the slot — so no zombie, fd, or pipe-refcount leak survives. `detached` steers
+/// it into the reap sweep.
+pub unsafe fn destroy_deferred_child(pid: u32) {
+    PROCESS_TABLE_LOCK.lock();
+    if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
+        proc.detached = true;
+        super::lifecycle::terminate_process_inner(proc, 0, 9);
+    }
+    super::wait::reap_detached_zombies();
+    PROCESS_TABLE_LOCK.unlock();
 }

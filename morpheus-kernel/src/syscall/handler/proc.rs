@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use morpheus_foundation::errno::E2BIG;
 use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 use morpheus_foundation::flags::{
-    SPAWN_CLEAR_FDS, SPAWN_FA_CHDIR, SPAWN_FA_CLOSE, SPAWN_FA_DUP2, SPAWN_FA_OPEN,
+    SPAWN_CLEAR_FDS, SPAWN_FA_CHDIR, SPAWN_FA_CLOSE, SPAWN_FA_DUP2, SPAWN_FA_NULL, SPAWN_FA_OPEN,
 };
 use morpheus_foundation::types::{SpawnArgs, SpawnFileAction};
 use morpheus_foundation::PAGE_SIZE;
@@ -191,6 +191,7 @@ unsafe fn replay_file_actions(child_pid: u32, sa: &SpawnArgs) -> Result<(), u64>
             SPAWN_FA_DUP2 => child_fd_dup2(child_pid, fa.fd, fa.newfd),
             SPAWN_FA_CHDIR => child_chdir(child_pid, fa.path_ptr, fa.path_len),
             SPAWN_FA_OPEN => child_fd_open(child_pid, fa.fd, fa.path_ptr, fa.path_len, fa.oflags),
+            SPAWN_FA_NULL => child_fd_null(child_pid, fa.fd),
             _ => Err(EINVAL),
         };
         if result.is_err() {
@@ -346,6 +347,24 @@ unsafe fn child_fd_open(
     Ok(())
 }
 
+/// PROCESS_TABLE_LOCK held by caller
+unsafe fn child_fd_null(child_pid: u32, fd: i32) -> Result<(), u64> {
+    if fd < 0 || fd as usize >= crate::storage::fs_api::FD_TABLE_LEN {
+        return Err(EBADF);
+    }
+    let _ = child_fd_close(child_pid, fd);
+    let child = PROCESS_TABLE
+        .get_mut(child_pid as usize)
+        .and_then(|s| s.as_mut())
+        .ok_or(ESRCH)?;
+    let mut state = crate::storage::fs_api::FdState::empty();
+    state.kind = crate::storage::fs_api::FdKind::Null;
+    if !child.fd_table.set(fd as usize, state) {
+        return Err(EBADF);
+    }
+    Ok(())
+}
+
 /// SYS_SPAWN(*const SpawnArgs) — posix_spawn. The child inherits the parent fd
 /// table minus `O_CLOEXEC` (or empty if `SPAWN_CLEAR_FDS`), then `file_actions[]`
 /// replay in order; argv/envp/cwd come off the versioned block.
@@ -465,13 +484,31 @@ pub unsafe fn sys_spawn(args_ptr: u64) -> u64 {
         cwd,
         true,
         clear_fds,
+        // defer_ready: park the child so file_actions[] replay before it can run.
+        true,
     );
 
     let _ = hal().phys().free_pages(buf_phys, pages_needed);
 
-    match result {
-        Ok(pid) => pid as u64,
-        Err(_) => ENOMEM,
+    let pid = match result {
+        Ok(pid) => pid,
+        Err(_) => return ENOMEM,
+    };
+
+    // Inheritance (minus cloexec) already ran inside spawn_user_process; now
+    // replay file_actions[] in array order over the still-parked child, then make
+    // it schedulable. A failing action tears the half-built child down through
+    // the normal child-destroy path (no fd/slot/pipe-refcount leak) and returns
+    // that action's errno so std maps it to the right ErrorKind (EBADF, ENOENT…).
+    match replay_file_actions(pid, &sa) {
+        Ok(()) => {
+            crate::schedular::mark_ready(pid);
+            pid as u64
+        },
+        Err(errno) => {
+            crate::schedular::destroy_deferred_child(pid);
+            errno
+        },
     }
 }
 

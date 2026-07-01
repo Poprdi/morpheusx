@@ -11,7 +11,7 @@ use crate::pipe;
 use crate::schedular::SCHEDULER;
 pub use morpheus_foundation::flags::{PROT_EXEC, PROT_READ, PROT_WRITE};
 use morpheus_hal_api::Pml4Handle;
-use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
+use morpheus_helix::types::open_flags::{O_CLOEXEC, O_NONBLOCK, O_PIPE_READ, O_PIPE_WRITE};
 
 // PROT_* preset lives with the VM syscalls; shm_grant reuses it.
 use super::mem::prot_to_user_preset;
@@ -139,11 +139,17 @@ unsafe fn shm_grant_locked(target_pid: u64, src_vaddr: u64, pages: u64, flags: u
     target_vaddr
 }
 
-/// Writes `[read_fd, write_fd]` (two u64) at `result_ptr`.
-pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
+/// Writes `[read_fd, write_fd]` (two u64) at `result_ptr`. `flags` is `pipe2`-style
+/// (`O_CLOEXEC`/`O_NONBLOCK`); unknown bits are ignored (forward-compat), so an old
+/// caller passing 0 is byte-for-byte unchanged (K6).
+pub unsafe fn sys_pipe(result_ptr: u64, flags: u64) -> u64 {
     if !validate_user_buf(result_ptr, 8) {
         return EFAULT;
     }
+    // Mask to the bits we honor on a pipe end.
+    let extra = (flags as u32) & (O_CLOEXEC | O_NONBLOCK);
+    let cloexec = extra & O_CLOEXEC != 0;
+
     let pipe_idx = match pipe::pipe_alloc() {
         Some(idx) => idx,
         None => return ENOMEM,
@@ -158,7 +164,8 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
     };
     let mut read_state = crate::storage::fs_api::FdState::empty();
     read_state.kind = crate::storage::fs_api::FdKind::Pipe;
-    read_state.flags = O_PIPE_READ;
+    read_state.flags = O_PIPE_READ | extra;
+    read_state.cloexec = cloexec;
     read_state.mount_id = pipe_idx as u64;
     if !fd_table.set(read_fd, read_state) {
         return ENOMEM;
@@ -173,7 +180,8 @@ pub unsafe fn sys_pipe(result_ptr: u64) -> u64 {
     };
     let mut write_state = crate::storage::fs_api::FdState::empty();
     write_state.kind = crate::storage::fs_api::FdKind::Pipe;
-    write_state.flags = O_PIPE_WRITE;
+    write_state.flags = O_PIPE_WRITE | extra;
+    write_state.cloexec = cloexec;
     write_state.mount_id = pipe_idx as u64;
     if !fd_table.set(write_fd, write_state) {
         let _ = fd_table.free(read_fd);
@@ -274,6 +282,19 @@ pub unsafe fn sys_getenv(buf_ptr: u64, buf_len: u64) -> u64 {
         dst.copy_from_slice(&leader.env_block[..copy_len]);
     }
     total as u64
+}
+
+/// Non-blocking counterpart to [`sys_pipe_read_blocking`] (O_NONBLOCK pipe reads):
+/// `EAGAIN` when empty with writers still live, `0` at EOF.
+pub(super) unsafe fn sys_pipe_read_nonblocking(pipe_idx: u8, buf: &mut [u8]) -> u64 {
+    let n = pipe::pipe_read(pipe_idx, buf);
+    if n > 0 {
+        return n as u64;
+    }
+    if pipe::pipe_writers(pipe_idx) == 0 {
+        return 0;
+    }
+    EAGAIN
 }
 
 /// Returns 0 when all writers have closed.

@@ -71,10 +71,21 @@ pub(super) unsafe fn net_poll_drive(timestamp_ms: u64) -> i64 {
     stack.device_mut().refill_rx_queue();
     let activity = stack.poll(timestamp_ms);
     stack.device_mut().collect_tx_completions();
+    state::reap_expired_dns_queries(stack, timestamp_ms);
     if activity {
         1
     } else {
         0
+    }
+}
+
+/// Milliseconds until smoltcp needs us 
+    match state::user_net_stack_mut() {
+        Some(stack) => match stack.poll_delay_ms(timestamp_ms) {
+            Some(ms) => ms.min(i64::MAX as u64) as i64,
+            None => -1,
+        },
+        None => -1,
     }
 }
 

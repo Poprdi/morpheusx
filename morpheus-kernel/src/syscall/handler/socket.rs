@@ -371,9 +371,9 @@ pub unsafe fn sys_listen(fd: u64, _backlog: u64) -> u64 {
 }
 
 /// SYS_ACCEPT: `fd,*mut SockAddrStorage,*mut u32 addrlen,flags -> newfd | -errno`.
-/// The IPv4 bridge mints the accepted connection as a fresh handle and re-arms
-/// the listener; we do not yet learn the peer address from it, so the returned
-/// `*sa` is AF_INET 0.0.0.0:0 (best-effort, documented gap).
+/// The IPv4 bridge mints the accepted connection as a fresh handle, re-arms the
+/// listener, and reports the connecting peer's endpoint (network-byte-order ip +
+/// host-order port) so the returned `*sa` / `getpeername` are the real client.
 pub unsafe fn sys_accept(fd: u64, addr: u64, addrlen: u64, flags: u64) -> u64 {
     let m = match meta_of(fd) {
         Ok(m) => m,
@@ -391,9 +391,11 @@ pub unsafe fn sys_accept(fd: u64, addr: u64, addrlen: u64, flags: u64) -> u64 {
 
     loop {
         net_drive();
-        let h = bridge_tcp_accept(m.handle);
+        let mut peer_ip: u32 = 0;
+        let mut peer_port: u16 = 0;
+        let h = bridge_tcp_accept(m.handle, &mut peer_ip, &mut peer_port);
         if h >= 0 {
-            return finish_accept(h, addr, addrlen, flags);
+            return finish_accept(h, peer_ip, peer_port, m, addr, addrlen, flags);
         }
         if h == BRIDGE_ABSENT {
             return ENOSYS;
@@ -409,8 +411,18 @@ pub unsafe fn sys_accept(fd: u64, addr: u64, addrlen: u64, flags: u64) -> u64 {
     }
 }
 
-/// Install an accepted backend handle as a new connected socket fd.
-unsafe fn finish_accept(handle: i64, addr: u64, addrlen: u64, flags: u64) -> u64 {
+/// Install an accepted backend handle as a new connected socket fd. `peer_ip`
+/// (network byte order) / `peer_port` (host order) come from the accept bridge;
+/// `listener` supplies the accepted socket's local endpoint (same port).
+unsafe fn finish_accept(
+    handle: i64,
+    peer_ip: u32,
+    peer_port: u16,
+    listener: SockMeta,
+    addr: u64,
+    addrlen: u64,
+    flags: u64,
+) -> u64 {
     let cloexec = flags & SOCK_CLOEXEC != 0;
     let nonblock = flags & SOCK_NONBLOCK != 0;
 
@@ -422,16 +434,18 @@ unsafe fn finish_accept(handle: i64, addr: u64, addrlen: u64, flags: u64) -> u64
             return EMFILE;
         },
     };
+    // Cache the peer so getpeername() and the accepted stream's peer_addr() are
+    // correct; local_ip/port inherit the listener (the accepted socket shares it).
     let meta = SockMeta {
         handle,
         ty: SOCK_STREAM_TAG,
         domain: AF_INET as u8,
         sflags: SF_CONNECTED,
         ttl: 64,
-        local_port: 0,
-        peer_port: 0,
-        peer_ip: 0,
-        local_ip: 0,
+        local_port: listener.local_port,
+        peer_port,
+        peer_ip,
+        local_ip: listener.local_ip,
         rcvtimeo_ms: 0,
         sndtimeo_ms: 0,
     };
@@ -446,9 +460,9 @@ unsafe fn finish_accept(handle: i64, addr: u64, addrlen: u64, flags: u64) -> u64
         return EMFILE;
     }
     readiness::register(readiness::socket_token(handle as u64));
-    // Peer address is not yet recoverable from the IPv4 bridge; report 0.0.0.0:0.
-    // Best-effort: a bad user buffer must not leak the freshly minted fd.
-    let _ = write_sockaddr_in(addr, addrlen, 0, 0);
+    // Report the real peer ip:port. Best-effort: a bad user buffer must not leak
+    // the freshly minted fd, so this write happens last.
+    let _ = write_sockaddr_in(addr, addrlen, peer_ip, peer_port);
     newfd as u64
 }
 
