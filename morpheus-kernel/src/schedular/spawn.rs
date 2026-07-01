@@ -1,9 +1,7 @@
 use super::lifecycle::apply_default_scheduler_policy;
 use super::state::{this_core_pid, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY};
 use crate::hal;
-use crate::process::{
-    CpuContext, Process, ProcessState, MAX_PROCESSES, MAX_USER_PROCESSES,
-};
+use crate::process::{CpuContext, Process, ProcessState, MAX_PROCESSES, MAX_USER_PROCESSES};
 use core::sync::atomic::Ordering;
 use morpheus_foundation::flags::open_flags;
 use morpheus_foundation::flags::THREAD_DETACHED;

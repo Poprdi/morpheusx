@@ -114,8 +114,9 @@ impl HelixSuperblock {
 
     pub fn update_crc(&mut self) {
         self.crc32c = 0;
-        let bytes =
-            unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, BLOCK_SIZE as usize) };
+        let bytes = unsafe {
+            core::slice::from_raw_parts(self as *const _ as *const u8, BLOCK_SIZE as usize)
+        };
         self.crc32c = crate::crc::crc32c(bytes);
     }
 

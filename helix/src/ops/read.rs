@@ -115,7 +115,8 @@ pub fn read_file_at_lsn<B: BlockIo>(
                                         &payload[..]
                                     };
 
-                                    if header.flags & rec_flags::IS_EXTENT != 0 && data.len() >= 17 {
+                                    if header.flags & rec_flags::IS_EXTENT != 0 && data.len() >= 17
+                                    {
                                         last_write_data = None;
                                         last_file_size = Some(u64::from_le_bytes(
                                             data[1..9].try_into().unwrap_or([0u8; 8]),

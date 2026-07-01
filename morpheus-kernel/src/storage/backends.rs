@@ -552,7 +552,11 @@ fn fat_dirent_to_abi(e: &morpheus_fat32::types::DirEntry) -> DirEntry {
     DirEntry {
         name,
         name_len: n as u16,
-        d_type: if is_dir { dirent_type::DT_DIR } else { dirent_type::DT_REG },
+        d_type: if is_dir {
+            dirent_type::DT_DIR
+        } else {
+            dirent_type::DT_REG
+        },
         size: e.size,
         version_count: 1,
         ..DirEntry::zeroed()

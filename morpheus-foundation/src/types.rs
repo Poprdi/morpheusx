@@ -483,7 +483,11 @@ impl VolumeInfo {
 
     /// The NUL-terminated `label` as a `&str` (lossy-empty on bad UTF-8 / no label).
     pub fn label_str(&self) -> &str {
-        let end = self.label.iter().position(|&b| b == 0).unwrap_or(self.label.len());
+        let end = self
+            .label
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.label.len());
         core::str::from_utf8(&self.label[..end]).unwrap_or("")
     }
 

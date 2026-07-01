@@ -75,7 +75,13 @@ impl VmaTable {
 
     /// Insert defaulting `prot` to RW — the only protection non-mmap callers
     /// (MAP_PHYS, spawn image) expose.
-    pub fn insert(&mut self, vaddr: u64, phys: u64, pages: u64, owns_phys: bool) -> Result<usize, ()> {
+    pub fn insert(
+        &mut self,
+        vaddr: u64,
+        phys: u64,
+        pages: u64,
+        owns_phys: bool,
+    ) -> Result<usize, ()> {
         self.insert_full(vaddr, phys, pages, owns_phys, PROT_WRITE)
     }
 

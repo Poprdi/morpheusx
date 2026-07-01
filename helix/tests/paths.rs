@@ -19,7 +19,10 @@ fn mount() -> (MemBio, HelixFs) {
 fn malformed_paths_rejected() {
     let (mut dev, mut fs) = mount();
     for p in ["//a", "/a//b", "/a/../b", "/a/./b", "/a/"] {
-        assert!(fs.write(&mut dev, p, b"x", 1).is_err(), "{p} must be rejected, not stored");
+        assert!(
+            fs.write(&mut dev, p, b"x", 1).is_err(),
+            "{p} must be rejected, not stored"
+        );
     }
     fs.write(&mut dev, "/ok", b"y", 1).unwrap();
     assert_eq!(fs.read(&mut dev, "/ok").unwrap(), b"y");
@@ -31,7 +34,17 @@ fn write_over_directory_rejected() {
     fs.mkdir(&mut dev, "/d", 1).unwrap();
     fs.write(&mut dev, "/d/child", b"c", 2).unwrap();
 
-    assert!(fs.write(&mut dev, "/d", b"x", 3).is_err(), "a write over a directory must fail");
-    assert!(fs.stat("/d").unwrap().is_dir(), "directory was clobbered/shadowed by a file write");
-    assert_eq!(fs.read(&mut dev, "/d/child").unwrap(), b"c", "child orphaned by a shadowing write");
+    assert!(
+        fs.write(&mut dev, "/d", b"x", 3).is_err(),
+        "a write over a directory must fail"
+    );
+    assert!(
+        fs.stat("/d").unwrap().is_dir(),
+        "directory was clobbered/shadowed by a file write"
+    );
+    assert_eq!(
+        fs.read(&mut dev, "/d/child").unwrap(),
+        b"c",
+        "child orphaned by a shadowing write"
+    );
 }

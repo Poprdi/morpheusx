@@ -5,7 +5,7 @@ extern crate alloc;
 use super::common::*;
 use crate::hal;
 use crate::process::ProcessState;
-use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, {SCHEDULER}};
+use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER};
 use alloc::vec::Vec;
 use morpheus_foundation::errno::E2BIG;
 use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
@@ -88,7 +88,11 @@ pub unsafe fn sys_getppid() -> u64 {
 /// Flatten an array of `argc` `{ptr,len}` pairs at `argv_ptr` into a
 /// NUL-separated blob (≤256 B, ≤16 entries, each ≤127 B) for `Process.args`.
 /// Returns `(blob_len, count)`.
-unsafe fn build_arg_blob(argv_ptr: u64, argc: u64, out: &mut [u8; 256]) -> Result<(usize, u8), u64> {
+unsafe fn build_arg_blob(
+    argv_ptr: u64,
+    argc: u64,
+    out: &mut [u8; 256],
+) -> Result<(usize, u8), u64> {
     let mut blob_len = 0usize;
     let mut count = 0u8;
     if argc == 0 || argv_ptr == 0 {
@@ -202,7 +206,10 @@ unsafe fn child_fd_close(child_pid: u32, fd: i32) -> Result<(), u64> {
     if fd < 0 {
         return Err(EBADF);
     }
-    let child = match PROCESS_TABLE.get_mut(child_pid as usize).and_then(|s| s.as_mut()) {
+    let child = match PROCESS_TABLE
+        .get_mut(child_pid as usize)
+        .and_then(|s| s.as_mut())
+    {
         Some(c) => c,
         None => return Err(ESRCH),
     };
@@ -253,7 +260,10 @@ unsafe fn child_fd_dup2(child_pid: u32, old_fd: i32, new_fd: i32) -> Result<(), 
     // Close any existing new_fd first (POSIX dup2 semantics).
     let _ = child_fd_close(child_pid, new_fd);
 
-    let child = match PROCESS_TABLE.get_mut(child_pid as usize).and_then(|s| s.as_mut()) {
+    let child = match PROCESS_TABLE
+        .get_mut(child_pid as usize)
+        .and_then(|s| s.as_mut())
+    {
         Some(c) => c,
         None => return Err(ESRCH),
     };

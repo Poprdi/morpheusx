@@ -278,13 +278,9 @@ unsafe fn mprotect_locked(vaddr: u64, pages: u64, prot: u64) -> u64 {
     proc.vma_table.set_at(idx, mid);
 
     if left_pages > 0 {
-        let _ = proc.vma_table.insert_full(
-            vma.vaddr,
-            vma.phys,
-            left_pages,
-            vma.owns_phys,
-            vma.prot,
-        );
+        let _ =
+            proc.vma_table
+                .insert_full(vma.vaddr, vma.phys, left_pages, vma.owns_phys, vma.prot);
     }
     if right_pages > 0 {
         let _ = proc.vma_table.insert_full(

@@ -207,7 +207,10 @@ pub unsafe fn sys_epoll_ctl(epfd: u64, op: u64, fd: u64, event: u64) -> u64 {
         return EBADF;
     }
 
-    let existing = inst.watches.iter().position(|w| w.in_use && w.fd == fd as u32);
+    let existing = inst
+        .watches
+        .iter()
+        .position(|w| w.in_use && w.fd == fd as u32);
 
     match op {
         EPOLL_CTL_ADD => {

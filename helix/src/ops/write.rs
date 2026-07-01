@@ -133,8 +133,12 @@ pub fn write_file<B: BlockIo>(
         return Err(HelixError::IoWriteFailed);
     }
 
-    let full_payload =
-        build_extent_payload(path, extent_kind::CONTIGUOUS, data.len() as u64, data_start_relative);
+    let full_payload = build_extent_payload(
+        path,
+        extent_kind::CONTIGUOUS,
+        data.len() as u64,
+        data_start_relative,
+    );
     let lsn = match log.append_full(
         block_io,
         LogOp::Write,
@@ -263,8 +267,7 @@ fn write_file_fragmented<B: BlockIo>(
         return Err(e);
     }
 
-    let full_payload =
-        build_extent_payload(path, extent_kind::NODE, data.len() as u64, node_block);
+    let full_payload = build_extent_payload(path, extent_kind::NODE, data.len() as u64, node_block);
     let lsn = match log.append_full(
         block_io,
         LogOp::Write,

@@ -215,8 +215,7 @@ pub unsafe fn sys_thread_detach(tid: u64) -> u64 {
     PROCESS_TABLE_LOCK.lock();
     let r = match PROCESS_TABLE.get_mut(tid as usize).and_then(|s| s.as_mut()) {
         Some(p) if !p.is_free() => {
-            let same_group =
-                p.is_thread() && p.thread_group_leader == caller_leader;
+            let same_group = p.is_thread() && p.thread_group_leader == caller_leader;
             if same_group || p.parent_pid == caller_leader {
                 p.detached = true;
                 0

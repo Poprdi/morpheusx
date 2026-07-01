@@ -13,8 +13,7 @@ const DISK_SECTORS: usize = 4096;
 fn disk_with_twice_written_file() -> MemBio {
     let mut dev = MemBio::new(DISK_SECTORS);
     let sectors = dev.sectors();
-    let mut fs =
-        HelixFs::format_and_mount(&mut dev, 0, sectors, 512, "test", [0u8; 16]).unwrap();
+    let mut fs = HelixFs::format_and_mount(&mut dev, 0, sectors, 512, "test", [0u8; 16]).unwrap();
     fs.write(&mut dev, "/f", b"v1", 100).unwrap();
     fs.write(&mut dev, "/f", b"v2-larger", 200).unwrap();
     fs.sync(&mut dev).unwrap();

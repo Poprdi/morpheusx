@@ -349,7 +349,11 @@ impl FdTable {
     // Private fds (`ofd == 0`) fall back to inline, so the unshared path is unchanged.
     pub fn offset(&self, fd: usize) -> Option<u64> {
         let s = self.get(fd)?;
-        Some(if s.ofd != 0 { ofd::offset(s.ofd) } else { s.offset })
+        Some(if s.ofd != 0 {
+            ofd::offset(s.ofd)
+        } else {
+            s.offset
+        })
     }
 
     pub fn set_offset(&mut self, fd: usize, v: u64) -> bool {
@@ -380,7 +384,11 @@ impl FdTable {
     /// OFD status flags (`O_NONBLOCK`/`O_APPEND`/access mode) — backs `F_GETFL`.
     pub fn status_flags(&self, fd: usize) -> Option<u32> {
         let s = self.get(fd)?;
-        Some(if s.ofd != 0 { ofd::flags(s.ofd) } else { s.flags })
+        Some(if s.ofd != 0 {
+            ofd::flags(s.ofd)
+        } else {
+            s.flags
+        })
     }
 
     /// Set OFD status flags — backs `F_SETFL` / `FIONBIO`. Shared across every fd
@@ -474,7 +482,12 @@ impl FdTable {
 
     /// `fcntl(F_DUPFD / F_DUPFD_CLOEXEC)` and `try_clone`: lowest free fd ≥
     /// `min_fd` (clamped to 3) aliasing `old`'s OFD, with `FD_CLOEXEC` = `cloexec`.
-    pub fn dup_from(&mut self, old: usize, min_fd: usize, cloexec: bool) -> Result<usize, VfsError> {
+    pub fn dup_from(
+        &mut self,
+        old: usize,
+        min_fd: usize,
+        cloexec: bool,
+    ) -> Result<usize, VfsError> {
         if self.get(old).is_none() {
             return Err(VfsError::BadFd);
         }

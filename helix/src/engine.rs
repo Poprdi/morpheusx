@@ -114,8 +114,7 @@ impl HelixFs {
             .all_entries()
             .iter()
             .filter(|e| {
-                e.flags
-                    & (entry_flags::IS_DELETED | entry_flags::IS_DIR | entry_flags::IS_INLINE)
+                e.flags & (entry_flags::IS_DELETED | entry_flags::IS_DIR | entry_flags::IS_INLINE)
                     == 0
                     && e.extent_root != BLOCK_NULL
             })
@@ -304,7 +303,11 @@ impl HelixFs {
     /// Run a mutation; on a full log, checkpoint to recycle the ring and retry
     /// once. Mutations roll back cleanly on `LogFull` (append is their first
     /// fallible step), so the retry is safe.
-    fn with_checkpoint_retry<B, F, T>(&mut self, block_io: &mut B, mut op: F) -> Result<T, HelixError>
+    fn with_checkpoint_retry<B, F, T>(
+        &mut self,
+        block_io: &mut B,
+        mut op: F,
+    ) -> Result<T, HelixError>
     where
         B: BlockIo,
         F: FnMut(&mut Self, &mut B) -> Result<T, HelixError>,

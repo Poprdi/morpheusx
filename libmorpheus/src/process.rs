@@ -90,7 +90,7 @@ fn decode_wstatus(s: i32) -> i32 {
     } else if WaitStatus::signaled(s) {
         128 + WaitStatus::term_sig(s)
     } else {
-        Ok(ret as i32)
+        s
     }
 }
 
@@ -115,7 +115,11 @@ fn make_spawn_args(path: &str, descs: &[[u64; 2]]) -> morpheus_foundation::types
         struct_size: core::mem::size_of::<SpawnArgs>() as u16,
         path_ptr: path.as_ptr() as u64,
         path_len: path.len() as u64,
-        argv_ptr: if descs.is_empty() { 0 } else { descs.as_ptr() as u64 },
+        argv_ptr: if descs.is_empty() {
+            0
+        } else {
+            descs.as_ptr() as u64
+        },
         argc: descs.len() as u64,
         fa_stride: core::mem::size_of::<SpawnFileAction>() as u32,
         ..SpawnArgs::default()

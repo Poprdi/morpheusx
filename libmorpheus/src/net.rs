@@ -785,7 +785,14 @@ impl TcpStream {
 impl io::Read for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> error::Result<usize> {
         let n = check(unsafe {
-            sys_recvfrom(self.fd as u64, buf.as_mut_ptr() as u64, buf.len() as u64, 0, 0, 0)
+            sys_recvfrom(
+                self.fd as u64,
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+                0,
+                0,
+                0,
+            )
         })?;
         Ok(n as usize)
     }
@@ -794,7 +801,14 @@ impl io::Read for TcpStream {
 impl io::Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> error::Result<usize> {
         let n = check(unsafe {
-            sys_sendto(self.fd as u64, buf.as_ptr() as u64, buf.len() as u64, 0, 0, 0)
+            sys_sendto(
+                self.fd as u64,
+                buf.as_ptr() as u64,
+                buf.len() as u64,
+                0,
+                0,
+                0,
+            )
         })?;
         Ok(n as usize)
     }
@@ -872,7 +886,8 @@ impl UdpSocket {
     pub fn bind(ip: Ipv4Addr, port: u16) -> error::Result<Self> {
         let fd = check(unsafe { sys_socket(AF_INET, SOCK_DGRAM, 0) })? as i32;
         let sa = encode_addr(ip, port);
-        if let Err(e) = check(unsafe { sys_bind(fd as u64, &sa as *const _ as u64, SOCKADDR_IN_LEN) })
+        if let Err(e) =
+            check(unsafe { sys_bind(fd as u64, &sa as *const _ as u64, SOCKADDR_IN_LEN) })
         {
             unsafe { raw_close(fd) };
             return Err(e);

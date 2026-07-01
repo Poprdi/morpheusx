@@ -1014,13 +1014,19 @@ unsafe fn stage_e2_enter_userspace(_ctx: &BootContext) -> ! {
         None => boot_panic("BOOT", "/bin/init not found"),
     };
 
-    let init_pid =
-        match morpheus_kernel::schedular::spawn_user_process(
-            "init", &elf_data, &[], 0, &[], None, false, false,
-        ) {
-            Ok(pid) => pid,
-            Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
-        };
+    let init_pid = match morpheus_kernel::schedular::spawn_user_process(
+        "init",
+        &elf_data,
+        &[],
+        0,
+        &[],
+        None,
+        false,
+        false,
+    ) {
+        Ok(pid) => pid,
+        Err(_) => boot_panic("BOOT", "failed to spawn /bin/init"),
+    };
     let _ = init_pid;
 
     // The ELF buffer can drop now; init has its own address space.

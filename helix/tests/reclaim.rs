@@ -20,7 +20,8 @@ fn overwrite_frees_prior_extent_blocks() {
     let used_after_first = fs.bitmap.allocated_count();
 
     for i in 0..20u8 {
-        fs.write(&mut dev, "/a", &[i + 1; 2 * BLOCK], 10 + i as u64).unwrap();
+        fs.write(&mut dev, "/a", &[i + 1; 2 * BLOCK], 10 + i as u64)
+            .unwrap();
     }
 
     assert_eq!(

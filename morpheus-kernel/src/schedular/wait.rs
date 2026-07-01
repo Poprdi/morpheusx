@@ -18,7 +18,13 @@ unsafe fn leader_of(pid: u32) -> u32 {
     PROCESS_TABLE
         .get(pid as usize)
         .and_then(|s| s.as_ref())
-        .map(|p| if p.is_thread() { p.thread_group_leader } else { pid })
+        .map(|p| {
+            if p.is_thread() {
+                p.thread_group_leader
+            } else {
+                pid
+            }
+        })
         .unwrap_or(pid)
 }
 
@@ -211,16 +217,16 @@ pub unsafe fn do_wait(idtype: u64, id: u32, options: u64) -> (u64, i32) {
         let mut ready: Option<u32> = None;
 
         match idtype {
-            P_PID => {
-                match PROCESS_TABLE.get(id as usize).and_then(|s| s.as_ref()) {
-                    Some(p) if can_reap(current, id) && !matches!(p.state, ProcessState::Terminated) => {
-                        found_any = true;
-                        if p.state == ProcessState::Zombie {
-                            ready = Some(id);
-                        }
-                    },
-                    _ => {},
-                }
+            P_PID => match PROCESS_TABLE.get(id as usize).and_then(|s| s.as_ref()) {
+                Some(p)
+                    if can_reap(current, id) && !matches!(p.state, ProcessState::Terminated) =>
+                {
+                    found_any = true;
+                    if p.state == ProcessState::Zombie {
+                        ready = Some(id);
+                    }
+                },
+                _ => {},
             },
             P_ALL => {
                 for idx in 1..MAX_PROCESSES {

@@ -94,7 +94,7 @@ pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
 pub unsafe fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> u64 {
     use morpheus_foundation::flags::open_flags::O_NONBLOCK;
     use morpheus_foundation::flags::{
-        F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
+        FD_CLOEXEC, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL,
     };
 
     let fd_table = SCHEDULER.current_fd_table_mut();

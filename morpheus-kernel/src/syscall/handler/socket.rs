@@ -14,8 +14,8 @@ use super::common::*;
 use super::net::{
     bridge_tcp_accept, bridge_tcp_can_recv, bridge_tcp_can_send, bridge_tcp_close,
     bridge_tcp_connect, bridge_tcp_keepalive, bridge_tcp_listen, bridge_tcp_nodelay,
-    bridge_tcp_recv, bridge_tcp_send, bridge_tcp_shutdown, bridge_tcp_state, bridge_udp_close,
-    bridge_udp_recv_from, bridge_udp_send_to, bridge_udp_socket, bridge_tcp_socket, monotonic_ms,
+    bridge_tcp_recv, bridge_tcp_send, bridge_tcp_shutdown, bridge_tcp_socket, bridge_tcp_state,
+    bridge_udp_close, bridge_udp_recv_from, bridge_udp_send_to, bridge_udp_socket, monotonic_ms,
     net_drive, net_present, BRIDGE_ABSENT,
 };
 use crate::hal;
@@ -177,7 +177,11 @@ fn slice_deadline() -> u64 {
 unsafe fn park_one_slice(token: u64, interest: u32) {
     net_drive();
     readiness::register(token);
-    let _ = readiness::wait_ready(token, interest | EPOLLERR | EPOLLHUP | EPOLLRDHUP, slice_deadline());
+    let _ = readiness::wait_ready(
+        token,
+        interest | EPOLLERR | EPOLLHUP | EPOLLRDHUP,
+        slice_deadline(),
+    );
 }
 
 /// Read a `SockAddrStorage`/`SockAddrIn` from user memory. Returns
@@ -205,7 +209,12 @@ unsafe fn read_sockaddr(addr: u64, addrlen: u64) -> Result<(u32, u16), u64> {
 /// Write an AF_INET address back to a user `*sa` + `*addrlen` (in/out capacity).
 /// `addr == 0` skips (POSIX: caller does not want the address). `ip_nbo` network
 /// byte order, `port_host` host order.
-unsafe fn write_sockaddr_in(addr: u64, addrlen_ptr: u64, ip_nbo: u32, port_host: u16) -> Result<(), u64> {
+unsafe fn write_sockaddr_in(
+    addr: u64,
+    addrlen_ptr: u64,
+    ip_nbo: u32,
+    port_host: u16,
+) -> Result<(), u64> {
     if addr == 0 {
         return Ok(());
     }
@@ -262,7 +271,11 @@ pub unsafe fn sys_socket(domain: u64, ty: u64, _protocol: u64) -> u64 {
         bridge_udp_socket()
     };
     if handle < 0 {
-        return if handle == BRIDGE_ABSENT { ENOSYS } else { ENOMEM };
+        return if handle == BRIDGE_ABSENT {
+            ENOSYS
+        } else {
+            ENOMEM
+        };
     }
 
     let t = SCHEDULER.current_fd_table_mut();
@@ -294,7 +307,8 @@ pub unsafe fn sys_socket(domain: u64, ty: u64, _protocol: u64) -> u64 {
 
     let mut state = crate::storage::fs_api::FdState::empty();
     state.kind = crate::storage::fs_api::FdKind::Socket;
-    state.flags = O_SOCKET | if nonblock { O_NONBLOCK } else { 0 } | if cloexec { O_CLOEXEC } else { 0 };
+    state.flags =
+        O_SOCKET | if nonblock { O_NONBLOCK } else { 0 } | if cloexec { O_CLOEXEC } else { 0 };
     state.cloexec = cloexec;
     state.cookie[..32].copy_from_slice(&meta.to_cookie());
 
@@ -344,7 +358,11 @@ pub unsafe fn sys_listen(fd: u64, _backlog: u64) -> u64 {
     let rc = bridge_tcp_listen(m.handle, m.local_port);
     if rc < 0 {
         // The stack rejects a re-listen / in-use port; surface EADDRINUSE.
-        return if rc == BRIDGE_ABSENT { ENOSYS } else { EADDRINUSE };
+        return if rc == BRIDGE_ABSENT {
+            ENOSYS
+        } else {
+            EADDRINUSE
+        };
     }
     m.sflags |= SF_LISTENING;
     store_meta(fd, &m);
@@ -419,7 +437,8 @@ unsafe fn finish_accept(handle: i64, addr: u64, addrlen: u64, flags: u64) -> u64
     };
     let mut state = crate::storage::fs_api::FdState::empty();
     state.kind = crate::storage::fs_api::FdKind::Socket;
-    state.flags = O_SOCKET | if nonblock { O_NONBLOCK } else { 0 } | if cloexec { O_CLOEXEC } else { 0 };
+    state.flags =
+        O_SOCKET | if nonblock { O_NONBLOCK } else { 0 } | if cloexec { O_CLOEXEC } else { 0 };
     state.cloexec = cloexec;
     state.cookie[..32].copy_from_slice(&meta.to_cookie());
     if !t.set(newfd, state) {
@@ -508,14 +527,7 @@ pub unsafe fn sys_connect(fd: u64, addr: u64, addrlen: u64) -> u64 {
 }
 
 /// SYS_SENDTO: `fd,buf,len,flags,*const SockAddrStorage,addrlen -> n | -errno`.
-pub unsafe fn sys_sendto(
-    fd: u64,
-    buf: u64,
-    len: u64,
-    flags: u64,
-    addr: u64,
-    addrlen: u64,
-) -> u64 {
+pub unsafe fn sys_sendto(fd: u64, buf: u64, len: u64, flags: u64, addr: u64, addrlen: u64) -> u64 {
     let m = match meta_of(fd) {
         Ok(m) => m,
         Err(e) => return e,
@@ -555,7 +567,10 @@ unsafe fn do_tcp_send(fd: u64, m: SockMeta, buf: u64, len: u64, flags: u64) -> u
         }
         // Send buffer full — is the connection even writable?
         let st = bridge_tcp_state(m.handle);
-        if !matches!(st, ST_ESTABLISHED | ST_CLOSE_WAIT | ST_SYN_SENT | ST_SYN_RECEIVED) {
+        if !matches!(
+            st,
+            ST_ESTABLISHED | ST_CLOSE_WAIT | ST_SYN_SENT | ST_SYN_RECEIVED
+        ) {
             return EPIPE;
         }
         readiness::clear_ready(token, EPOLLOUT);
@@ -740,13 +755,7 @@ pub unsafe fn sys_getpeername(fd: u64, addr: u64, addrlen: u64) -> u64 {
 }
 
 /// SYS_SETSOCKOPT: `fd,level,optname,*const optval,optlen -> 0 | -errno`.
-pub unsafe fn sys_setsockopt(
-    fd: u64,
-    level: u64,
-    optname: u64,
-    optval: u64,
-    optlen: u64,
-) -> u64 {
+pub unsafe fn sys_setsockopt(fd: u64, level: u64, optname: u64, optval: u64, optlen: u64) -> u64 {
     let mut m = match meta_of(fd) {
         Ok(m) => m,
         Err(e) => return e,
@@ -830,13 +839,7 @@ pub unsafe fn sys_setsockopt(
 }
 
 /// SYS_GETSOCKOPT: `fd,level,optname,*mut optval,*mut u32 optlen -> 0 | -errno`.
-pub unsafe fn sys_getsockopt(
-    fd: u64,
-    level: u64,
-    optname: u64,
-    optval: u64,
-    optlen: u64,
-) -> u64 {
+pub unsafe fn sys_getsockopt(fd: u64, level: u64, optname: u64, optval: u64, optlen: u64) -> u64 {
     let m = match meta_of(fd) {
         Ok(m) => m,
         Err(e) => return e,

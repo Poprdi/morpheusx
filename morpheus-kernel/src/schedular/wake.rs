@@ -1,6 +1,7 @@
 use super::state::{
     clear_futex_waiter, clear_input_waiter, clear_pipe_waiter, clear_stdin_waiter, futex_waiters,
-    input_waiters, pipe_waiters, stdin_waiters, PROCESS_TABLE, PROCESS_TABLE_LOCK, TIMED_BLOCK_COUNT,
+    input_waiters, pipe_waiters, stdin_waiters, PROCESS_TABLE, PROCESS_TABLE_LOCK,
+    TIMED_BLOCK_COUNT,
 };
 use crate::process::{BlockReason, ProcessState};
 use core::sync::atomic::Ordering;
@@ -80,7 +81,11 @@ pub unsafe fn wake_futex_waiters(addr: u64, count: u32) -> u32 {
                 }
             }
         }
-        if matched || PROCESS_TABLE.get(bit as usize).map_or(true, |s| s.is_none()) {
+        if matched
+            || PROCESS_TABLE
+                .get(bit as usize)
+                .map_or(true, |s| s.is_none())
+        {
             clear_futex_waiter(bit, addr);
         }
     });

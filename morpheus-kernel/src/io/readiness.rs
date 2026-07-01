@@ -79,7 +79,10 @@ pub fn register(token: u64) -> Option<usize> {
     REG_LOCK.lock();
     let r = match find(token) {
         Some(i) => Some(i),
-        None => match SOURCES.iter().position(|s| s.token.load(Ordering::Relaxed) == 0) {
+        None => match SOURCES
+            .iter()
+            .position(|s| s.token.load(Ordering::Relaxed) == 0)
+        {
             Some(i) => {
                 SOURCES[i].mask.store(0, Ordering::Relaxed);
                 SOURCES[i].token.store(token, Ordering::Release);

@@ -25,7 +25,8 @@ fn records_survive_log_segment_boundary() {
         // % 251 keeps the first byte clear of 0xFF (the extent-record marker),
         // isolating this test from the inline/extent classification bug.
         let data = [(i % 251) as u8; 96];
-        fs.write(&mut dev, &format!("/f{i:05}"), &data, 1000 + i as u64).unwrap();
+        fs.write(&mut dev, &format!("/f{i:05}"), &data, 1000 + i as u64)
+            .unwrap();
     }
     fs.sync(&mut dev).unwrap();
     drop(fs);
@@ -35,7 +36,14 @@ fn records_survive_log_segment_boundary() {
     // The earliest files lived in segment 0; they must still be there.
     for i in 0..256 {
         let got = fs2.read(&mut dev, &format!("/f{i:05}"));
-        assert!(got.is_ok(), "/f{i:05} lost across the segment boundary: {got:?}");
-        assert_eq!(got.unwrap(), [(i % 251) as u8; 96], "/f{i:05} content corrupted");
+        assert!(
+            got.is_ok(),
+            "/f{i:05} lost across the segment boundary: {got:?}"
+        );
+        assert_eq!(
+            got.unwrap(),
+            [(i % 251) as u8; 96],
+            "/f{i:05} content corrupted"
+        );
     }
 }

@@ -53,7 +53,12 @@ pub fn write_index_region<B: BlockIo>(
                 unsafe { core::slice::from_raw_parts(&e as *const _ as *const u8, ENTRY_SIZE) };
             buf[slot * ENTRY_SIZE..(slot + 1) * ENTRY_SIZE].copy_from_slice(bytes);
         }
-        let lba = region_lba(partition_lba_start, data_start_block, device_block_size, region_start + b);
+        let lba = region_lba(
+            partition_lba_start,
+            data_start_block,
+            device_block_size,
+            region_start + b,
+        );
         block_io
             .write_blocks(lba, &buf)
             .map_err(|_| HelixError::IoWriteFailed)?;
@@ -76,7 +81,12 @@ pub fn load_index_region<B: BlockIo>(
         if loaded >= entry_count {
             break;
         }
-        let lba = region_lba(partition_lba_start, data_start_block, device_block_size, region_start + b);
+        let lba = region_lba(
+            partition_lba_start,
+            data_start_block,
+            device_block_size,
+            region_start + b,
+        );
         let mut buf = vec![0u8; BLOCK_SIZE as usize];
         block_io
             .read_blocks(lba, &mut buf)

@@ -8,6 +8,7 @@ pub mod handler;
 use crate::hal;
 use crate::process::ProcessState;
 use crate::schedular::SCHEDULER;
+use handler::clock::{sys_clock_gettime, sys_nanosleep};
 use handler::compositor::{
     sys_compositor_set, sys_forward_input, sys_mouse_forward, sys_try_wait,
     sys_win_surface_dirty_clear, sys_win_surface_list, sys_win_surface_map,
@@ -16,18 +17,17 @@ use handler::core::{
     sys_exit, sys_getpid, sys_keyboard_read, sys_kill, sys_read, sys_sleep, sys_system_control,
     sys_wait, sys_write, sys_yield,
 };
+use handler::epoll::{sys_epoll_create, sys_epoll_ctl, sys_epoll_wait};
 use handler::fb::{
     fb_lock_holder, is_composited_client, sys_fb_blit, sys_fb_info, sys_fb_lock, sys_fb_map,
     sys_fb_present, sys_fb_unlock,
 };
-use handler::clock::{sys_clock_gettime, sys_nanosleep};
-use handler::epoll::{sys_epoll_create, sys_epoll_ctl, sys_epoll_wait};
 use handler::fd::{sys_chdir, sys_dup, sys_fcntl, sys_getcwd, sys_syslog};
 use handler::fs::{
     sys_fs_close, sys_fs_fstat, sys_fs_fsync, sys_fs_ftruncate, sys_fs_mkdir, sys_fs_open,
     sys_fs_readdir, sys_fs_rename, sys_fs_rmdir, sys_fs_seek, sys_fs_snapshot, sys_fs_stat,
-    sys_fs_sync, sys_fs_truncate, sys_fs_unlink, sys_fs_versions, sys_mount, sys_mounts, sys_umount,
-    sys_volumes,
+    sys_fs_sync, sys_fs_truncate, sys_fs_unlink, sys_fs_versions, sys_mount, sys_mounts,
+    sys_umount, sys_volumes,
 };
 use handler::hw::{
     sys_cache_flush, sys_dma_alloc, sys_dma_free, sys_getrandom, sys_irq_ack, sys_irq_attach,
@@ -36,10 +36,6 @@ use handler::hw::{
 use handler::ipc::{sys_dup2, sys_getargs, sys_getenv, sys_pipe, sys_set_fg, sys_shm_grant};
 use handler::mem::{sys_mmap, sys_mprotect, sys_munmap};
 use handler::net::{sys_dns, sys_net, sys_net_cfg, sys_net_poll};
-use handler::socket::{
-    sys_accept, sys_bind, sys_connect, sys_getpeername, sys_getsockname, sys_getsockopt,
-    sys_listen, sys_recvfrom, sys_sendto, sys_setsockopt, sys_shutdown, sys_socket,
-};
 use handler::nic_fb::fb_mark_dirty;
 use handler::nic_io::{
     sys_ioctl, sys_nic_info, sys_nic_link, sys_nic_mac, sys_nic_refill, sys_nic_rx, sys_nic_tx,
@@ -51,6 +47,10 @@ use handler::persist::{
 };
 use handler::proc::{
     sys_clock, sys_getppid, sys_reparent, sys_set_thread_pointer, sys_spawn, sys_sysinfo,
+};
+use handler::socket::{
+    sys_accept, sys_bind, sys_connect, sys_getpeername, sys_getsockname, sys_getsockopt,
+    sys_listen, sys_recvfrom, sys_sendto, sys_setsockopt, sys_shutdown, sys_socket,
 };
 use handler::sync::{
     sys_futex, sys_gettid, sys_mouse_read, sys_sigreturn, sys_thread_create, sys_thread_detach,

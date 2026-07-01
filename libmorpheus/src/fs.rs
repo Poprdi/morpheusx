@@ -512,11 +512,13 @@ impl Metadata {
     }
 
     pub fn is_dir(&self) -> bool {
-        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT) == morpheus_foundation::flags::mode::S_IFDIR
+        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT)
+            == morpheus_foundation::flags::mode::S_IFDIR
     }
 
     pub fn is_file(&self) -> bool {
-        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT) == morpheus_foundation::flags::mode::S_IFREG
+        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT)
+            == morpheus_foundation::flags::mode::S_IFREG
     }
 
     pub fn key(&self) -> u64 {

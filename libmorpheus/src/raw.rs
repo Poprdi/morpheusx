@@ -245,7 +245,14 @@ pub unsafe fn sys_sendto(fd: u64, buf: u64, len: u64, flags: u64, addr: u64, add
 
 /// `SYS_RECVFROM(fd, buf, len, flags, *mut SockAddrStorage, *mut u32 addrlen) -> n | -errno`.
 #[inline(always)]
-pub unsafe fn sys_recvfrom(fd: u64, buf: u64, len: u64, flags: u64, addr: u64, addrlen: u64) -> u64 {
+pub unsafe fn sys_recvfrom(
+    fd: u64,
+    buf: u64,
+    len: u64,
+    flags: u64,
+    addr: u64,
+    addrlen: u64,
+) -> u64 {
     syscall6(SYS_RECVFROM, fd, buf, len, flags, addr, addrlen)
 }
 

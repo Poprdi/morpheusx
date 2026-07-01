@@ -22,8 +22,14 @@ fn segment_header_valid_after_flush() {
     let hdr: LogSegmentHeader =
         unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const LogSegmentHeader) };
 
-    assert!(hdr.is_valid(), "on-disk segment header fails its own CRC after flush");
-    assert_eq!(hdr.record_count, 1, "record_count written at the wrong offset");
+    assert!(
+        hdr.is_valid(),
+        "on-disk segment header fails its own CRC after flush"
+    );
+    assert_eq!(
+        hdr.record_count, 1,
+        "record_count written at the wrong offset"
+    );
 }
 
 #[test]
@@ -53,5 +59,9 @@ fn read_file_at_lsn_returns_old_extent_version() {
     )
     .unwrap();
 
-    assert_eq!(out, vec![0xABu8; 200], "temporal read returned wrong bytes for the old extent version");
+    assert_eq!(
+        out,
+        vec![0xABu8; 200],
+        "temporal read returned wrong bytes for the old extent version"
+    );
 }

@@ -45,7 +45,12 @@ pub fn write_extent_node<B: BlockIo>(
     let crc = crc32c(&buf);
     buf[CRC_OFF..CRC_OFF + 4].copy_from_slice(&crc.to_le_bytes());
 
-    let lba = block_lba(partition_lba_start, data_start_block, device_block_size, node_block);
+    let lba = block_lba(
+        partition_lba_start,
+        data_start_block,
+        device_block_size,
+        node_block,
+    );
     block_io
         .write_blocks(lba, &buf)
         .map_err(|_| HelixError::IoWriteFailed)?;
@@ -60,7 +65,12 @@ pub fn read_extent_node<B: BlockIo>(
     device_block_size: u32,
     node_block: u64,
 ) -> Result<Vec<(u64, u64, u32)>, HelixError> {
-    let lba = block_lba(partition_lba_start, data_start_block, device_block_size, node_block);
+    let lba = block_lba(
+        partition_lba_start,
+        data_start_block,
+        device_block_size,
+        node_block,
+    );
     let mut buf = vec![0u8; BLOCK_SIZE as usize];
     block_io
         .read_blocks(lba, &mut buf)

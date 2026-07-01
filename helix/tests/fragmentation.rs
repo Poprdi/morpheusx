@@ -21,7 +21,8 @@ fn forced_fragmentation() -> (MemBio, HelixFs, Vec<u8>) {
     // Fill all 16 data blocks with 16 one-block files, each a distinct pattern.
     for i in 0..16u8 {
         let buf = vec![0x10u8 + i; BLOCK];
-        fs.write(&mut dev, &format!("/f{i}"), &buf, 100 + i as u64).unwrap();
+        fs.write(&mut dev, &format!("/f{i}"), &buf, 100 + i as u64)
+            .unwrap();
     }
 
     // Punch single-block holes: free every odd block. No two free blocks are
@@ -43,7 +44,11 @@ fn fragmented_file_reads_back_intact() {
 
     let read = fs.read(&mut dev, "/frag").unwrap();
 
-    assert_eq!(read.len(), written.len(), "fragmented file size changed on read");
+    assert_eq!(
+        read.len(),
+        written.len(),
+        "fragmented file size changed on read"
+    );
     assert_eq!(
         read, written,
         "fragmented file read back corrupt: blocks past the first extent came from a neighbouring file"
