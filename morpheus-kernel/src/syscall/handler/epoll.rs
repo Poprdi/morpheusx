@@ -34,7 +34,7 @@ const MAX_WAIT_EVENTS: u64 = 1024;
 
 /// RX-safety backstop for a net epoll set when the stack has no nearer `poll_at`
 /// (ms). Matches the socket layer's `POLL_SLICE_MS`. Needed only until the NIC RX
-/// IRQ is wired 
+/// IRQ is wired
 const NET_REPOLL_SLICE_MS: u64 = 2;
 
 /// EPOLL* bits that name readiness (vs. the EPOLLET/EPOLLONESHOT control bits).

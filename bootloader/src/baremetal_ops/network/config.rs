@@ -79,7 +79,8 @@ pub(super) unsafe fn net_poll_drive(timestamp_ms: u64) -> i64 {
     }
 }
 
-/// Milliseconds until smoltcp needs us 
+/// Milliseconds until smoltcp needs us next, or -1 if no stack / no deadline.
+pub(super) unsafe fn net_poll_at(timestamp_ms: u64) -> i64 {
     match state::user_net_stack_mut() {
         Some(stack) => match stack.poll_delay_ms(timestamp_ms) {
             Some(ms) => ms.min(i64::MAX as u64) as i64,
