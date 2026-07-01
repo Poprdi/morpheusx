@@ -1,14 +1,13 @@
 use super::lifecycle::terminate_process_inner;
 use crate::hal;
 use crate::process::{
-    BlockReason, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal, MAX_PROCESSES,
+    BlockReason, PidBitset, Process, ProcessPolicyClass, ProcessPowerMode, ProcessState, Signal,
+    MAX_PROCESSES,
 };
 use crate::serial::{put_hex32, puts};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
-/// Maximum logical CPUs the scheduler tracks. Mirrors
-/// `morpheus_foundation::MAX_CPUS` but typed as `usize` for const array
-/// sizing in this module's `[T; MAX_CPUS]` slots.
+/// `usize`-typed alias of `morpheus_foundation::MAX_CPUS` for `[T; MAX_CPUS]` array sizing.
 pub const MAX_CPUS: usize = morpheus_foundation::MAX_CPUS as usize;
 
 #[repr(u8)]
@@ -47,6 +46,14 @@ pub static mut PROCESS_TABLE: [Option<Process>; MAX_PROCESSES] = [const { None }
 
 pub static PROCESS_TABLE_LOCK: crate::sync::IsrSafeRawSpinLock =
     crate::sync::IsrSafeRawSpinLock::new();
+
+/// Per-address-space serialization for address-space mutations (mmap/munmap,
+/// and later shm_grant/map_phys/fb). Indexed by the thread-group *leader* pid:
+/// every thread sharing a CR3 resolves to the same lock, so concurrent
+/// mmap_brk/vma_table/page-table edits from sibling threads can't race. IRQ-safe
+/// (held with interrupts off), so it also blocks same-core preemption while held.
+pub static ADDRESS_SPACE_LOCKS: [crate::sync::IsrSafeRawSpinLock; MAX_PROCESSES] =
+    [const { crate::sync::IsrSafeRawSpinLock::new() }; MAX_PROCESSES];
 
 static CURRENT_PID: AtomicU32 = AtomicU32::new(0);
 pub(super) static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -93,20 +100,11 @@ pub(super) static mut SCHEDULER_READY: bool = false;
 pub(super) static mut KERNEL_CR3: u64 = 0;
 pub(super) static mut TSC_FREQUENCY: u64 = 0;
 
-// Lock-free PID bitmaps for fast wake paths.
-static STDIN_WAITERS: AtomicU64 = AtomicU64::new(0);
-static INPUT_WAITERS: AtomicU64 = AtomicU64::new(0);
-static PIPE_WAITERS: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
-static FUTEX_WAITERS: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
-
-#[inline(always)]
-fn pid_mask(pid: u32) -> u64 {
-    if pid < 64 {
-        1u64 << pid
-    } else {
-        0
-    }
-}
+// Lock-free per-resource waiter sets, scaling to MAX_PROCESSES slots.
+static STDIN_WAITERS: PidBitset = PidBitset::new();
+static INPUT_WAITERS: PidBitset = PidBitset::new();
+static PIPE_WAITERS: [PidBitset; 256] = [const { PidBitset::new() }; 256];
+static FUTEX_WAITERS: [PidBitset; 256] = [const { PidBitset::new() }; 256];
 
 #[inline(always)]
 fn futex_bucket(addr: u64) -> usize {
@@ -114,144 +112,109 @@ fn futex_bucket(addr: u64) -> usize {
 }
 
 pub fn mark_stdin_waiter(pid: u32) {
-    STDIN_WAITERS.fetch_or(pid_mask(pid), Ordering::Relaxed);
+    STDIN_WAITERS.set(pid);
 }
 
 pub(crate) fn clear_stdin_waiter(pid: u32) {
-    STDIN_WAITERS.fetch_and(!pid_mask(pid), Ordering::Relaxed);
+    STDIN_WAITERS.clear(pid);
 }
 
-pub(crate) fn stdin_waiters_mask() -> u64 {
-    STDIN_WAITERS.load(Ordering::Relaxed)
+pub(crate) fn stdin_waiters() -> &'static PidBitset {
+    &STDIN_WAITERS
 }
 
 pub fn mark_input_waiter(pid: u32) {
-    INPUT_WAITERS.fetch_or(pid_mask(pid), Ordering::Relaxed);
+    INPUT_WAITERS.set(pid);
 }
 
 pub fn clear_input_waiter(pid: u32) {
-    INPUT_WAITERS.fetch_and(!pid_mask(pid), Ordering::Relaxed);
+    INPUT_WAITERS.clear(pid);
 }
 
-pub(crate) fn input_waiters_mask() -> u64 {
-    INPUT_WAITERS.load(Ordering::Relaxed)
+pub(crate) fn input_waiters() -> &'static PidBitset {
+    &INPUT_WAITERS
 }
 
 pub fn mark_pipe_waiter(pid: u32, pipe_idx: u8) {
-    PIPE_WAITERS[pipe_idx as usize].fetch_or(pid_mask(pid), Ordering::Relaxed);
+    PIPE_WAITERS[pipe_idx as usize].set(pid);
 }
 
 pub(crate) fn clear_pipe_waiter(pid: u32, pipe_idx: u8) {
-    PIPE_WAITERS[pipe_idx as usize].fetch_and(!pid_mask(pid), Ordering::Relaxed);
+    PIPE_WAITERS[pipe_idx as usize].clear(pid);
 }
 
-pub(crate) fn pipe_waiters_mask(pipe_idx: u8) -> u64 {
-    PIPE_WAITERS[pipe_idx as usize].load(Ordering::Relaxed)
+pub(crate) fn pipe_waiters(pipe_idx: u8) -> &'static PidBitset {
+    &PIPE_WAITERS[pipe_idx as usize]
 }
 
 pub fn mark_futex_waiter(pid: u32, addr: u64) {
-    FUTEX_WAITERS[futex_bucket(addr)].fetch_or(pid_mask(pid), Ordering::Relaxed);
+    FUTEX_WAITERS[futex_bucket(addr)].set(pid);
 }
 
 pub(crate) fn clear_futex_waiter(pid: u32, addr: u64) {
-    FUTEX_WAITERS[futex_bucket(addr)].fetch_and(!pid_mask(pid), Ordering::Relaxed);
+    FUTEX_WAITERS[futex_bucket(addr)].clear(pid);
 }
 
-pub(crate) fn futex_waiters_mask(addr: u64) -> u64 {
-    FUTEX_WAITERS[futex_bucket(addr)].load(Ordering::Relaxed)
+pub(crate) fn futex_waiters(addr: u64) -> &'static PidBitset {
+    &FUTEX_WAITERS[futex_bucket(addr)]
 }
 
 pub(crate) fn clear_waiter_all(pid: u32) {
-    let mask = !pid_mask(pid);
-    STDIN_WAITERS.fetch_and(mask, Ordering::Relaxed);
-    INPUT_WAITERS.fetch_and(mask, Ordering::Relaxed);
+    STDIN_WAITERS.clear(pid);
+    INPUT_WAITERS.clear(pid);
     for b in PIPE_WAITERS.iter() {
-        b.fetch_and(mask, Ordering::Relaxed);
+        b.clear(pid);
     }
     for b in FUTEX_WAITERS.iter() {
-        b.fetch_and(mask, Ordering::Relaxed);
+        b.clear(pid);
     }
 }
 
 /// Clears waiter bits whose processes are no longer blocked on that resource.
 /// Cheap if called sparingly (~1k ticks); bounds long-uptime accumulation.
 pub(crate) unsafe fn cleanup_stale_waiters() {
-    let mut stdin_mask = STDIN_WAITERS.load(Ordering::Relaxed);
-    let mut input_mask = INPUT_WAITERS.load(Ordering::Relaxed);
-    let mut stale_stdin = 0u64;
-    let mut stale_input = 0u64;
-
-    while stdin_mask != 0 {
-        let bit = stdin_mask.trailing_zeros();
-        stdin_mask &= stdin_mask - 1;
-        if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
-            if !matches!(p.state, ProcessState::Blocked(BlockReason::StdinRead)) {
-                stale_stdin |= 1u64 << bit;
-            }
-        } else {
-            stale_stdin |= 1u64 << bit;
+    STDIN_WAITERS.for_each(|bit| {
+        let live = matches!(
+            PROCESS_TABLE.get(bit as usize),
+            Some(Some(p)) if matches!(p.state, ProcessState::Blocked(BlockReason::StdinRead))
+        );
+        if !live {
+            STDIN_WAITERS.clear(bit);
         }
-    }
+    });
 
-    while input_mask != 0 {
-        let bit = input_mask.trailing_zeros();
-        input_mask &= input_mask - 1;
-        if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
-            if !matches!(p.state, ProcessState::Blocked(BlockReason::InputRead)) {
-                stale_input |= 1u64 << bit;
-            }
-        } else {
-            stale_input |= 1u64 << bit;
+    INPUT_WAITERS.for_each(|bit| {
+        let live = matches!(
+            PROCESS_TABLE.get(bit as usize),
+            Some(Some(p)) if matches!(p.state, ProcessState::Blocked(BlockReason::InputRead))
+        );
+        if !live {
+            INPUT_WAITERS.clear(bit);
         }
-    }
-
-    if stale_stdin != 0 {
-        STDIN_WAITERS.fetch_and(!stale_stdin, Ordering::Relaxed);
-    }
-    if stale_input != 0 {
-        INPUT_WAITERS.fetch_and(!stale_input, Ordering::Relaxed);
-    }
+    });
 
     for (pipe_idx, waiter_set) in PIPE_WAITERS.iter().enumerate() {
-        let mut mask = waiter_set.load(Ordering::Relaxed);
-        let mut stale = 0u64;
-        while mask != 0 {
-            let bit = mask.trailing_zeros();
-            mask &= mask - 1;
-            if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
-                if let ProcessState::Blocked(BlockReason::PipeRead(idx)) = p.state {
-                    if idx as usize != pipe_idx {
-                        stale |= 1u64 << bit;
-                    }
-                } else {
-                    stale |= 1u64 << bit;
-                }
-            } else {
-                stale |= 1u64 << bit;
+        waiter_set.for_each(|bit| {
+            let live = matches!(
+                PROCESS_TABLE.get(bit as usize),
+                Some(Some(p)) if matches!(p.state, ProcessState::Blocked(BlockReason::PipeRead(idx)) if idx as usize == pipe_idx)
+            );
+            if !live {
+                waiter_set.clear(bit);
             }
-        }
-        if stale != 0 {
-            waiter_set.fetch_and(!stale, Ordering::Relaxed);
-        }
+        });
     }
 
     for waiter_set in FUTEX_WAITERS.iter() {
-        let mut mask = waiter_set.load(Ordering::Relaxed);
-        let mut stale = 0u64;
-        while mask != 0 {
-            let bit = mask.trailing_zeros();
-            mask &= mask - 1;
-            if let Some(Some(p)) = PROCESS_TABLE.get(bit as usize) {
-                if !matches!(p.state, ProcessState::Blocked(BlockReason::FutexWait(_))) {
-                    stale |= 1u64 << bit;
-                }
-            } else {
-                stale |= 1u64 << bit;
+        waiter_set.for_each(|bit| {
+            let live = matches!(
+                PROCESS_TABLE.get(bit as usize),
+                Some(Some(p)) if matches!(p.state, ProcessState::Blocked(BlockReason::FutexWait(_)))
+            );
+            if !live {
+                waiter_set.clear(bit);
             }
-        }
-        if stale != 0 {
-            waiter_set.fetch_and(!stale, Ordering::Relaxed);
-        }
+        });
     }
 }
 
@@ -532,6 +495,22 @@ pub(super) unsafe fn set_this_core_pid(pid: u32) {
     }
 }
 
+/// IDT fault-path hook: pid of the faulting thread on this core.
+pub unsafe fn idt_current_pid() -> u32 {
+    SCHEDULER.current_pid()
+}
+
+/// IDT fault-path hook: copy `pid`'s name into `out`; returns false if no live process.
+pub unsafe fn idt_lookup_name(pid: u32, out: &mut [u8; 32]) -> bool {
+    match SCHEDULER.process_by_pid(pid) {
+        Some(p) => {
+            out.copy_from_slice(&p.name);
+            true
+        },
+        None => false,
+    }
+}
+
 #[inline(always)]
 pub(super) unsafe fn this_core_index() -> u32 {
     if hal().smp().percpu_ready() {
@@ -710,9 +689,19 @@ impl Scheduler {
         out
     }
 
-    pub unsafe fn current_fd_table_mut(&self) -> &'static mut morpheus_helix::vfs::FdTable {
+    /// fds are a thread-group resource (POSIX CLONE_FILES): sibling threads
+    /// share CR3 *and* one descriptor table. Resolve to the group leader's slot
+    /// so an fd opened on any thread is visible on all of them — without this a
+    /// tokio worker can't epoll/read a socket the main thread created (EBADF).
+    /// Reap/exit operate on each thread's own `fd_table` field directly, which
+    /// stays empty for non-leaders, so only the leader's shared table is closed.
+    pub unsafe fn current_fd_table_mut(&self) -> &'static mut crate::storage::fs_api::FdTable {
         let pid = this_core_pid() as usize;
-        &mut PROCESS_TABLE[pid].as_mut().unwrap().fd_table
+        let leader = match PROCESS_TABLE[pid].as_ref() {
+            Some(p) if p.thread_group_leader != 0 => p.thread_group_leader as usize,
+            _ => pid,
+        };
+        &mut PROCESS_TABLE[leader].as_mut().unwrap().fd_table
     }
 
     pub unsafe fn current_process_mut(&self) -> &'static mut Process {
@@ -729,6 +718,49 @@ impl Scheduler {
             }
         }
         PROCESS_TABLE[leader_pid].as_mut().unwrap()
+    }
+
+    /// Thread-group leader pid for the current thread (the address-space owner).
+    pub unsafe fn current_memory_leader_pid(&self) -> u32 {
+        let pid = this_core_pid() as usize;
+        if let Some(p) = PROCESS_TABLE[pid].as_ref() {
+            if p.thread_group_leader != 0 {
+                return p.thread_group_leader;
+            }
+        }
+        pid as u32
+    }
+
+    /// The per-address-space lock for the current thread's leader. Acquire it
+    /// around any mutation of the shared address space (mmap_brk / vma_table /
+    /// user page tables) to serialize sibling threads.
+    pub unsafe fn current_address_space_lock(&self) -> &'static crate::sync::IsrSafeRawSpinLock {
+        &ADDRESS_SPACE_LOCKS[self.current_memory_leader_pid() as usize]
+    }
+
+    /// Thread-group leader pid for an arbitrary pid (its address-space owner).
+    /// Returns `pid` unchanged if it has no live entry (caller still range-checks).
+    pub unsafe fn memory_leader_pid_of(&self, pid: u32) -> u32 {
+        PROCESS_TABLE
+            .get(pid as usize)
+            .and_then(|s| s.as_ref())
+            .map(|p| {
+                if p.thread_group_leader != 0 {
+                    p.thread_group_leader
+                } else {
+                    pid
+                }
+            })
+            .unwrap_or(pid)
+    }
+
+    /// The per-address-space lock for `leader_pid`. Caller guarantees
+    /// `leader_pid < MAX_PROCESSES`.
+    pub unsafe fn address_space_lock(
+        &self,
+        leader_pid: u32,
+    ) -> &'static crate::sync::IsrSafeRawSpinLock {
+        &ADDRESS_SPACE_LOCKS[leader_pid as usize]
     }
 
     pub unsafe fn memory_leader_mut_by_pid(&self, pid: u32) -> Option<&'static mut Process> {
@@ -771,7 +803,7 @@ impl Scheduler {
                     puts("[SCHED] SIGKILL -> PID ");
                     put_hex32(pid);
                     puts("\n");
-                    terminate_process_inner(slot, -9);
+                    terminate_process_inner(slot, 0, 9);
                 }
             },
             Signal::SIGSTOP => {

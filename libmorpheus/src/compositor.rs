@@ -3,21 +3,8 @@
 
 use crate::raw::*;
 
-/// Mirror of `hwinit::syscall::handler::SurfaceEntry` — layout must match exactly.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct SurfaceEntry {
-    pub pid: u32,
-    pub _pad: u32,
-    pub phys_addr: u64,
-    pub pages: u64,
-    pub width: u32,
-    pub height: u32,
-    pub stride: u32,
-    pub format: u32,
-    pub dirty: u32,
-    pub _pad2: u32,
-}
+/// `SurfaceEntry` is canonical in morpheus-foundation — single source of truth.
+pub use morpheus_foundation::types::SurfaceEntry;
 
 /// Register the caller as the compositor. Only one at a time.
 pub fn compositor_set() -> Result<(), u64> {

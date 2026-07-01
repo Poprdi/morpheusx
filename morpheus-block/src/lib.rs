@@ -27,6 +27,8 @@ pub mod block_io_adapter;
 pub mod block_traits;
 pub mod boot_probe;
 pub mod device;
+pub mod gpt;
+pub mod raw_device;
 pub mod sdhci;
 pub mod transfer;
 pub mod unified_block_io;
@@ -38,3 +40,5 @@ pub use block_traits::{
     BlockCompletion, BlockDeviceInfo, BlockDriver, BlockDriverInit, BlockError,
 };
 pub use device::{UnifiedBlockDevice, UnifiedBlockError};
+pub use gpt::{enumerate_partitions, PartitionEntry, PART_NAME_LEN};
+pub use raw_device::{DeviceKind, MemBlockDevice, MemIoError, RawBlockDevice, RawIoError};

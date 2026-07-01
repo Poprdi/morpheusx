@@ -83,6 +83,8 @@ unsafe fn activate_network_from_userspace() -> i64 {
             tcp_recv: Some(tcp::net_tcp_recv_impl),
             tcp_close: Some(tcp::net_tcp_close_impl),
             tcp_state: Some(tcp::net_tcp_state_impl),
+            tcp_can_recv: Some(tcp::net_tcp_can_recv_impl),
+            tcp_can_send: Some(tcp::net_tcp_can_send_impl),
             tcp_listen: Some(tcp::net_tcp_listen_impl),
             tcp_accept: Some(tcp::net_tcp_accept_impl),
             tcp_shutdown: Some(tcp::net_tcp_shutdown_impl),

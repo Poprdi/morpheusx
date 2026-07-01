@@ -6,8 +6,9 @@ pub mod wait;
 pub mod wake;
 
 pub use lifecycle::{
-    exit_process, idle_tsc_total, inc_timed_block_count, init_scheduler, mark_kernel_hlt,
-    sample_per_core_idle_tsc, set_tsc_frequency, spawn_kernel_thread, tsc_frequency,
+    dec_timed_block_count, exit_process, idle_tsc_total, inc_timed_block_count, init_scheduler,
+    mark_kernel_hlt, sample_per_core_idle_tsc, set_tsc_frequency, spawn_kernel_thread,
+    tsc_frequency,
 };
 pub use spawn::{spawn_user_process, spawn_user_thread};
 pub use state::{
@@ -15,7 +16,7 @@ pub use state::{
     SchedulerCoreState, SchedulerDebugInfo, SchedulerSystemState, SCHEDULER,
 };
 pub use tick::scheduler_tick;
-pub use wait::{block_sleep, try_wait_child, wait_for_child};
+pub use wait::{block_sleep, do_wait, try_wait_child, wait_for_child, write_wait_status};
 pub use wake::{wake_futex_waiters, wake_input_reader, wake_pipe_readers, wake_stdin_waiters};
 
 pub use state::{

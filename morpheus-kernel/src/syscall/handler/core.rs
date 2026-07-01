@@ -1,5 +1,6 @@
 // Core syscalls: write/read/yield/exit/getpid/kill/wait/sleep/system_control.
-// All syscalls: u64 args, u64 return. High bits = errno (u64::MAX - n).
+// All syscalls: u64 args, u64 return. Errors are Linux-numeric `-errno` in the
+// top window [-4095,-1]; see morpheus_foundation::errno.
 
 use super::common::*;
 use super::fb::is_composited_client;
@@ -10,11 +11,10 @@ use crate::schedular::{exit_process, SCHEDULER};
 use crate::serial::puts;
 use morpheus_helix::types::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
 
-const SYSCTL_REBOOT_GRACEFUL: u64 = 0;
-const SYSCTL_REBOOT_FORCE: u64 = 1;
-const SYSCTL_SHUTDOWN_GRACEFUL: u64 = 2;
-const SYSCTL_SHUTDOWN_FORCE: u64 = 3;
-const SYSCTL_SHUTDOWN_PANIC: u64 = 4;
+use morpheus_foundation::flags::{
+    SYSCTL_REBOOT_FORCE, SYSCTL_REBOOT_GRACEFUL, SYSCTL_SHUTDOWN_FORCE, SYSCTL_SHUTDOWN_GRACEFUL,
+    SYSCTL_SHUTDOWN_PANIC,
+};
 
 static SYSTEM_CONTROL_IN_PROGRESS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -34,12 +34,11 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
         return EFAULT;
     }
 
-    // Redirected fds (via dup2) take precedence over stdio defaults.
     {
         let fd_table = SCHEDULER.current_fd_table_mut();
-        if let Ok(desc) = fd_table.get(fd as usize) {
+        if let Some(desc) = fd_table.get(fd as usize).copied() {
             if desc.flags & O_PIPE_WRITE != 0 {
-                let pipe_idx = desc.mount_idx;
+                let pipe_idx = desc.mount_id as u8;
                 let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
                 if crate::pipe::pipe_readers(pipe_idx) == 0 {
                     return EPIPE;
@@ -48,29 +47,11 @@ pub unsafe fn sys_write(fd: u64, ptr: u64, len: u64) -> u64 {
                 crate::schedular::wake_pipe_readers(pipe_idx);
                 return n as u64;
             }
-            let mut _vfs_guard = match vfs_lock() {
-                Some(g) => g,
-                None => return ENOSYS,
-            };
-            let fs = &mut *_vfs_guard.fs;
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            let data = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-            let ts = hal().timer().read_tsc();
-            return match morpheus_helix::vfs::vfs_write(
-                &mut fs.device,
-                &mut fs.mount_table,
-                fd_table,
-                fd as usize,
-                data,
-                ts,
-            ) {
-                Ok(n) => n as u64,
-                Err(e) => helix_err_to_errno(e),
-            };
+            // File-backed redirect: dispatch through the storage subsystem.
+            return super::fs::sys_fs_write(fd, ptr, len);
         }
     }
 
-    // Default stdio routing.
     match fd {
         1 | 2 => {
             let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
@@ -100,36 +81,20 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
 
     {
         let fd_table = SCHEDULER.current_fd_table_mut();
-        if let Ok(desc) = fd_table.get(fd as usize) {
+        if let Some(desc) = fd_table.get(fd as usize).copied() {
             if desc.flags & O_PIPE_READ != 0 {
-                let pipe_idx = desc.mount_idx;
+                let pipe_idx = desc.mount_id as u8;
                 let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
                 return super::ipc::sys_pipe_read_blocking(pipe_idx, buf);
             }
-            let mut _vfs_guard = match vfs_lock() {
-                Some(g) => g,
-                None => return ENOSYS,
-            };
-            let fs = &mut *_vfs_guard.fs;
-            let fd_table = SCHEDULER.current_fd_table_mut();
-            let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
-            return match morpheus_helix::vfs::vfs_read(
-                &mut fs.device,
-                &fs.mount_table,
-                fd_table,
-                fd as usize,
-                buf,
-            ) {
-                Ok(n) => n as u64,
-                Err(e) => helix_err_to_errno(e),
-            };
+            // File-backed redirect: dispatch through the storage subsystem.
+            return super::fs::sys_fs_read(fd, ptr, len);
         }
     }
 
     match fd {
         0 => {
-            // Composited clients: per-process input buf fed by SYS_FORWARD_INPUT.
-            // Others: global stdin ring fed by the PS/2 ISR.
+            // Composited: per-process buf fed by SYS_FORWARD_INPUT; else global stdin ring (PS/2 ISR).
             let buf = core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize);
 
             let nonblock = crate::process::stdin_nonblock(SCHEDULER.current_process_mut().pid);
@@ -184,15 +149,8 @@ pub unsafe fn sys_read(fd: u64, ptr: u64, len: u64) -> u64 {
     }
 }
 
-/// Non-blocking drain of the kernel keyboard event ring into `buf`, as raw
-/// PS/2 Set 1 bytes (break encoded as `|0x80`, `0xE0` as its own byte —
-/// exactly what `morpheus-xhci`'s HID driver pushes). Returns the number of
-/// bytes written (0 if the ring is empty).
-///
-/// Symmetric with [`super::sync::sys_mouse_read`]: input events are delivered
-/// through a dedicated ring-draining syscall, not the stdin byte stream. The
-/// compositor owns this; it then forwards decoded input to focused windows via
-/// `SYS_FORWARD_INPUT`.
+/// Non-blocking drain of the keyboard event ring. Returns raw PS/2 Set 1 bytes
+/// (break = byte | 0x80; 0xE0 prefix as its own byte). Returns 0 if ring empty.
 pub unsafe fn sys_keyboard_read(ptr: u64, len: u64) -> u64 {
     if ptr == 0 || len == 0 || len > (1 << 20) {
         return EINVAL;
@@ -221,23 +179,41 @@ pub unsafe fn sys_yield() -> u64 {
     0
 }
 
+/// Linux `getpid`: the thread-group/address-space owner (group leader for a
+/// thread), not the per-thread slot id that `gettid` returns.
 pub unsafe fn sys_getpid() -> u64 {
-    SCHEDULER.current_pid() as u64
+    SCHEDULER.current_memory_leader_pid() as u64
 }
 
 pub unsafe fn sys_kill(pid: u64, signum: u64) -> u64 {
     let sig = match Signal::from_u8(signum as u8) {
         Some(s) => s,
-        None => return u64::MAX - 22, // EINVAL
+        None => return EINVAL, // bad signal number
     };
     match SCHEDULER.send_signal(pid as u32, sig) {
         Ok(_) => 0,
-        Err(_) => u64::MAX - 3, // ESRCH
+        Err(_) => ESRCH,
     }
 }
 
-pub unsafe fn sys_wait(pid: u64) -> u64 {
-    crate::schedular::wait_for_child(pid as u32)
+/// SYS_WAIT(idtype, id, *mut WaitStatus, options). The value channel carries ONLY
+/// the reaped pid (0 for WNOHANG-with-no-ready-child); the encoded status word
+/// goes into `*wstatus`, killing the old exit/signal/errno blended-return
+/// collision. `P_PID` with a tid reaps a sibling thread via the same path.
+pub unsafe fn sys_wait(idtype: u64, id: u64, wstatus_ptr: u64, options: u64) -> u64 {
+    use morpheus_foundation::types::WaitStatus;
+    if wstatus_ptr != 0
+        && (wstatus_ptr & 7 != 0
+            || !validate_user_buf(wstatus_ptr, core::mem::size_of::<WaitStatus>() as u64))
+    {
+        return EFAULT;
+    }
+
+    let (ret, wstatus) = crate::schedular::do_wait(idtype, id as u32, options);
+    if !morpheus_foundation::errno::is_error(ret) && ret != 0 {
+        crate::schedular::write_wait_status(wstatus_ptr, ret as u32, wstatus);
+    }
+    ret
 }
 
 pub unsafe fn sys_sleep(millis: u64) -> u64 {

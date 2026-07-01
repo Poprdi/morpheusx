@@ -37,6 +37,12 @@ pub fn inc_timed_block_count() {
     TIMED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Cancel a timed block early (readiness/futex wakeup before its deadline) so the
+/// tick fast-path's count stays accurate.
+pub fn dec_timed_block_count() {
+    TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
+}
+
 pub(super) fn apply_default_scheduler_policy(proc: &mut Process, is_kernel: bool) {
     proc.importance_16 = 8;
     proc.power_mode = ProcessPowerMode::Balanced;
@@ -145,12 +151,30 @@ pub unsafe fn spawn_kernel_thread(
     Ok(pid)
 }
 
+/// Canonical lower-half limit; mirrors `syscall::handler::common::USER_ADDR_LIMIT`.
+const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
+
 pub unsafe fn exit_process(code: i32) -> ! {
     let pid = this_core_pid();
 
+    // CLONE_CHILD_CLEARTID: zero `ctid` and FUTEX_WAKE it BEFORE zombifying, while
+    // this thread's CR3 is still loaded so the store lands in the shared address
+    // space any joining sibling reads. Done outside the table lock (the wake takes
+    // it itself); a joiner that observes 0 returns from join without racing the
+    // reap. The slot itself is reaped later, off this (in-use) kernel stack.
+    let ctid = PROCESS_TABLE
+        .get(pid as usize)
+        .and_then(|s| s.as_ref())
+        .map(|p| p.ctid_ptr)
+        .unwrap_or(0);
+    if ctid != 0 && ctid & 3 == 0 && ctid < USER_ADDR_LIMIT {
+        core::ptr::write_volatile(ctid as *mut u32, 0);
+        crate::schedular::wake_futex_waiters(ctid, u32::MAX);
+    }
+
     PROCESS_TABLE_LOCK.lock();
     if let Some(Some(proc)) = PROCESS_TABLE.get_mut(pid as usize) {
-        terminate_process_inner(proc, code);
+        terminate_process_inner(proc, code, 0);
     }
     PROCESS_TABLE_LOCK.unlock();
 
@@ -160,7 +184,9 @@ pub unsafe fn exit_process(code: i32) -> ! {
     }
 }
 
-pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
+/// `term_signal != 0` ⇒ the task was killed by that signal (drives WIFSIGNALED);
+/// 0 ⇒ a normal exit with `code`.
+pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32, term_signal: u8) {
     let child_pid = proc.pid;
     let parent_pid = proc.parent_pid;
 
@@ -168,8 +194,35 @@ pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
 
     sched_hooks::release_fb_lock_if_holder(child_pid);
 
+    // Release this task's pipe endpoints at exit (not at reap): a child that exits
+    // must drop its writer immediately so a parent already blocked in a pipe read
+    // observes EOF, even though the zombie slot is reaped later. File fds keep
+    // their reap-time accounting; only pipe peers need prompt closure. Readers
+    // parked on a now-writerless pipe are woken in the sweep below.
+    {
+        use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
+        let mut pipe_fds: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+        for (fd, desc) in proc.fd_table.iter() {
+            if desc.flags & (O_PIPE_READ | O_PIPE_WRITE) == 0 {
+                continue;
+            }
+            let idx = desc.mount_id as u8;
+            if desc.flags & O_PIPE_READ != 0 {
+                crate::pipe::pipe_close_reader(idx);
+            }
+            if desc.flags & O_PIPE_WRITE != 0 {
+                crate::pipe::pipe_close_writer(idx);
+            }
+            pipe_fds.push(fd);
+        }
+        for fd in pipe_fds {
+            proc.fd_table.free(fd);
+        }
+    }
+
     proc.state = ProcessState::Zombie;
     proc.exit_code = Some(code);
+    proc.term_signal = term_signal;
     LIVE_COUNT.fetch_sub(1, Ordering::Relaxed);
 
     puts("[SCHED] PID ");
@@ -178,12 +231,30 @@ pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32) {
     put_hex32(code as u32);
     puts("\n");
 
-    if let Some(Some(parent)) = PROCESS_TABLE.get_mut(parent_pid as usize) {
-        if let ProcessState::Blocked(BlockReason::WaitChild(waited)) = parent.state {
-            if waited == child_pid {
-                parent.state = ProcessState::Ready;
+    // Wake every task parked in waitpid/thread-join for this child specifically
+    // or for "any child" (id 0). The woken waiter re-validates reaper eligibility,
+    // so this deliberately-broad sweep enables join-from-ANY-thread without the
+    // terminate path needing to know the thread-group topology.
+    for idx in 0..MAX_PROCESSES {
+        if idx == child_pid as usize {
+            continue;
+        }
+        if let Some(Some(p)) = PROCESS_TABLE.get_mut(idx) {
+            if let ProcessState::Blocked(BlockReason::WaitChild(waited)) = p.state {
+                if waited == child_pid || waited == 0 {
+                    p.state = ProcessState::Ready;
+                }
+            }
+            // A reader parked on a pipe whose last writer just closed must wake to
+            // collect its EOF.
+            if let ProcessState::Blocked(BlockReason::PipeRead(widx)) = p.state {
+                if crate::pipe::pipe_writers(widx) == 0 {
+                    p.state = ProcessState::Ready;
+                }
             }
         }
+    }
+    if let Some(Some(parent)) = PROCESS_TABLE.get_mut(parent_pid as usize) {
         parent.pending_signals.raise(Signal::SIGCHLD);
     }
 }

@@ -3,7 +3,6 @@
 /// 16 * 4 GB = 64 GB max ISO.
 pub const MAX_CHUNKS: usize = 16;
 
-/// 8.3-compatible filename length.
 pub const MAX_FILENAME_LEN: usize = 12;
 
 #[derive(Debug, Clone, Copy)]
@@ -130,7 +129,6 @@ impl ChunkSet {
         true
     }
 
-    /// Write progress, 0-100.
     pub fn progress_percent(&self) -> u8 {
         if self.total_size == 0 {
             return 0;

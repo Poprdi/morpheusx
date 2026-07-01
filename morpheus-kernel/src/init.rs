@@ -56,38 +56,17 @@ pub unsafe fn init(hal: &'static dyn Hal, params: InitParams) {
 
 /// Phase 11b: bootloader calls this AFTER `hal.phys().reclaim_boot_services()`.
 ///
+/// Root mounting moved into the storage subsystem (`bootloader::storage`): root
+/// is itself a staged `storage::mount` (spec §5/§7) chosen there from the pre-EBS
+/// image, a real disk holding `/bin/init`, or a fresh RAM helix. The old
+/// `init_root_fs` RAM-root allocation is now the `VOLUME_NONE` fresh-helix path,
+/// allocated through the staging admission control. Kept as a no-op hook so the
+/// bootloader call site and phase ordering stay intact.
+///
 /// # Safety
-/// BSP, post-late_init, post-reclaim. Single-threaded; the buddy must be
-/// validated clean before this runs.
+/// BSP, post-late_init, post-reclaim.
 pub unsafe fn mount_root_fs(hal: &'static dyn Hal, size_bytes: usize) {
-    use morpheus_hal_api::{AllocKind, MemoryType};
-
-    let pages = (size_bytes / 4096) as u64;
-    let base = match hal
-        .phys()
-        .allocate_pages(AllocKind::AnyPages, MemoryType::LoaderData, pages)
-    {
-        Ok(p) => p,
-        Err(_) => {
-            hal.serial().boot_step_warn("filesystem (helixfs)");
-            crate::serial::log_warn(
-                "FS",
-                412,
-                "root fs allocation failed; continuing without fs",
-            );
-            return;
-        },
-    };
-
-    core::ptr::write_bytes(base as *mut u8, 0, size_bytes);
-
-    match morpheus_helix::vfs::global::init_root_fs(base as *mut u8, size_bytes) {
-        Ok(()) => hal.serial().boot_step_ok("filesystem (helixfs)"),
-        Err(_) => {
-            hal.serial().boot_step_warn("filesystem (helixfs)");
-            crate::serial::log_warn("FS", 412, "root fs init failed; continuing without fs");
-        },
-    }
+    let _ = (hal, size_bytes);
 }
 
 /// Hook bundle for a future `HalImpl::init(KernelHooks)` entry. Unset fields

@@ -6,7 +6,8 @@ Yes it actually boots on real hardware. It is a work in progress but is already 
 
 In theory it should be able to run on any x86_64 UEFI-compatible system, manage USB devices, and ahci devices aswell as Virtio devices.
 
-After booting you can press ctrl+alt+x to spawn a shell and play arround. 
+This Repo contains only the KERNEL - I have moved the userland to a private repository for the time being, but you are free to roll your own.
+My next steps are Porting the Rust PAL and upstreaming it so this kernel becomes an actuall build target and the ecosystem becomes available. 
 
 ## Tested on: Fujitsu D3674-B13 -- ThinkPad T450s
 

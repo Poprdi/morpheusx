@@ -1,0 +1,10 @@
+[package]
+name = "morpheus-fat32"
+version.workspace = true
+edition.workspace = true
+description = "FAT32 read-only filesystem engine for MorpheusX"
+
+[dependencies]
+morpheus-foundation.workspace = true
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true

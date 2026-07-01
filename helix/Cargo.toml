@@ -11,3 +11,7 @@ default = []
 morpheus-foundation.workspace = true
 gpt_disk_io.workspace = true
 gpt_disk_types.workspace = true
+
+[dev-dependencies]
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true

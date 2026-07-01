@@ -3,8 +3,10 @@
 
 pub mod common;
 
+pub mod clock;
 pub mod compositor;
 pub mod core;
+pub mod epoll;
 pub mod fb;
 pub mod fd;
 pub mod fs;
@@ -16,6 +18,7 @@ pub mod nic_fb;
 pub mod nic_io;
 pub mod persist;
 pub mod proc;
+pub mod socket;
 pub mod sync;
 pub mod sysinfo;
 

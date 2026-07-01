@@ -16,6 +16,16 @@ morpheus-foundation.workspace = true
 morpheus-console.workspace = true
 # HelixFS — kernel needs to mount the root FS + drive vfs ops in syscall handlers.
 morpheus-helix.workspace = true
+# Device-handle types (RawBlockDevice/MemBlockDevice/DeviceKind) backing the
+# storage subsystem's device registry. The leaf types crate, NOT morpheus-block
+# proper: that crate pulls the USB-MSD/xhci driver stack which deps back on the
+# kernel (xhci -> kernel), so depending on it here would cycle the workspace.
+morpheus-block-types.workspace = true
+# FAT32 read engine — the Fat32Fs storage adapter wraps it.
+morpheus-fat32.workspace = true
+# BlockIo trait + Lba/BlockSize used by the storage adapters' device bridge.
+gpt_disk_io.workspace = true
+gpt_disk_types.workspace = true
 # PE parsing for the persist syscall path.
 morpheus-persistent.workspace = true
 # `Once` for the HAL global + spinlocks for process/sched state.

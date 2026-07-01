@@ -4,8 +4,10 @@ use core::fmt;
 
 pub const HELIX_MAGIC: [u8; 8] = *b"HELIXFS1";
 
-/// Layout version. v1 stored only `path_hash` (no replay); v2 carries full path.
-pub const HELIX_VERSION: u32 = 2;
+/// Layout version. v1: path_hash only. v2: full path in payload. v3: extent
+/// Write records are flagged out-of-band (`rec_flags::IS_EXTENT`) instead of by
+/// an in-band marker byte that could collide with inline user data.
+pub const HELIX_VERSION: u32 = 3;
 
 pub const BLOCK_SIZE: u32 = 4096;
 pub const BLOCK_SHIFT: u32 = 12;
@@ -85,10 +87,14 @@ pub struct HelixSuperblock {
     pub last_mount_ns: u64,
     pub mount_count: u64,
 
-    /// CRC32C of bytes [0..280) with this field zeroed during computation.
+    /// CRC32C of the whole 4 KiB block with this field zeroed.
     pub crc32c: u32,
 
-    pub _reserved: [u8; 3812],
+    /// Live entries serialized to the on-disk index checkpoint region
+    /// (`index_root_block` for `index_depth` blocks).
+    pub index_entry_count: u32,
+
+    pub _reserved: [u8; 3808],
 }
 
 const _ASSERT_SB_SIZE: () = assert!(core::mem::size_of::<HelixSuperblock>() == 4096);
@@ -108,14 +114,17 @@ impl HelixSuperblock {
 
     pub fn update_crc(&mut self) {
         self.crc32c = 0;
-        let bytes = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, 288) };
+        let bytes =
+            unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, BLOCK_SIZE as usize) };
         self.crc32c = crate::crc::crc32c(bytes);
     }
 
     pub fn verify_crc(&self) -> bool {
         let mut copy = *self;
         copy.crc32c = 0;
-        let bytes = unsafe { core::slice::from_raw_parts(&copy as *const _ as *const u8, 288) };
+        let bytes = unsafe {
+            core::slice::from_raw_parts(&copy as *const _ as *const u8, BLOCK_SIZE as usize)
+        };
         crate::crc::crc32c(bytes) == self.crc32c
     }
 }
@@ -243,6 +252,13 @@ impl LogRecordHeader {
     }
 }
 
+/// `LogRecordHeader.flags` bits.
+pub mod rec_flags {
+    /// Write payload is an extent descriptor, not inline data. Authoritative —
+    /// classification must never inspect payload bytes.
+    pub const IS_EXTENT: u8 = 1 << 0;
+}
+
 pub mod entry_flags {
     pub const IS_DIR: u32 = 1 << 0;
     pub const IS_DELETED: u32 = 1 << 1;
@@ -250,6 +266,17 @@ pub mod entry_flags {
     /// Synthetic VFS node (e.g. /sys).
     pub const IS_SYS: u32 = 1 << 3;
     pub const IS_DEDUP: u32 = 1 << 4;
+    /// `extent_root` addresses an extent-node block, not a contiguous run.
+    pub const IS_EXTENT_NODE: u32 = 1 << 5;
+}
+
+/// Discriminates an extent Write payload's residency. Stored as the first byte
+/// of the extent descriptor `[kind: u8][file_size: u64][extent_root: u64]`.
+pub mod extent_kind {
+    /// `extent_root` is the first of `ceil(size/BLOCK)` physically contiguous blocks.
+    pub const CONTIGUOUS: u8 = 1;
+    /// `extent_root` is an extent-node block listing every run.
+    pub const NODE: u8 = 2;
 }
 
 /// 512-byte B-tree leaf entry; 8 entries per 4 KiB block.
@@ -348,28 +375,10 @@ pub const EXTENTS_PER_LEAF: usize = 170;
 
 /// Open mode flags.
 ///
-/// MUST match the constants in `libmorpheus/src/fs.rs` exactly — these
-/// values cross the syscall ABI boundary verbatim.
-pub mod open_flags {
-    /// Open for reading.
-    pub const O_READ: u32 = 1 << 0; // 0x01
-    /// Open for writing.
-    pub const O_WRITE: u32 = 1 << 1; // 0x02
-    pub const O_CREATE: u32 = 1 << 2; // 0x04
-                                      // bit 3 (0x08) reserved — not used in libmorpheus ABI
-    /// Truncate on open.
-    pub const O_TRUNC: u32 = 1 << 4; // 0x10  (matches libmorpheus)
-    pub const O_APPEND: u32 = 1 << 5; // 0x20  (matches libmorpheus)
-    /// Open a directory for iteration.
-    pub const O_DIR: u32 = 1 << 6; // 0x40
-    /// Open at a specific LSN (temporal read).
-    pub const O_AT_LSN: u32 = 1 << 7; // 0x80
-                                      // ── Pipe markers (kernel-internal, not user-visible) ─────────
-    /// This fd is the read end of a kernel pipe.
-    pub const O_PIPE_READ: u32 = 1 << 8;
-    /// This fd is the write end of a kernel pipe.
-    pub const O_PIPE_WRITE: u32 = 1 << 9;
-}
+/// Canonical open flags live in `morpheus_foundation::flags::open_flags`; this
+/// re-export keeps the `helix::types::open_flags::*` path while single-sourcing
+/// the values.
+pub use morpheus_foundation::flags::open_flags;
 
 /// A file descriptor — per-process, in-memory only.
 #[derive(Clone, Copy, Debug)]
@@ -416,34 +425,11 @@ impl FileDescriptor {
     }
 }
 
-// Canonical kernel↔userland FFI types live in morpheus-foundation.
+// Canonical kernel↔userland FFI types, syscall numbers, and seek whence all live
+// in morpheus-foundation — the single source of truth. Re-exported (not
+// re-declared) so the values can never desync.
+pub use morpheus_foundation::syscall_abi::{
+    SEEK_CUR, SEEK_END, SEEK_SET, SYS_CLOSE, SYS_MKDIR, SYS_OPEN, SYS_READDIR, SYS_RENAME,
+    SYS_SEEK, SYS_SNAPSHOT, SYS_STAT, SYS_SYNC, SYS_TRUNCATE, SYS_UNLINK, SYS_VERSIONS,
+};
 pub use morpheus_foundation::types::{DirEntry, FileStat};
-
-/// `open(path_ptr, path_len, flags) → fd`
-pub const SYS_OPEN: u64 = 10;
-/// `close(fd) → 0`
-pub const SYS_CLOSE: u64 = 11;
-/// `seek(fd, offset, whence) → new_offset`
-pub const SYS_SEEK: u64 = 12;
-/// `stat(path_ptr, path_len, stat_buf_ptr) → 0`
-pub const SYS_STAT: u64 = 13;
-/// `readdir(fd, entry_buf_ptr, max_entries) → count`
-pub const SYS_READDIR: u64 = 14;
-/// `mkdir(path_ptr, path_len) → 0`
-pub const SYS_MKDIR: u64 = 15;
-/// `unlink(path_ptr, path_len) → 0`
-pub const SYS_UNLINK: u64 = 16;
-/// `rename(old_ptr, old_len, new_ptr, new_len) → 0`
-pub const SYS_RENAME: u64 = 17;
-/// `truncate(fd, new_size) → 0`
-pub const SYS_TRUNCATE: u64 = 18;
-/// `sync() → 0` — flush all pending writes and checkpoint.
-pub const SYS_SYNC: u64 = 19;
-/// `snapshot(name_ptr, name_len) → snapshot_id`
-pub const SYS_SNAPSHOT: u64 = 20;
-/// `versions(path_ptr, path_len, buf_ptr, max) → count`
-pub const SYS_VERSIONS: u64 = 21;
-
-pub const SEEK_SET: u64 = 0;
-pub const SEEK_CUR: u64 = 1;
-pub const SEEK_END: u64 = 2;

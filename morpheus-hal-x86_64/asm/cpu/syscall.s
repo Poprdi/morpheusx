@@ -29,7 +29,7 @@ section .text
 
 global syscall_entry
 global syscall_init
-extern syscall_dispatch         ; Rust: unsafe extern "C" fn(nr, a1, a2, a3, a4, a5) -> u64
+extern syscall_dispatch         ; Rust: unsafe extern "C" fn(nr, a1, a2, a3, a4, a5, a6) -> u64
 
 ; IA32 MSR addresses
 %define IA32_EFER    0xC0000080
@@ -122,6 +122,7 @@ syscall_entry:
     push    r11                         ; user RFLAGS
 
     ; ── Save user argument registers ──────────────────────────────────────
+    push    r9                          ; user a6
     push    r8                          ; user a5
     push    r10                         ; user a4
     push    rdi                         ; user a1
@@ -138,7 +139,14 @@ syscall_entry:
     mov     rbp, rsp
 
     ; ── Translate user ABI → MS x64 and call syscall_dispatch ─────────────
-    sub     rsp, 48                 ; 32 shadow + 16 stack args
+    ; MS x64: nr=rcx, a1=rdx, a2=r8, a3=r9; a4/a5/a6 spill to the stack above
+    ; the 32-byte shadow space. r9 still holds user a6 here; capture it before
+    ; r9 is reloaded with a3.
+    ; 15 qword pushes above leave RSP 8-off-16; sub 72 (=56 needed, +8 pad +8
+    ; align) restores 16-alignment for the `call`. Teardown uses `mov rsp,rbp`,
+    ; so the exact sub size need not be popped.
+    sub     rsp, 72                 ; 32 shadow + 24 stack args + 8 pad + 8 align
+    mov     [rsp + 0x30], r9        ; a6
     mov     [rsp + 0x28], r8        ; a5
     mov     [rsp + 0x20], r10       ; a4
     mov     r9, rdx                 ; a3
@@ -163,6 +171,7 @@ syscall_entry:
     pop     rdi                     ; user a1
     pop     r10                     ; user a4
     pop     r8                      ; user a5
+    pop     r9                      ; user a6
 
     pop     r11                     ; user RFLAGS
     pop     rcx                     ; user RIP

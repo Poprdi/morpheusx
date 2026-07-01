@@ -42,8 +42,7 @@ unsafe fn ap_quiesce_hlt_loop(core_idx: u32) -> ! {
 unsafe fn ap_idle_context(core_idx: u32) -> &'static CpuContext {
     let ctx = &mut AP_IDLE_CTX[core_idx as usize];
     let boot_rsp = hal().smp().pcpu_boot_kernel_rsp();
-    // CpuContext is opaque (morpheus-hal-api); reset the slot then init via
-    // the HAL — KERNEL_CS / KERNEL_DS selectors live inside the HAL impl.
+    // CpuContext is opaque (morpheus-hal-api); KERNEL_CS/DS live inside the HAL impl.
     *ctx = CpuContext::zeroed();
     hal()
         .cpu()
@@ -71,6 +70,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
     if core_idx == 0 && tick % STALE_WAITER_CLEANUP_INTERVAL == 0 {
         cleanup_stale_waiters();
+        super::wait::reap_detached_zombies();
     }
 
     let cur_pid = this_core_pid() as usize;
@@ -134,6 +134,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
             }
             let fpu_ptr = &mut next.fpu_state as *mut morpheus_hal_api::FpuState as u64;
             set_percpu_fpu_ptr(fpu_ptr);
+            hal().cpu().set_user_tls_base(next.tls_base);
             &next.context
         } else {
             set_this_core_pid(0);
@@ -257,6 +258,7 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
 
         let fpu_ptr = &mut next.fpu_state as *mut morpheus_hal_api::FpuState as u64;
         set_percpu_fpu_ptr(fpu_ptr);
+        hal().cpu().set_user_tls_base(next.tls_base);
 
         &next.context
     } else {
@@ -317,6 +319,19 @@ pub(super) unsafe fn wake_expired_sleepers() {
                     }
                     proc.state = ProcessState::Ready;
                     proc.futex_deadline = 0;
+                    proc.futex_timed_out = true;
+                    super::state::TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
+                } else if proc.futex_deadline != 0 {
+                    new_earliest = new_earliest.min(proc.futex_deadline);
+                    found_any = true;
+                }
+            },
+            // epoll_wait/blocking-socket timeout: same deadline machinery as futex.
+            ProcessState::Blocked(BlockReason::IoReady(_)) => {
+                if proc.futex_deadline != 0 && now >= proc.futex_deadline {
+                    proc.state = ProcessState::Ready;
+                    proc.futex_deadline = 0;
+                    proc.futex_timed_out = true;
                     super::state::TIMED_BLOCK_COUNT.fetch_sub(1, Ordering::Relaxed);
                 } else if proc.futex_deadline != 0 {
                     new_earliest = new_earliest.min(proc.futex_deadline);
@@ -695,7 +710,7 @@ pub(super) unsafe fn deliver_pending_signals(pid: u32) {
                 puts("[SCHED] signal -> PID ");
                 put_hex32(pid);
                 puts(" terminated\n");
-                terminate_process_inner(proc, -(sig as u8 as i32));
+                terminate_process_inner(proc, 0, sig as u8);
                 return;
             },
             SignalAction::Stop => {

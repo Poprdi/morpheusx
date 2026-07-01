@@ -1,26 +1,12 @@
-//! Shared helpers + errno constants for syscall handlers.
-//!
-//! `common.rs` is the SOLE caller of `morpheus_helix::vfs::global::fs_global_mut()`
-//! per LD27. All other handler files reach the VFS through `vfs_lock()` or
-//! `current_fd_table_and_fs`.
+//! Shared helpers and errno constants for syscall handlers (storage: spec §7).
 
-use morpheus_helix::vfs::global::FsGlobal;
-use morpheus_helix::vfs::FdTable;
+use alloc::string::String;
+use alloc::vec::Vec;
 
-pub(crate) const ENOSYS: u64 = u64::MAX - 37;
-pub(crate) const EINVAL: u64 = u64::MAX;
-pub(crate) const EPERM: u64 = u64::MAX - 1;
-pub(crate) const ENOENT: u64 = u64::MAX - 2;
-pub(crate) const ESRCH: u64 = u64::MAX - 3;
-pub(crate) const EIO: u64 = u64::MAX - 5;
-pub(crate) const EBADF: u64 = u64::MAX - 9;
-pub(crate) const EAGAIN: u64 = u64::MAX - 11;
-pub(crate) const ENOMEM: u64 = u64::MAX - 12;
-pub(crate) const EFAULT: u64 = u64::MAX - 14;
-pub(crate) const ENOTDIR: u64 = u64::MAX - 20;
-pub(crate) const EPIPE: u64 = u64::MAX - 32;
-pub(crate) const EBUSY: u64 = u64::MAX - 16;
-pub(crate) const ENODEV: u64 = u64::MAX - 19;
+pub(crate) use morpheus_foundation::errno::{
+    EAGAIN, EBADF, EBUSY, EEXIST, EFAULT, EINVAL, EIO, EISDIR, EMFILE, ENODEV, ENOENT, ENOMEM,
+    ENOSYS, ENOTDIR, EPERM, EPIPE, ESRCH,
+};
 
 /// Canonical lower-half limit (AMD64 Vol 2 §5.3). Same split applies on
 /// ARM HALs; arch-specific deviation belongs in HAL paging helpers, not
@@ -50,60 +36,65 @@ pub(crate) unsafe fn user_path(ptr: u64, len: u64) -> Option<&'static str> {
     core::str::from_utf8(bytes).ok()
 }
 
-pub(crate) fn helix_err_to_errno(_e: morpheus_helix::error::HelixError) -> u64 {
-    use morpheus_helix::error::HelixError::*;
-    match _e {
-        NotFound => ENOENT,
-        AlreadyExists => u64::MAX - 17, // EEXIST
-        InvalidFd => EBADF,
-        TooManyOpenFiles => u64::MAX - 24,  // EMFILE
-        ReadOnly => u64::MAX - 30,          // EROFS
-        IsADirectory => u64::MAX - 21,      // EISDIR
-        DirectoryNotEmpty => u64::MAX - 39, // ENOTEMPTY
-        NoSpace => u64::MAX - 28,           // ENOSPC
-        MountNotFound => ENOENT,
-        PermissionDenied => u64::MAX - 13, // EACCES
-        InvalidOffset => EINVAL,
-        IoReadFailed | IoWriteFailed | IoFlushFailed => EIO,
-        _ => EINVAL,
+/// Canonicalize an already-absolute path; `..` at root is clamped, never escapes `/`.
+pub(crate) fn normalize_abs(input: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in input.split('/') {
+        match seg {
+            "" | "." => {},
+            ".." => {
+                parts.pop();
+            },
+            s => parts.push(s),
+        }
     }
-}
-
-// SMP serialization for FsGlobal. Two cores aliasing the static mut corrupts
-// the VFS — confirmed empirically.
-pub(crate) static VFS_LOCK: crate::sync::RawSpinLock = crate::sync::RawSpinLock::new();
-
-pub(crate) struct VfsGuard {
-    pub fs: &'static mut FsGlobal,
-}
-
-impl Drop for VfsGuard {
-    fn drop(&mut self) {
-        VFS_LOCK.unlock();
+    let mut out = String::with_capacity(input.len() + 1);
+    out.push('/');
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(p);
     }
+    out
 }
 
-/// Returns None if FS isn't initialized. Lock drops with the guard.
-pub(crate) unsafe fn vfs_lock() -> Option<VfsGuard> {
-    VFS_LOCK.lock();
-    match morpheus_helix::vfs::global::fs_global_mut() {
-        Some(fs) => Some(VfsGuard { fs }),
-        None => {
-            VFS_LOCK.unlock();
-            None
-        },
+/// Resolve a user path to a canonical absolute path: relative paths join the
+/// caller's cwd (not the root mount). `None` on a bad user pointer.
+pub(crate) unsafe fn resolve_user_path(ptr: u64, len: u64) -> Option<String> {
+    let p = user_path(ptr, len)?;
+    if p.starts_with('/') {
+        return Some(normalize_abs(p));
     }
+    let cwd = crate::schedular::SCHEDULER.current_process_mut().cwd_str();
+    let mut joined = String::from(cwd);
+    if !joined.ends_with('/') {
+        joined.push('/');
+    }
+    joined.push_str(p);
+    Some(normalize_abs(&joined))
 }
 
-/// Unlocked variant of `vfs_lock` paired with the current fd table, for
-/// callers already holding `VFS_LOCK`. Returns `None` if FS isn't initialized.
-///
-/// # Safety
-/// Caller must ensure no other core touches the FS or fd table concurrently.
-#[allow(dead_code)]
-pub(crate) unsafe fn current_fd_table_and_fs(
-) -> Option<(&'static mut FdTable, &'static mut FsGlobal)> {
-    let fs = morpheus_helix::vfs::global::fs_global_mut()?;
-    let fd_table = crate::schedular::SCHEDULER.current_fd_table_mut();
-    Some((fd_table, fs))
+/// FS timestamp source (mtime/atime, log records). Monotonic ns-since-boot, not
+/// wall-clock: CLOCK_REALTIME epoch base awaits Domain F, and `FileStat` documents
+/// these fields as monotonic until then.
+#[inline]
+pub(crate) fn fs_now_ns() -> u64 {
+    crate::global::hal().timer().now_ns()
+}
+
+/// Fill the std-required metadata the backends leave at zero: the `{version,
+/// struct_size}` self-describing head and a sane `nlink` (POSIX link count is
+/// never 0 for a live object). `uid`/`gid` stay 0 (single-user root) by design.
+pub(crate) fn fill_stat_metadata(stat: &mut morpheus_foundation::types::FileStat) {
+    use morpheus_foundation::flags::mode;
+    stat.version = 1;
+    stat.struct_size = core::mem::size_of::<morpheus_foundation::types::FileStat>() as u16;
+    if stat.nlink == 0 {
+        stat.nlink = if stat.mode & mode::S_IFMT == mode::S_IFDIR {
+            2
+        } else {
+            1
+        };
+    }
 }

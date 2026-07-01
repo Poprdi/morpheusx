@@ -12,15 +12,18 @@ pub mod serial;
 pub mod sync;
 
 pub mod input;
+pub mod io;
 pub mod mouse;
 pub mod pipe;
 pub mod ps2_mouse;
 pub mod stdin;
 pub mod stdout;
 
+pub mod clock;
 pub mod process;
 pub mod schedular;
 pub mod shutdown;
+pub mod storage;
 pub mod syscall;
 
 pub mod elf;

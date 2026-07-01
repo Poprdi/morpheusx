@@ -15,7 +15,7 @@ const EFI_LOADER_DATA: usize = 2;
 /// .bss bootstrap heap; lives until registry init.
 const PRIMARY_HEAP_SIZE: usize = 4 * 1024 * 1024;
 const OVERFLOW_GROW_CHUNK: usize = 16 * 1024 * 1024;
-const OVERFLOW_MAX_SIZE: usize = 256 * 1024 * 1024;
+const OVERFLOW_MAX_SIZE: usize = 512 * 1024 * 1024;
 
 /// Pre-EBS only.
 static BOOT_SERVICES: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());

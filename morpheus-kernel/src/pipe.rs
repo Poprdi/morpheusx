@@ -59,7 +59,6 @@ impl Pipe {
         written
     }
 
-    /// Returns bytes read.
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
         while count < buf.len() {
@@ -99,20 +98,45 @@ pub unsafe fn pipe_alloc() -> Option<u8> {
     None
 }
 
+/// Re-publish a pipe's level-triggered epoll readiness from its live fill level.
+/// Called OUTSIDE `PIPE_LOCK`: `set_ready` takes `PROCESS_TABLE_LOCK` to wake
+/// parked waiters, and nesting that under `PIPE_LOCK` would invert lock order.
+unsafe fn publish_readiness(idx: u8, avail_read: usize, avail_write: usize) {
+    use crate::io::readiness::{clear_ready, pipe_token, set_ready};
+    use morpheus_foundation::flags::{EPOLLIN, EPOLLOUT};
+    let token = pipe_token(idx);
+    if avail_read > 0 {
+        set_ready(token, EPOLLIN);
+    } else {
+        clear_ready(token, EPOLLIN);
+    }
+    if avail_write > 0 {
+        set_ready(token, EPOLLOUT);
+    } else {
+        clear_ready(token, EPOLLOUT);
+    }
+}
+
 /// # Safety
 /// `idx` must be a valid pipe index.
 pub unsafe fn pipe_write(idx: u8, data: &[u8]) -> usize {
     PIPE_LOCK.lock();
+    let mut levels = None;
     let n = if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if !pipe.active {
             0
         } else {
-            pipe.write(data)
+            let n = pipe.write(data);
+            levels = Some((pipe.available_read(), pipe.available_write()));
+            n
         }
     } else {
         0
     };
     PIPE_LOCK.unlock();
+    if let Some((ar, aw)) = levels {
+        publish_readiness(idx, ar, aw);
+    }
     n
 }
 
@@ -120,16 +144,22 @@ pub unsafe fn pipe_write(idx: u8, data: &[u8]) -> usize {
 /// `idx` must be a valid pipe index.
 pub unsafe fn pipe_read(idx: u8, buf: &mut [u8]) -> usize {
     PIPE_LOCK.lock();
+    let mut levels = None;
     let n = if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if !pipe.active {
             0
         } else {
-            pipe.read(buf)
+            let n = pipe.read(buf);
+            levels = Some((pipe.available_read(), pipe.available_write()));
+            n
         }
     } else {
         0
     };
     PIPE_LOCK.unlock();
+    if let Some((ar, aw)) = levels {
+        publish_readiness(idx, ar, aw);
+    }
     n
 }
 
@@ -162,29 +192,45 @@ pub unsafe fn pipe_available(idx: u8) -> usize {
 /// Frees the pipe when both ends are closed.
 pub unsafe fn pipe_close_reader(idx: u8) {
     PIPE_LOCK.lock();
+    let mut last_reader = false;
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if pipe.readers > 0 {
             pipe.readers -= 1;
         }
+        last_reader = pipe.readers == 0;
         if pipe.readers == 0 && pipe.writers == 0 {
             pipe.active = false;
         }
     }
     PIPE_LOCK.unlock();
+    // No readers left: a writer parked/polling on EPOLLOUT must wake to see EPIPE.
+    if last_reader {
+        use crate::io::readiness::{pipe_token, set_ready};
+        use morpheus_foundation::flags::{EPOLLERR, EPOLLOUT};
+        set_ready(pipe_token(idx), EPOLLERR | EPOLLOUT);
+    }
 }
 
 /// Frees the pipe when both ends are closed.
 pub unsafe fn pipe_close_writer(idx: u8) {
     PIPE_LOCK.lock();
+    let mut last_writer = false;
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
         if pipe.writers > 0 {
             pipe.writers -= 1;
         }
+        last_writer = pipe.writers == 0;
         if pipe.readers == 0 && pipe.writers == 0 {
             pipe.active = false;
         }
     }
     PIPE_LOCK.unlock();
+    // No writers left: a reader parked on EPOLLIN must wake to observe EOF.
+    if last_writer {
+        use crate::io::readiness::{pipe_token, set_ready};
+        use morpheus_foundation::flags::{EPOLLHUP, EPOLLIN};
+        set_ready(pipe_token(idx), EPOLLHUP | EPOLLIN);
+    }
 }
 
 /// Bump reader refcount (fd inheritance / dup).

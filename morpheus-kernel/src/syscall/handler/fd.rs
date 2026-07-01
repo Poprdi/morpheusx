@@ -4,21 +4,16 @@ use super::common::*;
 use crate::schedular::SCHEDULER;
 use crate::serial::puts;
 
+/// `dup`: the new fd SHARES the old fd's open-file-description (one cursor), not a
+/// snapshot copy — this is the dup-copies-offset fix. The new fd is `FD_CLOEXEC`
+/// clear (POSIX).
 pub unsafe fn sys_dup(old_fd: u64) -> u64 {
     let fd_table = SCHEDULER.current_fd_table_mut();
-
-    let src = match fd_table.get(old_fd as usize) {
-        Ok(desc) => *desc,
-        Err(_) => return EBADF,
-    };
-
-    let new_fd = match fd_table.alloc() {
-        Ok(fd) => fd,
-        Err(_) => return ENOMEM,
-    };
-
-    fd_table.fds[new_fd] = src;
-    new_fd as u64
+    match fd_table.dup(old_fd as usize) {
+        Ok(new) => new as u64,
+        Err(crate::storage::fs_api::VfsError::BadFd) => EBADF,
+        Err(_) => EMFILE,
+    }
 }
 
 /// Bypass console/WM; straight to serial.
@@ -57,31 +52,88 @@ pub unsafe fn sys_getcwd(buf_ptr: u64, buf_len: u64) -> u64 {
 }
 
 pub unsafe fn sys_chdir(path_ptr: u64, path_len: u64) -> u64 {
-    let path = match user_path(path_ptr, path_len) {
+    // Resolve against the current cwd first so `chdir("..")`/`chdir("sub")` work;
+    // the stored cwd is always the canonical absolute path.
+    let path = match resolve_user_path(path_ptr, path_len) {
         Some(p) => p,
         None => return EINVAL,
     };
 
     if path == "/" {
         let proc = SCHEDULER.current_process_mut();
-        proc.set_cwd(path);
+        proc.set_cwd(&path);
         return 0;
     }
 
-    let _vfs_guard = match vfs_lock() {
-        Some(g) => g,
-        None => return ENOSYS,
+    let is_dir = {
+        let guard = crate::storage::lock();
+        let g = &mut *guard.g;
+        let (_, m, dev, rel) = match g.resolve_mut(&path) {
+            Some(t) => t,
+            None => return ENOENT,
+        };
+        match m.fs.stat(dev, rel) {
+            Ok(stat) => {
+                use morpheus_foundation::flags::mode;
+                stat.mode & mode::S_IFMT == mode::S_IFDIR
+            },
+            Err(_) => return ENOENT,
+        }
     };
-    let fs = &*_vfs_guard.fs;
-    match morpheus_helix::vfs::vfs_stat(&fs.mount_table, path) {
-        Ok(stat) => {
-            if !stat.is_dir {
-                return ENOTDIR;
+    if !is_dir {
+        return ENOTDIR;
+    }
+    let proc = SCHEDULER.current_process_mut();
+    proc.set_cwd(&path);
+    0
+}
+
+/// SYS_FCNTL: `fd,cmd,arg -> ret | -errno`. The std-required subset:
+/// `F_GETFD/F_SETFD` (FD_CLOEXEC, per-fd), `F_GETFL/F_SETFL` (O_NONBLOCK on the
+/// shared OFD), and `F_DUPFD/F_DUPFD_CLOEXEC` (backs `try_clone`, sharing the OFD).
+pub unsafe fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> u64 {
+    use morpheus_foundation::flags::open_flags::O_NONBLOCK;
+    use morpheus_foundation::flags::{
+        F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
+    };
+
+    let fd_table = SCHEDULER.current_fd_table_mut();
+    let fd = fd as usize;
+    if fd_table.get(fd).is_none() {
+        return EBADF;
+    }
+
+    match cmd {
+        F_GETFD => {
+            if fd_table.get_cloexec(fd).unwrap_or(false) {
+                FD_CLOEXEC
+            } else {
+                0
             }
-            let proc = SCHEDULER.current_process_mut();
-            proc.set_cwd(path);
+        },
+        F_SETFD => {
+            fd_table.set_cloexec(fd, arg & FD_CLOEXEC != 0);
             0
         },
-        Err(_) => ENOENT,
+        F_GETFL => fd_table.status_flags(fd).unwrap_or(0) as u64,
+        F_SETFL => {
+            // Only the mutable status bit (O_NONBLOCK) is honoured; access mode and
+            // creation flags are immutable post-open per POSIX.
+            let cur = fd_table.status_flags(fd).unwrap_or(0);
+            let next = (cur & !O_NONBLOCK) | (arg as u32 & O_NONBLOCK);
+            fd_table.set_status_flags(fd, next);
+            0
+        },
+        F_DUPFD => match fd_table.dup_from(fd, arg as usize, false) {
+            Ok(new) => new as u64,
+            Err(crate::storage::fs_api::VfsError::BadFd) => EBADF,
+            Err(_) => EMFILE,
+        },
+        F_DUPFD_CLOEXEC => match fd_table.dup_from(fd, arg as usize, true) {
+            Ok(new) => new as u64,
+            Err(crate::storage::fs_api::VfsError::BadFd) => EBADF,
+            Err(_) => EMFILE,
+        },
+        _ => EINVAL,
     }
 }

@@ -7,17 +7,17 @@ use crate::log::LogEngine;
 use crate::types::*;
 use alloc::string::String;
 use alloc::vec::Vec;
+use gpt_disk_io::BlockIo;
 
 /// Creates parents implicitly. Trailing '/' is canonical and added if missing.
-pub fn mkdir(
+pub fn mkdir<B: BlockIo>(
+    block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
-    if path.is_empty() || !path.starts_with('/') {
-        return Err(HelixError::PathInvalid);
-    }
+    btree::validate_path(path)?;
 
     let normalized = if path.ends_with('/') {
         String::from(path)
@@ -28,25 +28,25 @@ pub fn mkdir(
     };
 
     if normalized.len() > MAX_PATH_LEN {
-        return Err(HelixError::PathInvalid);
+        return Err(HelixError::PathTooLong);
     }
 
-    if let Some(existing) = index.lookup(&normalized) {
-        if existing.flags & entry_flags::IS_DIR != 0
-            && existing.flags & entry_flags::IS_DELETED == 0
-        {
-            return Err(HelixError::AlreadyExists);
-        }
+    if index.lookup(&normalized).is_some() {
+        return Err(HelixError::AlreadyExists);
+    }
+    // A directory must not collide with an existing file of the same name.
+    if index.lookup(normalized.trim_end_matches('/')).is_some() {
+        return Err(HelixError::AlreadyExists);
     }
 
-    ensure_parent_dirs(log, index, &normalized, timestamp_ns)?;
+    ensure_parent_dirs(block_io, log, index, &normalized, timestamp_ns)?;
 
     let hash = fnv1a_64(normalized.as_bytes());
     let norm_bytes = normalized.as_bytes();
     let mut payload = Vec::with_capacity(2 + norm_bytes.len());
     payload.extend_from_slice(&(norm_bytes.len() as u16).to_le_bytes());
     payload.extend_from_slice(norm_bytes);
-    let lsn = log.append(LogOp::MkDir, hash, &payload, timestamp_ns)?;
+    let lsn = log.append(block_io, LogOp::MkDir, hash, &payload, timestamp_ns)?;
     let entry = NamespaceIndex::make_dir_entry(&normalized, lsn, timestamp_ns);
     index.upsert(entry);
 
@@ -96,13 +96,17 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
             continue;
         }
 
+        let is_dir = child.flags & entry_flags::IS_DIR != 0;
         let mut dir_entry = DirEntry {
-            name: [0u8; 256],
-            name_len: 0,
             size: child.size,
-            is_dir: child.flags & entry_flags::IS_DIR != 0,
+            d_type: if is_dir {
+                morpheus_foundation::flags::dirent_type::DT_DIR
+            } else {
+                morpheus_foundation::flags::dirent_type::DT_REG
+            },
             modified_ns: child.modified_ns,
             version_count: child.version_count,
+            ..DirEntry::zeroed()
         };
 
         let name_bytes = filename.as_bytes();
@@ -116,17 +120,22 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
     Ok(entries)
 }
 
-/// Directories must be empty. Inline data and directories own no blocks;
-/// fragmented files only free their first extent here, the rest is GC's job.
-pub fn unlink(
+/// Directories must be empty. Inline data and directories own no blocks; extent
+/// files free every run (and the extent-node block for fragmented ones).
+#[allow(clippy::too_many_arguments)]
+pub fn unlink<B: BlockIo>(
+    block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
     bitmap: &mut crate::bitmap::BlockBitmap,
+    partition_lba_start: u64,
+    data_start_block: u64,
+    device_block_size: u32,
     path: &str,
     timestamp_ns: u64,
 ) -> Result<Lsn, HelixError> {
     // Capture before any &mut borrow of index. Path may lack trailing '/'.
-    let (extent_root, size, is_inline, is_dir) = {
+    let (extent_root, size, is_inline, is_dir, is_node) = {
         let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
         if entry.flags & entry_flags::IS_DELETED != 0 {
             return Err(HelixError::NotFound);
@@ -136,6 +145,7 @@ pub fn unlink(
             entry.size,
             entry.flags & entry_flags::IS_INLINE != 0,
             entry.flags & entry_flags::IS_DIR != 0,
+            entry.flags & entry_flags::IS_EXTENT_NODE != 0,
         )
     };
 
@@ -168,21 +178,29 @@ pub fn unlink(
     let mut payload = Vec::with_capacity(2 + del_bytes.len());
     payload.extend_from_slice(&(del_bytes.len() as u16).to_le_bytes());
     payload.extend_from_slice(del_bytes);
-    let lsn = log.append(LogOp::Delete, hash, &payload, timestamp_ns)?;
+    let lsn = log.append(block_io, LogOp::Delete, hash, &payload, timestamp_ns)?;
     index.mark_deleted(&actual_path)?;
 
-    // Inline + dirs own no blocks. Fragmented files: only first extent freed
-    // here; GC reclaims the rest from the log.
-    if !is_inline && !is_dir && extent_root != crate::types::BLOCK_NULL {
-        let blocks = size.div_ceil(crate::types::BLOCK_SIZE as u64);
-        let _ = bitmap.free_range(extent_root, blocks);
+    // Inline + dirs own no blocks.
+    if !is_inline && !is_dir {
+        crate::extent::free_file_blocks(
+            block_io,
+            bitmap,
+            partition_lba_start,
+            data_start_block,
+            device_block_size,
+            extent_root,
+            size,
+            is_node,
+        );
     }
 
     Ok(lsn)
 }
 
 /// Mirrors write.rs.
-fn ensure_parent_dirs(
+fn ensure_parent_dirs<B: BlockIo>(
+    block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
     path: &str,
@@ -205,7 +223,7 @@ fn ensure_parent_dirs(
             let mut dir_payload = Vec::with_capacity(2 + dir_bytes.len());
             dir_payload.extend_from_slice(&(dir_bytes.len() as u16).to_le_bytes());
             dir_payload.extend_from_slice(dir_bytes);
-            let lsn = log.append(LogOp::MkDir, hash, &dir_payload, timestamp_ns)?;
+            let lsn = log.append(block_io, LogOp::MkDir, hash, &dir_payload, timestamp_ns)?;
             let entry = NamespaceIndex::make_dir_entry(&current, lsn, timestamp_ns);
             index.upsert(entry);
         }

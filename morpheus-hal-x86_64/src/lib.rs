@@ -12,6 +12,7 @@ pub mod io;
 pub mod memory;
 pub mod paging;
 pub mod pci;
+pub mod rtc;
 pub mod platform;
 pub mod serial;
 pub mod sync;

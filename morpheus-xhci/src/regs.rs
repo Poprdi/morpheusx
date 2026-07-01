@@ -70,6 +70,7 @@ pub const TRB_DATA: u32 = 3 << 10;
 pub const TRB_STATUS: u32 = 4 << 10;
 pub const TRB_LINK: u32 = 6 << 10;
 pub const TRB_ENABLE_SLOT: u32 = 9 << 10;
+pub const TRB_DISABLE_SLOT: u32 = 10 << 10;
 pub const TRB_ADDRESS_DEV: u32 = 11 << 10;
 pub const TRB_CONFIGURE_EP: u32 = 12 << 10;
 pub const TRB_EVALUATE_CONTEXT: u32 = 13 << 10;

@@ -14,15 +14,52 @@ pub enum ErrorKind {
     NotImplemented,
     InvalidInput,
     WouldBlock,
+    Interrupted,
     TimedOut,
     AlreadyExists,
     PermissionDenied,
     ConnectionRefused,
     ConnectionReset,
+    ConnectionAborted,
     NotConnected,
+    AddrInUse,
+    AddrNotAvailable,
+    NetworkUnreachable,
+    HostUnreachable,
     UnexpectedEof,
     WriteZero,
     Unknown,
+}
+
+/// Maps a positive Linux-numeric errno to an [`ErrorKind`], mirroring
+/// `std::sys::pal::unix::decode_error_kind` so the future std PAL reuses it.
+#[inline]
+pub fn decode_error_kind(errno: i32) -> ErrorKind {
+    match errno {
+        1 | 13 => ErrorKind::PermissionDenied,
+        2 => ErrorKind::NotFound,
+        3 => ErrorKind::ProcessNotFound,
+        4 => ErrorKind::Interrupted,
+        5 => ErrorKind::Io,
+        9 => ErrorKind::BadFd,
+        11 => ErrorKind::WouldBlock,
+        12 => ErrorKind::OutOfMemory,
+        14 => ErrorKind::Fault,
+        17 => ErrorKind::AlreadyExists,
+        22 => ErrorKind::InvalidInput,
+        32 => ErrorKind::BrokenPipe,
+        38 => ErrorKind::NotImplemented,
+        98 => ErrorKind::AddrInUse,
+        99 => ErrorKind::AddrNotAvailable,
+        101 => ErrorKind::NetworkUnreachable,
+        103 => ErrorKind::ConnectionAborted,
+        104 => ErrorKind::ConnectionReset,
+        107 => ErrorKind::NotConnected,
+        110 => ErrorKind::TimedOut,
+        111 => ErrorKind::ConnectionRefused,
+        113 => ErrorKind::HostUnreachable,
+        _ => ErrorKind::Unknown,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -34,19 +71,10 @@ pub struct Error {
 impl Error {
     #[inline]
     pub fn from_raw(raw: u64) -> Self {
-        let kind = match raw {
-            crate::ENOENT => ErrorKind::NotFound,
-            crate::ESRCH => ErrorKind::ProcessNotFound,
-            crate::EIO => ErrorKind::Io,
-            crate::EBADF => ErrorKind::BadFd,
-            crate::ENOMEM => ErrorKind::OutOfMemory,
-            crate::EFAULT => ErrorKind::Fault,
-            crate::EPIPE => ErrorKind::BrokenPipe,
-            crate::ENOSYS => ErrorKind::NotImplemented,
-            crate::EINVAL => ErrorKind::InvalidInput,
-            _ => ErrorKind::Unknown,
-        };
-        Self { kind, raw }
+        Self {
+            kind: decode_error_kind(morpheus_foundation::errno::errno_value(raw)),
+            raw,
+        }
     }
 
     /// Synthetic error; raw = 0.
@@ -85,12 +113,18 @@ impl fmt::Display for Error {
             ErrorKind::NotImplemented => f.write_str("not implemented"),
             ErrorKind::InvalidInput => f.write_str("invalid argument"),
             ErrorKind::WouldBlock => f.write_str("would block"),
+            ErrorKind::Interrupted => f.write_str("interrupted"),
             ErrorKind::TimedOut => f.write_str("timed out"),
             ErrorKind::AlreadyExists => f.write_str("already exists"),
             ErrorKind::PermissionDenied => f.write_str("permission denied"),
             ErrorKind::ConnectionRefused => f.write_str("connection refused"),
             ErrorKind::ConnectionReset => f.write_str("connection reset"),
+            ErrorKind::ConnectionAborted => f.write_str("connection aborted"),
             ErrorKind::NotConnected => f.write_str("not connected"),
+            ErrorKind::AddrInUse => f.write_str("address in use"),
+            ErrorKind::AddrNotAvailable => f.write_str("address not available"),
+            ErrorKind::NetworkUnreachable => f.write_str("network unreachable"),
+            ErrorKind::HostUnreachable => f.write_str("host unreachable"),
             ErrorKind::UnexpectedEof => f.write_str("unexpected end of file"),
             ErrorKind::WriteZero => f.write_str("write zero"),
             ErrorKind::Unknown => write!(f, "unknown error (0x{:x})", self.raw),

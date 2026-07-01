@@ -150,6 +150,8 @@ pub fn is_helix<B: BlockIo>(
         }
     }
 
-    let sb = unsafe { &*(buf.as_ptr() as *const HelixSuperblock) };
+    // buf is a Vec<u8> (alignment 1); copy out rather than form a misaligned ref.
+    let sb: HelixSuperblock =
+        unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const HelixSuperblock) };
     sb.is_valid()
 }

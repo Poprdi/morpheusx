@@ -36,6 +36,17 @@ pub fn read_file<B: BlockIo>(
         return Ok(data);
     }
 
+    if entry.flags & entry_flags::IS_EXTENT_NODE != 0 {
+        return crate::extent::read_extent_file(
+            block_io,
+            partition_lba_start,
+            data_region_start_block,
+            device_block_size,
+            entry.extent_root,
+            entry.size,
+        );
+    }
+
     read_extent_data(
         block_io,
         partition_lba_start,
@@ -61,6 +72,7 @@ pub fn read_file_at_lsn<B: BlockIo>(
     let mut last_write_data: Option<Vec<u8>> = None;
     let mut last_extent_root: Option<u64> = None;
     let mut last_file_size: Option<u64> = None;
+    let mut last_is_node = false;
 
     // Circular walk: tail -> head.
     let segment_count = log.segment_count();
@@ -87,7 +99,9 @@ pub fn read_file_at_lsn<B: BlockIo>(
                         if let Some(op) = LogOp::from_u8(header.op) {
                             match op {
                                 LogOp::Write => {
-                                    // v2: [path_len:u16][path][data...].
+                                    // Payload after [path_len:u16][path]. Extent records
+                                    // are tagged by the IS_EXTENT header flag (never by a
+                                    // payload byte) and carry [kind][file_size][extent_root].
                                     let data = if payload.len() >= 2 {
                                         let plen =
                                             u16::from_le_bytes([payload[0], payload[1]]) as usize;
@@ -101,25 +115,27 @@ pub fn read_file_at_lsn<B: BlockIo>(
                                         &payload[..]
                                     };
 
-                                    if data.len() <= INLINE_DATA_SIZE {
+                                    if header.flags & rec_flags::IS_EXTENT != 0 && data.len() >= 17 {
+                                        last_write_data = None;
+                                        last_file_size = Some(u64::from_le_bytes(
+                                            data[1..9].try_into().unwrap_or([0u8; 8]),
+                                        ));
+                                        last_extent_root = Some(u64::from_le_bytes(
+                                            data[9..17].try_into().unwrap_or([0u8; 8]),
+                                        ));
+                                        last_is_node = data[0] == extent_kind::NODE;
+                                    } else if data.len() <= INLINE_DATA_SIZE {
                                         last_write_data = Some(data.to_vec());
                                         last_extent_root = None;
                                         last_file_size = None;
-                                    } else if data.len() >= 24 {
-                                        last_write_data = None;
-                                        let mut phys_bytes = [0u8; 8];
-                                        phys_bytes.copy_from_slice(&data[8..16]);
-                                        last_extent_root = Some(u64::from_le_bytes(phys_bytes));
-                                        let mut count_bytes = [0u8; 4];
-                                        count_bytes.copy_from_slice(&data[16..20]);
-                                        let block_count = u32::from_le_bytes(count_bytes) as u64;
-                                        last_file_size = Some(block_count * BLOCK_SIZE as u64);
+                                        last_is_node = false;
                                     }
                                 },
                                 LogOp::Delete => {
                                     last_write_data = None;
                                     last_extent_root = None;
                                     last_file_size = None;
+                                    last_is_node = false;
                                 },
                                 _ => {},
                             }
@@ -145,6 +161,16 @@ pub fn read_file_at_lsn<B: BlockIo>(
 
     if let Some(extent_root) = last_extent_root {
         let size = last_file_size.unwrap_or(0);
+        if last_is_node {
+            return crate::extent::read_extent_file(
+                block_io,
+                partition_lba_start,
+                data_region_start_block,
+                device_block_size,
+                extent_root,
+                size,
+            );
+        }
         return read_extent_data(
             block_io,
             partition_lba_start,
@@ -226,16 +252,22 @@ pub fn stat_file(index: &NamespaceIndex, path: &str) -> Result<FileStat, HelixEr
         return Err(HelixError::NotFound);
     }
 
+    let mode = if entry.flags & entry_flags::IS_DIR != 0 {
+        morpheus_foundation::flags::mode::S_IFDIR
+    } else {
+        morpheus_foundation::flags::mode::S_IFREG
+    };
     Ok(FileStat {
         key: entry.key,
         size: entry.size,
-        is_dir: entry.flags & entry_flags::IS_DIR != 0,
+        mode,
         created_ns: entry.created_ns,
         modified_ns: entry.modified_ns,
+        accessed_ns: entry.modified_ns,
         version_count: entry.version_count,
         lsn: entry.lsn,
         first_lsn: entry.first_lsn,
-        flags: entry.flags,
+        ..FileStat::default()
     })
 }
 

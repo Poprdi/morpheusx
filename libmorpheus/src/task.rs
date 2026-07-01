@@ -370,10 +370,15 @@ impl Future for SleepFuture {
         if !self.parked {
             self.parked = true;
             let remaining_ns = self.deadline_ns.saturating_sub(now);
-            let remaining_ms = remaining_ns.div_ceil(1_000_000);
 
-            if remaining_ms > 0 {
-                // Dummy stack futex; the timeout is what matters.
+            if remaining_ns > 0 {
+                // arg4 is a `*const Timespec` RELATIVE timeout vs CLOCK_MONOTONIC
+                // (ns granularity), NOT the old ms scalar. Dummy stack futex; the
+                // value matches so FUTEX_WAIT blocks purely on the timeout.
+                let ts = morpheus_foundation::types::Timespec {
+                    tv_sec: (remaining_ns / 1_000_000_000) as i64,
+                    tv_nsec: (remaining_ns % 1_000_000_000) as i64,
+                };
                 let dummy = AtomicU32::new(0);
                 unsafe {
                     crate::raw::syscall4(
@@ -381,7 +386,7 @@ impl Future for SleepFuture {
                         &dummy as *const AtomicU32 as u64,
                         FUTEX_WAIT,
                         0,
-                        remaining_ms,
+                        &ts as *const morpheus_foundation::types::Timespec as u64,
                     );
                 }
             }

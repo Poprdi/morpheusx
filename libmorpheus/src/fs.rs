@@ -11,15 +11,18 @@ use crate::io::{self, Read, Seek, SeekFrom, Write};
 use crate::is_error;
 use crate::raw::*;
 
-pub const O_READ: u32 = 0x01;
-pub const O_WRITE: u32 = 0x02;
-pub const O_CREATE: u32 = 0x04;
-pub const O_TRUNC: u32 = 0x10;
-pub const O_APPEND: u32 = 0x20;
+// open flags + seek whence are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::flags::open_flags::{O_APPEND, O_CREATE, O_READ, O_TRUNC, O_WRITE};
+pub use morpheus_foundation::syscall_abi::{SEEK_CUR, SEEK_END, SEEK_SET};
 
-pub const SEEK_SET: u64 = 0;
-pub const SEEK_CUR: u64 = 1;
-pub const SEEK_END: u64 = 2;
+// Storage-subsystem ABI (volumes/mounts) — re-exported so `libmorpheus::fs::*`
+// paths stay stable and the kernel↔userland seam is single-sourced.
+pub use morpheus_foundation::storage::{
+    DEV_AHCI, DEV_RAM, DEV_SDHCI, DEV_USBMSD, DEV_VIRTIO, FS_AUTO, FS_FAT32, FS_HELIX, FS_NONE,
+    FS_UNKNOWN, MNT_FORCE, MNT_RDONLY, MNT_STAGED, VOLUME_NONE, VOL_EPHEMERAL, VOL_MOUNTED,
+    VOL_RDONLY, VOL_REMOVABLE,
+};
+pub use morpheus_foundation::types::{MountInfo, VolumeInfo};
 
 pub fn open(path: &str, flags: u32) -> Result<usize, u64> {
     let ret = unsafe {
@@ -147,6 +150,151 @@ pub fn sync() -> Result<(), u64> {
     }
 }
 
+/// Resize `path` to `new_size`: shrinks truncate, grows zero-extend.
+pub fn truncate(path: &str, new_size: u64) -> Result<(), u64> {
+    let ret = unsafe {
+        syscall3(
+            SYS_TRUNCATE,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            new_size,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Record a named filesystem snapshot; returns its LSN (a point-in-time handle).
+pub fn snapshot(name: &str) -> Result<u64, u64> {
+    let ret = unsafe { syscall2(SYS_SNAPSHOT, name.as_ptr() as u64, name.len() as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
+}
+
+/// One logged version of a file. ABI struct: see `morpheus_foundation::types::FileVersion`.
+pub type FileVersion = morpheus_foundation::types::FileVersion;
+
+/// All logged versions of `path`, oldest-to-newest.
+pub fn versions(path: &str) -> Result<Vec<FileVersion>, u64> {
+    let count = unsafe { syscall4(SYS_VERSIONS, path.as_ptr() as u64, path.len() as u64, 0, 0) };
+    if is_error(count) {
+        return Err(count);
+    }
+    let count = count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<FileVersion> = vec![FileVersion::zeroed(); count];
+    let written = unsafe {
+        syscall4(
+            SYS_VERSIONS,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            out.as_mut_ptr() as u64,
+            count as u64,
+        )
+    };
+    if is_error(written) {
+        return Err(written);
+    }
+    out.truncate(written as usize);
+    Ok(out)
+}
+
+/// All storage volumes (lsblk-style). Probe count (`max == 0`), then fetch.
+pub fn volumes() -> Result<Vec<VolumeInfo>, u64> {
+    let count = unsafe { syscall2(SYS_VOLUMES, 0, 0) };
+    if is_error(count) {
+        return Err(count);
+    }
+    let count = count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<VolumeInfo> = vec![VolumeInfo::zeroed(); count];
+    let written = unsafe { syscall2(SYS_VOLUMES, out.as_mut_ptr() as u64, count as u64) };
+    if is_error(written) {
+        return Err(written);
+    }
+    out.truncate(written as usize);
+    Ok(out)
+}
+
+/// All active mounts. Probe count (`max == 0`), then fetch.
+pub fn mounts() -> Result<Vec<MountInfo>, u64> {
+    let count = unsafe { syscall2(SYS_MOUNTS, 0, 0) };
+    if is_error(count) {
+        return Err(count);
+    }
+    let count = count as usize;
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out: Vec<MountInfo> = vec![MountInfo::zeroed(); count];
+    let written = unsafe { syscall2(SYS_MOUNTS, out.as_mut_ptr() as u64, count as u64) };
+    if is_error(written) {
+        return Err(written);
+    }
+    out.truncate(written as usize);
+    Ok(out)
+}
+
+/// Mount `source_volume_id` (or `VOLUME_NONE` for a fresh RAM volume) at
+/// `mountpoint`. `fs_type` is `FS_AUTO|FS_HELIX|FS_FAT32`; `flags` is `MNT_*`;
+/// `aux` carries the size when staged-from-nothing (else a stage-size cap, 0 =
+/// full source). Returns the `mount_id`.
+pub fn mount(
+    source_volume_id: u64,
+    mountpoint: &str,
+    fs_type: u32,
+    flags: u32,
+    aux: u64,
+) -> Result<u64, u64> {
+    let ret = unsafe {
+        syscall6(
+            SYS_MOUNT,
+            source_volume_id,
+            mountpoint.as_ptr() as u64,
+            mountpoint.len() as u64,
+            fs_type as u64,
+            flags as u64,
+            aux,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(ret)
+    }
+}
+
+/// Unmount the filesystem at `mountpoint`. `flags` is `MNT_*` (`MNT_FORCE` to
+/// revoke open fds).
+pub fn umount(mountpoint: &str, flags: u32) -> Result<(), u64> {
+    let ret = unsafe {
+        syscall3(
+            SYS_UMOUNT,
+            mountpoint.as_ptr() as u64,
+            mountpoint.len() as u64,
+            flags as u64,
+        )
+    };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn dup(old_fd: usize) -> Result<usize, u64> {
     let ret = unsafe { syscall1(SYS_DUP, old_fd as u64) };
     if is_error(ret) {
@@ -175,14 +323,17 @@ pub fn chdir(path: &str) -> Result<(), u64> {
     }
 }
 
-/// Returns the number of entries written into `buf`.
-pub fn readdir(path: &str, buf: &mut [u8]) -> Result<usize, u64> {
+/// Enumerate `path` into `buf`; returns true child count (may exceed `max_entries`).
+/// `max_entries == 0` is count-only probe. Previously this was a 3-arg ABI without the
+/// capacity arg, leaving the bound register undefined — latent heap overflow.
+pub fn readdir(path: &str, buf: &mut [u8], max_entries: usize) -> Result<usize, u64> {
     let ret = unsafe {
-        syscall3(
+        syscall4(
             SYS_READDIR,
             path.as_ptr() as u64,
             path.len() as u64,
             buf.as_mut_ptr() as u64,
+            max_entries as u64,
         )
     };
     if is_error(ret) {
@@ -361,11 +512,11 @@ impl Metadata {
     }
 
     pub fn is_dir(&self) -> bool {
-        self.0.is_dir
+        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT) == morpheus_foundation::flags::mode::S_IFDIR
     }
 
     pub fn is_file(&self) -> bool {
-        !self.0.is_dir
+        (self.0.mode & morpheus_foundation::flags::mode::S_IFMT) == morpheus_foundation::flags::mode::S_IFREG
     }
 
     pub fn key(&self) -> u64 {
@@ -384,8 +535,8 @@ impl Metadata {
         self.0.version_count
     }
 
-    pub fn flags(&self) -> u32 {
-        self.0.flags
+    pub fn mode(&self) -> u32 {
+        self.0.mode
     }
 
     pub fn created_ns(&self) -> u64 {
@@ -417,11 +568,11 @@ impl DirEntry {
     }
 
     pub fn is_dir(&self) -> bool {
-        self.0.is_dir
+        self.0.d_type == morpheus_foundation::flags::dirent_type::DT_DIR
     }
 
     pub fn is_file(&self) -> bool {
-        !self.0.is_dir
+        self.0.d_type == morpheus_foundation::flags::dirent_type::DT_REG
     }
 
     pub fn size(&self) -> u64 {
@@ -441,7 +592,7 @@ impl core::fmt::Debug for DirEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DirEntry")
             .field("name", &self.name())
-            .field("is_dir", &self.0.is_dir)
+            .field("is_dir", &self.is_dir())
             .field("size", &self.0.size)
             .finish()
     }
@@ -473,19 +624,25 @@ impl Iterator for ReadDir {
 
 pub fn read_dir(path: &str) -> error::Result<ReadDir> {
     let entry_size = core::mem::size_of::<DirEntry>();
-    let max_entries = 256;
-    let mut buf = vec![0u8; entry_size * max_entries];
-
-    let count = readdir(path, &mut buf).map_err(Error::from_raw)?;
-
-    let mut entries = Vec::with_capacity(count);
-    for i in 0..count {
-        let offset = i * entry_size;
-        let ptr = buf[offset..].as_ptr() as *const DirEntry;
-        entries.push(unsafe { core::ptr::read_unaligned(ptr) });
+    // Start with a reasonable capacity; grow and retry if the directory holds more
+    // children than we allocated for. `readdir` caps the kernel's write at our buffer
+    // size and returns the true count, so `total > cap` means "truncated, retry larger".
+    let mut cap = 256usize;
+    loop {
+        let mut buf = vec![0u8; entry_size * cap];
+        let total = readdir(path, &mut buf, cap).map_err(Error::from_raw)?;
+        if total > cap {
+            cap = total;
+            continue;
+        }
+        let mut entries = Vec::with_capacity(total);
+        for i in 0..total {
+            let offset = i * entry_size;
+            let ptr = buf[offset..].as_ptr() as *const DirEntry;
+            entries.push(unsafe { core::ptr::read_unaligned(ptr) });
+        }
+        return Ok(ReadDir { entries, pos: 0 });
     }
-
-    Ok(ReadDir { entries, pos: 0 })
 }
 
 pub fn read_to_vec(path: &str) -> error::Result<Vec<u8>> {

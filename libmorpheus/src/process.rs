@@ -47,11 +47,48 @@ pub fn sleep(millis: u64) {
     }
 }
 
-/// Block until child exits; returns its exit code.
-pub fn wait(pid: u32) -> Result<i32, u64> {
-    let ret = unsafe { syscall1(SYS_WAIT, pid as u64) };
+/// Re-point a process's parent. Generic process-tree primitive — permitted as a
+/// *hand-off* (caller is `pid`'s current parent, e.g. a supervisor handing a
+/// freshly-spawned child to its real owner) or an *adopt-orphan* (caller is
+/// `new_parent` and `pid`'s current parent is already dead, e.g. a respawned
+/// supervisor adopting an orphaned process so it can supervise + reap it).
+pub fn reparent(pid: u32, new_parent: u32) -> Result<(), u64> {
+    let ret = unsafe { syscall2(SYS_REPARENT, pid as u64, new_parent as u64) };
     if is_error(ret) {
         Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Block until child exits; returns its exit code.
+pub fn wait(pid: u32) -> Result<i32, u64> {
+    use morpheus_foundation::flags::P_PID;
+    use morpheus_foundation::types::WaitStatus;
+    let mut ws = WaitStatus::default();
+    let ret = unsafe {
+        syscall4(
+            SYS_WAIT,
+            P_PID,
+            pid as u64,
+            &mut ws as *mut WaitStatus as u64,
+            0,
+        )
+    };
+    if is_error(ret) {
+        return Err(ret);
+    }
+    Ok(decode_wstatus(ws.wstatus))
+}
+
+/// Collapse a Linux wstatus word into the single exit code the legacy callers
+/// expect: the exit status for a normal exit, else `128 + signal`.
+fn decode_wstatus(s: i32) -> i32 {
+    use morpheus_foundation::types::WaitStatus;
+    if WaitStatus::exited(s) {
+        WaitStatus::exit_status(s)
+    } else if WaitStatus::signaled(s) {
+        128 + WaitStatus::term_sig(s)
     } else {
         Ok(ret as i32)
     }
@@ -60,8 +97,7 @@ pub fn wait(pid: u32) -> Result<i32, u64> {
 /// `Ok(None)` means still running.
 pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
     let ret = unsafe { syscall1(SYS_TRY_WAIT, pid as u64) };
-    const EAGAIN: u64 = u64::MAX - 11;
-    if ret == EAGAIN {
+    if ret == morpheus_foundation::errno::EAGAIN {
         Ok(None)
     } else if is_error(ret) {
         Err(ret)
@@ -70,9 +106,31 @@ pub fn try_wait(pid: u32) -> Result<Option<i32>, u64> {
     }
 }
 
+/// Build a versioned `SpawnArgs` for SYS_SPAWN; the child inherits our fds
+/// (minus O_CLOEXEC) with no file_actions.
+fn make_spawn_args(path: &str, descs: &[[u64; 2]]) -> morpheus_foundation::types::SpawnArgs {
+    use morpheus_foundation::types::{SpawnArgs, SpawnFileAction};
+    SpawnArgs {
+        version: 1,
+        struct_size: core::mem::size_of::<SpawnArgs>() as u16,
+        path_ptr: path.as_ptr() as u64,
+        path_len: path.len() as u64,
+        argv_ptr: if descs.is_empty() { 0 } else { descs.as_ptr() as u64 },
+        argc: descs.len() as u64,
+        fa_stride: core::mem::size_of::<SpawnFileAction>() as u32,
+        ..SpawnArgs::default()
+    }
+}
+
 /// Spawn ELF at `path`; returns child PID.
 pub fn spawn(path: &str) -> Result<u32, u64> {
-    let ret = unsafe { syscall4(SYS_SPAWN, path.as_ptr() as u64, path.len() as u64, 0, 0) };
+    let sa = make_spawn_args(path, &[]);
+    let ret = unsafe {
+        syscall1(
+            SYS_SPAWN,
+            &sa as *const morpheus_foundation::types::SpawnArgs as u64,
+        )
+    };
     if is_error(ret) {
         Err(ret)
     } else {
@@ -89,13 +147,11 @@ pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
         descs[i][0] = args[i].as_ptr() as u64;
         descs[i][1] = args[i].len() as u64;
     }
+    let sa = make_spawn_args(path, &descs[..count]);
     let ret = unsafe {
-        syscall4(
+        syscall1(
             SYS_SPAWN,
-            path.as_ptr() as u64,
-            path.len() as u64,
-            descs.as_ptr() as u64,
-            count as u64,
+            &sa as *const morpheus_foundation::types::SpawnArgs as u64,
         )
     };
     if is_error(ret) {
@@ -105,42 +161,8 @@ pub fn spawn_with_args(path: &str, args: &[&str]) -> Result<u32, u64> {
     }
 }
 
-/// Process table entry from `ps()`.
-#[repr(C)]
-pub struct PsEntry {
-    pub pid: u32,
-    pub ppid: u32,
-    /// 0=Ready, 1=Running, 2=Blocked, 3=Zombie, 4=Terminated.
-    pub state: u32,
-    pub priority: u32,
-    pub cpu_ticks: u64,
-    /// Active TSC cycles. PID 0 excludes HLT idle — divide by `SysInfo::uptime_ticks`
-    /// delta for absolute CPU utilization %.
-    pub cpu_tsc: u64,
-    pub pages_alloc: u64,
-    /// NUL-terminated.
-    pub name: [u8; 32],
-}
-
-impl PsEntry {
-    pub const fn zeroed() -> Self {
-        Self {
-            pid: 0,
-            ppid: 0,
-            state: 0,
-            priority: 0,
-            cpu_ticks: 0,
-            cpu_tsc: 0,
-            pages_alloc: 0,
-            name: [0u8; 32],
-        }
-    }
-
-    pub fn name_str(&self) -> &str {
-        let end = self.name.iter().position(|&b| b == 0).unwrap_or(32);
-        core::str::from_utf8(&self.name[..end]).unwrap_or("")
-    }
-}
+// `PsEntry` (+ `zeroed`/`name_str`) is canonical in morpheus-foundation.
+pub use morpheus_foundation::types::PsEntry;
 
 pub fn ps_count() -> u32 {
     unsafe { syscall2(SYS_PS, 0, 0) as u32 }
@@ -156,15 +178,9 @@ pub fn ps(entries: &mut [PsEntry]) -> usize {
     }
 }
 
-pub mod signal {
-    pub const SIGINT: u8 = 2;
-    pub const SIGKILL: u8 = 9;
-    pub const SIGSEGV: u8 = 11;
-    pub const SIGTERM: u8 = 15;
-    pub const SIGCHLD: u8 = 17;
-    pub const SIGCONT: u8 = 18;
-    pub const SIGSTOP: u8 = 19;
-}
+// Signal numbers are canonical in morpheus-foundation; re-export keeps the
+// `process::signal::SIG*` path while single-sourcing the values.
+pub use morpheus_foundation::flags::signal;
 
 /// sigaction. handler=0 → default, handler=1 → ignore.
 pub fn sigaction(signum: u8, handler: u64) -> Result<u64, u64> {

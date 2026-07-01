@@ -1,14 +1,51 @@
 use super::lifecycle::apply_default_scheduler_policy;
 use super::state::{this_core_pid, LIVE_COUNT, PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER_READY};
 use crate::hal;
-use crate::process::{CpuContext, Process, ProcessState, MAX_PROCESSES};
+use crate::process::{
+    CpuContext, Process, ProcessState, MAX_PROCESSES, MAX_USER_PROCESSES,
+};
 use core::sync::atomic::Ordering;
+use morpheus_foundation::flags::open_flags;
+use morpheus_foundation::flags::THREAD_DETACHED;
 
 const PAGE_SIZE: u64 = 4096;
 /// Stack top for the user process. Mirrors `elf::USER_STACK_TOP`.
 const USER_STACK_TOP: u64 = 0x0000_007F_FFFF_F000;
 
-pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<u32, &'static str> {
+/// Live independent processes (thread-group leaders, PID != 0). Threads are
+/// excluded — they draw from the separate thread budget, not this cap.
+unsafe fn count_user_processes() -> usize {
+    let mut n = 0;
+    for slot in PROCESS_TABLE.iter().flatten() {
+        if !slot.is_free() && slot.pid != 0 && !slot.is_thread() {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Lowest free slot at/above 1, reclaiming detached-thread zombies in passing.
+unsafe fn find_free_slot() -> Option<usize> {
+    super::wait::reap_detached_zombies();
+    (1..MAX_PROCESSES).find(|&i| {
+        PROCESS_TABLE[i]
+            .as_ref()
+            .map(|p| p.is_free())
+            .unwrap_or(true)
+    })
+}
+
+/// Thread sharing the caller's CR3. TLS base is set at creation (no
+/// SET_THREAD_POINTER race); `ctid_ptr` drives CLONE_CHILD_CLEARTID for race-free
+/// join. Draws from the full table, NOT the user-process cap.
+pub unsafe fn spawn_user_thread(
+    entry: u64,
+    stack_top: u64,
+    arg: u64,
+    tls_base: u64,
+    ctid_ptr: u64,
+    flags: u64,
+) -> Result<u32, &'static str> {
     if !SCHEDULER_READY {
         return Err("scheduler not initialized");
     }
@@ -37,17 +74,13 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
         parent_pid
     };
 
-    let slot_idx = (1..MAX_PROCESSES)
-        .find(|&i| {
-            PROCESS_TABLE[i]
-                .as_ref()
-                .map(|p| p.is_free())
-                .unwrap_or(true)
-        })
-        .ok_or_else(|| {
+    let slot_idx = match find_free_slot() {
+        Some(i) => i,
+        None => {
             PROCESS_TABLE_LOCK.unlock();
-            "process table full"
-        })?;
+            return Err("process table full");
+        },
+    };
 
     let tid = slot_idx as u32;
     // Fresh occupant of a reused slot starts with blocking stdin.
@@ -69,9 +102,11 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     thread.mmap_brk = parent_mmap_brk;
     thread.cwd = parent_cwd;
     thread.cwd_len = parent_cwd_len;
+    thread.tls_base = tls_base;
+    thread.ctid_ptr = ctid_ptr;
+    thread.detached = flags & THREAD_DETACHED != 0;
     apply_default_scheduler_policy(thread, false);
 
-    // Inherit parent scheduling policy across the thread group.
     if let Some(Some(parent_ref)) = PROCESS_TABLE.get(parent_pid as usize) {
         thread.importance_16 = parent_ref.importance_16;
         thread.power_mode = parent_ref.power_mode;
@@ -109,12 +144,42 @@ pub unsafe fn spawn_user_thread(entry: u64, stack_top: u64, arg: u64) -> Result<
     Ok(tid)
 }
 
+/// Inherit the parent's fds minus `O_CLOEXEC`. Inherited pipe endpoints bump the
+/// per-pipe refcount so the fd keeps the pipe alive.
+unsafe fn inherit_fds_minus_cloexec(child: &mut Process, parent: &Process) {
+    let mut seen_readers: [bool; 256] = [false; 256];
+    let mut seen_writers: [bool; 256] = [false; 256];
+    for (fd, desc) in parent.fd_table.iter() {
+        if desc.flags & open_flags::O_CLOEXEC != 0 {
+            continue;
+        }
+        if !child.fd_table.set(fd, *desc) {
+            continue;
+        }
+        let idx = desc.mount_id as u8 as usize;
+        if desc.flags & open_flags::O_PIPE_READ != 0 && !seen_readers[idx] {
+            crate::pipe::pipe_add_reader(idx as u8);
+            seen_readers[idx] = true;
+        }
+        if desc.flags & open_flags::O_PIPE_WRITE != 0 && !seen_writers[idx] {
+            crate::pipe::pipe_add_writer(idx as u8);
+            seen_writers[idx] = true;
+        }
+    }
+}
+
+/// Spawn an independent process from an ELF image. `clear_fds` overrides
+/// `inherit_fds`, starting the child with an empty fd table.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn spawn_user_process(
     name: &str,
     elf_data: &[u8],
     arg_blob: &[u8],
     arg_count: u8,
+    env_block: &[u8],
+    cwd: Option<&str>,
     inherit_fds: bool,
+    clear_fds: bool,
 ) -> Result<u32, &'static str> {
     if !SCHEDULER_READY {
         return Err("scheduler not initialized");
@@ -124,17 +189,18 @@ pub unsafe fn spawn_user_process(
 
     PROCESS_TABLE_LOCK.lock();
 
-    let slot_idx = (1..MAX_PROCESSES)
-        .find(|&i| {
-            PROCESS_TABLE[i]
-                .as_ref()
-                .map(|p| p.is_free())
-                .unwrap_or(true)
-        })
-        .ok_or_else(|| {
+    if count_user_processes() >= MAX_USER_PROCESSES {
+        PROCESS_TABLE_LOCK.unlock();
+        return Err("user process cap reached");
+    }
+
+    let slot_idx = match find_free_slot() {
+        Some(i) => i,
+        None => {
             PROCESS_TABLE_LOCK.unlock();
-            "process table full"
-        })?;
+            return Err("process table full");
+        },
+    };
 
     let pid = slot_idx as u32;
     // Fresh occupant of a reused slot starts with blocking stdin.
@@ -154,29 +220,24 @@ pub unsafe fn spawn_user_process(
         return Err(e);
     }
 
-    if inherit_fds {
+    // cwd: explicit override wins, else inherit the parent's.
+    match cwd {
+        Some(p) => proc.set_cwd(p),
+        None => {
+            if let Some(Some(parent)) = PROCESS_TABLE.get(proc.parent_pid as usize) {
+                proc.cwd = parent.cwd;
+                proc.cwd_len = parent.cwd_len;
+            }
+        },
+    }
+
+    if inherit_fds && !clear_fds {
         let parent_pid = proc.parent_pid as usize;
         if let Some(Some(parent)) = PROCESS_TABLE.get(parent_pid) {
-            proc.fd_table = parent.fd_table;
-            use morpheus_helix::types::open_flags;
-            let mut seen_readers: [bool; 256] = [false; 256];
-            let mut seen_writers: [bool; 256] = [false; 256];
-            for fd_desc in proc.fd_table.fds.iter() {
-                if fd_desc.is_open() {
-                    let fl = fd_desc.flags;
-                    let idx = fd_desc.mount_idx as usize;
-                    if idx < 256 {
-                        if fl & open_flags::O_PIPE_READ != 0 && !seen_readers[idx] {
-                            crate::pipe::pipe_add_reader(fd_desc.mount_idx);
-                            seen_readers[idx] = true;
-                        }
-                        if fl & open_flags::O_PIPE_WRITE != 0 && !seen_writers[idx] {
-                            crate::pipe::pipe_add_writer(fd_desc.mount_idx);
-                            seen_writers[idx] = true;
-                        }
-                    }
-                }
-            }
+            // SAFETY: parent and proc are distinct slots; copy out a raw ptr to
+            // sidestep the borrow on the shared static table.
+            let parent_ref: &Process = &*(parent as *const Process);
+            inherit_fds_minus_cloexec(&mut proc, parent_ref);
         }
     }
 
@@ -185,6 +246,11 @@ pub unsafe fn spawn_user_process(
         proc.args[..len].copy_from_slice(&arg_blob[..len]);
         proc.args_len = len as u16;
         proc.argc = arg_count;
+    }
+
+    if !env_block.is_empty() {
+        proc.env_block.clear();
+        proc.env_block.extend_from_slice(env_block);
     }
 
     {

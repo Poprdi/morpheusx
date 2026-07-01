@@ -8,21 +8,7 @@ use crate::process::ProcessState;
 use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER};
 
 /// Surface entry returned by SYS_WIN_SURFACE_LIST.
-/// Must match `libmorpheus::compositor::SurfaceEntry` exactly.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct SurfaceEntry {
-    pub pid: u32,
-    pub _pad: u32,
-    pub phys_addr: u64,
-    pub pages: u64,
-    pub width: u32,
-    pub height: u32,
-    pub stride: u32,
-    pub format: u32,
-    pub dirty: u32,
-    pub _pad2: u32,
-}
+pub use morpheus_foundation::types::SurfaceEntry;
 
 /// `SYS_COMPOSITOR_SET() → 0` — register the calling process as the WM.
 pub unsafe fn sys_compositor_set() -> u64 {
@@ -44,7 +30,7 @@ pub unsafe fn sys_win_surface_list(buf_ptr: u64, max_count: u64) -> u64 {
     use core::sync::atomic::Ordering::Relaxed;
     let cpid = COMPOSITOR_PID.load(Relaxed);
     if cpid == 0 {
-        return u64::MAX;
+        return EINVAL;
     }
 
     let pid = SCHEDULER.current_pid();

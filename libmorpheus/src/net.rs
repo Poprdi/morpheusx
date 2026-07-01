@@ -1,28 +1,22 @@
 //! Networking: raw NIC frames, hardware knobs, smoltcp TCP/IP.
-//!
-//! Two layers: raw `tcp_socket`/`tcp_connect`/... and RAII [`TcpStream`] /
-//! [`TcpListener`] / [`UdpSocket`] (auto-close on drop).
-//!
-//! Stack is explicitly polled — call [`net_poll_drive`] periodically.
-//! RAII types poll internally on calls, but event loops should drive too.
+//! Stack is explicitly polled — call [`net_poll_drive`] periodically; RAII types
+//! poll internally but event loops must drive it too.
 
-use crate::error::{self, Error, ErrorKind};
+use crate::error::{self, Error};
 use crate::io;
 use crate::raw::*;
 
-#[repr(C)]
-pub struct NicInfo {
-    /// 6-byte MAC, padded to 8.
-    pub mac: [u8; 8],
-    pub link_up: u32,
-    pub present: u32,
-}
+// Net boundary structs are canonical in morpheus-foundation — single source.
+pub use morpheus_foundation::types::{NetConfigInfo, NetStats, NicHwStats, NicInfo};
 
 pub fn nic_info() -> Result<NicInfo, u64> {
     let mut info = NicInfo {
-        mac: [0u8; 8],
+        version: 0,
+        struct_size: 0,
         link_up: 0,
         present: 0,
+        mac: [0u8; 8],
+        reserved: [0u8; 8],
     };
     let ret = unsafe { syscall1(SYS_NIC_INFO, &mut info as *mut NicInfo as u64) };
     if crate::is_error(ret) {
@@ -83,47 +77,17 @@ pub fn nic_refill() -> Result<(), u64> {
 // NIC hardware control routes through SYS_NET_CFG with subcmd >= 128,
 // dispatching directly to the NIC driver's ctrl function pointer.
 
-pub const NIC_CTRL_PROMISC: u32 = 1;
-pub const NIC_CTRL_MAC_SET: u32 = 2;
-pub const NIC_CTRL_STATS: u32 = 3;
-pub const NIC_CTRL_STATS_RESET: u32 = 4;
-pub const NIC_CTRL_MTU: u32 = 5;
-pub const NIC_CTRL_MULTICAST: u32 = 6;
-pub const NIC_CTRL_VLAN: u32 = 7;
-pub const NIC_CTRL_TX_CSUM: u32 = 8;
-pub const NIC_CTRL_RX_CSUM: u32 = 9;
-pub const NIC_CTRL_TSO: u32 = 10;
-pub const NIC_CTRL_RX_RING_SIZE: u32 = 11;
-pub const NIC_CTRL_TX_RING_SIZE: u32 = 12;
-pub const NIC_CTRL_IRQ_COALESCE: u32 = 13;
-pub const NIC_CTRL_CAPS: u32 = 14;
-
-pub const NIC_CAP_PROMISC: u64 = 1 << 0;
-pub const NIC_CAP_MAC_SET: u64 = 1 << 1;
-pub const NIC_CAP_MULTICAST: u64 = 1 << 2;
-pub const NIC_CAP_VLAN: u64 = 1 << 3;
-pub const NIC_CAP_TX_CSUM: u64 = 1 << 4;
-pub const NIC_CAP_RX_CSUM: u64 = 1 << 5;
-pub const NIC_CAP_TSO: u64 = 1 << 6;
-pub const NIC_CAP_IRQ_COALESCE: u64 = 1 << 7;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct NicHwStats {
-    pub tx_packets: u64,
-    pub rx_packets: u64,
-    pub tx_bytes: u64,
-    pub rx_bytes: u64,
-    pub tx_errors: u64,
-    pub rx_errors: u64,
-    pub rx_dropped: u64,
-    pub rx_crc_errors: u64,
-    pub collisions: u64,
-}
+pub use morpheus_foundation::net::{
+    NIC_CAP_IRQ_COALESCE, NIC_CAP_MAC_SET, NIC_CAP_MULTICAST, NIC_CAP_PROMISC, NIC_CAP_RX_CSUM,
+    NIC_CAP_TSO, NIC_CAP_TX_CSUM, NIC_CAP_VLAN, NIC_CTRL_CAPS, NIC_CTRL_IRQ_COALESCE,
+    NIC_CTRL_MAC_SET, NIC_CTRL_MTU, NIC_CTRL_MULTICAST, NIC_CTRL_PROMISC, NIC_CTRL_RX_CSUM,
+    NIC_CTRL_RX_RING_SIZE, NIC_CTRL_STATS, NIC_CTRL_STATS_RESET, NIC_CTRL_TSO, NIC_CTRL_TX_CSUM,
+    NIC_CTRL_TX_RING_SIZE, NIC_CTRL_VLAN,
+};
 
 /// Generic entry. Prefer the typed wrappers below.
 pub fn nic_ctrl(cmd: u32, arg: u64) -> Result<u64, u64> {
-    let subcmd = 128 + cmd as u64;
+    let subcmd = morpheus_foundation::net::NIC_CTRL_BASE + cmd as u64;
     let ret = unsafe { syscall3(SYS_NET_CFG, subcmd, arg, 0) };
     if crate::is_error(ret) {
         Err(ret)
@@ -193,19 +157,13 @@ pub fn nic_caps() -> Result<u64, u64> {
     Ok(caps)
 }
 
-// TCP sockets (smoltcp). Subcmds must match kernel.
+// TCP sockets (smoltcp). Subcmds are canonical in morpheus_foundation::net.
 
-const NET_TCP_SOCKET: u64 = 0;
-const NET_TCP_CONNECT: u64 = 1;
-const NET_TCP_SEND: u64 = 2;
-const NET_TCP_RECV: u64 = 3;
-const NET_TCP_CLOSE: u64 = 4;
-const NET_TCP_STATE: u64 = 5;
-const NET_TCP_LISTEN: u64 = 6;
-const NET_TCP_ACCEPT: u64 = 7;
-const NET_TCP_SHUTDOWN: u64 = 8;
-const NET_TCP_NODELAY: u64 = 9;
-const NET_TCP_KEEPALIVE: u64 = 10;
+use morpheus_foundation::net::{
+    NET_TCP_ACCEPT, NET_TCP_CLOSE, NET_TCP_CONNECT, NET_TCP_KEEPALIVE, NET_TCP_LISTEN,
+    NET_TCP_NODELAY, NET_TCP_RECV, NET_TCP_SEND, NET_TCP_SHUTDOWN, NET_TCP_SOCKET, NET_TCP_STATE,
+    NET_UDP_CLOSE, NET_UDP_RECV_FROM, NET_UDP_SEND_TO, NET_UDP_SOCKET,
+};
 
 pub type TcpHandle = u64;
 
@@ -367,9 +325,7 @@ pub fn tcp_set_keepalive(handle: TcpHandle, interval_ms: u64) -> Result<(), u64>
     }
 }
 
-const DNS_START_CMD: u64 = 0;
-const DNS_RESULT_CMD: u64 = 1;
-const DNS_SET_SERVERS_CMD: u64 = 2;
+use morpheus_foundation::net::{DNS_RESULT, DNS_SET_SERVERS, DNS_START};
 
 pub type DnsQuery = u64;
 
@@ -378,7 +334,7 @@ pub fn dns_start(hostname: &str) -> Result<DnsQuery, u64> {
     let ret = unsafe {
         syscall3(
             SYS_DNS,
-            DNS_START_CMD,
+            DNS_START,
             hostname.as_ptr() as u64,
             hostname.len() as u64,
         )
@@ -393,7 +349,7 @@ pub fn dns_start(hostname: &str) -> Result<DnsQuery, u64> {
 /// `Ok(Some(ip_nbo))` when resolved, `Ok(None)` if pending.
 pub fn dns_poll(query: DnsQuery) -> Result<Option<u32>, u64> {
     let mut ip: u32 = 0;
-    let ret = unsafe { syscall3(SYS_DNS, DNS_RESULT_CMD, query, &mut ip as *mut u32 as u64) };
+    let ret = unsafe { syscall3(SYS_DNS, DNS_RESULT, query, &mut ip as *mut u32 as u64) };
     if crate::is_error(ret) {
         Err(ret)
     } else if ret == 1 {
@@ -423,7 +379,7 @@ pub fn dns_set_servers(servers: &[u32]) -> Result<(), u64> {
     let ret = unsafe {
         syscall3(
             SYS_DNS,
-            DNS_SET_SERVERS_CMD,
+            DNS_SET_SERVERS,
             servers.as_ptr() as u64,
             servers.len() as u64,
         )
@@ -441,31 +397,10 @@ const CFG_STATIC: u64 = 2;
 const CFG_HOSTNAME: u64 = 3;
 const CFG_ACTIVATE: u64 = 4;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct NetConfigInfo {
-    pub state: u32,
-    pub flags: u32,
-    pub ipv4_addr: u32,
-    pub prefix_len: u8,
-    pub _pad0: [u8; 3],
-    pub gateway: u32,
-    pub dns_primary: u32,
-    pub dns_secondary: u32,
-    pub mac: [u8; 6],
-    pub _pad1: [u8; 2],
-    pub mtu: u32,
-    pub hostname: [u8; 64],
-}
-
-pub const NET_STATE_UNCONFIGURED: u32 = 0;
-pub const NET_STATE_DHCP_DISCOVERING: u32 = 1;
-pub const NET_STATE_READY: u32 = 2;
-pub const NET_STATE_ERROR: u32 = 3;
-
-pub const NET_FLAG_DHCP: u32 = 1 << 0;
-pub const NET_FLAG_HAS_GATEWAY: u32 = 1 << 1;
-pub const NET_FLAG_HAS_DNS: u32 = 1 << 2;
+pub use morpheus_foundation::net::{
+    NET_FLAG_DHCP, NET_FLAG_HAS_DNS, NET_FLAG_HAS_GATEWAY, NET_STATE_DHCP_DISCOVERING,
+    NET_STATE_ERROR, NET_STATE_READY, NET_STATE_UNCONFIGURED,
+};
 
 pub fn net_config() -> Result<NetConfigInfo, u64> {
     let mut info = unsafe { core::mem::zeroed::<NetConfigInfo>() };
@@ -529,19 +464,6 @@ pub fn net_activate() -> Result<u64, u64> {
 const POLL_DRIVE: u64 = 0;
 const POLL_STATS: u64 = 1;
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct NetStats {
-    pub tx_packets: u64,
-    pub rx_packets: u64,
-    pub tx_bytes: u64,
-    pub rx_bytes: u64,
-    pub tx_errors: u64,
-    pub rx_errors: u64,
-    pub tcp_active: u32,
-    pub _pad: u32,
-}
-
 /// Drives DHCP/ARP/TCP timers. Call periodically; returns true on activity.
 pub fn net_poll_drive(timestamp_ms: u64) -> bool {
     let ret = unsafe { syscall2(SYS_NET_POLL, POLL_DRIVE, timestamp_ms) };
@@ -568,34 +490,10 @@ pub const fn ipv4_bytes(ip: u32) -> [u8; 4] {
     ip.to_be_bytes()
 }
 
-// UDP subcmds must match hwinit/src/syscall/handler.rs.
-const UDP_SOCKET: u64 = 11;
-const UDP_SEND_TO: u64 = 12;
-const UDP_RECV_FROM: u64 = 13;
-const UDP_CLOSE: u64 = 14;
-
-/// Read from `a3` by `SYS_NET(UDP_SEND_TO, handle, &desc, 0)`.
-#[repr(C)]
-pub struct UdpSendDesc {
-    pub ip: u32,
-    pub port: u16,
-    pub _pad: u16,
-    pub buf: *const u8,
-    pub len: u64,
-}
-
-/// Kernel reads `buf`/`buf_len`, writes back `src_ip`/`src_port` on success.
-#[repr(C)]
-pub struct UdpRecvDesc {
-    pub buf: *mut u8,
-    pub buf_len: u64,
-    pub src_ip: u32,
-    pub src_port: u16,
-    pub _pad: u16,
-}
+pub use morpheus_foundation::types::{UdpRecvDesc, UdpSendDesc};
 
 pub fn udp_socket() -> Result<u64, u64> {
-    let ret = unsafe { syscall2(SYS_NET, UDP_SOCKET, 0) };
+    let ret = unsafe { syscall2(SYS_NET, NET_UDP_SOCKET, 0) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
@@ -615,7 +513,7 @@ pub fn udp_send_to(handle: u64, ip: u32, port: u16, data: &[u8]) -> Result<(), u
     let ret = unsafe {
         syscall4(
             SYS_NET,
-            UDP_SEND_TO,
+            NET_UDP_SEND_TO,
             handle,
             &desc as *const UdpSendDesc as u64,
             0,
@@ -640,7 +538,7 @@ pub fn udp_recv_from(handle: u64, buf: &mut [u8]) -> Result<(u64, u32, u16), u64
     let ret = unsafe {
         syscall4(
             SYS_NET,
-            UDP_RECV_FROM,
+            NET_UDP_RECV_FROM,
             handle,
             &mut desc as *mut UdpRecvDesc as u64,
             0,
@@ -654,7 +552,7 @@ pub fn udp_recv_from(handle: u64, buf: &mut [u8]) -> Result<(u64, u32, u16), u64
 }
 
 pub fn udp_close(handle: u64) -> Result<(), u64> {
-    let ret = unsafe { syscall2(SYS_NET, UDP_CLOSE, handle) };
+    let ret = unsafe { syscall2(SYS_NET, NET_UDP_CLOSE, handle) };
     if crate::is_error(ret) {
         Err(ret)
     } else {
@@ -724,236 +622,348 @@ impl core::fmt::Display for SocketAddr {
     }
 }
 
-/// Closes on drop. Non-blocking: reads return 0 on no data; sends may be short.
+// std::net-shaped sockets over the unified fd ABI (SYS_SOCKET..SYS_SHUTDOWN): a
+// socket is a real fd and ops block in-kernel (no userspace busy-poll). The
+// legacy handle-based tcp_*/udp_* free functions above stay for raw SYS_NET.
+
+use crate::raw::{
+    sys_accept, sys_bind, sys_connect, sys_getpeername, sys_getsockname, sys_listen, sys_recvfrom,
+    sys_sendto, sys_setsockopt, sys_shutdown, sys_socket, syscall1, SYS_CLOSE,
+};
+use morpheus_foundation::net::{
+    AF_INET, IPPROTO_TCP, SHUT_RD, SHUT_RDWR, SHUT_WR, SOCK_DGRAM, SOCK_STREAM, SOL_SOCKET,
+    SO_RCVTIMEO, TCP_NODELAY,
+};
+use morpheus_foundation::types::{KTimeval, SockAddrIn, SockAddrStorage};
+
+const SOCKADDR_IN_LEN: u64 = core::mem::size_of::<SockAddrIn>() as u64;
+
+fn check(ret: u64) -> error::Result<u64> {
+    if crate::is_error(ret) {
+        Err(Error::from_raw(ret))
+    } else {
+        Ok(ret)
+    }
+}
+
+fn encode_addr(ip: Ipv4Addr, port: u16) -> SockAddrStorage {
+    let sin = SockAddrIn {
+        sin_family: AF_INET as u16,
+        sin_port: port.to_be(),
+        sin_addr: ip.to_nbo(),
+        sin_zero: [0u8; 8],
+    };
+    let mut st = SockAddrStorage::zeroed();
+    // SAFETY: SockAddrIn (16B) fits inside the 128B storage; we copy its bytes
+    // into the AF_INET overlay the kernel reads back by sa_family.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            &sin as *const SockAddrIn as *const u8,
+            &mut st as *mut SockAddrStorage as *mut u8,
+            core::mem::size_of::<SockAddrIn>(),
+        );
+    }
+    st
+}
+
+fn decode_addr(st: &SockAddrStorage) -> SocketAddr {
+    // SAFETY: AF_INET overlay; we only read the 16 SockAddrIn bytes.
+    let sin = unsafe { &*(st as *const SockAddrStorage as *const SockAddrIn) };
+    SocketAddr::new(Ipv4Addr::from_nbo(sin.sin_addr), u16::from_be(sin.sin_port))
+}
+
+unsafe fn raw_close(fd: i32) {
+    let _ = syscall1(SYS_CLOSE, fd as u64);
+}
+
+/// A real-fd TCP connection. Blocks in the kernel by default; closes on drop.
 pub struct TcpStream {
-    handle: TcpHandle,
+    fd: i32,
 }
 
 impl TcpStream {
-    /// Initiates the handshake asynchronously; the kernel buffers data during it.
-    /// Poll [`state()`](Self::state) or just start reading/writing.
     pub fn connect(ip: Ipv4Addr, port: u16) -> error::Result<Self> {
-        let handle = tcp_socket().map_err(Error::from_raw)?;
-        tcp_connect(handle, ip.to_nbo(), port).map_err(|e| {
-            tcp_close(handle);
-            Error::from_raw(e)
-        })?;
-        Ok(Self { handle })
+        let fd = check(unsafe { sys_socket(AF_INET, SOCK_STREAM, 0) })? as i32;
+        let sa = encode_addr(ip, port);
+        if let Err(e) =
+            check(unsafe { sys_connect(fd as u64, &sa as *const _ as u64, SOCKADDR_IN_LEN) })
+        {
+            unsafe { raw_close(fd) };
+            return Err(e);
+        }
+        Ok(Self { fd })
     }
 
-    /// DNS resolve + TCP connect.
     pub fn connect_host(hostname: &str, port: u16) -> error::Result<Self> {
         let ip_nbo = dns_resolve(hostname).map_err(Error::from_raw)?;
-        let handle = tcp_socket().map_err(Error::from_raw)?;
-        tcp_connect(handle, ip_nbo, port).map_err(|e| {
-            tcp_close(handle);
-            Error::from_raw(e)
-        })?;
-        Ok(Self { handle })
+        Self::connect(Ipv4Addr::from_nbo(ip_nbo), port)
     }
 
-    pub fn from_raw_handle(handle: TcpHandle) -> Self {
-        Self { handle }
+    pub fn from_raw_fd(fd: i32) -> Self {
+        Self { fd }
     }
 
-    pub fn into_raw_handle(self) -> TcpHandle {
-        let h = self.handle;
+    pub fn into_raw_fd(self) -> i32 {
+        let fd = self.fd;
         core::mem::forget(self);
-        h
+        fd
     }
 
-    pub fn handle(&self) -> TcpHandle {
-        self.handle
+    pub fn as_raw_fd(&self) -> i32 {
+        self.fd
     }
 
-    pub fn state(&self) -> error::Result<TcpState> {
-        tcp_state(self.handle).map_err(Error::from_raw)
+    pub fn peer_addr(&self) -> error::Result<SocketAddr> {
+        let mut st = SockAddrStorage::zeroed();
+        let mut len = core::mem::size_of::<SockAddrStorage>() as u32;
+        check(unsafe {
+            sys_getpeername(
+                self.fd as u64,
+                &mut st as *mut _ as u64,
+                &mut len as *mut u32 as u64,
+            )
+        })?;
+        Ok(decode_addr(&st))
     }
 
-    pub fn shutdown(&self) -> error::Result<()> {
-        tcp_shutdown(self.handle).map_err(Error::from_raw)
+    pub fn local_addr(&self) -> error::Result<SocketAddr> {
+        let mut st = SockAddrStorage::zeroed();
+        let mut len = core::mem::size_of::<SockAddrStorage>() as u32;
+        check(unsafe {
+            sys_getsockname(
+                self.fd as u64,
+                &mut st as *mut _ as u64,
+                &mut len as *mut u32 as u64,
+            )
+        })?;
+        Ok(decode_addr(&st))
     }
 
     /// Disables Nagle.
     pub fn set_nodelay(&self, on: bool) -> error::Result<()> {
-        tcp_set_nodelay(self.handle, on).map_err(Error::from_raw)
+        let v: i32 = on as i32;
+        check(unsafe {
+            sys_setsockopt(
+                self.fd as u64,
+                IPPROTO_TCP,
+                TCP_NODELAY,
+                &v as *const i32 as u64,
+                4,
+            )
+        })
+        .map(|_| ())
     }
 
-    pub fn set_keepalive(&self, interval_ms: u64) -> error::Result<()> {
-        tcp_set_keepalive(self.handle, interval_ms).map_err(Error::from_raw)
+    /// `None` = block forever (Linux SO_RCVTIMEO of 0).
+    pub fn set_read_timeout(&self, dur_ms: Option<u64>) -> error::Result<()> {
+        let ms = dur_ms.unwrap_or(0);
+        let tv = KTimeval {
+            tv_sec: (ms / 1000) as i64,
+            tv_usec: ((ms % 1000) * 1000) as i64,
+        };
+        check(unsafe {
+            sys_setsockopt(
+                self.fd as u64,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                &tv as *const KTimeval as u64,
+                core::mem::size_of::<KTimeval>() as u64,
+            )
+        })
+        .map(|_| ())
     }
 
-    /// Blocking; polls the stack until Established or Closed.
-    pub fn wait_connected(&self) -> error::Result<()> {
-        loop {
-            net_poll_drive(0);
-            match self.state()? {
-                TcpState::Established => return Ok(()),
-                TcpState::Closed => return Err(Error::new(ErrorKind::ConnectionRefused)),
-                _ => {
-                    // sleep(1) not yield: avoids spinning when sole runnable proc.
-                    crate::process::sleep(1);
-                },
-            }
-        }
+    pub fn set_nonblocking(&self, nonblocking: bool) -> error::Result<()> {
+        set_fd_nonblocking(self.fd, nonblocking)
     }
 
-    /// Blocking; polls + retries until all data sent or error.
-    pub fn send_all(&self, mut data: &[u8]) -> error::Result<()> {
-        while !data.is_empty() {
-            net_poll_drive(0);
-            match tcp_send(self.handle, data) {
-                Ok(0) => match self.state()? {
-                    TcpState::Established | TcpState::CloseWait => {
-                        crate::process::sleep(1);
-                    },
-                    _ => return Err(Error::new(ErrorKind::BrokenPipe)),
-                },
-                Ok(n) => data = &data[n..],
-                Err(e) => return Err(Error::from_raw(e)),
-            }
-        }
-        Ok(())
-    }
-
-    /// Blocking; polls until >= 1 byte arrives or EOF/error.
-    pub fn recv_blocking(&self, buf: &mut [u8]) -> error::Result<usize> {
-        loop {
-            net_poll_drive(0);
-            match tcp_recv(self.handle, buf) {
-                Ok(0) => match self.state()? {
-                    TcpState::Established | TcpState::SynSent | TcpState::SynReceived => {
-                        crate::process::sleep(1);
-                    },
-                    _ => return Ok(0), // EOF
-                },
-                Ok(n) => return Ok(n),
-                Err(e) => return Err(Error::from_raw(e)),
-            }
-        }
+    pub fn shutdown(&self, how: Shutdown) -> error::Result<()> {
+        check(unsafe { sys_shutdown(self.fd as u64, how.as_raw()) }).map(|_| ())
     }
 }
 
 impl io::Read for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> error::Result<usize> {
-        net_poll_drive(0);
-        tcp_recv(self.handle, buf).map_err(Error::from_raw)
+        let n = check(unsafe {
+            sys_recvfrom(self.fd as u64, buf.as_mut_ptr() as u64, buf.len() as u64, 0, 0, 0)
+        })?;
+        Ok(n as usize)
     }
 }
 
 impl io::Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> error::Result<usize> {
-        net_poll_drive(0);
-        tcp_send(self.handle, buf).map_err(Error::from_raw)
+        let n = check(unsafe {
+            sys_sendto(self.fd as u64, buf.as_ptr() as u64, buf.len() as u64, 0, 0, 0)
+        })?;
+        Ok(n as usize)
     }
 
     fn flush(&mut self) -> error::Result<()> {
-        net_poll_drive(0);
         Ok(())
     }
 }
 
 impl Drop for TcpStream {
     fn drop(&mut self) {
-        tcp_close(self.handle);
+        unsafe { raw_close(self.fd) };
     }
 }
 
+/// A real-fd listening TCP socket.
 pub struct TcpListener {
-    handle: TcpHandle,
+    fd: i32,
 }
 
 impl TcpListener {
-    pub fn bind(port: u16) -> error::Result<Self> {
-        let handle = tcp_socket().map_err(Error::from_raw)?;
-        tcp_listen(handle, port).map_err(|e| {
-            tcp_close(handle);
-            Error::from_raw(e)
-        })?;
-        Ok(Self { handle })
-    }
-
-    /// `Err(WouldBlock)` if no connection pending.
-    pub fn accept(&self) -> error::Result<TcpStream> {
-        net_poll_drive(0);
-        match tcp_accept(self.handle) {
-            Ok(new_handle) => Ok(TcpStream::from_raw_handle(new_handle)),
-            Err(e) => Err(Error::from_raw(e)),
+    pub fn bind(ip: Ipv4Addr, port: u16) -> error::Result<Self> {
+        let fd = check(unsafe { sys_socket(AF_INET, SOCK_STREAM, 0) })? as i32;
+        let sa = encode_addr(ip, port);
+        let r = check(unsafe { sys_bind(fd as u64, &sa as *const _ as u64, SOCKADDR_IN_LEN) })
+            .and_then(|_| check(unsafe { sys_listen(fd as u64, 128) }));
+        if let Err(e) = r {
+            unsafe { raw_close(fd) };
+            return Err(e);
         }
+        Ok(Self { fd })
     }
 
-    pub fn accept_blocking(&self) -> error::Result<TcpStream> {
-        loop {
-            match self.accept() {
-                Ok(stream) => return Ok(stream),
-                Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                    crate::process::sleep(1);
-                },
-                Err(e) => return Err(e),
-            }
-        }
+    /// Bind to all interfaces on `port`.
+    pub fn bind_any(port: u16) -> error::Result<Self> {
+        Self::bind(Ipv4Addr::UNSPECIFIED, port)
     }
 
-    pub fn handle(&self) -> TcpHandle {
-        self.handle
+    /// Blocks until a connection arrives unless `set_nonblocking(true)`.
+    pub fn accept(&self) -> error::Result<(TcpStream, SocketAddr)> {
+        let mut st = SockAddrStorage::zeroed();
+        let mut len = core::mem::size_of::<SockAddrStorage>() as u32;
+        let newfd = check(unsafe {
+            sys_accept(
+                self.fd as u64,
+                &mut st as *mut _ as u64,
+                &mut len as *mut u32 as u64,
+                0,
+            )
+        })? as i32;
+        Ok((TcpStream::from_raw_fd(newfd), decode_addr(&st)))
+    }
+
+    pub fn set_nonblocking(&self, nonblocking: bool) -> error::Result<()> {
+        set_fd_nonblocking(self.fd, nonblocking)
+    }
+
+    pub fn as_raw_fd(&self) -> i32 {
+        self.fd
     }
 }
 
 impl Drop for TcpListener {
     fn drop(&mut self) {
-        tcp_close(self.handle);
+        unsafe { raw_close(self.fd) };
     }
 }
 
-/// Closes on drop.
+/// A real-fd UDP socket.
 pub struct UdpSocket {
-    handle: u64,
+    fd: i32,
 }
 
 impl UdpSocket {
-    pub fn new() -> error::Result<Self> {
-        let handle = udp_socket().map_err(Error::from_raw)?;
-        Ok(Self { handle })
-    }
-
-    pub fn from_raw_handle(handle: u64) -> Self {
-        Self { handle }
-    }
-
-    pub fn send_to(&self, ip: Ipv4Addr, port: u16, data: &[u8]) -> error::Result<()> {
-        net_poll_drive(0);
-        udp_send_to(self.handle, ip.to_nbo(), port, data).map_err(Error::from_raw)
-    }
-
-    /// Returns `(bytes, src_ip, src_port)`.
-    pub fn recv_from(&self, buf: &mut [u8]) -> error::Result<(usize, Ipv4Addr, u16)> {
-        net_poll_drive(0);
-        let (n, ip_nbo, port) = udp_recv_from(self.handle, buf).map_err(Error::from_raw)?;
-        Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port))
-    }
-
-    pub fn recv_from_blocking(&self, buf: &mut [u8]) -> error::Result<(usize, Ipv4Addr, u16)> {
-        loop {
-            net_poll_drive(0);
-            match udp_recv_from(self.handle, buf) {
-                Ok((0, _, _)) => {
-                    crate::process::sleep(1);
-                },
-                Ok((n, ip_nbo, port)) => {
-                    return Ok((n as usize, Ipv4Addr::from_nbo(ip_nbo), port));
-                },
-                Err(e) => return Err(Error::from_raw(e)),
-            }
+    pub fn bind(ip: Ipv4Addr, port: u16) -> error::Result<Self> {
+        let fd = check(unsafe { sys_socket(AF_INET, SOCK_DGRAM, 0) })? as i32;
+        let sa = encode_addr(ip, port);
+        if let Err(e) = check(unsafe { sys_bind(fd as u64, &sa as *const _ as u64, SOCKADDR_IN_LEN) })
+        {
+            unsafe { raw_close(fd) };
+            return Err(e);
         }
+        Ok(Self { fd })
     }
 
-    pub fn handle(&self) -> u64 {
-        self.handle
+    pub fn bind_any(port: u16) -> error::Result<Self> {
+        Self::bind(Ipv4Addr::UNSPECIFIED, port)
+    }
+
+    /// Set the default peer so `send`/`recv` work without an address.
+    pub fn connect(&self, ip: Ipv4Addr, port: u16) -> error::Result<()> {
+        let sa = encode_addr(ip, port);
+        check(unsafe { sys_connect(self.fd as u64, &sa as *const _ as u64, SOCKADDR_IN_LEN) })
+            .map(|_| ())
+    }
+
+    pub fn send_to(&self, data: &[u8], ip: Ipv4Addr, port: u16) -> error::Result<usize> {
+        let sa = encode_addr(ip, port);
+        let n = check(unsafe {
+            sys_sendto(
+                self.fd as u64,
+                data.as_ptr() as u64,
+                data.len() as u64,
+                0,
+                &sa as *const _ as u64,
+                SOCKADDR_IN_LEN,
+            )
+        })?;
+        Ok(n as usize)
+    }
+
+    pub fn recv_from(&self, buf: &mut [u8]) -> error::Result<(usize, SocketAddr)> {
+        let mut st = SockAddrStorage::zeroed();
+        let mut len = core::mem::size_of::<SockAddrStorage>() as u32;
+        let n = check(unsafe {
+            sys_recvfrom(
+                self.fd as u64,
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+                0,
+                &mut st as *mut _ as u64,
+                &mut len as *mut u32 as u64,
+            )
+        })?;
+        Ok((n as usize, decode_addr(&st)))
+    }
+
+    pub fn set_nonblocking(&self, nonblocking: bool) -> error::Result<()> {
+        set_fd_nonblocking(self.fd, nonblocking)
+    }
+
+    pub fn as_raw_fd(&self) -> i32 {
+        self.fd
     }
 }
 
 impl Drop for UdpSocket {
     fn drop(&mut self) {
-        let _ = udp_close(self.handle);
+        unsafe { raw_close(self.fd) };
     }
+}
+
+/// `std::net::Shutdown` analogue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shutdown {
+    Read,
+    Write,
+    Both,
+}
+
+impl Shutdown {
+    fn as_raw(self) -> u64 {
+        match self {
+            Shutdown::Read => SHUT_RD,
+            Shutdown::Write => SHUT_WR,
+            Shutdown::Both => SHUT_RDWR,
+        }
+    }
+}
+
+/// Toggle `O_NONBLOCK` via `F_SETFL` (backs `set_nonblocking`).
+fn set_fd_nonblocking(fd: i32, nonblocking: bool) -> error::Result<()> {
+    use morpheus_foundation::flags::open_flags::O_NONBLOCK;
+    use morpheus_foundation::flags::{F_GETFL, F_SETFL};
+    let cur = check(unsafe { crate::raw::sys_fcntl(fd as u64, F_GETFL, 0) })? as u32;
+    let next = if nonblocking {
+        cur | O_NONBLOCK
+    } else {
+        cur & !O_NONBLOCK
+    };
+    check(unsafe { crate::raw::sys_fcntl(fd as u64, F_SETFL, next as u64) }).map(|_| ())
 }
