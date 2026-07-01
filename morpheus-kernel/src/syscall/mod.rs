@@ -49,7 +49,9 @@ use handler::persist::{
     sys_pe_info, sys_persist_del, sys_persist_get, sys_persist_info, sys_persist_list,
     sys_persist_put,
 };
-use handler::proc::{sys_clock, sys_getppid, sys_set_thread_pointer, sys_spawn, sys_sysinfo};
+use handler::proc::{
+    sys_clock, sys_getppid, sys_reparent, sys_set_thread_pointer, sys_spawn, sys_sysinfo,
+};
 use handler::sync::{
     sys_futex, sys_gettid, sys_mouse_read, sys_sigreturn, sys_thread_create, sys_thread_detach,
     sys_thread_exit, sys_thread_join,
@@ -190,6 +192,7 @@ pub unsafe extern "C" fn syscall_dispatch(
         SYS_GETRANDOM => sys_getrandom(a1, a2, a3),
         SYS_VOLUMES => sys_volumes(a1, a2),
         SYS_MOUNTS => sys_mounts(a1, a2),
+        SYS_REPARENT => sys_reparent(a1, a2),
         SYS_CLOCK_GETTIME => sys_clock_gettime(a1, a2),
         SYS_NANOSLEEP => sys_nanosleep(a1, a2),
         SYS_FSTAT => sys_fs_fstat(a1, a2),

@@ -234,6 +234,7 @@ pub const SYS_FTRUNCATE: u64 = 126;
 pub const SYS_FCNTL: u64 = 127;
 /// `rmdir(path_ptr, path_len) -> 0 | -errno`. Dirs only (`SYS_UNLINK(16)` is files-only).
 pub const SYS_RMDIR: u64 = 128;
+pub const SYS_REPARENT: u64 = 104;
 
 // Seek whence constants.
 pub const SEEK_SET: u64 = 0;
@@ -379,6 +380,7 @@ pub const SYSCALL_TABLE: [u64; SYSCALL_COUNT] = [
     SYS_FTRUNCATE,
     SYS_FCNTL,
     SYS_RMDIR,
+    SYS_REPARENT,
 ];
 
 const _: () = {

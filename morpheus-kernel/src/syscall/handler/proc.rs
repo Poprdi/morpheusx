@@ -4,7 +4,8 @@ extern crate alloc;
 
 use super::common::*;
 use crate::hal;
-use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER};
+use crate::process::ProcessState;
+use crate::schedular::{PROCESS_TABLE, PROCESS_TABLE_LOCK, {PROCESS_TABLE, PROCESS_TABLE_LOCK, SCHEDULER}};
 use alloc::vec::Vec;
 use morpheus_foundation::errno::E2BIG;
 use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
@@ -458,18 +459,68 @@ pub unsafe fn sys_spawn(args_ptr: u64) -> u64 {
 
     let _ = hal().phys().free_pages(buf_phys, pages_needed);
 
-    let pid = match result {
-        Ok(pid) => pid,
-        Err(_) => return ENOMEM,
-    };
+    match result {
+        Ok(pid) => pid as u64,
+        Err(_) => ENOMEM,
+    }
+}
 
-    // Replay file_actions (open/dup2/close/chdir) over the child fd table in array
-    // order. A half-configured child must never run, so on any failure the child is
-    // SIGKILLed and the errno surfaced to the spawner.
-    if let Err(e) = replay_file_actions(pid, &sa) {
-        let _ = SCHEDULER.send_signal(pid, crate::process::signals::Signal::SIGKILL);
-        return e;
+/// `SYS_REPARENT(target_pid, new_parent_pid) -> 0 | -errno`. Re-points a
+/// process's `parent_pid`. A generic process-tree primitive: the kernel has no
+/// notion of init/userland, only the parent/child link it already tracks.
+///
+/// Permission (policy-free mechanism):
+///  - **hand-off** — the caller is the target's current parent (give your child
+///    away, e.g. a supervisor spawning then handing the child to its real owner), or
+///  - **adopt-orphan** — the caller *is* `new_parent` and the target's current
+///    parent is dead (Zombie/Terminated/absent), e.g. a respawned supervisor
+///    adopting the orphaned tree. You may never steal a live process's child.
+pub unsafe fn sys_reparent(target_pid: u64, new_parent_pid: u64) -> u64 {
+    // pid 0 is the kernel/idle context — never a valid reparent participant.
+    if target_pid == 0 || new_parent_pid == 0 {
+        return EINVAL;
+    }
+    let target = target_pid as usize;
+    let new_parent = new_parent_pid as usize;
+    let caller = SCHEDULER.current_pid() as usize;
+
+    PROCESS_TABLE_LOCK.lock();
+
+    // The new parent must exist and be live — no adopting onto a dead/free slot.
+    let new_parent_live = matches!(
+        PROCESS_TABLE.get(new_parent).and_then(|s| s.as_ref()),
+        Some(p) if !p.is_free()
+            && !matches!(p.state, ProcessState::Zombie | ProcessState::Terminated)
+    );
+    if !new_parent_live {
+        PROCESS_TABLE_LOCK.unlock();
+        return ESRCH;
     }
 
-    pid as u64
+    // The target must exist; read its current parent to decide permission.
+    let cur_parent = match PROCESS_TABLE.get(target).and_then(|s| s.as_ref()) {
+        Some(p) if !p.is_free() => p.parent_pid as usize,
+        _ => {
+            PROCESS_TABLE_LOCK.unlock();
+            return ESRCH;
+        },
+    };
+
+    let handoff = caller == cur_parent;
+    let cur_parent_live = matches!(
+        PROCESS_TABLE.get(cur_parent).and_then(|s| s.as_ref()),
+        Some(p) if !p.is_free()
+            && !matches!(p.state, ProcessState::Zombie | ProcessState::Terminated)
+    );
+    let adopt_orphan = caller == new_parent && !cur_parent_live;
+    if !handoff && !adopt_orphan {
+        PROCESS_TABLE_LOCK.unlock();
+        return EPERM;
+    }
+
+    if let Some(Some(t)) = PROCESS_TABLE.get_mut(target) {
+        t.parent_pid = new_parent as u32;
+    }
+    PROCESS_TABLE_LOCK.unlock();
+    0
 }

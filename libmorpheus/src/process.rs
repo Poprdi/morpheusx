@@ -47,7 +47,21 @@ pub fn sleep(millis: u64) {
     }
 }
 
-/// Block until child exits; returns its exit code (or `128 + signal` if killed).
+/// Re-point a process's parent. Generic process-tree primitive — permitted as a
+/// *hand-off* (caller is `pid`'s current parent, e.g. a supervisor handing a
+/// freshly-spawned child to its real owner) or an *adopt-orphan* (caller is
+/// `new_parent` and `pid`'s current parent is already dead, e.g. a respawned
+/// supervisor adopting an orphaned process so it can supervise + reap it).
+pub fn reparent(pid: u32, new_parent: u32) -> Result<(), u64> {
+    let ret = unsafe { syscall2(SYS_REPARENT, pid as u64, new_parent as u64) };
+    if is_error(ret) {
+        Err(ret)
+    } else {
+        Ok(())
+    }
+}
+
+/// Block until child exits; returns its exit code.
 pub fn wait(pid: u32) -> Result<i32, u64> {
     use morpheus_foundation::flags::P_PID;
     use morpheus_foundation::types::WaitStatus;
@@ -76,7 +90,7 @@ fn decode_wstatus(s: i32) -> i32 {
     } else if WaitStatus::signaled(s) {
         128 + WaitStatus::term_sig(s)
     } else {
-        0
+        Ok(ret as i32)
     }
 }
 
