@@ -26,20 +26,6 @@ the baud is fixed regardless of firmware.
 
 Requires: Rust 1.75+, `x86_64-unknown-uefi` target, QEMU + OVMF for testing.
 
-## Running
-
-```bash
-./setup-dev.sh run  # for running in QEMU
-```
-
-For running on real hardware, you will need to flash the UEFI binary to a USB drive and boot from it. For this you may use:
-
-```bash
-./setup-dev.sh flash /dev/sdX # where /dev/sdX is the target USB drive
-```
-
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for:
