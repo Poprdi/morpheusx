@@ -42,10 +42,14 @@ pub mod signatures {
     pub const POSIX_DEV: &[u8; 2] = b"PN";
     /// Symbolic link (SL) entry signature.
     pub const SYMLINK: &[u8; 2] = b"SL";
+    /// Alternate name (NM) entry signature.
     pub const ALTERNATE_NAME: &[u8; 2] = b"NM";
+    /// Child link (CL) entry signature.
     pub const CHILD_LINK: &[u8; 2] = b"CL";
+    /// Parent link (PL) entry signature.
     pub const PARENT_LINK: &[u8; 2] = b"PL";
     /// Relocated directory (RE) entry signature.
     pub const RELOCATED_DIR: &[u8; 2] = b"RE";
+    /// Timestamps (TF) entry signature.
     pub const TIMESTAMPS: &[u8; 2] = b"TF";
 }

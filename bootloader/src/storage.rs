@@ -703,6 +703,9 @@ unsafe fn record_helix_candidate(c: HelixCandidate) {
 /// Staged-mount first Helix candidate at `/`; commits only if `/bin/init` present.
 unsafe fn mount_helix_root() -> bool {
     let count = HELIX_CAND_COUNT;
+    // Index-based: `.iter()` over the `static mut HELIX_CANDS` would take a shared
+    // reference and trip `static_mut_refs`; reading each element by index does not.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..count {
         let c = match HELIX_CANDS[i] {
             Some(c) => c,

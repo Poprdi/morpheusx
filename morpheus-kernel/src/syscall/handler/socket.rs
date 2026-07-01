@@ -99,7 +99,7 @@ impl SockMeta {
         }
     }
 
-    fn to_cookie(&self) -> [u8; 32] {
+    fn to_cookie(self) -> [u8; 32] {
         let mut c = [0u8; 32];
         c[..8].copy_from_slice(&self.handle.to_ne_bytes());
         c[8] = self.ty;

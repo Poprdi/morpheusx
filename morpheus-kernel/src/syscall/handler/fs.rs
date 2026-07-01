@@ -694,13 +694,15 @@ pub unsafe fn sys_fs_fstat(fd: u64, statbuf: u64) -> u64 {
     }
 
     if desc.kind != FdKind::Regular {
-        let mut stat = FileStat::default();
-        stat.mode = match desc.kind {
-            FdKind::Socket => mode::S_IFSOCK,
-            FdKind::Pipe => mode::S_IFIFO,
-            // epoll and /dev/null both report as char devices.
-            FdKind::Epoll | FdKind::Null => mode::S_IFCHR,
-            FdKind::Regular => mode::S_IFREG,
+        let mut stat = FileStat {
+            mode: match desc.kind {
+                FdKind::Socket => mode::S_IFSOCK,
+                FdKind::Pipe => mode::S_IFIFO,
+                // epoll and /dev/null both report as char devices.
+                FdKind::Epoll | FdKind::Null => mode::S_IFCHR,
+                FdKind::Regular => mode::S_IFREG,
+            },
+            ..FileStat::default()
         };
         fill_stat_metadata(&mut stat);
         *(statbuf as *mut FileStat) = stat;
