@@ -8,7 +8,7 @@ use crate::storage::{self, vfs_err_to_errno};
 use morpheus_foundation::errno::EXDEV;
 use morpheus_foundation::flags::mode;
 use morpheus_foundation::flags::open_flags::{
-    O_APPEND, O_CLOEXEC, O_CREATE, O_EXCL, O_PIPE_READ, O_PIPE_WRITE, O_WRITE,
+    O_APPEND, O_CLOEXEC, O_CREATE, O_EXCL, O_PIPE_READ, O_PIPE_WRITE, O_SOCKET, O_WRITE,
 };
 use morpheus_foundation::storage::{MNT_RDONLY, MNT_STAGED};
 use morpheus_foundation::syscall_abi::{SEEK_CUR, SEEK_END, SEEK_SET};
@@ -18,7 +18,9 @@ pub unsafe fn sys_fs_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
         Some(p) => p,
         None => return EINVAL,
     };
-    let flags = flags as u32;
+    // O_PIPE_*/O_SOCKET classify the fd for read/write/close dispatch; a caller
+    // smuggling them in would alias a foreign pipe slot by mount id.
+    let flags = flags as u32 & !(O_PIPE_READ | O_PIPE_WRITE | O_SOCKET);
     let ts = fs_now_ns();
     let fd_table = SCHEDULER.current_fd_table_mut();
 

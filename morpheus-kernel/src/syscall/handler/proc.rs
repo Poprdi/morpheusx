@@ -8,7 +8,7 @@ use crate::process::ProcessState;
 use crate::schedular::{process_table, PROCESS_TABLE_LOCK, SCHEDULER};
 use alloc::vec::Vec;
 use morpheus_foundation::errno::E2BIG;
-use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
+use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE, O_SOCKET};
 use morpheus_foundation::flags::{
     SPAWN_CLEAR_FDS, SPAWN_FA_CHDIR, SPAWN_FA_CLOSE, SPAWN_FA_DUP2, SPAWN_FA_NULL, SPAWN_FA_OPEN,
 };
@@ -199,6 +199,7 @@ unsafe fn replay_file_actions(child_pid: u32, sa: &SpawnArgs) -> Result<(), u64>
         }
     }
     PROCESS_TABLE_LOCK.unlock();
+    crate::pipe::publish_pending_close_events();
     result
 }
 
@@ -221,11 +222,12 @@ unsafe fn child_fd_close(child_pid: u32, fd: i32) -> Result<(), u64> {
     if desc.flags & (O_PIPE_READ | O_PIPE_WRITE) != 0 {
         let idx = desc.mount_id as u8;
         child.fd_table.free(fd as usize);
+        // Quiet: we hold PROCESS_TABLE_LOCK; replay_file_actions publishes.
         if desc.flags & O_PIPE_READ != 0 {
-            crate::pipe::pipe_close_reader(idx);
+            crate::pipe::pipe_close_reader_quiet(idx);
         }
         if desc.flags & O_PIPE_WRITE != 0 {
-            crate::pipe::pipe_close_writer(idx);
+            crate::pipe::pipe_close_writer_quiet(idx);
         }
         return Ok(());
     }
@@ -321,6 +323,8 @@ unsafe fn child_fd_open(
     let guard = crate::storage::lock();
     let g = &mut *guard.g;
     let (mount_id, m, dev, rel) = g.resolve_mut(path).ok_or(ENOENT)?;
+    // Same kernel-owned classification bits as sys_fs_open.
+    let oflags = oflags & !(O_PIPE_READ | O_PIPE_WRITE | O_SOCKET);
     let opened = match m.fs.open(dev, rel, oflags, ts) {
         Ok(o) => o,
         Err(e) => return Err(crate::storage::vfs_err_to_errno(e)),

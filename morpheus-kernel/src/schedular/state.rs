@@ -862,6 +862,8 @@ impl Scheduler {
         PROCESS_TABLE_LOCK.lock();
         let result = self.send_signal_inner(pid, sig);
         PROCESS_TABLE_LOCK.unlock();
+        // SIGKILL of an off-cpu task terminated it inline above.
+        crate::pipe::publish_pending_close_events();
         result
     }
 

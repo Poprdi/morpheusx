@@ -66,6 +66,11 @@ pub unsafe extern "C" fn scheduler_tick(current_ctx: &CpuContext) -> &'static Cp
         crate::ps2_mouse::poll();
     }
 
+    // Catch-all for close events parked by an in-ISR signal kill (the
+    // deliver_pending_signals below runs under the table lock and cannot
+    // publish inline). Must precede the lock: set_ready takes it.
+    crate::pipe::publish_pending_close_events();
+
     PROCESS_TABLE_LOCK.lock();
 
     if core_idx == 0 && tick % STALE_WAITER_CLEANUP_INTERVAL == 0 {

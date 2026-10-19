@@ -676,7 +676,7 @@ unsafe fn do_tcp_recv(
     loop {
         net_drive();
         let rc = bridge_tcp_recv(m.handle, buf as *mut u8, len as usize);
-        if rc < 0 {
+        if rc == BRIDGE_ABSENT {
             return bridge_err(rc);
         }
         if rc > 0 {
@@ -684,7 +684,10 @@ unsafe fn do_tcp_recv(
             let _ = write_sockaddr_in(addr, addrlen, m.peer_ip, m.peer_port);
             return rc as u64;
         }
-        // No data: distinguish would-block from peer-closed EOF.
+        // No data (rc == 0) or smoltcp refused the recv (rc < 0): a drained
+        // FIN'd socket (CloseWait/Closed) makes recv_slice fail with
+        // InvalidState, which the bridge collapses to -1. POSIX wants orderly
+        // EOF there, not EIO, so consult the state before trusting the error.
         let st = bridge_tcp_state(m.handle);
         let readable_state = matches!(
             st,
@@ -692,6 +695,9 @@ unsafe fn do_tcp_recv(
         );
         if !readable_state {
             return 0; // orderly EOF (peer FIN drained / connection gone)
+        }
+        if rc < 0 {
+            return bridge_err(rc);
         }
         readiness::clear_ready(token, EPOLLIN);
         if nb {

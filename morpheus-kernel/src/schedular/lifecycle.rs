@@ -151,6 +151,30 @@ pub unsafe fn spawn_kernel_thread(
 /// Canonical lower-half limit; mirrors `syscall::handler::common::USER_ADDR_LIMIT`.
 const USER_ADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
 
+/// `SYS_EXIT`: POSIX exit_group. The whole thread group dies with `code`, not
+/// just the caller — a worker thread aborting (or `process::exit` from any
+/// thread) must not leave siblings running on an address space the parent is
+/// about to reap. The leader's zombie carries `code` for the parent's wait.
+pub unsafe fn exit_group(code: i32) -> ! {
+    let pid = this_core_pid();
+    PROCESS_TABLE_LOCK.lock();
+    let leader = process_table()
+        .get(pid as usize)
+        .and_then(|s| s.as_ref())
+        .map(|p| p.thread_group_leader)
+        .unwrap_or(0);
+    // A thread caller zombifies the leader here (which sweeps the other
+    // siblings); a leader caller is swept by its own terminate below.
+    if leader != 0 {
+        if let Some(Some(l)) = process_table().get_mut(leader as usize) {
+            terminate_process_inner(l, code, 0);
+        }
+    }
+    PROCESS_TABLE_LOCK.unlock();
+    crate::pipe::publish_pending_close_events();
+    exit_process(code)
+}
+
 pub unsafe fn exit_process(code: i32) -> ! {
     let pid = this_core_pid();
 
@@ -174,6 +198,9 @@ pub unsafe fn exit_process(code: i32) -> ! {
         terminate_process_inner(proc, code, 0);
     }
     PROCESS_TABLE_LOCK.unlock();
+    // Parent parked in epoll on our stdout pipe learns of the EOF here, not on
+    // the next tick.
+    crate::pipe::publish_pending_close_events();
 
     hal().cpu().enable_interrupts();
     loop {
@@ -182,12 +209,23 @@ pub unsafe fn exit_process(code: i32) -> ! {
 }
 
 /// `term_signal != 0` ⇒ the task was killed by that signal (drives WIFSIGNALED);
-/// 0 ⇒ a normal exit with `code`.
+/// 0 ⇒ a normal exit with `code`. Runs under PROCESS_TABLE_LOCK; the caller must
+/// `pipe::publish_pending_close_events()` once the lock is released.
 pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32, term_signal: u8) {
+    // Idempotent: a group kill may race the task's own exit (exit_group marks
+    // the caller SIGKILL-pending, the tick then finds it already a zombie).
+    if matches!(proc.state, ProcessState::Zombie | ProcessState::Terminated) {
+        return;
+    }
     let child_pid = proc.pid;
     let parent_pid = proc.parent_pid;
 
     clear_waiter_all(child_pid);
+    // Dying mid timed-block: keep the tick fast-path count honest.
+    if proc.futex_deadline != 0 {
+        proc.futex_deadline = 0;
+        dec_timed_block_count();
+    }
 
     sched_hooks::release_fb_lock_if_holder(child_pid);
 
@@ -195,7 +233,10 @@ pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32, term
     // must drop its writer immediately so a parent already blocked in a pipe read
     // observes EOF, even though the zombie slot is reaped later. File fds keep
     // their reap-time accounting; only pipe peers need prompt closure. Readers
-    // parked on a now-writerless pipe are woken in the sweep below.
+    // parked on a now-writerless pipe are woken in the sweep below. The epoll
+    // readiness publish is deferred: we run under PROCESS_TABLE_LOCK and
+    // `set_ready` would re-take it (non-recursive) — the caller drains
+    // `publish_pending_close_events` after unlock.
     {
         use morpheus_foundation::flags::open_flags::{O_PIPE_READ, O_PIPE_WRITE};
         let mut pipe_fds: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
@@ -205,10 +246,10 @@ pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32, term
             }
             let idx = desc.mount_id as u8;
             if desc.flags & O_PIPE_READ != 0 {
-                crate::pipe::pipe_close_reader(idx);
+                crate::pipe::pipe_close_reader_quiet(idx);
             }
             if desc.flags & O_PIPE_WRITE != 0 {
-                crate::pipe::pipe_close_writer(idx);
+                crate::pipe::pipe_close_writer_quiet(idx);
             }
             pipe_fds.push(fd);
         }
@@ -253,5 +294,35 @@ pub(super) unsafe fn terminate_process_inner(proc: &mut Process, code: i32, term
     }
     if let Some(Some(parent)) = process_table().get_mut(parent_pid as usize) {
         parent.pending_signals.raise(Signal::SIGCHLD);
+    }
+
+    // Never for pid 0: `thread_group_leader == 0` means "not a thread", so a
+    // sweep keyed on leader 0 would kill every plain process.
+    if child_pid != 0 && !proc.is_thread() {
+        kill_group_siblings(child_pid, code, term_signal);
+    }
+}
+
+/// A dying leader takes its thread group with it (exit_group / fatal signal).
+/// Off-cpu siblings are zombified inline; one still running on another core
+/// gets SIGKILL pending and its tick terminates it — the leader's reap is held
+/// back until every sibling slot is gone (`reap_zombie`), so the shared page
+/// tables outlive the last user. Siblings are marked detached: nobody joins
+/// them, the reap sweep frees the slots. Caller holds PROCESS_TABLE_LOCK.
+unsafe fn kill_group_siblings(leader_pid: u32, code: i32, term_signal: u8) {
+    for idx in 1..MAX_PROCESSES {
+        let p = match process_table().get_mut(idx).and_then(|s| s.as_mut()) {
+            Some(p) if p.thread_group_leader == leader_pid => p,
+            _ => continue,
+        };
+        if matches!(p.state, ProcessState::Zombie | ProcessState::Terminated) {
+            continue;
+        }
+        p.detached = true;
+        if p.running_on == u32::MAX {
+            terminate_process_inner(p, code, term_signal);
+        } else {
+            p.pending_signals.raise(Signal::SIGKILL);
+        }
     }
 }

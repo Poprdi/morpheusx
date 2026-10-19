@@ -91,6 +91,30 @@ pub unsafe fn block_sleep(deadline: u64) -> u64 {
 /// The Zombie→Terminated transition under the table lock makes double-reap
 /// (SYS_THREAD_JOIN racing SYS_WAIT on the same tid) impossible.
 unsafe fn reap_zombie(pid: u32) -> Option<(i32, i32)> {
+    let is_leader = !process_table().get(pid as usize)?.as_ref()?.is_thread();
+    // A leader's page tables are shared with its threads: reap the sibling
+    // zombies that are off-cpu now, and hold the leader back while any sibling
+    // slot survives (one still running gets its SIGKILL at its next tick).
+    if is_leader {
+        let mut siblings_left = false;
+        for idx in 1..MAX_PROCESSES {
+            let (zombie_off_cpu, member) = match process_table().get(idx).and_then(|s| s.as_ref()) {
+                Some(p) if p.thread_group_leader == pid => (
+                    p.state == ProcessState::Zombie && p.running_on == u32::MAX,
+                    true,
+                ),
+                _ => (false, false),
+            };
+            if member && zombie_off_cpu {
+                let _ = reap_zombie(idx as u32);
+            } else if member {
+                siblings_left = true;
+            }
+        }
+        if siblings_left {
+            return None;
+        }
+    }
     let child = process_table().get_mut(pid as usize)?.as_mut()?;
     // Don't free page tables while another core's CR3 still points at them.
     if child.running_on != u32::MAX {
@@ -114,6 +138,19 @@ unsafe fn reap_zombie(pid: u32) -> Option<(i32, i32)> {
     // safe to take here (never from tick/isr)
     super::state::REAPED.set(pid);
     process_table()[pid as usize] = None;
+
+    // Last sibling gone: a parent parked on the zombie leader can reap it now.
+    if leader_pid != 0 {
+        for idx in 1..MAX_PROCESSES {
+            if let Some(Some(p)) = process_table().get_mut(idx) {
+                if let ProcessState::Blocked(BlockReason::WaitChild(w)) = p.state {
+                    if w == leader_pid || w == 0 {
+                        p.state = ProcessState::Ready;
+                    }
+                }
+            }
+        }
+    }
 
     crate::serial::puts("[SCHED] reaped PID ");
     crate::serial::put_hex32(pid);

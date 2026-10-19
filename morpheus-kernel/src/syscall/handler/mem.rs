@@ -126,13 +126,14 @@ unsafe fn mmap_locked(pages: u64, prot: u64, fixed: bool, addr: u64) -> u64 {
     // map, independent of the user PTE protection (works for guard pages too).
     core::ptr::write_bytes(phys as *mut u8, 0, (pages * 4096) as usize);
 
-    // Tag with the creating thread's tid (its own slot id) so reap can reclaim a
-    // detached thread's stack/TLS from the leader's shared table. `current_pid`
-    // reads the per-core slot, not process_table, so it can't alias `proc`.
-    let owner_tid = SCHEDULER.current_pid();
+    // Mappings are process-wide (POSIX): a worker thread growing the shared heap
+    // must not have that arena torn down when it exits. Tagging by caller tid did
+    // exactly that (ripgrep worker reap freed live heap pages). The only
+    // thread-private VMAs are a thread's stack and TLS; `spawn_user_thread`
+    // retags those at creation so reap reclaims them and nothing else.
     if proc
         .vma_table
-        .insert_full(vaddr, phys, pages, true, eff_prot, owner_tid)
+        .insert_full(vaddr, phys, pages, true, eff_prot, 0)
         .is_err()
     {
         for i in 0..pages {

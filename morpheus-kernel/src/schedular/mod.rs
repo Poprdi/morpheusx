@@ -6,9 +6,9 @@ pub mod wait;
 pub mod wake;
 
 pub use lifecycle::{
-    dec_timed_block_count, exit_process, idle_tsc_total, inc_timed_block_count, init_scheduler,
-    mark_kernel_hlt, sample_per_core_idle_tsc, set_tsc_frequency, spawn_kernel_thread,
-    tsc_frequency,
+    dec_timed_block_count, exit_group, exit_process, idle_tsc_total, inc_timed_block_count,
+    init_scheduler, mark_kernel_hlt, sample_per_core_idle_tsc, set_tsc_frequency,
+    spawn_kernel_thread, tsc_frequency,
 };
 pub use spawn::{destroy_deferred_child, mark_ready, spawn_user_process, spawn_user_thread};
 pub use state::{

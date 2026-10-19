@@ -7,7 +7,7 @@ use super::fb::is_composited_client;
 use crate::hal;
 use crate::process::signals::Signal;
 use crate::process::{BlockReason, ProcessState};
-use crate::schedular::{exit_process, SCHEDULER};
+use crate::schedular::SCHEDULER;
 use crate::serial::puts;
 use morpheus_helix::types::open_flags::{O_NONBLOCK, O_PIPE_READ, O_PIPE_WRITE};
 
@@ -19,9 +19,9 @@ use morpheus_foundation::flags::{
 static SYSTEM_CONTROL_IN_PROGRESS: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-/// `SYS_EXIT(code)` — never returns.
+/// `SYS_EXIT(code)` — exit_group: never returns, takes the thread group along.
 pub unsafe fn sys_exit(code: u64) -> u64 {
-    exit_process(code as i32);
+    crate::schedular::exit_group(code as i32);
 }
 
 /// fd 0/1/2: dup2'd target (pipe/file) if set; else fd 1/2 go to serial,

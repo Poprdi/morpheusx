@@ -103,6 +103,7 @@ pub unsafe fn spawn_user_thread(
     thread.tls_base = tls_base;
     thread.ctid_ptr = ctid_ptr;
     thread.detached = flags & THREAD_DETACHED != 0;
+    claim_thread_private_vmas(group_leader, tid, stack_top, tls_base);
     apply_default_scheduler_policy(thread, false);
 
     if let Some(Some(parent_ref)) = process_table().get(parent_pid as usize) {
@@ -140,6 +141,40 @@ pub unsafe fn spawn_user_thread(
     LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     PROCESS_TABLE_LOCK.unlock();
     Ok(tid)
+}
+
+/// Retag the new thread's stack and TLS mappings with its tid so `reap_zombie`
+/// reclaims them (via `drain_owner`) and nothing else. The ABI contract is that
+/// both are dedicated `SYS_MMAP` mappings made by the spawner: the stack VMA must
+/// end exactly at `stack_top`'s page, else it is left shared (a stack carved from
+/// a larger arena is not ours to free). Caller holds PROCESS_TABLE_LOCK; takes the
+/// leader's address-space lock, same order as the reap path.
+unsafe fn claim_thread_private_vmas(leader_pid: u32, tid: u32, stack_top: u64, tls_base: u64) {
+    let lock = &super::state::ADDRESS_SPACE_LOCKS[leader_pid as usize];
+    lock.lock();
+    if let Some(Some(leader)) = process_table().get_mut(leader_pid as usize) {
+        let stack_end = (stack_top + 0xFFF) & !0xFFF;
+        let stack_idx = leader
+            .vma_table
+            .find_containing(stack_top - 1)
+            .filter(|(_, v)| v.owner_tid == 0 && v.vaddr + v.pages * 4096 == stack_end)
+            .map(|(i, _)| i);
+        let tls_idx = if tls_base != 0 {
+            leader
+                .vma_table
+                .find_containing(tls_base)
+                .filter(|(i, v)| v.owner_tid == 0 && Some(*i) != stack_idx)
+                .map(|(i, _)| i)
+        } else {
+            None
+        };
+        for idx in [stack_idx, tls_idx].into_iter().flatten() {
+            let mut v = leader.vma_table.get(idx);
+            v.owner_tid = tid;
+            leader.vma_table.set_at(idx, v);
+        }
+    }
+    lock.unlock();
 }
 
 /// Inherit the parent's fds minus `O_CLOEXEC`. Inherited pipe endpoints bump the
@@ -319,4 +354,5 @@ pub unsafe fn destroy_deferred_child(pid: u32) {
     }
     super::wait::reap_detached_zombies();
     PROCESS_TABLE_LOCK.unlock();
+    crate::pipe::publish_pending_close_events();
 }

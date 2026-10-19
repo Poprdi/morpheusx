@@ -1,0 +1,12 @@
+# rebuildable harness output
+img/
+logs/
+run/
+bin/
+ws
+target/
+app/applaunch/target/
+app/crt0/crt0.o
+app/x86_64-morpheus-app.abs.json
+# the root ignores *.json; this spec is source
+!app/x86_64-morpheus-app.json

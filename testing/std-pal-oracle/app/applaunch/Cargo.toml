@@ -1,0 +1,9 @@
+[package]
+name = "applaunch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+# standalone: built with the morpheus app target spec, never part of the kernel workspace
+[workspace]

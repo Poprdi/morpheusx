@@ -20,10 +20,10 @@ pub struct Vma {
     pub owns_phys: bool,
     /// Current protection (PROT_* bitmap) so a split can preserve the flanks.
     pub prot: u64,
-    /// Task slot (tid) that created this mapping; `0` = leader/shared. Nonzero
-    /// marks a thread-private map (stack/TLS) so `drain_owner` can reclaim it when
-    /// that thread is reaped — otherwise a detached thread leaks it until process
-    /// teardown. All threads' maps live in the leader's table (shared CR3).
+    /// `0` = process-shared (every `mmap`). Nonzero = the tid whose dedicated
+    /// stack/TLS this is (retagged at thread creation, not at mmap: the spawner
+    /// maps them), so `drain_owner` reclaims exactly those when that thread is
+    /// reaped. All threads' maps live in the leader's table (shared CR3).
     pub owner_tid: u32,
 }
 

@@ -4,6 +4,16 @@
 use crate::serial::{put_hex32, put_hex64, puts};
 
 pub const PAGE_SIZE: u64 = 4096;
+
+/// Lowest physical address the pool may hand out. Kernel code touches physical
+/// memory through the identity map while a *user* CR3 is loaded (syscalls never
+/// switch CR3: spawn file buffer, ELF segment copy, mmap zeroing, FreeNode
+/// headers), so a physical page whose address coincides with a user VA lands in
+/// the user's page instead. User images link at 0x400000 and run to a few MiB,
+/// so anything below this floor can alias them; the first 1 MiB is BIOS land
+/// anyway. Lifting the floor to 32 MiB costs that much RAM and removes the
+/// window; the real fix is a kernel physmap outside the user VA range.
+const POOL_FLOOR: u64 = 0x0200_0000;
 pub const PAGE_SHIFT: u32 = 12;
 
 /// Lets `KernelCr3Guard::enter` reach the kernel page table without a back-ref to
@@ -374,9 +384,8 @@ impl MemoryRegistry {
 
             if mem_type.is_immediately_writable() {
                 // Conventional/LoaderCode/LoaderData only — BootServices still WP.
-                // Skip first 1 MiB (BIOS land).
                 let region_end = phys + pages * PAGE_SIZE;
-                let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
+                let start = phys.max(POOL_FLOOR);
                 if start < region_end {
                     // Clip exclusion windows, then punch hw_holes so a FreeNode
                     // never lands in a live CPU structure or excluded image.
@@ -533,8 +542,7 @@ impl MemoryRegistry {
 
             let region_end = phys + pages * PAGE_SIZE;
 
-            // Skip low 1 MiB (BIOS land, VGA, ROM shadows).
-            let start = if phys < 0x10_0000 { 0x10_0000 } else { phys };
+            let start = phys.max(POOL_FLOOR);
             if start >= region_end {
                 continue;
             }

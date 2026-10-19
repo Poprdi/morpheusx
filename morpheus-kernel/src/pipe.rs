@@ -5,8 +5,12 @@
 //! Reading from an empty pipe with live writers blocks; reading with no
 //! writers returns 0 (EOF). Writing to a pipe with no readers returns EPIPE.
 
-/// Maximum number of simultaneous pipes.
+use core::sync::atomic::{AtomicU32, Ordering};
+
+/// Maximum number of simultaneous pipes. Bounded by the 32-bit deferred-close
+/// bitmaps below.
 pub const MAX_PIPES: usize = 16;
+const _: () = assert!(MAX_PIPES <= 32);
 
 /// Per-pipe buffer capacity (must be power of two).
 const PIPE_BUF_SIZE: usize = 4096;
@@ -199,53 +203,104 @@ pub unsafe fn pipe_available(idx: u8) -> usize {
     n
 }
 
-/// Frees the pipe when both ends are closed.
-// SAFETY: static-mut `PIPE_TABLE` is only mutated here under `PIPE_LOCK`,
-// held for the duration of the access below; readiness is published after
-// unlock to avoid PIPE_LOCK/PROCESS_TABLE_LOCK inversion (see publish_readiness).
-pub unsafe fn pipe_close_reader(idx: u8) {
+/// Drop one endpoint refcount; frees the pipe when both sides are gone. Returns
+/// true when `idx` just lost its LAST reader/writer (the peer must be told).
+// SAFETY: static-mut `PIPE_TABLE` is only mutated here under `PIPE_LOCK`, held
+// for the duration of the access below.
+unsafe fn close_end(idx: u8, writer: bool) -> bool {
     PIPE_LOCK.lock();
-    let mut last_reader = false;
+    let mut last = false;
     if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
-        if pipe.readers > 0 {
-            pipe.readers -= 1;
+        let n = if writer {
+            &mut pipe.writers
+        } else {
+            &mut pipe.readers
+        };
+        if *n > 0 {
+            *n -= 1;
         }
-        last_reader = pipe.readers == 0;
+        last = *n == 0;
         if pipe.readers == 0 && pipe.writers == 0 {
             pipe.active = false;
         }
     }
     PIPE_LOCK.unlock();
-    // No readers left: a writer parked/polling on EPOLLOUT must wake to see EPIPE.
-    if last_reader {
-        use crate::io::readiness::{pipe_token, set_ready};
-        use morpheus_foundation::flags::{EPOLLERR, EPOLLOUT};
-        set_ready(pipe_token(idx), EPOLLERR | EPOLLOUT);
+    last
+}
+
+/// Readiness a peer must see when the last reader (EPIPE) / last writer (EOF)
+/// goes away.
+const READER_GONE_MASK: u32 =
+    morpheus_foundation::flags::EPOLLERR | morpheus_foundation::flags::EPOLLOUT;
+const WRITER_GONE_MASK: u32 =
+    morpheus_foundation::flags::EPOLLHUP | morpheus_foundation::flags::EPOLLIN;
+
+/// Close events whose readiness publication was deferred by a `*_quiet` close
+/// (one bit per pipe; `MAX_PIPES` <= 32). `set_ready` takes `PROCESS_TABLE_LOCK`
+/// to wake parked waiters, so a close that runs UNDER that lock (process exit,
+/// spawn file_actions replay, in-ISR signal kill) must not publish inline: the
+/// nested acquire of a non-recursive spinlock hangs every core. The closer parks
+/// the event here and the caller drains it after unlock; `scheduler_tick` also
+/// drains as a catch-all so an event parked from ISR context is never lost.
+static DEFER_READER_GONE: AtomicU32 = AtomicU32::new(0);
+static DEFER_WRITER_GONE: AtomicU32 = AtomicU32::new(0);
+
+/// # Safety
+/// Caller must hold no lock that would invert order with `PIPE_LOCK`, and must
+/// NOT hold `PROCESS_TABLE_LOCK` (the readiness publish takes it).
+pub unsafe fn pipe_close_reader(idx: u8) {
+    if close_end(idx, false) {
+        crate::io::readiness::set_ready(crate::io::readiness::pipe_token(idx), READER_GONE_MASK);
     }
 }
 
-/// Frees the pipe when both ends are closed.
-// SAFETY: static-mut `PIPE_TABLE` is only mutated here under `PIPE_LOCK`,
-// held for the duration of the access below; readiness is published after
-// unlock to avoid PIPE_LOCK/PROCESS_TABLE_LOCK inversion (see publish_readiness).
+/// # Safety
+/// Caller must hold no lock that would invert order with `PIPE_LOCK`, and must
+/// NOT hold `PROCESS_TABLE_LOCK` (the readiness publish takes it).
 pub unsafe fn pipe_close_writer(idx: u8) {
-    PIPE_LOCK.lock();
-    let mut last_writer = false;
-    if let Some(pipe) = PIPE_TABLE.get_mut(idx as usize) {
-        if pipe.writers > 0 {
-            pipe.writers -= 1;
-        }
-        last_writer = pipe.writers == 0;
-        if pipe.readers == 0 && pipe.writers == 0 {
-            pipe.active = false;
-        }
+    if close_end(idx, true) {
+        crate::io::readiness::set_ready(crate::io::readiness::pipe_token(idx), WRITER_GONE_MASK);
     }
-    PIPE_LOCK.unlock();
-    // No writers left: a reader parked on EPOLLIN must wake to observe EOF.
-    if last_writer {
-        use crate::io::readiness::{pipe_token, set_ready};
-        use morpheus_foundation::flags::{EPOLLHUP, EPOLLIN};
-        set_ready(pipe_token(idx), EPOLLHUP | EPOLLIN);
+}
+
+/// `pipe_close_reader` for callers holding `PROCESS_TABLE_LOCK`: the EPIPE
+/// readiness is parked and published by `publish_pending_close_events`.
+///
+/// # Safety
+/// Caller must hold no lock that would invert order with `PIPE_LOCK`.
+pub unsafe fn pipe_close_reader_quiet(idx: u8) {
+    if close_end(idx, false) {
+        DEFER_READER_GONE.fetch_or(1 << idx, Ordering::AcqRel);
+    }
+}
+
+/// `pipe_close_writer` for callers holding `PROCESS_TABLE_LOCK`: the EOF
+/// readiness is parked and published by `publish_pending_close_events`.
+///
+/// # Safety
+/// Caller must hold no lock that would invert order with `PIPE_LOCK`.
+pub unsafe fn pipe_close_writer_quiet(idx: u8) {
+    if close_end(idx, true) {
+        DEFER_WRITER_GONE.fetch_or(1 << idx, Ordering::AcqRel);
+    }
+}
+
+/// Publish every close event parked by a `*_quiet` close. Must be called with
+/// `PROCESS_TABLE_LOCK` released. Idempotent and cheap when nothing is pending,
+/// so the tick calls it unconditionally.
+pub fn publish_pending_close_events() {
+    use crate::io::readiness::{pipe_token, set_ready};
+    let mut readers = DEFER_READER_GONE.swap(0, Ordering::AcqRel);
+    let mut writers = DEFER_WRITER_GONE.swap(0, Ordering::AcqRel);
+    while readers != 0 {
+        let idx = readers.trailing_zeros() as u8;
+        readers &= readers - 1;
+        set_ready(pipe_token(idx), READER_GONE_MASK);
+    }
+    while writers != 0 {
+        let idx = writers.trailing_zeros() as u8;
+        writers &= writers - 1;
+        set_ready(pipe_token(idx), WRITER_GONE_MASK);
     }
 }
 
