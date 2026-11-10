@@ -182,14 +182,71 @@ fn helix_err(e: morpheus_helix::HelixError) -> VfsError {
     }
 }
 
+/// Contents of the one file currently being read or written. The engine is
+/// whole-file, so without this every `read`/`write` call would reload (and
+/// every write rewrite) the entire file.
+struct FileCache {
+    path: alloc::string::String,
+    data: Vec<u8>,
+    dirty: bool,
+    ts: u64,
+}
+
 pub struct HelixFs {
     engine: morpheus_helix::HelixFs,
     read_only: bool,
+    cache: Option<FileCache>,
 }
 
 impl HelixFs {
     pub fn new(engine: morpheus_helix::HelixFs, read_only: bool) -> Self {
-        Self { engine, read_only }
+        Self {
+            engine,
+            read_only,
+            cache: None,
+        }
+    }
+
+    fn cached(&self, path: &str) -> bool {
+        self.cache.as_ref().is_some_and(|c| c.path == path)
+    }
+
+    /// Write a dirty cache through to the engine. On failure the cache stays
+    /// dirty so the data is not lost; the caller decides whether to drop it.
+    fn flush_cache(&mut self, dev: &mut RawBlockDevice) -> Result<(), VfsError> {
+        if let Some(c) = self.cache.as_mut().filter(|c| c.dirty) {
+            self.engine
+                .write(dev, &c.path, &c.data, c.ts)
+                .map_err(helix_err)?;
+            c.dirty = false;
+        }
+        Ok(())
+    }
+
+    /// Make `path` the cached file. A missing file loads as empty only when
+    /// `create` is set (a fresh `O_CREATE` before its first write).
+    fn load(
+        &mut self,
+        dev: &mut RawBlockDevice,
+        path: &str,
+        create: bool,
+    ) -> Result<&mut FileCache, VfsError> {
+        if !self.cached(path) {
+            self.flush_cache(dev)?;
+            self.cache = None;
+            let data = match self.engine.read(dev, path) {
+                Ok(d) => d,
+                Err(morpheus_helix::HelixError::NotFound) if create => Vec::new(),
+                Err(e) => return Err(helix_err(e)),
+            };
+            self.cache = Some(FileCache {
+                path: path.into(),
+                data,
+                dirty: false,
+                ts: 0,
+            });
+        }
+        self.cache.as_mut().ok_or(VfsError::Io)
     }
 }
 
@@ -220,6 +277,10 @@ impl FsBackend for HelixFs {
         if self.read_only && flags & (open_flags::O_WRITE | open_flags::O_CREATE) != 0 {
             return Err(VfsError::ReadOnly);
         }
+        // O_TRUNC discards whatever is pending for this file
+        if flags & open_flags::O_TRUNC != 0 && self.cached(path) {
+            self.cache = None;
+        }
         let key = self.engine.open(dev, path, flags, ts).map_err(helix_err)?;
         let is_dir = self
             .engine
@@ -238,27 +299,37 @@ impl FsBackend for HelixFs {
         f: &FdState,
         buf: &mut [u8],
     ) -> Result<usize, VfsError> {
-        // Engine reads whole files; the fd offset slices here.
-        let data = self.engine.read(dev, f.path_str()).map_err(helix_err)?;
-        let off = f.offset as usize;
-        if off >= data.len() {
-            return Ok(0);
-        }
+        let data = &self.load(dev, f.path_str(), false)?.data;
+        let off = match usize::try_from(f.offset) {
+            Ok(o) if o < data.len() => o,
+            _ => return Ok(0),
+        };
         let n = buf.len().min(data.len() - off);
         buf[..n].copy_from_slice(&data[off..off + n]);
         Ok(n)
     }
 
     fn stat(&mut self, _dev: &mut RawBlockDevice, path: &str) -> Result<FileStat, VfsError> {
-        self.engine.stat(path).map_err(helix_err)
+        let mut st = self.engine.stat(path).map_err(helix_err)?;
+        if let Some(c) = self.cache.as_ref().filter(|c| c.dirty && c.path == path) {
+            st.size = c.data.len() as u64;
+        }
+        Ok(st)
     }
 
-    fn readdir(
-        &mut self,
-        _dev: &mut RawBlockDevice,
-        path: &str,
-    ) -> Result<Vec<DirEntry>, VfsError> {
+    fn readdir(&mut self, dev: &mut RawBlockDevice, path: &str) -> Result<Vec<DirEntry>, VfsError> {
+        self.flush_cache(dev)?;
         self.engine.readdir(path).map_err(helix_err)
+    }
+
+    fn close(&mut self, dev: &mut RawBlockDevice, f: &FdState) -> Result<(), VfsError> {
+        if !self.cached(f.path_str()) {
+            return Ok(());
+        }
+        // last chance to report a failed write for this file
+        let r = self.flush_cache(dev);
+        self.cache = None;
+        r
     }
 
     fn write(
@@ -271,24 +342,19 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
-        // Read-modify-write: splice `buf` in at the fd offset (the engine is
-        // whole-file). A missing file means "start empty" (fresh O_CREATE before
-        // its first flush); any other read error must propagate, or a transient
-        // I/O fault would silently clobber existing data with the spliced buffer.
-        let mut data = match self.engine.read(dev, f.path_str()) {
-            Ok(d) => d,
-            Err(morpheus_helix::HelixError::NotFound) => Vec::new(),
-            Err(e) => return Err(helix_err(e)),
-        };
-        let off = f.offset as usize;
+        let c = self.load(dev, f.path_str(), true)?;
+        let off = usize::try_from(f.offset).map_err(|_| VfsError::Inval)?;
         let end = off.checked_add(buf.len()).ok_or(VfsError::Inval)?;
-        if end > data.len() {
-            data.resize(end, 0u8);
+        if end > c.data.len() {
+            // the offset is user-controlled; never let it abort the kernel
+            c.data
+                .try_reserve(end - c.data.len())
+                .map_err(|_| VfsError::NoSpace)?;
+            c.data.resize(end, 0u8);
         }
-        data[off..end].copy_from_slice(buf);
-        self.engine
-            .write(dev, f.path_str(), &data, ts)
-            .map_err(helix_err)?;
+        c.data[off..end].copy_from_slice(buf);
+        c.dirty = true;
+        c.ts = ts;
         f.offset = end as u64;
         Ok(buf.len())
     }
@@ -304,7 +370,11 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
-        self.engine.unlink(dev, path, ts).map_err(helix_err)
+        self.engine.unlink(dev, path, ts).map_err(helix_err)?;
+        if self.cached(path) {
+            self.cache = None;
+        }
+        Ok(())
     }
 
     fn rename(
@@ -317,6 +387,8 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
+        self.flush_cache(dev)?;
+        self.cache = None;
         self.engine.rename(dev, old, new, ts).map_err(helix_err)
     }
 
@@ -330,6 +402,10 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
+        if self.cached(path) {
+            self.flush_cache(dev)?;
+            self.cache = None;
+        }
         self.engine.truncate(dev, path, size, ts).map_err(helix_err)
     }
 
@@ -337,6 +413,7 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Ok(());
         }
+        self.flush_cache(dev)?;
         self.engine.sync(dev).map_err(helix_err)
     }
 
@@ -344,6 +421,7 @@ impl FsBackend for HelixFs {
         if self.read_only {
             return Err(VfsError::ReadOnly);
         }
+        self.flush_cache(dev)?;
         self.engine.snapshot(dev, name, ts).map_err(helix_err)
     }
 
@@ -352,6 +430,7 @@ impl FsBackend for HelixFs {
         dev: &mut RawBlockDevice,
         path: &str,
     ) -> Result<Vec<(u64, u64, u32)>, VfsError> {
+        self.flush_cache(dev)?;
         let recs = self.engine.versions(dev, path).map_err(helix_err)?;
         Ok(recs
             .into_iter()

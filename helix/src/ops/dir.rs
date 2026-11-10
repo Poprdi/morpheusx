@@ -120,34 +120,18 @@ pub fn readdir(index: &NamespaceIndex, dir_path: &str) -> Result<Vec<DirEntry>, 
     Ok(entries)
 }
 
-/// Directories must be empty. Inline data and directories own no blocks; extent
-/// files free every run (and the extent-node block for fragmented ones).
-#[allow(clippy::too_many_arguments)]
+/// Directories must be empty. Returns the removed entry; the caller releases
+/// its blocks.
 pub fn unlink<B: BlockIo>(
     block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
-    bitmap: &mut crate::bitmap::BlockBitmap,
-    partition_lba_start: u64,
-    data_start_block: u64,
-    device_block_size: u32,
     path: &str,
     timestamp_ns: u64,
-) -> Result<Lsn, HelixError> {
-    // Capture before any &mut borrow of index. Path may lack trailing '/'.
-    let (extent_root, size, is_inline, is_dir, is_node) = {
-        let entry = index.lookup_flex(path).ok_or(HelixError::NotFound)?;
-        if entry.flags & entry_flags::IS_DELETED != 0 {
-            return Err(HelixError::NotFound);
-        }
-        (
-            entry.extent_root,
-            entry.size,
-            entry.flags & entry_flags::IS_INLINE != 0,
-            entry.flags & entry_flags::IS_DIR != 0,
-            entry.flags & entry_flags::IS_EXTENT_NODE != 0,
-        )
-    };
+) -> Result<(Lsn, IndexEntry), HelixError> {
+    // Path may lack trailing '/'.
+    let removed = *index.lookup_flex(path).ok_or(HelixError::NotFound)?;
+    let is_dir = removed.flags & entry_flags::IS_DIR != 0;
 
     if is_dir {
         let normalized = if path.ends_with('/') {
@@ -181,21 +165,7 @@ pub fn unlink<B: BlockIo>(
     let lsn = log.append(block_io, LogOp::Delete, hash, &payload, timestamp_ns)?;
     index.mark_deleted(&actual_path)?;
 
-    // Inline + dirs own no blocks.
-    if !is_inline && !is_dir {
-        crate::extent::free_file_blocks(
-            block_io,
-            bitmap,
-            partition_lba_start,
-            data_start_block,
-            device_block_size,
-            extent_root,
-            size,
-            is_node,
-        );
-    }
-
-    Ok(lsn)
+    Ok((lsn, removed))
 }
 
 /// Mirrors write.rs.
@@ -215,6 +185,9 @@ fn ensure_parent_dirs<B: BlockIo>(
     let mut current = String::from("/");
     for part in &parts[..parts.len() - 1] {
         current.push_str(part);
+        if index.lookup(&current).is_some() {
+            return Err(HelixError::NotADirectory);
+        }
         current.push('/');
 
         if index.lookup(&current).is_none() {

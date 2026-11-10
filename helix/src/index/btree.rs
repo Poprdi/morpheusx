@@ -11,6 +11,8 @@ const EXPECTED_MAX_ENTRIES: usize = 1_000_000;
 pub struct NamespaceIndex {
     /// Sorted by (key, path bytes).
     entries: Vec<IndexEntry>,
+    /// Tombstones currently in `entries`.
+    deleted: usize,
 }
 
 impl Default for NamespaceIndex {
@@ -22,15 +24,13 @@ impl Default for NamespaceIndex {
 impl NamespaceIndex {
     pub fn new() -> Self {
         Self {
-            entries: Vec::with_capacity(1024),
+            entries: Vec::new(),
+            deleted: 0,
         }
     }
 
     pub fn live_count(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| e.flags & entry_flags::IS_DELETED == 0)
-            .count()
+        self.entries.len() - self.deleted
     }
 
     pub fn total_count(&self) -> usize {
@@ -99,9 +99,13 @@ impl NamespaceIndex {
         let path_b = path_bytes(&entry.path);
         match self.find_pos(entry.key, path_b) {
             Ok(idx) => {
+                let was = self.entries[idx].flags & entry_flags::IS_DELETED != 0;
+                let now = entry.flags & entry_flags::IS_DELETED != 0;
+                self.deleted = self.deleted - was as usize + now as usize;
                 self.entries[idx] = entry;
             },
             Err(idx) => {
+                self.deleted += (entry.flags & entry_flags::IS_DELETED != 0) as usize;
                 self.entries.insert(idx, entry);
             },
         }
@@ -134,7 +138,10 @@ impl NamespaceIndex {
                 },
             }
         };
-        self.entries[idx].flags |= entry_flags::IS_DELETED;
+        if self.entries[idx].flags & entry_flags::IS_DELETED == 0 {
+            self.entries[idx].flags |= entry_flags::IS_DELETED;
+            self.deleted += 1;
+        }
         Ok(())
     }
 
@@ -182,11 +189,13 @@ impl NamespaceIndex {
     pub fn compact(&mut self) {
         self.entries
             .retain(|e| e.flags & entry_flags::IS_DELETED == 0);
+        self.deleted = 0;
     }
 
     /// Used during recovery before replay.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.deleted = 0;
     }
 
     pub fn make_file_entry(

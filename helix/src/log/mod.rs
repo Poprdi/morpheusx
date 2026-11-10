@@ -31,9 +31,16 @@ pub struct LogEngine {
     next_lsn: Lsn,
     write_buf: Vec<u8>,
     record_count: u32,
+    /// Head-segment bytes already written to the device.
+    flushed_offset: u32,
     partition_lba_start: u64,
     device_block_size: u32,
 }
+
+/// Largest record `append` accepts; keeps every record inside one segment.
+pub const MAX_RECORD_BYTES: u64 = 4096;
+
+const FLUSH_CHUNK_BLOCKS: u64 = 16;
 
 impl LogEngine {
     pub fn new(sb: &HelixSuperblock, partition_lba_start: u64, device_block_size: u32) -> Self {
@@ -47,6 +54,7 @@ impl LogEngine {
             next_lsn: sb.committed_lsn + 1,
             write_buf: vec![0u8; LOG_SEGMENT_BYTES as usize],
             record_count: 0,
+            flushed_offset: sb.log_head_offset,
             partition_lba_start,
             device_block_size,
         }
@@ -72,10 +80,47 @@ impl LogEngine {
         self.tail_segment
     }
 
-    /// Recycle the ring once a checkpoint has captured all live state: the
-    /// current head becomes the tail, freeing every superseded segment.
-    pub fn reset_ring(&mut self) {
+    /// Restart the head segment in memory after a checkpoint superblock made
+    /// every logged record redundant. The device is not touched.
+    pub fn restart_head(&mut self, timestamp_ns: u64) {
         self.tail_segment = self.head_segment;
+        self.begin_segment(timestamp_ns);
+    }
+
+    fn begin_segment(&mut self, timestamp_ns: u64) {
+        self.head_offset = core::mem::size_of::<LogSegmentHeader>() as u32;
+        self.record_count = 0;
+        self.flushed_offset = 0;
+        self.write_buf.fill(0);
+        let hdr = LogSegmentHeader {
+            magic: LOG_SEGMENT_MAGIC,
+            _pad_magic: 0,
+            sequence: self.head_segment,
+            lsn_start: self.next_lsn,
+            record_count: 0,
+            bytes_used: 0,
+            timestamp_ns,
+            crc32c: 0,
+            _reserved: [0; 20],
+        };
+        // SAFETY: repr(C) header viewed for exactly its own size.
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                &hdr as *const _ as *const u8,
+                core::mem::size_of::<LogSegmentHeader>(),
+            )
+        };
+        self.write_buf[..bytes.len()].copy_from_slice(bytes);
+    }
+
+    /// Bytes appendable before `LogFull`, less per-segment tail slack.
+    pub fn free_bytes(&self) -> u64 {
+        let free_segments =
+            (self.tail_segment + self.segment_count - self.head_segment - 1) % self.segment_count;
+        let per_segment =
+            LOG_SEGMENT_BYTES - core::mem::size_of::<LogSegmentHeader>() as u64 - MAX_RECORD_BYTES;
+        (self.segment_remaining() as u64).saturating_sub(MAX_RECORD_BYTES)
+            + free_segments * per_segment
     }
 
     fn segment_remaining(&self) -> u32 {
@@ -145,6 +190,9 @@ impl LogEngine {
             _reserved: 0,
         };
 
+        if header.total_size() > MAX_RECORD_BYTES {
+            return Err(HelixError::FileTooLarge);
+        }
         let total_size = header.total_size() as u32;
 
         // Advance to next segment if current full; bail if head would lap tail.
@@ -153,36 +201,13 @@ impl LogEngine {
             if next_seg == self.tail_segment {
                 return Err(HelixError::LogFull);
             }
-            // The one-segment write buffer is about to be reused; persist the
-            // filled segment first or its records are lost (the next flush only
-            // writes the new head segment).
-            self.flush(block_io)?;
+            // persist the whole filled segment, zero tail included, before the
+            // buffer is reused
+            self.flushed_offset = 0;
+            self.write_blocks(block_io, 0, LOG_SEGMENT_BLOCKS)?;
+            block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
             self.head_segment = next_seg;
-            self.head_offset = core::mem::size_of::<LogSegmentHeader>() as u32;
-            self.record_count = 0;
-            for b in self.write_buf.iter_mut() {
-                *b = 0;
-            }
-            let seg_hdr = LogSegmentHeader {
-                magic: LOG_SEGMENT_MAGIC,
-                _pad_magic: 0,
-                sequence: self.head_segment,
-                lsn_start: lsn,
-                record_count: 0,
-                bytes_used: 0,
-                timestamp_ns,
-                crc32c: 0,
-                _reserved: [0; 20],
-            };
-            // SAFETY: LogSegmentHeader is #[repr(C)]; size_of matches exactly,
-            // and write_buf (one full LOG_SEGMENT_BYTES) is larger than the header.
-            let hdr_bytes = unsafe {
-                core::slice::from_raw_parts(
-                    &seg_hdr as *const _ as *const u8,
-                    core::mem::size_of::<LogSegmentHeader>(),
-                )
-            };
-            self.write_buf[..hdr_bytes.len()].copy_from_slice(hdr_bytes);
+            self.begin_segment(timestamp_ns);
         }
 
         // CRC over header (with record_crc32c=0) + payload.
@@ -214,35 +239,48 @@ impl LogEngine {
         Ok(lsn)
     }
 
-    /// Persist the current write buffer; returns highest committed LSN.
-    pub fn flush<B: BlockIo>(&mut self, block_io: &mut B) -> Result<Lsn, HelixError> {
-        let seg_hdr_size = core::mem::size_of::<LogSegmentHeader>();
-        if self.head_offset > seg_hdr_size as u32 {
-            // LogSegmentHeader field offsets: record_count @24, bytes_used @28,
-            // crc32c @40. CRC covers [0..40) (the canonical verify range).
-            self.write_buf[24..28].copy_from_slice(&self.record_count.to_le_bytes());
-            let used = self.head_offset - seg_hdr_size as u32;
-            self.write_buf[28..32].copy_from_slice(&used.to_le_bytes());
+    fn patch_segment_header(&mut self) {
+        let seg_hdr_size = core::mem::size_of::<LogSegmentHeader>() as u32;
+        // field offsets: record_count @24, bytes_used @28, crc32c @40 over [0..40)
+        self.write_buf[24..28].copy_from_slice(&self.record_count.to_le_bytes());
+        let used = self.head_offset - seg_hdr_size;
+        self.write_buf[28..32].copy_from_slice(&used.to_le_bytes());
+        self.write_buf[40..44].copy_from_slice(&[0; 4]);
+        let header_crc = crc32c(&self.write_buf[..40]);
+        self.write_buf[40..44].copy_from_slice(&header_crc.to_le_bytes());
+    }
 
-            self.write_buf[40..44].copy_from_slice(&[0; 4]);
-            let header_crc = crc32c(&self.write_buf[..40]);
-            self.write_buf[40..44].copy_from_slice(&header_crc.to_le_bytes());
-        }
-
-        let blocks_used = (self.head_offset as u64).div_ceil(BLOCK_SIZE as u64);
+    fn write_blocks<B: BlockIo>(
+        &mut self,
+        block_io: &mut B,
+        first: u64,
+        end: u64,
+    ) -> Result<(), HelixError> {
+        self.patch_segment_header();
         let seg_start = self.segment_to_block(self.head_segment);
-
-        for i in 0..blocks_used {
-            let block_off = (i * BLOCK_SIZE as u64) as usize;
-            let block_end = block_off + BLOCK_SIZE as usize;
-            let data = &self.write_buf[block_off..block_end];
-            let lba = self.abs_lba(seg_start + i);
+        let mut blk = first;
+        while blk < end {
+            let n = (end - blk).min(FLUSH_CHUNK_BLOCKS);
+            let off = (blk * BLOCK_SIZE as u64) as usize;
+            let len = (n * BLOCK_SIZE as u64) as usize;
+            let lba = self.abs_lba(seg_start + blk);
             block_io
-                .write_blocks(lba, data)
+                .write_blocks(lba, &self.write_buf[off..off + len])
                 .map_err(|_| HelixError::IoWriteFailed)?;
+            blk += n;
         }
+        Ok(())
+    }
 
+    /// Persist unwritten head-segment blocks; returns highest committed LSN.
+    pub fn flush<B: BlockIo>(&mut self, block_io: &mut B) -> Result<Lsn, HelixError> {
+        if self.flushed_offset != self.head_offset {
+            let first = self.flushed_offset as u64 / BLOCK_SIZE as u64;
+            let end = (self.head_offset as u64).div_ceil(BLOCK_SIZE as u64);
+            self.write_blocks(block_io, first, end)?;
+        }
         block_io.flush().map_err(|_| HelixError::IoFlushFailed)?;
+        self.flushed_offset = self.head_offset;
 
         Ok(self.next_lsn - 1)
     }
@@ -353,6 +391,10 @@ impl LogEngine {
                 .map_err(|_| HelixError::IoReadFailed)?;
         }
 
+        let loaded = (blocks_to_read * BLOCK_SIZE as u64) as usize;
+        self.write_buf[loaded..].fill(0);
+        self.flushed_offset = self.head_offset;
+
         // Rebuild record_count from what's already in the buffer.
         let mut offset = core::mem::size_of::<LogSegmentHeader>() as u32;
         let mut count = 0u32;
@@ -379,9 +421,9 @@ impl LogEngine {
         Ok(())
     }
 
-    /// Scan tail..=head, calling `visitor` per valid record. Stops on first
-    /// CRC failure or at the head write position. Returns highest valid LSN.
-    /// Reads whole segments; head segment reuses the loaded `write_buf`.
+    /// Scan tail..=head, calling `visitor` per record. Everything before the
+    /// head position is committed, so a bad or missing record there is
+    /// corruption, not a crash boundary. Returns highest LSN seen.
     pub fn scan_forward<B: BlockIo, F>(
         &self,
         block_io: &mut B,
@@ -396,8 +438,6 @@ impl LogEngine {
         let seg_hdr_size = core::mem::size_of::<LogSegmentHeader>() as u32;
         let mut highest_lsn: Lsn = 0;
         let mut seg = start_segment;
-
-        // Lazily allocated buffer for reading non-head segments.
         let mut seg_buf: Option<Vec<u8>> = None;
 
         loop {
@@ -407,80 +447,76 @@ impl LogEngine {
             } else {
                 LOG_SEGMENT_BYTES as u32
             };
-            let first_offset = if seg == start_segment {
+            let mut offset = if seg == start_segment {
                 start_offset
             } else {
                 seg_hdr_size
             };
-
-            if first_offset >= limit {
-                if is_head {
-                    break;
-                }
-                seg = (seg + 1) % self.segment_count;
-                continue;
-            }
 
             let buf: &[u8] = if is_head {
                 &self.write_buf
             } else {
                 let b = seg_buf.get_or_insert_with(|| vec![0u8; LOG_SEGMENT_BYTES as usize]);
                 let seg_start = self.segment_to_block(seg);
-                let blocks = (limit as u64).div_ceil(BLOCK_SIZE as u64);
-                for i in 0..blocks {
-                    let off = (i * BLOCK_SIZE as u64) as usize;
-                    let lba = self.abs_lba(seg_start + i);
+                let mut blk = 0u64;
+                while blk < LOG_SEGMENT_BLOCKS {
+                    let n = (LOG_SEGMENT_BLOCKS - blk).min(FLUSH_CHUNK_BLOCKS);
+                    let off = (blk * BLOCK_SIZE as u64) as usize;
+                    let len = (n * BLOCK_SIZE as u64) as usize;
                     block_io
-                        .read_blocks(lba, &mut b[off..off + BLOCK_SIZE as usize])
+                        .read_blocks(self.abs_lba(seg_start + blk), &mut b[off..off + len])
                         .map_err(|_| HelixError::IoReadFailed)?;
+                    blk += n;
                 }
                 b
             };
 
-            let mut offset = first_offset;
-            loop {
-                if (offset as usize) + hdr_size > limit as usize {
+            while offset < limit {
+                let off = offset as usize;
+                if off + hdr_size > limit as usize {
+                    if is_head {
+                        return Err(HelixError::LogSegmentCorrupt);
+                    }
                     break;
                 }
-
-                let off = offset as usize;
-                // SAFETY: LogRecordHeader is #[repr(C)] POD; the check above
-                // ((offset as usize) + hdr_size <= limit as usize) guarantees
-                // hdr_size bytes are available at off within buf.
+                // SAFETY: repr(C) POD; hdr_size bytes at `off` are in bounds.
                 let header: LogRecordHeader = unsafe {
                     core::ptr::read_unaligned(buf[off..].as_ptr() as *const LogRecordHeader)
                 };
 
-                // Invalid op = end of valid records in this segment.
                 if LogOp::from_u8(header.op).is_none() {
+                    // zero padding ends a filled segment; the lsn chain check
+                    // below catches a record that was damaged into padding
+                    if is_head {
+                        return Err(HelixError::LogSegmentCorrupt);
+                    }
                     break;
                 }
 
-                let total = header.total_size() as u32;
-                let payload_len = header.payload_len as usize;
+                let total = header.total_size();
                 let payload_start = off + hdr_size;
-                let payload_end = payload_start + payload_len;
-
-                if payload_end > buf.len() || offset + total > LOG_SEGMENT_BYTES as u32 {
-                    break;
+                let payload_end = payload_start + header.payload_len as usize;
+                if offset as u64 + total > limit as u64 {
+                    return Err(HelixError::LogSegmentCorrupt);
                 }
-
                 let payload = &buf[payload_start..payload_end];
 
                 let mut hdr_copy = header;
                 hdr_copy.record_crc32c = 0;
-                // SAFETY: LogRecordHeader is #[repr(C)] POD; hdr_size is its exact size.
+                // SAFETY: repr(C) POD viewed for exactly its own size.
                 let hdr_bytes = unsafe {
                     core::slice::from_raw_parts(&hdr_copy as *const _ as *const u8, hdr_size)
                 };
-                let computed = crc32c_two(hdr_bytes, payload);
-                if computed != header.record_crc32c {
-                    break;
+                if crc32c_two(hdr_bytes, payload) != header.record_crc32c {
+                    return Err(HelixError::LogCrcMismatch);
+                }
+                if highest_lsn != 0 && header.lsn != highest_lsn + 1 {
+                    return Err(HelixError::LogSegmentCorrupt);
                 }
 
                 highest_lsn = header.lsn;
                 visitor(&header, payload)?;
-                offset += total;
+                offset += total as u32;
             }
 
             if is_head {

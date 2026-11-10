@@ -25,6 +25,7 @@ pub mod format;
 pub mod index;
 pub mod log;
 pub mod ops;
+pub mod retain;
 pub mod types;
 
 pub use engine::{HelixFs, MAX_TRUNCATE_GROW};

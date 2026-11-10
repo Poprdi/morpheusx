@@ -12,6 +12,11 @@ pub struct BlockBitmap {
     free_count: u64,
     /// Starting index for next allocation scan.
     search_hint: u64,
+    /// No free block lies below this index.
+    lowest_free: u64,
+    /// Freed runs the committed superblock may still reference.
+    pending: Vec<(u64, u64)>,
+    pending_blocks: u64,
 }
 
 impl BlockBitmap {
@@ -22,6 +27,9 @@ impl BlockBitmap {
             total_blocks,
             free_count: total_blocks,
             search_hint: 0,
+            lowest_free: 0,
+            pending: Vec::new(),
+            pending_blocks: 0,
         }
     }
 
@@ -49,6 +57,9 @@ impl BlockBitmap {
             total_blocks,
             free_count: total_blocks - alloc_count,
             search_hint: 0,
+            lowest_free: 0,
+            pending: Vec::new(),
+            pending_blocks: 0,
         }
     }
 
@@ -92,6 +103,9 @@ impl BlockBitmap {
                 self.bits[byte_idx] |= 1 << bit_idx;
                 self.free_count -= 1;
                 self.search_hint = (idx + 1) % self.total_blocks;
+                if idx == self.lowest_free {
+                    self.lowest_free = idx + 1;
+                }
                 return Ok(idx);
             }
         }
@@ -111,7 +125,15 @@ impl BlockBitmap {
         let mut run_start: u64 = 0;
         let mut run_len: u64 = 0;
 
-        for idx in 0..self.total_blocks {
+        let mut idx = self.lowest_free;
+        while idx < self.total_blocks {
+            // skip fully allocated bytes in one step
+            if idx % 8 == 0 && idx + 8 <= self.total_blocks && self.bits[(idx / 8) as usize] == 0xFF
+            {
+                run_len = 0;
+                idx += 8;
+                continue;
+            }
             if !self.is_allocated(idx) {
                 if run_len == 0 {
                     run_start = idx;
@@ -125,11 +147,15 @@ impl BlockBitmap {
                     }
                     self.free_count -= count;
                     self.search_hint = (run_start + count) % self.total_blocks;
+                    if run_start == self.lowest_free {
+                        self.lowest_free = run_start + count;
+                    }
                     return Ok(run_start);
                 }
             } else {
                 run_len = 0;
             }
+            idx += 1;
         }
 
         Err(HelixError::NoSpace)
@@ -169,6 +195,9 @@ impl BlockBitmap {
         if block < self.search_hint {
             self.search_hint = block;
         }
+        if block < self.lowest_free {
+            self.lowest_free = block;
+        }
         Ok(())
     }
 
@@ -177,5 +206,38 @@ impl BlockBitmap {
             self.free_block(start + i)?;
         }
         Ok(())
+    }
+
+    /// True if `[start, start+count)` lies inside the data region.
+    pub fn in_range(&self, start: u64, count: u64) -> bool {
+        start
+            .checked_add(count)
+            .is_some_and(|end| end <= self.total_blocks)
+    }
+
+    /// Queue a run for release at the next commit.
+    pub fn defer_free_range(&mut self, start: u64, count: u64) {
+        if count == 0 || !self.in_range(start, count) {
+            return;
+        }
+        self.pending.push((start, count));
+        self.pending_blocks += count;
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    pub fn pending_blocks(&self) -> u64 {
+        self.pending_blocks
+    }
+
+    /// Call only after the superblock commit is durable.
+    pub fn commit_pending(&mut self) {
+        let runs = core::mem::take(&mut self.pending);
+        self.pending_blocks = 0;
+        for (start, count) in runs {
+            let _ = self.free_range(start, count);
+        }
     }
 }

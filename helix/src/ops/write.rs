@@ -7,20 +7,26 @@ use crate::index::btree::NamespaceIndex;
 use crate::log::LogEngine;
 use crate::types::*;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
-use gpt_disk_types::Lba;
 
-/// Extent Write payload: `[path_len: u16][path][kind: u8][file_size: u64][extent_root: u64]`.
-fn build_extent_payload(path: &str, kind: u8, file_size: u64, extent_root: u64) -> Vec<u8> {
+/// Extent Write payload:
+/// `[path_len: u16][path][kind: u8][file_size: u64][extent_root: u64][crc64: u64]`.
+fn build_extent_payload(
+    path: &str,
+    kind: u8,
+    file_size: u64,
+    extent_root: u64,
+    content_crc: u64,
+) -> Vec<u8> {
     let path_b = path.as_bytes();
-    let mut p = Vec::with_capacity(2 + path_b.len() + 17);
+    let mut p = Vec::with_capacity(2 + path_b.len() + 25);
     p.extend_from_slice(&(path_b.len() as u16).to_le_bytes());
     p.extend_from_slice(path_b);
     p.push(kind);
     p.extend_from_slice(&file_size.to_le_bytes());
     p.extend_from_slice(&extent_root.to_le_bytes());
+    p.extend_from_slice(&content_crc.to_le_bytes());
     p
 }
 
@@ -111,26 +117,16 @@ pub fn write_file<B: BlockIo>(
         Err(e) => return Err(e),
     };
 
-    // Roll back the bitmap on any I/O failure to avoid orphaned blocks.
-    let scale = BLOCK_SIZE as u64 / device_block_size as u64;
-    let mut write_offset = 0usize;
-    let mut io_failed = false;
-    for i in 0..blocks_needed {
-        let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
-        let chunk = (data.len() - write_offset).min(BLOCK_SIZE as usize);
-        block_buf[..chunk].copy_from_slice(&data[write_offset..write_offset + chunk]);
-        write_offset += chunk;
-
-        let abs_block = data_start_block + data_start_relative + i;
-        let lba = Lba(partition_lba_start + abs_block * scale);
-        if block_io.write_blocks(lba, &block_buf).is_err() {
-            io_failed = true;
-            break;
-        }
-    }
-    if io_failed {
+    if let Err(e) = crate::extent::write_run(
+        block_io,
+        partition_lba_start,
+        data_start_block,
+        device_block_size,
+        data_start_relative,
+        data,
+    ) {
         let _ = bitmap.free_range(data_start_relative, blocks_needed);
-        return Err(HelixError::IoWriteFailed);
+        return Err(e);
     }
 
     let full_payload = build_extent_payload(
@@ -138,6 +134,7 @@ pub fn write_file<B: BlockIo>(
         extent_kind::CONTIGUOUS,
         data.len() as u64,
         data_start_relative,
+        content_crc,
     );
     let lsn = match log.append_full(
         block_io,
@@ -166,6 +163,7 @@ pub fn write_file<B: BlockIo>(
         data_start_relative,
         content_crc,
     );
+    entry.flags |= entry_flags::HAS_CONTENT_CRC;
 
     if is_update {
         if let Some(existing) = index.lookup(path) {
@@ -200,8 +198,20 @@ fn write_file_fragmented<B: BlockIo>(
     let mut extents: Vec<(u64, u64, u32)> = Vec::new();
     let mut logical_block = 0u64;
 
+    let release = |bitmap: &mut BlockBitmap, extents: &[(u64, u64, u32)]| {
+        for (_, physical, count) in extents {
+            let _ = bitmap.free_range(*physical, *count as u64);
+        }
+    };
+
     for _ in 0..blocks_needed {
-        let phys = bitmap.alloc_block()?;
+        let phys = match bitmap.alloc_block() {
+            Ok(p) => p,
+            Err(e) => {
+                release(bitmap, &extents);
+                return Err(e);
+            },
+        };
         if let Some(last) = extents.last_mut() {
             if last.1 + last.2 as u64 == phys {
                 last.2 += 1;
@@ -212,31 +222,27 @@ fn write_file_fragmented<B: BlockIo>(
         extents.push((logical_block, phys, 1));
         logical_block += 1;
     }
-
-    // Roll back all extents on I/O failure to avoid orphaned blocks.
-    let scale = BLOCK_SIZE as u64 / device_block_size as u64;
-    let mut write_offset = 0usize;
-    let mut io_failed = false;
-    'write_loop: for (_, physical, count) in &extents {
-        for j in 0..*count as u64 {
-            let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
-            let chunk = (data.len() - write_offset).min(BLOCK_SIZE as usize);
-            block_buf[..chunk].copy_from_slice(&data[write_offset..write_offset + chunk]);
-            write_offset += chunk;
-
-            let abs_block = data_start_block + physical + j;
-            let lba = Lba(partition_lba_start + abs_block * scale);
-            if block_io.write_blocks(lba, &block_buf).is_err() {
-                io_failed = true;
-                break 'write_loop;
-            }
-        }
+    // one leaf holds the whole run list; more runs than that cannot be stored
+    if extents.len() > EXTENTS_PER_LEAF {
+        release(bitmap, &extents);
+        return Err(HelixError::NoSpace);
     }
-    if io_failed {
-        for (_, physical, count) in &extents {
-            let _ = bitmap.free_range(*physical, *count as u64);
+
+    let mut written = 0usize;
+    for (_, physical, count) in &extents {
+        let len = (*count as usize * BLOCK_SIZE as usize).min(data.len() - written);
+        if let Err(e) = crate::extent::write_run(
+            block_io,
+            partition_lba_start,
+            data_start_block,
+            device_block_size,
+            *physical,
+            &data[written..written + len],
+        ) {
+            release(bitmap, &extents);
+            return Err(e);
         }
-        return Err(HelixError::IoWriteFailed);
+        written += len;
     }
 
     let free_extents = |bitmap: &mut BlockBitmap| {
@@ -267,7 +273,13 @@ fn write_file_fragmented<B: BlockIo>(
         return Err(e);
     }
 
-    let full_payload = build_extent_payload(path, extent_kind::NODE, data.len() as u64, node_block);
+    let full_payload = build_extent_payload(
+        path,
+        extent_kind::NODE,
+        data.len() as u64,
+        node_block,
+        content_crc,
+    );
     let lsn = match log.append_full(
         block_io,
         LogOp::Write,
@@ -296,7 +308,7 @@ fn write_file_fragmented<B: BlockIo>(
         node_block,
         content_crc,
     );
-    entry.flags |= entry_flags::IS_EXTENT_NODE;
+    entry.flags |= entry_flags::IS_EXTENT_NODE | entry_flags::HAS_CONTENT_CRC;
 
     if is_update {
         if let Some(existing) = index.lookup(path) {
@@ -325,6 +337,9 @@ fn ensure_parent_dirs<B: BlockIo>(
     let mut current = alloc::string::String::from("/");
     for part in &parts[..parts.len() - 1] {
         current.push_str(part);
+        if index.lookup(&current).is_some() {
+            return Err(HelixError::NotADirectory);
+        }
         current.push('/');
 
         if index.lookup(&current).is_none() {
@@ -342,19 +357,36 @@ fn ensure_parent_dirs<B: BlockIo>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Log bytes a rename of `old_path` will append (upper bound).
+pub fn rename_log_bytes(index: &NamespaceIndex, old_path: &str) -> u64 {
+    let per_record = crate::log::MAX_RECORD_BYTES;
+    match index.lookup_flex(old_path) {
+        Some(e) if e.flags & entry_flags::IS_DIR != 0 => {
+            let prefix = dir_prefix(old_path);
+            let n = index
+                .all_entries()
+                .iter()
+                .filter(|e| {
+                    e.flags & entry_flags::IS_DELETED == 0
+                        && crate::index::btree::path_str(&e.path).starts_with(prefix.as_str())
+                })
+                .count();
+            n as u64 * per_record
+        },
+        _ => per_record,
+    }
+}
+
+/// Returns the rename LSN and, for a file renamed over an existing file, the
+/// entry it replaced (the caller releases its blocks).
 pub fn rename<B: BlockIo>(
     block_io: &mut B,
     log: &mut LogEngine,
     index: &mut NamespaceIndex,
-    bitmap: &mut BlockBitmap,
-    partition_lba_start: u64,
-    data_start_block: u64,
-    device_block_size: u32,
     old_path: &str,
     new_path: &str,
     timestamp_ns: u64,
-) -> Result<Lsn, HelixError> {
+) -> Result<(Lsn, Option<IndexEntry>), HelixError> {
     crate::index::btree::validate_path(new_path)?;
 
     let src = *index.lookup_flex(old_path).ok_or(HelixError::NotFound)?;
@@ -362,6 +394,9 @@ pub fn rename<B: BlockIo>(
     if src.flags & entry_flags::IS_DIR != 0 {
         let old_prefix = dir_prefix(old_path);
         let new_prefix = dir_prefix(new_path);
+        if new_prefix == old_prefix {
+            return Ok((src.lsn, None));
+        }
         if new_prefix.len() > MAX_PATH_LEN {
             return Err(HelixError::PathTooLong);
         }
@@ -369,9 +404,11 @@ pub fn rename<B: BlockIo>(
         if new_prefix.starts_with(old_prefix.as_str()) {
             return Err(HelixError::PathInvalid);
         }
-        if index.lookup(&new_prefix).is_some() {
+        if index.lookup_flex(&new_prefix).is_some() {
             return Err(HelixError::AlreadyExists);
         }
+
+        ensure_parent_dirs(block_io, log, index, &new_prefix, timestamp_ns)?;
 
         let mut moves: Vec<(String, String)> = Vec::new();
         for entry in index.all_entries() {
@@ -393,36 +430,31 @@ pub fn rename<B: BlockIo>(
         for (from, to) in &moves {
             last = log_rename_one(block_io, log, index, from, to, timestamp_ns)?;
         }
-        return Ok(last);
+        return Ok((last, None));
     }
 
-    // File rename: clobbering a file frees its blocks; a directory target is refused.
-    if let Some(dest) = index.lookup_flex(new_path) {
-        if dest.flags & entry_flags::IS_DIR != 0 {
+    if new_path.ends_with('/') {
+        return Err(HelixError::PathInvalid);
+    }
+    let src_path = crate::index::btree::path_str(&src.path);
+    if src_path == new_path {
+        return Ok((src.lsn, None));
+    }
+
+    // A file may replace a file; a directory target is refused.
+    let replaced = match index.lookup_flex(new_path) {
+        Some(dest) if dest.flags & entry_flags::IS_DIR != 0 => {
             return Err(HelixError::IsADirectory);
-        }
-        let (extent_root, size, is_node, is_inline) = (
-            dest.extent_root,
-            dest.size,
-            dest.flags & entry_flags::IS_EXTENT_NODE != 0,
-            dest.flags & entry_flags::IS_INLINE != 0,
-        );
-        if !is_inline {
-            crate::extent::free_file_blocks(
-                block_io,
-                bitmap,
-                partition_lba_start,
-                data_start_block,
-                device_block_size,
-                extent_root,
-                size,
-                is_node,
-            );
-        }
-        index.mark_deleted(new_path)?;
-    }
+        },
+        Some(dest) => Some(*dest),
+        None => None,
+    };
 
-    log_rename_one(block_io, log, index, old_path, new_path, timestamp_ns)
+    ensure_parent_dirs(block_io, log, index, new_path, timestamp_ns)?;
+
+    // upsert in log_rename_one overwrites the destination entry in place
+    let lsn = log_rename_one(block_io, log, index, src_path, new_path, timestamp_ns)?;
+    Ok((lsn, replaced))
 }
 
 fn dir_prefix(path: &str) -> String {
@@ -468,7 +500,7 @@ fn log_rename_one<B: BlockIo>(
         timestamp_ns,
     )?;
 
-    new_entry.lsn = lsn;
+    // entry.lsn stays the lsn of the data version; a rename moves no data
     index.mark_deleted(old_full)?;
     index.upsert(new_entry);
     Ok(lsn)

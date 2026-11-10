@@ -106,17 +106,19 @@ fn decode_path_payload(payload: &[u8]) -> Option<(&str, &[u8])> {
     Some((path_str, &payload[data_start..]))
 }
 
-/// Replay tail..=head, rebuilding the in-memory [`NamespaceIndex`]. v1 records
-/// without v2 path prefix are silently skipped. `log` + `index` must be from
-/// the same `HelixFs`.
+/// Replay tail..=head into `index`, collecting snapshot LSNs and the versions
+/// they pin. Fails if the log does not reach `committed_lsn` intact.
 pub fn replay_log<B: BlockIo>(
     block_io: &mut B,
     log: &LogEngine,
     index: &mut NamespaceIndex,
     snapshots: &mut Vec<Lsn>,
+    retained: &mut Vec<IndexEntry>,
     checkpoint_lsn: Lsn,
+    committed_lsn: Lsn,
 ) -> Result<Lsn, HelixError> {
     let start_offset = core::mem::size_of::<LogSegmentHeader>() as u32;
+    let corrupt = HelixError::LogSegmentCorrupt;
 
     let highest_lsn = log.scan_forward(
         block_io,
@@ -127,156 +129,132 @@ pub fn replay_log<B: BlockIo>(
             if hdr.lsn <= checkpoint_lsn {
                 return Ok(());
             }
-            let op = match LogOp::from_u8(hdr.op) {
-                Some(o) => o,
-                None => return Ok(()),
-            };
+            let op = LogOp::from_u8(hdr.op).ok_or(corrupt)?;
 
             match op {
                 LogOp::MkDir => {
-                    if let Some((path, _rest)) = decode_path_payload(payload) {
-                        let entry = NamespaceIndex::make_dir_entry(path, hdr.lsn, hdr.timestamp_ns);
-                        index.upsert(entry);
-                    }
+                    let (path, _) = decode_path_payload(payload).ok_or(corrupt)?;
+                    index.upsert(NamespaceIndex::make_dir_entry(
+                        path,
+                        hdr.lsn,
+                        hdr.timestamp_ns,
+                    ));
                 },
 
                 LogOp::Write => {
-                    if let Some((path, data)) = decode_path_payload(payload) {
-                        // Extent payload: [0xFF][file_size: u64][logical: u64][physical: u64][count: u32][pad: u32].
-                        // Inline payload: raw data. The IS_EXTENT header flag — not
-                        // any payload byte — decides which, so inline data may begin
-                        // with 0xFF without being mistaken for an extent.
-                        let is_extent = hdr.flags & rec_flags::IS_EXTENT != 0;
-                        let new_entry = if is_extent && data.len() >= 17 {
-                            let kind = data[0];
-                            let file_size =
-                                u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
-                            let extent_root =
-                                u64::from_le_bytes(data[9..17].try_into().unwrap_or([0u8; 8]));
-                            let mut e = NamespaceIndex::make_file_entry(
-                                path,
-                                hdr.lsn,
-                                file_size,
-                                hdr.timestamp_ns,
-                                None,
-                                extent_root,
-                                0,
-                            );
-                            if kind == extent_kind::NODE {
-                                e.flags |= entry_flags::IS_EXTENT_NODE;
-                            }
-                            Some(e)
-                        } else if !is_extent && data.len() <= INLINE_DATA_SIZE {
-                            let crc = if data.is_empty() {
-                                0
-                            } else {
-                                crate::crc::crc64(data)
-                            };
-                            Some(NamespaceIndex::make_file_entry(
-                                path,
-                                hdr.lsn,
-                                data.len() as u64,
-                                hdr.timestamp_ns,
-                                Some(data),
-                                BLOCK_NULL,
-                                crc,
-                            ))
-                        } else {
-                            None
-                        };
-
-                        if let Some(mut entry) = new_entry {
-                            // A rewrite must keep the file's birth metadata and
-                            // grow its version count — same as the live write
-                            // path — so stat() is identical before and after a
-                            // remount. A fresh entry after an intervening Delete
-                            // (lookup returns None) is correctly treated as new.
-                            if let Some(existing) = index.lookup(path) {
-                                entry.created_ns = existing.created_ns;
-                                entry.first_lsn = existing.first_lsn;
-                                entry.version_count = existing.version_count + 1;
-                            }
-                            index.upsert(entry);
+                    let (path, data) = decode_path_payload(payload).ok_or(corrupt)?;
+                    // The IS_EXTENT header flag, never a payload byte, decides
+                    // inline vs extent.
+                    let mut entry = if hdr.flags & rec_flags::IS_EXTENT != 0 {
+                        if data.len() < 17 {
+                            return Err(corrupt);
                         }
+                        let u64_at = |o: usize| {
+                            let mut b = [0u8; 8];
+                            b.copy_from_slice(&data[o..o + 8]);
+                            u64::from_le_bytes(b)
+                        };
+                        let has_crc = data.len() >= 25;
+                        let mut e = NamespaceIndex::make_file_entry(
+                            path,
+                            hdr.lsn,
+                            u64_at(1),
+                            hdr.timestamp_ns,
+                            None,
+                            u64_at(9),
+                            if has_crc { u64_at(17) } else { 0 },
+                        );
+                        if has_crc {
+                            e.flags |= entry_flags::HAS_CONTENT_CRC;
+                        }
+                        if data[0] == extent_kind::NODE {
+                            e.flags |= entry_flags::IS_EXTENT_NODE;
+                        }
+                        e
+                    } else {
+                        if data.len() > INLINE_DATA_SIZE {
+                            return Err(corrupt);
+                        }
+                        let crc = if data.is_empty() {
+                            0
+                        } else {
+                            crate::crc::crc64(data)
+                        };
+                        NamespaceIndex::make_file_entry(
+                            path,
+                            hdr.lsn,
+                            data.len() as u64,
+                            hdr.timestamp_ns,
+                            Some(data),
+                            BLOCK_NULL,
+                            crc,
+                        )
+                    };
+
+                    // A rewrite keeps birth metadata and bumps the version
+                    // count, same as the live write path.
+                    if let Some(existing) = index.lookup(path) {
+                        entry.created_ns = existing.created_ns;
+                        entry.first_lsn = existing.first_lsn;
+                        entry.version_count = existing.version_count + 1;
+                        let old = *existing;
+                        crate::retain::retire(snapshots, retained, &old, hdr.lsn);
                     }
+                    index.upsert(entry);
                 },
 
                 LogOp::Delete => {
-                    if let Some((path, _rest)) = decode_path_payload(payload) {
-                        let _ = index.mark_deleted(path);
+                    let (path, _) = decode_path_payload(payload).ok_or(corrupt)?;
+                    if let Some(old) = index.lookup_flex(path).copied() {
+                        crate::retain::retire(snapshots, retained, &old, hdr.lsn);
                     }
+                    let _ = index.mark_deleted(path);
                 },
 
                 LogOp::Rename => {
-                    // v2: [old_path_len: u16][old_path][new_path_len: u16][new_path].
-                    if let Some((old_path, rest)) = decode_path_payload(payload) {
-                        if rest.len() >= 2 {
-                            let new_len = u16::from_le_bytes([rest[0], rest[1]]) as usize;
-                            if rest.len() >= 2 + new_len {
-                                if let Ok(new_path) = core::str::from_utf8(&rest[2..2 + new_len]) {
-                                    if let Some(old_entry) = index.lookup(old_path) {
-                                        let mut new_entry = *old_entry;
-                                        new_entry.key = fnv1a_64(new_path.as_bytes());
-                                        let nb = new_path.as_bytes();
-                                        new_entry.path = [0u8; 256];
-                                        let l = nb.len().min(MAX_PATH_LEN);
-                                        new_entry.path[..l].copy_from_slice(&nb[..l]);
-                                        new_entry.lsn = hdr.lsn;
-                                        new_entry.modified_ns = hdr.timestamp_ns;
-                                        let _ = index.mark_deleted(old_path);
-                                        index.upsert(new_entry);
-                                    }
-                                }
-                            }
+                    // [old_path_len: u16][old_path][new_path_len: u16][new_path]
+                    let (old_path, rest) = decode_path_payload(payload).ok_or(corrupt)?;
+                    let (new_path, _) = decode_path_payload(rest).ok_or(corrupt)?;
+                    if let Some(old_entry) = index.lookup(old_path).copied() {
+                        if let Some(dest) = index.lookup(new_path).copied() {
+                            crate::retain::retire(snapshots, retained, &dest, hdr.lsn);
                         }
+                        let mut new_entry = old_entry;
+                        new_entry.key = fnv1a_64(new_path.as_bytes());
+                        new_entry.path = [0u8; 256];
+                        new_entry.path[..new_path.len()].copy_from_slice(new_path.as_bytes());
+                        new_entry.modified_ns = hdr.timestamp_ns;
+                        let _ = index.mark_deleted(old_path);
+                        index.upsert(new_entry);
                     }
                 },
 
                 LogOp::Snapshot => snapshots.push(hdr.lsn),
 
-                // Skipped during replay.
+                // Never written by this engine.
                 LogOp::SetMeta
                 | LogOp::DedupRef
                 | LogOp::TxBegin
                 | LogOp::TxCommit
                 | LogOp::TxAbort
                 | LogOp::Checkpoint
-                | LogOp::Truncate => {},
-
-                LogOp::Append => {
-                    // v2 payload: [path_len: u16][path][appended_data].
-                    if let Some((path, appended)) = decode_path_payload(payload) {
-                        if let Some(existing) = index.lookup_mut(path) {
-                            let old_size = existing.size as usize;
-                            let new_size = old_size + appended.len();
-
-                            if existing.flags & entry_flags::IS_INLINE != 0 {
-                                if new_size <= INLINE_DATA_SIZE {
-                                    existing.inline_data[old_size..new_size]
-                                        .copy_from_slice(appended);
-                                    existing.size = new_size as u64;
-                                } else {
-                                    // Promoted to extent by write path; that
-                                    // appears as a separate Write record.
-                                    existing.flags &= !entry_flags::IS_INLINE;
-                                    existing.size = new_size as u64;
-                                }
-                            } else {
-                                // Data blocks already written by original append.
-                                existing.size = new_size as u64;
-                            }
-                            existing.lsn = hdr.lsn;
-                            existing.modified_ns = hdr.timestamp_ns;
-                            existing.version_count += 1;
-                        }
-                        // Orphaned append (entry missing): skip.
-                    }
-                },
+                | LogOp::Truncate
+                | LogOp::Append => {},
             }
 
             Ok(())
         },
     )?;
+
+    // every record up to committed_lsn must have been seen
+    let reached = if highest_lsn == 0 {
+        committed_lsn <= checkpoint_lsn
+    } else {
+        highest_lsn == committed_lsn
+    };
+    if !reached {
+        return Err(corrupt);
+    }
 
     index.compact();
 

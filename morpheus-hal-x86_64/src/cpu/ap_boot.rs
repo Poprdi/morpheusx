@@ -8,7 +8,7 @@
 use crate::cpu::apic;
 use crate::cpu::gdt;
 use crate::cpu::per_cpu::{self, MAX_CPUS};
-use crate::memory::{global_registry_mut, AllocateType, MemoryType, PAGE_SIZE};
+use crate::memory::{global_registry_mut, AllocateType, E820Type, MemoryType, PAGE_SIZE};
 use crate::serial::{log_error, log_warn};
 use core::sync::atomic::{AtomicBool, Ordering};
 /// Trampoline physical address. Page-aligned, <1 MiB. 0x8000 is traditional.
@@ -53,27 +53,23 @@ static AP_TRAMPOLINE_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ap_t
 #[cfg(not(feature = "smp"))]
 static AP_TRAMPOLINE_BIN: &[u8] = &[];
 
-/// Reserve 0x8000 from the registry, copy trampoline, fill handoff data
-/// (CR3, GDT, entry). False = page unavailable (firmware reserved).
+/// Check 0x8000 is ram, copy trampoline, fill handoff data (CR3, GDT, entry).
+/// False = page unavailable (firmware reserved).
 // SAFETY: called only from start_aps*, which runs single-threaded during BSP
 // bring-up before any AP is live, so the low-memory trampoline page and
 // global registry are exclusively owned by this call.
 unsafe fn setup_trampoline() -> bool {
-    // Some firmware marks 0x8000 reserved/MMIO; validate before stomping.
-    match global_registry_mut().allocate_pages(
-        AllocateType::Address(AP_TRAMPOLINE_PHYS),
-        MemoryType::LoaderData,
-        1,
-    ) {
-        Ok(_) => {},
-        Err(_) => {
-            log_error(
-                "AP",
-                500,
-                "trampoline page 0x8000 unavailable in memory map",
-            );
-            return false;
-        },
+    // Some firmware marks 0x8000 reserved/MMIO; validate before stomping. The
+    // page sits below the pool floor so it is never in the buddy; the uefi
+    // snapshot is the only thing that knows what it is.
+    let ty = global_registry_mut().memory_type_at(AP_TRAMPOLINE_PHYS);
+    if ty.to_e820() != E820Type::Ram {
+        log_error(
+            "AP",
+            500,
+            "trampoline page 0x8000 unavailable in memory map",
+        );
+        return false;
     }
 
     let trampoline_len = AP_TRAMPOLINE_BIN.len();

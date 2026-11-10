@@ -5,7 +5,6 @@
 
 use crate::crc::crc32c;
 use crate::error::HelixError;
-use crate::index::btree::NamespaceIndex;
 use crate::types::*;
 use alloc::vec;
 use gpt_disk_io::BlockIo;
@@ -68,28 +67,26 @@ pub fn write_index_region<B: BlockIo>(
     Ok(())
 }
 
+/// Read `entry_count` CRC-checked entries from a region, in order.
 pub fn load_index_region<B: BlockIo>(
     block_io: &mut B,
     partition_lba_start: u64,
     data_start_block: u64,
     device_block_size: u32,
     region_start: u64,
-    block_count: u64,
     entry_count: u64,
-    index: &mut NamespaceIndex,
+    mut visit: impl FnMut(IndexEntry),
 ) -> Result<(), HelixError> {
     let mut loaded: u64 = 0;
-    for b in 0..block_count {
-        if loaded >= entry_count {
-            break;
-        }
+    let mut buf = vec![0u8; BLOCK_SIZE as usize];
+    let mut b = 0u64;
+    while loaded < entry_count {
         let lba = region_lba(
             partition_lba_start,
             data_start_block,
             device_block_size,
             region_start + b,
         );
-        let mut buf = vec![0u8; BLOCK_SIZE as usize];
         block_io
             .read_blocks(lba, &mut buf)
             .map_err(|_| HelixError::IoReadFailed)?;
@@ -98,17 +95,16 @@ pub fn load_index_region<B: BlockIo>(
                 break;
             }
             let off = slot * ENTRY_SIZE;
-            // SAFETY: IndexEntry is #[repr(C)] POD, ENTRY_SIZE bytes; buf is a
-            // freshly read BLOCK_SIZE block and off+ENTRY_SIZE stays within it
-            // (loop bound is ENTRIES_PER_INDEX_BLOCK = BLOCK_SIZE/ENTRY_SIZE).
+            // SAFETY: repr(C) POD of ENTRY_SIZE bytes; off+ENTRY_SIZE is within buf.
             let e: IndexEntry =
                 unsafe { core::ptr::read_unaligned(buf[off..].as_ptr() as *const IndexEntry) };
             if entry_crc(&e) != e.crc32c {
                 return Err(HelixError::IndexCrcMismatch);
             }
-            index.upsert(e);
+            visit(e);
             loaded += 1;
         }
+        b += 1;
     }
     Ok(())
 }

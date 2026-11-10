@@ -380,7 +380,10 @@ impl MemoryRegistry {
                 self.map_count += 1;
             }
 
-            self.total_pages += pages;
+            // ram only; mmio/reserved/nvs windows are not memory we could ever hand out
+            if mem_type.to_e820() == E820Type::Ram {
+                self.total_pages += pages;
+            }
 
             if mem_type.is_immediately_writable() {
                 // Conventional/LoaderCode/LoaderData only — BootServices still WP.
@@ -419,7 +422,7 @@ impl MemoryRegistry {
         mem_type: MemoryType,
         pages: u64,
     ) -> Result<u64, MemoryError> {
-        if pages == 0 {
+        if pages == 0 || pages > (1u64 << MAX_ORDER) {
             return Err(MemoryError::InvalidParameter);
         }
 
@@ -428,13 +431,24 @@ impl MemoryRegistry {
         // FreeNodes live at identity-mapped phys; user CR3 may remap those VAs.
         let addr = {
             let _guard = unsafe { KernelCr3Guard::enter() };
-            match alloc_type {
+            let addr = match alloc_type {
                 AllocateType::AnyPages => self.buddy_alloc(order)?,
                 AllocateType::MaxAddress(limit) => self.buddy_alloc_below(order, limit)?,
                 AllocateType::Address(want) => self.buddy_alloc_at(want, pages)?,
+            };
+            // the buddy hands out 2^order pages; give the round-up tail straight
+            // back or every non-pow2 allocation leaks it (free_pages only sees
+            // `pages`). Address allocs are exact.
+            let got = 1u64 << order;
+            if !matches!(alloc_type, AllocateType::Address(_)) && got > pages {
+                unsafe {
+                    self.free_range(addr + pages * PAGE_SIZE, addr + got * PAGE_SIZE);
+                }
             }
+            addr
         };
 
+        self.allocated_pages += pages;
         self.map_snapshot_add(addr, pages, mem_type);
         self.map_key += 1;
         Ok(addr)
@@ -446,30 +460,41 @@ impl MemoryRegistry {
         if addr & (PAGE_SIZE - 1) != 0 || pages == 0 {
             return Err(MemoryError::InvalidParameter);
         }
+        let end = pages
+            .checked_mul(PAGE_SIZE)
+            .and_then(|b| addr.checked_add(b))
+            .ok_or(MemoryError::InvalidParameter)?;
 
         self.map_snapshot_remove(addr, pages);
 
         // Free-list mutations require kernel CR3 mapping the buddy phys range.
         {
             let _guard = unsafe { KernelCr3Guard::enter() };
-            let mut base = addr;
-            let end = addr + pages * PAGE_SIZE;
-            while base < end {
-                let remaining_pages = (end - base) / PAGE_SIZE;
-                let align_order =
-                    (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
-                let size_order =
-                    usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
-                let order = align_order.min(size_order).min(MAX_ORDER);
-                unsafe {
-                    self.buddy_free(base, order);
-                }
-                base += (1u64 << order) * PAGE_SIZE;
+            unsafe {
+                self.free_range(addr, end);
             }
         }
 
+        self.allocated_pages = self.allocated_pages.saturating_sub(pages);
         self.map_key += 1;
         Ok(())
+    }
+
+    /// Return `[start, end)` as natural buddy blocks.
+    ///
+    /// # Safety
+    /// Page-aligned, physically mapped, no page of it in any free list; caller
+    /// holds the kernel-CR3 window.
+    unsafe fn free_range(&mut self, start: u64, end: u64) {
+        let mut base = start;
+        while base < end {
+            let remaining_pages = (end - base) / PAGE_SIZE;
+            let align_order = (base.trailing_zeros() as usize).saturating_sub(PAGE_SHIFT as usize);
+            let size_order = usize::BITS as usize - 1 - remaining_pages.leading_zeros() as usize;
+            let order = align_order.min(size_order).min(MAX_ORDER);
+            self.buddy_free(base, order);
+            base += (1u64 << order) * PAGE_SIZE;
+        }
     }
 
     /// Page-rounded byte alloc.
@@ -525,13 +550,15 @@ impl MemoryRegistry {
         let mut reclaimed_pages: u64 = 0;
 
         for i in 0..self.map_count {
-            let d = &self.map[i];
+            let d = self.map[i];
             if !matches!(
                 d.mem_type,
                 MemoryType::BootServicesCode | MemoryType::BootServicesData
             ) {
                 continue;
             }
+            // the pages are pool now; keep type queries and snapshot carving honest
+            self.map[i].mem_type = MemoryType::Conventional;
 
             let is_code = matches!(d.mem_type, MemoryType::BootServicesCode);
             let phys = d.physical_start;
@@ -885,7 +912,6 @@ impl MemoryRegistry {
             }
         }
 
-        self.allocated_pages += 1u64 << order;
         Ok(cur)
     }
 
@@ -893,16 +919,14 @@ impl MemoryRegistry {
     fn buddy_alloc_below(&mut self, order: usize, limit: u64) -> Result<u64, MemoryError> {
         let block_bytes = (1u64 << order) * PAGE_SIZE;
 
-        // Top-down: fewer splits.
+        // Top-down: fewer splits. Splitting always keeps the low half, so a
+        // block that straddles `limit` is fine as long as its first 2^order
+        // pages fit.
         for k in (order..=MAX_ORDER).rev() {
-            let k_bytes = (1u64 << k) * PAGE_SIZE;
             let mut cur = self.free_lists[k];
             while !cur.is_null() {
                 let base = cur as u64;
-                let base_end = base.saturating_add(k_bytes);
-                if base.saturating_add(block_bytes) <= limit.saturating_add(1)
-                    && base_end <= limit.saturating_add(1)
-                {
+                if base.saturating_add(block_bytes) <= limit.saturating_add(1) {
                     // Net change = -(1<<order); see `buddy_alloc`.
                     unsafe {
                         self.list_remove(base, k);
@@ -918,7 +942,6 @@ impl MemoryRegistry {
                         }
                     }
 
-                    self.allocated_pages += 1u64 << order;
                     return Ok(current);
                 }
                 unsafe {
@@ -934,7 +957,10 @@ impl MemoryRegistry {
         if addr & (PAGE_SIZE - 1) != 0 {
             return Err(MemoryError::InvalidParameter);
         }
-        let end = addr + pages * PAGE_SIZE;
+        let end = pages
+            .checked_mul(PAGE_SIZE)
+            .and_then(|b| addr.checked_add(b))
+            .ok_or(MemoryError::InvalidParameter)?;
         let mut base = addr;
         while base < end {
             let remaining = (end - base) / PAGE_SIZE;
@@ -942,23 +968,53 @@ impl MemoryRegistry {
             let size_order = usize::BITS as usize - 1 - remaining.leading_zeros() as usize;
             let order = align_order.min(size_order).min(MAX_ORDER);
             // SAFETY: identity-mapped phys range.
-            unsafe {
-                self.carve_block(base, order);
+            let carved = unsafe { self.carve_block(base, order) };
+            if !carved {
+                // a page in there is taken (or was never pool). a block of this
+                // order is free iff all its pages are, so page-step through the
+                // rest to find out which; anything already carved goes back.
+                if order > 0
+                    && unsafe { self.carve_pagewise(base, base + (1u64 << order) * PAGE_SIZE) }
+                {
+                    base += (1u64 << order) * PAGE_SIZE;
+                    continue;
+                }
+                unsafe {
+                    self.free_range(addr, base);
+                }
+                return Err(MemoryError::AlreadyAllocated);
             }
-            self.allocated_pages += 1u64 << order;
             base += (1u64 << order) * PAGE_SIZE;
         }
         Ok(addr)
     }
 
+    /// Carve `[start, end)` one page at a time. On the first page that is not
+    /// free, everything carved so far goes back and the result is false.
+    ///
+    /// # Safety
+    /// As `carve_block`.
+    unsafe fn carve_pagewise(&mut self, start: u64, end: u64) -> bool {
+        let mut p = start;
+        while p < end {
+            if !self.carve_block(p, 0) {
+                self.free_range(start, p);
+                return false;
+            }
+            p += PAGE_SIZE;
+        }
+        true
+    }
+
     /// Extract `[addr, addr + 2^order pages)` from the free lists; splits a
     /// containing block as needed. Net free_pages change = -(1<<order).
+    /// False when no free block covers the range (taken, or never pool).
     ///
     /// # Safety
     /// `addr` page-aligned and physically mapped.
-    unsafe fn carve_block(&mut self, addr: u64, order: usize) {
+    unsafe fn carve_block(&mut self, addr: u64, order: usize) -> bool {
         if self.list_remove(addr, order) {
-            return;
+            return true;
         }
 
         for k in (order + 1)..=MAX_ORDER {
@@ -978,10 +1034,10 @@ impl MemoryRegistry {
                         self.list_push(spare, current_k);
                     }
                 }
-                return;
+                return true;
             }
         }
-        // Already allocated or reserved; no-op.
+        false
     }
 
     /// Return `addr`/`order` to the buddy, coalescing upward. Net +1<<order.
@@ -1036,35 +1092,88 @@ impl MemoryRegistry {
 
     // Snapshot bookkeeping (E820 + type queries only).
 
+    // The map stays address-ordered (uefi hands it over sorted; we only ever
+    // split and re-merge in place), so neighbours by index are neighbours in
+    // memory.
+
+    fn map_insert(&mut self, idx: usize, d: MemoryDescriptor) {
+        self.map.copy_within(idx..self.map_count, idx + 1);
+        self.map[idx] = d;
+        self.map_count += 1;
+    }
+
+    fn map_remove(&mut self, idx: usize) {
+        self.map.copy_within(idx + 1..self.map_count, idx);
+        self.map_count -= 1;
+    }
+
+    /// Carve the allocation out of the free descriptor that covers it, leaving
+    /// the remainder as up to two free descriptors on either side.
     fn map_snapshot_add(&mut self, addr: u64, pages: u64, mem_type: MemoryType) {
-        // Update an overlapping free descriptor if present.
-        for i in 0..self.map_count {
-            if self.map[i].mem_type.is_free() && self.map[i].contains(addr) {
-                self.map[i].mem_type = mem_type;
-                self.map[i].physical_start = addr;
-                self.map[i].number_of_pages = pages;
-                return;
-            }
+        let end = addr + pages * PAGE_SIZE;
+        let Some(i) = (0..self.map_count).find(|&i| {
+            let d = &self.map[i];
+            d.mem_type.is_free() && d.physical_start <= addr && end <= d.physical_end()
+        }) else {
+            return;
+        };
+        let d = self.map[i];
+        let before = (addr - d.physical_start) / PAGE_SIZE;
+        let after = (d.physical_end() - end) / PAGE_SIZE;
+        let need = (before > 0) as usize + (after > 0) as usize;
+        if self.map_count + need > MAX_MAP {
+            return; // snapshot full; type queries go stale for this run
         }
-        if self.map_count < MAX_MAP {
-            self.map[self.map_count] = MemoryDescriptor {
-                mem_type,
-                physical_start: addr,
-                virtual_start: 0,
-                number_of_pages: pages,
-                attribute: MemoryAttribute::WB,
-            };
-            self.map_count += 1;
+        let alloc = MemoryDescriptor {
+            mem_type,
+            physical_start: addr,
+            virtual_start: 0,
+            number_of_pages: pages,
+            attribute: d.attribute,
+        };
+        let mut idx = i;
+        if before > 0 {
+            self.map[idx].number_of_pages = before;
+            idx += 1;
+            self.map_insert(idx, alloc);
+        } else {
+            self.map[idx] = alloc;
+        }
+        if after > 0 {
+            self.map_insert(
+                idx + 1,
+                MemoryDescriptor {
+                    mem_type: d.mem_type,
+                    physical_start: end,
+                    virtual_start: 0,
+                    number_of_pages: after,
+                    attribute: d.attribute,
+                },
+            );
         }
     }
 
+    /// Exact-match only: a range freed in pieces leaves its descriptor as is.
     fn map_snapshot_remove(&mut self, addr: u64, pages: u64) {
-        for i in 0..self.map_count {
-            let d = &self.map[i];
-            if d.physical_start == addr && d.number_of_pages == pages {
-                self.map[i].mem_type = MemoryType::Conventional;
-                return;
-            }
+        let Some(i) = (0..self.map_count)
+            .find(|&i| self.map[i].physical_start == addr && self.map[i].number_of_pages == pages)
+        else {
+            return;
+        };
+        self.map[i].mem_type = MemoryType::Conventional;
+        if i + 1 < self.map_count
+            && self.map[i + 1].mem_type.is_free()
+            && self.map[i + 1].physical_start == self.map[i].physical_end()
+        {
+            self.map[i].number_of_pages += self.map[i + 1].number_of_pages;
+            self.map_remove(i + 1);
+        }
+        if i > 0
+            && self.map[i - 1].mem_type.is_free()
+            && self.map[i - 1].physical_end() == self.map[i].physical_start
+        {
+            self.map[i - 1].number_of_pages += self.map[i].number_of_pages;
+            self.map_remove(i);
         }
     }
 

@@ -5,10 +5,8 @@ use crate::error::HelixError;
 use crate::index::btree::NamespaceIndex;
 use crate::log::LogEngine;
 use crate::types::*;
-use alloc::vec;
 use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
-use gpt_disk_types::Lba;
 
 /// Inline (<=96 B) comes straight from the index; larger files traverse extents.
 pub fn read_file<B: BlockIo>(
@@ -20,41 +18,61 @@ pub fn read_file<B: BlockIo>(
     path: &str,
 ) -> Result<Vec<u8>, HelixError> {
     let entry = index.lookup(path).ok_or(HelixError::NotFound)?;
+    read_entry(
+        block_io,
+        partition_lba_start,
+        data_region_start_block,
+        device_block_size,
+        entry,
+    )
+}
 
+/// Contents of one file version, checksum-verified when the entry carries one.
+pub fn read_entry<B: BlockIo>(
+    block_io: &mut B,
+    partition_lba_start: u64,
+    data_region_start_block: u64,
+    device_block_size: u32,
+    entry: &IndexEntry,
+) -> Result<Vec<u8>, HelixError> {
     if entry.flags & entry_flags::IS_DIR != 0 {
         return Err(HelixError::IsADirectory);
     }
-
     if entry.flags & entry_flags::IS_DELETED != 0 {
         return Err(HelixError::NotFound);
     }
 
     if entry.flags & entry_flags::IS_INLINE != 0 {
-        let size = entry.size as usize;
-        let mut data = vec![0u8; size];
-        data.copy_from_slice(&entry.inline_data[..size]);
-        return Ok(data);
+        let size = (entry.size as usize).min(INLINE_DATA_SIZE);
+        return Ok(entry.inline_data[..size].to_vec());
     }
 
-    if entry.flags & entry_flags::IS_EXTENT_NODE != 0 {
-        return crate::extent::read_extent_file(
+    let data = if entry.flags & entry_flags::IS_EXTENT_NODE != 0 {
+        crate::extent::read_extent_file(
             block_io,
             partition_lba_start,
             data_region_start_block,
             device_block_size,
             entry.extent_root,
             entry.size,
-        );
-    }
+        )?
+    } else {
+        read_extent_data(
+            block_io,
+            partition_lba_start,
+            data_region_start_block,
+            device_block_size,
+            entry.extent_root,
+            entry.size,
+        )?
+    };
 
-    read_extent_data(
-        block_io,
-        partition_lba_start,
-        data_region_start_block,
-        device_block_size,
-        entry.extent_root,
-        entry.size,
-    )
+    if entry.flags & entry_flags::HAS_CONTENT_CRC != 0
+        && crate::crc::crc64(&data) != entry.content_crc64
+    {
+        return Err(HelixError::ExtentCorrupt);
+    }
+    Ok(data)
 }
 
 /// Replay tail..=`target_lsn`; returns state as of that LSN.
@@ -284,31 +302,18 @@ fn read_extent_data<B: BlockIo>(
         return Err(HelixError::ExtentCorrupt);
     }
 
-    let blocks_needed = file_size.div_ceil(BLOCK_SIZE as u64);
-    let mut result = Vec::with_capacity(file_size as usize);
-
-    let scale = BLOCK_SIZE as u64 / device_block_size as u64;
-
-    // Single-extent fast path; fragmented files need a real extent walk.
-    for i in 0..blocks_needed {
-        let abs_block = data_region_start_block + extent_root + i;
-        let lba = Lba(partition_lba_start + abs_block * scale);
-
-        let mut block_buf = vec![0u8; BLOCK_SIZE as usize];
-
-        for j in 0..scale {
-            let chunk_lba = Lba(lba.0 + j);
-            let start = (j as usize) * device_block_size as usize;
-            let end = start + device_block_size as usize;
-            block_io
-                .read_blocks(chunk_lba, &mut block_buf[start..end])
-                .map_err(|_| HelixError::IoReadFailed)?;
-        }
-
-        let remaining = (file_size as usize) - result.len();
-        let copy_len = remaining.min(BLOCK_SIZE as usize);
-        result.extend_from_slice(&block_buf[..copy_len]);
-    }
-
+    let padded = file_size
+        .checked_next_multiple_of(BLOCK_SIZE as u64)
+        .ok_or(HelixError::FileTooLarge)?;
+    let mut result = crate::extent::try_zeroed(padded as usize)?;
+    crate::extent::read_run(
+        block_io,
+        partition_lba_start,
+        data_region_start_block,
+        device_block_size,
+        extent_root,
+        &mut result,
+    )?;
+    result.truncate(file_size as usize);
     Ok(result)
 }

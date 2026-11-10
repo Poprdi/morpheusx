@@ -1,5 +1,6 @@
 //! HelixFS on-disk data structures. `#[repr(C)]`, little-endian, 4 KiB blocks.
 
+use crate::error::HelixError;
 use core::fmt;
 
 pub const HELIX_MAGIC: [u8; 8] = *b"HELIXFS1";
@@ -98,6 +99,61 @@ impl HelixSuperblock {
             return false;
         }
         self.verify_crc()
+    }
+
+    /// Reject a checksum-valid superblock whose geometry cannot be trusted.
+    pub fn validate_geometry(&self) -> Result<(), HelixError> {
+        let bad = Err(HelixError::NoValidSuperblock);
+        if self.block_size != BLOCK_SIZE {
+            return Err(HelixError::InvalidBlockSize);
+        }
+        let log_blocks = match self.log_segment_count.checked_mul(LOG_SEGMENT_BLOCKS) {
+            Some(n) if n != 0 => n,
+            _ => return bad,
+        };
+        if self.log_start_block != 2
+            || self.log_start_block.checked_add(log_blocks) != self.log_end_block.checked_add(1)
+            || self.bitmap_start != self.log_end_block + 1
+            || self.bitmap_start.checked_add(self.bitmap_blocks) != Some(self.data_start_block)
+            || self
+                .data_start_block
+                .checked_add(self.data_block_count)
+                .map_or(true, |end| end > self.total_blocks)
+        {
+            return bad;
+        }
+        let seg_hdr = core::mem::size_of::<LogSegmentHeader>() as u32;
+        if self.log_head_segment >= self.log_segment_count
+            || self.log_tail_segment >= self.log_segment_count
+            || self.log_head_offset < seg_hdr
+            || self.log_head_offset as u64 > LOG_SEGMENT_BYTES
+            || self.log_head_offset % 8 != 0
+            || self.committed_lsn == u64::MAX
+            || self.checkpoint_lsn > self.committed_lsn
+        {
+            return bad;
+        }
+        if self.index_root_block != BLOCK_NULL {
+            let snap_blocks = (self.snapshot_count as u64).div_ceil(8);
+            let end = self
+                .index_root_block
+                .checked_add(self.index_depth as u64)
+                .and_then(|e| e.checked_add(snap_blocks));
+            if self.index_depth == 0
+                || end.map_or(true, |e| e > self.data_block_count)
+                || self.index_entry_count as u64 > self.index_depth as u64 * 8
+            {
+                return bad;
+            }
+            if self.snapshot_count != 0
+                && self.snapshot_table_block != self.index_root_block + self.index_depth as u64
+            {
+                return bad;
+            }
+        } else if self.snapshot_count != 0 {
+            return bad;
+        }
+        Ok(())
     }
 
     pub fn update_crc(&mut self) {
@@ -243,10 +299,15 @@ pub mod entry_flags {
     pub const IS_INLINE: u32 = 1 << 2;
     /// `extent_root` addresses an extent-node block, not a contiguous run.
     pub const IS_EXTENT_NODE: u32 = 1 << 5;
+    /// `content_crc64` covers the extent data and is verified on read.
+    pub const HAS_CONTENT_CRC: u32 = 1 << 6;
+    /// Snapshot-table marker: only `lsn` is meaningful.
+    pub const IS_SNAPSHOT_MARK: u32 = 1 << 7;
 }
 
 /// Discriminates an extent Write payload's residency. Stored as the first byte
-/// of the extent descriptor `[kind: u8][file_size: u64][extent_root: u64]`.
+/// of the extent descriptor `[kind: u8][file_size: u64][extent_root: u64][crc64: u64]`
+/// (the trailing crc is absent in records written before it existed).
 pub mod extent_kind {
     /// `extent_root` is the first of `ceil(size/BLOCK)` physically contiguous blocks.
     pub const CONTIGUOUS: u8 = 1;

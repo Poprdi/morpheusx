@@ -20,6 +20,68 @@ fn block_lba(partition_lba_start: u64, data_start_block: u64, dbs: u32, rel_bloc
     Lba(partition_lba_start + (data_start_block + rel_block) * scale)
 }
 
+const IO_CHUNK_BLOCKS: usize = 16;
+
+/// Read whole blocks starting at data block `physical` into `buf`.
+pub fn read_run<B: BlockIo>(
+    block_io: &mut B,
+    partition_lba_start: u64,
+    data_start_block: u64,
+    dbs: u32,
+    physical: u64,
+    buf: &mut [u8],
+) -> Result<(), HelixError> {
+    let chunk_bytes = IO_CHUNK_BLOCKS * BLOCK_SIZE as usize;
+    let mut block = physical;
+    for chunk in buf.chunks_mut(chunk_bytes) {
+        let lba = block_lba(partition_lba_start, data_start_block, dbs, block);
+        block_io
+            .read_blocks(lba, chunk)
+            .map_err(|_| HelixError::IoReadFailed)?;
+        block += (chunk.len() / BLOCK_SIZE as usize) as u64;
+    }
+    Ok(())
+}
+
+/// Write `data` starting at data block `physical`; a partial tail is zero-padded.
+pub fn write_run<B: BlockIo>(
+    block_io: &mut B,
+    partition_lba_start: u64,
+    data_start_block: u64,
+    dbs: u32,
+    physical: u64,
+    data: &[u8],
+) -> Result<(), HelixError> {
+    let bs = BLOCK_SIZE as usize;
+    let full = data.len() / bs * bs;
+    let mut block = physical;
+    for chunk in data[..full].chunks(IO_CHUNK_BLOCKS * bs) {
+        let lba = block_lba(partition_lba_start, data_start_block, dbs, block);
+        block_io
+            .write_blocks(lba, chunk)
+            .map_err(|_| HelixError::IoWriteFailed)?;
+        block += (chunk.len() / bs) as u64;
+    }
+    if full < data.len() {
+        let mut tail = [0u8; BLOCK_SIZE as usize];
+        tail[..data.len() - full].copy_from_slice(&data[full..]);
+        let lba = block_lba(partition_lba_start, data_start_block, dbs, block);
+        block_io
+            .write_blocks(lba, &tail)
+            .map_err(|_| HelixError::IoWriteFailed)?;
+    }
+    Ok(())
+}
+
+/// Zeroed buffer of `len` bytes, or `FileTooLarge` if the heap cannot hold it.
+pub fn try_zeroed(len: usize) -> Result<Vec<u8>, HelixError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len)
+        .map_err(|_| HelixError::FileTooLarge)?;
+    v.resize(len, 0);
+    Ok(v)
+}
+
 /// Serialize `(logical, physical, count)` runs into the node block.
 pub fn write_extent_node<B: BlockIo>(
     block_io: &mut B,
@@ -98,8 +160,7 @@ pub fn read_extent_node<B: BlockIo>(
     Ok(extents)
 }
 
-/// Free every block an extent file owns: its runs plus, when fragmented, the
-/// node block. Best-effort — a double free from a corrupt node is ignored.
+/// Free a file's runs and node block. `defer` holds them until the next commit.
 #[allow(clippy::too_many_arguments)]
 pub fn free_file_blocks<B: BlockIo>(
     block_io: &mut B,
@@ -110,10 +171,18 @@ pub fn free_file_blocks<B: BlockIo>(
     extent_root: u64,
     size: u64,
     is_node: bool,
+    defer: bool,
 ) {
     if extent_root == BLOCK_NULL {
         return;
     }
+    let release = |bitmap: &mut crate::bitmap::BlockBitmap, start: u64, count: u64| {
+        if defer {
+            bitmap.defer_free_range(start, count);
+        } else {
+            let _ = bitmap.free_range(start, count);
+        }
+    };
     if is_node {
         if let Ok(extents) = read_extent_node(
             block_io,
@@ -123,13 +192,13 @@ pub fn free_file_blocks<B: BlockIo>(
             extent_root,
         ) {
             for (_, physical, count) in extents {
-                let _ = bitmap.free_range(physical, count as u64);
+                release(bitmap, physical, count as u64);
             }
         }
-        let _ = bitmap.free_block(extent_root);
+        release(bitmap, extent_root, 1);
     } else {
         let blocks = size.div_ceil(BLOCK_SIZE as u64);
-        let _ = bitmap.free_range(extent_root, blocks);
+        release(bitmap, extent_root, blocks);
     }
 }
 
@@ -149,34 +218,35 @@ pub fn read_extent_file<B: BlockIo>(
         device_block_size,
         node_block,
     )?;
-    let scale = BLOCK_SIZE as u64 / device_block_size as u64;
-    // bound the allocation by mapped extents: a file_size larger than its extents
-    // cover is a corrupt inode, not a real file (helix is not sparse) — reject it
-    // instead of allocating an attacker-chosen size from an untrusted node record.
-    let covered: u64 = extents
-        .iter()
-        .map(|(_, _, count)| *count as u64 * BLOCK_SIZE as u64)
-        .sum();
+    // a file_size larger than its extents cover is a corrupt inode
+    let mut covered: u64 = 0;
+    for (logical, _, count) in &extents {
+        if *logical != covered / BLOCK_SIZE as u64 {
+            return Err(HelixError::ExtentCorrupt);
+        }
+        covered += *count as u64 * BLOCK_SIZE as u64;
+    }
     if file_size > covered {
         return Err(HelixError::FileTooLarge);
     }
-    let mut result = vec![0u8; file_size as usize];
+    let padded = file_size.div_ceil(BLOCK_SIZE as u64) * BLOCK_SIZE as u64;
+    let mut result = try_zeroed(padded as usize)?;
 
     for (logical, physical, count) in extents {
-        for j in 0..count as u64 {
-            let file_off = (logical + j) * BLOCK_SIZE as u64;
-            if file_off >= file_size {
-                break;
-            }
-            let lba = Lba(partition_lba_start + (data_start_block + physical + j) * scale);
-            let mut blk = vec![0u8; BLOCK_SIZE as usize];
-            block_io
-                .read_blocks(lba, &mut blk)
-                .map_err(|_| HelixError::IoReadFailed)?;
-            let start = file_off as usize;
-            let end = (start + BLOCK_SIZE as usize).min(file_size as usize);
-            result[start..end].copy_from_slice(&blk[..end - start]);
+        let start = logical * BLOCK_SIZE as u64;
+        if start >= padded {
+            break;
         }
+        let end = (start + count as u64 * BLOCK_SIZE as u64).min(padded);
+        read_run(
+            block_io,
+            partition_lba_start,
+            data_start_block,
+            device_block_size,
+            physical,
+            &mut result[start as usize..end as usize],
+        )?;
     }
+    result.truncate(file_size as usize);
     Ok(result)
 }
