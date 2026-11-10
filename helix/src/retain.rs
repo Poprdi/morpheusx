@@ -1,6 +1,7 @@
 //! Versions kept alive by snapshots. A version is retained when it is replaced
 //! while a snapshot taken during its lifetime exists; it carries the LSN that
-//! superseded it in `_reserved[..8]`.
+//! superseded it in `_reserved[..8]`. `_reserved[8..16]` holds the rename LSN
+//! of an entry that was moved to its path.
 
 use crate::index::btree::path_bytes;
 use crate::types::*;
@@ -10,6 +11,18 @@ pub fn superseded_lsn(e: &IndexEntry) -> Lsn {
     let mut b = [0u8; 8];
     b.copy_from_slice(&e._reserved[..8]);
     u64::from_le_bytes(b)
+}
+
+/// LSN at which the entry came to live at its current path: the rename that
+/// moved it there, else the write that created it.
+pub fn path_lsn(e: &IndexEntry) -> Lsn {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&e._reserved[8..16]);
+    u64::from_le_bytes(b).max(e.lsn)
+}
+
+pub fn set_path_lsn(e: &mut IndexEntry, lsn: Lsn) {
+    e._reserved[8..16].copy_from_slice(&lsn.to_le_bytes());
 }
 
 /// True if a snapshot was taken while the version `[old_lsn, new_lsn)` was current.
@@ -38,9 +51,9 @@ pub fn retire(
 
 /// The retained version of `path` that was current at `lsn`.
 pub fn version_at<'a>(retained: &'a [IndexEntry], path: &str, lsn: Lsn) -> Option<&'a IndexEntry> {
-    retained
-        .iter()
-        .find(|e| path_bytes(&e.path) == path.as_bytes() && e.lsn <= lsn && lsn < superseded_lsn(e))
+    retained.iter().find(|e| {
+        path_bytes(&e.path) == path.as_bytes() && path_lsn(e) <= lsn && lsn < superseded_lsn(e)
+    })
 }
 
 pub fn snapshot_mark(lsn: Lsn) -> IndexEntry {

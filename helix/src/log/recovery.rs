@@ -224,6 +224,7 @@ pub fn replay_log<B: BlockIo>(
                         new_entry.path = [0u8; 256];
                         new_entry.path[..new_path.len()].copy_from_slice(new_path.as_bytes());
                         new_entry.modified_ns = hdr.timestamp_ns;
+                        crate::retain::set_path_lsn(&mut new_entry, hdr.lsn);
                         let _ = index.mark_deleted(old_path);
                         index.upsert(new_entry);
                     }

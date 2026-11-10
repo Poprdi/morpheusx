@@ -7,11 +7,42 @@ use crate::crc::crc32c;
 use crate::error::HelixError;
 use crate::types::*;
 use alloc::vec;
+use alloc::vec::Vec;
 use gpt_disk_io::BlockIo;
 use gpt_disk_types::Lba;
 
 pub const ENTRIES_PER_INDEX_BLOCK: usize = BLOCK_SIZE as usize / 512;
 const ENTRY_SIZE: usize = 512;
+
+/// Blocks holding a checkpoint, in logical order: one contiguous run, or
+/// the runs listed in an extent-node block when free space was fragmented.
+#[derive(Clone)]
+pub struct Region {
+    /// `(logical, physical, count)`.
+    pub runs: Vec<(u64, u64, u32)>,
+    pub node: Option<u64>,
+}
+
+impl Region {
+    pub fn contiguous(start: u64, blocks: u64) -> Self {
+        Self {
+            runs: alloc::vec![(0, start, blocks as u32)],
+            node: None,
+        }
+    }
+
+    pub fn blocks(&self) -> u64 {
+        self.runs.iter().map(|r| r.2 as u64).sum()
+    }
+
+    fn physical(&self, logical: u64) -> Result<u64, HelixError> {
+        self.runs
+            .iter()
+            .find(|(l, _, n)| logical >= *l && logical < *l + *n as u64)
+            .map(|(l, p, _)| p + (logical - l))
+            .ok_or(HelixError::IndexCrcMismatch)
+    }
+}
 
 fn region_lba(partition_lba_start: u64, data_start_block: u64, dbs: u32, rel_block: u64) -> Lba {
     let scale = BLOCK_SIZE as u64 / dbs as u64;
@@ -36,7 +67,8 @@ pub fn write_index_region<B: BlockIo>(
     partition_lba_start: u64,
     data_start_block: u64,
     device_block_size: u32,
-    region_start: u64,
+    region: &Region,
+    first_logical: u64,
     entries: &[IndexEntry],
 ) -> Result<(), HelixError> {
     let blocks = region_blocks(entries.len());
@@ -58,7 +90,7 @@ pub fn write_index_region<B: BlockIo>(
             partition_lba_start,
             data_start_block,
             device_block_size,
-            region_start + b,
+            region.physical(first_logical + b)?,
         );
         block_io
             .write_blocks(lba, &buf)
@@ -73,7 +105,8 @@ pub fn load_index_region<B: BlockIo>(
     partition_lba_start: u64,
     data_start_block: u64,
     device_block_size: u32,
-    region_start: u64,
+    region: &Region,
+    first_logical: u64,
     entry_count: u64,
     mut visit: impl FnMut(IndexEntry),
 ) -> Result<(), HelixError> {
@@ -85,7 +118,7 @@ pub fn load_index_region<B: BlockIo>(
             partition_lba_start,
             data_start_block,
             device_block_size,
-            region_start + b,
+            region.physical(first_logical + b)?,
         );
         block_io
             .read_blocks(lba, &mut buf)

@@ -4,6 +4,7 @@
 //! per-fd cursor state.
 
 use crate::bitmap::BlockBitmap;
+use crate::checkpoint::Region;
 use crate::error::HelixError;
 use crate::index::btree::NamespaceIndex;
 use crate::log::recovery::{recover_superblock, replay_log, write_superblock};
@@ -34,6 +35,8 @@ pub struct HelixFs {
     /// Pre-allocated region for the next checkpoint, so a full disk can still
     /// checkpoint. `(start, blocks)`.
     spare: Option<(u64, u64)>,
+    /// Where the committed checkpoint lives.
+    region: Option<Region>,
 }
 
 fn check_device_block_size(dbs: u32) -> Result<(), HelixError> {
@@ -72,6 +75,7 @@ impl HelixFs {
             snapshot_lsns: Vec::new(),
             retained: Vec::new(),
             spare: None,
+            region: None,
         }
     }
 
@@ -107,13 +111,16 @@ impl HelixFs {
         fs.log.reload_head_segment(block_io)?;
 
         if fs.sb.index_root_block != BLOCK_NULL {
+            let region = fs.load_region(block_io)?;
+            let index_blocks = fs.sb.index_depth as u64;
             let index = &mut fs.index;
             crate::checkpoint::load_index_region(
                 block_io,
                 lba_start,
                 fs.sb.data_start_block,
                 block_size,
-                fs.sb.index_root_block,
+                &region,
+                0,
                 fs.sb.index_entry_count as u64,
                 |e| index.upsert(e),
             )?;
@@ -123,7 +130,8 @@ impl HelixFs {
                 lba_start,
                 fs.sb.data_start_block,
                 block_size,
-                fs.sb.snapshot_table_block,
+                &region,
+                index_blocks,
                 fs.sb.snapshot_count as u64,
                 |e| {
                     if e.flags & entry_flags::IS_SNAPSHOT_MARK != 0 {
@@ -133,6 +141,7 @@ impl HelixFs {
                     }
                 },
             )?;
+            fs.region = Some(region);
         }
         replay_log(
             block_io,
@@ -150,13 +159,43 @@ impl HelixFs {
         Ok(fs)
     }
 
-    fn checkpoint_region(&self) -> Option<(u64, u64)> {
-        (self.sb.index_root_block != BLOCK_NULL).then(|| {
-            (
-                self.sb.index_root_block,
-                self.sb.index_depth as u64 + snap_region_blocks(self.sb.snapshot_count as usize),
-            )
+    /// Resolve the superblock's checkpoint pointer to its blocks.
+    fn load_region<B: BlockIo>(&self, block_io: &mut B) -> Result<Region, HelixError> {
+        let total =
+            self.sb.index_depth as u64 + snap_region_blocks(self.sb.snapshot_count as usize);
+        if self.sb.index_flags & index_flags::ROOT_IS_NODE == 0 {
+            return Ok(Region::contiguous(self.sb.index_root_block, total));
+        }
+        let runs = crate::extent::read_extent_node(
+            block_io,
+            self.partition_lba_start,
+            self.sb.data_start_block,
+            self.device_block_size,
+            self.sb.index_root_block,
+        )?;
+        let mut next = 0u64;
+        for (logical, _, count) in &runs {
+            if *logical != next {
+                return Err(HelixError::IndexCrcMismatch);
+            }
+            next += *count as u64;
+        }
+        if next != total {
+            return Err(HelixError::IndexCrcMismatch);
+        }
+        Ok(Region {
+            runs,
+            node: Some(self.sb.index_root_block),
         })
+    }
+
+    fn free_region(&mut self, region: &Region) {
+        for (_, physical, count) in &region.runs {
+            let _ = self.bitmap.free_range(*physical, *count as u64);
+        }
+        if let Some(node) = region.node {
+            let _ = self.bitmap.free_block(node);
+        }
     }
 
     /// The bitmap is not stored; mark every block a live or retained file
@@ -214,8 +253,13 @@ impl HelixFs {
             }
         }
 
-        if let Some((start, blocks)) = self.checkpoint_region() {
-            mark(&mut self.bitmap, start, blocks)?;
+        if let Some(region) = &self.region {
+            for (_, physical, count) in &region.runs {
+                mark(&mut self.bitmap, *physical, *count as u64)?;
+            }
+            if let Some(node) = region.node {
+                mark(&mut self.bitmap, node, 1)?;
+            }
         }
         Ok(())
     }
@@ -285,7 +329,7 @@ impl HelixFs {
         lsn: Lsn,
     ) -> Result<Vec<u8>, HelixError> {
         let entry = match self.index.lookup(path) {
-            Some(e) if e.lsn <= lsn => e,
+            Some(e) if retain::path_lsn(e) <= lsn => e,
             _ => retain::version_at(&self.retained, path, lsn).ok_or(HelixError::NotFound)?,
         };
         ops::read::read_entry(
@@ -394,25 +438,56 @@ impl HelixFs {
         sb.blocks_used = sb.data_start_block + self.bitmap.allocated_count();
     }
 
+    /// Spare first, then one contiguous run, then scattered blocks behind an
+    /// extent node.
     fn alloc_checkpoint_region<B: BlockIo>(
         &mut self,
         block_io: &mut B,
         need: u64,
-    ) -> Result<u64, HelixError> {
+    ) -> Result<Region, HelixError> {
         if let Some((start, blocks)) = self.spare.take() {
             if blocks >= need {
                 let _ = self.bitmap.free_range(start + need, blocks - need);
-                return Ok(start);
+                return Ok(Region::contiguous(start, need));
             }
             let _ = self.bitmap.free_range(start, blocks);
         }
-        match self.bitmap.alloc_contiguous(need) {
-            Err(HelixError::NoSpace) if self.bitmap.has_pending() => {
-                self.sync(block_io)?;
-                self.bitmap.alloc_contiguous(need)
-            },
-            other => other,
+        if let Ok(start) = self.bitmap.alloc_contiguous(need) {
+            return Ok(Region::contiguous(start, need));
         }
+        if self.bitmap.free_count() <= need && self.bitmap.has_pending() {
+            self.sync(block_io)?;
+            if let Ok(start) = self.bitmap.alloc_contiguous(need) {
+                return Ok(Region::contiguous(start, need));
+            }
+        }
+
+        let mut region = Region {
+            runs: Vec::new(),
+            node: None,
+        };
+        for logical in 0..=need {
+            let block = match self.bitmap.alloc_block() {
+                Ok(b) => b,
+                Err(e) => {
+                    self.free_region(&region);
+                    return Err(e);
+                },
+            };
+            if logical == need {
+                region.node = Some(block);
+                break;
+            }
+            match region.runs.last_mut() {
+                Some(last) if last.1 + last.2 as u64 == block => last.2 += 1,
+                _ => region.runs.push((logical, block, 1)),
+            }
+        }
+        if region.runs.len() > EXTENTS_PER_LEAF {
+            self.free_region(&region);
+            return Err(HelixError::NoSpace);
+        }
+        Ok(region)
     }
 
     /// Persist the namespace and snapshot table, then restart the log. The
@@ -435,45 +510,54 @@ impl HelixFs {
         let index_blocks = crate::checkpoint::region_blocks(live.len());
         let need = index_blocks + snap_region_blocks(snap.len());
 
-        let region_start = self.alloc_checkpoint_region(block_io, need)?;
+        let region = self.alloc_checkpoint_region(block_io, need)?;
         let (pls, dsb, dbs) = (
             self.partition_lba_start,
             self.sb.data_start_block,
             self.device_block_size,
         );
-        let written =
-            crate::checkpoint::write_index_region(block_io, pls, dsb, dbs, region_start, &live)
-                .and_then(|_| {
-                    if snap.is_empty() {
-                        return Ok(());
-                    }
-                    crate::checkpoint::write_index_region(
-                        block_io,
-                        pls,
-                        dsb,
-                        dbs,
-                        region_start + index_blocks,
-                        &snap,
-                    )
-                })
-                .and_then(|_| block_io.flush().map_err(|_| HelixError::IoFlushFailed));
+        let written = (|| {
+            if let Some(node) = region.node {
+                crate::extent::write_extent_node(block_io, pls, dsb, dbs, node, &region.runs)?;
+            }
+            crate::checkpoint::write_index_region(block_io, pls, dsb, dbs, &region, 0, &live)?;
+            if !snap.is_empty() {
+                crate::checkpoint::write_index_region(
+                    block_io,
+                    pls,
+                    dsb,
+                    dbs,
+                    &region,
+                    index_blocks,
+                    &snap,
+                )?;
+            }
+            block_io.flush().map_err(|_| HelixError::IoFlushFailed)
+        })();
         if let Err(e) = written {
-            let _ = self.bitmap.free_range(region_start, need);
+            self.free_region(&region);
             return Err(e);
         }
 
-        let old_region = self.checkpoint_region();
         let lsn = self.log.next_lsn() - 1;
+        let root = region.node.unwrap_or(region.runs[0].1);
 
         let mut sb = self.sb;
-        sb.index_root_block = region_start;
+        sb.index_root_block = root;
+        sb.index_flags = if region.node.is_some() {
+            index_flags::ROOT_IS_NODE
+        } else {
+            0
+        };
         sb.index_depth = index_blocks as u32;
         sb.index_entry_count = live.len() as u32;
         sb.snapshot_count = snap.len() as u32;
         sb.snapshot_table_block = if snap.is_empty() {
             BLOCK_NULL
+        } else if region.node.is_some() {
+            root
         } else {
-            region_start + index_blocks
+            root + index_blocks
         };
         sb.checkpoint_lsn = lsn;
         sb.committed_lsn = lsn;
@@ -489,11 +573,15 @@ impl HelixFs {
         self.sb = sb;
         self.log.restart_head(0);
         self.bitmap.commit_pending();
-        if let Some((start, blocks)) = old_region {
-            if self.spare.is_none() && blocks >= self.spare_target() {
-                self.spare = Some((start, blocks));
-            } else {
-                let _ = self.bitmap.free_range(start, blocks);
+        if let Some(old) = self.region.replace(region) {
+            let whole = (old.node.is_none() && old.runs.len() == 1).then(|| old.runs[0]);
+            match whole {
+                Some((_, start, blocks))
+                    if self.spare.is_none() && blocks as u64 >= self.spare_target() =>
+                {
+                    self.spare = Some((start, blocks as u64));
+                },
+                _ => self.free_region(&old),
             }
         }
         self.refill_spare();

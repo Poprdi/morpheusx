@@ -501,6 +501,7 @@ fn log_rename_one<B: BlockIo>(
     )?;
 
     // entry.lsn stays the lsn of the data version; a rename moves no data
+    crate::retain::set_path_lsn(&mut new_entry, lsn);
     index.mark_deleted(old_full)?;
     index.upsert(new_entry);
     Ok(lsn)

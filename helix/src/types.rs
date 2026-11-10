@@ -49,9 +49,10 @@ pub struct HelixSuperblock {
 
     /// B-tree root at last checkpoint.
     pub index_root_block: BlockAddr,
-    /// 0 = root is a leaf.
+    /// Blocks in the index part of the checkpoint.
     pub index_depth: u32,
-    pub _pad0: u32,
+    /// `index_flags` bits.
+    pub index_flags: u32,
 
     pub committed_lsn: Lsn,
     /// LSN at which the B-tree was last flushed.
@@ -133,7 +134,17 @@ impl HelixSuperblock {
         {
             return bad;
         }
-        if self.index_root_block != BLOCK_NULL {
+        if self.index_flags & !index_flags::ROOT_IS_NODE != 0 {
+            return bad;
+        }
+        if self.index_flags & index_flags::ROOT_IS_NODE != 0 {
+            if self.index_root_block >= self.data_block_count
+                || self.index_depth == 0
+                || self.index_entry_count as u64 > self.index_depth as u64 * 8
+            {
+                return bad;
+            }
+        } else if self.index_root_block != BLOCK_NULL {
             let snap_blocks = (self.snapshot_count as u64).div_ceil(8);
             let end = self
                 .index_root_block
@@ -284,6 +295,13 @@ impl LogRecordHeader {
         let raw = core::mem::size_of::<Self>() as u64 + self.payload_len as u64;
         (raw + 7) & !7
     }
+}
+
+/// `HelixSuperblock.index_flags` bits.
+pub mod index_flags {
+    /// `index_root_block` is an extent node listing the checkpoint's runs
+    /// (a fragmented checkpoint) instead of the first block of one run.
+    pub const ROOT_IS_NODE: u32 = 1 << 0;
 }
 
 /// `LogRecordHeader.flags` bits.
